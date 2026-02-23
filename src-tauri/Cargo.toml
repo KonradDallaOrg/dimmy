@@ -25,3 +25,4 @@ arboard = "3"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 dirs = "5"
 chrono = "0.4"
+url = "2"

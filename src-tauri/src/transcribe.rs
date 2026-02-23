@@ -14,6 +14,17 @@ pub async fn transcribe_audio(
     wav_data: &[u8],
     language: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
+    // SECURITY: reject HTTP URLs to prevent API key leak over plaintext,
+    // except localhost/127.0.0.1 for self-hosted setups
+    if let Ok(parsed) = url::Url::parse(api_url) {
+        if parsed.scheme() == "http" {
+            let host = parsed.host_str().unwrap_or("");
+            if host != "localhost" && host != "127.0.0.1" && host != "::1" {
+                return Err("Refusing to send API key over HTTP. Use HTTPS or localhost.".into());
+            }
+        }
+    }
+
     let file_part = multipart::Part::bytes(wav_data.to_vec())
         .file_name("recording.wav")
         .mime_str("audio/wav")?;

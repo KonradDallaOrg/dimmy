@@ -82,7 +82,7 @@ mod platform {
     }
 
     unsafe extern "system" fn keyboard_proc(code: i32, wparam: usize, lparam: isize) -> isize {
-        if code >= 0 {
+        if code >= 0 && lparam != 0 {
             let kb = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
             let vk = kb.vkCode;
             let is_down = wparam == WM_KEYDOWN || wparam == WM_SYSKEYDOWN;

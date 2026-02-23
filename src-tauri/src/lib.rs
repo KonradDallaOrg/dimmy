@@ -10,6 +10,8 @@ use tauri::{Emitter, Manager, LogicalSize, LogicalPosition};
 
 const DEFAULT_API_URL: &str = "https://api.groq.com/openai/v1/audio/transcriptions";
 const DEFAULT_MODEL: &str = "whisper-large-v3-turbo";
+const MAX_RECORDING_SECS: usize = 30 * 60; // 30 minutes hard cap
+const MAX_LOG_BYTES: u64 = 1_048_576; // 1 MB log rotation threshold
 
 fn config_dir_path() -> Option<std::path::PathBuf> {
     dirs::config_dir().map(|p| p.join("pai-voice"))
@@ -30,6 +32,17 @@ pub(crate) fn log(msg: &str) {
     if let Some(path) = log_path() {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
+        }
+        // Rotate: if log exceeds MAX_LOG_BYTES, keep only the last half
+        if let Ok(meta) = std::fs::metadata(&path) {
+            if meta.len() > MAX_LOG_BYTES {
+                if let Ok(data) = std::fs::read_to_string(&path) {
+                    let half = data.len() / 2;
+                    // Find the next newline after the halfway point to avoid splitting a line
+                    let cut = data[half..].find('\n').map(|i| half + i + 1).unwrap_or(half);
+                    let _ = std::fs::write(&path, &data[cut..]);
+                }
+            }
         }
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
             let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
@@ -197,12 +210,25 @@ fn start_recording(
             let max_chunk_samples = sample_rate * 12;
             let silence_threshold: f32 = 0.01;
             let silence_duration_samples = (sample_rate as f32 * 0.4) as usize;
+            let max_buffer_samples = sample_rate * MAX_RECORDING_SECS;
 
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
                 if !streaming.load(Ordering::SeqCst) {
                     break;
+                }
+
+                // Auto-stop if buffer exceeds max recording duration
+                if let Ok(buf) = buffer.lock() {
+                    if buf.len() >= max_buffer_samples {
+                        drop(buf);
+                        streaming.store(false, Ordering::SeqCst);
+                        if let Some(w) = handle.get_webview_window("main") {
+                            let _ = w.emit("shortcut-stop", ());
+                        }
+                        break;
+                    }
                 }
 
                 let (should_split, split_end) = {
@@ -509,6 +535,7 @@ pub fn run() {
 
     let (file_url, file_model, file_device, file_language, file_shortcut_mode) = load_config_file();
     let stored_key = load_api_key_secure();
+    // SECURITY: never log the actual key value — only whether one exists
     log(&format!("Config loaded: url={}, model={}, device={:?}, has_key={}",
         file_url, file_model, file_device, stored_key.is_some()));
 
