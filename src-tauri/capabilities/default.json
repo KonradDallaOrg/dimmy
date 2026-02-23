@@ -1,0 +1,12 @@
+{
+  "identifier": "default",
+  "description": "Default permissions for Vocino",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "clipboard-manager:default",
+    "clipboard-manager:allow-write-text",
+    "clipboard-manager:allow-read-text"
+  ]
+}

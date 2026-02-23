@@ -1,0 +1,10 @@
+src-tauri/target/
+src-tauri/gen/
+node_modules/
+dist/
+.DS_Store
+*.exe
+*.msi
+*.dmg
+*.AppImage
+*.deb

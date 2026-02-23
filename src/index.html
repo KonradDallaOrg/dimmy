@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vocino</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="container">
+    <!-- Pill row — ALWAYS visible -->
+    <div id="pill">
+      <div id="dot" title="Ready"></div>
+      <span id="device-name">Loading...</span>
+      <span id="timer" class="hide">00:00</span>
+      <span id="status-text" class="hide"></span>
+      <div id="chunk-dots"></div>
+      <button id="settings-btn" title="Settings">&#9881;</button>
+    </div>
+
+    <!-- Recording panel — compact: waveform + transcript line -->
+    <div id="rec-panel" class="panel">
+      <canvas id="waveform"></canvas>
+      <div id="transcript-text"></div>
+    </div>
+
+    <!-- Settings panel -->
+    <div id="settings-panel" class="panel">
+      <label>Audio Input</label>
+      <select id="device-select"></select>
+
+      <label>Language</label>
+      <select id="language-select">
+        <option value="">Auto-detect</option>
+        <option value="it">Italiano</option>
+        <option value="en">English</option>
+        <option value="de">Deutsch</option>
+        <option value="fr">Fran&#231;ais</option>
+        <option value="es">Espa&#241;ol</option>
+        <option value="pt">Portugu&#234;s</option>
+        <option value="nl">Nederlands</option>
+        <option value="pl">Polski</option>
+        <option value="ja">&#26085;&#26412;&#35486;</option>
+        <option value="zh">&#20013;&#25991;</option>
+        <option value="ko">&#54620;&#44397;&#50612;</option>
+        <option value="ru">&#1056;&#1091;&#1089;&#1089;&#1082;&#1080;&#1081;</option>
+      </select>
+
+      <label>Provider &amp; Model</label>
+      <select id="model-select">
+        <optgroup label="Groq (Free)">
+          <option value="groq-turbo"
+            data-url="https://api.groq.com/openai/v1/audio/transcriptions"
+            data-model="whisper-large-v3-turbo">
+            whisper-large-v3-turbo &#8212; Fast &#9733;&#9733;&#9733;&#9733;
+          </option>
+          <option value="groq-v3"
+            data-url="https://api.groq.com/openai/v1/audio/transcriptions"
+            data-model="whisper-large-v3">
+            whisper-large-v3 &#8212; Accurate &#9733;&#9733;&#9733;&#9733;&#9733;
+          </option>
+          <option value="groq-distil"
+            data-url="https://api.groq.com/openai/v1/audio/transcriptions"
+            data-model="distil-whisper-large-v3-en">
+            distil-whisper (EN) &#8212; Fast &#9733;&#9733;&#9733;
+          </option>
+        </optgroup>
+        <optgroup label="OpenAI (~$0.006/min)">
+          <option value="openai-whisper"
+            data-url="https://api.openai.com/v1/audio/transcriptions"
+            data-model="whisper-1">
+            whisper-1 &#8212; Standard &#9733;&#9733;&#9733;&#9733;
+          </option>
+          <option value="openai-4o"
+            data-url="https://api.openai.com/v1/audio/transcriptions"
+            data-model="gpt-4o-transcribe">
+            gpt-4o-transcribe &#8212; Best &#9733;&#9733;&#9733;&#9733;&#9733;
+          </option>
+          <option value="openai-4o-mini"
+            data-url="https://api.openai.com/v1/audio/transcriptions"
+            data-model="gpt-4o-mini-transcribe">
+            gpt-4o-mini &#8212; Fast &#9733;&#9733;&#9733;
+          </option>
+        </optgroup>
+        <optgroup label="Custom">
+          <option value="custom">Custom endpoint...</option>
+        </optgroup>
+      </select>
+
+      <div id="custom-fields" class="hide">
+        <label>Endpoint URL</label>
+        <input type="text" id="api-url" placeholder="https://api.example.com/v1/audio/transcriptions" />
+        <label>Model</label>
+        <input type="text" id="api-model" placeholder="whisper-large-v3" />
+      </div>
+
+      <label>API Key <span id="key-hint"></span></label>
+      <input type="password" id="api-key" placeholder="sk-... or gsk_..." />
+
+      <label>Shortcut Mode (Win+Alt / Cmd+Alt)</label>
+      <select id="shortcut-mode-select">
+        <option value="toggle">Toggle &#8212; press to start/stop</option>
+        <option value="hold">Hold &#8212; hold to record, release to stop</option>
+      </select>
+
+      <div class="btn-row">
+        <button id="save-btn">Save</button>
+        <button id="close-btn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="main.js"></script>
+</body>
+</html>
