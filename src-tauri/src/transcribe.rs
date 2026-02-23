@@ -13,6 +13,7 @@ pub async fn transcribe_audio(
     api_key: &str,
     wav_data: &[u8],
     language: &str,
+    prompt: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
     // SECURITY: reject HTTP URLs to prevent API key leak over plaintext,
     // except localhost/127.0.0.1 for self-hosted setups
@@ -37,6 +38,12 @@ pub async fn transcribe_audio(
     // Add language hint if specified (prevents Whisper from translating)
     if !language.is_empty() {
         form = form.text("language", language.to_string());
+    }
+
+    // Prompt guides Whisper's output style (punctuation, vocabulary, spelling).
+    // It's not an instruction — Whisper mimics the style of the prompt text.
+    if !prompt.is_empty() {
+        form = form.text("prompt", prompt.to_string());
     }
 
     let client = reqwest::Client::builder()

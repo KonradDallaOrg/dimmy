@@ -249,7 +249,24 @@ body {
   transition: border-color 0.2s;
 }
 
-#settings-panel input:focus { border-color: #818cf8; }
+#settings-panel input:focus,
+#settings-panel textarea:focus { border-color: #818cf8; }
+
+#prompt-input {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: #d1d5db;
+  padding: 3px 6px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-family: inherit;
+  outline: none;
+  width: 100%;
+  resize: vertical;
+  min-height: 24px;
+  max-height: 60px;
+  transition: border-color 0.2s;
+}
 
 #settings-panel input::placeholder {
   color: #374151;

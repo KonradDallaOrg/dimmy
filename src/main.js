@@ -33,6 +33,7 @@ const apiModelInput = document.getElementById('api-model');
 const apiKeyInput = document.getElementById('api-key');
 const keyHint = document.getElementById('key-hint');
 const shortcutModeSelect = document.getElementById('shortcut-mode-select');
+const promptInput = document.getElementById('prompt-input');
 const saveBtn = document.getElementById('save-btn');
 const closeBtn = document.getElementById('close-btn');
 
@@ -395,6 +396,9 @@ async function openSettings() {
     // Shortcut mode
     shortcutModeSelect.value = config.shortcut_mode || 'toggle';
 
+    // Prompt / vocabulary
+    promptInput.value = config.prompt || '';
+
     // Model select
     let found = false;
     for (const opt of modelSelect.options) {
@@ -461,6 +465,7 @@ saveBtn.addEventListener('click', async () => {
   const selectedDevice = deviceSelect.value || null;
   const language = languageSelect.value;
   const shortcutMode = shortcutModeSelect.value;
+  const prompt = promptInput.value;
 
   if (!apiKey) {
     try {
@@ -473,7 +478,7 @@ saveBtn.addEventListener('click', async () => {
   }
 
   try {
-    await invoke('set_config', { apiKey, apiUrl, apiModel, language, shortcutMode, selectedDevice });
+    await invoke('set_config', { apiKey, apiUrl, apiModel, language, shortcutMode, selectedDevice, prompt });
     const name = await invoke('get_audio_device');
     deviceName.textContent = name;
     deviceName.title = name;

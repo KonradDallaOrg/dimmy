@@ -10,6 +10,9 @@ use tauri::{Emitter, Manager, LogicalSize, LogicalPosition};
 
 const DEFAULT_API_URL: &str = "https://api.groq.com/openai/v1/audio/transcriptions";
 const DEFAULT_MODEL: &str = "whisper-large-v3-turbo";
+/// Default prompt guides Whisper to produce punctuated, well-formatted output.
+/// Whisper mimics the style of this text — punctuation, capitalization, etc.
+const DEFAULT_PROMPT: &str = "Hello, how are you? Fine, thanks! Today we'll discuss an interesting topic. Ciao, come stai? Bene, grazie! Oggi parliamo di un argomento interessante.";
 const MAX_RECORDING_SECS: usize = 30 * 60; // 30 minutes hard cap
 const MAX_LOG_BYTES: u64 = 1_048_576; // 1 MB log rotation threshold
 
@@ -52,7 +55,7 @@ pub(crate) fn log(msg: &str) {
 }
 
 /// Save non-sensitive config to file (NO api_key — that goes to keyring ONLY)
-fn save_config_file(api_url: &str, api_model: &str, selected_device: &Option<String>, language: &str, shortcut_mode: &str) {
+fn save_config_file(api_url: &str, api_model: &str, selected_device: &Option<String>, language: &str, shortcut_mode: &str, prompt: &str) {
     if let Some(path) = config_path() {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -62,6 +65,7 @@ fn save_config_file(api_url: &str, api_model: &str, selected_device: &Option<Str
             "api_model": api_model,
             "language": language,
             "shortcut_mode": shortcut_mode,
+            "prompt": prompt,
         });
         if let Some(dev) = selected_device {
             cfg["selected_device"] = serde_json::json!(dev);
@@ -71,7 +75,7 @@ fn save_config_file(api_url: &str, api_model: &str, selected_device: &Option<Str
 }
 
 /// Load non-sensitive config from file
-fn load_config_file() -> (String, String, Option<String>, String, String) {
+fn load_config_file() -> (String, String, Option<String>, String, String, String) {
     if let Some(path) = config_path() {
         if let Ok(data) = std::fs::read_to_string(&path) {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
@@ -80,11 +84,12 @@ fn load_config_file() -> (String, String, Option<String>, String, String) {
                 let device = v["selected_device"].as_str().map(|s| s.to_string());
                 let language = v["language"].as_str().unwrap_or("").to_string();
                 let shortcut_mode = v["shortcut_mode"].as_str().unwrap_or("toggle").to_string();
-                return (url, model, device, language, shortcut_mode);
+                let prompt = v["prompt"].as_str().unwrap_or(DEFAULT_PROMPT).to_string();
+                return (url, model, device, language, shortcut_mode, prompt);
             }
         }
     }
-    (DEFAULT_API_URL.to_string(), DEFAULT_MODEL.to_string(), None, String::new(), "toggle".to_string())
+    (DEFAULT_API_URL.to_string(), DEFAULT_MODEL.to_string(), None, String::new(), "toggle".to_string(), DEFAULT_PROMPT.to_string())
 }
 
 
@@ -106,7 +111,8 @@ fn migrate_plaintext_key() {
                         let device = v["selected_device"].as_str().map(|s| s.to_string());
                         let language = v["language"].as_str().unwrap_or("");
                         let shortcut_mode = v["shortcut_mode"].as_str().unwrap_or("toggle");
-                        save_config_file(url, model, &device, language, shortcut_mode);
+                        let prompt = v["prompt"].as_str().unwrap_or(DEFAULT_PROMPT);
+                        save_config_file(url, model, &device, language, shortcut_mode, prompt);
                         log("Plaintext key removed from config file");
                     }
                 }
@@ -157,6 +163,7 @@ pub struct AppState {
     pub api_url: Mutex<String>,
     pub api_model: Mutex<String>,
     pub language: Mutex<String>,
+    pub prompt: Mutex<String>,        // Whisper style prompt (punctuation + vocabulary)
     pub shortcut_mode: Mutex<String>, // "toggle" or "hold"
     pub selected_device: Mutex<Option<String>>,
     pub audio_sample_rate: Mutex<u32>,
@@ -196,6 +203,7 @@ fn start_recording(
     let api_url = state.api_url.lock().map_err(|e| e.to_string())?.clone();
     let api_model = state.api_model.lock().map_err(|e| e.to_string())?.clone();
     let language = state.language.lock().map_err(|e| e.to_string())?.clone();
+    let prompt = state.prompt.lock().map_err(|e| e.to_string())?.clone();
 
     if let Some(key) = api_key {
         let buffer = state.audio_buffer.clone();
@@ -286,7 +294,7 @@ fn start_recording(
                 match wav_result {
                     Ok(wav_data) => {
                         match transcribe::transcribe_audio(
-                            &api_url, &api_model, &key, &wav_data, &language,
+                            &api_url, &api_model, &key, &wav_data, &language, &prompt,
                         )
                         .await
                         {
@@ -336,7 +344,7 @@ async fn stop_recording(
 ) -> Result<String, String> {
     state.streaming_active.store(false, Ordering::SeqCst);
 
-    let (buffer, api_key, api_url, api_model, language) = {
+    let (buffer, api_key, api_url, api_model, language, prompt) = {
         let mut recording = state.recording.lock().map_err(|e| e.to_string())?;
         *recording = false;
 
@@ -366,8 +374,9 @@ async fn stop_recording(
         let api_url = state.api_url.lock().map_err(|e| e.to_string())?.clone();
         let api_model = state.api_model.lock().map_err(|e| e.to_string())?.clone();
         let language = state.language.lock().map_err(|e| e.to_string())?.clone();
+        let prompt = state.prompt.lock().map_err(|e| e.to_string())?.clone();
 
-        (buffer, api_key, api_url, api_model, language)
+        (buffer, api_key, api_url, api_model, language, prompt)
     };
 
     if buffer.is_empty() {
@@ -382,7 +391,7 @@ async fn stop_recording(
     let sr = *state.audio_sample_rate.lock().map_err(|e| e.to_string())?;
     let wav_data = audio::encode_wav(&buffer, sr).map_err(|e| e.to_string())?;
     let transcript =
-        transcribe::transcribe_audio(&api_url, &api_model, &api_key, &wav_data, &language)
+        transcribe::transcribe_audio(&api_url, &api_model, &api_key, &wav_data, &language, &prompt)
             .await
             .map_err(|e| e.to_string())?;
 
@@ -409,6 +418,7 @@ fn set_config(
     language: String,
     shortcut_mode: String,
     selected_device: Option<String>,
+    prompt: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     log(&format!("set_config called: mode={}, device={:?}", shortcut_mode, selected_device));
@@ -420,12 +430,13 @@ fn set_config(
         }
     }
 
-    save_config_file(&api_url, &api_model, &selected_device, &language, &shortcut_mode);
+    save_config_file(&api_url, &api_model, &selected_device, &language, &shortcut_mode, &prompt);
     log("Config file saved");
 
     *state.api_url.lock().map_err(|e| e.to_string())? = api_url;
     *state.api_model.lock().map_err(|e| e.to_string())? = api_model;
     *state.language.lock().map_err(|e| e.to_string())? = language;
+    *state.prompt.lock().map_err(|e| e.to_string())? = prompt;
     *state.shortcut_mode.lock().map_err(|e| e.to_string())? = shortcut_mode;
     *state.selected_device.lock().map_err(|e| e.to_string())? = selected_device;
     log("set_config completed OK");
@@ -438,6 +449,7 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
     let api_url = state.api_url.lock().map_err(|e| e.to_string())?.clone();
     let api_model = state.api_model.lock().map_err(|e| e.to_string())?.clone();
     let language = state.language.lock().map_err(|e| e.to_string())?.clone();
+    let prompt = state.prompt.lock().map_err(|e| e.to_string())?.clone();
     let shortcut_mode = state.shortcut_mode.lock().map_err(|e| e.to_string())?.clone();
     let selected_device = state.selected_device.lock().map_err(|e| e.to_string())?.clone();
     let devices = audio::list_input_devices();
@@ -446,6 +458,7 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
         "api_url": api_url,
         "api_model": api_model,
         "language": language,
+        "prompt": prompt,
         "shortcut_mode": shortcut_mode,
         "selected_device": selected_device,
         "devices": devices,
@@ -494,19 +507,52 @@ fn paste_text(text: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Get the usable desktop area excluding the taskbar.
+/// Returns (right, bottom) in physical pixels for the primary monitor.
+#[cfg(target_os = "windows")]
+fn get_work_area() -> Option<(i32, i32)> {
+    #[repr(C)]
+    struct RECT { left: i32, top: i32, right: i32, bottom: i32 }
+    extern "system" {
+        fn SystemParametersInfoW(action: u32, param: u32, data: *mut std::ffi::c_void, flags: u32) -> i32;
+    }
+    const SPI_GETWORKAREA: u32 = 0x0030;
+    unsafe {
+        let mut rect = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        if SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut rect as *mut _ as *mut std::ffi::c_void, 0) != 0 {
+            Some((rect.right, rect.bottom))
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn get_work_area() -> Option<(i32, i32)> {
+    None
+}
+
+/// Position a window at the bottom-right of the usable desktop (above the taskbar).
+fn position_bottom_right(win: &tauri::WebviewWindow, w: f64, h: f64) {
+    let padding = 12.0_f64;
+    if let Ok(Some(monitor)) = win.primary_monitor() {
+        let screen = monitor.size();
+        let scale = monitor.scale_factor();
+        // Use work area (excludes taskbar) when available, else full screen
+        let (area_w, area_h) = get_work_area()
+            .map(|(r, b)| (r as f64, b as f64))
+            .unwrap_or((screen.width as f64, screen.height as f64));
+        let x = (area_w / scale) - w - padding;
+        let y = (area_h / scale) - h - padding;
+        let _ = win.set_position(LogicalPosition::new(x, y));
+    }
+}
+
 #[tauri::command]
 fn resize_window(w: f64, h: f64, app_handle: tauri::AppHandle) -> Result<(), String> {
     if let Some(win) = app_handle.get_webview_window("main") {
         win.set_size(LogicalSize::new(w, h)).map_err(|e| e.to_string())?;
-        // Reposition to keep bottom-right corner anchored with padding
-        if let Ok(Some(monitor)) = win.primary_monitor() {
-            let screen = monitor.size();
-            let scale = monitor.scale_factor();
-            let padding = 20.0_f64;
-            let x = (screen.width as f64 / scale) - w - padding;
-            let y = (screen.height as f64 / scale) - h - padding;
-            let _ = win.set_position(LogicalPosition::new(x, y));
-        }
+        position_bottom_right(&win, w, h);
     }
     Ok(())
 }
@@ -533,7 +579,7 @@ pub fn run() {
 
     migrate_plaintext_key();
 
-    let (file_url, file_model, file_device, file_language, file_shortcut_mode) = load_config_file();
+    let (file_url, file_model, file_device, file_language, file_shortcut_mode, file_prompt) = load_config_file();
     let stored_key = load_api_key_secure();
     // SECURITY: never log the actual key value — only whether one exists
     log(&format!("Config loaded: url={}, model={}, device={:?}, has_key={}",
@@ -550,6 +596,7 @@ pub fn run() {
             api_url: Mutex::new(file_url),
             api_model: Mutex::new(file_model),
             language: Mutex::new(file_language),
+            prompt: Mutex::new(file_prompt),
             shortcut_mode: Mutex::new(file_shortcut_mode),
             selected_device: Mutex::new(file_device.clone()),
             audio_sample_rate: Mutex::new(audio::device_sample_rate(&file_device)),
@@ -569,18 +616,11 @@ pub fn run() {
                 #[cfg(debug_assertions)]
                 window.open_devtools();
 
-                // Position bottom-right with padding
-                if let Ok(Some(monitor)) = window.primary_monitor() {
-                    let screen = monitor.size();
-                    let scale = monitor.scale_factor();
-                    let win_w = 220.0_f64; // initial logical width
-                    let win_h = 32.0_f64;  // initial logical height
-                    let padding = 20.0_f64;
-                    let x = (screen.width as f64 / scale) - win_w - padding;
-                    let y = (screen.height as f64 / scale) - win_h - padding;
-                    let _ = window.set_position(LogicalPosition::new(x, y));
-                    log(&format!("Window positioned: {}x{} at ({}, {})", win_w, win_h, x as i32, y as i32));
-                }
+                // Position bottom-right above taskbar
+                let win_w = 220.0_f64;
+                let win_h = 32.0_f64;
+                position_bottom_right(&window, win_w, win_h);
+                log("Window positioned above taskbar");
             }
             // Install low-level keyboard hook for Win+Alt (2-key combo)
             hotkey::install(log);
@@ -712,12 +752,12 @@ mod tests {
     #[test]
     fn save_config_no_panic_with_none_device() {
         // Should not panic when device is None
-        save_config_file("https://example.com", "test", &None, "en", "toggle");
+        save_config_file("https://example.com", "test", &None, "en", "toggle", DEFAULT_PROMPT);
     }
 
     #[test]
     fn save_config_no_panic_with_some_device() {
-        save_config_file("https://example.com", "test", &Some("Mic".to_string()), "it", "toggle");
+        save_config_file("https://example.com", "test", &Some("Mic".to_string()), "it", "toggle", DEFAULT_PROMPT);
     }
 
     #[test]
@@ -778,7 +818,7 @@ mod tests {
     fn save_config_creates_valid_json() {
         // Verify save_config_file writes parseable JSON
         // Note: parallel tests may race on the config file, so we retry parse once
-        save_config_file("https://test.local/v1", "test-m", &Some("Dev1".into()), "fr", "toggle");
+        save_config_file("https://test.local/v1", "test-m", &Some("Dev1".into()), "fr", "toggle", DEFAULT_PROMPT);
         if let Some(path) = config_path() {
             let data = std::fs::read_to_string(&path).unwrap();
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
@@ -786,7 +826,7 @@ mod tests {
                 assert!(v["api_model"].is_string(), "api_model should be a string");
             }
             // If parse fails, another test raced the write — that's OK, the structure is tested above
-            save_config_file(DEFAULT_API_URL, DEFAULT_MODEL, &None, "", "toggle");
+            save_config_file(DEFAULT_API_URL, DEFAULT_MODEL, &None, "", "toggle", DEFAULT_PROMPT);
         }
     }
 
