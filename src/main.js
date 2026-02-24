@@ -1,7 +1,7 @@
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
-const W = 300;
+const W = 360;
 const MICRO_W = 56;
 const PILL_H = 32;
 const REC_H = 64;
@@ -508,12 +508,56 @@ function drawBars() {
 // ========================
 // SETTINGS
 // ========================
+
+// Per-provider key status (populated by openSettings)
+let providerKeyFlags = {};
+
+function getProviderFromUrl(url) {
+  if (!url) return 'custom';
+  if (url.includes('groq.com')) return 'groq';
+  if (url.includes('openai.com')) return 'openai';
+  return 'custom';
+}
+
+function providerLabel(provider) {
+  return { groq: 'Groq', openai: 'OpenAI', custom: 'Custom' }[provider] || provider;
+}
+
+function updateApiKeyHint(url) {
+  const provider = getProviderFromUrl(url);
+  const hasKey = providerKeyFlags['has_' + provider + '_key'];
+  const name = providerLabel(provider);
+  apiKeyInput.value = '';
+  apiKeyInput.placeholder = hasKey ? `(${name} key saved) enter new to change` : 'sk-... or gsk_...';
+  keyHint.textContent = hasKey ? `(${name} key saved)` : '';
+}
+
+function updateLlmKeyHint(url) {
+  const provider = getProviderFromUrl(url);
+  const hasKey = providerKeyFlags['has_llm_' + provider + '_key'];
+  const name = providerLabel(provider);
+  llmApiKeyInput.value = '';
+  llmApiKeyInput.placeholder = hasKey ? `(${name} key saved) enter new to change` : 'Separate LLM API key...';
+  if (llmKeyHint) {
+    llmKeyHint.textContent = hasKey ? `(${name} key saved)` : '';
+  }
+}
+
 async function openSettings() {
   try {
     const config = await invoke('get_config');
-    apiKeyInput.value = '';
-    apiKeyInput.placeholder = config.has_key ? '(secured) enter new to change' : 'sk-... or gsk_...';
-    keyHint.textContent = config.has_key ? '(saved securely)' : '';
+
+    // Store per-provider key flags
+    providerKeyFlags = {
+      has_groq_key: config.has_groq_key,
+      has_openai_key: config.has_openai_key,
+      has_custom_key: config.has_custom_key,
+      has_llm_groq_key: config.has_llm_groq_key,
+      has_llm_openai_key: config.has_llm_openai_key,
+      has_llm_custom_key: config.has_llm_custom_key,
+    };
+
+    updateApiKeyHint(config.api_url);
 
     // Populate device dropdown
     deviceSelect.innerHTML = '';
@@ -597,11 +641,7 @@ async function openSettings() {
     llmLogCheckbox.checked = config.llm_log_enabled !== false;
     toggleLlmKeyField();
 
-    llmApiKeyInput.value = '';
-    llmApiKeyInput.placeholder = config.has_llm_key ? '(secured) enter new to change' : 'Separate LLM API key...';
-    if (llmKeyHint) {
-      llmKeyHint.textContent = config.has_llm_key ? '(saved securely)' : '';
-    }
+    updateLlmKeyHint(config.llm_api_url);
 
   } catch (err) {
     console.error('get_config:', err);
@@ -664,6 +704,10 @@ llmProviderSelect.addEventListener('change', () => {
   } else {
     llmCustomEndpoint.classList.add('hide');
   }
+  // Update LLM key hint for the newly selected provider
+  const opt = llmProviderSelect.options[llmProviderSelect.selectedIndex];
+  const url = llmProviderSelect.value === 'llm-custom' ? llmApiUrlInput.value : (opt.dataset.url || '');
+  updateLlmKeyHint(url);
   resizeSettingsWindow();
 });
 
@@ -673,6 +717,10 @@ modelSelect.addEventListener('change', () => {
   } else {
     customFields.classList.add('hide');
   }
+  // Update API key hint for the newly selected provider
+  const opt = modelSelect.options[modelSelect.selectedIndex];
+  const url = modelSelect.value === 'custom' ? apiUrlInput.value : (opt.dataset.url || '');
+  updateApiKeyHint(url);
   resizeSettingsWindow();
 });
 
@@ -681,6 +729,7 @@ modelSelect.addEventListener('change', () => {
 // ========================
 let shortcutRecording = false;
 let shortcutPollInterval = null;
+let shortcutAutoCancel = null;
 
 shortcutRecordBtn.addEventListener('click', async () => {
   if (shortcutRecording) {
@@ -689,14 +738,24 @@ shortcutRecordBtn.addEventListener('click', async () => {
     shortcutRecordBtn.textContent = 'Change';
     shortcutRecording = false;
     if (shortcutPollInterval) { clearInterval(shortcutPollInterval); shortcutPollInterval = null; }
+    if (shortcutAutoCancel) { clearTimeout(shortcutAutoCancel); shortcutAutoCancel = null; }
     return;
   }
 
+  // Visual feedback BEFORE IPC to avoid race condition
   shortcutRecording = true;
   shortcutRecordBtn.textContent = 'Cancel';
-  shortcutLabel.textContent = 'Press two modifier keys...';
+  shortcutLabel.textContent = '2 modifiers (+ optional key)...';
 
-  await invoke('start_shortcut_recording');
+  try {
+    await invoke('start_shortcut_recording');
+  } catch (err) {
+    console.error('start_shortcut_recording failed:', err);
+    shortcutLabel.textContent = 'Recording failed';
+    shortcutRecordBtn.textContent = 'Change';
+    shortcutRecording = false;
+    return;
+  }
 
   shortcutPollInterval = setInterval(async () => {
     try {
@@ -704,15 +763,20 @@ shortcutRecordBtn.addEventListener('click', async () => {
       if (result.done) {
         clearInterval(shortcutPollInterval);
         shortcutPollInterval = null;
+        if (shortcutAutoCancel) { clearTimeout(shortcutAutoCancel); shortcutAutoCancel = null; }
         shortcutRecording = false;
         shortcutLabel.textContent = result.label;
         shortcutRecordBtn.textContent = 'Change';
       }
-    } catch (_) {}
+    } catch (err) {
+      console.error('poll_shortcut_recording error:', err);
+      shortcutLabel.textContent = 'Error: ' + String(err).substring(0, 30);
+    }
   }, 100);
 
   // Auto-cancel after 10s
-  setTimeout(() => {
+  shortcutAutoCancel = setTimeout(() => {
+    shortcutAutoCancel = null;
     if (shortcutRecording) {
       shortcutRecordBtn.click();
     }
@@ -749,13 +813,12 @@ saveBtn.addEventListener('click', async () => {
   const prompt = promptInput.value;
 
   if (!apiKey) {
-    try {
-      const config = await invoke('get_config');
-      if (!config.has_key) {
-        apiKeyInput.focus();
-        return;
-      }
-    } catch (_) {}
+    const provider = getProviderFromUrl(apiUrl);
+    const hasKey = providerKeyFlags['has_' + provider + '_key'];
+    if (!hasKey) {
+      apiKeyInput.focus();
+      return;
+    }
   }
 
   const preprocessingEnabled = preprocessingCheckbox.checked;

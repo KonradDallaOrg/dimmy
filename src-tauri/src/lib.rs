@@ -170,8 +170,10 @@ fn migrate_plaintext_key() {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
                 if let Some(key) = v["api_key"].as_str() {
                     if !key.is_empty() {
-                        log("Migrating plaintext API key to secure storage...");
-                        match save_api_key_secure(key) {
+                        let api_url = v["api_url"].as_str().unwrap_or(DEFAULT_API_URL);
+                        let provider = url_to_provider(api_url);
+                        log(&format!("Migrating plaintext API key to secure storage (provider={})...", provider));
+                        match save_key_for_provider("api-key", provider, key) {
                             Ok(()) => log("Key migrated to secure storage"),
                             Err(e) => log(&format!("WARNING: migration failed: {}", e)),
                         }
@@ -186,57 +188,83 @@ fn migrate_plaintext_key() {
     }
 }
 
-// ── Secure key storage: keyring with native platform backends ──
-// Requires features: windows-native, apple-native, sync-secret-service
+// ── Per-provider secure key storage ─────────────────────────────────
+// Keys are stored per-provider so switching providers doesn't lose keys.
+// Keyring entries: "pai-voice" / "api-key-{provider}" and "llm-key-{provider}"
 
-fn save_api_key_secure(key: &str) -> Result<(), String> {
-    let entry = keyring::Entry::new("pai-voice", "api-key")
-        .map_err(|e| {
-            log(&format!("ERROR: keyring Entry::new failed: {}", e));
-            format!("Credential store error: {}", e)
-        })?;
-    entry.set_password(key).map_err(|e| {
-        log(&format!("ERROR: keyring set_password failed: {}", e));
-        format!("Failed to save API key: {}", e)
-    })?;
-    log("API key saved to secure storage (keyring)");
-    Ok(())
-}
-
-fn load_api_key_secure() -> Option<String> {
-    match keyring::Entry::new("pai-voice", "api-key") {
-        Ok(entry) => match entry.get_password() {
-            Ok(key) => {
-                log("API key loaded from secure storage (keyring)");
-                Some(key)
-            }
-            Err(e) => {
-                log(&format!("WARNING: keyring get_password failed: {}", e));
-                None
-            }
-        },
-        Err(e) => {
-            log(&format!("WARNING: keyring Entry::new failed on load: {}", e));
-            None
-        }
+/// Derive a provider identifier from a URL hostname.
+fn url_to_provider(url: &str) -> &str {
+    if url.contains("groq.com") {
+        "groq"
+    } else if url.contains("openai.com") {
+        "openai"
+    } else {
+        "custom"
     }
 }
 
-fn save_llm_key_secure(key: &str) -> Result<(), String> {
-    let entry = keyring::Entry::new("pai-voice", "llm-api-key")
-        .map_err(|e| format!("Credential store error: {}", e))?;
-    entry.set_password(key).map_err(|e| format!("Failed to save LLM API key: {}", e))?;
-    log("LLM API key saved to secure storage (keyring)");
+fn save_key_for_provider(prefix: &str, provider: &str, key: &str) -> Result<(), String> {
+    let entry_name = format!("{}-{}", prefix, provider);
+    let entry = keyring::Entry::new("pai-voice", &entry_name)
+        .map_err(|e| {
+            log(&format!("ERROR: keyring Entry::new({}) failed: {}", entry_name, e));
+            format!("Credential store error: {}", e)
+        })?;
+    entry.set_password(key).map_err(|e| {
+        log(&format!("ERROR: keyring set_password({}) failed: {}", entry_name, e));
+        format!("Failed to save key: {}", e)
+    })?;
+    log(&format!("Key saved to secure storage: {}", entry_name));
     Ok(())
 }
 
-fn load_llm_key_secure() -> Option<String> {
-    match keyring::Entry::new("pai-voice", "llm-api-key") {
+fn load_key_for_provider(prefix: &str, provider: &str) -> Option<String> {
+    let entry_name = format!("{}-{}", prefix, provider);
+    match keyring::Entry::new("pai-voice", &entry_name) {
         Ok(entry) => match entry.get_password() {
-            Ok(key) => Some(key),
+            Ok(key) => {
+                log(&format!("Key loaded from secure storage: {}", entry_name));
+                Some(key)
+            }
             Err(_) => None,
         },
         Err(_) => None,
+    }
+}
+
+fn has_key_for_provider(prefix: &str, provider: &str) -> bool {
+    let entry_name = format!("{}-{}", prefix, provider);
+    match keyring::Entry::new("pai-voice", &entry_name) {
+        Ok(entry) => entry.get_password().is_ok(),
+        Err(_) => false,
+    }
+}
+
+fn delete_key(service: &str, name: &str) {
+    if let Ok(entry) = keyring::Entry::new(service, name) {
+        let _ = entry.delete_credential();
+    }
+}
+
+/// Migrate old single "api-key" and "llm-api-key" entries to per-provider entries.
+fn migrate_keyring_to_per_provider(api_url: &str, llm_api_url: &str) {
+    // Migrate transcription key
+    if let Ok(entry) = keyring::Entry::new("pai-voice", "api-key") {
+        if let Ok(key) = entry.get_password() {
+            let provider = url_to_provider(api_url);
+            log(&format!("Migrating old api-key to api-key-{}", provider));
+            let _ = save_key_for_provider("api-key", provider, &key);
+            delete_key("pai-voice", "api-key");
+        }
+    }
+    // Migrate LLM key
+    if let Ok(entry) = keyring::Entry::new("pai-voice", "llm-api-key") {
+        if let Ok(key) = entry.get_password() {
+            let provider = url_to_provider(llm_api_url);
+            log(&format!("Migrating old llm-api-key to llm-key-{}", provider));
+            let _ = save_key_for_provider("llm-key", provider, &key);
+            delete_key("pai-voice", "llm-api-key");
+        }
     }
 }
 
@@ -557,17 +585,21 @@ fn set_config(
 ) -> Result<(), String> {
     log(&format!("set_config called: mode={}, device={:?}", shortcut_mode, selected_device));
 
+    // Save transcription API key for the provider derived from the URL
+    let transcription_provider = url_to_provider(&api_url);
     if let Some(ref key) = api_key {
         if !key.is_empty() {
-            save_api_key_secure(key)?;
+            save_key_for_provider("api-key", transcription_provider, key)?;
             *state.api_key.lock().map_err(|e| e.to_string())? = Some(key.clone());
         }
     }
 
-    // Handle separate LLM API key
+    // Handle separate LLM API key (provider derived from LLM URL)
+    let llm_url_for_provider = llm_api_url.as_deref().unwrap_or(&api_url);
+    let llm_provider = url_to_provider(llm_url_for_provider);
     if let Some(ref key) = llm_api_key {
         if !key.is_empty() {
-            save_llm_key_secure(key)?;
+            save_key_for_provider("llm-key", llm_provider, key)?;
             *state.llm_api_key.lock().map_err(|e| e.to_string())? = Some(key.clone());
         }
     }
@@ -627,12 +659,28 @@ fn set_config(
     save_config_file(&cfg);
     log("Config file saved");
 
-    *state.api_url.lock().map_err(|e| e.to_string())? = api_url;
+    *state.api_url.lock().map_err(|e| e.to_string())? = api_url.clone();
     *state.api_model.lock().map_err(|e| e.to_string())? = api_model;
     *state.language.lock().map_err(|e| e.to_string())? = language;
     *state.prompt.lock().map_err(|e| e.to_string())? = prompt;
     *state.shortcut_mode.lock().map_err(|e| e.to_string())? = shortcut_mode;
     *state.selected_device.lock().map_err(|e| e.to_string())? = selected_device;
+
+    // When provider changes, load the stored key for the new provider into AppState
+    if api_key.is_none() || api_key.as_deref() == Some("") {
+        let provider = url_to_provider(&api_url);
+        if let Some(key) = load_key_for_provider("api-key", provider) {
+            *state.api_key.lock().map_err(|e| e.to_string())? = Some(key);
+        }
+    }
+    if llm_api_key.is_none() || llm_api_key.as_deref() == Some("") {
+        let llm_url = state.llm_api_url.lock().map_err(|e| e.to_string())?.clone();
+        let provider = url_to_provider(&llm_url);
+        if let Some(key) = load_key_for_provider("llm-key", provider) {
+            *state.llm_api_key.lock().map_err(|e| e.to_string())? = Some(key);
+        }
+    }
+
     log("set_config completed OK");
     Ok(())
 }
@@ -664,6 +712,14 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
     let styles: Vec<&str> = llm::STYLES.iter().map(|(name, _)| *name).collect();
     let tones: Vec<&str> = llm::TONES.iter().map(|(name, _)| *name).collect();
 
+    // Per-provider key flags
+    let has_groq_key = has_key_for_provider("api-key", "groq");
+    let has_openai_key = has_key_for_provider("api-key", "openai");
+    let has_custom_key = has_key_for_provider("api-key", "custom");
+    let has_llm_groq_key = has_key_for_provider("llm-key", "groq");
+    let has_llm_openai_key = has_key_for_provider("llm-key", "openai");
+    let has_llm_custom_key = has_key_for_provider("llm-key", "custom");
+
     Ok(serde_json::json!({
         "has_key": has_key,
         "api_url": api_url,
@@ -687,6 +743,13 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
         "shortcut_label": shortcut_label,
         "llm_styles": styles,
         "llm_tones": tones,
+        // Per-provider key flags
+        "has_groq_key": has_groq_key,
+        "has_openai_key": has_openai_key,
+        "has_custom_key": has_custom_key,
+        "has_llm_groq_key": has_llm_groq_key,
+        "has_llm_openai_key": has_llm_openai_key,
+        "has_llm_custom_key": has_llm_custom_key,
     }))
 }
 
@@ -751,6 +814,7 @@ async fn process_with_llm(
 
 #[tauri::command]
 fn start_shortcut_recording() -> Result<(), String> {
+    log("start_shortcut_recording called");
     hotkey::start_recording();
     Ok(())
 }
@@ -759,12 +823,17 @@ fn start_shortcut_recording() -> Result<(), String> {
 fn poll_shortcut_recording(
     state: tauri::State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
+    // Poll modifier keys via GetAsyncKeyState
+    hotkey::poll_recording_keys();
+
     match hotkey::take_recorded() {
         Some((name, label)) => {
-            // Apply the new shortcut immediately
+            log(&format!("poll_shortcut_recording: combo detected: {} ({})", name, label));
             hotkey::set_shortcut(&name);
             *state.shortcut.lock().map_err(|e| e.to_string())? = name.clone();
-            save_current_config(&state)?;
+            if let Err(e) = save_current_config(&state) {
+                log(&format!("WARNING: save_current_config failed: {}", e));
+            }
             Ok(serde_json::json!({ "done": true, "name": name, "label": label }))
         }
         None => Ok(serde_json::json!({ "done": false })),
@@ -974,12 +1043,19 @@ pub fn run() {
     migrate_plaintext_key();
 
     let file_cfg = load_config_file();
-    let stored_key = load_api_key_secure();
-    let stored_llm_key = load_llm_key_secure();
+
+    // Migrate old single keyring entries to per-provider entries
+    migrate_keyring_to_per_provider(&file_cfg.api_url, &file_cfg.llm_api_url);
+
+    // Load the key for the current provider
+    let transcription_provider = url_to_provider(&file_cfg.api_url);
+    let llm_provider = url_to_provider(&file_cfg.llm_api_url);
+    let stored_key = load_key_for_provider("api-key", transcription_provider);
+    let stored_llm_key = load_key_for_provider("llm-key", llm_provider);
     // SECURITY: never log the actual key value — only whether one exists
-    log(&format!("Config loaded: url={}, model={}, device={:?}, has_key={}, llm_enabled={}, llm_style={}",
-        file_cfg.api_url, file_cfg.api_model, file_cfg.selected_device, stored_key.is_some(),
-        file_cfg.llm_enabled, file_cfg.llm_style));
+    log(&format!("Config loaded: url={}, model={}, device={:?}, provider={}, has_key={}, llm_provider={}, llm_enabled={}, llm_style={}",
+        file_cfg.api_url, file_cfg.api_model, file_cfg.selected_device, transcription_provider,
+        stored_key.is_some(), llm_provider, file_cfg.llm_enabled, file_cfg.llm_style));
 
     let shortcut_preset = file_cfg.shortcut.clone();
 

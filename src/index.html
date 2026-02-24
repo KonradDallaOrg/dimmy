@@ -26,6 +26,26 @@
 
     <!-- Settings panel -->
     <div id="settings-panel" class="panel">
+
+      <!-- Group 1: Activation -->
+      <label class="section-label">Activation</label>
+
+      <label>Shortcut Key</label>
+      <div style="display:flex;gap:6px;align-items:center">
+        <span id="shortcut-label" style="flex:1;font-size:12px;color:#e5e7eb">Win + Alt</span>
+        <button id="shortcut-record-btn" type="button" style="font-size:11px;padding:2px 8px">Change</button>
+      </div>
+
+      <label>Shortcut Mode</label>
+      <select id="shortcut-mode-select">
+        <option value="toggle">Toggle &#8212; press to start/stop</option>
+        <option value="hold">Hold &#8212; hold to record, release to stop</option>
+      </select>
+
+      <!-- Group 2: Audio -->
+      <div class="settings-divider"></div>
+      <label class="section-label">Audio</label>
+
       <label>Audio Input</label>
       <select id="device-select"></select>
 
@@ -45,6 +65,15 @@
         <option value="ko">&#54620;&#44397;&#50612;</option>
         <option value="ru">&#1056;&#1091;&#1089;&#1089;&#1082;&#1080;&#1081;</option>
       </select>
+
+      <label class="checkbox-label">
+        <input type="checkbox" id="preprocessing-enabled" checked />
+        Audio preprocessing <span style="color:#6b7280;font-weight:400">(noise filter + normalization)</span>
+      </label>
+
+      <!-- Group 3: Transcription -->
+      <div class="settings-divider"></div>
+      <label class="section-label">Transcription</label>
 
       <label>Provider &amp; Model</label>
       <select id="model-select">
@@ -100,29 +129,13 @@
       <label>Prompt / Vocabulary <span style="color:#6b7280;font-weight:400">(guides punctuation &amp; spelling)</span></label>
       <textarea id="prompt-input" rows="2" placeholder="Whisper mimics the style of this text. Add punctuation and custom terms here."></textarea>
 
-      <label>Shortcut Key</label>
-      <div style="display:flex;gap:6px;align-items:center">
-        <span id="shortcut-label" style="flex:1;font-size:12px;color:#e5e7eb">Win + Alt</span>
-        <button id="shortcut-record-btn" type="button" style="font-size:11px;padding:2px 8px">Change</button>
-      </div>
-
-      <label>Shortcut Mode</label>
-      <select id="shortcut-mode-select">
-        <option value="toggle">Toggle &#8212; press to start/stop</option>
-        <option value="hold">Hold &#8212; hold to record, release to stop</option>
-      </select>
-
-      <label class="checkbox-label">
-        <input type="checkbox" id="preprocessing-enabled" checked />
-        Audio preprocessing <span style="color:#6b7280;font-weight:400">(noise filter + volume normalization)</span>
-      </label>
-
-      <!-- LLM Post-Processing -->
+      <!-- Group 4: AI Enhancement -->
       <div class="settings-divider"></div>
+      <label class="section-label">AI Enhancement</label>
 
       <label class="checkbox-label">
         <input type="checkbox" id="llm-enabled" />
-        AI Enhancement <span style="color:#6b7280;font-weight:400">(post-process with LLM)</span>
+        Enable AI Enhancement <span style="color:#6b7280;font-weight:400">(post-process with LLM)</span>
       </label>
 
       <div id="llm-fields" class="hide">
