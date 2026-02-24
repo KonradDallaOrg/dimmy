@@ -65,6 +65,7 @@ struct AppConfig {
     selected_device: Option<String>,
     language: String,
     shortcut_mode: String,
+    shortcut: String,
     prompt: String,
     // LLM post-processing fields
     llm_enabled: bool,
@@ -75,6 +76,7 @@ struct AppConfig {
     llm_api_model: String,
     llm_use_same_key: bool,
     llm_log_enabled: bool,
+    preprocessing_enabled: bool,
 }
 
 impl Default for AppConfig {
@@ -85,6 +87,7 @@ impl Default for AppConfig {
             selected_device: None,
             language: String::new(),
             shortcut_mode: "toggle".to_string(),
+            shortcut: "win+alt".to_string(),
             prompt: DEFAULT_PROMPT.to_string(),
             llm_enabled: false,
             llm_style: "off".to_string(),
@@ -94,6 +97,7 @@ impl Default for AppConfig {
             llm_api_model: DEFAULT_LLM_MODEL.to_string(),
             llm_use_same_key: true,
             llm_log_enabled: true,
+            preprocessing_enabled: true,
         }
     }
 }
@@ -109,6 +113,7 @@ fn save_config_file(cfg: &AppConfig) {
             "api_model": cfg.api_model,
             "language": cfg.language,
             "shortcut_mode": cfg.shortcut_mode,
+            "shortcut": cfg.shortcut,
             "prompt": cfg.prompt,
             "llm_enabled": cfg.llm_enabled,
             "llm_style": cfg.llm_style,
@@ -118,6 +123,7 @@ fn save_config_file(cfg: &AppConfig) {
             "llm_api_model": cfg.llm_api_model,
             "llm_use_same_key": cfg.llm_use_same_key,
             "llm_log_enabled": cfg.llm_log_enabled,
+            "preprocessing_enabled": cfg.preprocessing_enabled,
         });
         if let Some(ref dev) = cfg.selected_device {
             json["selected_device"] = serde_json::json!(dev);
@@ -138,6 +144,7 @@ fn load_config_file() -> AppConfig {
                     selected_device: v["selected_device"].as_str().map(|s| s.to_string()),
                     language: v["language"].as_str().unwrap_or("").to_string(),
                     shortcut_mode: v["shortcut_mode"].as_str().unwrap_or("toggle").to_string(),
+                    shortcut: v["shortcut"].as_str().unwrap_or("win+alt").to_string(),
                     prompt: v["prompt"].as_str().unwrap_or(DEFAULT_PROMPT).to_string(),
                     llm_enabled: v["llm_enabled"].as_bool().unwrap_or(defaults.llm_enabled),
                     llm_style: v["llm_style"].as_str().unwrap_or(&defaults.llm_style).to_string(),
@@ -147,6 +154,7 @@ fn load_config_file() -> AppConfig {
                     llm_api_model: v["llm_api_model"].as_str().unwrap_or(&defaults.llm_api_model).to_string(),
                     llm_use_same_key: v["llm_use_same_key"].as_bool().unwrap_or(defaults.llm_use_same_key),
                     llm_log_enabled: v["llm_log_enabled"].as_bool().unwrap_or(defaults.llm_log_enabled),
+                    preprocessing_enabled: v["preprocessing_enabled"].as_bool().unwrap_or(defaults.preprocessing_enabled),
                 };
             }
         }
@@ -240,6 +248,7 @@ pub struct AppState {
     pub language: Mutex<String>,
     pub prompt: Mutex<String>,        // Whisper style prompt (punctuation + vocabulary)
     pub shortcut_mode: Mutex<String>, // "toggle" or "hold"
+    pub shortcut: Mutex<String>,      // "win+alt", "ctrl+alt", "ctrl+shift"
     pub selected_device: Mutex<Option<String>>,
     pub audio_sample_rate: Mutex<u32>,
     pub transcript: Mutex<String>,
@@ -256,6 +265,7 @@ pub struct AppState {
     pub llm_use_same_key: Mutex<bool>,
     pub llm_api_key: Mutex<Option<String>>,
     pub llm_log_enabled: Mutex<bool>,
+    pub preprocessing_enabled: Mutex<bool>,
 }
 
 #[tauri::command]
@@ -289,6 +299,8 @@ fn start_recording(
     let api_model = state.api_model.lock().map_err(|e| e.to_string())?.clone();
     let language = state.language.lock().map_err(|e| e.to_string())?.clone();
     let prompt = state.prompt.lock().map_err(|e| e.to_string())?.clone();
+
+    let preprocess_on = *state.preprocessing_enabled.lock().map_err(|e| e.to_string())?;
 
     if let Some(key) = api_key {
         let buffer = state.audio_buffer.clone();
@@ -367,12 +379,17 @@ fn start_recording(
 
                 offset = split_end;
 
-                // Preprocess: highpass + VAD + normalize
-                let processed = preprocessor.process(&chunk_data);
-                if processed.is_empty() {
-                    // Entire chunk was noise/silence — skip sending to Whisper
-                    continue;
-                }
+                // Preprocess: highpass + VAD + normalize (if enabled)
+                let processed = if preprocess_on {
+                    let p = preprocessor.process(&chunk_data);
+                    if p.is_empty() {
+                        // Entire chunk was noise/silence — skip sending to Whisper
+                        continue;
+                    }
+                    p
+                } else {
+                    chunk_data
+                };
 
                 chunk_index += 1;
 
@@ -483,12 +500,18 @@ async fn stop_recording(
     );
 
     let sr = *state.audio_sample_rate.lock().map_err(|e| e.to_string())?;
-    // Preprocess final buffer: highpass + VAD + normalize
-    let processed = preprocess::process_buffer(&buffer, sr);
-    if processed.is_empty() {
-        return Err("No speech detected in recording".into());
-    }
-    let wav_data = audio::encode_wav(&processed, sr).map_err(|e| e.to_string())?;
+    let preprocess_final = *state.preprocessing_enabled.lock().map_err(|e| e.to_string())?;
+    // Preprocess final buffer: highpass + VAD + normalize (if enabled)
+    let audio_data = if preprocess_final {
+        let processed = preprocess::process_buffer(&buffer, sr);
+        if processed.is_empty() {
+            return Err("No speech detected in recording".into());
+        }
+        processed
+    } else {
+        buffer
+    };
+    let wav_data = audio::encode_wav(&audio_data, sr).map_err(|e| e.to_string())?;
     let transcript =
         transcribe::transcribe_audio(&api_url, &api_model, &api_key, &wav_data, &language, &prompt)
             .await
@@ -516,6 +539,7 @@ fn set_config(
     api_model: String,
     language: String,
     shortcut_mode: String,
+    shortcut: Option<String>,
     selected_device: Option<String>,
     prompt: String,
     // LLM fields — all Option for backward compatibility
@@ -528,6 +552,7 @@ fn set_config(
     llm_use_same_key: Option<bool>,
     llm_api_key: Option<String>,
     llm_log_enabled: Option<bool>,
+    preprocessing_enabled: Option<bool>,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     log(&format!("set_config called: mode={}, device={:?}", shortcut_mode, selected_device));
@@ -572,6 +597,13 @@ fn set_config(
     if let Some(v) = llm_log_enabled {
         *state.llm_log_enabled.lock().map_err(|e| e.to_string())? = v;
     }
+    if let Some(v) = preprocessing_enabled {
+        *state.preprocessing_enabled.lock().map_err(|e| e.to_string())? = v;
+    }
+    if let Some(ref v) = shortcut {
+        *state.shortcut.lock().map_err(|e| e.to_string())? = v.clone();
+        hotkey::set_shortcut(v);
+    }
 
     // Build AppConfig from current state for saving
     let cfg = AppConfig {
@@ -580,6 +612,7 @@ fn set_config(
         selected_device: selected_device.clone(),
         language: language.clone(),
         shortcut_mode: shortcut_mode.clone(),
+        shortcut: state.shortcut.lock().map_err(|e| e.to_string())?.clone(),
         prompt: prompt.clone(),
         llm_enabled: *state.llm_enabled.lock().map_err(|e| e.to_string())?,
         llm_style: state.llm_style.lock().map_err(|e| e.to_string())?.clone(),
@@ -589,6 +622,7 @@ fn set_config(
         llm_api_model: state.llm_api_model.lock().map_err(|e| e.to_string())?.clone(),
         llm_use_same_key: *state.llm_use_same_key.lock().map_err(|e| e.to_string())?,
         llm_log_enabled: *state.llm_log_enabled.lock().map_err(|e| e.to_string())?,
+        preprocessing_enabled: *state.preprocessing_enabled.lock().map_err(|e| e.to_string())?,
     };
     save_config_file(&cfg);
     log("Config file saved");
@@ -623,6 +657,11 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
     let llm_use_same_key = *state.llm_use_same_key.lock().map_err(|e| e.to_string())?;
     let has_llm_key = state.llm_api_key.lock().map_err(|e| e.to_string())?.is_some();
     let llm_log_enabled = *state.llm_log_enabled.lock().map_err(|e| e.to_string())?;
+    let preprocessing_enabled = *state.preprocessing_enabled.lock().map_err(|e| e.to_string())?;
+    let shortcut = state.shortcut.lock().map_err(|e| e.to_string())?.clone();
+    let shortcut_presets: Vec<serde_json::Value> = hotkey::SHORTCUT_PRESETS.iter()
+        .map(|(id, label)| serde_json::json!({"id": id, "label": label}))
+        .collect();
 
     let styles: Vec<&str> = llm::STYLES.iter().map(|(name, _)| *name).collect();
     let tones: Vec<&str> = llm::TONES.iter().map(|(name, _)| *name).collect();
@@ -645,6 +684,9 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
         "llm_use_same_key": llm_use_same_key,
         "has_llm_key": has_llm_key,
         "llm_log_enabled": llm_log_enabled,
+        "preprocessing_enabled": preprocessing_enabled,
+        "shortcut": shortcut,
+        "shortcut_presets": shortcut_presets,
         "llm_styles": styles,
         "llm_tones": tones,
     }))
@@ -775,6 +817,7 @@ fn save_current_config(state: &tauri::State<'_, AppState>) -> Result<(), String>
         selected_device: state.selected_device.lock().map_err(|e| e.to_string())?.clone(),
         language: state.language.lock().map_err(|e| e.to_string())?.clone(),
         shortcut_mode: state.shortcut_mode.lock().map_err(|e| e.to_string())?.clone(),
+        shortcut: state.shortcut.lock().map_err(|e| e.to_string())?.clone(),
         prompt: state.prompt.lock().map_err(|e| e.to_string())?.clone(),
         llm_enabled: *state.llm_enabled.lock().map_err(|e| e.to_string())?,
         llm_style: state.llm_style.lock().map_err(|e| e.to_string())?.clone(),
@@ -784,6 +827,7 @@ fn save_current_config(state: &tauri::State<'_, AppState>) -> Result<(), String>
         llm_api_model: state.llm_api_model.lock().map_err(|e| e.to_string())?.clone(),
         llm_use_same_key: *state.llm_use_same_key.lock().map_err(|e| e.to_string())?,
         llm_log_enabled: *state.llm_log_enabled.lock().map_err(|e| e.to_string())?,
+        preprocessing_enabled: *state.preprocessing_enabled.lock().map_err(|e| e.to_string())?,
     };
     save_config_file(&cfg);
     Ok(())
@@ -911,6 +955,8 @@ pub fn run() {
         file_cfg.api_url, file_cfg.api_model, file_cfg.selected_device, stored_key.is_some(),
         file_cfg.llm_enabled, file_cfg.llm_style));
 
+    let shortcut_preset = file_cfg.shortcut.clone();
+
     let audio_buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
     let audio_tx = audio::spawn_audio_thread(audio_buffer.clone());
 
@@ -924,6 +970,7 @@ pub fn run() {
             language: Mutex::new(file_cfg.language),
             prompt: Mutex::new(file_cfg.prompt),
             shortcut_mode: Mutex::new(file_cfg.shortcut_mode),
+            shortcut: Mutex::new(file_cfg.shortcut.clone()),
             selected_device: Mutex::new(file_cfg.selected_device.clone()),
             audio_sample_rate: Mutex::new(audio::device_sample_rate(&file_cfg.selected_device)),
             transcript: Mutex::new(String::new()),
@@ -940,8 +987,9 @@ pub fn run() {
             llm_use_same_key: Mutex::new(file_cfg.llm_use_same_key),
             llm_api_key: Mutex::new(stored_llm_key),
             llm_log_enabled: Mutex::new(file_cfg.llm_log_enabled),
+            preprocessing_enabled: Mutex::new(file_cfg.preprocessing_enabled),
         })
-        .setup(|app| {
+        .setup(move |app| {
             // Remove Windows DWM border and set transparent background
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_shadow(false);
@@ -958,7 +1006,8 @@ pub fn run() {
                 position_bottom_right(&window, win_w, win_h);
                 log("Window positioned above taskbar");
             }
-            // Install low-level keyboard hook for Win+Alt (2-key combo)
+            // Configure and install keyboard hook
+            hotkey::set_shortcut(&shortcut_preset);
             hotkey::install(log);
 
             // Poll for hotkey events and emit to frontend

@@ -44,10 +44,13 @@ const apiUrlInput = document.getElementById('api-url');
 const apiModelInput = document.getElementById('api-model');
 const apiKeyInput = document.getElementById('api-key');
 const keyHint = document.getElementById('key-hint');
+const shortcutSelect = document.getElementById('shortcut-select');
 const shortcutModeSelect = document.getElementById('shortcut-mode-select');
 const promptInput = document.getElementById('prompt-input');
 const saveBtn = document.getElementById('save-btn');
 const closeBtn = document.getElementById('close-btn');
+
+const preprocessingCheckbox = document.getElementById('preprocessing-enabled');
 
 // LLM DOM
 const llmEnabledCheckbox = document.getElementById('llm-enabled');
@@ -530,6 +533,18 @@ async function openSettings() {
     // Language
     languageSelect.value = config.language || '';
 
+    // Shortcut key
+    shortcutSelect.innerHTML = '';
+    if (config.shortcut_presets) {
+      for (const preset of config.shortcut_presets) {
+        const opt = document.createElement('option');
+        opt.value = preset.id;
+        opt.textContent = preset.label;
+        if (config.shortcut === preset.id) opt.selected = true;
+        shortcutSelect.appendChild(opt);
+      }
+    }
+
     // Shortcut mode
     shortcutModeSelect.value = config.shortcut_mode || 'toggle';
 
@@ -553,6 +568,9 @@ async function openSettings() {
     } else {
       customFields.classList.add('hide');
     }
+
+    // Preprocessing
+    preprocessingCheckbox.checked = config.preprocessing_enabled !== false;
 
     // LLM settings
     llmEnabledCheckbox.checked = config.llm_enabled || false;
@@ -692,6 +710,7 @@ saveBtn.addEventListener('click', async () => {
   const selectedDevice = deviceSelect.value || null;
   const language = languageSelect.value;
   const shortcutMode = shortcutModeSelect.value;
+  const shortcutKey = shortcutSelect.value;
   const prompt = promptInput.value;
 
   if (!apiKey) {
@@ -703,6 +722,8 @@ saveBtn.addEventListener('click', async () => {
       }
     } catch (_) {}
   }
+
+  const preprocessingEnabled = preprocessingCheckbox.checked;
 
   // LLM fields
   const llmEnabledVal = llmEnabledCheckbox.checked;
@@ -726,6 +747,8 @@ saveBtn.addEventListener('click', async () => {
   try {
     await invoke('set_config', {
       apiKey, apiUrl, apiModel, language, shortcutMode, selectedDevice, prompt,
+      shortcut: shortcutKey,
+      preprocessingEnabled: preprocessingEnabled,
       llmEnabled: llmEnabledVal,
       llmStyle: llmStyleVal,
       llmTone: llmToneVal,

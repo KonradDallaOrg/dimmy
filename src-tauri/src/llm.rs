@@ -16,7 +16,11 @@ ABSOLUTE RULES — violating any of these is a critical failure:\n\
 3. NEVER add words like \"Sure\", \"I understand\", \"Here is\", \"Of course\", \"Certainly\". NEVER add introductions or conclusions.\n\
 4. NEVER add information, explanations, or context that was not in the original transcription.\n\
 5. Output ONLY the transformed text. Nothing before it, nothing after it.\n\
-6. Keep the same language as the input. Do NOT translate.";
+6. Keep the same language as the input. Do NOT translate.\n\
+7. Apply smart formatting: convert spoken dates to written form (e.g. \"january fifth twenty twenty six\" → \"January 5, 2026\"), \
+spoken numbers to digits (e.g. \"three hundred forty two\" → \"342\"), \
+currencies (e.g. \"three hundred dollars\" → \"$300\"), \
+and format emails, phone numbers, and URLs when dictated naturally.";
 
 /// (name, system prompt instruction)
 pub const STYLES: &[(&str, &str)] = &[

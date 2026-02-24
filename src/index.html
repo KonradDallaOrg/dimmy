@@ -100,11 +100,19 @@
       <label>Prompt / Vocabulary <span style="color:#6b7280;font-weight:400">(guides punctuation &amp; spelling)</span></label>
       <textarea id="prompt-input" rows="2" placeholder="Whisper mimics the style of this text. Add punctuation and custom terms here."></textarea>
 
-      <label>Shortcut Mode (Win+Alt / Cmd+Alt)</label>
+      <label>Shortcut Key</label>
+      <select id="shortcut-select"></select>
+
+      <label>Shortcut Mode</label>
       <select id="shortcut-mode-select">
         <option value="toggle">Toggle &#8212; press to start/stop</option>
         <option value="hold">Hold &#8212; hold to record, release to stop</option>
       </select>
+
+      <label class="checkbox-label">
+        <input type="checkbox" id="preprocessing-enabled" checked />
+        Audio preprocessing <span style="color:#6b7280;font-weight:400">(noise filter + volume normalization)</span>
+      </label>
 
       <!-- LLM Post-Processing -->
       <div class="settings-divider"></div>

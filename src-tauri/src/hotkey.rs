@@ -4,16 +4,60 @@
 //! `WH_KEYBOARD_LL` to track key states and detect when both Alt and
 //! Win/Cmd are held simultaneously.
 
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 
 const EVENT_NONE: u8 = 0;
 const EVENT_PRESSED: u8 = 1;
 const EVENT_RELEASED: u8 = 2;
 
-static ALT_DOWN: AtomicBool = AtomicBool::new(false);
-static WIN_DOWN: AtomicBool = AtomicBool::new(false);
+static KEY1_DOWN: AtomicBool = AtomicBool::new(false);
+static KEY2_DOWN: AtomicBool = AtomicBool::new(false);
 static COMBO_ACTIVE: AtomicBool = AtomicBool::new(false);
 static HOTKEY_EVENT: AtomicU8 = AtomicU8::new(EVENT_NONE);
+
+/// Configurable key group 1 and 2 (each group can match multiple VK codes).
+/// Format: up to 2 VK codes packed as (vk1, vk2) in a u32: high 16 = vk1, low 16 = vk2.
+/// If vk2 is 0, only vk1 is matched.
+static KEY1_CODES: AtomicU32 = AtomicU32::new(0);
+static KEY2_CODES: AtomicU32 = AtomicU32::new(0);
+
+/// Shortcut presets: (name, key1_left, key1_right, key2_left, key2_right)
+pub const SHORTCUT_PRESETS: &[(&str, &str)] = &[
+    ("win+alt", "Win + Alt"),
+    ("ctrl+alt", "Ctrl + Alt"),
+    ("ctrl+shift", "Ctrl + Shift"),
+];
+
+/// Set the shortcut combo by preset name. Must be called before install().
+pub fn set_shortcut(preset: &str) {
+    let (k1, k2) = match preset {
+        "ctrl+alt" => (
+            pack_keys(0xA2, 0xA3),  // VK_LCONTROL, VK_RCONTROL
+            pack_keys(0xA4, 0xA5),  // VK_LMENU, VK_RMENU
+        ),
+        "ctrl+shift" => (
+            pack_keys(0xA2, 0xA3),  // VK_LCONTROL, VK_RCONTROL
+            pack_keys(0xA0, 0xA1),  // VK_LSHIFT, VK_RSHIFT
+        ),
+        _ => (
+            // Default: win+alt
+            pack_keys(0x5B, 0x5C),  // VK_LWIN, VK_RWIN
+            pack_keys(0xA4, 0xA5),  // VK_LMENU, VK_RMENU
+        ),
+    };
+    KEY1_CODES.store(k1, Ordering::SeqCst);
+    KEY2_CODES.store(k2, Ordering::SeqCst);
+}
+
+fn pack_keys(left: u32, right: u32) -> u32 {
+    (left << 16) | (right & 0xFFFF)
+}
+
+fn matches_key_group(vk: u32, packed: u32) -> bool {
+    let left = packed >> 16;
+    let right = packed & 0xFFFF;
+    vk == left || (right != 0 && vk == right)
+}
 
 /// Take the latest hotkey event: 0=none, 1=pressed, 2=released.
 pub fn take_event() -> u8 {
@@ -33,12 +77,6 @@ mod platform {
     use std::sync::atomic::AtomicIsize;
 
     static HOOK_HANDLE: AtomicIsize = AtomicIsize::new(0);
-
-    // Virtual key codes
-    const VK_LWIN: u32 = 0x5B;
-    const VK_RWIN: u32 = 0x5C;
-    const VK_LMENU: u32 = 0xA4;
-    const VK_RMENU: u32 = 0xA5;
 
     // Window messages
     const WM_KEYDOWN: usize = 0x0100;
@@ -88,38 +126,37 @@ mod platform {
             let is_down = wparam == WM_KEYDOWN || wparam == WM_SYSKEYDOWN;
             let is_up = wparam == WM_KEYUP || wparam == WM_SYSKEYUP;
 
-            match vk {
-                VK_LWIN | VK_RWIN => {
-                    if is_down {
-                        WIN_DOWN.store(true, Ordering::SeqCst);
-                        if ALT_DOWN.load(Ordering::SeqCst)
-                            && !COMBO_ACTIVE.swap(true, Ordering::SeqCst)
-                        {
-                            HOTKEY_EVENT.store(EVENT_PRESSED, Ordering::SeqCst);
-                        }
-                    } else if is_up {
-                        WIN_DOWN.store(false, Ordering::SeqCst);
-                        if COMBO_ACTIVE.swap(false, Ordering::SeqCst) {
-                            HOTKEY_EVENT.store(EVENT_RELEASED, Ordering::SeqCst);
-                        }
+            let k1 = KEY1_CODES.load(Ordering::SeqCst);
+            let k2 = KEY2_CODES.load(Ordering::SeqCst);
+
+            if matches_key_group(vk, k1) {
+                if is_down {
+                    KEY1_DOWN.store(true, Ordering::SeqCst);
+                    if KEY2_DOWN.load(Ordering::SeqCst)
+                        && !COMBO_ACTIVE.swap(true, Ordering::SeqCst)
+                    {
+                        HOTKEY_EVENT.store(EVENT_PRESSED, Ordering::SeqCst);
+                    }
+                } else if is_up {
+                    KEY1_DOWN.store(false, Ordering::SeqCst);
+                    if COMBO_ACTIVE.swap(false, Ordering::SeqCst) {
+                        HOTKEY_EVENT.store(EVENT_RELEASED, Ordering::SeqCst);
                     }
                 }
-                VK_LMENU | VK_RMENU => {
-                    if is_down {
-                        ALT_DOWN.store(true, Ordering::SeqCst);
-                        if WIN_DOWN.load(Ordering::SeqCst)
-                            && !COMBO_ACTIVE.swap(true, Ordering::SeqCst)
-                        {
-                            HOTKEY_EVENT.store(EVENT_PRESSED, Ordering::SeqCst);
-                        }
-                    } else if is_up {
-                        ALT_DOWN.store(false, Ordering::SeqCst);
-                        if COMBO_ACTIVE.swap(false, Ordering::SeqCst) {
-                            HOTKEY_EVENT.store(EVENT_RELEASED, Ordering::SeqCst);
-                        }
+            } else if matches_key_group(vk, k2) {
+                if is_down {
+                    KEY2_DOWN.store(true, Ordering::SeqCst);
+                    if KEY1_DOWN.load(Ordering::SeqCst)
+                        && !COMBO_ACTIVE.swap(true, Ordering::SeqCst)
+                    {
+                        HOTKEY_EVENT.store(EVENT_PRESSED, Ordering::SeqCst);
+                    }
+                } else if is_up {
+                    KEY2_DOWN.store(false, Ordering::SeqCst);
+                    if COMBO_ACTIVE.swap(false, Ordering::SeqCst) {
+                        HOTKEY_EVENT.store(EVENT_RELEASED, Ordering::SeqCst);
                     }
                 }
-                _ => {}
             }
         }
         unsafe { CallNextHookEx(HOOK_HANDLE.load(Ordering::SeqCst), code, wparam, lparam) }
