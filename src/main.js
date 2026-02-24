@@ -9,6 +9,17 @@ const BAR_COUNT = 28;
 const BAR_W = 7;
 const BAR_GAP = 2;
 
+// LLM style -> dot color map
+const STYLE_COLORS = {
+  off: '#34d399',      // green — LLM off
+  correct: '#2dd4bf',  // teal
+  summarize: '#fbbf24', // amber
+  elaborate: '#4ade80', // light green
+  comprehensible: '#38bdf8', // sky blue
+  professional: '#f472b6', // pink
+  custom: '#fb923c',   // orange
+};
+
 // DOM
 const pill = document.getElementById('pill');
 const dot = document.getElementById('dot');
@@ -37,6 +48,22 @@ const promptInput = document.getElementById('prompt-input');
 const saveBtn = document.getElementById('save-btn');
 const closeBtn = document.getElementById('close-btn');
 
+// LLM DOM
+const llmEnabledCheckbox = document.getElementById('llm-enabled');
+const llmFields = document.getElementById('llm-fields');
+const llmStyleSelect = document.getElementById('llm-style-select');
+const llmToneSelect = document.getElementById('llm-tone-select');
+const llmCustomPromptField = document.getElementById('llm-custom-prompt-field');
+const llmCustomPrompt = document.getElementById('llm-custom-prompt');
+const llmProviderSelect = document.getElementById('llm-provider-select');
+const llmCustomEndpoint = document.getElementById('llm-custom-endpoint');
+const llmApiUrlInput = document.getElementById('llm-api-url');
+const llmApiModelInput = document.getElementById('llm-api-model');
+const llmSameKeyCheckbox = document.getElementById('llm-same-key');
+const llmKeyField = document.getElementById('llm-key-field');
+const llmApiKeyInput = document.getElementById('llm-api-key');
+const llmKeyHint = document.getElementById('llm-key-hint');
+
 let isRecording = false;
 let waveformInterval = null;
 let timerInterval = null;
@@ -46,6 +73,12 @@ let currentView = 'micro'; // 'micro' | 'pill' | 'rec' | 'settings'
 let shrinkTimeout = null;
 let energyHistory = [];
 let waveformPending = false;
+
+// LLM state
+let llmEnabled = false;
+let llmStyle = 'off';
+let llmTone = 'none';
+let styleFlashTimeout = null;
 
 // ========================
 // RESIZE — Rust-side
@@ -101,6 +134,28 @@ function shrinkToMicro(delay) {
 }
 
 // ========================
+// LLM STYLE INDICATOR
+// ========================
+function updateStyleIndicator() {
+  // Don't override recording/transcribing/error states
+  if (dot.classList.contains('recording') ||
+      dot.classList.contains('transcribing') ||
+      dot.classList.contains('error') ||
+      dot.classList.contains('llm-processing')) {
+    return;
+  }
+
+  if (llmEnabled && llmStyle !== 'off') {
+    const color = STYLE_COLORS[llmStyle] || STYLE_COLORS.off;
+    dot.style.setProperty('--style-color', color);
+    dot.className = 'styled';
+  } else {
+    dot.style.removeProperty('--style-color');
+    dot.className = '';
+  }
+}
+
+// ========================
 // INIT
 // ========================
 async function init() {
@@ -111,9 +166,20 @@ async function init() {
   } catch (_) {
     deviceName.textContent = 'No mic';
   }
+  await loadLlmState();
   switchView('micro');
 }
 init();
+
+async function loadLlmState() {
+  try {
+    const config = await invoke('get_config');
+    llmEnabled = config.llm_enabled || false;
+    llmStyle = config.llm_style || 'off';
+    llmTone = config.llm_tone || 'none';
+    updateStyleIndicator();
+  } catch (_) {}
+}
 
 // ========================
 // HOVER — expand micro on mouse enter, shrink back on leave
@@ -146,6 +212,41 @@ setInterval(() => {
     switchView('micro');
   }
 }, 5000);
+
+// ========================
+// SCROLL-WHEEL CYCLING on pill (LLM style/tone)
+// ========================
+pill.addEventListener('wheel', async (e) => {
+  // Only cycle when not recording and not in settings
+  if (isRecording || currentView === 'settings') return;
+  e.preventDefault();
+
+  const direction = e.deltaY > 0 ? 1 : -1;
+
+  try {
+    if (e.ctrlKey) {
+      // Ctrl+scroll = cycle tone
+      const result = await invoke('cycle_llm_tone', { direction });
+      llmTone = result.tone;
+      showStatus(`tone: ${result.tone}`);
+    } else {
+      // Scroll = cycle style
+      const result = await invoke('cycle_llm_style', { direction });
+      llmStyle = result.style;
+      llmEnabled = result.style !== 'off';
+      showStatus(result.style);
+    }
+    updateStyleIndicator();
+    // Flash status for 1.5s
+    if (styleFlashTimeout) clearTimeout(styleFlashTimeout);
+    styleFlashTimeout = setTimeout(() => {
+      hideStatus();
+      styleFlashTimeout = null;
+    }, 1500);
+  } catch (err) {
+    console.error('cycle error:', err);
+  }
+}, { passive: false });
 
 // ========================
 // SHORTCUTS
@@ -186,6 +287,24 @@ listen('transcription-final', (event) => {
 });
 
 // ========================
+// LLM STATUS EVENTS
+// ========================
+listen('llm-status', (event) => {
+  const { status, error } = event.payload;
+  if (status === 'processing') {
+    dot.className = 'llm-processing';
+    showStatus('enhancing');
+  } else if (status === 'done') {
+    updateStyleIndicator();
+  } else if (status === 'error') {
+    console.error('LLM error:', error);
+    // Brief error indication, then back to normal
+    showStatus('llm err');
+    setTimeout(() => updateStyleIndicator(), 2000);
+  }
+});
+
+// ========================
 // CHUNK DOTS — in pill row
 // ========================
 function addChunkDot(i, cls) {
@@ -223,7 +342,7 @@ async function startRecording() {
   } catch (err) {
     dot.className = 'error';
     showStatus(String(err).substring(0, 30));
-    setTimeout(() => { dot.className = ''; hideStatus(); shrinkToMicro(5000); }, 4000);
+    setTimeout(() => { dot.className = ''; updateStyleIndicator(); hideStatus(); shrinkToMicro(5000); }, 4000);
     return;
   }
 
@@ -266,11 +385,27 @@ async function stopRecording() {
   showStatus('transcribing');
 
   try {
-    const text = await invoke('stop_recording');
+    let text = await invoke('stop_recording');
     isRecording = false;
     transcriptText.textContent = text;
     transcriptText.scrollLeft = transcriptText.scrollWidth;
+
+    // LLM post-processing if enabled
+    if (llmEnabled && llmStyle !== 'off') {
+      dot.className = 'llm-processing';
+      showStatus('enhancing');
+      try {
+        text = await invoke('process_with_llm', { text });
+      } catch (llmErr) {
+        console.error('LLM fallback:', llmErr);
+        // text remains the original transcription
+      }
+      transcriptText.textContent = text;
+      transcriptText.scrollLeft = transcriptText.scrollWidth;
+    }
+
     dot.className = '';
+    updateStyleIndicator();
     showStatus('pasting');
 
     try { await invoke('paste_text', { text }); } catch (_) {}
@@ -290,7 +425,7 @@ async function stopRecording() {
     setTimeout(() => {
       switchView('pill');
       hideTimer();
-      dot.className = '';
+      updateStyleIndicator();
       hideStatus();
       settingsBtn.disabled = false;
       shrinkToMicro(5000);
@@ -416,6 +551,44 @@ async function openSettings() {
     } else {
       customFields.classList.add('hide');
     }
+
+    // LLM settings
+    llmEnabledCheckbox.checked = config.llm_enabled || false;
+    toggleLlmFields();
+
+    llmStyleSelect.value = config.llm_style || 'off';
+    toggleCustomPromptField();
+
+    llmToneSelect.value = config.llm_tone || 'none';
+    llmCustomPrompt.value = config.llm_custom_prompt || '';
+
+    // LLM provider select
+    let llmFound = false;
+    for (const opt of llmProviderSelect.options) {
+      if (opt.dataset.url === config.llm_api_url && opt.dataset.model === config.llm_api_model) {
+        opt.selected = true;
+        llmFound = true;
+        break;
+      }
+    }
+    if (!llmFound && config.llm_api_url) {
+      llmProviderSelect.value = 'llm-custom';
+      llmApiUrlInput.value = config.llm_api_url || '';
+      llmApiModelInput.value = config.llm_api_model || '';
+      llmCustomEndpoint.classList.remove('hide');
+    } else {
+      llmCustomEndpoint.classList.add('hide');
+    }
+
+    llmSameKeyCheckbox.checked = config.llm_use_same_key !== false;
+    toggleLlmKeyField();
+
+    llmApiKeyInput.value = '';
+    llmApiKeyInput.placeholder = config.has_llm_key ? '(secured) enter new to change' : 'Separate LLM API key...';
+    if (llmKeyHint) {
+      llmKeyHint.textContent = config.has_llm_key ? '(saved securely)' : '';
+    }
+
   } catch (err) {
     console.error('get_config:', err);
   }
@@ -426,16 +599,67 @@ function closeSettings() {
   switchView('micro');
 }
 
+function toggleLlmFields() {
+  if (llmEnabledCheckbox.checked) {
+    llmFields.classList.remove('hide');
+  } else {
+    llmFields.classList.add('hide');
+  }
+  resizeSettingsWindow();
+}
+
+function toggleCustomPromptField() {
+  if (llmStyleSelect.value === 'custom') {
+    llmCustomPromptField.classList.remove('hide');
+  } else {
+    llmCustomPromptField.classList.add('hide');
+  }
+  resizeSettingsWindow();
+}
+
+function toggleLlmKeyField() {
+  if (llmSameKeyCheckbox.checked) {
+    llmKeyField.classList.add('hide');
+  } else {
+    llmKeyField.classList.remove('hide');
+  }
+  resizeSettingsWindow();
+}
+
+function resizeSettingsWindow() {
+  if (currentView === 'settings') {
+    requestAnimationFrame(() => {
+      const container = document.getElementById('container');
+      setWindowSizeWH(W, container.offsetHeight);
+    });
+  }
+}
+
+// LLM settings event listeners
+llmEnabledCheckbox.addEventListener('change', toggleLlmFields);
+llmStyleSelect.addEventListener('change', () => {
+  toggleCustomPromptField();
+  resizeSettingsWindow();
+});
+llmToneSelect.addEventListener('change', resizeSettingsWindow);
+llmSameKeyCheckbox.addEventListener('change', toggleLlmKeyField);
+
+llmProviderSelect.addEventListener('change', () => {
+  if (llmProviderSelect.value === 'llm-custom') {
+    llmCustomEndpoint.classList.remove('hide');
+  } else {
+    llmCustomEndpoint.classList.add('hide');
+  }
+  resizeSettingsWindow();
+});
+
 modelSelect.addEventListener('change', () => {
   if (modelSelect.value === 'custom') {
     customFields.classList.remove('hide');
   } else {
     customFields.classList.add('hide');
   }
-  requestAnimationFrame(() => {
-    const container = document.getElementById('container');
-    setWindowSizeWH(W, container.offsetHeight);
-  });
+  resizeSettingsWindow();
 });
 
 settingsBtn.addEventListener('click', (e) => {
@@ -477,8 +701,43 @@ saveBtn.addEventListener('click', async () => {
     } catch (_) {}
   }
 
+  // LLM fields
+  const llmEnabledVal = llmEnabledCheckbox.checked;
+  const llmStyleVal = llmStyleSelect.value;
+  const llmToneVal = llmToneSelect.value;
+  const llmCustomPromptVal = llmCustomPrompt.value;
+  const llmUseSameKey = llmSameKeyCheckbox.checked;
+  const llmApiKey = llmApiKeyInput.value.trim() || null;
+
+  let llmApiUrl, llmApiModel;
+  if (llmProviderSelect.value === 'llm-custom') {
+    llmApiUrl = llmApiUrlInput.value.trim();
+    llmApiModel = llmApiModelInput.value.trim();
+  } else {
+    const opt = llmProviderSelect.options[llmProviderSelect.selectedIndex];
+    llmApiUrl = opt.dataset.url;
+    llmApiModel = opt.dataset.model;
+  }
+
   try {
-    await invoke('set_config', { apiKey, apiUrl, apiModel, language, shortcutMode, selectedDevice, prompt });
+    await invoke('set_config', {
+      apiKey, apiUrl, apiModel, language, shortcutMode, selectedDevice, prompt,
+      llmEnabled: llmEnabledVal,
+      llmStyle: llmStyleVal,
+      llmTone: llmToneVal,
+      llmCustomPrompt: llmCustomPromptVal,
+      llmApiUrl: llmApiUrl || null,
+      llmApiModel: llmApiModel || null,
+      llmUseSameKey: llmUseSameKey,
+      llmApiKey: llmApiKey,
+    });
+
+    // Update local state
+    llmEnabled = llmEnabledVal;
+    llmStyle = llmStyleVal;
+    llmTone = llmToneVal;
+    updateStyleIndicator();
+
     const name = await invoke('get_audio_device');
     deviceName.textContent = name;
     deviceName.title = name;

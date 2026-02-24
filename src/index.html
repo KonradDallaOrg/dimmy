@@ -106,6 +106,84 @@
         <option value="hold">Hold &#8212; hold to record, release to stop</option>
       </select>
 
+      <!-- LLM Post-Processing -->
+      <div class="settings-divider"></div>
+
+      <label class="checkbox-label">
+        <input type="checkbox" id="llm-enabled" />
+        AI Enhancement <span style="color:#6b7280;font-weight:400">(post-process with LLM)</span>
+      </label>
+
+      <div id="llm-fields" class="hide">
+        <label>Style</label>
+        <select id="llm-style-select">
+          <option value="off">Off</option>
+          <option value="correct">Correct &#8212; fix grammar &amp; filler words</option>
+          <option value="summarize">Summarize &#8212; condense key points</option>
+          <option value="elaborate">Elaborate &#8212; expand with detail</option>
+          <option value="comprehensible">Comprehensible &#8212; rewrite clearly</option>
+          <option value="professional">Professional &#8212; business tone</option>
+          <option value="custom">Custom prompt...</option>
+        </select>
+
+        <label>Tone</label>
+        <select id="llm-tone-select">
+          <option value="none">None</option>
+          <option value="formal">Formal</option>
+          <option value="friendly">Friendly</option>
+          <option value="concise">Concise</option>
+          <option value="academic">Academic</option>
+        </select>
+
+        <div id="llm-custom-prompt-field" class="hide">
+          <label>Custom Prompt</label>
+          <textarea id="llm-custom-prompt" rows="2" placeholder="Translate to Italian. Keep the same register."></textarea>
+        </div>
+
+        <label>LLM Provider</label>
+        <select id="llm-provider-select">
+          <optgroup label="Groq (Free)">
+            <option value="groq-llama-8b"
+              data-url="https://api.groq.com/openai/v1/chat/completions"
+              data-model="llama-3.1-8b-instant">
+              Llama 3.1 8B &#8212; Fast/Free
+            </option>
+            <option value="groq-llama-70b"
+              data-url="https://api.groq.com/openai/v1/chat/completions"
+              data-model="llama-3.3-70b-versatile">
+              Llama 3.3 70B &#8212; Better
+            </option>
+          </optgroup>
+          <optgroup label="OpenAI">
+            <option value="openai-4o-mini-llm"
+              data-url="https://api.openai.com/v1/chat/completions"
+              data-model="gpt-4o-mini">
+              GPT-4o Mini
+            </option>
+          </optgroup>
+          <optgroup label="Custom">
+            <option value="llm-custom">Custom endpoint...</option>
+          </optgroup>
+        </select>
+
+        <div id="llm-custom-endpoint" class="hide">
+          <label>LLM Endpoint URL</label>
+          <input type="text" id="llm-api-url" placeholder="https://api.example.com/v1/chat/completions" />
+          <label>LLM Model</label>
+          <input type="text" id="llm-api-model" placeholder="llama-3.1-8b-instant" />
+        </div>
+
+        <label class="checkbox-label">
+          <input type="checkbox" id="llm-same-key" checked />
+          Use same API key as transcription
+        </label>
+
+        <div id="llm-key-field" class="hide">
+          <label>LLM API Key <span id="llm-key-hint"></span></label>
+          <input type="password" id="llm-api-key" placeholder="Separate LLM API key..." />
+        </div>
+      </div>
+
       <div class="btn-row">
         <button id="save-btn">Save</button>
         <button id="close-btn">Cancel</button>

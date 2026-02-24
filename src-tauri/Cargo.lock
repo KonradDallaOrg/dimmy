@@ -2795,6 +2795,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-clipboard-manager",
  "tokio",
+ "url",
 ]
 
 [[package]]

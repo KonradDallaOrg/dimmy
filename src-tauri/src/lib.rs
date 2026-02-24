@@ -1,5 +1,6 @@
 mod audio;
 mod hotkey;
+mod llm;
 mod transcribe;
 
 use audio::AudioCommand;
@@ -13,6 +14,8 @@ const DEFAULT_MODEL: &str = "whisper-large-v3-turbo";
 /// Default prompt guides Whisper to produce punctuated, well-formatted output.
 /// Whisper mimics the style of this text — punctuation, capitalization, etc.
 const DEFAULT_PROMPT: &str = "Hello, how are you? Fine, thanks! Today we'll discuss an interesting topic. Ciao, come stai? Bene, grazie! Oggi parliamo di un argomento interessante.";
+const DEFAULT_LLM_URL: &str = "https://api.groq.com/openai/v1/chat/completions";
+const DEFAULT_LLM_MODEL: &str = "llama-3.1-8b-instant";
 const MAX_RECORDING_SECS: usize = 30 * 60; // 30 minutes hard cap
 const MAX_LOG_BYTES: u64 = 1_048_576; // 1 MB log rotation threshold
 
@@ -54,42 +57,96 @@ pub(crate) fn log(msg: &str) {
     }
 }
 
+/// Non-sensitive config persisted to disk.
+struct AppConfig {
+    api_url: String,
+    api_model: String,
+    selected_device: Option<String>,
+    language: String,
+    shortcut_mode: String,
+    prompt: String,
+    // LLM post-processing fields
+    llm_enabled: bool,
+    llm_style: String,
+    llm_tone: String,
+    llm_custom_prompt: String,
+    llm_api_url: String,
+    llm_api_model: String,
+    llm_use_same_key: bool,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            api_url: DEFAULT_API_URL.to_string(),
+            api_model: DEFAULT_MODEL.to_string(),
+            selected_device: None,
+            language: String::new(),
+            shortcut_mode: "toggle".to_string(),
+            prompt: DEFAULT_PROMPT.to_string(),
+            llm_enabled: false,
+            llm_style: "off".to_string(),
+            llm_tone: "none".to_string(),
+            llm_custom_prompt: String::new(),
+            llm_api_url: DEFAULT_LLM_URL.to_string(),
+            llm_api_model: DEFAULT_LLM_MODEL.to_string(),
+            llm_use_same_key: true,
+        }
+    }
+}
+
 /// Save non-sensitive config to file (NO api_key — that goes to keyring ONLY)
-fn save_config_file(api_url: &str, api_model: &str, selected_device: &Option<String>, language: &str, shortcut_mode: &str, prompt: &str) {
+fn save_config_file(cfg: &AppConfig) {
     if let Some(path) = config_path() {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let mut cfg = serde_json::json!({
-            "api_url": api_url,
-            "api_model": api_model,
-            "language": language,
-            "shortcut_mode": shortcut_mode,
-            "prompt": prompt,
+        let mut json = serde_json::json!({
+            "api_url": cfg.api_url,
+            "api_model": cfg.api_model,
+            "language": cfg.language,
+            "shortcut_mode": cfg.shortcut_mode,
+            "prompt": cfg.prompt,
+            "llm_enabled": cfg.llm_enabled,
+            "llm_style": cfg.llm_style,
+            "llm_tone": cfg.llm_tone,
+            "llm_custom_prompt": cfg.llm_custom_prompt,
+            "llm_api_url": cfg.llm_api_url,
+            "llm_api_model": cfg.llm_api_model,
+            "llm_use_same_key": cfg.llm_use_same_key,
         });
-        if let Some(dev) = selected_device {
-            cfg["selected_device"] = serde_json::json!(dev);
+        if let Some(ref dev) = cfg.selected_device {
+            json["selected_device"] = serde_json::json!(dev);
         }
-        let _ = std::fs::write(&path, serde_json::to_string_pretty(&cfg).unwrap_or_default());
+        let _ = std::fs::write(&path, serde_json::to_string_pretty(&json).unwrap_or_default());
     }
 }
 
-/// Load non-sensitive config from file
-fn load_config_file() -> (String, String, Option<String>, String, String, String) {
+/// Load non-sensitive config from file. Missing LLM fields use defaults (backward compatible).
+fn load_config_file() -> AppConfig {
+    let defaults = AppConfig::default();
     if let Some(path) = config_path() {
         if let Ok(data) = std::fs::read_to_string(&path) {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
-                let url = v["api_url"].as_str().unwrap_or(DEFAULT_API_URL).to_string();
-                let model = v["api_model"].as_str().unwrap_or(DEFAULT_MODEL).to_string();
-                let device = v["selected_device"].as_str().map(|s| s.to_string());
-                let language = v["language"].as_str().unwrap_or("").to_string();
-                let shortcut_mode = v["shortcut_mode"].as_str().unwrap_or("toggle").to_string();
-                let prompt = v["prompt"].as_str().unwrap_or(DEFAULT_PROMPT).to_string();
-                return (url, model, device, language, shortcut_mode, prompt);
+                return AppConfig {
+                    api_url: v["api_url"].as_str().unwrap_or(DEFAULT_API_URL).to_string(),
+                    api_model: v["api_model"].as_str().unwrap_or(DEFAULT_MODEL).to_string(),
+                    selected_device: v["selected_device"].as_str().map(|s| s.to_string()),
+                    language: v["language"].as_str().unwrap_or("").to_string(),
+                    shortcut_mode: v["shortcut_mode"].as_str().unwrap_or("toggle").to_string(),
+                    prompt: v["prompt"].as_str().unwrap_or(DEFAULT_PROMPT).to_string(),
+                    llm_enabled: v["llm_enabled"].as_bool().unwrap_or(defaults.llm_enabled),
+                    llm_style: v["llm_style"].as_str().unwrap_or(&defaults.llm_style).to_string(),
+                    llm_tone: v["llm_tone"].as_str().unwrap_or(&defaults.llm_tone).to_string(),
+                    llm_custom_prompt: v["llm_custom_prompt"].as_str().unwrap_or(&defaults.llm_custom_prompt).to_string(),
+                    llm_api_url: v["llm_api_url"].as_str().unwrap_or(&defaults.llm_api_url).to_string(),
+                    llm_api_model: v["llm_api_model"].as_str().unwrap_or(&defaults.llm_api_model).to_string(),
+                    llm_use_same_key: v["llm_use_same_key"].as_bool().unwrap_or(defaults.llm_use_same_key),
+                };
             }
         }
     }
-    (DEFAULT_API_URL.to_string(), DEFAULT_MODEL.to_string(), None, String::new(), "toggle".to_string(), DEFAULT_PROMPT.to_string())
+    defaults
 }
 
 
@@ -105,14 +162,9 @@ fn migrate_plaintext_key() {
                             Ok(()) => log("Key migrated to secure storage"),
                             Err(e) => log(&format!("WARNING: migration failed: {}", e)),
                         }
-                        // Remove plaintext key from config file
-                        let url = v["api_url"].as_str().unwrap_or(DEFAULT_API_URL);
-                        let model = v["api_model"].as_str().unwrap_or(DEFAULT_MODEL);
-                        let device = v["selected_device"].as_str().map(|s| s.to_string());
-                        let language = v["language"].as_str().unwrap_or("");
-                        let shortcut_mode = v["shortcut_mode"].as_str().unwrap_or("toggle");
-                        let prompt = v["prompt"].as_str().unwrap_or(DEFAULT_PROMPT);
-                        save_config_file(url, model, &device, language, shortcut_mode, prompt);
+                        // Re-save config without the plaintext key
+                        let cfg = load_config_file();
+                        save_config_file(&cfg);
                         log("Plaintext key removed from config file");
                     }
                 }
@@ -157,6 +209,24 @@ fn load_api_key_secure() -> Option<String> {
     }
 }
 
+fn save_llm_key_secure(key: &str) -> Result<(), String> {
+    let entry = keyring::Entry::new("pai-voice", "llm-api-key")
+        .map_err(|e| format!("Credential store error: {}", e))?;
+    entry.set_password(key).map_err(|e| format!("Failed to save LLM API key: {}", e))?;
+    log("LLM API key saved to secure storage (keyring)");
+    Ok(())
+}
+
+fn load_llm_key_secure() -> Option<String> {
+    match keyring::Entry::new("pai-voice", "llm-api-key") {
+        Ok(entry) => match entry.get_password() {
+            Ok(key) => Some(key),
+            Err(_) => None,
+        },
+        Err(_) => None,
+    }
+}
+
 pub struct AppState {
     pub recording: Mutex<bool>,
     pub api_key: Mutex<Option<String>>,
@@ -171,6 +241,15 @@ pub struct AppState {
     pub audio_buffer: Arc<Mutex<Vec<f32>>>,
     pub audio_tx: Mutex<Sender<AudioCommand>>,
     pub streaming_active: Arc<AtomicBool>,
+    // LLM post-processing state
+    pub llm_enabled: Mutex<bool>,
+    pub llm_style: Mutex<String>,
+    pub llm_tone: Mutex<String>,
+    pub llm_custom_prompt: Mutex<String>,
+    pub llm_api_url: Mutex<String>,
+    pub llm_api_model: Mutex<String>,
+    pub llm_use_same_key: Mutex<bool>,
+    pub llm_api_key: Mutex<Option<String>>,
 }
 
 #[tauri::command]
@@ -419,6 +498,15 @@ fn set_config(
     shortcut_mode: String,
     selected_device: Option<String>,
     prompt: String,
+    // LLM fields — all Option for backward compatibility
+    llm_enabled: Option<bool>,
+    llm_style: Option<String>,
+    llm_tone: Option<String>,
+    llm_custom_prompt: Option<String>,
+    llm_api_url: Option<String>,
+    llm_api_model: Option<String>,
+    llm_use_same_key: Option<bool>,
+    llm_api_key: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     log(&format!("set_config called: mode={}, device={:?}", shortcut_mode, selected_device));
@@ -430,7 +518,54 @@ fn set_config(
         }
     }
 
-    save_config_file(&api_url, &api_model, &selected_device, &language, &shortcut_mode, &prompt);
+    // Handle separate LLM API key
+    if let Some(ref key) = llm_api_key {
+        if !key.is_empty() {
+            save_llm_key_secure(key)?;
+            *state.llm_api_key.lock().map_err(|e| e.to_string())? = Some(key.clone());
+        }
+    }
+
+    // Update LLM state if provided
+    if let Some(v) = llm_enabled {
+        *state.llm_enabled.lock().map_err(|e| e.to_string())? = v;
+    }
+    if let Some(ref v) = llm_style {
+        *state.llm_style.lock().map_err(|e| e.to_string())? = v.clone();
+    }
+    if let Some(ref v) = llm_tone {
+        *state.llm_tone.lock().map_err(|e| e.to_string())? = v.clone();
+    }
+    if let Some(ref v) = llm_custom_prompt {
+        *state.llm_custom_prompt.lock().map_err(|e| e.to_string())? = v.clone();
+    }
+    if let Some(ref v) = llm_api_url {
+        *state.llm_api_url.lock().map_err(|e| e.to_string())? = v.clone();
+    }
+    if let Some(ref v) = llm_api_model {
+        *state.llm_api_model.lock().map_err(|e| e.to_string())? = v.clone();
+    }
+    if let Some(v) = llm_use_same_key {
+        *state.llm_use_same_key.lock().map_err(|e| e.to_string())? = v;
+    }
+
+    // Build AppConfig from current state for saving
+    let cfg = AppConfig {
+        api_url: api_url.clone(),
+        api_model: api_model.clone(),
+        selected_device: selected_device.clone(),
+        language: language.clone(),
+        shortcut_mode: shortcut_mode.clone(),
+        prompt: prompt.clone(),
+        llm_enabled: *state.llm_enabled.lock().map_err(|e| e.to_string())?,
+        llm_style: state.llm_style.lock().map_err(|e| e.to_string())?.clone(),
+        llm_tone: state.llm_tone.lock().map_err(|e| e.to_string())?.clone(),
+        llm_custom_prompt: state.llm_custom_prompt.lock().map_err(|e| e.to_string())?.clone(),
+        llm_api_url: state.llm_api_url.lock().map_err(|e| e.to_string())?.clone(),
+        llm_api_model: state.llm_api_model.lock().map_err(|e| e.to_string())?.clone(),
+        llm_use_same_key: *state.llm_use_same_key.lock().map_err(|e| e.to_string())?,
+    };
+    save_config_file(&cfg);
     log("Config file saved");
 
     *state.api_url.lock().map_err(|e| e.to_string())? = api_url;
@@ -453,6 +588,19 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
     let shortcut_mode = state.shortcut_mode.lock().map_err(|e| e.to_string())?.clone();
     let selected_device = state.selected_device.lock().map_err(|e| e.to_string())?.clone();
     let devices = audio::list_input_devices();
+
+    let llm_enabled = *state.llm_enabled.lock().map_err(|e| e.to_string())?;
+    let llm_style = state.llm_style.lock().map_err(|e| e.to_string())?.clone();
+    let llm_tone = state.llm_tone.lock().map_err(|e| e.to_string())?.clone();
+    let llm_custom_prompt = state.llm_custom_prompt.lock().map_err(|e| e.to_string())?.clone();
+    let llm_api_url = state.llm_api_url.lock().map_err(|e| e.to_string())?.clone();
+    let llm_api_model = state.llm_api_model.lock().map_err(|e| e.to_string())?.clone();
+    let llm_use_same_key = *state.llm_use_same_key.lock().map_err(|e| e.to_string())?;
+    let has_llm_key = state.llm_api_key.lock().map_err(|e| e.to_string())?.is_some();
+
+    let styles: Vec<&str> = llm::STYLES.iter().map(|(name, _)| *name).collect();
+    let tones: Vec<&str> = llm::TONES.iter().map(|(name, _)| *name).collect();
+
     Ok(serde_json::json!({
         "has_key": has_key,
         "api_url": api_url,
@@ -462,7 +610,146 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
         "shortcut_mode": shortcut_mode,
         "selected_device": selected_device,
         "devices": devices,
+        "llm_enabled": llm_enabled,
+        "llm_style": llm_style,
+        "llm_tone": llm_tone,
+        "llm_custom_prompt": llm_custom_prompt,
+        "llm_api_url": llm_api_url,
+        "llm_api_model": llm_api_model,
+        "llm_use_same_key": llm_use_same_key,
+        "has_llm_key": has_llm_key,
+        "llm_styles": styles,
+        "llm_tones": tones,
     }))
+}
+
+#[tauri::command]
+async fn process_with_llm(
+    text: String,
+    state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+) -> Result<String, String> {
+    let enabled = *state.llm_enabled.lock().map_err(|e| e.to_string())?;
+    let style = state.llm_style.lock().map_err(|e| e.to_string())?.clone();
+
+    if !enabled || style == "off" {
+        return Ok(text);
+    }
+
+    let tone = state.llm_tone.lock().map_err(|e| e.to_string())?.clone();
+    let custom_prompt = state.llm_custom_prompt.lock().map_err(|e| e.to_string())?.clone();
+    let api_url = state.llm_api_url.lock().map_err(|e| e.to_string())?.clone();
+    let model = state.llm_api_model.lock().map_err(|e| e.to_string())?.clone();
+    let use_same_key = *state.llm_use_same_key.lock().map_err(|e| e.to_string())?;
+
+    let api_key = if use_same_key {
+        state.api_key.lock().map_err(|e| e.to_string())?.clone()
+    } else {
+        state.llm_api_key.lock().map_err(|e| e.to_string())?.clone()
+    };
+
+    let api_key = match api_key {
+        Some(k) => k,
+        None => {
+            log("LLM: no API key available, returning raw text");
+            let _ = app_handle.emit("llm-status", serde_json::json!({ "status": "error", "error": "No LLM API key" }));
+            return Ok(text);
+        }
+    };
+
+    let _ = app_handle.emit("llm-status", serde_json::json!({ "status": "processing" }));
+
+    match llm::process_text(&api_url, &model, &api_key, &text, &style, &tone, &custom_prompt).await {
+        Ok(enhanced) => {
+            let _ = app_handle.emit("llm-status", serde_json::json!({ "status": "done" }));
+            Ok(enhanced)
+        }
+        Err(e) => {
+            log(&format!("LLM processing failed: {}", e));
+            let _ = app_handle.emit("llm-status", serde_json::json!({ "status": "error", "error": e.to_string() }));
+            // Graceful fallback: return original text, never block paste
+            Ok(text)
+        }
+    }
+}
+
+#[tauri::command]
+fn cycle_llm_style(
+    direction: i32,
+    state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let mut style = state.llm_style.lock().map_err(|e| e.to_string())?;
+    let total = llm::STYLES.len();
+    let current_idx = llm::STYLES.iter().position(|(n, _)| *n == style.as_str()).unwrap_or(0);
+    let new_idx = if direction > 0 {
+        (current_idx + 1) % total
+    } else {
+        (current_idx + total - 1) % total
+    };
+    let (new_name, _) = llm::STYLES[new_idx];
+    *style = new_name.to_string();
+
+    // Also enable/disable LLM based on style
+    if let Ok(mut enabled) = state.llm_enabled.lock() {
+        *enabled = new_name != "off";
+    }
+
+    // Persist to config file
+    drop(style);
+    save_current_config(&state)?;
+
+    Ok(serde_json::json!({
+        "style": new_name,
+        "index": new_idx,
+        "total": total,
+    }))
+}
+
+#[tauri::command]
+fn cycle_llm_tone(
+    direction: i32,
+    state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let mut tone = state.llm_tone.lock().map_err(|e| e.to_string())?;
+    let total = llm::TONES.len();
+    let current_idx = llm::TONES.iter().position(|(n, _)| *n == tone.as_str()).unwrap_or(0);
+    let new_idx = if direction > 0 {
+        (current_idx + 1) % total
+    } else {
+        (current_idx + total - 1) % total
+    };
+    let (new_name, _) = llm::TONES[new_idx];
+    *tone = new_name.to_string();
+
+    drop(tone);
+    save_current_config(&state)?;
+
+    Ok(serde_json::json!({
+        "tone": new_name,
+        "index": new_idx,
+        "total": total,
+    }))
+}
+
+/// Helper to persist current in-memory state to config file.
+fn save_current_config(state: &tauri::State<'_, AppState>) -> Result<(), String> {
+    let cfg = AppConfig {
+        api_url: state.api_url.lock().map_err(|e| e.to_string())?.clone(),
+        api_model: state.api_model.lock().map_err(|e| e.to_string())?.clone(),
+        selected_device: state.selected_device.lock().map_err(|e| e.to_string())?.clone(),
+        language: state.language.lock().map_err(|e| e.to_string())?.clone(),
+        shortcut_mode: state.shortcut_mode.lock().map_err(|e| e.to_string())?.clone(),
+        prompt: state.prompt.lock().map_err(|e| e.to_string())?.clone(),
+        llm_enabled: *state.llm_enabled.lock().map_err(|e| e.to_string())?,
+        llm_style: state.llm_style.lock().map_err(|e| e.to_string())?.clone(),
+        llm_tone: state.llm_tone.lock().map_err(|e| e.to_string())?.clone(),
+        llm_custom_prompt: state.llm_custom_prompt.lock().map_err(|e| e.to_string())?.clone(),
+        llm_api_url: state.llm_api_url.lock().map_err(|e| e.to_string())?.clone(),
+        llm_api_model: state.llm_api_model.lock().map_err(|e| e.to_string())?.clone(),
+        llm_use_same_key: *state.llm_use_same_key.lock().map_err(|e| e.to_string())?,
+    };
+    save_config_file(&cfg);
+    Ok(())
 }
 
 #[tauri::command]
@@ -579,11 +866,13 @@ pub fn run() {
 
     migrate_plaintext_key();
 
-    let (file_url, file_model, file_device, file_language, file_shortcut_mode, file_prompt) = load_config_file();
+    let file_cfg = load_config_file();
     let stored_key = load_api_key_secure();
+    let stored_llm_key = load_llm_key_secure();
     // SECURITY: never log the actual key value — only whether one exists
-    log(&format!("Config loaded: url={}, model={}, device={:?}, has_key={}",
-        file_url, file_model, file_device, stored_key.is_some()));
+    log(&format!("Config loaded: url={}, model={}, device={:?}, has_key={}, llm_enabled={}, llm_style={}",
+        file_cfg.api_url, file_cfg.api_model, file_cfg.selected_device, stored_key.is_some(),
+        file_cfg.llm_enabled, file_cfg.llm_style));
 
     let audio_buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
     let audio_tx = audio::spawn_audio_thread(audio_buffer.clone());
@@ -593,17 +882,26 @@ pub fn run() {
         .manage(AppState {
             recording: Mutex::new(false),
             api_key: Mutex::new(stored_key),
-            api_url: Mutex::new(file_url),
-            api_model: Mutex::new(file_model),
-            language: Mutex::new(file_language),
-            prompt: Mutex::new(file_prompt),
-            shortcut_mode: Mutex::new(file_shortcut_mode),
-            selected_device: Mutex::new(file_device.clone()),
-            audio_sample_rate: Mutex::new(audio::device_sample_rate(&file_device)),
+            api_url: Mutex::new(file_cfg.api_url),
+            api_model: Mutex::new(file_cfg.api_model),
+            language: Mutex::new(file_cfg.language),
+            prompt: Mutex::new(file_cfg.prompt),
+            shortcut_mode: Mutex::new(file_cfg.shortcut_mode),
+            selected_device: Mutex::new(file_cfg.selected_device.clone()),
+            audio_sample_rate: Mutex::new(audio::device_sample_rate(&file_cfg.selected_device)),
             transcript: Mutex::new(String::new()),
             audio_buffer,
             audio_tx: Mutex::new(audio_tx),
             streaming_active: Arc::new(AtomicBool::new(false)),
+            // LLM state
+            llm_enabled: Mutex::new(file_cfg.llm_enabled),
+            llm_style: Mutex::new(file_cfg.llm_style),
+            llm_tone: Mutex::new(file_cfg.llm_tone),
+            llm_custom_prompt: Mutex::new(file_cfg.llm_custom_prompt),
+            llm_api_url: Mutex::new(file_cfg.llm_api_url),
+            llm_api_model: Mutex::new(file_cfg.llm_api_model),
+            llm_use_same_key: Mutex::new(file_cfg.llm_use_same_key),
+            llm_api_key: Mutex::new(stored_llm_key),
         })
         .setup(|app| {
             // Remove Windows DWM border and set transparent background
@@ -681,6 +979,9 @@ pub fn run() {
             get_audio_device,
             paste_text,
             resize_window,
+            process_with_llm,
+            cycle_llm_style,
+            cycle_llm_tone,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Vocino");
@@ -741,23 +1042,24 @@ mod tests {
 
     #[test]
     fn config_missing_file_returns_defaults() {
-        let (url, model, device, language, _shortcut_mode) = load_config_file();
-        // Even if config exists, verify types are correct
-        assert!(!url.is_empty(), "URL should not be empty");
-        assert!(!model.is_empty(), "Model should not be empty");
-        // device and language can be None/"" legitimately
-        let _ = (device, language);
+        let cfg = load_config_file();
+        assert!(!cfg.api_url.is_empty(), "URL should not be empty");
+        assert!(!cfg.api_model.is_empty(), "Model should not be empty");
     }
 
     #[test]
     fn save_config_no_panic_with_none_device() {
-        // Should not panic when device is None
-        save_config_file("https://example.com", "test", &None, "en", "toggle", DEFAULT_PROMPT);
+        let mut cfg = AppConfig::default();
+        cfg.selected_device = None;
+        save_config_file(&cfg);
     }
 
     #[test]
     fn save_config_no_panic_with_some_device() {
-        save_config_file("https://example.com", "test", &Some("Mic".to_string()), "it", "toggle", DEFAULT_PROMPT);
+        let mut cfg = AppConfig::default();
+        cfg.selected_device = Some("Mic".to_string());
+        cfg.language = "it".to_string();
+        save_config_file(&cfg);
     }
 
     #[test]
@@ -808,31 +1110,31 @@ mod tests {
 
     #[test]
     fn load_config_returns_valid_strings() {
-        // load_config_file always returns non-empty url and model
-        let (url, model, _device, _lang, _mode) = load_config_file();
-        assert!(url.starts_with("https://"), "URL should be HTTPS, got: {}", url);
-        assert!(!model.is_empty(), "Model should not be empty");
+        let cfg = load_config_file();
+        assert!(cfg.api_url.starts_with("https://"), "URL should be HTTPS, got: {}", cfg.api_url);
+        assert!(!cfg.api_model.is_empty(), "Model should not be empty");
     }
 
     #[test]
     fn save_config_creates_valid_json() {
-        // Verify save_config_file writes parseable JSON
-        // Note: parallel tests may race on the config file, so we retry parse once
-        save_config_file("https://test.local/v1", "test-m", &Some("Dev1".into()), "fr", "toggle", DEFAULT_PROMPT);
+        let mut cfg = AppConfig::default();
+        cfg.api_url = "https://test.local/v1".to_string();
+        cfg.api_model = "test-m".to_string();
+        cfg.selected_device = Some("Dev1".into());
+        cfg.language = "fr".to_string();
+        save_config_file(&cfg);
         if let Some(path) = config_path() {
             let data = std::fs::read_to_string(&path).unwrap();
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
                 assert!(v["api_url"].is_string(), "api_url should be a string");
                 assert!(v["api_model"].is_string(), "api_model should be a string");
             }
-            // If parse fails, another test raced the write — that's OK, the structure is tested above
-            save_config_file(DEFAULT_API_URL, DEFAULT_MODEL, &None, "", "toggle", DEFAULT_PROMPT);
+            save_config_file(&AppConfig::default());
         }
     }
 
     #[test]
     fn migrate_plaintext_key_no_panic_without_key() {
-        // If config has no api_key field, migration should be a no-op
         migrate_plaintext_key();
     }
 
@@ -840,5 +1142,46 @@ mod tests {
     fn default_constants_are_valid() {
         assert!(DEFAULT_API_URL.starts_with("https://"), "API URL should use HTTPS");
         assert!(!DEFAULT_MODEL.is_empty(), "Default model should not be empty");
+        assert!(DEFAULT_LLM_URL.starts_with("https://"), "LLM URL should use HTTPS");
+        assert!(!DEFAULT_LLM_MODEL.is_empty(), "Default LLM model should not be empty");
+    }
+
+    #[test]
+    fn llm_config_defaults() {
+        let cfg = AppConfig::default();
+        assert!(!cfg.llm_enabled, "LLM should be disabled by default");
+        assert_eq!(cfg.llm_style, "off");
+        assert_eq!(cfg.llm_tone, "none");
+        assert!(cfg.llm_custom_prompt.is_empty());
+        assert_eq!(cfg.llm_api_url, DEFAULT_LLM_URL);
+        assert_eq!(cfg.llm_api_model, DEFAULT_LLM_MODEL);
+        assert!(cfg.llm_use_same_key, "Should use same key by default");
+    }
+
+    #[test]
+    fn llm_backward_compat_old_config() {
+        // Simulate an old config file without LLM fields
+        let tmp = std::env::temp_dir().join("pai-voice-test-compat");
+        let _ = std::fs::create_dir_all(&tmp);
+        let path = tmp.join("config.json");
+
+        let old_cfg = serde_json::json!({
+            "api_url": "https://old.example.com/v1",
+            "api_model": "old-model",
+            "language": "de",
+            "shortcut_mode": "hold",
+        });
+        std::fs::write(&path, serde_json::to_string_pretty(&old_cfg).unwrap()).unwrap();
+
+        // Manually parse to verify defaults apply
+        let data = std::fs::read_to_string(&path).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&data).unwrap();
+        let defaults = AppConfig::default();
+
+        assert!(v["llm_enabled"].is_null(), "Old config shouldn't have llm_enabled");
+        assert_eq!(v["llm_enabled"].as_bool().unwrap_or(defaults.llm_enabled), false);
+        assert_eq!(v["llm_style"].as_str().unwrap_or(&defaults.llm_style), "off");
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

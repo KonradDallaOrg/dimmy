@@ -98,6 +98,7 @@ New-Item -ItemType Directory -Force -Path $srcFe | Out-Null
 Copy-Item (Join-Path $WslSource 'src\*') $srcFe -Recurse -Force
 Copy-Item (Join-Path $WslSource 'src-tauri\src\*') (Join-Path $srcTauri 'src') -Recurse -Force
 Copy-Item (Join-Path $WslSource 'src-tauri\Cargo.toml') $srcTauri -Force
+Copy-Item (Join-Path $WslSource 'src-tauri\Cargo.lock') $srcTauri -Force
 Copy-Item (Join-Path $WslSource 'src-tauri\build.rs') $srcTauri -Force
 Copy-Item (Join-Path $WslSource 'src-tauri\tauri.conf.json') $srcTauri -Force
 Copy-Item (Join-Path $WslSource 'src-tauri\capabilities\*') (Join-Path $srcTauri 'capabilities') -Force
