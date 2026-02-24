@@ -1,6 +1,7 @@
 mod audio;
 mod hotkey;
 mod llm;
+mod preprocess;
 mod transcribe;
 
 use audio::AudioCommand;
@@ -73,6 +74,7 @@ struct AppConfig {
     llm_api_url: String,
     llm_api_model: String,
     llm_use_same_key: bool,
+    llm_log_enabled: bool,
 }
 
 impl Default for AppConfig {
@@ -91,6 +93,7 @@ impl Default for AppConfig {
             llm_api_url: DEFAULT_LLM_URL.to_string(),
             llm_api_model: DEFAULT_LLM_MODEL.to_string(),
             llm_use_same_key: true,
+            llm_log_enabled: true,
         }
     }
 }
@@ -114,6 +117,7 @@ fn save_config_file(cfg: &AppConfig) {
             "llm_api_url": cfg.llm_api_url,
             "llm_api_model": cfg.llm_api_model,
             "llm_use_same_key": cfg.llm_use_same_key,
+            "llm_log_enabled": cfg.llm_log_enabled,
         });
         if let Some(ref dev) = cfg.selected_device {
             json["selected_device"] = serde_json::json!(dev);
@@ -142,6 +146,7 @@ fn load_config_file() -> AppConfig {
                     llm_api_url: v["llm_api_url"].as_str().unwrap_or(&defaults.llm_api_url).to_string(),
                     llm_api_model: v["llm_api_model"].as_str().unwrap_or(&defaults.llm_api_model).to_string(),
                     llm_use_same_key: v["llm_use_same_key"].as_bool().unwrap_or(defaults.llm_use_same_key),
+                    llm_log_enabled: v["llm_log_enabled"].as_bool().unwrap_or(defaults.llm_log_enabled),
                 };
             }
         }
@@ -250,6 +255,7 @@ pub struct AppState {
     pub llm_api_model: Mutex<String>,
     pub llm_use_same_key: Mutex<bool>,
     pub llm_api_key: Mutex<Option<String>>,
+    pub llm_log_enabled: Mutex<bool>,
 }
 
 #[tauri::command]
@@ -298,6 +304,7 @@ fn start_recording(
             let silence_threshold: f32 = 0.01;
             let silence_duration_samples = (sample_rate as f32 * 0.4) as usize;
             let max_buffer_samples = sample_rate * MAX_RECORDING_SECS;
+            let mut preprocessor = preprocess::AudioPreprocessor::new(sample_rate as u32);
 
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -359,6 +366,14 @@ fn start_recording(
                 };
 
                 offset = split_end;
+
+                // Preprocess: highpass + VAD + normalize
+                let processed = preprocessor.process(&chunk_data);
+                if processed.is_empty() {
+                    // Entire chunk was noise/silence — skip sending to Whisper
+                    continue;
+                }
+
                 chunk_index += 1;
 
                 let _ = handle.emit(
@@ -369,7 +384,7 @@ fn start_recording(
                     }),
                 );
 
-                let wav_result = audio::encode_wav(&chunk_data, sample_rate as u32).map_err(|e| e.to_string());
+                let wav_result = audio::encode_wav(&processed, sample_rate as u32).map_err(|e| e.to_string());
                 match wav_result {
                     Ok(wav_data) => {
                         match transcribe::transcribe_audio(
@@ -468,7 +483,12 @@ async fn stop_recording(
     );
 
     let sr = *state.audio_sample_rate.lock().map_err(|e| e.to_string())?;
-    let wav_data = audio::encode_wav(&buffer, sr).map_err(|e| e.to_string())?;
+    // Preprocess final buffer: highpass + VAD + normalize
+    let processed = preprocess::process_buffer(&buffer, sr);
+    if processed.is_empty() {
+        return Err("No speech detected in recording".into());
+    }
+    let wav_data = audio::encode_wav(&processed, sr).map_err(|e| e.to_string())?;
     let transcript =
         transcribe::transcribe_audio(&api_url, &api_model, &api_key, &wav_data, &language, &prompt)
             .await
@@ -507,6 +527,7 @@ fn set_config(
     llm_api_model: Option<String>,
     llm_use_same_key: Option<bool>,
     llm_api_key: Option<String>,
+    llm_log_enabled: Option<bool>,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     log(&format!("set_config called: mode={}, device={:?}", shortcut_mode, selected_device));
@@ -548,6 +569,9 @@ fn set_config(
     if let Some(v) = llm_use_same_key {
         *state.llm_use_same_key.lock().map_err(|e| e.to_string())? = v;
     }
+    if let Some(v) = llm_log_enabled {
+        *state.llm_log_enabled.lock().map_err(|e| e.to_string())? = v;
+    }
 
     // Build AppConfig from current state for saving
     let cfg = AppConfig {
@@ -564,6 +588,7 @@ fn set_config(
         llm_api_url: state.llm_api_url.lock().map_err(|e| e.to_string())?.clone(),
         llm_api_model: state.llm_api_model.lock().map_err(|e| e.to_string())?.clone(),
         llm_use_same_key: *state.llm_use_same_key.lock().map_err(|e| e.to_string())?,
+        llm_log_enabled: *state.llm_log_enabled.lock().map_err(|e| e.to_string())?,
     };
     save_config_file(&cfg);
     log("Config file saved");
@@ -597,6 +622,7 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
     let llm_api_model = state.llm_api_model.lock().map_err(|e| e.to_string())?.clone();
     let llm_use_same_key = *state.llm_use_same_key.lock().map_err(|e| e.to_string())?;
     let has_llm_key = state.llm_api_key.lock().map_err(|e| e.to_string())?.is_some();
+    let llm_log_enabled = *state.llm_log_enabled.lock().map_err(|e| e.to_string())?;
 
     let styles: Vec<&str> = llm::STYLES.iter().map(|(name, _)| *name).collect();
     let tones: Vec<&str> = llm::TONES.iter().map(|(name, _)| *name).collect();
@@ -618,6 +644,7 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
         "llm_api_model": llm_api_model,
         "llm_use_same_key": llm_use_same_key,
         "has_llm_key": has_llm_key,
+        "llm_log_enabled": llm_log_enabled,
         "llm_styles": styles,
         "llm_tones": tones,
     }))
@@ -657,10 +684,19 @@ async fn process_with_llm(
         }
     };
 
+    let log_enabled = *state.llm_log_enabled.lock().map_err(|e| e.to_string())?;
+
+    if log_enabled {
+        log(&format!("LLM INPUT [{}+{}]: {}", style, tone, text));
+    }
+
     let _ = app_handle.emit("llm-status", serde_json::json!({ "status": "processing" }));
 
     match llm::process_text(&api_url, &model, &api_key, &text, &style, &tone, &custom_prompt).await {
         Ok(enhanced) => {
+            if log_enabled {
+                log(&format!("LLM OUTPUT [{}+{}]: {}", style, tone, enhanced));
+            }
             let _ = app_handle.emit("llm-status", serde_json::json!({ "status": "done" }));
             Ok(enhanced)
         }
@@ -747,6 +783,7 @@ fn save_current_config(state: &tauri::State<'_, AppState>) -> Result<(), String>
         llm_api_url: state.llm_api_url.lock().map_err(|e| e.to_string())?.clone(),
         llm_api_model: state.llm_api_model.lock().map_err(|e| e.to_string())?.clone(),
         llm_use_same_key: *state.llm_use_same_key.lock().map_err(|e| e.to_string())?,
+        llm_log_enabled: *state.llm_log_enabled.lock().map_err(|e| e.to_string())?,
     };
     save_config_file(&cfg);
     Ok(())
@@ -902,6 +939,7 @@ pub fn run() {
             llm_api_model: Mutex::new(file_cfg.llm_api_model),
             llm_use_same_key: Mutex::new(file_cfg.llm_use_same_key),
             llm_api_key: Mutex::new(stored_llm_key),
+            llm_log_enabled: Mutex::new(file_cfg.llm_log_enabled),
         })
         .setup(|app| {
             // Remove Windows DWM border and set transparent background

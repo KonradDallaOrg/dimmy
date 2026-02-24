@@ -17,6 +17,7 @@ const STYLE_COLORS = {
   elaborate: '#4ade80', // light green
   comprehensible: '#38bdf8', // sky blue
   professional: '#f472b6', // pink
+  prompt: '#a78bfa',    // violet
   custom: '#fb923c',   // orange
 };
 
@@ -63,6 +64,7 @@ const llmSameKeyCheckbox = document.getElementById('llm-same-key');
 const llmKeyField = document.getElementById('llm-key-field');
 const llmApiKeyInput = document.getElementById('llm-api-key');
 const llmKeyHint = document.getElementById('llm-key-hint');
+const llmLogCheckbox = document.getElementById('llm-log-enabled');
 
 let isRecording = false;
 let waveformInterval = null;
@@ -581,6 +583,7 @@ async function openSettings() {
     }
 
     llmSameKeyCheckbox.checked = config.llm_use_same_key !== false;
+    llmLogCheckbox.checked = config.llm_log_enabled !== false;
     toggleLlmKeyField();
 
     llmApiKeyInput.value = '';
@@ -707,6 +710,7 @@ saveBtn.addEventListener('click', async () => {
   const llmToneVal = llmToneSelect.value;
   const llmCustomPromptVal = llmCustomPrompt.value;
   const llmUseSameKey = llmSameKeyCheckbox.checked;
+  const llmLogEnabled = llmLogCheckbox.checked;
   const llmApiKey = llmApiKeyInput.value.trim() || null;
 
   let llmApiUrl, llmApiModel;
@@ -729,6 +733,7 @@ saveBtn.addEventListener('click', async () => {
       llmApiUrl: llmApiUrl || null,
       llmApiModel: llmApiModel || null,
       llmUseSameKey: llmUseSameKey,
+      llmLogEnabled: llmLogEnabled,
       llmApiKey: llmApiKey,
     });
 

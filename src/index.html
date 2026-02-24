@@ -123,6 +123,7 @@
           <option value="elaborate">Elaborate &#8212; expand with detail</option>
           <option value="comprehensible">Comprehensible &#8212; rewrite clearly</option>
           <option value="professional">Professional &#8212; business tone</option>
+          <option value="prompt">Prompt &#8212; reshape as LLM prompt</option>
           <option value="custom">Custom prompt...</option>
         </select>
 
@@ -182,6 +183,11 @@
           <label>LLM API Key <span id="llm-key-hint"></span></label>
           <input type="password" id="llm-api-key" placeholder="Separate LLM API key..." />
         </div>
+
+        <label class="checkbox-label">
+          <input type="checkbox" id="llm-log-enabled" checked />
+          Log transcription &amp; LLM output <span style="color:#6b7280;font-weight:400">(for debugging)</span>
+        </label>
       </div>
 
       <div class="btn-row">
