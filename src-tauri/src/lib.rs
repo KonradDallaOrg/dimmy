@@ -659,9 +659,7 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
     let llm_log_enabled = *state.llm_log_enabled.lock().map_err(|e| e.to_string())?;
     let preprocessing_enabled = *state.preprocessing_enabled.lock().map_err(|e| e.to_string())?;
     let shortcut = state.shortcut.lock().map_err(|e| e.to_string())?.clone();
-    let shortcut_presets: Vec<serde_json::Value> = hotkey::SHORTCUT_PRESETS.iter()
-        .map(|(id, label)| serde_json::json!({"id": id, "label": label}))
-        .collect();
+    let shortcut_label = hotkey::current_label();
 
     let styles: Vec<&str> = llm::STYLES.iter().map(|(name, _)| *name).collect();
     let tones: Vec<&str> = llm::TONES.iter().map(|(name, _)| *name).collect();
@@ -686,7 +684,7 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
         "llm_log_enabled": llm_log_enabled,
         "preprocessing_enabled": preprocessing_enabled,
         "shortcut": shortcut,
-        "shortcut_presets": shortcut_presets,
+        "shortcut_label": shortcut_label,
         "llm_styles": styles,
         "llm_tones": tones,
     }))
@@ -749,6 +747,34 @@ async fn process_with_llm(
             Ok(text)
         }
     }
+}
+
+#[tauri::command]
+fn start_shortcut_recording() -> Result<(), String> {
+    hotkey::start_recording();
+    Ok(())
+}
+
+#[tauri::command]
+fn poll_shortcut_recording(
+    state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    match hotkey::take_recorded() {
+        Some((name, label)) => {
+            // Apply the new shortcut immediately
+            hotkey::set_shortcut(&name);
+            *state.shortcut.lock().map_err(|e| e.to_string())? = name.clone();
+            save_current_config(&state)?;
+            Ok(serde_json::json!({ "done": true, "name": name, "label": label }))
+        }
+        None => Ok(serde_json::json!({ "done": false })),
+    }
+}
+
+#[tauri::command]
+fn cancel_shortcut_recording() -> Result<(), String> {
+    hotkey::stop_recording();
+    Ok(())
 }
 
 #[tauri::command]
@@ -1069,6 +1095,9 @@ pub fn run() {
             process_with_llm,
             cycle_llm_style,
             cycle_llm_tone,
+            start_shortcut_recording,
+            poll_shortcut_recording,
+            cancel_shortcut_recording,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Vocino");

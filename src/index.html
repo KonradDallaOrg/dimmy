@@ -101,7 +101,10 @@
       <textarea id="prompt-input" rows="2" placeholder="Whisper mimics the style of this text. Add punctuation and custom terms here."></textarea>
 
       <label>Shortcut Key</label>
-      <select id="shortcut-select"></select>
+      <div style="display:flex;gap:6px;align-items:center">
+        <span id="shortcut-label" style="flex:1;font-size:12px;color:#e5e7eb">Win + Alt</span>
+        <button id="shortcut-record-btn" type="button" style="font-size:11px;padding:2px 8px">Change</button>
+      </div>
 
       <label>Shortcut Mode</label>
       <select id="shortcut-mode-select">

@@ -44,7 +44,8 @@ const apiUrlInput = document.getElementById('api-url');
 const apiModelInput = document.getElementById('api-model');
 const apiKeyInput = document.getElementById('api-key');
 const keyHint = document.getElementById('key-hint');
-const shortcutSelect = document.getElementById('shortcut-select');
+const shortcutLabel = document.getElementById('shortcut-label');
+const shortcutRecordBtn = document.getElementById('shortcut-record-btn');
 const shortcutModeSelect = document.getElementById('shortcut-mode-select');
 const promptInput = document.getElementById('prompt-input');
 const saveBtn = document.getElementById('save-btn');
@@ -534,16 +535,8 @@ async function openSettings() {
     languageSelect.value = config.language || '';
 
     // Shortcut key
-    shortcutSelect.innerHTML = '';
-    if (config.shortcut_presets) {
-      for (const preset of config.shortcut_presets) {
-        const opt = document.createElement('option');
-        opt.value = preset.id;
-        opt.textContent = preset.label;
-        if (config.shortcut === preset.id) opt.selected = true;
-        shortcutSelect.appendChild(opt);
-      }
-    }
+    shortcutLabel.textContent = config.shortcut_label || 'Win + Alt';
+    shortcutRecordBtn.textContent = 'Change';
 
     // Shortcut mode
     shortcutModeSelect.value = config.shortcut_mode || 'toggle';
@@ -683,6 +676,49 @@ modelSelect.addEventListener('change', () => {
   resizeSettingsWindow();
 });
 
+// ========================
+// SHORTCUT RECORDING
+// ========================
+let shortcutRecording = false;
+let shortcutPollInterval = null;
+
+shortcutRecordBtn.addEventListener('click', async () => {
+  if (shortcutRecording) {
+    // Cancel
+    await invoke('cancel_shortcut_recording');
+    shortcutRecordBtn.textContent = 'Change';
+    shortcutRecording = false;
+    if (shortcutPollInterval) { clearInterval(shortcutPollInterval); shortcutPollInterval = null; }
+    return;
+  }
+
+  shortcutRecording = true;
+  shortcutRecordBtn.textContent = 'Cancel';
+  shortcutLabel.textContent = 'Press two modifier keys...';
+
+  await invoke('start_shortcut_recording');
+
+  shortcutPollInterval = setInterval(async () => {
+    try {
+      const result = await invoke('poll_shortcut_recording');
+      if (result.done) {
+        clearInterval(shortcutPollInterval);
+        shortcutPollInterval = null;
+        shortcutRecording = false;
+        shortcutLabel.textContent = result.label;
+        shortcutRecordBtn.textContent = 'Change';
+      }
+    } catch (_) {}
+  }, 100);
+
+  // Auto-cancel after 10s
+  setTimeout(() => {
+    if (shortcutRecording) {
+      shortcutRecordBtn.click();
+    }
+  }, 10000);
+});
+
 settingsBtn.addEventListener('click', (e) => {
   e.stopPropagation();
   if (currentView === 'settings') {
@@ -710,7 +746,6 @@ saveBtn.addEventListener('click', async () => {
   const selectedDevice = deviceSelect.value || null;
   const language = languageSelect.value;
   const shortcutMode = shortcutModeSelect.value;
-  const shortcutKey = shortcutSelect.value;
   const prompt = promptInput.value;
 
   if (!apiKey) {
@@ -747,7 +782,6 @@ saveBtn.addEventListener('click', async () => {
   try {
     await invoke('set_config', {
       apiKey, apiUrl, apiModel, language, shortcutMode, selectedDevice, prompt,
-      shortcut: shortcutKey,
       preprocessingEnabled: preprocessingEnabled,
       llmEnabled: llmEnabledVal,
       llmStyle: llmStyleVal,
