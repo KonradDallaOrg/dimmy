@@ -652,26 +652,28 @@ fn set_config(
         hotkey::set_shortcut(v);
     }
 
-    // Build AppConfig from current state for saving
+    // Build AppConfig from current state for saving (acquire each lock individually)
+    let cur_shortcut = state.shortcut.lock().map_err(|e| e.to_string())?.clone();
+    let cur_llm_enabled = *state.llm_enabled.lock().map_err(|e| e.to_string())?;
+    let cur_llm_style = state.llm_style.lock().map_err(|e| e.to_string())?.clone();
+    let cur_llm_tone = state.llm_tone.lock().map_err(|e| e.to_string())?.clone();
+    let cur_llm_custom_prompt = state.llm_custom_prompt.lock().map_err(|e| e.to_string())?.clone();
+    let cur_llm_api_url = state.llm_api_url.lock().map_err(|e| e.to_string())?.clone();
+    let cur_llm_api_model = state.llm_api_model.lock().map_err(|e| e.to_string())?.clone();
+    let cur_llm_use_same_key = *state.llm_use_same_key.lock().map_err(|e| e.to_string())?;
+    let cur_llm_log_enabled = *state.llm_log_enabled.lock().map_err(|e| e.to_string())?;
+    let cur_preprocessing_enabled = *state.preprocessing_enabled.lock().map_err(|e| e.to_string())?;
+    let cur_anchor = state.window_anchor.lock().map_err(|e| e.to_string())?.clone();
     let cfg = AppConfig {
-        api_url: api_url.clone(),
-        api_model: api_model.clone(),
-        selected_device: selected_device.clone(),
-        language: language.clone(),
-        shortcut_mode: shortcut_mode.clone(),
-        shortcut: state.shortcut.lock().map_err(|e| e.to_string())?.clone(),
-        prompt: prompt.clone(),
-        llm_enabled: *state.llm_enabled.lock().map_err(|e| e.to_string())?,
-        llm_style: state.llm_style.lock().map_err(|e| e.to_string())?.clone(),
-        llm_tone: state.llm_tone.lock().map_err(|e| e.to_string())?.clone(),
-        llm_custom_prompt: state.llm_custom_prompt.lock().map_err(|e| e.to_string())?.clone(),
-        llm_api_url: state.llm_api_url.lock().map_err(|e| e.to_string())?.clone(),
-        llm_api_model: state.llm_api_model.lock().map_err(|e| e.to_string())?.clone(),
-        llm_use_same_key: *state.llm_use_same_key.lock().map_err(|e| e.to_string())?,
-        llm_log_enabled: *state.llm_log_enabled.lock().map_err(|e| e.to_string())?,
-        preprocessing_enabled: *state.preprocessing_enabled.lock().map_err(|e| e.to_string())?,
-        window_anchor_right: state.window_anchor.lock().map_err(|e| e.to_string())?.map(|(r, _)| r),
-        window_anchor_bottom: state.window_anchor.lock().map_err(|e| e.to_string())?.map(|(_, b)| b),
+        api_url: api_url.clone(), api_model: api_model.clone(),
+        selected_device: selected_device.clone(), language: language.clone(),
+        shortcut_mode: shortcut_mode.clone(), shortcut: cur_shortcut, prompt: prompt.clone(),
+        llm_enabled: cur_llm_enabled, llm_style: cur_llm_style, llm_tone: cur_llm_tone,
+        llm_custom_prompt: cur_llm_custom_prompt, llm_api_url: cur_llm_api_url,
+        llm_api_model: cur_llm_api_model, llm_use_same_key: cur_llm_use_same_key,
+        llm_log_enabled: cur_llm_log_enabled, preprocessing_enabled: cur_preprocessing_enabled,
+        window_anchor_right: cur_anchor.map(|(r, _)| r),
+        window_anchor_bottom: cur_anchor.map(|(_, b)| b),
     };
     save_config_file(&cfg);
     log("Config file saved");
@@ -921,54 +923,38 @@ fn cycle_llm_tone(
     }))
 }
 
-/// Save config from a raw AppState reference (used from event handlers where tauri::State is unavailable).
-fn save_current_config_from_state(state: &AppState) -> Result<(), String> {
-    let cfg = AppConfig {
-        api_url: state.api_url.lock().map_err(|e| e.to_string())?.clone(),
-        api_model: state.api_model.lock().map_err(|e| e.to_string())?.clone(),
-        selected_device: state.selected_device.lock().map_err(|e| e.to_string())?.clone(),
-        language: state.language.lock().map_err(|e| e.to_string())?.clone(),
-        shortcut_mode: state.shortcut_mode.lock().map_err(|e| e.to_string())?.clone(),
-        shortcut: state.shortcut.lock().map_err(|e| e.to_string())?.clone(),
-        prompt: state.prompt.lock().map_err(|e| e.to_string())?.clone(),
-        llm_enabled: *state.llm_enabled.lock().map_err(|e| e.to_string())?,
-        llm_style: state.llm_style.lock().map_err(|e| e.to_string())?.clone(),
-        llm_tone: state.llm_tone.lock().map_err(|e| e.to_string())?.clone(),
-        llm_custom_prompt: state.llm_custom_prompt.lock().map_err(|e| e.to_string())?.clone(),
-        llm_api_url: state.llm_api_url.lock().map_err(|e| e.to_string())?.clone(),
-        llm_api_model: state.llm_api_model.lock().map_err(|e| e.to_string())?.clone(),
-        llm_use_same_key: *state.llm_use_same_key.lock().map_err(|e| e.to_string())?,
-        llm_log_enabled: *state.llm_log_enabled.lock().map_err(|e| e.to_string())?,
-        preprocessing_enabled: *state.preprocessing_enabled.lock().map_err(|e| e.to_string())?,
-        window_anchor_right: state.window_anchor.lock().map_err(|e| e.to_string())?.map(|(r, _)| r),
-        window_anchor_bottom: state.window_anchor.lock().map_err(|e| e.to_string())?.map(|(_, b)| b),
-    };
-    save_config_file(&cfg);
-    Ok(())
+/// Build AppConfig by acquiring each mutex individually (one at a time, no overlapping locks).
+fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
+    let api_url = state.api_url.lock().map_err(|e| e.to_string())?.clone();
+    let api_model = state.api_model.lock().map_err(|e| e.to_string())?.clone();
+    let selected_device = state.selected_device.lock().map_err(|e| e.to_string())?.clone();
+    let language = state.language.lock().map_err(|e| e.to_string())?.clone();
+    let shortcut_mode = state.shortcut_mode.lock().map_err(|e| e.to_string())?.clone();
+    let shortcut = state.shortcut.lock().map_err(|e| e.to_string())?.clone();
+    let prompt = state.prompt.lock().map_err(|e| e.to_string())?.clone();
+    let llm_enabled = *state.llm_enabled.lock().map_err(|e| e.to_string())?;
+    let llm_style = state.llm_style.lock().map_err(|e| e.to_string())?.clone();
+    let llm_tone = state.llm_tone.lock().map_err(|e| e.to_string())?.clone();
+    let llm_custom_prompt = state.llm_custom_prompt.lock().map_err(|e| e.to_string())?.clone();
+    let llm_api_url = state.llm_api_url.lock().map_err(|e| e.to_string())?.clone();
+    let llm_api_model = state.llm_api_model.lock().map_err(|e| e.to_string())?.clone();
+    let llm_use_same_key = *state.llm_use_same_key.lock().map_err(|e| e.to_string())?;
+    let llm_log_enabled = *state.llm_log_enabled.lock().map_err(|e| e.to_string())?;
+    let preprocessing_enabled = *state.preprocessing_enabled.lock().map_err(|e| e.to_string())?;
+    let anchor = state.window_anchor.lock().map_err(|e| e.to_string())?.clone();
+
+    Ok(AppConfig {
+        api_url, api_model, selected_device, language, shortcut_mode, shortcut, prompt,
+        llm_enabled, llm_style, llm_tone, llm_custom_prompt, llm_api_url, llm_api_model,
+        llm_use_same_key, llm_log_enabled, preprocessing_enabled,
+        window_anchor_right: anchor.map(|(r, _)| r),
+        window_anchor_bottom: anchor.map(|(_, b)| b),
+    })
 }
 
 /// Helper to persist current in-memory state to config file.
 fn save_current_config(state: &tauri::State<'_, AppState>) -> Result<(), String> {
-    let cfg = AppConfig {
-        api_url: state.api_url.lock().map_err(|e| e.to_string())?.clone(),
-        api_model: state.api_model.lock().map_err(|e| e.to_string())?.clone(),
-        selected_device: state.selected_device.lock().map_err(|e| e.to_string())?.clone(),
-        language: state.language.lock().map_err(|e| e.to_string())?.clone(),
-        shortcut_mode: state.shortcut_mode.lock().map_err(|e| e.to_string())?.clone(),
-        shortcut: state.shortcut.lock().map_err(|e| e.to_string())?.clone(),
-        prompt: state.prompt.lock().map_err(|e| e.to_string())?.clone(),
-        llm_enabled: *state.llm_enabled.lock().map_err(|e| e.to_string())?,
-        llm_style: state.llm_style.lock().map_err(|e| e.to_string())?.clone(),
-        llm_tone: state.llm_tone.lock().map_err(|e| e.to_string())?.clone(),
-        llm_custom_prompt: state.llm_custom_prompt.lock().map_err(|e| e.to_string())?.clone(),
-        llm_api_url: state.llm_api_url.lock().map_err(|e| e.to_string())?.clone(),
-        llm_api_model: state.llm_api_model.lock().map_err(|e| e.to_string())?.clone(),
-        llm_use_same_key: *state.llm_use_same_key.lock().map_err(|e| e.to_string())?,
-        llm_log_enabled: *state.llm_log_enabled.lock().map_err(|e| e.to_string())?,
-        preprocessing_enabled: *state.preprocessing_enabled.lock().map_err(|e| e.to_string())?,
-        window_anchor_right: state.window_anchor.lock().map_err(|e| e.to_string())?.map(|(r, _)| r),
-        window_anchor_bottom: state.window_anchor.lock().map_err(|e| e.to_string())?.map(|(_, b)| b),
-    };
+    let cfg = snapshot_config(state)?;
     save_config_file(&cfg);
     Ok(())
 }
@@ -1056,9 +1042,6 @@ fn position_bottom_right(win: &tauri::WebviewWindow, w: f64, h: f64) {
     }
 }
 
-/// Flag: when true, ignore Moved events (we're repositioning programmatically).
-static PROGRAMMATIC_MOVE: AtomicBool = AtomicBool::new(false);
-
 #[tauri::command]
 fn resize_window(
     w: f64,
@@ -1067,19 +1050,29 @@ fn resize_window(
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
     if let Some(win) = app_handle.get_webview_window("main") {
-        let anchor = state.window_anchor.lock().map_err(|e| e.to_string())?.clone();
+        // Compute anchor from LIVE window position (captures user drags since last resize)
+        let anchor = {
+            if let (Ok(pos), Ok(size)) = (win.outer_position(), win.outer_size()) {
+                let scale = win.scale_factor().unwrap_or(1.0);
+                let right = pos.x as f64 / scale + size.width as f64 / scale;
+                let bottom = pos.y as f64 / scale + size.height as f64 / scale;
+                Some((right, bottom))
+            } else {
+                state.window_anchor.lock().map_err(|e| e.to_string())?.clone()
+            }
+        };
 
-        PROGRAMMATIC_MOVE.store(true, Ordering::SeqCst);
         win.set_size(LogicalSize::new(w, h)).map_err(|e| e.to_string())?;
 
         if let Some((right, bottom)) = anchor {
             let x = (right - w).max(0.0);
             let y = (bottom - h).max(0.0);
             let _ = win.set_position(LogicalPosition::new(x, y));
+            // Update stored anchor
+            let _ = state.window_anchor.lock().map(|mut a| *a = Some((right, bottom)));
         } else {
             position_bottom_right(&win, w, h);
         }
-        PROGRAMMATIC_MOVE.store(false, Ordering::SeqCst);
     }
     Ok(())
 }
@@ -1197,33 +1190,6 @@ pub fn run() {
                     }
                 }
 
-                // Listen for window move events (user drag) to update anchor
-                let moved_handle = app.handle().clone();
-                window.on_window_event(move |event| {
-                    match event {
-                        tauri::WindowEvent::Moved(_) => {
-                            if PROGRAMMATIC_MOVE.load(Ordering::SeqCst) {
-                                return;
-                            }
-                            if let Some(win) = moved_handle.get_webview_window("main") {
-                                if let (Ok(pos), Ok(size)) = (win.outer_position(), win.outer_size()) {
-                                    let scale = win.scale_factor().unwrap_or(1.0);
-                                    let right = pos.x as f64 / scale + size.width as f64 / scale;
-                                    let bottom = pos.y as f64 / scale + size.height as f64 / scale;
-                                    let st = moved_handle.state::<AppState>();
-                                    let _ = st.window_anchor.lock()
-                                        .map(|mut a| *a = Some((right, bottom)));
-                                }
-                            }
-                        }
-                        tauri::WindowEvent::CloseRequested { .. } => {
-                            // Save position to disk on close
-                            let st = moved_handle.state::<AppState>();
-                            let _ = save_current_config_from_state(&*st);
-                        }
-                        _ => {}
-                    }
-                });
             }
             // Configure and install keyboard hook
             hotkey::set_shortcut(&shortcut_preset);
@@ -1292,8 +1258,29 @@ pub fn run() {
             poll_shortcut_recording,
             cancel_shortcut_recording,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Vocino");
+        .build(tauri::generate_context!())
+        .expect("error while building Vocino")
+        .run(|app_handle, event| {
+            // Save window position + config on close
+            if let tauri::RunEvent::WindowEvent {
+                event: tauri::WindowEvent::CloseRequested { .. }, ..
+            } = &event {
+                // Read live window position for anchor
+                if let Some(win) = app_handle.get_webview_window("main") {
+                    if let (Ok(pos), Ok(size)) = (win.outer_position(), win.outer_size()) {
+                        let scale = win.scale_factor().unwrap_or(1.0);
+                        let right = pos.x as f64 / scale + size.width as f64 / scale;
+                        let bottom = pos.y as f64 / scale + size.height as f64 / scale;
+                        let st: tauri::State<'_, AppState> = app_handle.state();
+                        let _ = st.window_anchor.lock().map(|mut a| *a = Some((right, bottom)));
+                        if let Ok(cfg) = snapshot_config(&st) {
+                            save_config_file(&cfg);
+                            log("Config saved on close (with window position)");
+                        }
+                    }
+                }
+            }
+        });
 }
 
 #[cfg(test)]
