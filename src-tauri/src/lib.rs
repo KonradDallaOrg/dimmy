@@ -77,6 +77,9 @@ struct AppConfig {
     llm_use_same_key: bool,
     llm_log_enabled: bool,
     preprocessing_enabled: bool,
+    // Window position — bottom-right anchor in logical pixels
+    window_anchor_right: Option<f64>,
+    window_anchor_bottom: Option<f64>,
 }
 
 impl Default for AppConfig {
@@ -98,6 +101,8 @@ impl Default for AppConfig {
             llm_use_same_key: true,
             llm_log_enabled: true,
             preprocessing_enabled: true,
+            window_anchor_right: None,
+            window_anchor_bottom: None,
         }
     }
 }
@@ -128,6 +133,12 @@ fn save_config_file(cfg: &AppConfig) {
         if let Some(ref dev) = cfg.selected_device {
             json["selected_device"] = serde_json::json!(dev);
         }
+        if let Some(r) = cfg.window_anchor_right {
+            json["window_anchor_right"] = serde_json::json!(r);
+        }
+        if let Some(b) = cfg.window_anchor_bottom {
+            json["window_anchor_bottom"] = serde_json::json!(b);
+        }
         let _ = std::fs::write(&path, serde_json::to_string_pretty(&json).unwrap_or_default());
     }
 }
@@ -155,6 +166,8 @@ fn load_config_file() -> AppConfig {
                     llm_use_same_key: v["llm_use_same_key"].as_bool().unwrap_or(defaults.llm_use_same_key),
                     llm_log_enabled: v["llm_log_enabled"].as_bool().unwrap_or(defaults.llm_log_enabled),
                     preprocessing_enabled: v["preprocessing_enabled"].as_bool().unwrap_or(defaults.preprocessing_enabled),
+                    window_anchor_right: v["window_anchor_right"].as_f64(),
+                    window_anchor_bottom: v["window_anchor_bottom"].as_f64(),
                 };
             }
         }
@@ -294,6 +307,8 @@ pub struct AppState {
     pub llm_api_key: Mutex<Option<String>>,
     pub llm_log_enabled: Mutex<bool>,
     pub preprocessing_enabled: Mutex<bool>,
+    /// Bottom-right anchor in logical pixels — persisted across restarts
+    pub window_anchor: Mutex<Option<(f64, f64)>>,
 }
 
 #[tauri::command]
@@ -655,6 +670,8 @@ fn set_config(
         llm_use_same_key: *state.llm_use_same_key.lock().map_err(|e| e.to_string())?,
         llm_log_enabled: *state.llm_log_enabled.lock().map_err(|e| e.to_string())?,
         preprocessing_enabled: *state.preprocessing_enabled.lock().map_err(|e| e.to_string())?,
+        window_anchor_right: state.window_anchor.lock().map_err(|e| e.to_string())?.map(|(r, _)| r),
+        window_anchor_bottom: state.window_anchor.lock().map_err(|e| e.to_string())?.map(|(_, b)| b),
     };
     save_config_file(&cfg);
     log("Config file saved");
@@ -904,6 +921,32 @@ fn cycle_llm_tone(
     }))
 }
 
+/// Save config from a raw AppState reference (used from event handlers where tauri::State is unavailable).
+fn save_current_config_from_state(state: &AppState) -> Result<(), String> {
+    let cfg = AppConfig {
+        api_url: state.api_url.lock().map_err(|e| e.to_string())?.clone(),
+        api_model: state.api_model.lock().map_err(|e| e.to_string())?.clone(),
+        selected_device: state.selected_device.lock().map_err(|e| e.to_string())?.clone(),
+        language: state.language.lock().map_err(|e| e.to_string())?.clone(),
+        shortcut_mode: state.shortcut_mode.lock().map_err(|e| e.to_string())?.clone(),
+        shortcut: state.shortcut.lock().map_err(|e| e.to_string())?.clone(),
+        prompt: state.prompt.lock().map_err(|e| e.to_string())?.clone(),
+        llm_enabled: *state.llm_enabled.lock().map_err(|e| e.to_string())?,
+        llm_style: state.llm_style.lock().map_err(|e| e.to_string())?.clone(),
+        llm_tone: state.llm_tone.lock().map_err(|e| e.to_string())?.clone(),
+        llm_custom_prompt: state.llm_custom_prompt.lock().map_err(|e| e.to_string())?.clone(),
+        llm_api_url: state.llm_api_url.lock().map_err(|e| e.to_string())?.clone(),
+        llm_api_model: state.llm_api_model.lock().map_err(|e| e.to_string())?.clone(),
+        llm_use_same_key: *state.llm_use_same_key.lock().map_err(|e| e.to_string())?,
+        llm_log_enabled: *state.llm_log_enabled.lock().map_err(|e| e.to_string())?,
+        preprocessing_enabled: *state.preprocessing_enabled.lock().map_err(|e| e.to_string())?,
+        window_anchor_right: state.window_anchor.lock().map_err(|e| e.to_string())?.map(|(r, _)| r),
+        window_anchor_bottom: state.window_anchor.lock().map_err(|e| e.to_string())?.map(|(_, b)| b),
+    };
+    save_config_file(&cfg);
+    Ok(())
+}
+
 /// Helper to persist current in-memory state to config file.
 fn save_current_config(state: &tauri::State<'_, AppState>) -> Result<(), String> {
     let cfg = AppConfig {
@@ -923,6 +966,8 @@ fn save_current_config(state: &tauri::State<'_, AppState>) -> Result<(), String>
         llm_use_same_key: *state.llm_use_same_key.lock().map_err(|e| e.to_string())?,
         llm_log_enabled: *state.llm_log_enabled.lock().map_err(|e| e.to_string())?,
         preprocessing_enabled: *state.preprocessing_enabled.lock().map_err(|e| e.to_string())?,
+        window_anchor_right: state.window_anchor.lock().map_err(|e| e.to_string())?.map(|(r, _)| r),
+        window_anchor_bottom: state.window_anchor.lock().map_err(|e| e.to_string())?.map(|(_, b)| b),
     };
     save_config_file(&cfg);
     Ok(())
@@ -1011,11 +1056,30 @@ fn position_bottom_right(win: &tauri::WebviewWindow, w: f64, h: f64) {
     }
 }
 
+/// Flag: when true, ignore Moved events (we're repositioning programmatically).
+static PROGRAMMATIC_MOVE: AtomicBool = AtomicBool::new(false);
+
 #[tauri::command]
-fn resize_window(w: f64, h: f64, app_handle: tauri::AppHandle) -> Result<(), String> {
+fn resize_window(
+    w: f64,
+    h: f64,
+    state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+) -> Result<(), String> {
     if let Some(win) = app_handle.get_webview_window("main") {
+        let anchor = state.window_anchor.lock().map_err(|e| e.to_string())?.clone();
+
+        PROGRAMMATIC_MOVE.store(true, Ordering::SeqCst);
         win.set_size(LogicalSize::new(w, h)).map_err(|e| e.to_string())?;
-        position_bottom_right(&win, w, h);
+
+        if let Some((right, bottom)) = anchor {
+            let x = (right - w).max(0.0);
+            let y = (bottom - h).max(0.0);
+            let _ = win.set_position(LogicalPosition::new(x, y));
+        } else {
+            position_bottom_right(&win, w, h);
+        }
+        PROGRAMMATIC_MOVE.store(false, Ordering::SeqCst);
     }
     Ok(())
 }
@@ -1090,6 +1154,12 @@ pub fn run() {
             llm_api_key: Mutex::new(stored_llm_key),
             llm_log_enabled: Mutex::new(file_cfg.llm_log_enabled),
             preprocessing_enabled: Mutex::new(file_cfg.preprocessing_enabled),
+            window_anchor: Mutex::new(
+                match (file_cfg.window_anchor_right, file_cfg.window_anchor_bottom) {
+                    (Some(r), Some(b)) => Some((r, b)),
+                    _ => None,
+                }
+            ),
         })
         .setup(move |app| {
             // Remove Windows DWM border and set transparent background
@@ -1102,11 +1172,58 @@ pub fn run() {
                 #[cfg(debug_assertions)]
                 window.open_devtools();
 
-                // Position bottom-right above taskbar
+                // Position from saved anchor or default bottom-right
                 let win_w = 220.0_f64;
                 let win_h = 32.0_f64;
-                position_bottom_right(&window, win_w, win_h);
-                log("Window positioned above taskbar");
+                {
+                    let anchor = app.state::<AppState>().window_anchor.lock()
+                        .unwrap_or_else(|e| e.into_inner()).clone();
+                    if let Some((right, bottom)) = anchor {
+                        let x = (right - win_w).max(0.0);
+                        let y = (bottom - win_h).max(0.0);
+                        let _ = window.set_position(LogicalPosition::new(x, y));
+                        log(&format!("Window positioned at saved anchor ({}, {})", right, bottom));
+                    } else {
+                        position_bottom_right(&window, win_w, win_h);
+                        // Compute initial anchor from the position we just set
+                        if let (Ok(pos), Ok(size)) = (window.outer_position(), window.outer_size()) {
+                            let scale = window.scale_factor().unwrap_or(1.0);
+                            let right = pos.x as f64 / scale + size.width as f64 / scale;
+                            let bottom = pos.y as f64 / scale + size.height as f64 / scale;
+                            *app.state::<AppState>().window_anchor.lock()
+                                .unwrap_or_else(|e| e.into_inner()) = Some((right, bottom));
+                        }
+                        log("Window positioned bottom-right (default)");
+                    }
+                }
+
+                // Listen for window move events (user drag) to update anchor
+                let moved_handle = app.handle().clone();
+                window.on_window_event(move |event| {
+                    match event {
+                        tauri::WindowEvent::Moved(_) => {
+                            if PROGRAMMATIC_MOVE.load(Ordering::SeqCst) {
+                                return;
+                            }
+                            if let Some(win) = moved_handle.get_webview_window("main") {
+                                if let (Ok(pos), Ok(size)) = (win.outer_position(), win.outer_size()) {
+                                    let scale = win.scale_factor().unwrap_or(1.0);
+                                    let right = pos.x as f64 / scale + size.width as f64 / scale;
+                                    let bottom = pos.y as f64 / scale + size.height as f64 / scale;
+                                    let st = moved_handle.state::<AppState>();
+                                    let _ = st.window_anchor.lock()
+                                        .map(|mut a| *a = Some((right, bottom)));
+                                }
+                            }
+                        }
+                        tauri::WindowEvent::CloseRequested { .. } => {
+                            // Save position to disk on close
+                            let st = moved_handle.state::<AppState>();
+                            let _ = save_current_config_from_state(&*st);
+                        }
+                        _ => {}
+                    }
+                });
             }
             // Configure and install keyboard hook
             hotkey::set_shortcut(&shortcut_preset);
