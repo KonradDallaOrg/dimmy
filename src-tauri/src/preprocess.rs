@@ -7,7 +7,9 @@
 //! The *denoised* output is intentionally discarded — Whisper performs better on original
 //! audio, but hallucmates on silence/noise segments. VAD eliminates those segments.
 
-use biquad::{Biquad, Coefficients, DirectForm2Transposed, Q_BUTTERWORTH_F32, ToHertz, Type as FilterType};
+use biquad::{
+    Biquad, Coefficients, DirectForm2Transposed, ToHertz, Type as FilterType, Q_BUTTERWORTH_F32,
+};
 use nnnoiseless::DenoiseState;
 
 /// Frame size expected by nnnoiseless (480 samples = 10ms at 48kHz)
@@ -237,7 +239,10 @@ mod tests {
     fn normalize_rms_clamps() {
         let mut buf = vec![0.5f32; 480];
         normalize_rms(&mut buf, 1.0);
-        assert!(buf.iter().all(|&s| s <= 1.0 && s >= -1.0), "Should clamp to [-1, 1]");
+        assert!(
+            buf.iter().all(|&s| s <= 1.0 && s >= -1.0),
+            "Should clamp to [-1, 1]"
+        );
     }
 
     #[test]
@@ -255,7 +260,10 @@ mod tests {
         let out = proc.process(&silence);
         // After grace period, silence should be stripped
         // Grace = 30 frames * 480 samples = 14400 samples
-        assert!(out.len() < silence.len(), "Silence should be partially stripped");
+        assert!(
+            out.len() < silence.len(),
+            "Silence should be partially stripped"
+        );
     }
 
     #[test]

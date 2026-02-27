@@ -2,19 +2,14 @@ name: CI
 
 on:
   push:
-    branches: [main, "feature/**"]
+    branches: [main]
   pull_request:
     branches: [main]
 
 jobs:
-  check:
-    name: Check (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-22.04, windows-latest, macos-latest]
-
+  lint:
+    name: Lint
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
@@ -22,6 +17,86 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libasound2-dev \
+            libxdo-dev
+
+      - name: Version consistency
+        working-directory: src-tauri
+        run: |
+          CARGO_VER=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          TAURI_VER=$(grep '"version"' tauri.conf.json | head -1 | sed 's/.*"\([0-9][^"]*\)".*/\1/')
+          echo "Cargo.toml: $CARGO_VER"
+          echo "tauri.conf.json: $TAURI_VER"
+          if [ "$CARGO_VER" != "$TAURI_VER" ]; then
+            echo "::error::Version mismatch: Cargo.toml=$CARGO_VER vs tauri.conf.json=$TAURI_VER"
+            exit 1
+          fi
+
+      - name: Format
+        working-directory: src-tauri
+        run: cargo fmt --check
+
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy -- -D warnings
+
+  test:
+    name: Test
+    runs-on: ubuntu-22.04
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libasound2-dev \
+            libxdo-dev
+
+      - name: Run tests
+        working-directory: src-tauri
+        run: cargo test
+
+  build:
+    name: Build (${{ matrix.os }})
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -39,34 +114,6 @@ jobs:
             patchelf \
             libasound2-dev \
             libxdo-dev
-
-      - name: Version consistency check
-        if: runner.os == 'Linux'
-        working-directory: src-tauri
-        run: |
-          CARGO_VER=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
-          TAURI_VER=$(grep '"version"' tauri.conf.json | head -1 | sed 's/.*"\([0-9][^"]*\)".*/\1/')
-          echo "Cargo.toml: $CARGO_VER"
-          echo "tauri.conf.json: $TAURI_VER"
-          if [ "$CARGO_VER" != "$TAURI_VER" ]; then
-            echo "::error::Version mismatch: Cargo.toml=$CARGO_VER vs tauri.conf.json=$TAURI_VER"
-            exit 1
-          fi
-
-      - name: Format check
-        if: runner.os == 'Linux'
-        working-directory: src-tauri
-        run: cargo fmt --check
-
-      - name: Clippy
-        if: runner.os == 'Linux'
-        working-directory: src-tauri
-        run: cargo clippy -- -D warnings
-
-      - name: Tests
-        if: runner.os == 'Linux'
-        working-directory: src-tauri
-        run: cargo test
 
       - name: Build
         working-directory: src-tauri

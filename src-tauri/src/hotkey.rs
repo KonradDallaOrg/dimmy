@@ -7,7 +7,7 @@
 //! Keys are configured at runtime via `set_shortcut()`.
 //! Recording mode uses GetAsyncKeyState polling to capture the combo.
 
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 
 const EVENT_NONE: u8 = 0;
 const EVENT_PRESSED: u8 = 1;
@@ -237,7 +237,12 @@ pub fn current_label() -> String {
     let g1 = vk_to_group(k1 >> 16);
     let g2 = vk_to_group(k2 >> 16);
     if k3 != 0 {
-        format!("{} + {} + {}", group_to_label(g1), group_to_label(g2), vk_to_label(k3))
+        format!(
+            "{} + {} + {}",
+            group_to_label(g1),
+            group_to_label(g2),
+            vk_to_label(k3)
+        )
     } else {
         format!("{} + {}", group_to_label(g1), group_to_label(g2))
     }
@@ -279,8 +284,18 @@ pub fn take_recorded() -> Option<(String, String)> {
         REC_WAIT.store(0, Ordering::SeqCst);
 
         if k3 != 0 {
-            let name = format!("{}+{}+{}", group_to_name(g1), group_to_name(g2), vk_to_name(k3));
-            let label = format!("{} + {} + {}", group_to_label(g1), group_to_label(g2), vk_to_label(k3));
+            let name = format!(
+                "{}+{}+{}",
+                group_to_name(g1),
+                group_to_name(g2),
+                vk_to_name(k3)
+            );
+            let label = format!(
+                "{} + {} + {}",
+                group_to_label(g1),
+                group_to_label(g2),
+                vk_to_label(k3)
+            );
             Some((name, label))
         } else {
             let name = format!("{}+{}", group_to_name(g1), group_to_name(g2));
@@ -368,7 +383,8 @@ mod platform {
             dwThreadId: u32,
         ) -> isize;
         fn CallNextHookEx(hhk: isize, nCode: i32, wParam: usize, lParam: isize) -> isize;
-        fn GetMessageW(lpMsg: *mut MSG, hWnd: isize, wMsgFilterMin: u32, wMsgFilterMax: u32) -> i32;
+        fn GetMessageW(lpMsg: *mut MSG, hWnd: isize, wMsgFilterMin: u32, wMsgFilterMax: u32)
+            -> i32;
         fn GetAsyncKeyState(vKey: i32) -> i16;
     }
 
@@ -379,15 +395,14 @@ mod platform {
     /// Scan for any pressed non-modifier key. Returns VK code or 0.
     fn scan_non_modifier_key() -> u32 {
         const SCAN: &[u32] = &[
-            0x08, 0x09, 0x0D, 0x1B, 0x20,                         // Bksp Tab Enter Esc Space
+            0x08, 0x09, 0x0D, 0x1B, 0x20, // Bksp Tab Enter Esc Space
             0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, // 0-9
-            0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48,       // A-Z
-            0x49, 0x4A, 0x4B, 0x4C, 0x4D, 0x4E, 0x4F, 0x50,
-            0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58,
-            0x59, 0x5A,
-            0x60, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, // Numpad 0-9
-            0x6A, 0x6B, 0x6D, 0x6E, 0x6F,                         // Numpad ops
-            0x70, 0x71, 0x72, 0x73, 0x74, 0x75,                   // F1-F12
+            0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, // A-Z
+            0x49, 0x4A, 0x4B, 0x4C, 0x4D, 0x4E, 0x4F, 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56,
+            0x57, 0x58, 0x59, 0x5A, 0x60, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68,
+            0x69, // Numpad 0-9
+            0x6A, 0x6B, 0x6D, 0x6E, 0x6F, // Numpad ops
+            0x70, 0x71, 0x72, 0x73, 0x74, 0x75, // F1-F12
             0x76, 0x77, 0x78, 0x79, 0x7A, 0x7B,
         ];
         for &vk in SCAN {
@@ -407,16 +422,20 @@ mod platform {
         let mut count = 0usize;
 
         if is_key_pressed(VK_LWIN) || is_key_pressed(VK_RWIN) {
-            pressed[count] = GROUP_WIN; count += 1;
+            pressed[count] = GROUP_WIN;
+            count += 1;
         }
         if is_key_pressed(VK_LMENU) || is_key_pressed(VK_RMENU) {
-            pressed[count] = GROUP_ALT; count += 1;
+            pressed[count] = GROUP_ALT;
+            count += 1;
         }
         if is_key_pressed(VK_LCONTROL) || is_key_pressed(VK_RCONTROL) {
-            pressed[count] = GROUP_CTRL; count += 1;
+            pressed[count] = GROUP_CTRL;
+            count += 1;
         }
         if is_key_pressed(VK_LSHIFT) || is_key_pressed(VK_RSHIFT) {
-            pressed[count] = GROUP_SHIFT; count += 1;
+            pressed[count] = GROUP_SHIFT;
+            count += 1;
         }
 
         if count < 2 {
@@ -503,16 +522,25 @@ mod platform {
                     // ── 2-modifier + 1-key combo ──
                     let mut changed = false;
                     if matches_key_group(vk, k1) {
-                        if is_down { KEY1_DOWN.store(true, Ordering::SeqCst); }
-                        else if is_up { KEY1_DOWN.store(false, Ordering::SeqCst); }
+                        if is_down {
+                            KEY1_DOWN.store(true, Ordering::SeqCst);
+                        } else if is_up {
+                            KEY1_DOWN.store(false, Ordering::SeqCst);
+                        }
                         changed = true;
                     } else if matches_key_group(vk, k2) {
-                        if is_down { KEY2_DOWN.store(true, Ordering::SeqCst); }
-                        else if is_up { KEY2_DOWN.store(false, Ordering::SeqCst); }
+                        if is_down {
+                            KEY2_DOWN.store(true, Ordering::SeqCst);
+                        } else if is_up {
+                            KEY2_DOWN.store(false, Ordering::SeqCst);
+                        }
                         changed = true;
                     } else if vk == k3 {
-                        if is_down { KEY3_DOWN.store(true, Ordering::SeqCst); }
-                        else if is_up { KEY3_DOWN.store(false, Ordering::SeqCst); }
+                        if is_down {
+                            KEY3_DOWN.store(true, Ordering::SeqCst);
+                        } else if is_up {
+                            KEY3_DOWN.store(false, Ordering::SeqCst);
+                        }
                         changed = true;
                     }
 

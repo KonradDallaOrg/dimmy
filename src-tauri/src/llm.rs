@@ -39,8 +39,14 @@ pub const TONES: &[(&str, &str)] = &[
     ("none", ""),
     ("formal", "Use a formal register and vocabulary."),
     ("friendly", "Use a warm, friendly, and approachable tone."),
-    ("concise", "Be as brief as possible. Remove unnecessary words."),
-    ("academic", "Use an academic, scholarly tone with precise language."),
+    (
+        "concise",
+        "Be as brief as possible. Remove unnecessary words.",
+    ),
+    (
+        "academic",
+        "Use an academic, scholarly tone with precise language.",
+    ),
 ];
 
 /// Build the system prompt from a style + tone combination.

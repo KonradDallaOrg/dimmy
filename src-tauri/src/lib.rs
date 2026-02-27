@@ -8,7 +8,7 @@ use audio::AudioCommand;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
-use tauri::{Emitter, Manager, LogicalSize, LogicalPosition};
+use tauri::{Emitter, LogicalPosition, LogicalSize, Manager};
 
 const DEFAULT_API_URL: &str = "https://api.groq.com/openai/v1/audio/transcriptions";
 const DEFAULT_MODEL: &str = "whisper-large-v3-turbo";
@@ -46,12 +46,19 @@ pub(crate) fn log(msg: &str) {
                 if let Ok(data) = std::fs::read_to_string(&path) {
                     let half = data.len() / 2;
                     // Find the next newline after the halfway point to avoid splitting a line
-                    let cut = data[half..].find('\n').map(|i| half + i + 1).unwrap_or(half);
+                    let cut = data[half..]
+                        .find('\n')
+                        .map(|i| half + i + 1)
+                        .unwrap_or(half);
                     let _ = std::fs::write(&path, &data[cut..]);
                 }
             }
         }
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
             let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
             let _ = writeln!(f, "[{}] {}", ts, msg);
         }
@@ -139,7 +146,10 @@ fn save_config_file(cfg: &AppConfig) {
         if let Some(b) = cfg.window_anchor_bottom {
             json["window_anchor_bottom"] = serde_json::json!(b);
         }
-        let _ = std::fs::write(&path, serde_json::to_string_pretty(&json).unwrap_or_default());
+        let _ = std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&json).unwrap_or_default(),
+        );
     }
 }
 
@@ -158,14 +168,35 @@ fn load_config_file() -> AppConfig {
                     shortcut: v["shortcut"].as_str().unwrap_or("win+alt").to_string(),
                     prompt: v["prompt"].as_str().unwrap_or(DEFAULT_PROMPT).to_string(),
                     llm_enabled: v["llm_enabled"].as_bool().unwrap_or(defaults.llm_enabled),
-                    llm_style: v["llm_style"].as_str().unwrap_or(&defaults.llm_style).to_string(),
-                    llm_tone: v["llm_tone"].as_str().unwrap_or(&defaults.llm_tone).to_string(),
-                    llm_custom_prompt: v["llm_custom_prompt"].as_str().unwrap_or(&defaults.llm_custom_prompt).to_string(),
-                    llm_api_url: v["llm_api_url"].as_str().unwrap_or(&defaults.llm_api_url).to_string(),
-                    llm_api_model: v["llm_api_model"].as_str().unwrap_or(&defaults.llm_api_model).to_string(),
-                    llm_use_same_key: v["llm_use_same_key"].as_bool().unwrap_or(defaults.llm_use_same_key),
-                    llm_log_enabled: v["llm_log_enabled"].as_bool().unwrap_or(defaults.llm_log_enabled),
-                    preprocessing_enabled: v["preprocessing_enabled"].as_bool().unwrap_or(defaults.preprocessing_enabled),
+                    llm_style: v["llm_style"]
+                        .as_str()
+                        .unwrap_or(&defaults.llm_style)
+                        .to_string(),
+                    llm_tone: v["llm_tone"]
+                        .as_str()
+                        .unwrap_or(&defaults.llm_tone)
+                        .to_string(),
+                    llm_custom_prompt: v["llm_custom_prompt"]
+                        .as_str()
+                        .unwrap_or(&defaults.llm_custom_prompt)
+                        .to_string(),
+                    llm_api_url: v["llm_api_url"]
+                        .as_str()
+                        .unwrap_or(&defaults.llm_api_url)
+                        .to_string(),
+                    llm_api_model: v["llm_api_model"]
+                        .as_str()
+                        .unwrap_or(&defaults.llm_api_model)
+                        .to_string(),
+                    llm_use_same_key: v["llm_use_same_key"]
+                        .as_bool()
+                        .unwrap_or(defaults.llm_use_same_key),
+                    llm_log_enabled: v["llm_log_enabled"]
+                        .as_bool()
+                        .unwrap_or(defaults.llm_log_enabled),
+                    preprocessing_enabled: v["preprocessing_enabled"]
+                        .as_bool()
+                        .unwrap_or(defaults.preprocessing_enabled),
                     window_anchor_right: v["window_anchor_right"].as_f64(),
                     window_anchor_bottom: v["window_anchor_bottom"].as_f64(),
                 };
@@ -174,7 +205,6 @@ fn load_config_file() -> AppConfig {
     }
     defaults
 }
-
 
 /// Migrate from old "pai-voice" config/keyring to "dimmy" for existing users.
 fn migrate_from_pai_voice() {
@@ -200,7 +230,11 @@ fn migrate_from_pai_voice() {
     for name in &["config.json", "pai-voice.log"] {
         let src = old_dir.join(name);
         if src.exists() {
-            let dest_name = if *name == "pai-voice.log" { "dimmy.log" } else { name };
+            let dest_name = if *name == "pai-voice.log" {
+                "dimmy.log"
+            } else {
+                name
+            };
             let dest = dimmy_dir.join(dest_name);
             if let Err(e) = std::fs::copy(&src, &dest) {
                 log(&format!("WARNING: failed to copy {}: {}", name, e));
@@ -212,9 +246,14 @@ fn migrate_from_pai_voice() {
 
     // Migrate keyring entries from service "pai-voice" to "dimmy"
     let key_names = [
-        "api-key-groq", "api-key-openai", "api-key-custom",
-        "llm-key-groq", "llm-key-openai", "llm-key-custom",
-        "api-key", "llm-api-key",
+        "api-key-groq",
+        "api-key-openai",
+        "api-key-custom",
+        "llm-key-groq",
+        "llm-key-openai",
+        "llm-key-custom",
+        "api-key",
+        "llm-api-key",
     ];
     for name in &key_names {
         if let Ok(old_entry) = keyring::Entry::new("pai-voice", name) {
@@ -222,7 +261,10 @@ fn migrate_from_pai_voice() {
                 if let Ok(new_entry) = keyring::Entry::new("dimmy", name) {
                     match new_entry.set_password(&key) {
                         Ok(()) => log(&format!("Migrated keyring entry: {}", name)),
-                        Err(e) => log(&format!("WARNING: keyring migration failed for {}: {}", name, e)),
+                        Err(e) => log(&format!(
+                            "WARNING: keyring migration failed for {}: {}",
+                            name, e
+                        )),
                     }
                 }
             }
@@ -240,7 +282,10 @@ fn migrate_plaintext_key() {
                     if !key.is_empty() {
                         let api_url = v["api_url"].as_str().unwrap_or(DEFAULT_API_URL);
                         let provider = url_to_provider(api_url);
-                        log(&format!("Migrating plaintext API key to secure storage (provider={})...", provider));
+                        log(&format!(
+                            "Migrating plaintext API key to secure storage (provider={})...",
+                            provider
+                        ));
                         match save_key_for_provider("api-key", provider, key) {
                             Ok(()) => log("Key migrated to secure storage"),
                             Err(e) => log(&format!("WARNING: migration failed: {}", e)),
@@ -273,13 +318,18 @@ fn url_to_provider(url: &str) -> &str {
 
 fn save_key_for_provider(prefix: &str, provider: &str, key: &str) -> Result<(), String> {
     let entry_name = format!("{}-{}", prefix, provider);
-    let entry = keyring::Entry::new("dimmy", &entry_name)
-        .map_err(|e| {
-            log(&format!("ERROR: keyring Entry::new({}) failed: {}", entry_name, e));
-            format!("Credential store error: {}", e)
-        })?;
+    let entry = keyring::Entry::new("dimmy", &entry_name).map_err(|e| {
+        log(&format!(
+            "ERROR: keyring Entry::new({}) failed: {}",
+            entry_name, e
+        ));
+        format!("Credential store error: {}", e)
+    })?;
     entry.set_password(key).map_err(|e| {
-        log(&format!("ERROR: keyring set_password({}) failed: {}", entry_name, e));
+        log(&format!(
+            "ERROR: keyring set_password({}) failed: {}",
+            entry_name, e
+        ));
         format!("Failed to save key: {}", e)
     })?;
     log(&format!("Key saved to secure storage: {}", entry_name));
@@ -329,7 +379,10 @@ fn migrate_keyring_to_per_provider(api_url: &str, llm_api_url: &str) {
     if let Ok(entry) = keyring::Entry::new("dimmy", "llm-api-key") {
         if let Ok(key) = entry.get_password() {
             let provider = url_to_provider(llm_api_url);
-            log(&format!("Migrating old llm-api-key to llm-key-{}", provider));
+            log(&format!(
+                "Migrating old llm-api-key to llm-key-{}",
+                provider
+            ));
             let _ = save_key_for_provider("llm-key", provider, &key);
             delete_key("dimmy", "llm-api-key");
         }
@@ -342,9 +395,9 @@ pub struct AppState {
     pub api_url: Mutex<String>,
     pub api_model: Mutex<String>,
     pub language: Mutex<String>,
-    pub prompt: Mutex<String>,        // Whisper style prompt (punctuation + vocabulary)
+    pub prompt: Mutex<String>, // Whisper style prompt (punctuation + vocabulary)
     pub shortcut_mode: Mutex<String>, // "toggle" or "hold"
-    pub shortcut: Mutex<String>,      // "win+alt", "ctrl+alt", "ctrl+shift"
+    pub shortcut: Mutex<String>, // "win+alt", "ctrl+alt", "ctrl+shift"
     pub selected_device: Mutex<Option<String>>,
     pub audio_sample_rate: Mutex<u32>,
     pub transcript: Mutex<String>,
@@ -377,7 +430,11 @@ fn start_recording(
     }
     *recording = true;
 
-    let selected_device = state.selected_device.lock().map_err(|e| e.to_string())?.clone();
+    let selected_device = state
+        .selected_device
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
 
     // Get sample rate for the SELECTED device (not default)
     let device_sr = audio::device_sample_rate(&selected_device);
@@ -398,7 +455,10 @@ fn start_recording(
     let language = state.language.lock().map_err(|e| e.to_string())?.clone();
     let prompt = state.prompt.lock().map_err(|e| e.to_string())?.clone();
 
-    let preprocess_on = *state.preprocessing_enabled.lock().map_err(|e| e.to_string())?;
+    let preprocess_on = *state
+        .preprocessing_enabled
+        .lock()
+        .map_err(|e| e.to_string())?;
 
     if let Some(key) = api_key {
         let buffer = state.audio_buffer.clone();
@@ -499,7 +559,8 @@ fn start_recording(
                     }),
                 );
 
-                let wav_result = audio::encode_wav(&processed, sample_rate as u32).map_err(|e| e.to_string());
+                let wav_result =
+                    audio::encode_wav(&processed, sample_rate as u32).map_err(|e| e.to_string());
                 match wav_result {
                     Ok(wav_data) => {
                         match transcribe::transcribe_audio(
@@ -598,7 +659,10 @@ async fn stop_recording(
     );
 
     let sr = *state.audio_sample_rate.lock().map_err(|e| e.to_string())?;
-    let preprocess_final = *state.preprocessing_enabled.lock().map_err(|e| e.to_string())?;
+    let preprocess_final = *state
+        .preprocessing_enabled
+        .lock()
+        .map_err(|e| e.to_string())?;
     // Preprocess final buffer: highpass + VAD + normalize (if enabled)
     let audio_data = if preprocess_final {
         let processed = preprocess::process_buffer(&buffer, sr);
@@ -610,10 +674,11 @@ async fn stop_recording(
         buffer
     };
     let wav_data = audio::encode_wav(&audio_data, sr).map_err(|e| e.to_string())?;
-    let transcript =
-        transcribe::transcribe_audio(&api_url, &api_model, &api_key, &wav_data, &language, &prompt)
-            .await
-            .map_err(|e| e.to_string())?;
+    let transcript = transcribe::transcribe_audio(
+        &api_url, &api_model, &api_key, &wav_data, &language, &prompt,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
 
     *state.transcript.lock().map_err(|e| e.to_string())? = transcript.clone();
 
@@ -653,7 +718,10 @@ fn set_config(
     preprocessing_enabled: Option<bool>,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    log(&format!("set_config called: mode={}, device={:?}", shortcut_mode, selected_device));
+    log(&format!(
+        "set_config called: mode={}, device={:?}",
+        shortcut_mode, selected_device
+    ));
 
     // Save transcription API key for the provider derived from the URL
     let transcription_provider = url_to_provider(&api_url);
@@ -700,7 +768,10 @@ fn set_config(
         *state.llm_log_enabled.lock().map_err(|e| e.to_string())? = v;
     }
     if let Some(v) = preprocessing_enabled {
-        *state.preprocessing_enabled.lock().map_err(|e| e.to_string())? = v;
+        *state
+            .preprocessing_enabled
+            .lock()
+            .map_err(|e| e.to_string())? = v;
     }
     if let Some(ref v) = shortcut {
         *state.shortcut.lock().map_err(|e| e.to_string())? = v.clone();
@@ -712,21 +783,45 @@ fn set_config(
     let cur_llm_enabled = *state.llm_enabled.lock().map_err(|e| e.to_string())?;
     let cur_llm_style = state.llm_style.lock().map_err(|e| e.to_string())?.clone();
     let cur_llm_tone = state.llm_tone.lock().map_err(|e| e.to_string())?.clone();
-    let cur_llm_custom_prompt = state.llm_custom_prompt.lock().map_err(|e| e.to_string())?.clone();
+    let cur_llm_custom_prompt = state
+        .llm_custom_prompt
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     let cur_llm_api_url = state.llm_api_url.lock().map_err(|e| e.to_string())?.clone();
-    let cur_llm_api_model = state.llm_api_model.lock().map_err(|e| e.to_string())?.clone();
+    let cur_llm_api_model = state
+        .llm_api_model
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     let cur_llm_use_same_key = *state.llm_use_same_key.lock().map_err(|e| e.to_string())?;
     let cur_llm_log_enabled = *state.llm_log_enabled.lock().map_err(|e| e.to_string())?;
-    let cur_preprocessing_enabled = *state.preprocessing_enabled.lock().map_err(|e| e.to_string())?;
-    let cur_anchor = state.window_anchor.lock().map_err(|e| e.to_string())?.clone();
+    let cur_preprocessing_enabled = *state
+        .preprocessing_enabled
+        .lock()
+        .map_err(|e| e.to_string())?;
+    let cur_anchor = state
+        .window_anchor
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     let cfg = AppConfig {
-        api_url: api_url.clone(), api_model: api_model.clone(),
-        selected_device: selected_device.clone(), language: language.clone(),
-        shortcut_mode: shortcut_mode.clone(), shortcut: cur_shortcut, prompt: prompt.clone(),
-        llm_enabled: cur_llm_enabled, llm_style: cur_llm_style, llm_tone: cur_llm_tone,
-        llm_custom_prompt: cur_llm_custom_prompt, llm_api_url: cur_llm_api_url,
-        llm_api_model: cur_llm_api_model, llm_use_same_key: cur_llm_use_same_key,
-        llm_log_enabled: cur_llm_log_enabled, preprocessing_enabled: cur_preprocessing_enabled,
+        api_url: api_url.clone(),
+        api_model: api_model.clone(),
+        selected_device: selected_device.clone(),
+        language: language.clone(),
+        shortcut_mode: shortcut_mode.clone(),
+        shortcut: cur_shortcut,
+        prompt: prompt.clone(),
+        llm_enabled: cur_llm_enabled,
+        llm_style: cur_llm_style,
+        llm_tone: cur_llm_tone,
+        llm_custom_prompt: cur_llm_custom_prompt,
+        llm_api_url: cur_llm_api_url,
+        llm_api_model: cur_llm_api_model,
+        llm_use_same_key: cur_llm_use_same_key,
+        llm_log_enabled: cur_llm_log_enabled,
+        preprocessing_enabled: cur_preprocessing_enabled,
         window_anchor_right: cur_anchor.map(|(r, _)| r),
         window_anchor_bottom: cur_anchor.map(|(_, b)| b),
     };
@@ -766,20 +861,43 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
     let api_model = state.api_model.lock().map_err(|e| e.to_string())?.clone();
     let language = state.language.lock().map_err(|e| e.to_string())?.clone();
     let prompt = state.prompt.lock().map_err(|e| e.to_string())?.clone();
-    let shortcut_mode = state.shortcut_mode.lock().map_err(|e| e.to_string())?.clone();
-    let selected_device = state.selected_device.lock().map_err(|e| e.to_string())?.clone();
+    let shortcut_mode = state
+        .shortcut_mode
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
+    let selected_device = state
+        .selected_device
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     let devices = audio::list_input_devices();
 
     let llm_enabled = *state.llm_enabled.lock().map_err(|e| e.to_string())?;
     let llm_style = state.llm_style.lock().map_err(|e| e.to_string())?.clone();
     let llm_tone = state.llm_tone.lock().map_err(|e| e.to_string())?.clone();
-    let llm_custom_prompt = state.llm_custom_prompt.lock().map_err(|e| e.to_string())?.clone();
+    let llm_custom_prompt = state
+        .llm_custom_prompt
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     let llm_api_url = state.llm_api_url.lock().map_err(|e| e.to_string())?.clone();
-    let llm_api_model = state.llm_api_model.lock().map_err(|e| e.to_string())?.clone();
+    let llm_api_model = state
+        .llm_api_model
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     let llm_use_same_key = *state.llm_use_same_key.lock().map_err(|e| e.to_string())?;
-    let has_llm_key = state.llm_api_key.lock().map_err(|e| e.to_string())?.is_some();
+    let has_llm_key = state
+        .llm_api_key
+        .lock()
+        .map_err(|e| e.to_string())?
+        .is_some();
     let llm_log_enabled = *state.llm_log_enabled.lock().map_err(|e| e.to_string())?;
-    let preprocessing_enabled = *state.preprocessing_enabled.lock().map_err(|e| e.to_string())?;
+    let preprocessing_enabled = *state
+        .preprocessing_enabled
+        .lock()
+        .map_err(|e| e.to_string())?;
     let shortcut = state.shortcut.lock().map_err(|e| e.to_string())?.clone();
     let shortcut_label = hotkey::current_label();
 
@@ -841,9 +959,17 @@ async fn process_with_llm(
     }
 
     let tone = state.llm_tone.lock().map_err(|e| e.to_string())?.clone();
-    let custom_prompt = state.llm_custom_prompt.lock().map_err(|e| e.to_string())?.clone();
+    let custom_prompt = state
+        .llm_custom_prompt
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     let api_url = state.llm_api_url.lock().map_err(|e| e.to_string())?.clone();
-    let model = state.llm_api_model.lock().map_err(|e| e.to_string())?.clone();
+    let model = state
+        .llm_api_model
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     let use_same_key = *state.llm_use_same_key.lock().map_err(|e| e.to_string())?;
 
     let api_key = if use_same_key {
@@ -856,7 +982,10 @@ async fn process_with_llm(
         Some(k) => k,
         None => {
             log("LLM: no API key available, returning raw text");
-            let _ = app_handle.emit("llm-status", serde_json::json!({ "status": "error", "error": "No LLM API key" }));
+            let _ = app_handle.emit(
+                "llm-status",
+                serde_json::json!({ "status": "error", "error": "No LLM API key" }),
+            );
             return Ok(text);
         }
     };
@@ -869,7 +998,17 @@ async fn process_with_llm(
 
     let _ = app_handle.emit("llm-status", serde_json::json!({ "status": "processing" }));
 
-    match llm::process_text(&api_url, &model, &api_key, &text, &style, &tone, &custom_prompt).await {
+    match llm::process_text(
+        &api_url,
+        &model,
+        &api_key,
+        &text,
+        &style,
+        &tone,
+        &custom_prompt,
+    )
+    .await
+    {
         Ok(enhanced) => {
             if log_enabled {
                 log(&format!("LLM OUTPUT [{}+{}]: {}", style, tone, enhanced));
@@ -879,7 +1018,10 @@ async fn process_with_llm(
         }
         Err(e) => {
             log(&format!("LLM processing failed: {}", e));
-            let _ = app_handle.emit("llm-status", serde_json::json!({ "status": "error", "error": e.to_string() }));
+            let _ = app_handle.emit(
+                "llm-status",
+                serde_json::json!({ "status": "error", "error": e.to_string() }),
+            );
             // Graceful fallback: return original text, never block paste
             Ok(text)
         }
@@ -894,15 +1036,16 @@ fn start_shortcut_recording() -> Result<(), String> {
 }
 
 #[tauri::command]
-fn poll_shortcut_recording(
-    state: tauri::State<'_, AppState>,
-) -> Result<serde_json::Value, String> {
+fn poll_shortcut_recording(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
     // Poll modifier keys via GetAsyncKeyState
     hotkey::poll_recording_keys();
 
     match hotkey::take_recorded() {
         Some((name, label)) => {
-            log(&format!("poll_shortcut_recording: combo detected: {} ({})", name, label));
+            log(&format!(
+                "poll_shortcut_recording: combo detected: {} ({})",
+                name, label
+            ));
             hotkey::set_shortcut(&name);
             *state.shortcut.lock().map_err(|e| e.to_string())? = name.clone();
             if let Err(e) = save_current_config(&state) {
@@ -927,7 +1070,10 @@ fn cycle_llm_style(
 ) -> Result<serde_json::Value, String> {
     let mut style = state.llm_style.lock().map_err(|e| e.to_string())?;
     let total = llm::STYLES.len();
-    let current_idx = llm::STYLES.iter().position(|(n, _)| *n == style.as_str()).unwrap_or(0);
+    let current_idx = llm::STYLES
+        .iter()
+        .position(|(n, _)| *n == style.as_str())
+        .unwrap_or(0);
     let new_idx = if direction > 0 {
         (current_idx + 1) % total
     } else {
@@ -959,7 +1105,10 @@ fn cycle_llm_tone(
 ) -> Result<serde_json::Value, String> {
     let mut tone = state.llm_tone.lock().map_err(|e| e.to_string())?;
     let total = llm::TONES.len();
-    let current_idx = llm::TONES.iter().position(|(n, _)| *n == tone.as_str()).unwrap_or(0);
+    let current_idx = llm::TONES
+        .iter()
+        .position(|(n, _)| *n == tone.as_str())
+        .unwrap_or(0);
     let new_idx = if direction > 0 {
         (current_idx + 1) % total
     } else {
@@ -982,26 +1131,62 @@ fn cycle_llm_tone(
 fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
     let api_url = state.api_url.lock().map_err(|e| e.to_string())?.clone();
     let api_model = state.api_model.lock().map_err(|e| e.to_string())?.clone();
-    let selected_device = state.selected_device.lock().map_err(|e| e.to_string())?.clone();
+    let selected_device = state
+        .selected_device
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     let language = state.language.lock().map_err(|e| e.to_string())?.clone();
-    let shortcut_mode = state.shortcut_mode.lock().map_err(|e| e.to_string())?.clone();
+    let shortcut_mode = state
+        .shortcut_mode
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     let shortcut = state.shortcut.lock().map_err(|e| e.to_string())?.clone();
     let prompt = state.prompt.lock().map_err(|e| e.to_string())?.clone();
     let llm_enabled = *state.llm_enabled.lock().map_err(|e| e.to_string())?;
     let llm_style = state.llm_style.lock().map_err(|e| e.to_string())?.clone();
     let llm_tone = state.llm_tone.lock().map_err(|e| e.to_string())?.clone();
-    let llm_custom_prompt = state.llm_custom_prompt.lock().map_err(|e| e.to_string())?.clone();
+    let llm_custom_prompt = state
+        .llm_custom_prompt
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     let llm_api_url = state.llm_api_url.lock().map_err(|e| e.to_string())?.clone();
-    let llm_api_model = state.llm_api_model.lock().map_err(|e| e.to_string())?.clone();
+    let llm_api_model = state
+        .llm_api_model
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     let llm_use_same_key = *state.llm_use_same_key.lock().map_err(|e| e.to_string())?;
     let llm_log_enabled = *state.llm_log_enabled.lock().map_err(|e| e.to_string())?;
-    let preprocessing_enabled = *state.preprocessing_enabled.lock().map_err(|e| e.to_string())?;
-    let anchor = state.window_anchor.lock().map_err(|e| e.to_string())?.clone();
+    let preprocessing_enabled = *state
+        .preprocessing_enabled
+        .lock()
+        .map_err(|e| e.to_string())?;
+    let anchor = state
+        .window_anchor
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
 
     Ok(AppConfig {
-        api_url, api_model, selected_device, language, shortcut_mode, shortcut, prompt,
-        llm_enabled, llm_style, llm_tone, llm_custom_prompt, llm_api_url, llm_api_model,
-        llm_use_same_key, llm_log_enabled, preprocessing_enabled,
+        api_url,
+        api_model,
+        selected_device,
+        language,
+        shortcut_mode,
+        shortcut,
+        prompt,
+        llm_enabled,
+        llm_style,
+        llm_tone,
+        llm_custom_prompt,
+        llm_api_url,
+        llm_api_model,
+        llm_use_same_key,
+        llm_log_enabled,
+        preprocessing_enabled,
         window_anchor_right: anchor.map(|(r, _)| r),
         window_anchor_bottom: anchor.map(|(_, b)| b),
     })
@@ -1031,7 +1216,11 @@ fn get_amplitude(state: tauri::State<'_, AppState>) -> Result<f32, String> {
 
 #[tauri::command]
 fn get_audio_device(state: tauri::State<'_, AppState>) -> Result<String, String> {
-    let selected = state.selected_device.lock().map_err(|e| e.to_string())?.clone();
+    let selected = state
+        .selected_device
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     Ok(selected.unwrap_or_else(|| audio::default_input_device_name()))
 }
 
@@ -1050,9 +1239,15 @@ fn paste_text(text: String) -> Result<(), String> {
     #[cfg(not(target_os = "macos"))]
     let modifier = Key::Control;
 
-    enigo.key(modifier, Direction::Press).map_err(|e| e.to_string())?;
-    enigo.key(Key::Unicode('v'), Direction::Click).map_err(|e| e.to_string())?;
-    enigo.key(modifier, Direction::Release).map_err(|e| e.to_string())?;
+    enigo
+        .key(modifier, Direction::Press)
+        .map_err(|e| e.to_string())?;
+    enigo
+        .key(Key::Unicode('v'), Direction::Click)
+        .map_err(|e| e.to_string())?;
+    enigo
+        .key(modifier, Direction::Release)
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1061,14 +1256,35 @@ fn paste_text(text: String) -> Result<(), String> {
 #[cfg(target_os = "windows")]
 fn get_work_area() -> Option<(i32, i32)> {
     #[repr(C)]
-    struct RECT { left: i32, top: i32, right: i32, bottom: i32 }
+    struct RECT {
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+    }
     extern "system" {
-        fn SystemParametersInfoW(action: u32, param: u32, data: *mut std::ffi::c_void, flags: u32) -> i32;
+        fn SystemParametersInfoW(
+            action: u32,
+            param: u32,
+            data: *mut std::ffi::c_void,
+            flags: u32,
+        ) -> i32;
     }
     const SPI_GETWORKAREA: u32 = 0x0030;
     unsafe {
-        let mut rect = RECT { left: 0, top: 0, right: 0, bottom: 0 };
-        if SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut rect as *mut _ as *mut std::ffi::c_void, 0) != 0 {
+        let mut rect = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        if SystemParametersInfoW(
+            SPI_GETWORKAREA,
+            0,
+            &mut rect as *mut _ as *mut std::ffi::c_void,
+            0,
+        ) != 0
+        {
             Some((rect.right, rect.bottom))
         } else {
             None
@@ -1113,18 +1329,26 @@ fn resize_window(
                 let bottom = pos.y as f64 / scale + size.height as f64 / scale;
                 Some((right, bottom))
             } else {
-                state.window_anchor.lock().map_err(|e| e.to_string())?.clone()
+                state
+                    .window_anchor
+                    .lock()
+                    .map_err(|e| e.to_string())?
+                    .clone()
             }
         };
 
-        win.set_size(LogicalSize::new(w, h)).map_err(|e| e.to_string())?;
+        win.set_size(LogicalSize::new(w, h))
+            .map_err(|e| e.to_string())?;
 
         if let Some((right, bottom)) = anchor {
             let x = (right - w).max(0.0);
             let y = (bottom - h).max(0.0);
             let _ = win.set_position(LogicalPosition::new(x, y));
             // Update stored anchor
-            let _ = state.window_anchor.lock().map(|mut a| *a = Some((right, bottom)));
+            let _ = state
+                .window_anchor
+                .lock()
+                .map(|mut a| *a = Some((right, bottom)));
         } else {
             position_bottom_right(&win, w, h);
         }
@@ -1140,7 +1364,12 @@ fn get_version(app_handle: tauri::AppHandle) -> String {
 #[tauri::command]
 async fn check_for_update(app_handle: tauri::AppHandle) -> Result<Option<String>, String> {
     use tauri_plugin_updater::UpdaterExt;
-    match app_handle.updater().map_err(|e| e.to_string())?.check().await {
+    match app_handle
+        .updater()
+        .map_err(|e| e.to_string())?
+        .check()
+        .await
+    {
         Ok(Some(update)) => Ok(Some(update.version.clone())),
         Ok(None) => Ok(None),
         Err(e) => Err(e.to_string()),
@@ -1150,19 +1379,29 @@ async fn check_for_update(app_handle: tauri::AppHandle) -> Result<Option<String>
 #[tauri::command]
 async fn install_update(app_handle: tauri::AppHandle) -> Result<(), String> {
     use tauri_plugin_updater::UpdaterExt;
-    let update = app_handle.updater().map_err(|e| e.to_string())?
-        .check().await.map_err(|e| e.to_string())?;
+    let update = app_handle
+        .updater()
+        .map_err(|e| e.to_string())?
+        .check()
+        .await
+        .map_err(|e| e.to_string())?;
     if let Some(update) = update {
         let mut downloaded = 0;
-        update.download_and_install(
-            |chunk_length, content_length| {
-                downloaded += chunk_length;
-                log(&format!("Update download: {} / {:?}", downloaded, content_length));
-            },
-            || {
-                log("Update download complete, installing...");
-            },
-        ).await.map_err(|e| e.to_string())?;
+        update
+            .download_and_install(
+                |chunk_length, content_length| {
+                    downloaded += chunk_length;
+                    log(&format!(
+                        "Update download: {} / {:?}",
+                        downloaded, content_length
+                    ));
+                },
+                || {
+                    log("Update download complete, installing...");
+                },
+            )
+            .await
+            .map_err(|e| e.to_string())?;
         log("Update installed, restart required");
     }
     Ok(())
@@ -1175,7 +1414,11 @@ pub fn run() {
         eprintln!("{}", msg);
         // Write directly to log file since log() might not work during panic
         if let Some(path) = log_path() {
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+            {
                 use std::io::Write;
                 let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
                 let _ = writeln!(f, "[{}] {}", ts, msg);
@@ -1244,7 +1487,7 @@ pub fn run() {
                 match (file_cfg.window_anchor_right, file_cfg.window_anchor_bottom) {
                     (Some(r), Some(b)) => Some((r, b)),
                     _ => None,
-                }
+                },
             ),
         })
         .setup(move |app| {
@@ -1262,27 +1505,36 @@ pub fn run() {
                 let win_w = 220.0_f64;
                 let win_h = 32.0_f64;
                 {
-                    let anchor = app.state::<AppState>().window_anchor.lock()
-                        .unwrap_or_else(|e| e.into_inner()).clone();
+                    let anchor = app
+                        .state::<AppState>()
+                        .window_anchor
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .clone();
                     if let Some((right, bottom)) = anchor {
                         let x = (right - win_w).max(0.0);
                         let y = (bottom - win_h).max(0.0);
                         let _ = window.set_position(LogicalPosition::new(x, y));
-                        log(&format!("Window positioned at saved anchor ({}, {})", right, bottom));
+                        log(&format!(
+                            "Window positioned at saved anchor ({}, {})",
+                            right, bottom
+                        ));
                     } else {
                         position_bottom_right(&window, win_w, win_h);
                         // Compute initial anchor from the position we just set
-                        if let (Ok(pos), Ok(size)) = (window.outer_position(), window.outer_size()) {
+                        if let (Ok(pos), Ok(size)) = (window.outer_position(), window.outer_size())
+                        {
                             let scale = window.scale_factor().unwrap_or(1.0);
                             let right = pos.x as f64 / scale + size.width as f64 / scale;
                             let bottom = pos.y as f64 / scale + size.height as f64 / scale;
-                            *app.state::<AppState>().window_anchor.lock()
+                            *app.state::<AppState>()
+                                .window_anchor
+                                .lock()
                                 .unwrap_or_else(|e| e.into_inner()) = Some((right, bottom));
                         }
                         log("Window positioned bottom-right (default)");
                     }
                 }
-
             }
             // Configure and install keyboard hook
             hotkey::set_shortcut(&shortcut_preset);
@@ -1295,8 +1547,11 @@ pub fn run() {
                     let event = hotkey::take_event();
                     if event != 0 {
                         let state = hotkey_handle.state::<AppState>();
-                        let is_recording = *state.recording.lock().unwrap_or_else(|e| e.into_inner());
-                        let mode = state.shortcut_mode.lock()
+                        let is_recording =
+                            *state.recording.lock().unwrap_or_else(|e| e.into_inner());
+                        let mode = state
+                            .shortcut_mode
+                            .lock()
                             .map(|m| m.clone())
                             .unwrap_or_else(|_| "toggle".to_string());
 
@@ -1359,8 +1614,10 @@ pub fn run() {
         .run(|app_handle, event| {
             // Save window position + config on close
             if let tauri::RunEvent::WindowEvent {
-                event: tauri::WindowEvent::CloseRequested { .. }, ..
-            } = &event {
+                event: tauri::WindowEvent::CloseRequested { .. },
+                ..
+            } = &event
+            {
                 // Read live window position for anchor
                 if let Some(win) = app_handle.get_webview_window("main") {
                     if let (Ok(pos), Ok(size)) = (win.outer_position(), win.outer_size()) {
@@ -1368,7 +1625,10 @@ pub fn run() {
                         let right = pos.x as f64 / scale + size.width as f64 / scale;
                         let bottom = pos.y as f64 / scale + size.height as f64 / scale;
                         let st: tauri::State<'_, AppState> = app_handle.state();
-                        let _ = st.window_anchor.lock().map(|mut a| *a = Some((right, bottom)));
+                        let _ = st
+                            .window_anchor
+                            .lock()
+                            .map(|mut a| *a = Some((right, bottom)));
                         if let Ok(cfg) = snapshot_config(&st) {
                             save_config_file(&cfg);
                             log("Config saved on close (with window position)");
@@ -1401,7 +1661,10 @@ mod tests {
         let data = std::fs::read_to_string(&path).unwrap();
         let v: serde_json::Value = serde_json::from_str(&data).unwrap();
 
-        assert_eq!(v["api_url"].as_str().unwrap(), "https://test.example.com/v1/transcribe");
+        assert_eq!(
+            v["api_url"].as_str().unwrap(),
+            "https://test.example.com/v1/transcribe"
+        );
         assert_eq!(v["api_model"].as_str().unwrap(), "test-model-v1");
         assert_eq!(v["language"].as_str().unwrap(), "it");
         assert_eq!(v["selected_device"].as_str().unwrap(), "Test Microphone");
@@ -1427,7 +1690,10 @@ mod tests {
 
         assert_eq!(v["api_url"].as_str().unwrap(), DEFAULT_API_URL);
         assert_eq!(v["api_model"].as_str().unwrap(), DEFAULT_MODEL);
-        assert!(v["selected_device"].is_null(), "No device should produce null");
+        assert!(
+            v["selected_device"].is_null(),
+            "No device should produce null"
+        );
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -1467,7 +1733,11 @@ mod tests {
         let p = config_path();
         assert!(p.is_some());
         let p = p.unwrap();
-        assert!(p.ends_with("config.json"), "Should end with config.json, got: {:?}", p);
+        assert!(
+            p.ends_with("config.json"),
+            "Should end with config.json, got: {:?}",
+            p
+        );
     }
 
     #[test]
@@ -1475,7 +1745,11 @@ mod tests {
         let p = log_path();
         assert!(p.is_some());
         let p = p.unwrap();
-        assert!(p.ends_with("dimmy.log"), "Should end with dimmy.log, got: {:?}", p);
+        assert!(
+            p.ends_with("dimmy.log"),
+            "Should end with dimmy.log, got: {:?}",
+            p
+        );
     }
 
     #[test]
@@ -1495,15 +1769,25 @@ mod tests {
             writeln!(f, "[{}] {}", ts, "test log message").unwrap();
         }
         let contents = std::fs::read_to_string(&log_file).unwrap();
-        assert!(contents.contains("test log message"), "Log should contain the message");
-        assert!(contents.contains("[20"), "Log should contain timestamp starting with [20xx");
+        assert!(
+            contents.contains("test log message"),
+            "Log should contain the message"
+        );
+        assert!(
+            contents.contains("[20"),
+            "Log should contain timestamp starting with [20xx"
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn load_config_returns_valid_strings() {
         let cfg = load_config_file();
-        assert!(cfg.api_url.starts_with("https://"), "URL should be HTTPS, got: {}", cfg.api_url);
+        assert!(
+            cfg.api_url.starts_with("https://"),
+            "URL should be HTTPS, got: {}",
+            cfg.api_url
+        );
         assert!(!cfg.api_model.is_empty(), "Model should not be empty");
     }
 
@@ -1532,10 +1816,22 @@ mod tests {
 
     #[test]
     fn default_constants_are_valid() {
-        assert!(DEFAULT_API_URL.starts_with("https://"), "API URL should use HTTPS");
-        assert!(!DEFAULT_MODEL.is_empty(), "Default model should not be empty");
-        assert!(DEFAULT_LLM_URL.starts_with("https://"), "LLM URL should use HTTPS");
-        assert!(!DEFAULT_LLM_MODEL.is_empty(), "Default LLM model should not be empty");
+        assert!(
+            DEFAULT_API_URL.starts_with("https://"),
+            "API URL should use HTTPS"
+        );
+        assert!(
+            !DEFAULT_MODEL.is_empty(),
+            "Default model should not be empty"
+        );
+        assert!(
+            DEFAULT_LLM_URL.starts_with("https://"),
+            "LLM URL should use HTTPS"
+        );
+        assert!(
+            !DEFAULT_LLM_MODEL.is_empty(),
+            "Default LLM model should not be empty"
+        );
     }
 
     #[test]
@@ -1570,9 +1866,18 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&data).unwrap();
         let defaults = AppConfig::default();
 
-        assert!(v["llm_enabled"].is_null(), "Old config shouldn't have llm_enabled");
-        assert_eq!(v["llm_enabled"].as_bool().unwrap_or(defaults.llm_enabled), false);
-        assert_eq!(v["llm_style"].as_str().unwrap_or(&defaults.llm_style), "off");
+        assert!(
+            v["llm_enabled"].is_null(),
+            "Old config shouldn't have llm_enabled"
+        );
+        assert_eq!(
+            v["llm_enabled"].as_bool().unwrap_or(defaults.llm_enabled),
+            false
+        );
+        assert_eq!(
+            v["llm_style"].as_str().unwrap_or(&defaults.llm_style),
+            "off"
+        );
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

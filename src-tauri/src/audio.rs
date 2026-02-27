@@ -24,111 +24,114 @@ pub fn list_input_devices() -> Vec<String> {
 pub fn spawn_audio_thread(buffer: Arc<Mutex<Vec<f32>>>) -> mpsc::Sender<AudioCommand> {
     let (tx, rx) = mpsc::channel::<AudioCommand>();
 
-    thread::spawn(#[allow(unused_assignments, unused_variables)] move || {
-        let host = cpal::default_host();
-        // stream is held alive to keep recording; dropping/replacing stops/starts
-        let mut stream: Option<cpal::Stream> = None;
+    thread::spawn(
+        #[allow(unused_assignments, unused_variables)]
+        move || {
+            let host = cpal::default_host();
+            // stream is held alive to keep recording; dropping/replacing stops/starts
+            let mut stream: Option<cpal::Stream> = None;
 
-        // Event loop: wait for commands
-        for cmd in rx {
-            match cmd {
-                AudioCommand::Start(device_name) => {
-                    // Find the requested device, or fall back to default
-                    let device = if let Some(ref name) = device_name {
-                        host.input_devices()
-                            .ok()
-                            .and_then(|mut devs| {
-                                devs.find(|d| d.name().ok().as_deref() == Some(name.as_str()))
-                            })
-                            .or_else(|| host.default_input_device())
-                    } else {
-                        host.default_input_device()
-                    };
+            // Event loop: wait for commands
+            for cmd in rx {
+                match cmd {
+                    AudioCommand::Start(device_name) => {
+                        // Find the requested device, or fall back to default
+                        let device = if let Some(ref name) = device_name {
+                            host.input_devices()
+                                .ok()
+                                .and_then(|mut devs| {
+                                    devs.find(|d| d.name().ok().as_deref() == Some(name.as_str()))
+                                })
+                                .or_else(|| host.default_input_device())
+                        } else {
+                            host.default_input_device()
+                        };
 
-                    let device = match device {
-                        Some(d) => d,
-                        None => {
-                            eprintln!("No input device available");
-                            continue;
+                        let device = match device {
+                            Some(d) => d,
+                            None => {
+                                eprintln!("No input device available");
+                                continue;
+                            }
+                        };
+
+                        let config = match device.default_input_config() {
+                            Ok(c) => c,
+                            Err(e) => {
+                                eprintln!("Failed to get input config: {}", e);
+                                continue;
+                            }
+                        };
+
+                        let channels = config.channels() as usize;
+
+                        // Clear buffer
+                        if let Ok(mut b) = buffer.lock() {
+                            b.clear();
                         }
-                    };
 
-                    let config = match device.default_input_config() {
-                        Ok(c) => c,
-                        Err(e) => {
-                            eprintln!("Failed to get input config: {}", e);
-                            continue;
-                        }
-                    };
-
-                    let channels = config.channels() as usize;
-
-                    // Clear buffer
-                    if let Ok(mut b) = buffer.lock() {
-                        b.clear();
-                    }
-
-                    let buf = buffer.clone();
-                    let s = match config.sample_format() {
-                        cpal::SampleFormat::F32 => device.build_input_stream(
-                            &config.clone().into(),
-                            move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                                if let Ok(mut b) = buf.lock() {
-                                    if channels > 1 {
-                                        for chunk in data.chunks(channels) {
-                                            let mono =
-                                                chunk.iter().sum::<f32>() / channels as f32;
-                                            b.push(mono);
-                                        }
-                                    } else {
-                                        b.extend_from_slice(data);
-                                    }
-                                }
-                            },
-                            |err| eprintln!("Audio error: {}", err),
-                            None,
-                        ),
-                        cpal::SampleFormat::I16 => {
-                            let buf2 = buffer.clone();
-                            device.build_input_stream(
+                        let buf = buffer.clone();
+                        let s = match config.sample_format() {
+                            cpal::SampleFormat::F32 => device.build_input_stream(
                                 &config.clone().into(),
-                                move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                                    if let Ok(mut b) = buf2.lock() {
-                                        for chunk in data.chunks(channels) {
-                                            let mono: f32 = chunk
-                                                .iter()
-                                                .map(|&s| s as f32 / 32768.0)
-                                                .sum::<f32>()
-                                                / channels as f32;
-                                            b.push(mono);
+                                move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                                    if let Ok(mut b) = buf.lock() {
+                                        if channels > 1 {
+                                            for chunk in data.chunks(channels) {
+                                                let mono =
+                                                    chunk.iter().sum::<f32>() / channels as f32;
+                                                b.push(mono);
+                                            }
+                                        } else {
+                                            b.extend_from_slice(data);
                                         }
                                     }
                                 },
                                 |err| eprintln!("Audio error: {}", err),
                                 None,
-                            )
-                        }
-                        _ => {
-                            eprintln!("Unsupported sample format");
-                            continue;
-                        }
-                    };
+                            ),
+                            cpal::SampleFormat::I16 => {
+                                let buf2 = buffer.clone();
+                                device.build_input_stream(
+                                    &config.clone().into(),
+                                    move |data: &[i16], _: &cpal::InputCallbackInfo| {
+                                        if let Ok(mut b) = buf2.lock() {
+                                            for chunk in data.chunks(channels) {
+                                                let mono: f32 = chunk
+                                                    .iter()
+                                                    .map(|&s| s as f32 / 32768.0)
+                                                    .sum::<f32>()
+                                                    / channels as f32;
+                                                b.push(mono);
+                                            }
+                                        }
+                                    },
+                                    |err| eprintln!("Audio error: {}", err),
+                                    None,
+                                )
+                            }
+                            _ => {
+                                eprintln!("Unsupported sample format");
+                                continue;
+                            }
+                        };
 
-                    match s {
-                        Ok(s) => {
-                            let _ = s.play();
-                            stream = Some(s);
+                        match s {
+                            Ok(s) => {
+                                let _ = s.play();
+                                stream = Some(s);
+                            }
+                            Err(e) => eprintln!("Failed to build stream: {}", e),
                         }
-                        Err(e) => eprintln!("Failed to build stream: {}", e),
+                    }
+                    AudioCommand::Stop => {
+                        // Dropping the stream stops recording
+                        stream = None;
                     }
                 }
-                AudioCommand::Stop => {
-                    // Dropping the stream stops recording
-                    stream = None;
-                }
             }
-        }
-    });
+        },
+    );
 
     tx
 }
@@ -159,7 +162,10 @@ pub fn device_sample_rate(device_name: &Option<String>) -> u32 {
 }
 
 /// Encode f32 samples to WAV bytes (16-bit PCM, mono)
-pub fn encode_wav(samples: &[f32], sample_rate: u32) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+pub fn encode_wav(
+    samples: &[f32],
+    sample_rate: u32,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let spec = hound::WavSpec {
         channels: 1,
         sample_rate,
@@ -231,7 +237,10 @@ mod tests {
 
         let mut reader = hound::WavReader::new(Cursor::new(&wav)).expect("hound can't read WAV");
         let decoded: Vec<i16> = reader.samples::<i16>().map(|s| s.unwrap()).collect();
-        assert!(decoded.iter().all(|&s| s == 0), "Silent input must produce zero samples");
+        assert!(
+            decoded.iter().all(|&s| s == 0),
+            "Silent input must produce zero samples"
+        );
     }
 
     #[test]
