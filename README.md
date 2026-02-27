@@ -1,6 +1,21 @@
-# Dimmy
+<p align="center">
+  <img src="src-tauri/icons/icon.png" width="128" alt="Dimmy">
+</p>
 
-Cross-platform voice transcription overlay. Speak anywhere, text appears everywhere.
+<h1 align="center">Dimmy</h1>
+
+<p align="center">
+  Cross-platform voice transcription overlay. Speak anywhere, text appears everywhere.
+</p>
+
+<p align="center">
+  <a href="https://github.com/KonradDallaOrg/dimmy/actions/workflows/ci.yml"><img src="https://github.com/KonradDallaOrg/dimmy/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/KonradDallaOrg/dimmy/releases/latest"><img src="https://img.shields.io/github/v/release/KonradDallaOrg/dimmy?label=download&color=34d399" alt="Latest Release"></a>
+  <a href="https://github.com/KonradDallaOrg/dimmy/blob/main/LICENSE"><img src="https://img.shields.io/github/license/KonradDallaOrg/dimmy?color=818cf8" alt="License"></a>
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-6366f1" alt="Platform">
+</p>
+
+---
 
 Dimmy sits as a tiny always-on-top pill on your screen. Press a keyboard shortcut, speak, and the transcribed text is automatically pasted into whatever app has focus. Optionally enhance with AI post-processing (grammar correction, summarization, tone adjustment).
 
@@ -20,45 +35,9 @@ Dimmy sits as a tiny always-on-top pill on your screen. Press a keyboard shortcu
 
 ## Download
 
-| Platform | Download |
-|----------|----------|
-| Windows | [Dimmy_x64.msi](https://github.com/KonradDallaOrg/dimmy/releases/latest) |
-| macOS (Apple Silicon) | [Dimmy_aarch64.dmg](https://github.com/KonradDallaOrg/dimmy/releases/latest) |
-| macOS (Intel) | [Dimmy_x64.dmg](https://github.com/KonradDallaOrg/dimmy/releases/latest) |
-| Linux (Debian/Ubuntu) | [Dimmy_amd64.deb](https://github.com/KonradDallaOrg/dimmy/releases/latest) |
-| Linux (AppImage) | [Dimmy_amd64.AppImage](https://github.com/KonradDallaOrg/dimmy/releases/latest) |
+Get the latest release for your platform:
 
-## Build from Source
-
-### Prerequisites
-
-- [Rust](https://rustup.rs/) (latest stable)
-- [Tauri CLI](https://tauri.app/): `cargo install tauri-cli --version '^2'`
-
-#### Linux
-
-```bash
-sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libxdo-dev
-```
-
-#### macOS
-
-```bash
-xcode-select --install
-```
-
-#### Windows
-
-Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the C++ workload.
-
-### Build
-
-```bash
-cd src-tauri
-cargo tauri build
-```
-
-The binary will be in `src-tauri/target/release/`.
+**[Download Dimmy](https://github.com/KonradDallaOrg/dimmy/releases/latest)** — Windows (.msi), macOS (.dmg), Linux (.deb, .AppImage)
 
 ## Quick Start
 
@@ -92,6 +71,32 @@ Scroll wheel on the pill to cycle styles. Ctrl+scroll to cycle tones.
 ## Auto-Update
 
 Dimmy checks for updates when you open Settings. If an update is available, click the update link to download and install. Restart the app to apply.
+
+## Build from Source
+
+### Prerequisites
+
+- [Rust](https://rustup.rs/) (latest stable)
+- [Tauri CLI](https://tauri.app/): `cargo install tauri-cli --version '^2'`
+
+**Linux:**
+```bash
+sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libxdo-dev
+```
+
+**macOS:**
+```bash
+xcode-select --install
+```
+
+**Windows:** Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the C++ workload.
+
+### Build
+
+```bash
+cd src-tauri
+cargo tauri build
+```
 
 ## Development
 
