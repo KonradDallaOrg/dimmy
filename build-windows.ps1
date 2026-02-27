@@ -1,4 +1,4 @@
-# Vocino - Windows Build Script
+# Dimmy - Windows Build Script
 #
 # IMPORTANT: Run from a NATIVE Windows terminal (not from WSL)
 #
@@ -12,14 +12,14 @@
 $ErrorActionPreference = 'Stop'
 
 $WslSource = '\\wsl$\Ubuntu\home\konrad\code\pai-voice'
-$BuildDir = Join-Path $env:USERPROFILE 'pai-voice-build'
+$BuildDir = Join-Path $env:USERPROFILE 'dimmy-build'
 $CargoBin = Join-Path $env:USERPROFILE '.cargo\bin'
 
 # Ensure cargo bin is in PATH
 $env:Path = $CargoBin + ';' + $env:Path
 
 Write-Host ''
-Write-Host '=== Vocino - Windows Build ===' -ForegroundColor Cyan
+Write-Host '=== Dimmy - Windows Build ===' -ForegroundColor Cyan
 
 # Step 0: Setup MSVC environment if link.exe not found
 $linkExe = Get-Command link.exe -ErrorAction SilentlyContinue
@@ -106,7 +106,7 @@ Copy-Item (Join-Path $WslSource 'src-tauri\icons\*') (Join-Path $srcTauri 'icons
 Write-Host ('  Done: ' + $BuildDir) -ForegroundColor Green
 
 # Step 4: Build
-Write-Host '[4/4] Building Vocino...' -ForegroundColor Yellow
+Write-Host '[4/4] Building Dimmy...' -ForegroundColor Yellow
 Push-Location $BuildDir
 & $cargoExe tauri build
 $result = $LASTEXITCODE
@@ -118,10 +118,9 @@ if ($result -ne 0) {
 }
 
 # Report
-# Try Vocino.exe first (new name), fall back to pai-voice.exe
-$exePath = Join-Path $srcTauri 'target\release\Vocino.exe'
+$exePath = Join-Path $srcTauri 'target\release\Dimmy.exe'
 if (-not (Test-Path $exePath)) {
-    $exePath = Join-Path $srcTauri 'target\release\pai-voice.exe'
+    $exePath = Join-Path $srcTauri 'target\release\dimmy.exe'
 }
 if (Test-Path $exePath) {
     $sizeMB = [math]::Round((Get-Item $exePath).Length / 1MB, 1)
@@ -130,14 +129,14 @@ if (Test-Path $exePath) {
     Write-Host ('  EXE: ' + $exePath) -ForegroundColor White
     Write-Host ('  Size: ' + $sizeMB + ' MB') -ForegroundColor White
     $desktop = [Environment]::GetFolderPath('Desktop')
-    $destExe = Join-Path $desktop 'Vocino.exe'
+    $destExe = Join-Path $desktop 'Dimmy.exe'
     # Kill running instance before copying
-    Get-Process -Name 'Vocino' -ErrorAction SilentlyContinue | Stop-Process -Force
-    Get-Process -Name 'pai-voice' -ErrorAction SilentlyContinue | Stop-Process -Force
+    Get-Process -Name 'Dimmy' -ErrorAction SilentlyContinue | Stop-Process -Force
+    Get-Process -Name 'dimmy' -ErrorAction SilentlyContinue | Stop-Process -Force
     Start-Sleep -Milliseconds 500
     Copy-Item $exePath $destExe -Force
     Write-Host ('  Copied to Desktop: ' + $destExe) -ForegroundColor Green
     Write-Host ''
-    Write-Host '  Launch: double-click Vocino.exe on Desktop' -ForegroundColor Cyan
+    Write-Host '  Launch: double-click Dimmy.exe on Desktop' -ForegroundColor Cyan
     Write-Host '  Hotkey: Win+Alt to toggle recording' -ForegroundColor Cyan
 }

@@ -646,6 +646,48 @@ async function openSettings() {
   } catch (err) {
     console.error('get_config:', err);
   }
+
+  // Load version and check for updates
+  const versionText = document.getElementById('version-text');
+  const updateStatus = document.getElementById('update-status');
+  try {
+    const version = await invoke('get_version');
+    versionText.textContent = `Dimmy v${version}`;
+  } catch (_) {}
+
+  // Async update check
+  updateStatus.textContent = 'checking...';
+  updateStatus.className = 'checking';
+  (async () => {
+    try {
+      const newVersion = await invoke('check_for_update');
+      if (newVersion) {
+        updateStatus.textContent = `Update v${newVersion} available`;
+        updateStatus.className = 'available';
+        updateStatus.onclick = async () => {
+          updateStatus.textContent = 'Installing...';
+          updateStatus.className = 'installing';
+          updateStatus.onclick = null;
+          try {
+            await invoke('install_update');
+            updateStatus.textContent = 'Restart to apply';
+          } catch (e) {
+            updateStatus.textContent = 'Update failed';
+            updateStatus.className = 'error';
+            console.error('install_update:', e);
+          }
+        };
+      } else {
+        updateStatus.textContent = 'Up to date';
+        updateStatus.className = '';
+      }
+    } catch (e) {
+      updateStatus.textContent = '';
+      updateStatus.className = '';
+      console.log('Update check skipped:', e);
+    }
+  })();
+
   switchView('settings');
 }
 

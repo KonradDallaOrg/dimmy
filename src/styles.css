@@ -379,3 +379,32 @@ body {
 }
 
 #close-btn:hover { background: rgba(255, 255, 255, 0.08); }
+
+/* === Version footer === */
+#version-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+#version-text {
+  font-size: 8px;
+  color: #374151;
+  letter-spacing: 0.5px;
+}
+
+#update-status {
+  font-size: 8px;
+  color: #4b5563;
+  letter-spacing: 0.3px;
+  cursor: default;
+}
+
+#update-status.checking { color: #6b7280; }
+#update-status.available { color: #34d399; cursor: pointer; }
+#update-status.available:hover { text-decoration: underline; }
+#update-status.error { color: #fbbf24; }
+#update-status.installing { color: #818cf8; }

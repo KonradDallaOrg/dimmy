@@ -1,4 +1,4 @@
-# Vocino - Product Requirements Document
+# Dimmy - Product Requirements Document
 
 **Version:** 1.0
 **Date:** 2026-02-23
@@ -9,7 +9,7 @@
 
 ## 1. Vision
 
-Vocino is a **cross-platform, privacy-first voice transcription overlay** that lets users dictate text into any application. It aims to be the tool that finally bridges the gap between local privacy, cloud accuracy, and modern AI post-processing — something no competitor currently delivers.
+Dimmy is a **cross-platform, privacy-first voice transcription overlay** that lets users dictate text into any application. It aims to be the tool that finally bridges the gap between local privacy, cloud accuracy, and modern AI post-processing — something no competitor currently delivers.
 
 **One-liner:** The Obsidian of voice transcription — open source core, works locally, optional cloud for power features.
 
@@ -39,7 +39,7 @@ Voice transcription in 2026 is fragmented along three axes:
 
 ## 3. Current State (v0.1.0)
 
-Vocino already ships:
+Dimmy already ships:
 
 - Tauri v2 desktop app (Rust backend, ~11MB binary)
 - Real-time audio recording via system microphone (cpal)
@@ -191,7 +191,7 @@ Two layers:
 - Piggybacks on AI post-processing pipeline (FR-1)
 
 #### FR-11: VS Code Extension
-- WebSocket connection to Vocino's local API
+- WebSocket connection to Dimmy's local API
 - Pipe transcriptions to editor at cursor position
 - Auto-activate code dictation when code file is active
 
@@ -256,7 +256,7 @@ Two layers:
 
 ## 8. Open Questions
 
-1. **Brand name:** Vocino is good. Keep it or explore alternatives?
+1. **Brand name:** Dimmy is good. Keep it or explore alternatives?
 2. **Local model distribution:** Bundle models in installer or download on first run?
 3. **Pro tier pricing:** $9/month vs $79 lifetime vs both?
 4. **Plugin system:** When to introduce? What API surface to expose?

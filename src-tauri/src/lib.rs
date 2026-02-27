@@ -21,7 +21,7 @@ const MAX_RECORDING_SECS: usize = 30 * 60; // 30 minutes hard cap
 const MAX_LOG_BYTES: u64 = 1_048_576; // 1 MB log rotation threshold
 
 fn config_dir_path() -> Option<std::path::PathBuf> {
-    dirs::config_dir().map(|p| p.join("pai-voice"))
+    dirs::config_dir().map(|p| p.join("dimmy"))
 }
 
 fn config_path() -> Option<std::path::PathBuf> {
@@ -29,10 +29,10 @@ fn config_path() -> Option<std::path::PathBuf> {
 }
 
 fn log_path() -> Option<std::path::PathBuf> {
-    config_dir_path().map(|p| p.join("pai-voice.log"))
+    config_dir_path().map(|p| p.join("dimmy.log"))
 }
 
-/// Write a log line to %APPDATA%/pai-voice/pai-voice.log (visible on Windows GUI apps)
+/// Write a log line to %APPDATA%/dimmy/dimmy.log (visible on Windows GUI apps)
 pub(crate) fn log(msg: &str) {
     use std::io::Write;
     eprintln!("{}", msg); // also stderr for dev/terminal use
@@ -176,6 +176,61 @@ fn load_config_file() -> AppConfig {
 }
 
 
+/// Migrate from old "pai-voice" config/keyring to "dimmy" for existing users.
+fn migrate_from_pai_voice() {
+    let dimmy_dir = match config_dir_path() {
+        Some(d) => d,
+        None => return,
+    };
+    // If dimmy config dir already exists, skip migration
+    if dimmy_dir.exists() {
+        return;
+    }
+    let old_dir = match dirs::config_dir().map(|p| p.join("pai-voice")) {
+        Some(d) => d,
+        None => return,
+    };
+    if !old_dir.exists() {
+        return;
+    }
+    log("Migrating from pai-voice to dimmy...");
+
+    // Copy config and log files
+    let _ = std::fs::create_dir_all(&dimmy_dir);
+    for name in &["config.json", "pai-voice.log"] {
+        let src = old_dir.join(name);
+        if src.exists() {
+            let dest_name = if *name == "pai-voice.log" { "dimmy.log" } else { name };
+            let dest = dimmy_dir.join(dest_name);
+            if let Err(e) = std::fs::copy(&src, &dest) {
+                log(&format!("WARNING: failed to copy {}: {}", name, e));
+            } else {
+                log(&format!("Copied {} -> {}", src.display(), dest.display()));
+            }
+        }
+    }
+
+    // Migrate keyring entries from service "pai-voice" to "dimmy"
+    let key_names = [
+        "api-key-groq", "api-key-openai", "api-key-custom",
+        "llm-key-groq", "llm-key-openai", "llm-key-custom",
+        "api-key", "llm-api-key",
+    ];
+    for name in &key_names {
+        if let Ok(old_entry) = keyring::Entry::new("pai-voice", name) {
+            if let Ok(key) = old_entry.get_password() {
+                if let Ok(new_entry) = keyring::Entry::new("dimmy", name) {
+                    match new_entry.set_password(&key) {
+                        Ok(()) => log(&format!("Migrated keyring entry: {}", name)),
+                        Err(e) => log(&format!("WARNING: keyring migration failed for {}: {}", name, e)),
+                    }
+                }
+            }
+        }
+    }
+    log("Migration from pai-voice complete");
+}
+
 /// Migrate: if old config.json has api_key in plain text, move to secure storage and REMOVE from file
 fn migrate_plaintext_key() {
     if let Some(path) = config_path() {
@@ -203,7 +258,7 @@ fn migrate_plaintext_key() {
 
 // ── Per-provider secure key storage ─────────────────────────────────
 // Keys are stored per-provider so switching providers doesn't lose keys.
-// Keyring entries: "pai-voice" / "api-key-{provider}" and "llm-key-{provider}"
+// Keyring entries: "dimmy" / "api-key-{provider}" and "llm-key-{provider}"
 
 /// Derive a provider identifier from a URL hostname.
 fn url_to_provider(url: &str) -> &str {
@@ -218,7 +273,7 @@ fn url_to_provider(url: &str) -> &str {
 
 fn save_key_for_provider(prefix: &str, provider: &str, key: &str) -> Result<(), String> {
     let entry_name = format!("{}-{}", prefix, provider);
-    let entry = keyring::Entry::new("pai-voice", &entry_name)
+    let entry = keyring::Entry::new("dimmy", &entry_name)
         .map_err(|e| {
             log(&format!("ERROR: keyring Entry::new({}) failed: {}", entry_name, e));
             format!("Credential store error: {}", e)
@@ -233,7 +288,7 @@ fn save_key_for_provider(prefix: &str, provider: &str, key: &str) -> Result<(), 
 
 fn load_key_for_provider(prefix: &str, provider: &str) -> Option<String> {
     let entry_name = format!("{}-{}", prefix, provider);
-    match keyring::Entry::new("pai-voice", &entry_name) {
+    match keyring::Entry::new("dimmy", &entry_name) {
         Ok(entry) => match entry.get_password() {
             Ok(key) => {
                 log(&format!("Key loaded from secure storage: {}", entry_name));
@@ -247,7 +302,7 @@ fn load_key_for_provider(prefix: &str, provider: &str) -> Option<String> {
 
 fn has_key_for_provider(prefix: &str, provider: &str) -> bool {
     let entry_name = format!("{}-{}", prefix, provider);
-    match keyring::Entry::new("pai-voice", &entry_name) {
+    match keyring::Entry::new("dimmy", &entry_name) {
         Ok(entry) => entry.get_password().is_ok(),
         Err(_) => false,
     }
@@ -262,21 +317,21 @@ fn delete_key(service: &str, name: &str) {
 /// Migrate old single "api-key" and "llm-api-key" entries to per-provider entries.
 fn migrate_keyring_to_per_provider(api_url: &str, llm_api_url: &str) {
     // Migrate transcription key
-    if let Ok(entry) = keyring::Entry::new("pai-voice", "api-key") {
+    if let Ok(entry) = keyring::Entry::new("dimmy", "api-key") {
         if let Ok(key) = entry.get_password() {
             let provider = url_to_provider(api_url);
             log(&format!("Migrating old api-key to api-key-{}", provider));
             let _ = save_key_for_provider("api-key", provider, &key);
-            delete_key("pai-voice", "api-key");
+            delete_key("dimmy", "api-key");
         }
     }
     // Migrate LLM key
-    if let Ok(entry) = keyring::Entry::new("pai-voice", "llm-api-key") {
+    if let Ok(entry) = keyring::Entry::new("dimmy", "llm-api-key") {
         if let Ok(key) = entry.get_password() {
             let provider = url_to_provider(llm_api_url);
             log(&format!("Migrating old llm-api-key to llm-key-{}", provider));
             let _ = save_key_for_provider("llm-key", provider, &key);
-            delete_key("pai-voice", "llm-api-key");
+            delete_key("dimmy", "llm-api-key");
         }
     }
 }
@@ -1077,6 +1132,42 @@ fn resize_window(
     Ok(())
 }
 
+#[tauri::command]
+fn get_version(app_handle: tauri::AppHandle) -> String {
+    app_handle.package_info().version.to_string()
+}
+
+#[tauri::command]
+async fn check_for_update(app_handle: tauri::AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_updater::UpdaterExt;
+    match app_handle.updater().map_err(|e| e.to_string())?.check().await {
+        Ok(Some(update)) => Ok(Some(update.version.clone())),
+        Ok(None) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+async fn install_update(app_handle: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let update = app_handle.updater().map_err(|e| e.to_string())?
+        .check().await.map_err(|e| e.to_string())?;
+    if let Some(update) = update {
+        let mut downloaded = 0;
+        update.download_and_install(
+            |chunk_length, content_length| {
+                downloaded += chunk_length;
+                log(&format!("Update download: {} / {:?}", downloaded, content_length));
+            },
+            || {
+                log("Update download complete, installing...");
+            },
+        ).await.map_err(|e| e.to_string())?;
+        log("Update installed, restart required");
+    }
+    Ok(())
+}
+
 pub fn run() {
     // Log panics to file before crashing
     std::panic::set_hook(Box::new(|info| {
@@ -1092,11 +1183,12 @@ pub fn run() {
         }
     }));
 
-    log("=== Vocino starting ===");
+    log("=== Dimmy starting ===");
     if let Some(p) = log_path() {
         log(&format!("Log file: {}", p.display()));
     }
 
+    migrate_from_pai_voice();
     migrate_plaintext_key();
 
     let file_cfg = load_config_file();
@@ -1121,6 +1213,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState {
             recording: Mutex::new(false),
             api_key: Mutex::new(stored_key),
@@ -1257,9 +1350,12 @@ pub fn run() {
             start_shortcut_recording,
             poll_shortcut_recording,
             cancel_shortcut_recording,
+            get_version,
+            check_for_update,
+            install_update,
         ])
         .build(tauri::generate_context!())
-        .expect("error while building Vocino")
+        .expect("error while building Dimmy")
         .run(|app_handle, event| {
             // Save window position + config on close
             if let tauri::RunEvent::WindowEvent {
@@ -1290,7 +1386,7 @@ mod tests {
     #[test]
     fn config_roundtrip_with_device() {
         // Use a temp dir to avoid polluting real config
-        let tmp = std::env::temp_dir().join("pai-voice-test-config");
+        let tmp = std::env::temp_dir().join("dimmy-test-config");
         let _ = std::fs::create_dir_all(&tmp);
         let path = tmp.join("config.json");
 
@@ -1315,7 +1411,7 @@ mod tests {
 
     #[test]
     fn config_roundtrip_no_device() {
-        let tmp = std::env::temp_dir().join("pai-voice-test-config2");
+        let tmp = std::env::temp_dir().join("dimmy-test-config2");
         let _ = std::fs::create_dir_all(&tmp);
         let path = tmp.join("config.json");
 
@@ -1363,7 +1459,7 @@ mod tests {
         let p = config_dir_path();
         assert!(p.is_some(), "config_dir_path should return Some on any OS");
         let p = p.unwrap();
-        assert!(p.ends_with("pai-voice"), "Path should end with 'pai-voice'");
+        assert!(p.ends_with("dimmy"), "Path should end with 'dimmy'");
     }
 
     #[test]
@@ -1379,12 +1475,12 @@ mod tests {
         let p = log_path();
         assert!(p.is_some());
         let p = p.unwrap();
-        assert!(p.ends_with("pai-voice.log"), "Should end with pai-voice.log, got: {:?}", p);
+        assert!(p.ends_with("dimmy.log"), "Should end with dimmy.log, got: {:?}", p);
     }
 
     #[test]
     fn log_writes_timestamped_line_to_file() {
-        let tmp = std::env::temp_dir().join("pai-voice-test-log");
+        let tmp = std::env::temp_dir().join("dimmy-test-log");
         let _ = std::fs::create_dir_all(&tmp);
         let log_file = tmp.join("test.log");
         // Write directly using the same logic as log()
@@ -1457,7 +1553,7 @@ mod tests {
     #[test]
     fn llm_backward_compat_old_config() {
         // Simulate an old config file without LLM fields
-        let tmp = std::env::temp_dir().join("pai-voice-test-compat");
+        let tmp = std::env::temp_dir().join("dimmy-test-compat");
         let _ = std::fs::create_dir_all(&tmp);
         let path = tmp.join("config.json");
 

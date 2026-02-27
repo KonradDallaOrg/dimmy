@@ -1,4 +1,4 @@
-# Vocino - Business Model
+# Dimmy - Business Model
 
 **Date:** 2026-02-23
 **Orientation:** Open-source core (GitHub) + optional paid cloud tier

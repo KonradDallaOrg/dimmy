@@ -1,4 +1,4 @@
-# Vocino - Market Research
+# Dimmy - Market Research
 
 **Date:** 2026-02-23
 **Sources:** 60+ cross-referenced (Reddit, GitHub, Product Hunt, vendor benchmarks, industry analyses, academic research)
@@ -64,7 +64,7 @@ The AI meeting transcription sub-segment is the fastest-growing at 25.62% CAGR (
                     |  WhisperDesktop (basic)        |
 ```
 
-**The gap Vocino fills:** Cross-platform + local-first + AI-enhanced. No one owns this space.
+**The gap Dimmy fills:** Cross-platform + local-first + AI-enhanced. No one owns this space.
 
 ---
 
@@ -106,7 +106,7 @@ The AI meeting transcription sub-segment is the fastest-growing at 25.62% CAGR (
 7. **Universal text field integration** — Works everywhere, every app, every OS
 8. **Sub-300ms streaming with privacy** — Fast AND local
 
-**Vocino already delivers:** #7 (universal paste), partially #1 (cloud API).
+**Dimmy already delivers:** #7 (universal paste), partially #1 (cloud API).
 **Tier 1 features add:** #2, #3.
 **Tier 2 features add:** #1 (local), #5, #6.
 
@@ -117,7 +117,7 @@ The AI meeting transcription sub-segment is the fastest-growing at 25.62% CAGR (
 ### Trend 1: Audio-Native LLMs
 Mistral's Voxtral (July 2025) handles transcription + understanding in one pass, outperforming Whisper Large V3 by up to 50% in multilingual. This could obsolete the Whisper pipeline in 12-18 months.
 
-**Implication for Vocino:** Architecture must allow swapping the STT backend easily.
+**Implication for Dimmy:** Architecture must allow swapping the STT backend easily.
 
 ### Trend 2: Local-First is Winning
 whisper.cpp at 38k GitHub stars. Privacy backlash against cloud tools. Whisper Large V3 Turbo's 216x real-time factor means consumer hardware handles it.
@@ -148,7 +148,7 @@ Groq Whisper Turbo: $0.04/hour. Deepgram Nova-3: $0.26/hour. OpenAI Whisper: $0.
 
 **A. Platform Lock-in** — Apple/Microsoft dramatically improve built-in dictation with on-device Whisper-class models. Third-party tools squeezed to niches.
 
-**B. Open-Source Dominance** — A polished OSS desktop app emerges as the standard, killing subscription models. (This is where Vocino aims.)
+**B. Open-Source Dominance** — A polished OSS desktop app emerges as the standard, killing subscription models. (This is where Dimmy aims.)
 
 **C. AI-Native Dictation** — Audio-native LLMs make the "dictation app" become an "AI writing assistant you talk to." Highest probability for 2027+.
 

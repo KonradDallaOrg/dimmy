@@ -1,11 +1,11 @@
 [package]
-name = "pai-voice"
+name = "dimmy"
 version = "0.1.0"
 edition = "2021"
-description = "Vocino — Cross-platform voice transcription overlay"
+description = "Dimmy — Cross-platform voice transcription overlay"
 
 [lib]
-name = "pai_voice_lib"
+name = "dimmy_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -28,3 +28,4 @@ chrono = "0.4"
 url = "2"
 nnnoiseless = "0.5"
 biquad = "0.4"
+tauri-plugin-updater = "2"

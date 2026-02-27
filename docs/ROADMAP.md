@@ -1,4 +1,4 @@
-# Vocino - Product Roadmap
+# Dimmy - Product Roadmap
 
 **Date:** 2026-02-23
 
@@ -24,7 +24,7 @@ v2.0  [6-8 wk]  Live captions + VS Code extension + API + team features
 
 ## v1.1 — AI Enhancement (4-6 weeks)
 
-The highest-ROI release. Transforms Vocino from "yet another Whisper frontend" into an intelligent dictation tool.
+The highest-ROI release. Transforms Dimmy from "yet another Whisper frontend" into an intelligent dictation tool.
 
 ### Features
 
@@ -142,7 +142,7 @@ New user segments: accessibility, developers, automation, teams.
 | Feature | Impact | Effort | Details |
 |---------|--------|--------|---------|
 | Live captions overlay | 8/10 | 5/10 | System audio + customizable captions |
-| VS Code extension | 6/10 | 6/10 | WebSocket to local Vocino API |
+| VS Code extension | 6/10 | 6/10 | WebSocket to local Dimmy API |
 | Webhook/REST API | 5/10 | 3/10 | Local HTTP server, events |
 | Team features | 7/10 | 6/10 | Shared library, roles, SSO |
 
