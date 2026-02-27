@@ -27,12 +27,17 @@
     <!-- Settings panel -->
     <div id="settings-panel" class="panel">
 
+      <div id="accessibility-warning" class="hide" style="background:#7f1d1d;color:#fca5a5;padding:6px 8px;border-radius:4px;font-size:11px;margin-bottom:6px">
+        Accessibility permission required for global shortcuts.
+        <a href="#" id="accessibility-link" style="color:#fbbf24;text-decoration:underline">Open System Settings</a>
+      </div>
+
       <!-- Group 1: Activation -->
       <label class="section-label">Activation</label>
 
       <label>Shortcut Key</label>
       <div style="display:flex;gap:6px;align-items:center">
-        <span id="shortcut-label" style="flex:1;font-size:12px;color:#e5e7eb">Win + Alt</span>
+        <span id="shortcut-label" style="flex:1;font-size:12px;color:#e5e7eb">...</span>
         <button id="shortcut-record-btn" type="button" style="font-size:11px;padding:2px 8px">Change</button>
       </div>
 

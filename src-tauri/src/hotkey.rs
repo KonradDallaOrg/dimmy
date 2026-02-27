@@ -74,8 +74,20 @@ fn group_to_packed(group: u8) -> u32 {
 
 fn group_to_name(group: u8) -> &'static str {
     match group {
-        GROUP_WIN => "win",
-        GROUP_ALT => "alt",
+        GROUP_WIN => {
+            if cfg!(target_os = "macos") {
+                "cmd"
+            } else {
+                "win"
+            }
+        }
+        GROUP_ALT => {
+            if cfg!(target_os = "macos") {
+                "option"
+            } else {
+                "alt"
+            }
+        }
         GROUP_CTRL => "ctrl",
         GROUP_SHIFT => "shift",
         _ => "?",
@@ -84,8 +96,20 @@ fn group_to_name(group: u8) -> &'static str {
 
 fn group_to_label(group: u8) -> &'static str {
     match group {
-        GROUP_WIN => "Win",
-        GROUP_ALT => "Alt",
+        GROUP_WIN => {
+            if cfg!(target_os = "macos") {
+                "Cmd"
+            } else {
+                "Win"
+            }
+        }
+        GROUP_ALT => {
+            if cfg!(target_os = "macos") {
+                "Option"
+            } else {
+                "Alt"
+            }
+        }
         GROUP_CTRL => "Ctrl",
         GROUP_SHIFT => "Shift",
         _ => "?",
@@ -94,8 +118,8 @@ fn group_to_label(group: u8) -> &'static str {
 
 fn name_to_group(name: &str) -> u8 {
     match name {
-        "win" => GROUP_WIN,
-        "alt" => GROUP_ALT,
+        "win" | "cmd" => GROUP_WIN,
+        "alt" | "option" => GROUP_ALT,
         "ctrl" => GROUP_CTRL,
         "shift" => GROUP_SHIFT,
         _ => 0,
@@ -224,7 +248,7 @@ pub fn set_shortcut(combo: &str) {
             return;
         }
     }
-    // Fallback: win+alt
+    // Fallback: cmd+option on macOS, win+alt elsewhere
     KEY1_CODES.store(group_to_packed(GROUP_WIN), Ordering::SeqCst);
     KEY2_CODES.store(group_to_packed(GROUP_ALT), Ordering::SeqCst);
     KEY3_CODE.store(0, Ordering::SeqCst);
@@ -579,9 +603,445 @@ mod platform {
     }
 }
 
-// ── Non-Windows stub ────────────────────────────────────────────────
+// ── macOS implementation ─────────────────────────────────────────────
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+mod platform {
+    use super::*;
+
+    // macOS keycodes for modifier keys
+    const KC_LEFT_CMD: u16 = 0x37;
+    const KC_RIGHT_CMD: u16 = 0x36;
+    const KC_LEFT_OPTION: u16 = 0x3A;
+    const KC_RIGHT_OPTION: u16 = 0x3D;
+    const KC_LEFT_CTRL: u16 = 0x3B;
+    const KC_RIGHT_CTRL: u16 = 0x3E;
+    const KC_LEFT_SHIFT: u16 = 0x38;
+    const KC_RIGHT_SHIFT: u16 = 0x3C;
+
+    fn keycode_to_group(kc: u16) -> u8 {
+        match kc {
+            KC_LEFT_CMD | KC_RIGHT_CMD => GROUP_WIN,
+            KC_LEFT_OPTION | KC_RIGHT_OPTION => GROUP_ALT,
+            KC_LEFT_CTRL | KC_RIGHT_CTRL => GROUP_CTRL,
+            KC_LEFT_SHIFT | KC_RIGHT_SHIFT => GROUP_SHIFT,
+            _ => 0,
+        }
+    }
+
+    /// Map macOS keycode to the Windows-compatible VK code used by the shared logic.
+    /// Modifier keys use the platform VK constants; non-modifier keys are mapped
+    /// to the same codes that vk_to_name/vk_to_label/name_to_vk understand.
+    fn keycode_to_vk(kc: u16) -> u32 {
+        match kc {
+            // Modifiers — mapped to Windows VK codes so matches_key_group works
+            KC_LEFT_CMD => VK_LWIN,
+            KC_RIGHT_CMD => VK_RWIN,
+            KC_LEFT_OPTION => VK_LMENU,
+            KC_RIGHT_OPTION => VK_RMENU,
+            KC_LEFT_CTRL => VK_LCONTROL,
+            KC_RIGHT_CTRL => VK_RCONTROL,
+            KC_LEFT_SHIFT => VK_LSHIFT,
+            KC_RIGHT_SHIFT => VK_RSHIFT,
+            // Letters (macOS 0x00-0x1F map to ANSI layout)
+            0x00 => 0x41, // A
+            0x0B => 0x42, // B
+            0x08 => 0x43, // C
+            0x02 => 0x44, // D
+            0x0E => 0x45, // E
+            0x03 => 0x46, // F
+            0x05 => 0x47, // G
+            0x04 => 0x48, // H
+            0x22 => 0x49, // I
+            0x26 => 0x4A, // J
+            0x28 => 0x4B, // K
+            0x25 => 0x4C, // L
+            0x2E => 0x4D, // M
+            0x2D => 0x4E, // N
+            0x1F => 0x4F, // O
+            0x23 => 0x50, // P
+            0x0C => 0x51, // Q
+            0x0F => 0x52, // R
+            0x01 => 0x53, // S
+            0x11 => 0x54, // T
+            0x20 => 0x55, // U
+            0x09 => 0x56, // V
+            0x0D => 0x57, // W
+            0x07 => 0x58, // X
+            0x10 => 0x59, // Y
+            0x06 => 0x5A, // Z
+            // Digits
+            0x12 => 0x31, // 1
+            0x13 => 0x32, // 2
+            0x14 => 0x33, // 3
+            0x15 => 0x34, // 4
+            0x17 => 0x35, // 5
+            0x16 => 0x36, // 6
+            0x1A => 0x37, // 7
+            0x1C => 0x38, // 8
+            0x19 => 0x39, // 9
+            0x1D => 0x30, // 0
+            // Function keys
+            0x7A => 0x70, // F1
+            0x78 => 0x71, // F2
+            0x63 => 0x72, // F3
+            0x76 => 0x73, // F4
+            0x60 => 0x74, // F5
+            0x61 => 0x75, // F6
+            0x62 => 0x76, // F7
+            0x64 => 0x77, // F8
+            0x65 => 0x78, // F9
+            0x6D => 0x79, // F10
+            0x67 => 0x7A, // F11
+            0x6F => 0x7B, // F12
+            // Special keys
+            0x33 => 0x08, // Backspace (Delete)
+            0x30 => 0x09, // Tab
+            0x24 => 0x0D, // Return/Enter
+            0x35 => 0x1B, // Escape
+            0x31 => 0x20, // Space
+            // Numpad
+            0x52 => 0x60, // Numpad 0
+            0x53 => 0x61, // Numpad 1
+            0x54 => 0x62, // Numpad 2
+            0x55 => 0x63, // Numpad 3
+            0x56 => 0x64, // Numpad 4
+            0x57 => 0x65, // Numpad 5
+            0x58 => 0x66, // Numpad 6
+            0x59 => 0x67, // Numpad 7
+            0x5B => 0x68, // Numpad 8
+            0x5C => 0x69, // Numpad 9
+            0x43 => 0x6A, // Numpad *
+            0x45 => 0x6B, // Numpad +
+            0x4E => 0x6D, // Numpad -
+            0x41 => 0x6E, // Numpad .
+            0x4B => 0x6F, // Numpad /
+            _ => 0,
+        }
+    }
+
+    // ── CoreGraphics / CoreFoundation FFI ────────────────────────────
+
+    type CGEventTapLocation = u32;
+    type CGEventTapPlacement = u32;
+    type CGEventTapOptions = u32;
+    type CGEventMask = u64;
+    type CGEventType = u32;
+    type CGEventField = u32;
+    type CGEventFlags = u64;
+    type CGEventSourceStateID = u32;
+
+    const K_CG_SESSION_EVENT_TAP: CGEventTapLocation = 1;
+    const K_CG_HEAD_INSERT_EVENT_TAP: CGEventTapPlacement = 0;
+    const K_CG_EVENT_TAP_OPTION_LISTEN_ONLY: CGEventTapOptions = 1;
+
+    const K_CG_EVENT_KEY_DOWN: CGEventType = 10;
+    const K_CG_EVENT_KEY_UP: CGEventType = 11;
+    const K_CG_EVENT_FLAGS_CHANGED: CGEventType = 12;
+
+    const K_CG_KEYBOARD_EVENT_KEYCODE: CGEventField = 9;
+
+    const K_CG_EVENT_SOURCE_STATE_COMBINED_SESSION: CGEventSourceStateID = 0;
+
+    const K_CG_EVENT_FLAG_MASK_COMMAND: CGEventFlags = 0x00100000;
+    const K_CG_EVENT_FLAG_MASK_SHIFT: CGEventFlags = 0x00020000;
+    const K_CG_EVENT_FLAG_MASK_ALTERNATE: CGEventFlags = 0x00080000;
+    const K_CG_EVENT_FLAG_MASK_CONTROL: CGEventFlags = 0x00040000;
+
+    // Opaque types
+    #[repr(C)]
+    struct __CGEvent {
+        _private: [u8; 0],
+    }
+    type CGEventRef = *mut __CGEvent;
+
+    #[repr(C)]
+    struct __CFMachPort {
+        _private: [u8; 0],
+    }
+    type CFMachPortRef = *mut __CFMachPort;
+
+    #[repr(C)]
+    struct __CFRunLoopSource {
+        _private: [u8; 0],
+    }
+    type CFRunLoopSourceRef = *mut __CFRunLoopSource;
+
+    #[repr(C)]
+    struct __CFRunLoop {
+        _private: [u8; 0],
+    }
+    type CFRunLoopRef = *mut __CFRunLoop;
+
+    type CFIndex = isize;
+    type CFAllocatorRef = *const std::ffi::c_void;
+    type CFStringRef = *const std::ffi::c_void;
+    type CFRunLoopMode = CFStringRef;
+
+    type CGEventTapCallBack = unsafe extern "C" fn(
+        proxy: *const std::ffi::c_void,
+        event_type: CGEventType,
+        event: CGEventRef,
+        user_info: *mut std::ffi::c_void,
+    ) -> CGEventRef;
+
+    extern "C" {
+        fn CGEventTapCreate(
+            tap: CGEventTapLocation,
+            place: CGEventTapPlacement,
+            options: CGEventTapOptions,
+            events_of_interest: CGEventMask,
+            callback: CGEventTapCallBack,
+            user_info: *mut std::ffi::c_void,
+        ) -> CFMachPortRef;
+
+        fn CFMachPortCreateRunLoopSource(
+            allocator: CFAllocatorRef,
+            port: CFMachPortRef,
+            order: CFIndex,
+        ) -> CFRunLoopSourceRef;
+
+        fn CFRunLoopGetCurrent() -> CFRunLoopRef;
+
+        fn CFRunLoopAddSource(
+            rl: CFRunLoopRef,
+            source: CFRunLoopSourceRef,
+            mode: CFRunLoopMode,
+        );
+
+        fn CFRunLoopRun();
+
+        fn CGEventGetIntegerValueField(event: CGEventRef, field: CGEventField) -> i64;
+
+        fn CGEventSourceFlagsState(state_id: CGEventSourceStateID) -> CGEventFlags;
+
+        fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
+
+        static kCFRunLoopCommonModes: CFRunLoopMode;
+    }
+
+    fn event_mask(ty: CGEventType) -> CGEventMask {
+        1u64 << (ty as u64)
+    }
+
+    // Track the tap for re-enabling if macOS disables it
+    static TAP_PORT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    unsafe extern "C" fn tap_callback(
+        _proxy: *const std::ffi::c_void,
+        event_type: CGEventType,
+        event: CGEventRef,
+        _user_info: *mut std::ffi::c_void,
+    ) -> CGEventRef {
+        // macOS may send a special event when the tap is disabled; re-enable it
+        if event_type == 0xFFFFFFFF {
+            // kCGEventTapDisabledByTimeout or kCGEventTapDisabledByUserInput
+            let port_addr = TAP_PORT.load(Ordering::SeqCst);
+            if port_addr != 0 {
+                CGEventTapEnable(port_addr as CFMachPortRef, true);
+            }
+            return event;
+        }
+
+        let keycode =
+            unsafe { CGEventGetIntegerValueField(event, K_CG_KEYBOARD_EVENT_KEYCODE) } as u16;
+
+        // Determine key-down / key-up
+        // For kCGEventFlagsChanged we look at the current modifier flags to decide
+        let (is_down, is_up) = match event_type {
+            K_CG_EVENT_KEY_DOWN => (true, false),
+            K_CG_EVENT_KEY_UP => (false, true),
+            K_CG_EVENT_FLAGS_CHANGED => {
+                // For modifier keys, flagsChanged fires on both press and release.
+                // Check the current flags to determine direction.
+                let flags =
+                    unsafe { CGEventSourceFlagsState(K_CG_EVENT_SOURCE_STATE_COMBINED_SESSION) };
+                let group = keycode_to_group(keycode);
+                let is_pressed = match group {
+                    GROUP_WIN => flags & K_CG_EVENT_FLAG_MASK_COMMAND != 0,
+                    GROUP_ALT => flags & K_CG_EVENT_FLAG_MASK_ALTERNATE != 0,
+                    GROUP_CTRL => flags & K_CG_EVENT_FLAG_MASK_CONTROL != 0,
+                    GROUP_SHIFT => flags & K_CG_EVENT_FLAG_MASK_SHIFT != 0,
+                    _ => return event,
+                };
+                (is_pressed, !is_pressed)
+            }
+            _ => return event,
+        };
+
+        let vk = keycode_to_vk(keycode);
+        if vk == 0 {
+            return event;
+        }
+
+        // Skip hotkey detection while recording a new shortcut
+        if !RECORDING.load(Ordering::SeqCst) {
+            let k1 = KEY1_CODES.load(Ordering::SeqCst);
+            let k2 = KEY2_CODES.load(Ordering::SeqCst);
+            let k3 = KEY3_CODE.load(Ordering::SeqCst);
+
+            if k3 == 0 {
+                // ── 2-modifier combo ──
+                if matches_key_group(vk, k1) {
+                    if is_down {
+                        KEY1_DOWN.store(true, Ordering::SeqCst);
+                        if KEY2_DOWN.load(Ordering::SeqCst)
+                            && !COMBO_ACTIVE.swap(true, Ordering::SeqCst)
+                        {
+                            HOTKEY_EVENT.store(EVENT_PRESSED, Ordering::SeqCst);
+                        }
+                    } else if is_up {
+                        KEY1_DOWN.store(false, Ordering::SeqCst);
+                        if COMBO_ACTIVE.swap(false, Ordering::SeqCst) {
+                            HOTKEY_EVENT.store(EVENT_RELEASED, Ordering::SeqCst);
+                        }
+                    }
+                } else if matches_key_group(vk, k2) {
+                    if is_down {
+                        KEY2_DOWN.store(true, Ordering::SeqCst);
+                        if KEY1_DOWN.load(Ordering::SeqCst)
+                            && !COMBO_ACTIVE.swap(true, Ordering::SeqCst)
+                        {
+                            HOTKEY_EVENT.store(EVENT_PRESSED, Ordering::SeqCst);
+                        }
+                    } else if is_up {
+                        KEY2_DOWN.store(false, Ordering::SeqCst);
+                        if COMBO_ACTIVE.swap(false, Ordering::SeqCst) {
+                            HOTKEY_EVENT.store(EVENT_RELEASED, Ordering::SeqCst);
+                        }
+                    }
+                }
+            } else {
+                // ── 2-modifier + 1-key combo ──
+                let mut changed = false;
+                if matches_key_group(vk, k1) {
+                    if is_down {
+                        KEY1_DOWN.store(true, Ordering::SeqCst);
+                    } else if is_up {
+                        KEY1_DOWN.store(false, Ordering::SeqCst);
+                    }
+                    changed = true;
+                } else if matches_key_group(vk, k2) {
+                    if is_down {
+                        KEY2_DOWN.store(true, Ordering::SeqCst);
+                    } else if is_up {
+                        KEY2_DOWN.store(false, Ordering::SeqCst);
+                    }
+                    changed = true;
+                } else if vk == k3 {
+                    if is_down {
+                        KEY3_DOWN.store(true, Ordering::SeqCst);
+                    } else if is_up {
+                        KEY3_DOWN.store(false, Ordering::SeqCst);
+                    }
+                    changed = true;
+                }
+
+                if changed {
+                    let all = KEY1_DOWN.load(Ordering::SeqCst)
+                        && KEY2_DOWN.load(Ordering::SeqCst)
+                        && KEY3_DOWN.load(Ordering::SeqCst);
+                    if all && !COMBO_ACTIVE.swap(true, Ordering::SeqCst) {
+                        HOTKEY_EVENT.store(EVENT_PRESSED, Ordering::SeqCst);
+                    } else if !all && COMBO_ACTIVE.swap(false, Ordering::SeqCst) {
+                        HOTKEY_EVENT.store(EVENT_RELEASED, Ordering::SeqCst);
+                    }
+                }
+            }
+        }
+
+        event
+    }
+
+    /// Poll modifier key state using CGEventSourceFlagsState (for recording mode).
+    pub fn poll_async_key_state() {
+        let flags =
+            unsafe { CGEventSourceFlagsState(K_CG_EVENT_SOURCE_STATE_COMBINED_SESSION) };
+
+        let mut pressed: [u8; 4] = [0; 4];
+        let mut count = 0usize;
+
+        if flags & K_CG_EVENT_FLAG_MASK_COMMAND != 0 {
+            pressed[count] = GROUP_WIN;
+            count += 1;
+        }
+        if flags & K_CG_EVENT_FLAG_MASK_ALTERNATE != 0 {
+            pressed[count] = GROUP_ALT;
+            count += 1;
+        }
+        if flags & K_CG_EVENT_FLAG_MASK_CONTROL != 0 {
+            pressed[count] = GROUP_CTRL;
+            count += 1;
+        }
+        if flags & K_CG_EVENT_FLAG_MASK_SHIFT != 0 {
+            pressed[count] = GROUP_SHIFT;
+            count += 1;
+        }
+
+        if count < 2 {
+            REC_WAIT.store(0, Ordering::SeqCst);
+            return;
+        }
+
+        // On macOS we cannot scan non-modifier keys via flags alone, so
+        // we only support 2-modifier combos in recording mode (matching
+        // typical macOS usage patterns like Cmd+Option).
+        let wait = REC_WAIT.load(Ordering::SeqCst);
+        if wait == 0 {
+            REC_GROUP1.store(pressed[0], Ordering::SeqCst);
+            REC_GROUP2.store(pressed[1], Ordering::SeqCst);
+            REC_KEY3.store(0, Ordering::SeqCst);
+            REC_WAIT.store(3, Ordering::SeqCst);
+        } else if wait == 1 {
+            REC_WAIT.store(0, Ordering::SeqCst);
+            REC_DONE.store(true, Ordering::SeqCst);
+        } else {
+            REC_WAIT.store(wait - 1, Ordering::SeqCst);
+        }
+    }
+
+    pub fn install_hook(log_fn: fn(&str)) {
+        std::thread::spawn(move || unsafe {
+            let mask = event_mask(K_CG_EVENT_KEY_DOWN)
+                | event_mask(K_CG_EVENT_KEY_UP)
+                | event_mask(K_CG_EVENT_FLAGS_CHANGED);
+
+            let tap = CGEventTapCreate(
+                K_CG_SESSION_EVENT_TAP,
+                K_CG_HEAD_INSERT_EVENT_TAP,
+                K_CG_EVENT_TAP_OPTION_LISTEN_ONLY,
+                mask,
+                tap_callback,
+                std::ptr::null_mut(),
+            );
+
+            if tap.is_null() {
+                log_fn("ERROR: Failed to create CGEventTap — check Accessibility permissions");
+                return;
+            }
+
+            TAP_PORT.store(tap as usize, Ordering::SeqCst);
+
+            let source = CFMachPortCreateRunLoopSource(std::ptr::null(), tap, 0);
+            if source.is_null() {
+                log_fn("ERROR: Failed to create run loop source for CGEventTap");
+                return;
+            }
+
+            let run_loop = CFRunLoopGetCurrent();
+            CFRunLoopAddSource(run_loop, source, kCFRunLoopCommonModes);
+            CGEventTapEnable(tap, true);
+
+            log_fn("CGEventTap installed — shortcut active");
+
+            CFRunLoopRun();
+        });
+    }
+}
+
+// ── Linux stub ──────────────────────────────────────────────────────
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 mod platform {
     pub fn install_hook(_log_fn: fn(&str)) {}
     pub fn poll_async_key_state() {}

@@ -97,7 +97,12 @@ impl Default for AppConfig {
             selected_device: None,
             language: String::new(),
             shortcut_mode: "toggle".to_string(),
-            shortcut: "win+alt".to_string(),
+            shortcut: if cfg!(target_os = "macos") {
+                "cmd+option"
+            } else {
+                "win+alt"
+            }
+            .to_string(),
             prompt: DEFAULT_PROMPT.to_string(),
             llm_enabled: false,
             llm_style: "off".to_string(),
@@ -1285,7 +1290,105 @@ fn get_work_area() -> Option<(i32, i32)> {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+fn get_work_area() -> Option<(i32, i32)> {
+    // NSScreen.mainScreen.visibleFrame excludes menu bar and Dock
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    struct NSPoint {
+        x: f64,
+        y: f64,
+    }
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    struct NSSize {
+        width: f64,
+        height: f64,
+    }
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    struct NSRect {
+        origin: NSPoint,
+        size: NSSize,
+    }
+
+    #[link(name = "AppKit", kind = "framework")]
+    extern "C" {}
+
+    extern "C" {
+        // objc_msgSend with different return types
+        fn objc_getClass(name: *const u8) -> *mut std::ffi::c_void;
+        fn sel_registerName(name: *const u8) -> *mut std::ffi::c_void;
+    }
+
+    // Use objc_msgSend for pointer-returning calls and
+    // objc_msgSend_stret for struct-returning calls on x86_64.
+    // On aarch64 all returns go through objc_msgSend.
+    extern "C" {
+        fn objc_msgSend(obj: *mut std::ffi::c_void, sel: *mut std::ffi::c_void, ...) -> *mut std::ffi::c_void;
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    extern "C" {
+        fn objc_msgSend_stret(
+            stret: *mut NSRect,
+            obj: *mut std::ffi::c_void,
+            sel: *mut std::ffi::c_void,
+            ...
+        );
+    }
+
+    unsafe {
+        let ns_screen = objc_getClass(b"NSScreen\0".as_ptr());
+        if ns_screen.is_null() {
+            return None;
+        }
+        let main_screen_sel = sel_registerName(b"mainScreen\0".as_ptr());
+        let screen = objc_msgSend(ns_screen, main_screen_sel);
+        if screen.is_null() {
+            return None;
+        }
+
+        let visible_frame_sel = sel_registerName(b"visibleFrame\0".as_ptr());
+        let frame_sel = sel_registerName(b"frame\0".as_ptr());
+
+        let visible: NSRect;
+        let full: NSRect;
+
+        #[cfg(target_arch = "aarch64")]
+        {
+            // On ARM64, objc_msgSend returns structs directly
+            let msg_send: unsafe extern "C" fn(
+                *mut std::ffi::c_void,
+                *mut std::ffi::c_void,
+            ) -> NSRect = std::mem::transmute(objc_msgSend as *const ());
+            visible = msg_send(screen, visible_frame_sel);
+            full = msg_send(screen, frame_sel);
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        {
+            let mut v = std::mem::zeroed::<NSRect>();
+            let mut f = std::mem::zeroed::<NSRect>();
+            objc_msgSend_stret(&mut v, screen, visible_frame_sel);
+            objc_msgSend_stret(&mut f, screen, frame_sel);
+            visible = v;
+            full = f;
+        }
+
+        // visibleFrame gives the usable area in screen coordinates
+        // (origin.y is from bottom-left). We return (width, height) of the
+        // visible area in physical-ish pixels, matching the Windows API shape.
+        // The caller divides by scale_factor, so return raw point values.
+        let _ = full; // available if we ever need the full frame
+        Some((
+            (visible.origin.x + visible.size.width) as i32,
+            (visible.origin.y + visible.size.height) as i32,
+        ))
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn get_work_area() -> Option<(i32, i32)> {
     None
 }
@@ -1330,8 +1433,16 @@ fn resize_window(
             .map_err(|e| e.to_string())?;
 
         if let Some((right, bottom)) = anchor {
-            let x = (right - w).max(0.0);
-            let y = (bottom - h).max(0.0);
+            let mut x = (right - w).max(0.0);
+            let mut y = (bottom - h).max(0.0);
+            // Clamp to screen bounds so the window never ends up off-screen
+            if let Ok(Some(monitor)) = win.primary_monitor() {
+                let scale = win.scale_factor().unwrap_or(1.0);
+                let screen_w = monitor.size().width as f64 / scale;
+                let screen_h = monitor.size().height as f64 / scale;
+                x = x.max(0.0).min((screen_w - w).max(0.0));
+                y = y.max(0.0).min((screen_h - h).max(0.0));
+            }
             let _ = win.set_position(LogicalPosition::new(x, y));
             // Update stored anchor
             let _ = state
@@ -1343,6 +1454,24 @@ fn resize_window(
         }
     }
     Ok(())
+}
+
+#[tauri::command]
+fn check_accessibility() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        extern "C" {
+            fn AXIsProcessTrustedWithOptions(
+                options: *const std::ffi::c_void,
+            ) -> bool;
+        }
+        // Pass null options — just check, don't prompt
+        unsafe { AXIsProcessTrustedWithOptions(std::ptr::null()) }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
 }
 
 #[tauri::command]
@@ -1524,6 +1653,37 @@ pub fn run() {
                     }
                 }
             }
+            // System tray icon with Show / Quit menu
+            {
+                use tauri::menu::{MenuBuilder, MenuItemBuilder};
+                use tauri::tray::TrayIconBuilder;
+
+                let show = MenuItemBuilder::with_id("show", "Show").build(app)?;
+                let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
+                let menu = MenuBuilder::new(app).items(&[&show, &quit]).build()?;
+
+                TrayIconBuilder::new()
+                    .icon(app.default_window_icon().unwrap().clone())
+                    .menu(&menu)
+                    .on_menu_event(move |app_handle, event| {
+                        match event.id().as_ref() {
+                            "show" => {
+                                if let Some(win) = app_handle.get_webview_window("main") {
+                                    // Reset to default bottom-right position
+                                    position_bottom_right(&win, 56.0, 32.0);
+                                    let _ = win.show();
+                                    let _ = win.set_focus();
+                                }
+                            }
+                            "quit" => {
+                                app_handle.exit(0);
+                            }
+                            _ => {}
+                        }
+                    })
+                    .build(app)?;
+            }
+
             // Configure and install keyboard hook
             hotkey::set_shortcut(&shortcut_preset);
             hotkey::install(log);
@@ -1591,6 +1751,7 @@ pub fn run() {
             start_shortcut_recording,
             poll_shortcut_recording,
             cancel_shortcut_recording,
+            check_accessibility,
             get_version,
             check_for_update,
             install_update,

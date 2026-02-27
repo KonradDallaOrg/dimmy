@@ -117,6 +117,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
+          updaterJsonPreferNsis: true
           args: --target ${{ matrix.target }}
           projectPath: src-tauri
 

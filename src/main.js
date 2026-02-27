@@ -70,6 +70,15 @@ const llmApiKeyInput = document.getElementById('llm-api-key');
 const llmKeyHint = document.getElementById('llm-key-hint');
 const llmLogCheckbox = document.getElementById('llm-log-enabled');
 
+// Accessibility link (macOS) — the link is informational; users must navigate manually
+const accessibilityLink = document.getElementById('accessibility-link');
+if (accessibilityLink) {
+  accessibilityLink.addEventListener('click', (e) => {
+    e.preventDefault();
+    accessibilityLink.textContent = 'System Settings > Privacy & Security > Input Monitoring';
+  });
+}
+
 let isRecording = false;
 let waveformInterval = null;
 let timerInterval = null;
@@ -579,7 +588,7 @@ async function openSettings() {
     languageSelect.value = config.language || '';
 
     // Shortcut key
-    shortcutLabel.textContent = config.shortcut_label || 'Win + Alt';
+    shortcutLabel.textContent = config.shortcut_label || 'Press to set';
     shortcutRecordBtn.textContent = 'Change';
 
     // Shortcut mode
@@ -647,6 +656,17 @@ async function openSettings() {
     console.error('get_config:', err);
   }
 
+  // Check accessibility permissions (macOS)
+  try {
+    const accessible = await invoke('check_accessibility');
+    const warning = document.getElementById('accessibility-warning');
+    if (!accessible) {
+      warning.classList.remove('hide');
+    } else {
+      warning.classList.add('hide');
+    }
+  } catch (_) {}
+
   // Load version and check for updates
   const versionText = document.getElementById('version-text');
   const updateStatus = document.getElementById('update-status');
@@ -682,9 +702,9 @@ async function openSettings() {
         updateStatus.className = '';
       }
     } catch (e) {
-      updateStatus.textContent = '';
-      updateStatus.className = '';
-      console.log('Update check skipped:', e);
+      updateStatus.textContent = 'Update check failed';
+      updateStatus.className = 'error';
+      console.error('Update check failed:', e);
     }
   })();
 
