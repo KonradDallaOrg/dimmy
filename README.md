@@ -11,8 +11,9 @@
 <p align="center">
   <a href="https://github.com/KonradDallaOrg/dimmy/actions/workflows/ci.yml"><img src="https://github.com/KonradDallaOrg/dimmy/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/KonradDallaOrg/dimmy/releases/latest"><img src="https://img.shields.io/github/v/release/KonradDallaOrg/dimmy?label=download&color=34d399" alt="Latest Release"></a>
-  <a href="https://github.com/KonradDallaOrg/dimmy/blob/main/LICENSE"><img src="https://img.shields.io/github/license/KonradDallaOrg/dimmy?color=818cf8" alt="License"></a>
+  <a href="https://github.com/KonradDallaOrg/dimmy/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-818cf8" alt="License"></a>
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-6366f1" alt="Platform">
+  <a href="https://github.com/sponsors/KonradDallaOrg"><img src="https://img.shields.io/badge/sponsor-%E2%9D%A4-ea4aaa" alt="Sponsor"></a>
 </p>
 
 ---
@@ -169,6 +170,14 @@ cargo clippy -- -D warnings
 | Secure storage | keyring (OS-native) |
 | HTTP | reqwest |
 
+## Support
+
+If Dimmy saves you time, consider supporting its development:
+
+- [GitHub Sponsors](https://github.com/sponsors/KonradDallaOrg)
+- [Buy Me a Coffee](https://buymeacoffee.com/konraddalla)
+- [Ko-fi](https://ko-fi.com/konraddalla)
+
 ## License
 
-MIT
+[AGPL-3.0](LICENSE) — free to use, modify, and distribute. If you redistribute or offer it as a service, your code must remain open source under the same license.
