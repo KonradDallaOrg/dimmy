@@ -46,6 +46,7 @@ pub struct AudioPreprocessor {
     /// Whether the device sample rate supports VAD (must be 48kHz)
     vad_enabled: bool,
     /// Device sample rate
+    #[allow(dead_code)]
     sample_rate: u32,
 }
 
@@ -163,6 +164,7 @@ impl AudioPreprocessor {
     }
 
     /// Reset state between recordings
+    #[allow(dead_code)]
     pub fn reset(&mut self) {
         self.frame_buf.clear();
         self.original_buf.clear();

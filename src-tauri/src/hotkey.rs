@@ -7,6 +7,8 @@
 //! Keys are configured at runtime via `set_shortcut()`.
 //! Recording mode uses GetAsyncKeyState polling to capture the combo.
 
+#![allow(dead_code)]
+
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 
 const EVENT_NONE: u8 = 0;
@@ -158,17 +160,17 @@ fn name_to_vk(name: &str) -> u32 {
             let bytes = name.as_bytes();
             if bytes.len() == 1 {
                 let c = bytes[0];
-                if c >= b'a' && c <= b'z' {
+                if c.is_ascii_lowercase() {
                     return (c - b'a' + 0x41) as u32;
                 }
-                if c >= b'0' && c <= b'9' {
+                if c.is_ascii_digit() {
                     return c as u32;
                 }
             }
             // f1-f12
-            if name.starts_with('f') {
-                if let Ok(n) = name[1..].parse::<u32>() {
-                    if n >= 1 && n <= 12 {
+            if let Some(suffix) = name.strip_prefix('f') {
+                if let Ok(n) = suffix.parse::<u32>() {
+                    if (1..=12).contains(&n) {
                         return 0x6F + n;
                     }
                 }
@@ -176,7 +178,7 @@ fn name_to_vk(name: &str) -> u32 {
             // num0-num9
             if name.starts_with("num") && name.len() == 4 {
                 let d = name.as_bytes()[3];
-                if d >= b'0' && d <= b'9' {
+                if d.is_ascii_digit() {
                     return 0x60 + (d - b'0') as u32;
                 }
             }

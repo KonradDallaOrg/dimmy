@@ -696,6 +696,7 @@ fn get_transcript(state: tauri::State<'_, AppState>) -> Result<String, String> {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 fn set_config(
     api_key: Option<String>,
     api_url: String,
@@ -800,11 +801,7 @@ fn set_config(
         .preprocessing_enabled
         .lock()
         .map_err(|e| e.to_string())?;
-    let cur_anchor = state
-        .window_anchor
-        .lock()
-        .map_err(|e| e.to_string())?
-        .clone();
+    let cur_anchor = *state.window_anchor.lock().map_err(|e| e.to_string())?;
     let cfg = AppConfig {
         api_url: api_url.clone(),
         api_model: api_model.clone(),
@@ -1164,11 +1161,7 @@ fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         .preprocessing_enabled
         .lock()
         .map_err(|e| e.to_string())?;
-    let anchor = state
-        .window_anchor
-        .lock()
-        .map_err(|e| e.to_string())?
-        .clone();
+    let anchor = *state.window_anchor.lock().map_err(|e| e.to_string())?;
 
     Ok(AppConfig {
         api_url,
@@ -1221,7 +1214,7 @@ fn get_audio_device(state: tauri::State<'_, AppState>) -> Result<String, String>
         .lock()
         .map_err(|e| e.to_string())?
         .clone();
-    Ok(selected.unwrap_or_else(|| audio::default_input_device_name()))
+    Ok(selected.unwrap_or_else(audio::default_input_device_name))
 }
 
 #[tauri::command]
@@ -1329,11 +1322,7 @@ fn resize_window(
                 let bottom = pos.y as f64 / scale + size.height as f64 / scale;
                 Some((right, bottom))
             } else {
-                state
-                    .window_anchor
-                    .lock()
-                    .map_err(|e| e.to_string())?
-                    .clone()
+                *state.window_anchor.lock().map_err(|e| e.to_string())?
             }
         };
 
@@ -1505,12 +1494,11 @@ pub fn run() {
                 let win_w = 220.0_f64;
                 let win_h = 32.0_f64;
                 {
-                    let anchor = app
+                    let anchor = *app
                         .state::<AppState>()
                         .window_anchor
                         .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .clone();
+                        .unwrap_or_else(|e| e.into_inner());
                     if let Some((right, bottom)) = anchor {
                         let x = (right - win_w).max(0.0);
                         let y = (bottom - win_h).max(0.0);
@@ -1569,10 +1557,8 @@ pub fn run() {
                                     if let Some(w) = hotkey_handle.get_webview_window("main") {
                                         let _ = w.emit("shortcut-stop", ());
                                     }
-                                } else {
-                                    if let Some(w) = hotkey_handle.get_webview_window("main") {
-                                        let _ = w.emit("shortcut-start", ());
-                                    }
+                                } else if let Some(w) = hotkey_handle.get_webview_window("main") {
+                                    let _ = w.emit("shortcut-start", ());
                                 }
                             }
                         } else if event == 2 {
