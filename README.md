@@ -42,19 +42,59 @@ Get the latest release for your platform:
 ## Quick Start
 
 1. Launch Dimmy — a small green dot appears in the corner of your screen
-2. Open Settings (gear icon) and enter an API key (get a free one at [groq.com](https://console.groq.com/keys))
-3. Press **Win+Alt** (default) to start recording
-4. Speak naturally
-5. Press **Win+Alt** again to stop — text is transcribed and pasted into the active app
+2. Open Settings (click the gear icon or right-click the pill)
+3. Enter an API key for transcription (see [Get an API Key](#get-an-api-key) below)
+4. Press **Win+Alt** (default) to start recording
+5. Speak naturally
+6. Press **Win+Alt** again to stop — text is transcribed and pasted into the active app
 
-### Shortcut Modes
+## Settings Guide
 
-- **Toggle** (default) — press once to start, press again to stop
-- **Hold** — hold to record, release to stop
+### Get an API Key
 
-### AI Enhancement
+Dimmy needs an API key for speech-to-text transcription. Choose a provider:
 
-Enable in Settings to post-process transcriptions with an LLM:
+| Provider | Get Key | Cost | Notes |
+|----------|---------|------|-------|
+| **Groq** (recommended) | [console.groq.com/keys](https://console.groq.com/keys) | Free tier available | Fast, free for moderate usage |
+| **OpenAI** | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) | Pay-per-use | Original Whisper provider |
+| **Custom endpoint** | Your provider's dashboard | Varies | Any OpenAI-compatible API |
+
+In Settings, paste your key in the **API Key** field. Keys are stored securely in your OS keyring (Windows Credential Manager, macOS Keychain, Linux Secret Service) — never in plain text.
+
+### Transcription Settings
+
+| Setting | Description |
+|---------|-------------|
+| **API URL** | Provider endpoint. Pre-filled for Groq/OpenAI, or enter a custom URL |
+| **Model** | Whisper model to use (e.g. `whisper-large-v3-turbo` for Groq) |
+| **Language** | Select a language or leave on "Auto-detect" for multilingual use |
+| **Audio Device** | Choose which microphone to use |
+| **Prompt** | Whisper prompt for vocabulary hints (e.g. proper nouns, acronyms) |
+| **Preprocessing** | Toggle noise filtering and voice activity detection (recommended on) |
+
+### Shortcut Settings
+
+| Setting | Description |
+|---------|-------------|
+| **Mode: Toggle** (default) | Press once to start, press again to stop |
+| **Mode: Hold** | Hold to record, release to stop |
+| **Custom shortcut** | Click "Record new shortcut" and press any 2-modifier combo (e.g. Ctrl+Shift, Win+Alt) optionally with a regular key |
+
+### AI Enhancement (LLM Post-Processing)
+
+Enable in Settings to send transcriptions through an LLM for cleanup or transformation. Requires a separate LLM API key (or check "Use same key" if your transcription provider also offers chat completions).
+
+| Setting | Description |
+|---------|-------------|
+| **LLM API URL** | Endpoint for chat completions (Groq, OpenAI, or custom) |
+| **LLM API Key** | Separate key for the LLM provider, or "Use same key as transcription" |
+| **LLM Model** | Chat model to use (e.g. `llama-3.3-70b-versatile` for Groq) |
+| **Style** | What the LLM does — scroll wheel on the pill to cycle |
+| **Tone** | How it writes — Ctrl+scroll to cycle |
+| **LLM Logging** | Save LLM input/output to `~/.dimmy/llm-log/` for debugging |
+
+**Styles:**
 
 | Style | Effect |
 |-------|--------|
@@ -64,13 +104,14 @@ Enable in Settings to post-process transcriptions with an LLM:
 | Comprehensible | Rewrite clearly |
 | Professional | Business tone |
 | Prompt | Reshape as LLM prompt |
-| Custom | Your own prompt |
-
-Scroll wheel on the pill to cycle styles. Ctrl+scroll to cycle tones.
+| Custom | Your own system prompt |
 
 ## Auto-Update
 
-Dimmy checks for updates when you open Settings. If an update is available, click the update link to download and install. Restart the app to apply.
+Dimmy checks for updates automatically when you open Settings. The version number and update status appear at the bottom of the settings panel:
+
+- **"Up to date"** — you're on the latest version
+- **"Update vX.Y.Z available"** — click to download and install, then restart the app
 
 ## Build from Source
 
