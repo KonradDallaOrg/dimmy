@@ -475,7 +475,7 @@ async function pollWaveform() {
   waveformPending = true;
   try {
     const amp = await invoke('get_amplitude');
-    const norm = Math.min(1.0, amp * 8);
+    const norm = Math.min(1.0, amp * 16);
     energyHistory.push(norm);
     if (energyHistory.length > BAR_COUNT) {
       energyHistory = energyHistory.slice(energyHistory.length - BAR_COUNT);
