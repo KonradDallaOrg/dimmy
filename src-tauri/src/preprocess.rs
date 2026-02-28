@@ -26,8 +26,8 @@ const VAD_THRESHOLD: f32 = 0.5;
 /// At 48kHz with 480-sample frames, each frame = 10ms → 30 frames = 300ms.
 const SILENCE_GRACE_FRAMES: usize = 30;
 
-/// Target RMS level for normalization. 0.1 ≈ -20dBFS — a safe, consistent level.
-const TARGET_RMS: f32 = 0.1;
+/// Target RMS level for normalization. 0.2 ≈ -14dBFS — loud enough for clear STT input.
+const TARGET_RMS: f32 = 0.2;
 
 /// Maximum gain applied during normalization (prevents amplifying noise in quiet segments).
 const MAX_GAIN: f32 = 10.0;
@@ -220,21 +220,21 @@ mod tests {
 
     #[test]
     fn normalize_rms_boosts_quiet() {
-        let mut buf = vec![0.01f32; 480];
+        let mut buf = vec![0.05f32; 480];
         let rms_before = (buf.iter().map(|s| s * s).sum::<f32>() / buf.len() as f32).sqrt();
-        normalize_rms(&mut buf, 0.1);
+        normalize_rms(&mut buf, TARGET_RMS);
         let rms_after = (buf.iter().map(|s| s * s).sum::<f32>() / buf.len() as f32).sqrt();
         assert!(rms_after > rms_before, "Should boost quiet audio");
-        assert!((rms_after - 0.1).abs() < 0.01, "Should be near target RMS");
+        assert!((rms_after - TARGET_RMS).abs() < 0.01, "Should be near target RMS");
     }
 
     #[test]
     fn normalize_rms_caps_gain() {
         let mut buf = vec![0.001f32; 480];
-        normalize_rms(&mut buf, 0.1);
-        // gain would be 100x but capped at MAX_GAIN (10x), so result ≈ 0.01
+        normalize_rms(&mut buf, TARGET_RMS);
+        // gain would be 200x but capped at MAX_GAIN (10x), so result ≈ 0.01
         let rms = (buf.iter().map(|s| s * s).sum::<f32>() / buf.len() as f32).sqrt();
-        assert!(rms < 0.1, "Gain should be capped, rms={}", rms);
+        assert!(rms < TARGET_RMS, "Gain should be capped, rms={}", rms);
     }
 
     #[test]
