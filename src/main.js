@@ -88,7 +88,7 @@ let currentView = 'micro'; // 'micro' | 'pill' | 'rec' | 'settings'
 let shrinkTimeout = null;
 let energyHistory = [];
 let waveformPending = false;
-let peakAmplitude = 0.01; // auto-scaling: tracks recent peak mic level
+let peakAmplitude = 0.0001; // auto-scaling: tracks recent peak mic level
 
 // LLM state
 let llmEnabled = false;
@@ -370,7 +370,7 @@ async function startRecording() {
 
   chunkTexts = [];
   energyHistory = [];
-  peakAmplitude = 0.01;
+  peakAmplitude = 0.0001;
   transcriptText.textContent = '';
   chunkDots.innerHTML = '';
 
@@ -481,7 +481,7 @@ async function pollWaveform() {
     if (amp > peakAmplitude) {
       peakAmplitude = amp;
     } else {
-      peakAmplitude = Math.max(0.01, peakAmplitude * 0.997);
+      peakAmplitude = Math.max(0.0001, peakAmplitude * 0.997);
     }
     const norm = Math.min(1.0, amp / peakAmplitude * 0.85);
     energyHistory.push(norm);

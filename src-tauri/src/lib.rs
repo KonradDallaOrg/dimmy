@@ -1197,6 +1197,9 @@ fn save_current_config(state: &tauri::State<'_, AppState>) -> Result<(), String>
     Ok(())
 }
 
+/// Counter for periodic amplitude logging (every ~5s at 60fps polling)
+static AMP_LOG_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 #[tauri::command]
 fn get_amplitude(state: tauri::State<'_, AppState>) -> Result<f32, String> {
     let buffer = state.audio_buffer.lock().map_err(|e| e.to_string())?;
@@ -1209,7 +1212,16 @@ fn get_amplitude(state: tauri::State<'_, AppState>) -> Result<f32, String> {
     let start = buffer.len().saturating_sub(window);
     let len = buffer.len() - start;
     let rms: f32 = buffer[start..].iter().map(|s| s * s).sum::<f32>() / len as f32;
-    Ok(rms.sqrt())
+    let rms = rms.sqrt();
+
+    // Log raw mic level every ~5 seconds for diagnostics
+    let count = AMP_LOG_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if count % 300 == 0 {
+        let peak = buffer[start..].iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+        log(&format!("Mic level: rms={:.6}, peak={:.6}, samples={}", rms, peak, len));
+    }
+
+    Ok(rms)
 }
 
 #[tauri::command]
