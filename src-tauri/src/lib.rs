@@ -1216,9 +1216,15 @@ fn get_amplitude(state: tauri::State<'_, AppState>) -> Result<f32, String> {
 
     // Log raw mic level every ~5 seconds for diagnostics
     let count = AMP_LOG_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    if count % 300 == 0 {
-        let peak = buffer[start..].iter().map(|s| s.abs()).fold(0.0f32, f32::max);
-        log(&format!("Mic level: rms={:.6}, peak={:.6}, samples={}", rms, peak, len));
+    if count.is_multiple_of(300) {
+        let peak = buffer[start..]
+            .iter()
+            .map(|s| s.abs())
+            .fold(0.0f32, f32::max);
+        log(&format!(
+            "Mic level: rms={:.6}, peak={:.6}, samples={}",
+            rms, peak, len
+        ));
     }
 
     Ok(rms)
@@ -1337,7 +1343,11 @@ fn get_work_area() -> Option<(i32, i32)> {
     // objc_msgSend_stret for struct-returning calls on x86_64.
     // On aarch64 all returns go through objc_msgSend.
     extern "C" {
-        fn objc_msgSend(obj: *mut std::ffi::c_void, sel: *mut std::ffi::c_void, ...) -> *mut std::ffi::c_void;
+        fn objc_msgSend(
+            obj: *mut std::ffi::c_void,
+            sel: *mut std::ffi::c_void,
+            ...
+        ) -> *mut std::ffi::c_void;
     }
 
     #[cfg(target_arch = "x86_64")]
@@ -1443,6 +1453,8 @@ fn resize_window(
 
         win.set_size(LogicalSize::new(w, h))
             .map_err(|e| e.to_string())?;
+        // Re-enforce always-on-top (can be lost after show/hide cycles on some OS)
+        let _ = win.set_always_on_top(true);
 
         if let Some((right, bottom)) = anchor {
             let mut x = (right - w).max(0.0);
@@ -1473,9 +1485,7 @@ fn check_accessibility() -> bool {
     #[cfg(target_os = "macos")]
     {
         extern "C" {
-            fn AXIsProcessTrustedWithOptions(
-                options: *const std::ffi::c_void,
-            ) -> bool;
+            fn AXIsProcessTrustedWithOptions(options: *const std::ffi::c_void) -> bool;
         }
         // Pass null options — just check, don't prompt
         unsafe { AXIsProcessTrustedWithOptions(std::ptr::null()) }
@@ -1688,6 +1698,7 @@ pub fn run() {
                                     // Reset to default bottom-right position
                                     position_bottom_right(&win, 56.0, 32.0);
                                     let _ = win.show();
+                                    let _ = win.set_always_on_top(true);
                                     let _ = win.set_focus();
                                 }
                             }

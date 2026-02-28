@@ -803,11 +803,7 @@ mod platform {
 
         fn CFRunLoopGetCurrent() -> CFRunLoopRef;
 
-        fn CFRunLoopAddSource(
-            rl: CFRunLoopRef,
-            source: CFRunLoopSourceRef,
-            mode: CFRunLoopMode,
-        );
+        fn CFRunLoopAddSource(rl: CFRunLoopRef, source: CFRunLoopSourceRef, mode: CFRunLoopMode);
 
         fn CFRunLoopRun();
 
@@ -955,8 +951,7 @@ mod platform {
 
     /// Poll modifier key state using CGEventSourceFlagsState (for recording mode).
     pub fn poll_async_key_state() {
-        let flags =
-            unsafe { CGEventSourceFlagsState(K_CG_EVENT_SOURCE_STATE_COMBINED_SESSION) };
+        let flags = unsafe { CGEventSourceFlagsState(K_CG_EVENT_SOURCE_STATE_COMBINED_SESSION) };
 
         let mut pressed: [u8; 4] = [0; 4];
         let mut count = 0usize;

@@ -225,7 +225,10 @@ mod tests {
         normalize_rms(&mut buf, TARGET_RMS);
         let rms_after = (buf.iter().map(|s| s * s).sum::<f32>() / buf.len() as f32).sqrt();
         assert!(rms_after > rms_before, "Should boost quiet audio");
-        assert!((rms_after - TARGET_RMS).abs() < 0.01, "Should be near target RMS");
+        assert!(
+            (rms_after - TARGET_RMS).abs() < 0.01,
+            "Should be near target RMS"
+        );
     }
 
     #[test]
