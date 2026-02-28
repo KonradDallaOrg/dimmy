@@ -1,6 +1,6 @@
 [package]
 name = "dimmy"
-version = "0.3.5"
+version = "0.3.6"
 edition = "2021"
 description = "Dimmy — Cross-platform voice transcription overlay"
 license = "AGPL-3.0-only"
