@@ -692,7 +692,7 @@ async function openSettings() {
             await invoke('install_update');
             updateStatus.textContent = 'Restart to apply';
           } catch (e) {
-            updateStatus.textContent = 'Update failed';
+            updateStatus.textContent = `Update failed: ${e}`;
             updateStatus.className = 'error';
             console.error('install_update:', e);
           }

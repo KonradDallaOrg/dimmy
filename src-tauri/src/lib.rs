@@ -1519,7 +1519,11 @@ async fn install_update(app_handle: tauri::AppHandle) -> Result<(), String> {
                 },
             )
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| {
+                let msg = format!("Update install failed: {}", e);
+                log(&msg);
+                msg
+            })?;
         log("Update installed, restart required");
     }
     Ok(())
