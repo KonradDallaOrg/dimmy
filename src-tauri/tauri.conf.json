@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicholasio/tauri-schema/refs/heads/v2/schema.json",
   "productName": "Dimmy",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "identifier": "com.dimmy.voice",
   "build": {
     "frontendDist": "../src",
@@ -54,7 +54,7 @@
         "https://github.com/KonradDallaOrg/dimmy/releases/latest/download/latest.json"
       ],
       "dialog": false,
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFCN0NDREIyOEE3QkQ3QTcKUldTbjEzdUtzczE4cSs4N21QTW41b0V4U29sdjd4c3FBZDRxWFZ2QjZFenh1OFNvQ1hFL296MjEK"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQzRTVGMTlENjYwQzkxMzgKUldRNGtReG1uZkhsUStMcFd0SFhETVRBUTlPRkZOYVdyNkJBcXBraXdjMHB3dGdvc3ZqSnNhRVoK"
     }
   }
 }
