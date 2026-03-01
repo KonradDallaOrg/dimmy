@@ -37,7 +37,7 @@
 
       <label>Shortcut Key</label>
       <div style="display:flex;gap:6px;align-items:center">
-        <span id="shortcut-label" style="flex:1;font-size:12px;color:#e5e7eb">...</span>
+        <span id="shortcut-label" style="flex:1;font-size:12px" class="shortcut-value">...</span>
         <button id="shortcut-record-btn" type="button" style="font-size:11px;padding:2px 8px">Change</button>
       </div>
 
@@ -45,6 +45,13 @@
       <select id="shortcut-mode-select">
         <option value="toggle">Toggle &#8212; press to start/stop</option>
         <option value="hold">Hold &#8212; hold to record, release to stop</option>
+      </select>
+
+      <label>Theme</label>
+      <select id="theme-select">
+        <option value="auto">Auto &#8212; follow system</option>
+        <option value="dark">Dark</option>
+        <option value="light">Light</option>
       </select>
 
       <!-- Group 2: Audio -->
@@ -73,7 +80,7 @@
 
       <label class="checkbox-label">
         <input type="checkbox" id="preprocessing-enabled" checked />
-        Audio preprocessing <span style="color:#6b7280;font-weight:400">(noise filter + normalization)</span>
+        Audio preprocessing <span class="hint-text">(noise filter + normalization)</span>
       </label>
 
       <!-- Group 3: Transcription -->
@@ -131,7 +138,7 @@
       <label>API Key <span id="key-hint"></span></label>
       <input type="password" id="api-key" placeholder="sk-... or gsk_..." />
 
-      <label>Prompt / Vocabulary <span style="color:#6b7280;font-weight:400">(guides punctuation &amp; spelling)</span></label>
+      <label>Prompt / Vocabulary <span class="hint-text">(guides punctuation &amp; spelling)</span></label>
       <textarea id="prompt-input" rows="2" placeholder="Whisper mimics the style of this text. Add punctuation and custom terms here."></textarea>
 
       <!-- Group 4: AI Enhancement -->
@@ -140,7 +147,7 @@
 
       <label class="checkbox-label">
         <input type="checkbox" id="llm-enabled" />
-        Enable AI Enhancement <span style="color:#6b7280;font-weight:400">(post-process with LLM)</span>
+        Enable AI Enhancement <span class="hint-text">(post-process with LLM)</span>
       </label>
 
       <div id="llm-fields" class="hide">
@@ -215,7 +222,7 @@
 
         <label class="checkbox-label">
           <input type="checkbox" id="llm-log-enabled" checked />
-          Log transcription &amp; LLM output <span style="color:#6b7280;font-weight:400">(for debugging)</span>
+          Log transcription &amp; LLM output <span class="hint-text">(for debugging)</span>
         </label>
       </div>
 

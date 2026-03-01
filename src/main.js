@@ -52,6 +52,7 @@ const saveBtn = document.getElementById('save-btn');
 const closeBtn = document.getElementById('close-btn');
 
 const preprocessingCheckbox = document.getElementById('preprocessing-enabled');
+const themeSelect = document.getElementById('theme-select');
 
 // LLM DOM
 const llmEnabledCheckbox = document.getElementById('llm-enabled');
@@ -69,6 +70,16 @@ const llmKeyField = document.getElementById('llm-key-field');
 const llmApiKeyInput = document.getElementById('llm-api-key');
 const llmKeyHint = document.getElementById('llm-key-hint');
 const llmLogCheckbox = document.getElementById('llm-log-enabled');
+
+// === Theme ===
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  localStorage.setItem('dimmy-theme', theme);
+}
+// Apply saved theme immediately on load
+applyTheme(localStorage.getItem('dimmy-theme') || 'auto');
+
+themeSelect.addEventListener('change', () => applyTheme(themeSelect.value));
 
 // Accessibility link (macOS) — the link is informational; users must navigate manually
 const accessibilityLink = document.getElementById('accessibility-link');
@@ -623,6 +634,9 @@ async function openSettings() {
 
     // Shortcut mode
     shortcutModeSelect.value = config.shortcut_mode || 'toggle';
+
+    // Theme
+    themeSelect.value = localStorage.getItem('dimmy-theme') || 'auto';
 
     // Prompt / vocabulary
     promptInput.value = config.prompt || '';
