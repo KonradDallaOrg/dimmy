@@ -327,6 +327,10 @@ fn url_to_provider(url: &str) -> &str {
         "groq"
     } else if url.contains("openai.com") {
         "openai"
+    } else if url.contains("openrouter.ai") {
+        "openrouter"
+    } else if url.contains("googleapis.com") {
+        "gemini"
     } else {
         "custom"
     }
@@ -931,6 +935,8 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
     let has_custom_key = has_key_for_provider("api-key", "custom");
     let has_llm_groq_key = has_key_for_provider("llm-key", "groq");
     let has_llm_openai_key = has_key_for_provider("llm-key", "openai");
+    let has_llm_openrouter_key = has_key_for_provider("llm-key", "openrouter");
+    let has_llm_gemini_key = has_key_for_provider("llm-key", "gemini");
     let has_llm_custom_key = has_key_for_provider("llm-key", "custom");
 
     Ok(serde_json::json!({
@@ -962,6 +968,8 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
         "has_custom_key": has_custom_key,
         "has_llm_groq_key": has_llm_groq_key,
         "has_llm_openai_key": has_llm_openai_key,
+        "has_llm_openrouter_key": has_llm_openrouter_key,
+        "has_llm_gemini_key": has_llm_gemini_key,
         "has_llm_custom_key": has_llm_custom_key,
         "stats_total_words": *state.stats_total_words.lock().map_err(|e| e.to_string())?,
         "stats_total_speaking_secs": *state.stats_total_speaking_secs.lock().map_err(|e| e.to_string())?,
@@ -1640,6 +1648,15 @@ pub fn run() {
     let audio_tx = audio::spawn_audio_thread(audio_buffer.clone());
 
     tauri::Builder::default()
+        // Single-instance MUST be registered first
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // A second instance was launched — focus the existing window
+            log("Second instance detected, focusing existing window");
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.show();
+                let _ = win.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState {

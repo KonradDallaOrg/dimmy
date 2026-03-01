@@ -1,6 +1,6 @@
 [package]
 name = "dimmy"
-version = "0.3.8"
+version = "0.3.9"
 edition = "2021"
 description = "Dimmy — Cross-platform voice transcription overlay"
 license = "AGPL-3.0-only"
@@ -31,3 +31,4 @@ url = "2"
 nnnoiseless = "0.5"
 biquad = "0.4"
 tauri-plugin-updater = "2"
+tauri-plugin-single-instance = "2"
