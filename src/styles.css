@@ -215,16 +215,31 @@ body {
 #llm-style-select,
 #llm-tone-select,
 #llm-provider-select {
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  color: #d1d5db;
-  padding: 5px 6px;
+  appearance: none;
+  -webkit-appearance: none;
+  background: #1a1a2e url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%236b7280'/%3E%3C/svg%3E") no-repeat right 8px center;
+  background-size: 10px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #e5e7eb;
+  padding: 5px 24px 5px 8px;
   border-radius: 6px;
   font-size: 11px;
+  font-family: inherit;
   outline: none;
   width: 100%;
   cursor: pointer;
-  transition: border-color 0.2s;
+  transition: border-color 0.2s, background-color 0.2s;
+}
+
+#model-select:hover,
+#device-select:hover,
+#language-select:hover,
+#shortcut-mode-select:hover,
+#llm-style-select:hover,
+#llm-tone-select:hover,
+#llm-provider-select:hover {
+  background-color: #1e1e36;
+  border-color: rgba(255, 255, 255, 0.12);
 }
 
 #model-select:focus,
@@ -244,7 +259,7 @@ body {
 #shortcut-mode-select option,
 #llm-style-select option,
 #llm-tone-select option,
-#llm-provider-select option { color: #d1d5db; background: #0d0d14; }
+#llm-provider-select option { color: #e5e7eb; background: #1a1a2e; padding: 4px 8px; }
 
 #key-hint,
 #llm-key-hint {
@@ -343,6 +358,39 @@ body {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+/* Stats grid */
+.stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+}
+
+.stat-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 4px;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.stat-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: #a5b4fc;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-label {
+  font-size: 7px;
+  color: #4b5563;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  text-align: center;
 }
 
 .btn-row {

@@ -87,6 +87,9 @@ struct AppConfig {
     // Window position — bottom-right anchor in logical pixels
     window_anchor_right: Option<f64>,
     window_anchor_bottom: Option<f64>,
+    // KPI stats — cumulative across sessions
+    stats_total_words: u64,
+    stats_total_speaking_secs: f64,
 }
 
 impl Default for AppConfig {
@@ -115,6 +118,8 @@ impl Default for AppConfig {
             preprocessing_enabled: true,
             window_anchor_right: None,
             window_anchor_bottom: None,
+            stats_total_words: 0,
+            stats_total_speaking_secs: 0.0,
         }
     }
 }
@@ -141,6 +146,8 @@ fn save_config_file(cfg: &AppConfig) {
             "llm_use_same_key": cfg.llm_use_same_key,
             "llm_log_enabled": cfg.llm_log_enabled,
             "preprocessing_enabled": cfg.preprocessing_enabled,
+            "stats_total_words": cfg.stats_total_words,
+            "stats_total_speaking_secs": cfg.stats_total_speaking_secs,
         });
         if let Some(ref dev) = cfg.selected_device {
             json["selected_device"] = serde_json::json!(dev);
@@ -204,6 +211,10 @@ fn load_config_file() -> AppConfig {
                         .unwrap_or(defaults.preprocessing_enabled),
                     window_anchor_right: v["window_anchor_right"].as_f64(),
                     window_anchor_bottom: v["window_anchor_bottom"].as_f64(),
+                    stats_total_words: v["stats_total_words"].as_u64().unwrap_or(0),
+                    stats_total_speaking_secs: v["stats_total_speaking_secs"]
+                        .as_f64()
+                        .unwrap_or(0.0),
                 };
             }
         }
@@ -422,6 +433,9 @@ pub struct AppState {
     pub preprocessing_enabled: Mutex<bool>,
     /// Bottom-right anchor in logical pixels — persisted across restarts
     pub window_anchor: Mutex<Option<(f64, f64)>>,
+    // KPI stats
+    pub stats_total_words: Mutex<u64>,
+    pub stats_total_speaking_secs: Mutex<f64>,
 }
 
 #[tauri::command]
@@ -826,6 +840,11 @@ fn set_config(
         preprocessing_enabled: cur_preprocessing_enabled,
         window_anchor_right: cur_anchor.map(|(r, _)| r),
         window_anchor_bottom: cur_anchor.map(|(_, b)| b),
+        stats_total_words: *state.stats_total_words.lock().map_err(|e| e.to_string())?,
+        stats_total_speaking_secs: *state
+            .stats_total_speaking_secs
+            .lock()
+            .map_err(|e| e.to_string())?,
     };
     save_config_file(&cfg);
     log("Config file saved");
@@ -944,7 +963,24 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
         "has_llm_groq_key": has_llm_groq_key,
         "has_llm_openai_key": has_llm_openai_key,
         "has_llm_custom_key": has_llm_custom_key,
+        "stats_total_words": *state.stats_total_words.lock().map_err(|e| e.to_string())?,
+        "stats_total_speaking_secs": *state.stats_total_speaking_secs.lock().map_err(|e| e.to_string())?,
     }))
+}
+
+#[tauri::command]
+fn update_stats(
+    words: u64,
+    speaking_secs: f64,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    *state.stats_total_words.lock().map_err(|e| e.to_string())? += words;
+    *state
+        .stats_total_speaking_secs
+        .lock()
+        .map_err(|e| e.to_string())? += speaking_secs;
+    save_current_config(&state)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -1187,6 +1223,11 @@ fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         preprocessing_enabled,
         window_anchor_right: anchor.map(|(r, _)| r),
         window_anchor_bottom: anchor.map(|(_, b)| b),
+        stats_total_words: *state.stats_total_words.lock().map_err(|e| e.to_string())?,
+        stats_total_speaking_secs: *state
+            .stats_total_speaking_secs
+            .lock()
+            .map_err(|e| e.to_string())?,
     })
 }
 
@@ -1633,6 +1674,8 @@ pub fn run() {
                     _ => None,
                 },
             ),
+            stats_total_words: Mutex::new(file_cfg.stats_total_words),
+            stats_total_speaking_secs: Mutex::new(file_cfg.stats_total_speaking_secs),
         })
         .setup(move |app| {
             // Remove Windows DWM border and set transparent background
@@ -1773,6 +1816,7 @@ pub fn run() {
             paste_text,
             resize_window,
             process_with_llm,
+            update_stats,
             cycle_llm_style,
             cycle_llm_tone,
             start_shortcut_recording,

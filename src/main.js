@@ -397,6 +397,7 @@ async function startRecording() {
 async function stopRecording() {
   if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
   if (waveformInterval) { clearInterval(waveformInterval); waveformInterval = null; }
+  const speakingSecs = (Date.now() - recordingStart) / 1000;
 
   dot.className = 'transcribing';
   showStatus('transcribing');
@@ -427,6 +428,12 @@ async function stopRecording() {
 
     try { await invoke('paste_text', { text }); } catch (_) {}
 
+    // Accumulate KPI stats
+    const wordCount = text.trim().split(/\s+/).filter(w => w.length > 0).length;
+    if (wordCount > 0) {
+      try { await invoke('update_stats', { words: wordCount, speakingSecs }); } catch (_) {}
+    }
+
     showStatus('done');
     setTimeout(() => {
       switchView('pill');
@@ -448,6 +455,21 @@ async function stopRecording() {
       shrinkToMicro(5000);
     }, 4000);
   }
+}
+
+// ========================
+// STATS FORMATTING
+// ========================
+function formatDuration(totalSecs) {
+  if (totalSecs < 60) return Math.round(totalSecs) + 's';
+  if (totalSecs < 3600) return (totalSecs / 60).toFixed(1) + ' min';
+  return (totalSecs / 3600).toFixed(1) + ' hrs';
+}
+
+function formatTimeSaved(mins) {
+  if (mins < 1) return Math.round(mins * 60) + 's';
+  if (mins < 60) return mins.toFixed(1) + ' min';
+  return (mins / 60).toFixed(1) + ' hrs';
 }
 
 // ========================
@@ -659,6 +681,16 @@ async function openSettings() {
     toggleLlmKeyField();
 
     updateLlmKeyHint(config.llm_api_url);
+
+    // Populate stats
+    const totalWords = config.stats_total_words || 0;
+    const totalSpeakingSecs = config.stats_total_speaking_secs || 0;
+    const typingTimeMins = totalWords / 40; // 40 WPM average
+    const speakingTimeMins = totalSpeakingSecs / 60;
+    const timeSavedMins = Math.max(0, typingTimeMins - speakingTimeMins);
+    document.getElementById('stat-words').textContent = totalWords.toLocaleString();
+    document.getElementById('stat-speaking').textContent = formatDuration(totalSpeakingSecs);
+    document.getElementById('stat-saved').textContent = formatTimeSaved(timeSavedMins);
 
   } catch (err) {
     console.error('get_config:', err);
