@@ -32,6 +32,41 @@ fn log_path() -> Option<std::path::PathBuf> {
     config_dir_path().map(|p| p.join("dimmy.log"))
 }
 
+fn transcription_debug_log_path() -> Option<std::path::PathBuf> {
+    config_dir_path().map(|p| p.join("transcription_debug.log"))
+}
+
+/// Append a line to the transcription debug log for chunk vs final comparison.
+fn debug_transcription(msg: &str) {
+    use std::io::Write;
+    if let Some(path) = transcription_debug_log_path() {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        // Rotate at 2 MB
+        if let Ok(meta) = std::fs::metadata(&path) {
+            if meta.len() > 2_097_152 {
+                if let Ok(data) = std::fs::read_to_string(&path) {
+                    let half = data.len() / 2;
+                    let cut = data[half..]
+                        .find('\n')
+                        .map(|i| half + i + 1)
+                        .unwrap_or(half);
+                    let _ = std::fs::write(&path, &data[cut..]);
+                }
+            }
+        }
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
+            let _ = writeln!(f, "[{}] {}", ts, msg);
+        }
+    }
+}
+
 /// Write a log line to %APPDATA%/dimmy/dimmy.log (visible on Windows GUI apps)
 pub(crate) fn log(msg: &str) {
     use std::io::Write;
@@ -483,6 +518,11 @@ fn start_recording(
         .lock()
         .map_err(|e| e.to_string())?;
 
+    let debug_log_on = *state
+        .llm_log_enabled
+        .lock()
+        .map_err(|e| e.to_string())?;
+
     if let Some(key) = api_key {
         let buffer = state.audio_buffer.clone();
         let streaming = state.streaming_active.clone();
@@ -490,6 +530,9 @@ fn start_recording(
         let sample_rate = device_sr as usize;
 
         tauri::async_runtime::spawn(async move {
+            if debug_log_on {
+                debug_transcription("========== NEW RECORDING SESSION ==========");
+            }
             let mut offset: usize = 0;
             let mut chunk_index: u32 = 0;
             let min_chunk_samples = sample_rate * 2;
@@ -573,6 +616,14 @@ fn start_recording(
                 };
 
                 chunk_index += 1;
+                let chunk_duration_secs = processed.len() as f64 / sample_rate as f64;
+
+                if debug_log_on {
+                    debug_transcription(&format!(
+                        "CHUNK #{} | samples={} | duration={:.2}s | offset={}..{}",
+                        chunk_index, processed.len(), chunk_duration_secs, offset.saturating_sub(processed.len()), offset
+                    ));
+                }
 
                 let _ = handle.emit(
                     "chunk-status",
@@ -582,16 +633,30 @@ fn start_recording(
                     }),
                 );
 
+                let chunk_send_time = std::time::Instant::now();
                 let wav_result =
                     audio::encode_wav(&processed, sample_rate as u32).map_err(|e| e.to_string());
                 match wav_result {
                     Ok(wav_data) => {
+                        if debug_log_on {
+                            debug_transcription(&format!(
+                                "CHUNK #{} | wav_size={} bytes | sending to Whisper...",
+                                chunk_index, wav_data.len()
+                            ));
+                        }
                         match transcribe::transcribe_audio(
                             &api_url, &api_model, &key, &wav_data, &language, &prompt,
                         )
                         .await
                         {
                             Ok(text) => {
+                                if debug_log_on {
+                                    let elapsed = chunk_send_time.elapsed();
+                                    debug_transcription(&format!(
+                                        "CHUNK #{} | latency={:.0}ms | text=\"{}\"",
+                                        chunk_index, elapsed.as_millis(), text
+                                    ));
+                                }
                                 let _ = handle.emit(
                                     "transcription-chunk",
                                     serde_json::json!({
@@ -601,6 +666,13 @@ fn start_recording(
                                 );
                             }
                             Err(e) => {
+                                if debug_log_on {
+                                    let elapsed = chunk_send_time.elapsed();
+                                    debug_transcription(&format!(
+                                        "CHUNK #{} | ERROR after {:.0}ms | {}",
+                                        chunk_index, elapsed.as_millis(), e
+                                    ));
+                                }
                                 let _ = handle.emit(
                                     "chunk-status",
                                     serde_json::json!({
@@ -676,6 +748,21 @@ async fn stop_recording(
         return Err("No audio captured".into());
     }
 
+    let debug_log_on = *state
+        .llm_log_enabled
+        .lock()
+        .map_err(|e| e.to_string())?;
+
+    if debug_log_on {
+        let total_duration_secs = buffer.len() as f64
+            / *state.audio_sample_rate.lock().map_err(|e| e.to_string())? as f64;
+        debug_transcription(&format!(
+            "---------- STOP RECORDING | total_samples={} | duration={:.2}s ----------",
+            buffer.len(),
+            total_duration_secs
+        ));
+    }
+
     let _ = app_handle.emit(
         "chunk-status",
         serde_json::json!({ "index": 0, "status": "final" }),
@@ -697,11 +784,31 @@ async fn stop_recording(
         buffer
     };
     let wav_data = audio::encode_wav(&audio_data, sr).map_err(|e| e.to_string())?;
+
+    if debug_log_on {
+        debug_transcription(&format!(
+            "FINAL | wav_size={} bytes | audio_samples={} | sending to Whisper...",
+            wav_data.len(),
+            audio_data.len()
+        ));
+    }
+    let final_send_time = std::time::Instant::now();
+
     let transcript = transcribe::transcribe_audio(
         &api_url, &api_model, &api_key, &wav_data, &language, &prompt,
     )
     .await
     .map_err(|e| e.to_string())?;
+
+    if debug_log_on {
+        let final_elapsed = final_send_time.elapsed();
+        debug_transcription(&format!(
+            "FINAL | latency={:.0}ms | text=\"{}\"",
+            final_elapsed.as_millis(),
+            transcript
+        ));
+        debug_transcription("========== END SESSION ==========\n");
+    }
 
     *state.transcript.lock().map_err(|e| e.to_string())? = transcript.clone();
 
