@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicholasio/tauri-schema/refs/heads/v2/schema.json",
   "productName": "Dimmy",
-  "version": "0.3.10",
+  "version": "0.3.11",
   "identifier": "com.dimmy.voice",
   "build": {
     "frontendDist": "../src",
@@ -13,7 +13,8 @@
     "createUpdaterArtifacts": true,
     "icon": [
       "icons/icon.png",
-      "icons/icon.ico"
+      "icons/icon.ico",
+      "icons/icon.icns"
     ],
     "windows": {
       "certificateThumbprint": null,
@@ -24,6 +25,7 @@
       }
     },
     "macOS": {
+      "entitlements": "./Entitlements.plist",
       "frameworks": [],
       "minimumSystemVersion": "12.0"
     },

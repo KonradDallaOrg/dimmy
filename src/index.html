@@ -28,8 +28,11 @@
     <div id="settings-panel" class="panel">
 
       <div id="accessibility-warning" class="hide" style="background:#7f1d1d;color:#fca5a5;padding:6px 8px;border-radius:4px;font-size:11px;margin-bottom:6px">
-        Accessibility permission required for global shortcuts.
-        <a href="#" id="accessibility-link" style="color:#fbbf24;text-decoration:underline">Open System Settings</a>
+        Accessibility permission required for global shortcuts and paste.
+        <span style="display:flex;gap:4px;margin-top:4px">
+          <button id="accessibility-grant-btn" type="button" style="font-size:10px;padding:2px 6px;background:#fbbf24;color:#000;border:none;border-radius:3px;cursor:pointer">Grant Permission</button>
+          <button id="accessibility-open-btn" type="button" style="font-size:10px;padding:2px 6px;background:transparent;color:#fbbf24;border:1px solid #fbbf24;border-radius:3px;cursor:pointer">Open Settings</button>
+        </span>
       </div>
 
       <!-- Group 1: Activation -->
@@ -81,6 +84,11 @@
       <label class="checkbox-label">
         <input type="checkbox" id="preprocessing-enabled" checked />
         Audio preprocessing <span class="hint-text">(noise filter + normalization)</span>
+      </label>
+
+      <label class="checkbox-label">
+        <input type="checkbox" id="audio-debug-enabled" />
+        Save audio debug files <span class="hint-text">(WAV dumps per session)</span>
       </label>
 
       <!-- Group 3: Transcription -->

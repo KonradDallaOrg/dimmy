@@ -36,6 +36,46 @@ fn transcription_debug_log_path() -> Option<std::path::PathBuf> {
     config_dir_path().map(|p| p.join("transcription_debug.log"))
 }
 
+fn audio_debug_dir() -> Option<std::path::PathBuf> {
+    config_dir_path().map(|p| p.join("audio_debug"))
+}
+
+/// Create a session directory for audio debug dumps and return its path.
+fn create_audio_debug_session() -> Option<std::path::PathBuf> {
+    let base = audio_debug_dir()?;
+    let ts = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+    let session_dir = base.join(&ts);
+    std::fs::create_dir_all(&session_dir).ok()?;
+    Some(session_dir)
+}
+
+/// Save WAV bytes to a file inside a debug session directory (fire-and-forget).
+fn save_debug_wav(dir: &std::path::Path, filename: &str, wav_data: &[u8]) {
+    let path = dir.join(filename);
+    let _ = std::fs::write(&path, wav_data);
+}
+
+/// Save session metadata JSON to the debug directory.
+fn save_debug_metadata(
+    dir: &std::path::Path,
+    sample_rate: u32,
+    device: &Option<String>,
+    preprocessing_on: bool,
+    duration_secs: f64,
+    chunk_count: u32,
+) {
+    let meta = serde_json::json!({
+        "sample_rate": sample_rate,
+        "device": device.as_deref().unwrap_or("default"),
+        "preprocessing_enabled": preprocessing_on,
+        "duration_secs": duration_secs,
+        "chunk_count": chunk_count,
+        "timestamp": chrono::Local::now().to_rfc3339(),
+    });
+    let path = dir.join("metadata.json");
+    let _ = std::fs::write(&path, serde_json::to_string_pretty(&meta).unwrap_or_default());
+}
+
 /// Append a line to the transcription debug log for chunk vs final comparison.
 fn debug_transcription(msg: &str) {
     use std::io::Write;
@@ -119,6 +159,7 @@ struct AppConfig {
     llm_use_same_key: bool,
     llm_log_enabled: bool,
     preprocessing_enabled: bool,
+    audio_debug_enabled: bool,
     // Window position — bottom-right anchor in logical pixels
     window_anchor_right: Option<f64>,
     window_anchor_bottom: Option<f64>,
@@ -151,6 +192,7 @@ impl Default for AppConfig {
             llm_use_same_key: true,
             llm_log_enabled: true,
             preprocessing_enabled: true,
+            audio_debug_enabled: false,
             window_anchor_right: None,
             window_anchor_bottom: None,
             stats_total_words: 0,
@@ -181,6 +223,7 @@ fn save_config_file(cfg: &AppConfig) {
             "llm_use_same_key": cfg.llm_use_same_key,
             "llm_log_enabled": cfg.llm_log_enabled,
             "preprocessing_enabled": cfg.preprocessing_enabled,
+            "audio_debug_enabled": cfg.audio_debug_enabled,
             "stats_total_words": cfg.stats_total_words,
             "stats_total_speaking_secs": cfg.stats_total_speaking_secs,
         });
@@ -244,6 +287,9 @@ fn load_config_file() -> AppConfig {
                     preprocessing_enabled: v["preprocessing_enabled"]
                         .as_bool()
                         .unwrap_or(defaults.preprocessing_enabled),
+                    audio_debug_enabled: v["audio_debug_enabled"]
+                        .as_bool()
+                        .unwrap_or(defaults.audio_debug_enabled),
                     window_anchor_right: v["window_anchor_right"].as_f64(),
                     window_anchor_bottom: v["window_anchor_bottom"].as_f64(),
                     stats_total_words: v["stats_total_words"].as_u64().unwrap_or(0),
@@ -470,6 +516,9 @@ pub struct AppState {
     pub llm_api_key: Mutex<Option<String>>,
     pub llm_log_enabled: Mutex<bool>,
     pub preprocessing_enabled: Mutex<bool>,
+    pub audio_debug_enabled: Mutex<bool>,
+    /// Path to current audio debug session directory (set during recording, cleared on stop)
+    pub audio_debug_session_dir: Mutex<Option<std::path::PathBuf>>,
     /// Bottom-right anchor in logical pixels — persisted across restarts
     pub window_anchor: Mutex<Option<(f64, f64)>>,
     // KPI stats
@@ -523,6 +572,23 @@ fn start_recording(
         .lock()
         .map_err(|e| e.to_string())?;
 
+    let audio_debug_on = *state
+        .audio_debug_enabled
+        .lock()
+        .map_err(|e| e.to_string())?;
+
+    // Create debug session directory before spawning async task
+    let debug_session_dir = if audio_debug_on {
+        create_audio_debug_session()
+    } else {
+        None
+    };
+    // Store session dir in state so stop_recording can access it
+    *state
+        .audio_debug_session_dir
+        .lock()
+        .map_err(|e| e.to_string())? = debug_session_dir.clone();
+
     if let Some(key) = api_key {
         let buffer = state.audio_buffer.clone();
         let streaming = state.streaming_active.clone();
@@ -535,6 +601,7 @@ fn start_recording(
             }
             let mut offset: usize = 0;
             let mut chunk_index: u32 = 0;
+            let mut debug_chunk_idx: u32 = 0;
             let min_chunk_samples = sample_rate * 2;
             let max_chunk_samples = sample_rate * 12;
             let silence_threshold: f32 = 0.01;
@@ -603,6 +670,14 @@ fn start_recording(
 
                 offset = split_end;
 
+                // Save raw chunk WAV for audio debug (before preprocessing)
+                debug_chunk_idx += 1;
+                if let Some(ref dir) = debug_session_dir {
+                    if let Ok(raw_wav) = audio::encode_wav(&chunk_data, sample_rate as u32) {
+                        save_debug_wav(dir, &format!("chunk_{:03}_raw.wav", debug_chunk_idx), &raw_wav);
+                    }
+                }
+
                 // Preprocess: highpass + VAD + normalize (if enabled)
                 let processed = if preprocess_on {
                     let p = preprocessor.process(&chunk_data);
@@ -614,6 +689,13 @@ fn start_recording(
                 } else {
                     chunk_data
                 };
+
+                // Save processed chunk WAV for audio debug (after preprocessing)
+                if let Some(ref dir) = debug_session_dir {
+                    if let Ok(proc_wav) = audio::encode_wav(&processed, sample_rate as u32) {
+                        save_debug_wav(dir, &format!("chunk_{:03}_processed.wav", debug_chunk_idx), &proc_wav);
+                    }
+                }
 
                 chunk_index += 1;
                 let chunk_duration_secs = processed.len() as f64 / sample_rate as f64;
@@ -634,8 +716,10 @@ fn start_recording(
                 );
 
                 let chunk_send_time = std::time::Instant::now();
+                // Downsample to 16kHz before sending to Whisper (reduces upload by ~3x)
+                let resampled = preprocess::downsample_to_16k(&processed, sample_rate as u32);
                 let wav_result =
-                    audio::encode_wav(&processed, sample_rate as u32).map_err(|e| e.to_string());
+                    audio::encode_wav(&resampled, 16000).map_err(|e| e.to_string());
                 match wav_result {
                     Ok(wav_data) => {
                         if debug_log_on {
@@ -773,17 +857,51 @@ async fn stop_recording(
         .preprocessing_enabled
         .lock()
         .map_err(|e| e.to_string())?;
+
+    // Audio debug: take session dir from state and save raw session WAV
+    let debug_session_dir = state
+        .audio_debug_session_dir
+        .lock()
+        .map_err(|e| e.to_string())?
+        .take();
+    let debug_device = state
+        .selected_device
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
+    if let Some(ref dir) = debug_session_dir {
+        if let Ok(raw_wav) = audio::encode_wav(&buffer, sr) {
+            save_debug_wav(dir, "session_raw.wav", &raw_wav);
+        }
+    }
+
     // Preprocess final buffer: highpass + VAD + normalize (if enabled)
     let audio_data = if preprocess_final {
         let processed = preprocess::process_buffer(&buffer, sr);
         if processed.is_empty() {
+            // Still save metadata even when no speech detected
+            if let Some(ref dir) = debug_session_dir {
+                let duration = buffer.len() as f64 / sr as f64;
+                save_debug_metadata(dir, sr, &debug_device, true, duration, 0);
+            }
             return Err("No speech detected in recording".into());
         }
         processed
     } else {
         buffer
     };
-    let wav_data = audio::encode_wav(&audio_data, sr).map_err(|e| e.to_string())?;
+    // Downsample to 16kHz before sending to Whisper (reduces upload by ~3x)
+    let resampled = preprocess::downsample_to_16k(&audio_data, sr);
+    let wav_data = audio::encode_wav(&resampled, 16000).map_err(|e| e.to_string())?;
+
+    // Audio debug: save processed session WAV at original sample rate (not downsampled)
+    if let Some(ref dir) = debug_session_dir {
+        if let Ok(proc_wav) = audio::encode_wav(&audio_data, sr) {
+            save_debug_wav(dir, "session_processed.wav", &proc_wav);
+        }
+        let duration = audio_data.len() as f64 / sr as f64;
+        save_debug_metadata(dir, sr, &debug_device, preprocess_final, duration, 0);
+    }
 
     if debug_log_on {
         debug_transcription(&format!(
@@ -847,6 +965,7 @@ fn set_config(
     llm_api_key: Option<String>,
     llm_log_enabled: Option<bool>,
     preprocessing_enabled: Option<bool>,
+    audio_debug_enabled: Option<bool>,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     log(&format!(
@@ -904,6 +1023,12 @@ fn set_config(
             .lock()
             .map_err(|e| e.to_string())? = v;
     }
+    if let Some(v) = audio_debug_enabled {
+        *state
+            .audio_debug_enabled
+            .lock()
+            .map_err(|e| e.to_string())? = v;
+    }
     if let Some(ref v) = shortcut {
         *state.shortcut.lock().map_err(|e| e.to_string())? = v.clone();
         hotkey::set_shortcut(v);
@@ -931,6 +1056,10 @@ fn set_config(
         .preprocessing_enabled
         .lock()
         .map_err(|e| e.to_string())?;
+    let cur_audio_debug_enabled = *state
+        .audio_debug_enabled
+        .lock()
+        .map_err(|e| e.to_string())?;
     let cur_anchor = *state.window_anchor.lock().map_err(|e| e.to_string())?;
     let cfg = AppConfig {
         api_url: api_url.clone(),
@@ -949,6 +1078,7 @@ fn set_config(
         llm_use_same_key: cur_llm_use_same_key,
         llm_log_enabled: cur_llm_log_enabled,
         preprocessing_enabled: cur_preprocessing_enabled,
+        audio_debug_enabled: cur_audio_debug_enabled,
         window_anchor_right: cur_anchor.map(|(r, _)| r),
         window_anchor_bottom: cur_anchor.map(|(_, b)| b),
         stats_total_words: *state.stats_total_words.lock().map_err(|e| e.to_string())?,
@@ -1030,6 +1160,10 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
         .preprocessing_enabled
         .lock()
         .map_err(|e| e.to_string())?;
+    let audio_debug_enabled = *state
+        .audio_debug_enabled
+        .lock()
+        .map_err(|e| e.to_string())?;
     let shortcut = state.shortcut.lock().map_err(|e| e.to_string())?.clone();
     let shortcut_label = hotkey::current_label();
 
@@ -1065,6 +1199,7 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
         "has_llm_key": has_llm_key,
         "llm_log_enabled": llm_log_enabled,
         "preprocessing_enabled": preprocessing_enabled,
+        "audio_debug_enabled": audio_debug_enabled,
         "shortcut": shortcut,
         "shortcut_label": shortcut_label,
         "llm_styles": styles,
@@ -1317,6 +1452,10 @@ fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         .preprocessing_enabled
         .lock()
         .map_err(|e| e.to_string())?;
+    let audio_debug_enabled = *state
+        .audio_debug_enabled
+        .lock()
+        .map_err(|e| e.to_string())?;
     let anchor = *state.window_anchor.lock().map_err(|e| e.to_string())?;
 
     Ok(AppConfig {
@@ -1336,6 +1475,7 @@ fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         llm_use_same_key,
         llm_log_enabled,
         preprocessing_enabled,
+        audio_debug_enabled,
         window_anchor_right: anchor.map(|(r, _)| r),
         window_anchor_bottom: anchor.map(|(_, b)| b),
         stats_total_words: *state.stats_total_words.lock().map_err(|e| e.to_string())?,
@@ -1652,6 +1792,97 @@ fn check_accessibility() -> bool {
     }
 }
 
+/// Prompt the user to grant Accessibility permissions (macOS only).
+/// Shows the native macOS dialog that links to System Settings.
+#[tauri::command]
+fn prompt_accessibility() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        extern "C" {
+            fn AXIsProcessTrustedWithOptions(options: *const std::ffi::c_void) -> bool;
+            fn CFDictionaryCreate(
+                allocator: *const std::ffi::c_void,
+                keys: *const *const std::ffi::c_void,
+                values: *const *const std::ffi::c_void,
+                num_values: isize,
+                key_callbacks: *const std::ffi::c_void,
+                value_callbacks: *const std::ffi::c_void,
+            ) -> *const std::ffi::c_void;
+            fn CFRelease(cf: *const std::ffi::c_void);
+            static kCFBooleanTrue: *const std::ffi::c_void;
+            static kCFTypeDictionaryKeyCallBacks: u8;
+            static kCFTypeDictionaryValueCallBacks: u8;
+        }
+
+        // "AXTrustedCheckOptionPrompt" as CFString
+        extern "C" {
+            fn CFStringCreateWithCString(
+                alloc: *const std::ffi::c_void,
+                c_str: *const u8,
+                encoding: u32,
+            ) -> *const std::ffi::c_void;
+        }
+
+        unsafe {
+            let prompt_key = CFStringCreateWithCString(
+                std::ptr::null(),
+                b"AXTrustedCheckOptionPrompt\0".as_ptr(),
+                0x0600_0100, // kCFStringEncodingUTF8
+            );
+            let keys = [prompt_key];
+            let values = [kCFBooleanTrue];
+            let options = CFDictionaryCreate(
+                std::ptr::null(),
+                keys.as_ptr(),
+                values.as_ptr(),
+                1,
+                &kCFTypeDictionaryKeyCallBacks as *const u8 as *const std::ffi::c_void,
+                &kCFTypeDictionaryValueCallBacks as *const u8 as *const std::ffi::c_void,
+            );
+            let trusted = AXIsProcessTrustedWithOptions(options);
+            CFRelease(options);
+            CFRelease(prompt_key);
+            trusted
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
+}
+
+/// Open macOS System Settings > Privacy & Security > Accessibility pane.
+#[tauri::command]
+fn open_accessibility_settings() {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+            .spawn();
+    }
+}
+
+#[tauri::command]
+fn open_audio_debug_dir() -> Result<(), String> {
+    let dir = audio_debug_dir().ok_or("Cannot determine config directory")?;
+    if !dir.exists() {
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("explorer").arg(&dir).spawn();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg(&dir).spawn();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(&dir).spawn();
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn get_version(app_handle: tauri::AppHandle) -> String {
     app_handle.package_info().version.to_string()
@@ -1792,6 +2023,8 @@ pub fn run() {
             llm_api_key: Mutex::new(stored_llm_key),
             llm_log_enabled: Mutex::new(file_cfg.llm_log_enabled),
             preprocessing_enabled: Mutex::new(file_cfg.preprocessing_enabled),
+            audio_debug_enabled: Mutex::new(file_cfg.audio_debug_enabled),
+            audio_debug_session_dir: Mutex::new(None),
             window_anchor: Mutex::new(
                 match (file_cfg.window_anchor_right, file_cfg.window_anchor_bottom) {
                     (Some(r), Some(b)) => Some((r, b)),
@@ -1947,7 +2180,10 @@ pub fn run() {
             poll_shortcut_recording,
             cancel_shortcut_recording,
             check_accessibility,
+            prompt_accessibility,
+            open_accessibility_settings,
             get_version,
+            open_audio_debug_dir,
             check_for_update,
             install_update,
         ])

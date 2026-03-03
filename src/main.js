@@ -52,6 +52,7 @@ const saveBtn = document.getElementById('save-btn');
 const closeBtn = document.getElementById('close-btn');
 
 const preprocessingCheckbox = document.getElementById('preprocessing-enabled');
+const audioDebugCheckbox = document.getElementById('audio-debug-enabled');
 const themeSelect = document.getElementById('theme-select');
 
 // LLM DOM
@@ -81,12 +82,17 @@ applyTheme(localStorage.getItem('dimmy-theme') || 'auto');
 
 themeSelect.addEventListener('change', () => applyTheme(themeSelect.value));
 
-// Accessibility link (macOS) — the link is informational; users must navigate manually
-const accessibilityLink = document.getElementById('accessibility-link');
-if (accessibilityLink) {
-  accessibilityLink.addEventListener('click', (e) => {
-    e.preventDefault();
-    accessibilityLink.textContent = 'System Settings > Privacy & Security > Input Monitoring';
+// Accessibility buttons (macOS)
+const accessibilityGrantBtn = document.getElementById('accessibility-grant-btn');
+if (accessibilityGrantBtn) {
+  accessibilityGrantBtn.addEventListener('click', async () => {
+    await invoke('prompt_accessibility');
+  });
+}
+const accessibilityOpenBtn = document.getElementById('accessibility-open-btn');
+if (accessibilityOpenBtn) {
+  accessibilityOpenBtn.addEventListener('click', async () => {
+    await invoke('open_accessibility_settings');
   });
 }
 
@@ -665,6 +671,7 @@ async function openSettings() {
 
     // Preprocessing
     preprocessingCheckbox.checked = config.preprocessing_enabled !== false;
+    audioDebugCheckbox.checked = config.audio_debug_enabled || false;
 
     // LLM settings
     llmEnabledCheckbox.checked = config.llm_enabled || false;
@@ -942,6 +949,7 @@ saveBtn.addEventListener('click', async () => {
   }
 
   const preprocessingEnabled = preprocessingCheckbox.checked;
+  const audioDebugEnabled = audioDebugCheckbox.checked;
 
   // LLM fields
   const llmEnabledVal = llmEnabledCheckbox.checked;
@@ -966,6 +974,7 @@ saveBtn.addEventListener('click', async () => {
     await invoke('set_config', {
       apiKey, apiUrl, apiModel, language, shortcutMode, selectedDevice, prompt,
       preprocessingEnabled: preprocessingEnabled,
+      audioDebugEnabled: audioDebugEnabled,
       llmEnabled: llmEnabledVal,
       llmStyle: llmStyleVal,
       llmTone: llmToneVal,
