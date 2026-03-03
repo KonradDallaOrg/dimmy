@@ -1711,18 +1711,46 @@ fn get_work_area() -> Option<(i32, i32)> {
     None
 }
 
+/// Clamp a window position to the usable work area (excludes taskbar/panel).
+/// All inputs and outputs are in logical pixels.
+fn clamp_to_work_area(win: &tauri::WebviewWindow, x: f64, y: f64, w: f64, h: f64) -> (f64, f64) {
+    if let Ok(Some(monitor)) = win.primary_monitor() {
+        let scale = monitor.scale_factor();
+        let screen_w = monitor.size().width as f64;
+        let screen_h = monitor.size().height as f64;
+        // Work area in logical pixels — excludes taskbar/panel
+        let (area_w, area_h) = get_work_area()
+            .map(|(r, b)| (r as f64 / scale, b as f64 / scale))
+            .unwrap_or_else(|| {
+                // Linux fallback: assume ~48px panel at bottom (physical), convert to logical
+                let panel_px = 48.0;
+                (screen_w / scale, (screen_h - panel_px) / scale)
+            });
+        let cx = x.max(0.0).min((area_w - w).max(0.0));
+        let cy = y.max(0.0).min((area_h - h).max(0.0));
+        (cx, cy)
+    } else {
+        (x.max(0.0), y.max(0.0))
+    }
+}
+
 /// Position a window at the bottom-right of the usable desktop (above the taskbar).
 fn position_bottom_right(win: &tauri::WebviewWindow, w: f64, h: f64) {
     let padding = 12.0_f64;
     if let Ok(Some(monitor)) = win.primary_monitor() {
-        let screen = monitor.size();
         let scale = monitor.scale_factor();
-        // Use work area (excludes taskbar) when available, else full screen
+        let screen_w = monitor.size().width as f64;
+        let screen_h = monitor.size().height as f64;
+        // Work area in logical pixels — excludes taskbar/panel
         let (area_w, area_h) = get_work_area()
-            .map(|(r, b)| (r as f64, b as f64))
-            .unwrap_or((screen.width as f64, screen.height as f64));
-        let x = (area_w / scale) - w - padding;
-        let y = (area_h / scale) - h - padding;
+            .map(|(r, b)| (r as f64 / scale, b as f64 / scale))
+            .unwrap_or_else(|| {
+                let panel_px = 48.0;
+                (screen_w / scale, (screen_h - panel_px) / scale)
+            });
+        let x = area_w - w - padding;
+        let y = area_h - h - padding;
+        let (x, y) = clamp_to_work_area(win, x, y, w, h);
         let _ = win.set_position(LogicalPosition::new(x, y));
     }
 }
@@ -1753,16 +1781,10 @@ fn resize_window(
         let _ = win.set_always_on_top(true);
 
         if let Some((right, bottom)) = anchor {
-            let mut x = (right - w).max(0.0);
-            let mut y = (bottom - h).max(0.0);
-            // Clamp to screen bounds so the window never ends up off-screen
-            if let Ok(Some(monitor)) = win.primary_monitor() {
-                let scale = win.scale_factor().unwrap_or(1.0);
-                let screen_w = monitor.size().width as f64 / scale;
-                let screen_h = monitor.size().height as f64 / scale;
-                x = x.max(0.0).min((screen_w - w).max(0.0));
-                y = y.max(0.0).min((screen_h - h).max(0.0));
-            }
+            let x = (right - w).max(0.0);
+            let y = (bottom - h).max(0.0);
+            // Clamp to work area so the window never overlaps the taskbar or goes off-screen
+            let (x, y) = clamp_to_work_area(&win, x, y, w, h);
             let _ = win.set_position(LogicalPosition::new(x, y));
             // Update stored anchor
             let _ = state
@@ -2057,6 +2079,8 @@ pub fn run() {
                     if let Some((right, bottom)) = anchor {
                         let x = (right - win_w).max(0.0);
                         let y = (bottom - win_h).max(0.0);
+                        // Clamp to work area in case resolution/monitor changed since last session
+                        let (x, y) = clamp_to_work_area(&window, x, y, win_w, win_h);
                         let _ = window.set_position(LogicalPosition::new(x, y));
                         log(&format!(
                             "Window positioned at saved anchor ({}, {})",
@@ -2095,8 +2119,23 @@ pub fn run() {
                         match event.id().as_ref() {
                             "show" => {
                                 if let Some(win) = app_handle.get_webview_window("main") {
-                                    // Reset to default bottom-right position
-                                    position_bottom_right(&win, 56.0, 32.0);
+                                    // Restore saved anchor position (clamped to work area)
+                                    let micro_w = 56.0_f64;
+                                    let micro_h = 32.0_f64;
+                                    let st: tauri::State<'_, AppState> = app_handle.state();
+                                    let anchor = st
+                                        .window_anchor
+                                        .lock()
+                                        .ok()
+                                        .and_then(|a| *a);
+                                    if let Some((right, bottom)) = anchor {
+                                        let x = (right - micro_w).max(0.0);
+                                        let y = (bottom - micro_h).max(0.0);
+                                        let (x, y) = clamp_to_work_area(&win, x, y, micro_w, micro_h);
+                                        let _ = win.set_position(LogicalPosition::new(x, y));
+                                    } else {
+                                        position_bottom_right(&win, micro_w, micro_h);
+                                    }
                                     let _ = win.show();
                                     let _ = win.set_always_on_top(true);
                                     let _ = win.set_focus();

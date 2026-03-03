@@ -1091,7 +1091,7 @@ dependencies = [
 
 [[package]]
 name = "dimmy"
-version = "0.3.10"
+version = "0.3.12"
 dependencies = [
  "arboard",
  "biquad",
