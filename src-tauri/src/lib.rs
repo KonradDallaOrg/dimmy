@@ -154,6 +154,7 @@ struct AppConfig {
     llm_style: String,
     llm_tone: String,
     llm_custom_prompt: String,
+    llm_translate_to: String,
     llm_api_url: String,
     llm_api_model: String,
     llm_use_same_key: bool,
@@ -187,6 +188,7 @@ impl Default for AppConfig {
             llm_style: "off".to_string(),
             llm_tone: "none".to_string(),
             llm_custom_prompt: String::new(),
+            llm_translate_to: "none".to_string(),
             llm_api_url: DEFAULT_LLM_URL.to_string(),
             llm_api_model: DEFAULT_LLM_MODEL.to_string(),
             llm_use_same_key: true,
@@ -218,6 +220,7 @@ fn save_config_file(cfg: &AppConfig) {
             "llm_style": cfg.llm_style,
             "llm_tone": cfg.llm_tone,
             "llm_custom_prompt": cfg.llm_custom_prompt,
+            "llm_translate_to": cfg.llm_translate_to,
             "llm_api_url": cfg.llm_api_url,
             "llm_api_model": cfg.llm_api_model,
             "llm_use_same_key": cfg.llm_use_same_key,
@@ -269,6 +272,10 @@ fn load_config_file() -> AppConfig {
                     llm_custom_prompt: v["llm_custom_prompt"]
                         .as_str()
                         .unwrap_or(&defaults.llm_custom_prompt)
+                        .to_string(),
+                    llm_translate_to: v["llm_translate_to"]
+                        .as_str()
+                        .unwrap_or(&defaults.llm_translate_to)
                         .to_string(),
                     llm_api_url: v["llm_api_url"]
                         .as_str()
@@ -510,6 +517,7 @@ pub struct AppState {
     pub llm_style: Mutex<String>,
     pub llm_tone: Mutex<String>,
     pub llm_custom_prompt: Mutex<String>,
+    pub llm_translate_to: Mutex<String>,
     pub llm_api_url: Mutex<String>,
     pub llm_api_model: Mutex<String>,
     pub llm_use_same_key: Mutex<bool>,
@@ -959,6 +967,7 @@ fn set_config(
     llm_style: Option<String>,
     llm_tone: Option<String>,
     llm_custom_prompt: Option<String>,
+    llm_translate_to: Option<String>,
     llm_api_url: Option<String>,
     llm_api_model: Option<String>,
     llm_use_same_key: Option<bool>,
@@ -1005,6 +1014,9 @@ fn set_config(
     if let Some(ref v) = llm_custom_prompt {
         *state.llm_custom_prompt.lock().map_err(|e| e.to_string())? = v.clone();
     }
+    if let Some(ref v) = llm_translate_to {
+        *state.llm_translate_to.lock().map_err(|e| e.to_string())? = v.clone();
+    }
     if let Some(ref v) = llm_api_url {
         *state.llm_api_url.lock().map_err(|e| e.to_string())? = v.clone();
     }
@@ -1044,6 +1056,11 @@ fn set_config(
         .lock()
         .map_err(|e| e.to_string())?
         .clone();
+    let cur_llm_translate_to = state
+        .llm_translate_to
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     let cur_llm_api_url = state.llm_api_url.lock().map_err(|e| e.to_string())?.clone();
     let cur_llm_api_model = state
         .llm_api_model
@@ -1073,6 +1090,7 @@ fn set_config(
         llm_style: cur_llm_style,
         llm_tone: cur_llm_tone,
         llm_custom_prompt: cur_llm_custom_prompt,
+        llm_translate_to: cur_llm_translate_to,
         llm_api_url: cur_llm_api_url,
         llm_api_model: cur_llm_api_model,
         llm_use_same_key: cur_llm_use_same_key,
@@ -1143,6 +1161,11 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
         .lock()
         .map_err(|e| e.to_string())?
         .clone();
+    let llm_translate_to = state
+        .llm_translate_to
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     let llm_api_url = state.llm_api_url.lock().map_err(|e| e.to_string())?.clone();
     let llm_api_model = state
         .llm_api_model
@@ -1193,6 +1216,7 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
         "llm_style": llm_style,
         "llm_tone": llm_tone,
         "llm_custom_prompt": llm_custom_prompt,
+        "llm_translate_to": llm_translate_to,
         "llm_api_url": llm_api_url,
         "llm_api_model": llm_api_model,
         "llm_use_same_key": llm_use_same_key,
@@ -1241,8 +1265,13 @@ async fn process_with_llm(
 ) -> Result<String, String> {
     let enabled = *state.llm_enabled.lock().map_err(|e| e.to_string())?;
     let style = state.llm_style.lock().map_err(|e| e.to_string())?.clone();
+    let translate_to = state.llm_translate_to.lock().map_err(|e| e.to_string())?.clone();
+    let translating = !translate_to.is_empty() && translate_to != "none";
 
-    if !enabled || style == "off" {
+    if !enabled && !translating {
+        return Ok(text);
+    }
+    if style == "off" && !translating {
         return Ok(text);
     }
 
@@ -1294,6 +1323,7 @@ async fn process_with_llm(
         &style,
         &tone,
         &custom_prompt,
+        &translate_to,
     )
     .await
     {
@@ -1370,9 +1400,14 @@ fn cycle_llm_style(
     let (new_name, _) = llm::STYLES[new_idx];
     *style = new_name.to_string();
 
-    // Also enable/disable LLM based on style
+    // Also enable/disable LLM based on style + translate_to
     if let Ok(mut enabled) = state.llm_enabled.lock() {
-        *enabled = new_name != "off";
+        let translating = state
+            .llm_translate_to
+            .lock()
+            .map(|t| !t.is_empty() && *t != "none")
+            .unwrap_or(false);
+        *enabled = new_name != "off" || translating;
     }
 
     // Persist to config file
@@ -1440,6 +1475,11 @@ fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         .lock()
         .map_err(|e| e.to_string())?
         .clone();
+    let llm_translate_to = state
+        .llm_translate_to
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     let llm_api_url = state.llm_api_url.lock().map_err(|e| e.to_string())?.clone();
     let llm_api_model = state
         .llm_api_model
@@ -1470,6 +1510,7 @@ fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         llm_style,
         llm_tone,
         llm_custom_prompt,
+        llm_translate_to,
         llm_api_url,
         llm_api_model,
         llm_use_same_key,
@@ -2039,6 +2080,7 @@ pub fn run() {
             llm_style: Mutex::new(file_cfg.llm_style),
             llm_tone: Mutex::new(file_cfg.llm_tone),
             llm_custom_prompt: Mutex::new(file_cfg.llm_custom_prompt),
+            llm_translate_to: Mutex::new(file_cfg.llm_translate_to),
             llm_api_url: Mutex::new(file_cfg.llm_api_url),
             llm_api_model: Mutex::new(file_cfg.llm_api_model),
             llm_use_same_key: Mutex::new(file_cfg.llm_use_same_key),
@@ -2458,6 +2500,7 @@ mod tests {
         assert_eq!(cfg.llm_style, "off");
         assert_eq!(cfg.llm_tone, "none");
         assert!(cfg.llm_custom_prompt.is_empty());
+        assert_eq!(cfg.llm_translate_to, "none");
         assert_eq!(cfg.llm_api_url, DEFAULT_LLM_URL);
         assert_eq!(cfg.llm_api_model, DEFAULT_LLM_MODEL);
         assert!(cfg.llm_use_same_key, "Should use same key by default");

@@ -59,6 +59,7 @@ const advancedToggle = document.getElementById('advanced-toggle');
 
 // LLM DOM
 const llmStyleSelect = document.getElementById('llm-style-select');
+const llmTranslateSelect = document.getElementById('llm-translate-select');
 const llmToneSelect = document.getElementById('llm-tone-select');
 const llmCustomPromptField = document.getElementById('llm-custom-prompt-field');
 const llmCustomPrompt = document.getElementById('llm-custom-prompt');
@@ -178,7 +179,7 @@ function updateStyleIndicator() {
     return;
   }
 
-  if (llmEnabled && llmStyle !== 'off') {
+  if (llmEnabled) {
     const color = STYLE_COLORS[llmStyle] || STYLE_COLORS.off;
     dot.style.setProperty('--style-color', color);
     dot.className = 'styled';
@@ -209,7 +210,8 @@ async function loadLlmState() {
     const config = await invoke('get_config');
     llmStyle = config.llm_style || 'off';
     llmTone = config.llm_tone || 'none';
-    llmEnabled = llmStyle !== 'off';
+    const translateTo = config.llm_translate_to || 'none';
+    llmEnabled = llmStyle !== 'off' || translateTo !== 'none';
     updateStyleIndicator();
   } catch (_) {}
 }
@@ -425,8 +427,8 @@ async function stopRecording() {
     transcriptText.textContent = text;
     transcriptText.scrollLeft = transcriptText.scrollWidth;
 
-    // LLM post-processing if enabled
-    if (llmEnabled && llmStyle !== 'off') {
+    // LLM post-processing if enabled (style or translate active)
+    if (llmEnabled) {
       dot.className = 'llm-processing';
       showStatus('enhancing');
       try {
@@ -675,6 +677,7 @@ async function openSettings() {
 
     // LLM settings
     llmStyleSelect.value = config.llm_style || 'off';
+    llmTranslateSelect.value = config.llm_translate_to || 'none';
     toggleCustomPromptField();
 
     llmToneSelect.value = config.llm_tone || 'none';
@@ -813,6 +816,7 @@ llmStyleSelect.addEventListener('change', () => {
   resizeSettingsWindow();
 });
 llmToneSelect.addEventListener('change', resizeSettingsWindow);
+llmTranslateSelect.addEventListener('change', resizeSettingsWindow);
 llmSameKeyCheckbox.addEventListener('change', toggleLlmKeyField);
 
 llmProviderSelect.addEventListener('change', () => {
@@ -963,9 +967,10 @@ saveBtn.addEventListener('click', async () => {
   const preprocessingEnabled = preprocessingCheckbox.checked;
   const audioDebugEnabled = audioDebugCheckbox.checked;
 
-  // LLM fields — enabled is derived from style
+  // LLM fields — enabled is derived from style + translate
   const llmStyleVal = llmStyleSelect.value;
-  const llmEnabledVal = llmStyleVal !== 'off';
+  const llmTranslateVal = llmTranslateSelect.value;
+  const llmEnabledVal = llmStyleVal !== 'off' || llmTranslateVal !== 'none';
   const llmToneVal = llmToneSelect.value;
   const llmCustomPromptVal = llmCustomPrompt.value;
   const llmUseSameKey = llmSameKeyCheckbox.checked;
@@ -991,6 +996,7 @@ saveBtn.addEventListener('click', async () => {
       llmStyle: llmStyleVal,
       llmTone: llmToneVal,
       llmCustomPrompt: llmCustomPromptVal,
+      llmTranslateTo: llmTranslateVal,
       llmApiUrl: llmApiUrl || null,
       llmApiModel: llmApiModel || null,
       llmUseSameKey: llmUseSameKey,
@@ -1002,6 +1008,7 @@ saveBtn.addEventListener('click', async () => {
     llmEnabled = llmEnabledVal;
     llmStyle = llmStyleVal;
     llmTone = llmToneVal;
+    // translate_to is persisted but not tracked locally (no pill indicator needed)
     updateStyleIndicator();
 
     const name = await invoke('get_audio_device');

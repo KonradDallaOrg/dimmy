@@ -49,16 +49,26 @@ pub const TONES: &[(&str, &str)] = &[
     ),
 ];
 
-/// Build the system prompt from a style + tone combination.
-/// If style is "off", returns empty string (caller should skip LLM).
+/// Build the system prompt from a style + tone + translate_to combination.
+/// If style is "off" and translate_to is empty/none, returns empty string (caller should skip LLM).
 /// If style is "custom", uses `custom_prompt` instead of the style instruction.
-pub fn build_system_prompt(style: &str, tone: &str, custom_prompt: &str) -> String {
-    if style == "off" {
+/// If translate_to is set, adds a translation instruction and removes the "do not translate" rule.
+pub fn build_system_prompt(
+    style: &str,
+    tone: &str,
+    custom_prompt: &str,
+    translate_to: &str,
+) -> String {
+    let translating = !translate_to.is_empty() && translate_to != "none";
+
+    if style == "off" && !translating {
         return String::new();
     }
 
     let style_instruction = if style == "custom" {
         custom_prompt.to_string()
+    } else if style == "off" {
+        String::new()
     } else {
         STYLES
             .iter()
@@ -73,19 +83,41 @@ pub fn build_system_prompt(style: &str, tone: &str, custom_prompt: &str) -> Stri
         .map(|(_, instr)| instr.to_string())
         .unwrap_or_default();
 
-    let task = if tone_modifier.is_empty() {
-        style_instruction
-    } else if style_instruction.is_empty() {
-        tone_modifier
+    let translate_instruction = if translating {
+        format!("Translate the output to {}.", translate_to)
     } else {
-        format!("{} {}", style_instruction, tone_modifier)
+        String::new()
     };
 
+    // Compose task parts
+    let parts: Vec<&str> = [
+        style_instruction.as_str(),
+        tone_modifier.as_str(),
+        translate_instruction.as_str(),
+    ]
+    .iter()
+    .filter(|s| !s.is_empty())
+    .copied()
+    .collect();
+
+    let task = parts.join(" ");
+
     if task.is_empty() {
-        String::new()
-    } else {
-        format!("{}\n\n{}", PREAMBLE, task)
+        return String::new();
     }
+
+    // When translating, remove rule #6 ("do not translate") from preamble
+    let preamble = if translating {
+        PREAMBLE
+            .replace(
+                "6. Keep the same language as the input. Do NOT translate.\n",
+                "",
+            )
+    } else {
+        PREAMBLE.to_string()
+    };
+
+    format!("{}\n\n{}", preamble, task)
 }
 
 #[derive(serde::Deserialize)]
@@ -112,8 +144,9 @@ pub async fn process_text(
     style: &str,
     tone: &str,
     custom_prompt: &str,
+    translate_to: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let system_prompt = build_system_prompt(style, tone, custom_prompt);
+    let system_prompt = build_system_prompt(style, tone, custom_prompt, translate_to);
     if system_prompt.is_empty() {
         return Ok(text.to_string());
     }
@@ -179,19 +212,19 @@ mod tests {
 
     #[test]
     fn off_returns_empty() {
-        let prompt = build_system_prompt("off", "none", "");
+        let prompt = build_system_prompt("off", "none", "", "none");
         assert!(prompt.is_empty());
     }
 
     #[test]
     fn off_ignores_tone() {
-        let prompt = build_system_prompt("off", "formal", "");
+        let prompt = build_system_prompt("off", "formal", "", "none");
         assert!(prompt.is_empty());
     }
 
     #[test]
     fn preamble_included() {
-        let prompt = build_system_prompt("correct", "none", "");
+        let prompt = build_system_prompt("correct", "none", "", "none");
         assert!(prompt.contains("text post-processor"));
         assert!(prompt.contains("NEVER answer questions"));
         assert!(prompt.contains("[TRANSCRIPTION]"));
@@ -199,74 +232,74 @@ mod tests {
 
     #[test]
     fn correct_no_tone() {
-        let prompt = build_system_prompt("correct", "none", "");
+        let prompt = build_system_prompt("correct", "none", "", "none");
         assert!(prompt.contains("fix grammar"));
         assert!(!prompt.contains("formal register"));
     }
 
     #[test]
     fn correct_with_formal_tone() {
-        let prompt = build_system_prompt("correct", "formal", "");
+        let prompt = build_system_prompt("correct", "formal", "", "none");
         assert!(prompt.contains("fix grammar"));
         assert!(prompt.contains("formal"));
     }
 
     #[test]
     fn summarize_with_concise() {
-        let prompt = build_system_prompt("summarize", "concise", "");
+        let prompt = build_system_prompt("summarize", "concise", "", "none");
         assert!(prompt.contains("condense"));
         assert!(prompt.contains("brief"));
     }
 
     #[test]
     fn elaborate_with_friendly() {
-        let prompt = build_system_prompt("elaborate", "friendly", "");
+        let prompt = build_system_prompt("elaborate", "friendly", "", "none");
         assert!(prompt.contains("expand"));
         assert!(prompt.contains("friendly"));
     }
 
     #[test]
     fn comprehensible_with_academic() {
-        let prompt = build_system_prompt("comprehensible", "academic", "");
+        let prompt = build_system_prompt("comprehensible", "academic", "", "none");
         assert!(prompt.contains("clearer"));
         assert!(prompt.contains("academic"));
     }
 
     #[test]
     fn professional_no_tone() {
-        let prompt = build_system_prompt("professional", "none", "");
+        let prompt = build_system_prompt("professional", "none", "", "none");
         assert!(prompt.contains("professional"));
     }
 
     #[test]
     fn custom_uses_custom_prompt() {
-        let prompt = build_system_prompt("custom", "none", "Translate to Italian");
-        assert!(prompt.contains("Translate to Italian"));
-        assert!(prompt.contains(PREAMBLE));
+        let prompt = build_system_prompt("custom", "none", "Rewrite formally", "none");
+        assert!(prompt.contains("Rewrite formally"));
+        assert!(prompt.contains("Do NOT translate"));
     }
 
     #[test]
     fn custom_with_tone() {
-        let prompt = build_system_prompt("custom", "formal", "Translate to Italian");
-        assert!(prompt.contains("Translate to Italian"));
+        let prompt = build_system_prompt("custom", "formal", "Rewrite", "none");
+        assert!(prompt.contains("Rewrite"));
         assert!(prompt.contains("formal"));
     }
 
     #[test]
     fn custom_empty_prompt_with_tone() {
-        let prompt = build_system_prompt("custom", "friendly", "");
+        let prompt = build_system_prompt("custom", "friendly", "", "none");
         assert!(prompt.contains("friendly"));
     }
 
     #[test]
     fn unknown_style_returns_tone_only() {
-        let prompt = build_system_prompt("nonexistent", "formal", "");
+        let prompt = build_system_prompt("nonexistent", "formal", "", "none");
         assert!(prompt.contains("formal"));
     }
 
     #[test]
     fn unknown_tone_returns_style_only() {
-        let prompt = build_system_prompt("correct", "nonexistent", "");
+        let prompt = build_system_prompt("correct", "nonexistent", "", "none");
         assert!(prompt.contains("fix grammar"));
     }
 
@@ -291,5 +324,47 @@ mod tests {
         assert!(names.contains(&"friendly"));
         assert!(names.contains(&"concise"));
         assert!(names.contains(&"academic"));
+    }
+
+    // Translation tests
+    #[test]
+    fn translate_only_activates_llm() {
+        let prompt = build_system_prompt("off", "none", "", "English");
+        assert!(!prompt.is_empty());
+        assert!(prompt.contains("Translate the output to English."));
+    }
+
+    #[test]
+    fn translate_removes_no_translate_rule() {
+        let prompt = build_system_prompt("off", "none", "", "English");
+        assert!(!prompt.contains("Do NOT translate"));
+    }
+
+    #[test]
+    fn no_translate_keeps_rule() {
+        let prompt = build_system_prompt("correct", "none", "", "none");
+        assert!(prompt.contains("Do NOT translate"));
+    }
+
+    #[test]
+    fn translate_with_style() {
+        let prompt = build_system_prompt("correct", "none", "", "Italiano");
+        assert!(prompt.contains("fix grammar"));
+        assert!(prompt.contains("Translate the output to Italiano."));
+        assert!(!prompt.contains("Do NOT translate"));
+    }
+
+    #[test]
+    fn translate_with_style_and_tone() {
+        let prompt = build_system_prompt("correct", "formal", "", "Deutsch");
+        assert!(prompt.contains("fix grammar"));
+        assert!(prompt.contains("formal"));
+        assert!(prompt.contains("Translate the output to Deutsch."));
+    }
+
+    #[test]
+    fn translate_empty_string_is_noop() {
+        let prompt = build_system_prompt("off", "none", "", "");
+        assert!(prompt.is_empty());
     }
 }

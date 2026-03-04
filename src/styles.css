@@ -311,7 +311,8 @@ body {
 #theme-select,
 #llm-style-select,
 #llm-tone-select,
-#llm-provider-select {
+#llm-provider-select,
+#llm-translate-select {
   appearance: none;
   -webkit-appearance: none;
   background: var(--bg-select) var(--select-arrow) no-repeat right 8px center;
@@ -335,7 +336,8 @@ body {
 #theme-select:hover,
 #llm-style-select:hover,
 #llm-tone-select:hover,
-#llm-provider-select:hover {
+#llm-provider-select:hover,
+#llm-translate-select:hover {
   background-color: var(--bg-select-hover);
   border-color: var(--border-hover);
 }
@@ -347,7 +349,8 @@ body {
 #theme-select:focus,
 #llm-style-select:focus,
 #llm-tone-select:focus,
-#llm-provider-select:focus { border-color: var(--accent-focus); }
+#llm-provider-select:focus,
+#llm-translate-select:focus { border-color: var(--accent-focus); }
 
 #model-select optgroup,
 #llm-provider-select optgroup { color: var(--accent-stat); font-weight: 600; font-size: 10px; }
@@ -359,7 +362,8 @@ body {
 #theme-select option,
 #llm-style-select option,
 #llm-tone-select option,
-#llm-provider-select option { color: var(--text-primary); background: var(--bg-select); padding: 4px 8px; }
+#llm-provider-select option,
+#llm-translate-select option { color: var(--text-primary); background: var(--bg-select); padding: 4px 8px; }
 
 #key-hint,
 #llm-key-hint {
