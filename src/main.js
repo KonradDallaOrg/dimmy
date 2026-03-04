@@ -54,11 +54,10 @@ const closeBtn = document.getElementById('close-btn');
 const preprocessingCheckbox = document.getElementById('preprocessing-enabled');
 const audioDebugCheckbox = document.getElementById('audio-debug-enabled');
 const themeSelect = document.getElementById('theme-select');
-const debugSection = document.getElementById('debug-section');
+const advancedSection = document.getElementById('advanced-section');
+const advancedToggle = document.getElementById('advanced-toggle');
 
 // LLM DOM
-const llmEnabledCheckbox = document.getElementById('llm-enabled');
-const llmFields = document.getElementById('llm-fields');
 const llmStyleSelect = document.getElementById('llm-style-select');
 const llmToneSelect = document.getElementById('llm-tone-select');
 const llmCustomPromptField = document.getElementById('llm-custom-prompt-field');
@@ -208,9 +207,9 @@ init();
 async function loadLlmState() {
   try {
     const config = await invoke('get_config');
-    llmEnabled = config.llm_enabled || false;
     llmStyle = config.llm_style || 'off';
     llmTone = config.llm_tone || 'none';
+    llmEnabled = llmStyle !== 'off';
     updateStyleIndicator();
   } catch (_) {}
 }
@@ -675,9 +674,6 @@ async function openSettings() {
     audioDebugCheckbox.checked = config.audio_debug_enabled || false;
 
     // LLM settings
-    llmEnabledCheckbox.checked = config.llm_enabled || false;
-    toggleLlmFields();
-
     llmStyleSelect.value = config.llm_style || 'off';
     toggleCustomPromptField();
 
@@ -706,8 +702,8 @@ async function openSettings() {
     llmLogCheckbox.checked = config.llm_log_enabled !== false;
     toggleLlmKeyField();
 
-    // Debug section visibility
-    applyDebugMode();
+    // Advanced section visibility
+    applyAdvancedMode();
 
     updateLlmKeyHint(config.llm_api_url);
 
@@ -784,15 +780,6 @@ function closeSettings() {
   switchView('micro');
 }
 
-function toggleLlmFields() {
-  if (llmEnabledCheckbox.checked) {
-    llmFields.classList.remove('hide');
-  } else {
-    llmFields.classList.add('hide');
-  }
-  resizeSettingsWindow();
-}
-
 function toggleCustomPromptField() {
   if (llmStyleSelect.value === 'custom') {
     llmCustomPromptField.classList.remove('hide');
@@ -821,7 +808,6 @@ function resizeSettingsWindow() {
 }
 
 // LLM settings event listeners
-llmEnabledCheckbox.addEventListener('change', toggleLlmFields);
 llmStyleSelect.addEventListener('change', () => {
   toggleCustomPromptField();
   resizeSettingsWindow();
@@ -835,7 +821,6 @@ llmProviderSelect.addEventListener('change', () => {
   } else {
     llmCustomEndpoint.classList.add('hide');
   }
-  // Update LLM key hint for the newly selected provider
   const opt = llmProviderSelect.options[llmProviderSelect.selectedIndex];
   const url = llmProviderSelect.value === 'llm-custom' ? llmApiUrlInput.value : (opt.dataset.url || '');
   updateLlmKeyHint(url);
@@ -843,32 +828,26 @@ llmProviderSelect.addEventListener('change', () => {
 });
 
 // ========================
-// DEBUG MODE — 5x click on version text
+// ADVANCED TOGGLE
 // ========================
-let debugTapCount = 0;
-let debugTapTimer = null;
-let debugMode = localStorage.getItem('dimmy-debug') === '1';
+let advancedOpen = localStorage.getItem('dimmy-advanced') === '1';
 
-function applyDebugMode() {
-  if (debugMode) {
-    debugSection.classList.remove('hide');
+function applyAdvancedMode() {
+  if (advancedOpen) {
+    advancedSection.classList.remove('hide');
+    advancedToggle.textContent = 'Less';
   } else {
-    debugSection.classList.add('hide');
+    advancedSection.classList.add('hide');
+    advancedToggle.textContent = 'All settings';
   }
   resizeSettingsWindow();
 }
 
-document.getElementById('version-text').addEventListener('click', () => {
-  debugTapCount++;
-  if (debugTapTimer) clearTimeout(debugTapTimer);
-  debugTapTimer = setTimeout(() => { debugTapCount = 0; }, 1500);
-
-  if (debugTapCount >= 5) {
-    debugTapCount = 0;
-    debugMode = !debugMode;
-    localStorage.setItem('dimmy-debug', debugMode ? '1' : '0');
-    applyDebugMode();
-  }
+advancedToggle.addEventListener('click', (e) => {
+  e.preventDefault();
+  advancedOpen = !advancedOpen;
+  localStorage.setItem('dimmy-advanced', advancedOpen ? '1' : '0');
+  applyAdvancedMode();
 });
 
 modelSelect.addEventListener('change', () => {
@@ -984,9 +963,9 @@ saveBtn.addEventListener('click', async () => {
   const preprocessingEnabled = preprocessingCheckbox.checked;
   const audioDebugEnabled = audioDebugCheckbox.checked;
 
-  // LLM fields
-  const llmEnabledVal = llmEnabledCheckbox.checked;
+  // LLM fields — enabled is derived from style
   const llmStyleVal = llmStyleSelect.value;
+  const llmEnabledVal = llmStyleVal !== 'off';
   const llmToneVal = llmToneSelect.value;
   const llmCustomPromptVal = llmCustomPrompt.value;
   const llmUseSameKey = llmSameKeyCheckbox.checked;

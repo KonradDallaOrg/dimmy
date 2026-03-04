@@ -531,6 +531,21 @@ body {
 
 #close-btn:hover { background: var(--bg-input-hover); }
 
+/* === Advanced toggle link === */
+#advanced-toggle {
+  display: block;
+  text-align: center;
+  font-size: 9px;
+  color: var(--text-tertiary);
+  text-decoration: none;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  padding: 2px 0;
+  transition: color 0.2s;
+}
+
+#advanced-toggle:hover { color: var(--accent-section); }
+
 /* === Version footer === */
 #version-footer {
   display: flex;

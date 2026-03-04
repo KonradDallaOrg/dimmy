@@ -35,56 +35,9 @@
         </span>
       </div>
 
-      <!-- Group 1: Activation -->
-      <label class="section-label">Activation</label>
+      <!-- === SIMPLE VIEW === -->
 
-      <label>Shortcut Key</label>
-      <div style="display:flex;gap:6px;align-items:center">
-        <span id="shortcut-label" style="flex:1;font-size:12px" class="shortcut-value">...</span>
-        <button id="shortcut-record-btn" type="button" style="font-size:11px;padding:2px 8px">Change</button>
-      </div>
-
-      <label>Shortcut Mode</label>
-      <select id="shortcut-mode-select">
-        <option value="toggle">Toggle &#8212; press to start/stop</option>
-        <option value="hold">Hold &#8212; hold to record, release to stop</option>
-      </select>
-
-      <label>Theme</label>
-      <select id="theme-select">
-        <option value="auto">Auto &#8212; follow system</option>
-        <option value="dark">Dark</option>
-        <option value="light">Light</option>
-      </select>
-
-      <!-- Group 2: Audio -->
-      <div class="settings-divider"></div>
-      <label class="section-label">Audio</label>
-
-      <label>Audio Input</label>
-      <select id="device-select"></select>
-
-      <label>Language</label>
-      <select id="language-select">
-        <option value="">Auto-detect</option>
-        <option value="it">Italiano</option>
-        <option value="en">English</option>
-        <option value="de">Deutsch</option>
-        <option value="fr">Fran&#231;ais</option>
-        <option value="es">Espa&#241;ol</option>
-        <option value="pt">Portugu&#234;s</option>
-        <option value="nl">Nederlands</option>
-        <option value="pl">Polski</option>
-        <option value="ja">&#26085;&#26412;&#35486;</option>
-        <option value="zh">&#20013;&#25991;</option>
-        <option value="ko">&#54620;&#44397;&#50612;</option>
-        <option value="ru">&#1056;&#1091;&#1089;&#1089;&#1082;&#1080;&#1081;</option>
-      </select>
-
-      <!-- Group 3: Transcription -->
-      <div class="settings-divider"></div>
-      <label class="section-label">Transcription</label>
-
+      <!-- Transcription model + key -->
       <label>Provider &amp; Model</label>
       <select id="model-select">
         <optgroup label="Groq (Free)">
@@ -136,39 +89,112 @@
       <label>API Key <span id="key-hint"></span></label>
       <input type="password" id="api-key" placeholder="sk-... or gsk_..." />
 
-      <label>Prompt / Vocabulary <span class="hint-text">(guides punctuation &amp; spelling)</span></label>
-      <textarea id="prompt-input" rows="2" placeholder="Whisper mimics the style of this text. Add punctuation and custom terms here."></textarea>
-
-      <!-- Group 4: AI Enhancement -->
+      <!-- AI Style & Tone (simple) -->
       <div class="settings-divider"></div>
       <label class="section-label">AI Enhancement</label>
 
-      <label class="checkbox-label">
-        <input type="checkbox" id="llm-enabled" />
-        Enable AI Enhancement <span class="hint-text">(post-process with LLM)</span>
-      </label>
+      <label>Style</label>
+      <select id="llm-style-select">
+        <option value="off">Off</option>
+        <option value="correct">Correct &#8212; fix grammar &amp; filler words</option>
+        <option value="summarize">Summarize &#8212; condense key points</option>
+        <option value="elaborate">Elaborate &#8212; expand with detail</option>
+        <option value="comprehensible">Comprehensible &#8212; rewrite clearly</option>
+        <option value="professional">Professional &#8212; business tone</option>
+        <option value="prompt">Prompt &#8212; reshape as LLM prompt</option>
+        <option value="custom">Custom prompt...</option>
+      </select>
 
-      <div id="llm-fields" class="hide">
-        <label>Style</label>
-        <select id="llm-style-select">
-          <option value="off">Off</option>
-          <option value="correct">Correct &#8212; fix grammar &amp; filler words</option>
-          <option value="summarize">Summarize &#8212; condense key points</option>
-          <option value="elaborate">Elaborate &#8212; expand with detail</option>
-          <option value="comprehensible">Comprehensible &#8212; rewrite clearly</option>
-          <option value="professional">Professional &#8212; business tone</option>
-          <option value="prompt">Prompt &#8212; reshape as LLM prompt</option>
-          <option value="custom">Custom prompt...</option>
+      <label>Tone</label>
+      <select id="llm-tone-select">
+        <option value="none">None</option>
+        <option value="formal">Formal</option>
+        <option value="friendly">Friendly</option>
+        <option value="concise">Concise</option>
+        <option value="academic">Academic</option>
+      </select>
+
+      <!-- Theme -->
+      <div class="settings-divider"></div>
+
+      <label>Theme</label>
+      <select id="theme-select">
+        <option value="auto">Auto &#8212; follow system</option>
+        <option value="dark">Dark</option>
+        <option value="light">Light</option>
+      </select>
+
+      <!-- Stats -->
+      <div class="settings-divider"></div>
+      <label class="section-label">Stats</label>
+      <div class="stats-grid">
+        <div class="stat-item">
+          <span class="stat-value" id="stat-words">0</span>
+          <span class="stat-label">words dictated</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-value" id="stat-speaking">0s</span>
+          <span class="stat-label">speaking time</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-value" id="stat-saved">0s</span>
+          <span class="stat-label">time saved</span>
+        </div>
+      </div>
+
+      <!-- === ADVANCED SECTION (hidden by default) === -->
+      <div id="advanced-section" class="hide">
+
+        <!-- Activation -->
+        <div class="settings-divider"></div>
+        <label class="section-label">Activation</label>
+
+        <label>Shortcut Key</label>
+        <div style="display:flex;gap:6px;align-items:center">
+          <span id="shortcut-label" style="flex:1;font-size:12px" class="shortcut-value">...</span>
+          <button id="shortcut-record-btn" type="button" style="font-size:11px;padding:2px 8px">Change</button>
+        </div>
+
+        <label>Shortcut Mode</label>
+        <select id="shortcut-mode-select">
+          <option value="toggle">Toggle &#8212; press to start/stop</option>
+          <option value="hold">Hold &#8212; hold to record, release to stop</option>
         </select>
 
-        <label>Tone</label>
-        <select id="llm-tone-select">
-          <option value="none">None</option>
-          <option value="formal">Formal</option>
-          <option value="friendly">Friendly</option>
-          <option value="concise">Concise</option>
-          <option value="academic">Academic</option>
+        <!-- Audio -->
+        <div class="settings-divider"></div>
+        <label class="section-label">Audio</label>
+
+        <label>Audio Input</label>
+        <select id="device-select"></select>
+
+        <label>Language</label>
+        <select id="language-select">
+          <option value="">Auto-detect</option>
+          <option value="it">Italiano</option>
+          <option value="en">English</option>
+          <option value="de">Deutsch</option>
+          <option value="fr">Fran&#231;ais</option>
+          <option value="es">Espa&#241;ol</option>
+          <option value="pt">Portugu&#234;s</option>
+          <option value="nl">Nederlands</option>
+          <option value="pl">Polski</option>
+          <option value="ja">&#26085;&#26412;&#35486;</option>
+          <option value="zh">&#20013;&#25991;</option>
+          <option value="ko">&#54620;&#44397;&#50612;</option>
+          <option value="ru">&#1056;&#1091;&#1089;&#1089;&#1082;&#1080;&#1081;</option>
         </select>
+
+        <!-- Transcription extras -->
+        <div class="settings-divider"></div>
+        <label class="section-label">Transcription</label>
+
+        <label>Prompt / Vocabulary <span class="hint-text">(guides punctuation &amp; spelling)</span></label>
+        <textarea id="prompt-input" rows="2" placeholder="Whisper mimics the style of this text. Add punctuation and custom terms here."></textarea>
+
+        <!-- AI Enhancement details -->
+        <div class="settings-divider"></div>
+        <label class="section-label">AI Enhancement Details</label>
 
         <div id="llm-custom-prompt-field" class="hide">
           <label>Custom Prompt</label>
@@ -237,10 +263,7 @@
           <input type="password" id="llm-api-key" placeholder="Separate LLM API key..." />
         </div>
 
-      </div>
-
-      <!-- Group 5: Debug (hidden by default, 5x click on version to reveal) -->
-      <div id="debug-section" class="hide">
+        <!-- Debug -->
         <div class="settings-divider"></div>
         <label class="section-label">Debug</label>
 
@@ -258,25 +281,12 @@
           <input type="checkbox" id="llm-log-enabled" checked />
           Log transcription &amp; LLM output
         </label>
+
       </div>
 
-      <!-- Group 6: Stats -->
+      <!-- Toggle link + buttons -->
       <div class="settings-divider"></div>
-      <label class="section-label">Stats</label>
-      <div class="stats-grid">
-        <div class="stat-item">
-          <span class="stat-value" id="stat-words">0</span>
-          <span class="stat-label">words dictated</span>
-        </div>
-        <div class="stat-item">
-          <span class="stat-value" id="stat-speaking">0s</span>
-          <span class="stat-label">speaking time</span>
-        </div>
-        <div class="stat-item">
-          <span class="stat-value" id="stat-saved">0s</span>
-          <span class="stat-label">time saved</span>
-        </div>
-      </div>
+      <a id="advanced-toggle" href="#">All settings</a>
 
       <div class="btn-row">
         <button id="save-btn">Save</button>
