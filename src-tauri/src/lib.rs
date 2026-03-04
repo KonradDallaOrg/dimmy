@@ -1197,11 +1197,13 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
     let has_groq_key = has_key_for_provider("api-key", "groq");
     let has_openai_key = has_key_for_provider("api-key", "openai");
     let has_custom_key = has_key_for_provider("api-key", "custom");
-    let has_llm_groq_key = has_key_for_provider("llm-key", "groq");
-    let has_llm_openai_key = has_key_for_provider("llm-key", "openai");
-    let has_llm_openrouter_key = has_key_for_provider("llm-key", "openrouter");
-    let has_llm_gemini_key = has_key_for_provider("llm-key", "gemini");
-    let has_llm_custom_key = has_key_for_provider("llm-key", "custom");
+    // LLM key flags: check dedicated llm-key first, fall back to api-key for same provider.
+    // Keys are per-provider — if you entered an OpenAI key for transcription, it works for LLM too.
+    let has_llm_groq_key = has_key_for_provider("llm-key", "groq") || has_key_for_provider("api-key", "groq");
+    let has_llm_openai_key = has_key_for_provider("llm-key", "openai") || has_key_for_provider("api-key", "openai");
+    let has_llm_openrouter_key = has_key_for_provider("llm-key", "openrouter") || has_key_for_provider("api-key", "openrouter");
+    let has_llm_gemini_key = has_key_for_provider("llm-key", "gemini") || has_key_for_provider("api-key", "gemini");
+    let has_llm_custom_key = has_key_for_provider("llm-key", "custom") || has_key_for_provider("api-key", "custom");
 
     Ok(serde_json::json!({
         "has_key": has_key,
@@ -1292,7 +1294,16 @@ async fn process_with_llm(
     let api_key = if use_same_key {
         state.api_key.lock().map_err(|e| e.to_string())?.clone()
     } else {
-        state.llm_api_key.lock().map_err(|e| e.to_string())?.clone()
+        // Try dedicated LLM key first, then fall back to transcription key for same provider.
+        // Keys are per-provider: if you entered an OpenAI key for transcription,
+        // it should work for LLM too when OpenAI is selected.
+        let llm_key = state.llm_api_key.lock().map_err(|e| e.to_string())?.clone();
+        if llm_key.is_some() {
+            llm_key
+        } else {
+            let llm_provider = url_to_provider(&api_url);
+            load_key_for_provider("api-key", llm_provider)
+        }
     };
 
     let api_key = match api_key {
