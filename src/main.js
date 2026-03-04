@@ -18,6 +18,11 @@ const STYLE_COLORS = {
   comprehensible: '#38bdf8', // sky blue
   professional: '#f472b6', // pink
   prompt: '#a78bfa',    // violet
+  genz: '#e879f9',     // fuchsia
+  boomer: '#f97316',   // orange-warm
+  emoji: '#facc15',    // yellow
+  acronyms: '#22d3ee', // cyan
+  imbruttito: '#ef4444', // red
   custom: '#fb923c',   // orange
 };
 

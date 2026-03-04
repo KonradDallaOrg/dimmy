@@ -31,6 +31,11 @@ pub const STYLES: &[(&str, &str)] = &[
     ("comprehensible", "Apply this transformation: rewrite the transcription to be clearer and easier to understand, keeping the same meaning and language."),
     ("professional", "Apply this transformation: rewrite the transcription in a professional, polished tone suitable for business communication. Keep the same language."),
     ("prompt", "Apply this transformation: reshape the transcription into a clear, well-structured prompt ready to be sent to an advanced AI model (ChatGPT, Claude, etc.). Fix grammar, remove filler words, organize the request logically, and make the intent explicit. If the user expressed a question, keep it as a question. If they described a task, frame it as a clear instruction. Keep the same language. Output only the resulting prompt, nothing else."),
+    ("genz", "Apply this transformation: rewrite the transcription in Gen-Z internet slang. Use terms like 'no cap', 'fr fr', 'lowkey', 'highkey', 'slay', 'bestie', 'it\'s giving', 'understood the assignment', 'vibe check', 'big yikes', 'rent free', 'main character energy', 'periodt', 'bussin', 'based', 'sus'. Replace boring words with zoomer equivalents. Keep the same meaning and language. Go hard on the slang."),
+    ("boomer", "Apply this transformation: rewrite the transcription as a boomer would type. Use excessive ellipsis (......), random Capitalization of Words, overly polite phrases, sign-off energy ('Kind Regards....', 'GOD BLESS...'). Add unnecessary context ('As I was saying to my colleague the other day......'). Type like someone who just discovered the internet. Keep the same language."),
+    ("emoji", "Apply this transformation: rewrite the transcription with heavy emoji usage. Add relevant emojis after key words and sentences. Use emojis to replace words where possible (e.g. ❤️ for love, 🔥 for great, 💀 for funny, ✨ for emphasis, 👀 for attention). Make every sentence pop with 2-4 emojis. Keep the same meaning and language. Go maximum emoji."),
+    ("acronyms", "Apply this transformation: rewrite the transcription inserting well-known acronyms and internet abbreviations throughout. Use IMO, TBH, NGL, GOAT, ASAP, FWIW, AFAIK, TL;DR, ICYMI, FYI, BTW, IMHO, SMH, LMAO, IRL, IIRC, AKA, ETA, TLDR, LMK, IDK, YMMV. Replace phrases with their acronym equivalents wherever natural. Keep the same meaning and language."),
+    ("imbruttito", "Apply this transformation: rewrite the transcription in the style of 'Il Milanese Imbruttito' — mix Italian with gratuitous English business jargon and Milanese attitude. Use terms like 'performare', 'deliverare', 'schedulare', 'il meeting', 'la call', 'la deadline', 'pushare', 'il budget', 'droppare', 'skippare', 'il feedback', 'il team', 'asap', 'il workflow'. Add Milanese impatience and corporate buzzwords. Write in Italian but sprinkle anglicisms everywhere as if normal Italian words don't exist. Keep the same meaning."),
     ("custom", ""),
 ];
 
@@ -313,6 +318,11 @@ mod tests {
         assert!(names.contains(&"comprehensible"));
         assert!(names.contains(&"professional"));
         assert!(names.contains(&"prompt"));
+        assert!(names.contains(&"genz"));
+        assert!(names.contains(&"boomer"));
+        assert!(names.contains(&"emoji"));
+        assert!(names.contains(&"acronyms"));
+        assert!(names.contains(&"imbruttito"));
         assert!(names.contains(&"custom"));
     }
 
