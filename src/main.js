@@ -54,6 +54,7 @@ const closeBtn = document.getElementById('close-btn');
 const preprocessingCheckbox = document.getElementById('preprocessing-enabled');
 const audioDebugCheckbox = document.getElementById('audio-debug-enabled');
 const themeSelect = document.getElementById('theme-select');
+const debugSection = document.getElementById('debug-section');
 
 // LLM DOM
 const llmEnabledCheckbox = document.getElementById('llm-enabled');
@@ -705,6 +706,9 @@ async function openSettings() {
     llmLogCheckbox.checked = config.llm_log_enabled !== false;
     toggleLlmKeyField();
 
+    // Debug section visibility
+    applyDebugMode();
+
     updateLlmKeyHint(config.llm_api_url);
 
     // Populate stats
@@ -836,6 +840,35 @@ llmProviderSelect.addEventListener('change', () => {
   const url = llmProviderSelect.value === 'llm-custom' ? llmApiUrlInput.value : (opt.dataset.url || '');
   updateLlmKeyHint(url);
   resizeSettingsWindow();
+});
+
+// ========================
+// DEBUG MODE — 5x click on version text
+// ========================
+let debugTapCount = 0;
+let debugTapTimer = null;
+let debugMode = localStorage.getItem('dimmy-debug') === '1';
+
+function applyDebugMode() {
+  if (debugMode) {
+    debugSection.classList.remove('hide');
+  } else {
+    debugSection.classList.add('hide');
+  }
+  resizeSettingsWindow();
+}
+
+document.getElementById('version-text').addEventListener('click', () => {
+  debugTapCount++;
+  if (debugTapTimer) clearTimeout(debugTapTimer);
+  debugTapTimer = setTimeout(() => { debugTapCount = 0; }, 1500);
+
+  if (debugTapCount >= 5) {
+    debugTapCount = 0;
+    debugMode = !debugMode;
+    localStorage.setItem('dimmy-debug', debugMode ? '1' : '0');
+    applyDebugMode();
+  }
 });
 
 modelSelect.addEventListener('change', () => {

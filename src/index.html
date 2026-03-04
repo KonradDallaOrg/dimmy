@@ -81,16 +81,6 @@
         <option value="ru">&#1056;&#1091;&#1089;&#1089;&#1082;&#1080;&#1081;</option>
       </select>
 
-      <label class="checkbox-label">
-        <input type="checkbox" id="preprocessing-enabled" checked />
-        Audio preprocessing <span class="hint-text">(noise filter + normalization)</span>
-      </label>
-
-      <label class="checkbox-label">
-        <input type="checkbox" id="audio-debug-enabled" />
-        Save audio debug files <span class="hint-text">(WAV dumps per session)</span>
-      </label>
-
       <!-- Group 3: Transcription -->
       <div class="settings-divider"></div>
       <label class="section-label">Transcription</label>
@@ -247,13 +237,30 @@
           <input type="password" id="llm-api-key" placeholder="Separate LLM API key..." />
         </div>
 
+      </div>
+
+      <!-- Group 5: Debug (hidden by default, 5x click on version to reveal) -->
+      <div id="debug-section" class="hide">
+        <div class="settings-divider"></div>
+        <label class="section-label">Debug</label>
+
+        <label class="checkbox-label">
+          <input type="checkbox" id="preprocessing-enabled" checked />
+          Audio preprocessing <span class="hint-text">(VAD + AGC)</span>
+        </label>
+
+        <label class="checkbox-label">
+          <input type="checkbox" id="audio-debug-enabled" />
+          Save audio debug WAVs <span class="hint-text">(per session)</span>
+        </label>
+
         <label class="checkbox-label">
           <input type="checkbox" id="llm-log-enabled" checked />
-          Log transcription &amp; LLM output <span class="hint-text">(for debugging)</span>
+          Log transcription &amp; LLM output
         </label>
       </div>
 
-      <!-- Group 5: Stats -->
+      <!-- Group 6: Stats -->
       <div class="settings-divider"></div>
       <label class="section-label">Stats</label>
       <div class="stats-grid">
