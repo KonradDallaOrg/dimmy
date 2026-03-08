@@ -25,7 +25,7 @@ and format emails, phone numbers, and URLs when dictated naturally.";
 /// (name, system prompt instruction)
 pub const STYLES: &[(&str, &str)] = &[
     ("off", ""),
-    ("correct", "Apply this transformation: fix grammar, spelling, and punctuation errors. Remove filler words (um, uh, like, you know). Preserve the original meaning, intent, and language exactly."),
+    ("correct", "Apply this transformation: fix grammar, spelling, and punctuation errors. Remove filler words and verbal tics (um, uh, ehm, like, you know, so, I mean, basically, right, well, allora, praticamente, cioè, insomma, tipo, diciamo, ecco, niente, comunque). Preserve the original meaning, intent, and language exactly."),
     ("summarize", "Apply this transformation: condense the transcription to its key points. Preserve the original language. Output only the condensed version."),
     ("elaborate", "Apply this transformation: expand the transcription with more detail and context while keeping the same meaning and language. Output only the expanded version."),
     ("comprehensible", "Apply this transformation: rewrite the transcription to be clearer and easier to understand, keeping the same meaning and language."),
@@ -174,32 +174,53 @@ pub async fn process_text(
         text
     );
 
-    // Estimate input tokens (~0.75 tokens per character) and cap output at 2x input.
-    // Minimum 256 to avoid cutting short responses on small inputs.
+    // Estimate input tokens (~0.75 tokens per character) and cap output at 3x input.
+    // Minimum 512 — some providers (Gemini) count tokens differently and need headroom.
     let estimated_input_tokens = (text.len() as f64 * 0.75).ceil() as u64;
-    let max_tokens = (estimated_input_tokens * 2).max(256);
-
-    let body = serde_json::json!({
-        "model": model,
-        "temperature": 0.3,
-        "max_tokens": max_tokens,
-        "messages": [
-            { "role": "system", "content": system_prompt },
-            { "role": "user", "content": user_message },
-        ],
-    });
+    let max_tokens = (estimated_input_tokens * 3).max(512);
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()?;
 
-    let response = client
-        .post(api_url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await?;
+    // Route to Anthropic Messages API if URL points to anthropic.com
+    let is_anthropic = api_url.contains("anthropic.com");
+
+    let response = if is_anthropic {
+        let body = serde_json::json!({
+            "model": model,
+            "max_tokens": max_tokens,
+            "system": system_prompt,
+            "messages": [
+                { "role": "user", "content": user_message },
+            ],
+        });
+        client
+            .post(api_url)
+            .header("x-api-key", api_key)
+            .header("anthropic-version", "2023-06-01")
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await?
+    } else {
+        let body = serde_json::json!({
+            "model": model,
+            "temperature": 0.3,
+            "max_tokens": max_tokens,
+            "messages": [
+                { "role": "system", "content": system_prompt },
+                { "role": "user", "content": user_message },
+            ],
+        });
+        client
+            .post(api_url)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await?
+    };
 
     if !response.status().is_success() {
         let status = response.status();
@@ -207,12 +228,22 @@ pub async fn process_text(
         return Err(format!("LLM API error {}: {}", status, body).into());
     }
 
-    let result: ChatResponse = response.json().await?;
-    let content = result
-        .choices
-        .first()
-        .map(|c| c.message.content.trim().to_string())
-        .unwrap_or_else(|| text.to_string());
+    let content = if is_anthropic {
+        // Anthropic: { "content": [{ "type": "text", "text": "..." }] }
+        let result: serde_json::Value = response.json().await?;
+        result["content"][0]["text"]
+            .as_str()
+            .unwrap_or(text)
+            .trim()
+            .to_string()
+    } else {
+        let result: ChatResponse = response.json().await?;
+        result
+            .choices
+            .first()
+            .map(|c| c.message.content.trim().to_string())
+            .unwrap_or_else(|| text.to_string())
+    };
 
     Ok(content)
 }

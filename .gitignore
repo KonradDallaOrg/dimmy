@@ -10,3 +10,4 @@ dist/
 *.deb
 CLAUDE.md
 .cargo/
+.env

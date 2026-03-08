@@ -425,6 +425,8 @@ fn url_to_provider(url: &str) -> &str {
         "openrouter"
     } else if url.contains("googleapis.com") {
         "gemini"
+    } else if url.contains("anthropic.com") {
+        "anthropic"
     } else {
         "custom"
     }
@@ -1228,6 +1230,7 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
     let has_llm_openai_key = has_key_for_provider("llm-key", "openai") || has_key_for_provider("api-key", "openai");
     let has_llm_openrouter_key = has_key_for_provider("llm-key", "openrouter") || has_key_for_provider("api-key", "openrouter");
     let has_llm_gemini_key = has_key_for_provider("llm-key", "gemini") || has_key_for_provider("api-key", "gemini");
+    let has_llm_anthropic_key = has_key_for_provider("llm-key", "anthropic") || has_key_for_provider("api-key", "anthropic");
     let has_llm_custom_key = has_key_for_provider("llm-key", "custom") || has_key_for_provider("api-key", "custom");
 
     Ok(serde_json::json!({
@@ -1265,6 +1268,7 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
         "has_llm_openai_key": has_llm_openai_key,
         "has_llm_openrouter_key": has_llm_openrouter_key,
         "has_llm_gemini_key": has_llm_gemini_key,
+        "has_llm_anthropic_key": has_llm_anthropic_key,
         "has_llm_custom_key": has_llm_custom_key,
         "stats_total_words": *state.stats_total_words.lock().map_err(|e| e.to_string())?,
         "stats_total_speaking_secs": *state.stats_total_speaking_secs.lock().map_err(|e| e.to_string())?,
