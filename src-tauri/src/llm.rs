@@ -174,9 +174,15 @@ pub async fn process_text(
         text
     );
 
+    // Estimate input tokens (~0.75 tokens per character) and cap output at 2x input.
+    // Minimum 256 to avoid cutting short responses on small inputs.
+    let estimated_input_tokens = (text.len() as f64 * 0.75).ceil() as u64;
+    let max_tokens = (estimated_input_tokens * 2).max(256);
+
     let body = serde_json::json!({
         "model": model,
         "temperature": 0.3,
+        "max_tokens": max_tokens,
         "messages": [
             { "role": "system", "content": system_prompt },
             { "role": "user", "content": user_message },

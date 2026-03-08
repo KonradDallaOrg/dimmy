@@ -74,6 +74,18 @@
             gpt-4o-mini &#8212; Fast &#9733;&#9733;&#9733;
           </option>
         </optgroup>
+        <optgroup label="Google Gemini (Free)">
+          <option value="gemini-flash"
+            data-url="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+            data-model="gemini-2.5-flash">
+            Gemini 2.5 Flash &#8212; Fast &#9733;&#9733;&#9733;&#9733;
+          </option>
+          <option value="gemini-pro"
+            data-url="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent"
+            data-model="gemini-2.5-pro">
+            Gemini 2.5 Pro &#8212; Accurate &#9733;&#9733;&#9733;&#9733;&#9733;
+          </option>
+        </optgroup>
         <optgroup label="Custom">
           <option value="custom">Custom endpoint...</option>
         </optgroup>
@@ -284,6 +296,11 @@
           <label>LLM API Key <span id="llm-key-hint"></span></label>
           <input type="password" id="llm-api-key" placeholder="Separate LLM API key..." />
         </div>
+
+        <label class="checkbox-label">
+          <input type="checkbox" id="chunk-streaming-enabled" checked />
+          Realtime preview <span class="hint-text">(send chunks while recording)</span>
+        </label>
 
         <!-- Debug -->
         <div class="settings-divider"></div>

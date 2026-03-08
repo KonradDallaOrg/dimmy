@@ -159,6 +159,7 @@ struct AppConfig {
     llm_api_model: String,
     llm_use_same_key: bool,
     llm_log_enabled: bool,
+    chunk_streaming_enabled: bool,
     preprocessing_enabled: bool,
     audio_debug_enabled: bool,
     // Window position — bottom-right anchor in logical pixels
@@ -193,6 +194,7 @@ impl Default for AppConfig {
             llm_api_model: DEFAULT_LLM_MODEL.to_string(),
             llm_use_same_key: true,
             llm_log_enabled: true,
+            chunk_streaming_enabled: true,
             preprocessing_enabled: true,
             audio_debug_enabled: false,
             window_anchor_right: None,
@@ -225,6 +227,7 @@ fn save_config_file(cfg: &AppConfig) {
             "llm_api_model": cfg.llm_api_model,
             "llm_use_same_key": cfg.llm_use_same_key,
             "llm_log_enabled": cfg.llm_log_enabled,
+            "chunk_streaming_enabled": cfg.chunk_streaming_enabled,
             "preprocessing_enabled": cfg.preprocessing_enabled,
             "audio_debug_enabled": cfg.audio_debug_enabled,
             "stats_total_words": cfg.stats_total_words,
@@ -291,6 +294,9 @@ fn load_config_file() -> AppConfig {
                     llm_log_enabled: v["llm_log_enabled"]
                         .as_bool()
                         .unwrap_or(defaults.llm_log_enabled),
+                    chunk_streaming_enabled: v["chunk_streaming_enabled"]
+                        .as_bool()
+                        .unwrap_or(defaults.chunk_streaming_enabled),
                     preprocessing_enabled: v["preprocessing_enabled"]
                         .as_bool()
                         .unwrap_or(defaults.preprocessing_enabled),
@@ -523,6 +529,7 @@ pub struct AppState {
     pub llm_use_same_key: Mutex<bool>,
     pub llm_api_key: Mutex<Option<String>>,
     pub llm_log_enabled: Mutex<bool>,
+    pub chunk_streaming_enabled: Mutex<bool>,
     pub preprocessing_enabled: Mutex<bool>,
     pub audio_debug_enabled: Mutex<bool>,
     /// Path to current audio debug session directory (set during recording, cleared on stop)
@@ -585,6 +592,11 @@ fn start_recording(
         .lock()
         .map_err(|e| e.to_string())?;
 
+    let chunk_streaming_on = *state
+        .chunk_streaming_enabled
+        .lock()
+        .map_err(|e| e.to_string())?;
+
     // Create debug session directory before spawning async task
     let debug_session_dir = if audio_debug_on {
         create_audio_debug_session()
@@ -597,7 +609,7 @@ fn start_recording(
         .lock()
         .map_err(|e| e.to_string())? = debug_session_dir.clone();
 
-    if let Some(key) = api_key {
+    if let Some(key) = api_key.filter(|_| chunk_streaming_on) {
         let buffer = state.audio_buffer.clone();
         let streaming = state.streaming_active.clone();
         let handle = app_handle.clone();
@@ -610,7 +622,7 @@ fn start_recording(
             let mut offset: usize = 0;
             let mut chunk_index: u32 = 0;
             let mut debug_chunk_idx: u32 = 0;
-            let min_chunk_samples = sample_rate * 2;
+            let min_chunk_samples = sample_rate * 5;
             let max_chunk_samples = sample_rate * 12;
             let silence_threshold: f32 = 0.01;
             let silence_duration_samples = (sample_rate as f32 * 0.4) as usize;
@@ -974,6 +986,7 @@ fn set_config(
     llm_api_key: Option<String>,
     llm_log_enabled: Option<bool>,
     preprocessing_enabled: Option<bool>,
+    chunk_streaming_enabled: Option<bool>,
     audio_debug_enabled: Option<bool>,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
@@ -1035,6 +1048,12 @@ fn set_config(
             .lock()
             .map_err(|e| e.to_string())? = v;
     }
+    if let Some(v) = chunk_streaming_enabled {
+        *state
+            .chunk_streaming_enabled
+            .lock()
+            .map_err(|e| e.to_string())? = v;
+    }
     if let Some(v) = audio_debug_enabled {
         *state
             .audio_debug_enabled
@@ -1069,6 +1088,10 @@ fn set_config(
         .clone();
     let cur_llm_use_same_key = *state.llm_use_same_key.lock().map_err(|e| e.to_string())?;
     let cur_llm_log_enabled = *state.llm_log_enabled.lock().map_err(|e| e.to_string())?;
+    let cur_chunk_streaming_enabled = *state
+        .chunk_streaming_enabled
+        .lock()
+        .map_err(|e| e.to_string())?;
     let cur_preprocessing_enabled = *state
         .preprocessing_enabled
         .lock()
@@ -1095,6 +1118,7 @@ fn set_config(
         llm_api_model: cur_llm_api_model,
         llm_use_same_key: cur_llm_use_same_key,
         llm_log_enabled: cur_llm_log_enabled,
+        chunk_streaming_enabled: cur_chunk_streaming_enabled,
         preprocessing_enabled: cur_preprocessing_enabled,
         audio_debug_enabled: cur_audio_debug_enabled,
         window_anchor_right: cur_anchor.map(|(r, _)| r),
@@ -1196,6 +1220,7 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
     // Per-provider key flags
     let has_groq_key = has_key_for_provider("api-key", "groq");
     let has_openai_key = has_key_for_provider("api-key", "openai");
+    let has_gemini_key = has_key_for_provider("api-key", "gemini");
     let has_custom_key = has_key_for_provider("api-key", "custom");
     // LLM key flags: check dedicated llm-key first, fall back to api-key for same provider.
     // Keys are per-provider — if you entered an OpenAI key for transcription, it works for LLM too.
@@ -1224,6 +1249,7 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
         "llm_use_same_key": llm_use_same_key,
         "has_llm_key": has_llm_key,
         "llm_log_enabled": llm_log_enabled,
+        "chunk_streaming_enabled": *state.chunk_streaming_enabled.lock().map_err(|e| e.to_string())?,
         "preprocessing_enabled": preprocessing_enabled,
         "audio_debug_enabled": audio_debug_enabled,
         "shortcut": shortcut,
@@ -1233,6 +1259,7 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
         // Per-provider key flags
         "has_groq_key": has_groq_key,
         "has_openai_key": has_openai_key,
+        "has_gemini_key": has_gemini_key,
         "has_custom_key": has_custom_key,
         "has_llm_groq_key": has_llm_groq_key,
         "has_llm_openai_key": has_llm_openai_key,
@@ -1499,6 +1526,10 @@ fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         .clone();
     let llm_use_same_key = *state.llm_use_same_key.lock().map_err(|e| e.to_string())?;
     let llm_log_enabled = *state.llm_log_enabled.lock().map_err(|e| e.to_string())?;
+    let chunk_streaming_enabled = *state
+        .chunk_streaming_enabled
+        .lock()
+        .map_err(|e| e.to_string())?;
     let preprocessing_enabled = *state
         .preprocessing_enabled
         .lock()
@@ -1526,6 +1557,7 @@ fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         llm_api_model,
         llm_use_same_key,
         llm_log_enabled,
+        chunk_streaming_enabled,
         preprocessing_enabled,
         audio_debug_enabled,
         window_anchor_right: anchor.map(|(r, _)| r),
@@ -2097,6 +2129,7 @@ pub fn run() {
             llm_use_same_key: Mutex::new(file_cfg.llm_use_same_key),
             llm_api_key: Mutex::new(stored_llm_key),
             llm_log_enabled: Mutex::new(file_cfg.llm_log_enabled),
+            chunk_streaming_enabled: Mutex::new(file_cfg.chunk_streaming_enabled),
             preprocessing_enabled: Mutex::new(file_cfg.preprocessing_enabled),
             audio_debug_enabled: Mutex::new(file_cfg.audio_debug_enabled),
             audio_debug_session_dir: Mutex::new(None),

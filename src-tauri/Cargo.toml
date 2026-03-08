@@ -1,6 +1,6 @@
 [package]
 name = "dimmy"
-version = "0.3.18"
+version = "0.3.19"
 edition = "2021"
 description = "Dimmy — Cross-platform voice transcription overlay"
 license = "AGPL-3.0-only"
@@ -28,6 +28,7 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "sync-s
 dirs = "5"
 chrono = "0.4"
 url = "2"
+base64 = "0.22"
 nnnoiseless = "0.5"
 biquad = "0.4"
 dagc = "0.1"

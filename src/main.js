@@ -58,6 +58,7 @@ const closeBtn = document.getElementById('close-btn');
 
 const preprocessingCheckbox = document.getElementById('preprocessing-enabled');
 const audioDebugCheckbox = document.getElementById('audio-debug-enabled');
+const chunkStreamingCheckbox = document.getElementById('chunk-streaming-enabled');
 const themeSelect = document.getElementById('theme-select');
 const advancedSection = document.getElementById('advanced-section');
 const advancedToggle = document.getElementById('advanced-toggle');
@@ -616,6 +617,7 @@ async function openSettings() {
     providerKeyFlags = {
       has_groq_key: config.has_groq_key,
       has_openai_key: config.has_openai_key,
+      has_gemini_key: config.has_gemini_key,
       has_custom_key: config.has_custom_key,
       has_llm_groq_key: config.has_llm_groq_key,
       has_llm_openai_key: config.has_llm_openai_key,
@@ -679,6 +681,7 @@ async function openSettings() {
     // Preprocessing
     preprocessingCheckbox.checked = config.preprocessing_enabled !== false;
     audioDebugCheckbox.checked = config.audio_debug_enabled || false;
+    chunkStreamingCheckbox.checked = config.chunk_streaming_enabled !== false;
 
     // LLM settings
     llmStyleSelect.value = config.llm_style || 'off';
@@ -971,6 +974,7 @@ saveBtn.addEventListener('click', async () => {
 
   const preprocessingEnabled = preprocessingCheckbox.checked;
   const audioDebugEnabled = audioDebugCheckbox.checked;
+  const chunkStreamingEnabled = chunkStreamingCheckbox.checked;
 
   // LLM fields — enabled is derived from style + translate
   const llmStyleVal = llmStyleSelect.value;
@@ -996,6 +1000,7 @@ saveBtn.addEventListener('click', async () => {
     await invoke('set_config', {
       apiKey, apiUrl, apiModel, language, shortcutMode, selectedDevice, prompt,
       preprocessingEnabled: preprocessingEnabled,
+      chunkStreamingEnabled: chunkStreamingEnabled,
       audioDebugEnabled: audioDebugEnabled,
       llmEnabled: llmEnabledVal,
       llmStyle: llmStyleVal,

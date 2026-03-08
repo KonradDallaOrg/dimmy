@@ -1,3 +1,4 @@
+use base64::Engine;
 use reqwest::multipart;
 
 #[derive(serde::Deserialize)]
@@ -5,7 +6,8 @@ struct TranscriptionResponse {
     text: String,
 }
 
-/// Send WAV audio to any OpenAI-compatible transcription endpoint.
+/// Send WAV audio to any OpenAI-compatible transcription endpoint,
+/// or to Google Gemini's generateContent endpoint (auto-detected from URL).
 /// `language` is an ISO 639-1 code (e.g. "it", "en"). Empty string = auto-detect.
 pub async fn transcribe_audio(
     api_url: &str,
@@ -24,6 +26,11 @@ pub async fn transcribe_audio(
                 return Err("Refusing to send API key over HTTP. Use HTTPS or localhost.".into());
             }
         }
+    }
+
+    // Route to Gemini-specific path if the URL points to googleapis.com
+    if api_url.contains("googleapis.com") && api_url.contains("generateContent") {
+        return transcribe_audio_gemini(api_url, api_key, wav_data, language).await;
     }
 
     let file_part = multipart::Part::bytes(wav_data.to_vec())
@@ -64,4 +71,73 @@ pub async fn transcribe_audio(
 
     let result: TranscriptionResponse = response.json().await?;
     Ok(result.text)
+}
+
+/// Gemini-specific transcription: sends audio as base64 inline data to generateContent.
+/// The URL already contains the model name, e.g.:
+///   https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent
+async fn transcribe_audio_gemini(
+    api_url: &str,
+    api_key: &str,
+    wav_data: &[u8],
+    language: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let audio_b64 = base64::engine::general_purpose::STANDARD.encode(wav_data);
+
+    let lang_hint = if !language.is_empty() {
+        format!(" The audio is in {}.", language)
+    } else {
+        String::new()
+    };
+
+    let body = serde_json::json!({
+        "contents": [{
+            "parts": [
+                {
+                    "text": format!(
+                        "Transcribe this audio exactly as spoken. Output ONLY the transcribed text, nothing else. \
+                        No introductions, no explanations, no labels.{}", lang_hint
+                    )
+                },
+                {
+                    "inline_data": {
+                        "mime_type": "audio/wav",
+                        "data": audio_b64
+                    }
+                }
+            ]
+        }]
+    });
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
+
+    let response = client
+        .post(api_url)
+        .header("x-goog-api-key", api_key)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("Gemini API error {}: {}", status, body).into());
+    }
+
+    // Gemini response: { "candidates": [{ "content": { "parts": [{ "text": "..." }] } }] }
+    let result: serde_json::Value = response.json().await?;
+    let text = result["candidates"][0]["content"]["parts"][0]["text"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    if text.is_empty() {
+        return Err("Gemini returned empty transcription".into());
+    }
+
+    Ok(text)
 }
