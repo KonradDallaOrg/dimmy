@@ -13,7 +13,6 @@
   <a href="https://github.com/KonradDallaOrg/dimmy/releases/latest"><img src="https://img.shields.io/github/v/release/KonradDallaOrg/dimmy?label=download&color=34d399" alt="Latest Release"></a>
   <a href="https://github.com/KonradDallaOrg/dimmy/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-818cf8" alt="License"></a>
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-6366f1" alt="Platform">
-  <a href="https://github.com/sponsors/KonradDallaOrg"><img src="https://img.shields.io/badge/sponsor-%E2%9D%A4-ea4aaa" alt="Sponsor"></a>
 </p>
 
 ---
@@ -208,7 +207,6 @@ cargo clippy -- -D warnings
 
 If Dimmy saves you time, consider supporting its development:
 
-- [GitHub Sponsors](https://github.com/sponsors/KonradDallaOrg)
 - [Buy Me a Coffee](https://buymeacoffee.com/konraddall5)
 - [Ko-fi](https://ko-fi.com/konraddalla)
 
