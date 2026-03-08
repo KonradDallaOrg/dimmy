@@ -581,13 +581,14 @@ function getProviderFromUrl(url) {
   if (url.includes('groq.com')) return 'groq';
   if (url.includes('openai.com')) return 'openai';
   if (url.includes('openrouter.ai')) return 'openrouter';
+  if (url.includes('deepgram.com')) return 'deepgram';
   if (url.includes('googleapis.com')) return 'gemini';
   if (url.includes('anthropic.com')) return 'anthropic';
   return 'custom';
 }
 
 function providerLabel(provider) {
-  return { groq: 'Groq', openai: 'OpenAI', openrouter: 'OpenRouter', gemini: 'Gemini', anthropic: 'Anthropic', custom: 'Custom' }[provider] || provider;
+  return { groq: 'Groq', openai: 'OpenAI', deepgram: 'Deepgram', openrouter: 'OpenRouter', gemini: 'Gemini', anthropic: 'Anthropic', custom: 'Custom' }[provider] || provider;
 }
 
 function updateApiKeyHint(url) {
@@ -619,6 +620,7 @@ async function openSettings() {
       has_groq_key: config.has_groq_key,
       has_openai_key: config.has_openai_key,
       has_gemini_key: config.has_gemini_key,
+      has_deepgram_key: config.has_deepgram_key,
       has_custom_key: config.has_custom_key,
       has_llm_groq_key: config.has_llm_groq_key,
       has_llm_openai_key: config.has_llm_openai_key,

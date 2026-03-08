@@ -28,6 +28,11 @@ pub async fn transcribe_audio(
         }
     }
 
+    // Route to Deepgram-specific path
+    if api_url.contains("deepgram.com") {
+        return transcribe_audio_deepgram(api_url, api_key, wav_data, language).await;
+    }
+
     // Route to Gemini-specific path if the URL points to googleapis.com
     if api_url.contains("googleapis.com") && api_url.contains("generateContent") {
         return transcribe_audio_gemini(api_url, api_key, wav_data, language).await;
@@ -71,6 +76,52 @@ pub async fn transcribe_audio(
 
     let result: TranscriptionResponse = response.json().await?;
     Ok(result.text)
+}
+
+/// Deepgram-specific transcription: sends raw WAV bytes with Token auth.
+/// The URL should be: https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true
+async fn transcribe_audio_deepgram(
+    api_url: &str,
+    api_key: &str,
+    wav_data: &[u8],
+    language: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let mut url = api_url.to_string();
+    if !language.is_empty() {
+        let sep = if url.contains('?') { "&" } else { "?" };
+        url = format!("{}{}language={}", url, sep, language);
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
+
+    let response = client
+        .post(&url)
+        .header("Authorization", format!("Token {}", api_key))
+        .header("Content-Type", "audio/wav")
+        .body(wav_data.to_vec())
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("Deepgram API error {}: {}", status, body).into());
+    }
+
+    let result: serde_json::Value = response.json().await?;
+    let text = result["results"]["channels"][0]["alternatives"][0]["transcript"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    if text.is_empty() {
+        return Err("Deepgram returned empty transcription".into());
+    }
+
+    Ok(text)
 }
 
 /// Gemini-specific transcription: sends audio as base64 inline data to generateContent.

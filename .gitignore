@@ -11,3 +11,4 @@ dist/
 CLAUDE.md
 .cargo/
 .env
+tests/test_audio.wav

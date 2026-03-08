@@ -16,7 +16,7 @@ const DEFAULT_MODEL: &str = "whisper-large-v3-turbo";
 /// Whisper mimics the style of this text — punctuation, capitalization, etc.
 const DEFAULT_PROMPT: &str = "Hello, how are you? Fine, thanks! Today we'll discuss an interesting topic. Ciao, come stai? Bene, grazie! Oggi parliamo di un argomento interessante.";
 const DEFAULT_LLM_URL: &str = "https://api.groq.com/openai/v1/chat/completions";
-const DEFAULT_LLM_MODEL: &str = "llama-3.1-8b-instant";
+const DEFAULT_LLM_MODEL: &str = "llama-3.3-70b-versatile";
 const MAX_RECORDING_SECS: usize = 30 * 60; // 30 minutes hard cap
 const MAX_LOG_BYTES: u64 = 1_048_576; // 1 MB log rotation threshold
 
@@ -425,6 +425,8 @@ fn url_to_provider(url: &str) -> &str {
         "openrouter"
     } else if url.contains("googleapis.com") {
         "gemini"
+    } else if url.contains("deepgram.com") {
+        "deepgram"
     } else if url.contains("anthropic.com") {
         "anthropic"
     } else {
@@ -1223,6 +1225,7 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
     let has_groq_key = has_key_for_provider("api-key", "groq");
     let has_openai_key = has_key_for_provider("api-key", "openai");
     let has_gemini_key = has_key_for_provider("api-key", "gemini");
+    let has_deepgram_key = has_key_for_provider("api-key", "deepgram");
     let has_custom_key = has_key_for_provider("api-key", "custom");
     // LLM key flags: check dedicated llm-key first, fall back to api-key for same provider.
     // Keys are per-provider — if you entered an OpenAI key for transcription, it works for LLM too.
@@ -1263,6 +1266,7 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
         "has_groq_key": has_groq_key,
         "has_openai_key": has_openai_key,
         "has_gemini_key": has_gemini_key,
+        "has_deepgram_key": has_deepgram_key,
         "has_custom_key": has_custom_key,
         "has_llm_groq_key": has_llm_groq_key,
         "has_llm_openai_key": has_llm_openai_key,
