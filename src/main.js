@@ -5,6 +5,7 @@ const W = 360;
 const MICRO_W = 56;
 const PILL_H = 32;
 const REC_H = 64;
+const SETTINGS_H = 380;
 const BAR_COUNT = 28;
 const BAR_W = 7;
 const BAR_GAP = 2;
@@ -60,8 +61,6 @@ const preprocessingCheckbox = document.getElementById('preprocessing-enabled');
 const audioDebugCheckbox = document.getElementById('audio-debug-enabled');
 const chunkStreamingCheckbox = document.getElementById('chunk-streaming-enabled');
 const themeSelect = document.getElementById('theme-select');
-const advancedSection = document.getElementById('advanced-section');
-const advancedToggle = document.getElementById('advanced-toggle');
 
 // LLM DOM
 const llmStyleSelect = document.getElementById('llm-style-select');
@@ -156,10 +155,7 @@ function switchView(view) {
   } else if (view === 'settings') {
     pill.classList.remove('micro');
     settingsPanel.classList.add('open');
-    requestAnimationFrame(() => {
-      const container = document.getElementById('container');
-      setWindowSizeWH(W, container.offsetHeight);
-    });
+    setWindowSizeWH(W, SETTINGS_H);
   }
 }
 
@@ -717,9 +713,6 @@ async function openSettings() {
     llmLogCheckbox.checked = config.llm_log_enabled !== false;
     toggleLlmKeyField();
 
-    // Advanced section visibility
-    applyAdvancedMode();
-
     updateLlmKeyHint(config.llm_api_url);
 
     // Populate stats
@@ -788,6 +781,14 @@ async function openSettings() {
     }
   })();
 
+  // Reset to first tab
+  document.querySelectorAll('#settings-nav .nav-item').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.settings-page').forEach(p => p.classList.add('hide'));
+  const firstBtn = document.querySelector('#settings-nav .nav-item');
+  if (firstBtn) firstBtn.classList.add('active');
+  const firstPage = document.querySelector('.settings-page');
+  if (firstPage) firstPage.classList.remove('hide');
+
   switchView('settings');
 }
 
@@ -814,11 +815,9 @@ function toggleLlmKeyField() {
 }
 
 function resizeSettingsWindow() {
+  // Fixed height — content scrolls within the panel
   if (currentView === 'settings') {
-    requestAnimationFrame(() => {
-      const container = document.getElementById('container');
-      setWindowSizeWH(W, container.offsetHeight);
-    });
+    setWindowSizeWH(W, SETTINGS_H);
   }
 }
 
@@ -844,26 +843,17 @@ llmProviderSelect.addEventListener('change', () => {
 });
 
 // ========================
-// ADVANCED TOGGLE
+// SETTINGS NAV — section switching
 // ========================
-let advancedOpen = localStorage.getItem('dimmy-advanced') === '1';
-
-function applyAdvancedMode() {
-  if (advancedOpen) {
-    advancedSection.classList.remove('hide');
-    advancedToggle.textContent = 'Less';
-  } else {
-    advancedSection.classList.add('hide');
-    advancedToggle.textContent = 'All settings';
-  }
-  resizeSettingsWindow();
-}
-
-advancedToggle.addEventListener('click', (e) => {
-  e.preventDefault();
-  advancedOpen = !advancedOpen;
-  localStorage.setItem('dimmy-advanced', advancedOpen ? '1' : '0');
-  applyAdvancedMode();
+document.querySelectorAll('#settings-nav .nav-item').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#settings-nav .nav-item').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.settings-page').forEach(p => p.classList.add('hide'));
+    btn.classList.add('active');
+    const page = document.querySelector(`.settings-page[data-page="${btn.dataset.section}"]`);
+    if (page) page.classList.remove('hide');
+    document.getElementById('settings-pages').scrollTop = 0;
+  });
 });
 
 modelSelect.addEventListener('change', () => {

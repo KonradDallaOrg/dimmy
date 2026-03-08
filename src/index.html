@@ -24,10 +24,10 @@
       <div id="transcript-text"></div>
     </div>
 
-    <!-- Settings panel -->
+    <!-- Settings panel — sidebar nav + page content -->
     <div id="settings-panel" class="panel">
 
-      <div id="accessibility-warning" class="hide" style="background:#7f1d1d;color:#fca5a5;padding:6px 8px;border-radius:4px;font-size:11px;margin-bottom:6px">
+      <div id="accessibility-warning" class="hide" style="background:#7f1d1d;color:#fca5a5;padding:6px 8px;border-radius:0;font-size:11px">
         Accessibility permission required for global shortcuts and paste.
         <span style="display:flex;gap:4px;margin-top:4px">
           <button id="accessibility-grant-btn" type="button" style="font-size:10px;padding:2px 6px;background:#fbbf24;color:#000;border:none;border-radius:3px;cursor:pointer">Grant Permission</button>
@@ -35,325 +35,337 @@
         </span>
       </div>
 
-      <!-- === SIMPLE VIEW === -->
+      <div id="settings-layout">
+        <nav id="settings-nav">
+          <button class="nav-item active" data-section="transcription" title="Transcription">
+            <svg viewBox="0 0 16 16" fill="currentColor" width="14" height="14"><path d="M8 1a2 2 0 0 0-2 2v4a2 2 0 0 0 4 0V3a2 2 0 0 0-2-2Z"/><path d="M5 7a3 3 0 0 0 6 0h1a4 4 0 0 1-3.5 4V13H10v1H6v-1h1.5v-2A4 4 0 0 1 4 7h1Z"/></svg>
+          </button>
+          <button class="nav-item" data-section="ai" title="AI Enhancement">
+            <svg viewBox="0 0 16 16" fill="currentColor" width="14" height="14"><path d="M8 0l2 6 6 2-6 2-2 6-2-6-6-2 6-2Z"/></svg>
+          </button>
+          <button class="nav-item" data-section="activation" title="Activation">
+            <svg viewBox="0 0 16 16" fill="currentColor" width="14" height="14"><path d="M10 1L4 8h4l-1 7 6-8H9Z"/></svg>
+          </button>
+          <button class="nav-item" data-section="audio" title="Audio">
+            <svg viewBox="0 0 16 16" width="14" height="14"><path d="M2 5h3l4-3v12l-4-3H2a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Z" fill="currentColor"/><path d="M11 5.5a4 4 0 0 1 0 5" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+          </button>
+          <button class="nav-item" data-section="appearance" title="Appearance">
+            <svg viewBox="0 0 16 16" fill="currentColor" width="14" height="14"><path d="M8 2a6 6 0 1 0 0 12 6 6 0 0 0 0-12Zm0 1v10a5 5 0 0 1 0-10Z"/></svg>
+          </button>
+          <button class="nav-item" data-section="stats" title="Stats">
+            <svg viewBox="0 0 16 16" fill="currentColor" width="14" height="14"><rect x="1" y="9" width="3" height="5" rx=".5"/><rect x="6.5" y="5" width="3" height="9" rx=".5"/><rect x="12" y="7" width="3" height="7" rx=".5"/></svg>
+          </button>
+          <button class="nav-item" data-section="debug" title="Debug">
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 4l4 4-4 4"/><path d="M8 12h6"/></svg>
+          </button>
+        </nav>
 
-      <!-- Transcription model + key -->
-      <label>Provider &amp; Model</label>
-      <select id="model-select">
-        <optgroup label="Groq (Free)">
-          <option value="groq-turbo"
-            data-url="https://api.groq.com/openai/v1/audio/transcriptions"
-            data-model="whisper-large-v3-turbo">
-            whisper-large-v3-turbo &#8212; Fast &#9733;&#9733;&#9733;&#9733;
-          </option>
-          <option value="groq-v3"
-            data-url="https://api.groq.com/openai/v1/audio/transcriptions"
-            data-model="whisper-large-v3">
-            whisper-large-v3 &#8212; Accurate &#9733;&#9733;&#9733;&#9733;&#9733;
-          </option>
-          <option value="groq-distil"
-            data-url="https://api.groq.com/openai/v1/audio/transcriptions"
-            data-model="distil-whisper-large-v3-en">
-            distil-whisper (EN) &#8212; Fast &#9733;&#9733;&#9733;
-          </option>
-        </optgroup>
-        <optgroup label="OpenAI (~$0.006/min)">
-          <option value="openai-whisper"
-            data-url="https://api.openai.com/v1/audio/transcriptions"
-            data-model="whisper-1">
-            whisper-1 &#8212; Standard &#9733;&#9733;&#9733;&#9733;
-          </option>
-          <option value="openai-4o"
-            data-url="https://api.openai.com/v1/audio/transcriptions"
-            data-model="gpt-4o-transcribe">
-            gpt-4o-transcribe &#8212; Best &#9733;&#9733;&#9733;&#9733;&#9733;
-          </option>
-          <option value="openai-4o-mini"
-            data-url="https://api.openai.com/v1/audio/transcriptions"
-            data-model="gpt-4o-mini-transcribe">
-            gpt-4o-mini &#8212; Fast &#9733;&#9733;&#9733;
-          </option>
-        </optgroup>
-        <optgroup label="Deepgram ($200 Free)">
-          <option value="deepgram-nova3"
-            data-url="https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&punctuate=true&paragraphs=true"
-            data-model="nova-3">
-            Nova-3 &#8212; Best &#9733;&#9733;&#9733;&#9733;&#9733;
-          </option>
-          <option value="deepgram-nova2"
-            data-url="https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&punctuate=true&paragraphs=true"
-            data-model="nova-2">
-            Nova-2 &#8212; Standard &#9733;&#9733;&#9733;&#9733;
-          </option>
-        </optgroup>
-        <optgroup label="Google Gemini (Free)">
-          <option value="gemini-flash"
-            data-url="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
-            data-model="gemini-2.5-flash">
-            Gemini 2.5 Flash &#8212; Fast &#9733;&#9733;&#9733;&#9733;
-          </option>
-          <option value="gemini-pro"
-            data-url="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent"
-            data-model="gemini-2.5-pro">
-            Gemini 2.5 Pro &#8212; Accurate &#9733;&#9733;&#9733;&#9733;&#9733;
-          </option>
-        </optgroup>
-        <optgroup label="Custom">
-          <option value="custom">Custom endpoint...</option>
-        </optgroup>
-      </select>
+        <div id="settings-main">
+          <div id="settings-pages">
 
-      <div id="custom-fields" class="hide">
-        <label>Endpoint URL</label>
-        <input type="text" id="api-url" placeholder="https://api.example.com/v1/audio/transcriptions" />
-        <label>Model</label>
-        <input type="text" id="api-model" placeholder="whisper-large-v3" />
-      </div>
+            <!-- ===== TRANSCRIPTION ===== -->
+            <div class="settings-page" data-page="transcription">
+              <label>Provider &amp; Model</label>
+              <select id="model-select">
+                <optgroup label="Groq (Free)">
+                  <option value="groq-turbo"
+                    data-url="https://api.groq.com/openai/v1/audio/transcriptions"
+                    data-model="whisper-large-v3-turbo">
+                    whisper-large-v3-turbo &#8212; Fast &#9733;&#9733;&#9733;&#9733;
+                  </option>
+                  <option value="groq-v3"
+                    data-url="https://api.groq.com/openai/v1/audio/transcriptions"
+                    data-model="whisper-large-v3">
+                    whisper-large-v3 &#8212; Accurate &#9733;&#9733;&#9733;&#9733;&#9733;
+                  </option>
+                  <option value="groq-distil"
+                    data-url="https://api.groq.com/openai/v1/audio/transcriptions"
+                    data-model="distil-whisper-large-v3-en">
+                    distil-whisper (EN) &#8212; Fast &#9733;&#9733;&#9733;
+                  </option>
+                </optgroup>
+                <optgroup label="OpenAI (~$0.006/min)">
+                  <option value="openai-whisper"
+                    data-url="https://api.openai.com/v1/audio/transcriptions"
+                    data-model="whisper-1">
+                    whisper-1 &#8212; Standard &#9733;&#9733;&#9733;&#9733;
+                  </option>
+                  <option value="openai-4o"
+                    data-url="https://api.openai.com/v1/audio/transcriptions"
+                    data-model="gpt-4o-transcribe">
+                    gpt-4o-transcribe &#8212; Best &#9733;&#9733;&#9733;&#9733;&#9733;
+                  </option>
+                  <option value="openai-4o-mini"
+                    data-url="https://api.openai.com/v1/audio/transcriptions"
+                    data-model="gpt-4o-mini-transcribe">
+                    gpt-4o-mini &#8212; Fast &#9733;&#9733;&#9733;
+                  </option>
+                </optgroup>
+                <optgroup label="Deepgram ($200 Free)">
+                  <option value="deepgram-nova3"
+                    data-url="https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&punctuate=true&paragraphs=true"
+                    data-model="nova-3">
+                    Nova-3 &#8212; Best &#9733;&#9733;&#9733;&#9733;&#9733;
+                  </option>
+                  <option value="deepgram-nova2"
+                    data-url="https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&punctuate=true&paragraphs=true"
+                    data-model="nova-2">
+                    Nova-2 &#8212; Standard &#9733;&#9733;&#9733;&#9733;
+                  </option>
+                </optgroup>
+                <optgroup label="Google Gemini (Free)">
+                  <option value="gemini-flash"
+                    data-url="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+                    data-model="gemini-2.5-flash">
+                    Gemini 2.5 Flash &#8212; Fast &#9733;&#9733;&#9733;&#9733;
+                  </option>
+                  <option value="gemini-pro"
+                    data-url="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent"
+                    data-model="gemini-2.5-pro">
+                    Gemini 2.5 Pro &#8212; Accurate &#9733;&#9733;&#9733;&#9733;&#9733;
+                  </option>
+                </optgroup>
+                <optgroup label="Custom">
+                  <option value="custom">Custom endpoint...</option>
+                </optgroup>
+              </select>
 
-      <label>API Key <span id="key-hint"></span></label>
-      <input type="password" id="api-key" placeholder="sk-... or gsk_..." />
+              <div id="custom-fields" class="hide">
+                <label>Endpoint URL</label>
+                <input type="text" id="api-url" placeholder="https://api.example.com/v1/audio/transcriptions" />
+                <label>Model</label>
+                <input type="text" id="api-model" placeholder="whisper-large-v3" />
+              </div>
 
-      <!-- AI Style & Tone (simple) -->
-      <div class="settings-divider"></div>
-      <label class="section-label">AI Enhancement</label>
+              <label>API Key <span id="key-hint"></span></label>
+              <input type="password" id="api-key" placeholder="sk-... or gsk_..." />
 
-      <label>Style</label>
-      <select id="llm-style-select">
-        <option value="off">Off</option>
-        <option value="correct">Correct &#8212; fix grammar &amp; filler words</option>
-        <option value="summarize">Summarize &#8212; condense key points</option>
-        <option value="elaborate">Elaborate &#8212; expand with detail</option>
-        <option value="comprehensible">Comprehensible &#8212; rewrite clearly</option>
-        <option value="professional">Professional &#8212; business tone</option>
-        <option value="prompt">Prompt &#8212; reshape as LLM prompt</option>
-        <option value="genz">Gen-Z &#8212; no cap fr fr slay &#128133;</option>
-        <option value="boomer">Boomer &#8212; Kind Regards.......</option>
-        <option value="emoji">Emoji &#8212; maximum emoji &#128293;&#10024;&#128128;</option>
-        <option value="acronyms">Acronyms &#8212; TBH IMO NGL GOAT</option>
-        <option value="imbruttito">Imbruttito &#8212; schedulare la call ASAP</option>
-        <option value="custom">Custom prompt...</option>
-      </select>
+              <label>Language</label>
+              <select id="language-select">
+                <option value="">Auto-detect</option>
+                <option value="it">Italiano</option>
+                <option value="en">English</option>
+                <option value="de">Deutsch</option>
+                <option value="fr">Fran&#231;ais</option>
+                <option value="es">Espa&#241;ol</option>
+                <option value="pt">Portugu&#234;s</option>
+                <option value="nl">Nederlands</option>
+                <option value="pl">Polski</option>
+                <option value="ja">&#26085;&#26412;&#35486;</option>
+                <option value="zh">&#20013;&#25991;</option>
+                <option value="ko">&#54620;&#44397;&#50612;</option>
+                <option value="ru">&#1056;&#1091;&#1089;&#1089;&#1082;&#1080;&#1081;</option>
+              </select>
 
-      <label>Tone</label>
-      <select id="llm-tone-select">
-        <option value="none">None</option>
-        <option value="formal">Formal</option>
-        <option value="friendly">Friendly</option>
-        <option value="concise">Concise</option>
-        <option value="academic">Academic</option>
-      </select>
+              <label>Prompt / Vocabulary <span class="hint-text">(guides punctuation &amp; spelling)</span></label>
+              <textarea id="prompt-input" rows="2" placeholder="Whisper mimics the style of this text. Add punctuation and custom terms here."></textarea>
 
-      <label>Translate to</label>
-      <select id="llm-translate-select">
-        <option value="none">None</option>
-        <option value="English">English</option>
-        <option value="Italiano">Italiano</option>
-        <option value="Deutsch">Deutsch</option>
-        <option value="Fran&#231;ais">Fran&#231;ais</option>
-        <option value="Espa&#241;ol">Espa&#241;ol</option>
-        <option value="Portugu&#234;s">Portugu&#234;s</option>
-        <option value="Nederlands">Nederlands</option>
-        <option value="Polski">Polski</option>
-        <option value="&#26085;&#26412;&#35486;">&#26085;&#26412;&#35486;</option>
-        <option value="&#20013;&#25991;">&#20013;&#25991;</option>
-        <option value="&#54620;&#44397;&#50612;">&#54620;&#44397;&#50612;</option>
-        <option value="&#1056;&#1091;&#1089;&#1089;&#1082;&#1080;&#1081;">&#1056;&#1091;&#1089;&#1089;&#1082;&#1080;&#1081;</option>
-      </select>
+              <label class="checkbox-label">
+                <input type="checkbox" id="chunk-streaming-enabled" checked />
+                Realtime preview <span class="hint-text">(send chunks while recording)</span>
+              </label>
+            </div>
 
-      <!-- Theme -->
-      <div class="settings-divider"></div>
+            <!-- ===== AI ENHANCEMENT ===== -->
+            <div class="settings-page hide" data-page="ai">
+              <label>Style</label>
+              <select id="llm-style-select">
+                <option value="off">Off</option>
+                <option value="correct">Correct &#8212; fix grammar &amp; filler words</option>
+                <option value="summarize">Summarize &#8212; condense key points</option>
+                <option value="elaborate">Elaborate &#8212; expand with detail</option>
+                <option value="comprehensible">Comprehensible &#8212; rewrite clearly</option>
+                <option value="professional">Professional &#8212; business tone</option>
+                <option value="prompt">Prompt &#8212; reshape as LLM prompt</option>
+                <option value="genz">Gen-Z &#8212; no cap fr fr slay &#128133;</option>
+                <option value="boomer">Boomer &#8212; Kind Regards.......</option>
+                <option value="emoji">Emoji &#8212; maximum emoji &#128293;&#10024;&#128128;</option>
+                <option value="acronyms">Acronyms &#8212; TBH IMO NGL GOAT</option>
+                <option value="imbruttito">Imbruttito &#8212; schedulare la call ASAP</option>
+                <option value="custom">Custom prompt...</option>
+              </select>
 
-      <label>Theme</label>
-      <select id="theme-select">
-        <option value="auto">Auto &#8212; follow system</option>
-        <option value="dark">Dark</option>
-        <option value="light">Light</option>
-      </select>
+              <label>Tone</label>
+              <select id="llm-tone-select">
+                <option value="none">None</option>
+                <option value="formal">Formal</option>
+                <option value="friendly">Friendly</option>
+                <option value="concise">Concise</option>
+                <option value="academic">Academic</option>
+              </select>
 
-      <!-- Stats -->
-      <div class="settings-divider"></div>
-      <label class="section-label">Stats</label>
-      <div class="stats-grid">
-        <div class="stat-item">
-          <span class="stat-value" id="stat-words">0</span>
-          <span class="stat-label">words dictated</span>
+              <label>Translate to</label>
+              <select id="llm-translate-select">
+                <option value="none">None</option>
+                <option value="English">English</option>
+                <option value="Italiano">Italiano</option>
+                <option value="Deutsch">Deutsch</option>
+                <option value="Fran&#231;ais">Fran&#231;ais</option>
+                <option value="Espa&#241;ol">Espa&#241;ol</option>
+                <option value="Portugu&#234;s">Portugu&#234;s</option>
+                <option value="Nederlands">Nederlands</option>
+                <option value="Polski">Polski</option>
+                <option value="&#26085;&#26412;&#35486;">&#26085;&#26412;&#35486;</option>
+                <option value="&#20013;&#25991;">&#20013;&#25991;</option>
+                <option value="&#54620;&#44397;&#50612;">&#54620;&#44397;&#50612;</option>
+                <option value="&#1056;&#1091;&#1089;&#1089;&#1082;&#1080;&#1081;">&#1056;&#1091;&#1089;&#1089;&#1082;&#1080;&#1081;</option>
+              </select>
+
+              <div id="llm-custom-prompt-field" class="hide">
+                <label>Custom Prompt</label>
+                <textarea id="llm-custom-prompt" rows="2" placeholder="Translate to Italian. Keep the same register."></textarea>
+              </div>
+
+              <label>LLM Provider</label>
+              <select id="llm-provider-select">
+                <optgroup label="Groq (Free)">
+                  <option value="groq-llama-70b"
+                    data-url="https://api.groq.com/openai/v1/chat/completions"
+                    data-model="llama-3.3-70b-versatile">
+                    Llama 3.3 70B &#8212; Better
+                  </option>
+                </optgroup>
+                <optgroup label="OpenAI">
+                  <option value="openai-4o-mini-llm"
+                    data-url="https://api.openai.com/v1/chat/completions"
+                    data-model="gpt-4o-mini">
+                    GPT-4o Mini
+                  </option>
+                </optgroup>
+                <optgroup label="OpenRouter (Free)">
+                  <option value="openrouter-llama-70b"
+                    data-url="https://openrouter.ai/api/v1/chat/completions"
+                    data-model="meta-llama/llama-3.3-70b-instruct:free">
+                    Llama 3.3 70B &#8212; Free
+                  </option>
+                  <option value="openrouter-deepseek-r1"
+                    data-url="https://openrouter.ai/api/v1/chat/completions"
+                    data-model="deepseek/deepseek-r1:free">
+                    DeepSeek R1 &#8212; Free
+                  </option>
+                </optgroup>
+                <optgroup label="Google Gemini (Free)">
+                  <option value="gemini-flash"
+                    data-url="https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+                    data-model="gemini-2.5-flash">
+                    Gemini 2.5 Flash &#8212; Free
+                  </option>
+                </optgroup>
+                <optgroup label="Anthropic">
+                  <option value="anthropic-haiku"
+                    data-url="https://api.anthropic.com/v1/messages"
+                    data-model="claude-haiku-4-5-20251001">
+                    Claude Haiku 4.5 &#8212; Fast
+                  </option>
+                  <option value="anthropic-sonnet"
+                    data-url="https://api.anthropic.com/v1/messages"
+                    data-model="claude-sonnet-4-20250514">
+                    Claude Sonnet 4 &#8212; Best
+                  </option>
+                </optgroup>
+                <optgroup label="Custom">
+                  <option value="llm-custom">Custom endpoint...</option>
+                </optgroup>
+              </select>
+
+              <div id="llm-custom-endpoint" class="hide">
+                <label>LLM Endpoint URL</label>
+                <input type="text" id="llm-api-url" placeholder="https://api.example.com/v1/chat/completions" />
+                <label>LLM Model</label>
+                <input type="text" id="llm-api-model" placeholder="llama-3.1-8b-instant" />
+              </div>
+
+              <label class="checkbox-label">
+                <input type="checkbox" id="llm-same-key" checked />
+                Use same API key as transcription
+              </label>
+
+              <div id="llm-key-field" class="hide">
+                <label>LLM API Key <span id="llm-key-hint"></span></label>
+                <input type="password" id="llm-api-key" placeholder="Separate LLM API key..." />
+              </div>
+            </div>
+
+            <!-- ===== ACTIVATION ===== -->
+            <div class="settings-page hide" data-page="activation">
+              <label>Shortcut Key</label>
+              <div style="display:flex;gap:6px;align-items:center">
+                <span id="shortcut-label" style="flex:1;font-size:12px" class="shortcut-value">...</span>
+                <button id="shortcut-record-btn" type="button" style="font-size:11px;padding:2px 8px">Change</button>
+              </div>
+
+              <label>Shortcut Mode</label>
+              <select id="shortcut-mode-select">
+                <option value="toggle">Toggle &#8212; press to start/stop</option>
+                <option value="hold">Hold &#8212; hold to record, release to stop</option>
+              </select>
+            </div>
+
+            <!-- ===== AUDIO ===== -->
+            <div class="settings-page hide" data-page="audio">
+              <label>Audio Input</label>
+              <select id="device-select"></select>
+
+              <label class="checkbox-label">
+                <input type="checkbox" id="preprocessing-enabled" checked />
+                Audio preprocessing <span class="hint-text">(VAD + AGC)</span>
+              </label>
+
+              <label class="checkbox-label">
+                <input type="checkbox" id="audio-debug-enabled" />
+                Save audio debug WAVs <span class="hint-text">(per session)</span>
+              </label>
+            </div>
+
+            <!-- ===== APPEARANCE ===== -->
+            <div class="settings-page hide" data-page="appearance">
+              <label>Theme</label>
+              <select id="theme-select">
+                <option value="auto">Auto &#8212; follow system</option>
+                <option value="dark">Dark</option>
+                <option value="light">Light</option>
+              </select>
+            </div>
+
+            <!-- ===== STATS ===== -->
+            <div class="settings-page hide" data-page="stats">
+              <div class="stats-grid">
+                <div class="stat-item">
+                  <span class="stat-value" id="stat-words">0</span>
+                  <span class="stat-label">words dictated</span>
+                </div>
+                <div class="stat-item">
+                  <span class="stat-value" id="stat-speaking">0s</span>
+                  <span class="stat-label">speaking time</span>
+                </div>
+                <div class="stat-item">
+                  <span class="stat-value" id="stat-saved">0s</span>
+                  <span class="stat-label">time saved</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- ===== DEBUG ===== -->
+            <div class="settings-page hide" data-page="debug">
+              <label class="checkbox-label">
+                <input type="checkbox" id="llm-log-enabled" checked />
+                Log transcription &amp; LLM output
+              </label>
+            </div>
+
+          </div>
+
+          <div id="settings-bottom">
+            <div class="btn-row">
+              <button id="save-btn">Save</button>
+              <button id="close-btn">Cancel</button>
+            </div>
+            <div id="version-footer">
+              <span id="version-text">Dimmy</span>
+              <span id="update-status"></span>
+            </div>
+          </div>
         </div>
-        <div class="stat-item">
-          <span class="stat-value" id="stat-speaking">0s</span>
-          <span class="stat-label">speaking time</span>
-        </div>
-        <div class="stat-item">
-          <span class="stat-value" id="stat-saved">0s</span>
-          <span class="stat-label">time saved</span>
-        </div>
-      </div>
-
-      <!-- === ADVANCED SECTION (hidden by default) === -->
-      <div id="advanced-section" class="hide">
-
-        <!-- Activation -->
-        <div class="settings-divider"></div>
-        <label class="section-label">Activation</label>
-
-        <label>Shortcut Key</label>
-        <div style="display:flex;gap:6px;align-items:center">
-          <span id="shortcut-label" style="flex:1;font-size:12px" class="shortcut-value">...</span>
-          <button id="shortcut-record-btn" type="button" style="font-size:11px;padding:2px 8px">Change</button>
-        </div>
-
-        <label>Shortcut Mode</label>
-        <select id="shortcut-mode-select">
-          <option value="toggle">Toggle &#8212; press to start/stop</option>
-          <option value="hold">Hold &#8212; hold to record, release to stop</option>
-        </select>
-
-        <!-- Audio -->
-        <div class="settings-divider"></div>
-        <label class="section-label">Audio</label>
-
-        <label>Audio Input</label>
-        <select id="device-select"></select>
-
-        <label>Language</label>
-        <select id="language-select">
-          <option value="">Auto-detect</option>
-          <option value="it">Italiano</option>
-          <option value="en">English</option>
-          <option value="de">Deutsch</option>
-          <option value="fr">Fran&#231;ais</option>
-          <option value="es">Espa&#241;ol</option>
-          <option value="pt">Portugu&#234;s</option>
-          <option value="nl">Nederlands</option>
-          <option value="pl">Polski</option>
-          <option value="ja">&#26085;&#26412;&#35486;</option>
-          <option value="zh">&#20013;&#25991;</option>
-          <option value="ko">&#54620;&#44397;&#50612;</option>
-          <option value="ru">&#1056;&#1091;&#1089;&#1089;&#1082;&#1080;&#1081;</option>
-        </select>
-
-        <!-- Transcription extras -->
-        <div class="settings-divider"></div>
-        <label class="section-label">Transcription</label>
-
-        <label>Prompt / Vocabulary <span class="hint-text">(guides punctuation &amp; spelling)</span></label>
-        <textarea id="prompt-input" rows="2" placeholder="Whisper mimics the style of this text. Add punctuation and custom terms here."></textarea>
-
-        <!-- AI Enhancement details -->
-        <div class="settings-divider"></div>
-        <label class="section-label">AI Enhancement Details</label>
-
-        <div id="llm-custom-prompt-field" class="hide">
-          <label>Custom Prompt</label>
-          <textarea id="llm-custom-prompt" rows="2" placeholder="Translate to Italian. Keep the same register."></textarea>
-        </div>
-
-        <label>LLM Provider</label>
-        <select id="llm-provider-select">
-          <optgroup label="Groq (Free)">
-            <option value="groq-llama-70b"
-              data-url="https://api.groq.com/openai/v1/chat/completions"
-              data-model="llama-3.3-70b-versatile">
-              Llama 3.3 70B &#8212; Better
-            </option>
-          </optgroup>
-          <optgroup label="OpenAI">
-            <option value="openai-4o-mini-llm"
-              data-url="https://api.openai.com/v1/chat/completions"
-              data-model="gpt-4o-mini">
-              GPT-4o Mini
-            </option>
-          </optgroup>
-          <optgroup label="OpenRouter (Free)">
-            <option value="openrouter-llama-70b"
-              data-url="https://openrouter.ai/api/v1/chat/completions"
-              data-model="meta-llama/llama-3.3-70b-instruct:free">
-              Llama 3.3 70B &#8212; Free
-            </option>
-            <option value="openrouter-deepseek-r1"
-              data-url="https://openrouter.ai/api/v1/chat/completions"
-              data-model="deepseek/deepseek-r1:free">
-              DeepSeek R1 &#8212; Free
-            </option>
-          </optgroup>
-          <optgroup label="Google Gemini (Free)">
-            <option value="gemini-flash"
-              data-url="https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-              data-model="gemini-2.5-flash">
-              Gemini 2.5 Flash &#8212; Free
-            </option>
-          </optgroup>
-          <optgroup label="Anthropic">
-            <option value="anthropic-haiku"
-              data-url="https://api.anthropic.com/v1/messages"
-              data-model="claude-haiku-4-5-20251001">
-              Claude Haiku 4.5 &#8212; Fast
-            </option>
-            <option value="anthropic-sonnet"
-              data-url="https://api.anthropic.com/v1/messages"
-              data-model="claude-sonnet-4-20250514">
-              Claude Sonnet 4 &#8212; Best
-            </option>
-          </optgroup>
-          <optgroup label="Custom">
-            <option value="llm-custom">Custom endpoint...</option>
-          </optgroup>
-        </select>
-
-        <div id="llm-custom-endpoint" class="hide">
-          <label>LLM Endpoint URL</label>
-          <input type="text" id="llm-api-url" placeholder="https://api.example.com/v1/chat/completions" />
-          <label>LLM Model</label>
-          <input type="text" id="llm-api-model" placeholder="llama-3.1-8b-instant" />
-        </div>
-
-        <label class="checkbox-label">
-          <input type="checkbox" id="llm-same-key" checked />
-          Use same API key as transcription
-        </label>
-
-        <div id="llm-key-field" class="hide">
-          <label>LLM API Key <span id="llm-key-hint"></span></label>
-          <input type="password" id="llm-api-key" placeholder="Separate LLM API key..." />
-        </div>
-
-        <label class="checkbox-label">
-          <input type="checkbox" id="chunk-streaming-enabled" checked />
-          Realtime preview <span class="hint-text">(send chunks while recording)</span>
-        </label>
-
-        <!-- Debug -->
-        <div class="settings-divider"></div>
-        <label class="section-label">Debug</label>
-
-        <label class="checkbox-label">
-          <input type="checkbox" id="preprocessing-enabled" checked />
-          Audio preprocessing <span class="hint-text">(VAD + AGC)</span>
-        </label>
-
-        <label class="checkbox-label">
-          <input type="checkbox" id="audio-debug-enabled" />
-          Save audio debug WAVs <span class="hint-text">(per session)</span>
-        </label>
-
-        <label class="checkbox-label">
-          <input type="checkbox" id="llm-log-enabled" checked />
-          Log transcription &amp; LLM output
-        </label>
-
-      </div>
-
-      <!-- Toggle link + buttons -->
-      <div class="settings-divider"></div>
-      <a id="advanced-toggle" href="#">All settings</a>
-
-      <div class="btn-row">
-        <button id="save-btn">Save</button>
-        <button id="close-btn">Cancel</button>
-      </div>
-
-      <div id="version-footer">
-        <span id="version-text">Dimmy</span>
-        <span id="update-status"></span>
       </div>
     </div>
   </div>

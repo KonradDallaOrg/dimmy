@@ -36,6 +36,23 @@ Dimmy sits as a tiny always-on-top pill on your screen. Press a keyboard shortcu
 - **Privacy-first** — no telemetry, all data local, keys in OS secure storage
 - **Auto-update** — built-in update checker with one-click install
 
+## Screenshots
+
+<p align="center">
+  <img src="docs/screenshots/dimmy-pill-states.png" alt="Dimmy pill states" width="560">
+</p>
+
+<details>
+<summary><strong>Settings panel</strong></summary>
+
+<p align="center">
+  <img src="docs/screenshots/dimmy-settings-transcription.png" alt="Transcription settings" width="280">
+  <img src="docs/screenshots/dimmy-settings-ai.png" alt="AI Enhancement settings" width="280">
+  <img src="docs/screenshots/dimmy-settings-stats.png" alt="Stats" width="280">
+</p>
+
+</details>
+
 ## Download
 
 Get the latest release for your platform:

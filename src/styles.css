@@ -298,10 +298,89 @@ body {
   font-size: 9px;
 }
 
-/* === Settings panel === */
+/* === Settings panel — sidebar nav layout === */
 #settings-panel {
+  gap: 0;
+  padding: 0;
+}
+
+#settings-layout {
+  display: flex;
+  height: 348px;
+}
+
+/* Sidebar nav */
+#settings-nav {
+  display: flex;
+  flex-direction: column;
+  width: 36px;
+  background: rgba(0, 0, 0, 0.12);
+  border-right: 1px solid var(--border-divider);
+  padding: 4px 0;
+  gap: 1px;
+  flex-shrink: 0;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 34px;
+  background: none;
+  border: none;
+  border-left: 2px solid transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 0;
+  transition: color 0.15s, background 0.15s;
+}
+
+.nav-item:hover {
+  color: var(--text-primary);
+  background: var(--bg-input);
+}
+
+.nav-item.active {
+  color: var(--accent-section);
+  border-left-color: var(--accent-section);
+  background: var(--bg-input);
+}
+
+.nav-item svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+/* Main content area */
+#settings-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+#settings-pages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 12px;
+}
+
+#settings-pages::-webkit-scrollbar { width: 3px; }
+#settings-pages::-webkit-scrollbar-track { background: transparent; }
+#settings-pages::-webkit-scrollbar-thumb { background: var(--border-subtle); border-radius: 2px; }
+
+.settings-page {
+  display: flex;
+  flex-direction: column;
   gap: 6px;
-  padding: 0 14px 10px 14px;
+}
+
+#settings-bottom {
+  padding: 6px 12px 8px;
+  border-top: 1px solid var(--border-divider);
 }
 
 #model-select,
@@ -392,14 +471,6 @@ body {
 .hint-text { color: var(--text-tertiary); font-weight: 400; }
 .shortcut-value { color: var(--text-primary); }
 
-/* Section labels (group headers) */
-#settings-panel .section-label {
-  font-size: 8px;
-  color: var(--accent-section);
-  letter-spacing: 1.5px;
-  font-weight: 600;
-  margin-top: 2px;
-}
 
 #settings-panel input[type="text"],
 #settings-panel input[type="password"] {
@@ -453,19 +524,7 @@ body {
   cursor: pointer;
 }
 
-/* Settings divider */
-.settings-divider {
-  height: 1px;
-  background: var(--border-divider);
-  margin: 4px 0;
-}
 
-/* LLM fields container */
-#llm-fields {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
 
 /* Stats grid */
 .stats-grid {
@@ -503,7 +562,6 @@ body {
 .btn-row {
   display: flex;
   gap: 6px;
-  margin-top: 2px;
 }
 
 #save-btn {
@@ -535,29 +593,13 @@ body {
 
 #close-btn:hover { background: var(--bg-input-hover); }
 
-/* === Advanced toggle link === */
-#advanced-toggle {
-  display: block;
-  text-align: center;
-  font-size: 9px;
-  color: var(--text-tertiary);
-  text-decoration: none;
-  letter-spacing: 0.5px;
-  cursor: pointer;
-  padding: 2px 0;
-  transition: color 0.2s;
-}
-
-#advanced-toggle:hover { color: var(--accent-section); }
 
 /* === Version footer === */
 #version-footer {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-top: 6px;
-  padding-top: 6px;
-  border-top: 1px solid var(--version-border);
+  margin-top: 4px;
 }
 
 #version-text {
