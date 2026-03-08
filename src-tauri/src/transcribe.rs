@@ -71,7 +71,7 @@ pub async fn transcribe_audio(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(format!("API error {}: {}", status, body).into());
+        return Err(format!("API error {}: {}", status, &body[..body.len().min(200)]).into());
     }
 
     let result: TranscriptionResponse = response.json().await?;
@@ -110,7 +110,7 @@ async fn transcribe_audio_deepgram(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(format!("Deepgram API error {}: {}", status, body).into());
+        return Err(format!("Deepgram API error {}: {}", status, &body[..body.len().min(200)]).into());
     }
 
     let result: serde_json::Value = response.json().await?;
@@ -178,7 +178,7 @@ async fn transcribe_audio_gemini(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(format!("Gemini API error {}: {}", status, body).into());
+        return Err(format!("Gemini API error {}: {}", status, &body[..body.len().min(200)]).into());
     }
 
     // Gemini response: { "candidates": [{ "content": { "parts": [{ "text": "..." }] } }] }

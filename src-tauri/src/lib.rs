@@ -193,7 +193,7 @@ impl Default for AppConfig {
             llm_api_url: DEFAULT_LLM_URL.to_string(),
             llm_api_model: DEFAULT_LLM_MODEL.to_string(),
             llm_use_same_key: true,
-            llm_log_enabled: true,
+            llm_log_enabled: false,
             chunk_streaming_enabled: true,
             preprocessing_enabled: true,
             audio_debug_enabled: false,
@@ -1392,7 +1392,7 @@ async fn process_with_llm(
             Ok(enhanced)
         }
         Err(e) => {
-            log(&format!("LLM processing failed: {}", e));
+            log("LLM processing failed (see UI for details)");
             let _ = app_handle.emit(
                 "llm-status",
                 serde_json::json!({ "status": "error", "error": e.to_string() }),

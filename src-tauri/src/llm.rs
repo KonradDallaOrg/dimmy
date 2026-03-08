@@ -225,7 +225,7 @@ pub async fn process_text(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(format!("LLM API error {}: {}", status, body).into());
+        return Err(format!("LLM API error {}: {}", status, &body[..body.len().min(200)]).into());
     }
 
     let content = if is_anthropic {

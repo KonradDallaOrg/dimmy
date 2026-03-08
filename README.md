@@ -25,8 +25,10 @@ Dimmy sits as a tiny always-on-top pill on your screen. Press a keyboard shortcu
 - **Universal dictation** — works with any application via clipboard paste
 - **Always-on-top overlay** — minimal pill UI with waveform visualization
 - **Streaming transcription** — real-time chunks via OpenAI-compatible APIs
-- **AI enhancement** — post-process with LLM (correct, summarize, elaborate, custom prompts)
-- **Multiple providers** — Groq (free), OpenAI, or any custom endpoint
+- **Realtime preview** — optionally send chunks while recording, or wait for final result
+- **AI enhancement** — post-process with LLM (correct, summarize, elaborate, 13 styles total)
+- **Multiple providers** — Groq, OpenAI, Deepgram, Gemini, Anthropic, or any custom endpoint
+- **Anti-hallucination guard** — skips audio chunks with less than 0.5s of speech
 - **Per-provider API keys** — securely stored in OS keyring, switch without re-entering
 - **Audio preprocessing** — noise filtering + normalization for cleaner input
 - **Configurable shortcut** — toggle or hold mode, any 2-modifier combo
@@ -55,13 +57,15 @@ Get the latest release for your platform:
 
 Dimmy needs an API key for speech-to-text transcription. Choose a provider:
 
-| Provider | Get Key | Cost | Notes |
-|----------|---------|------|-------|
-| **Groq** (recommended) | [console.groq.com/keys](https://console.groq.com/keys) | Free tier available | Fast, free for moderate usage |
-| **OpenAI** | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) | Pay-per-use | Original Whisper provider |
-| **Custom endpoint** | Your provider's dashboard | Varies | Any OpenAI-compatible API |
+| Provider | Type | Models | Free Tier |
+|----------|------|--------|-----------|
+| **Groq** (recommended) | STT + LLM | whisper-large-v3, whisper-large-v3-turbo, llama-3.3-70b | Yes (rate limited) |
+| **OpenAI** | STT + LLM | gpt-4o-transcribe, gpt-4o-mini-transcribe, whisper-1, gpt-4o-mini | ~$0.006/min |
+| **Deepgram** | STT | Nova-3, Nova-2 | $200 free credits |
+| **Google Gemini** | STT + LLM | gemini-2.5-flash, gemini-2.5-pro | Yes |
+| **Anthropic** | LLM | Claude Haiku 4.5, Claude Sonnet 4 | No |
 
-In Settings, paste your key in the **API Key** field. Keys are stored securely in your OS keyring (Windows Credential Manager, macOS Keychain, Linux Secret Service) — never in plain text.
+Get your key from the provider's dashboard and paste it in Settings. You can also use any **custom endpoint** compatible with the OpenAI API format. Keys are stored securely in your OS keyring (Windows Credential Manager, macOS Keychain, Linux Secret Service) — never in plain text.
 
 ### Transcription Settings
 
@@ -69,10 +73,11 @@ In Settings, paste your key in the **API Key** field. Keys are stored securely i
 |---------|-------------|
 | **API URL** | Provider endpoint. Pre-filled for Groq/OpenAI, or enter a custom URL |
 | **Model** | Whisper model to use (e.g. `whisper-large-v3-turbo` for Groq) |
-| **Language** | Select a language or leave on "Auto-detect" for multilingual use |
+| **Language** | Select a language or leave on "Auto-detect" for multilingual use (Deepgram auto-detects natively) |
 | **Audio Device** | Choose which microphone to use |
 | **Prompt** | Whisper prompt for vocabulary hints (e.g. proper nouns, acronyms) |
 | **Preprocessing** | Toggle noise filtering and voice activity detection (recommended on) |
+| **Realtime Preview** | Send audio chunks while recording for live preview, or wait for final result |
 
 ### Shortcut Settings
 
@@ -88,7 +93,7 @@ Enable in Settings to send transcriptions through an LLM for cleanup or transfor
 
 | Setting | Description |
 |---------|-------------|
-| **LLM API URL** | Endpoint for chat completions (Groq, OpenAI, or custom) |
+| **LLM API URL** | Endpoint for chat completions (Groq, OpenAI, Gemini, Anthropic, or custom) |
 | **LLM API Key** | Separate key for the LLM provider, or "Use same key as transcription" |
 | **LLM Model** | Chat model to use (e.g. `llama-3.3-70b-versatile` for Groq) |
 | **Style** | What the LLM does — scroll wheel on the pill to cycle |
@@ -99,12 +104,18 @@ Enable in Settings to send transcriptions through an LLM for cleanup or transfor
 
 | Style | Effect |
 |-------|--------|
+| Off | No LLM processing |
 | Correct | Fix grammar and filler words |
 | Summarize | Condense key points |
 | Elaborate | Expand with detail |
 | Comprehensible | Rewrite clearly |
 | Professional | Business tone |
 | Prompt | Reshape as LLM prompt |
+| Gen-Z | Gen-Z slang rewrite |
+| Boomer | Old-school formal rewrite |
+| Emoji | Heavy emoji insertion |
+| Acronyms | Replace phrases with abbreviations |
+| Imbruttito | Milanese grumpy rewrite |
 | Custom | Your own system prompt |
 
 ## Auto-Update
