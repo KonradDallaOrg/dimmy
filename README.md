@@ -46,9 +46,14 @@ Dimmy sits as a tiny always-on-top pill on your screen. Press a keyboard shortcu
 <summary><strong>Settings panel</strong></summary>
 
 <p align="center">
-  <img src="docs/screenshots/dimmy-settings-transcription.png" alt="Transcription settings" width="280">
-  <img src="docs/screenshots/dimmy-settings-ai.png" alt="AI Enhancement settings" width="280">
-  <img src="docs/screenshots/dimmy-settings-stats.png" alt="Stats" width="280">
+  <img src="docs/screenshots/dimmy-settings-transcription.png" alt="Transcription" width="220">
+  <img src="docs/screenshots/dimmy-settings-ai.png" alt="AI Enhancement" width="220">
+  <img src="docs/screenshots/dimmy-settings-activation.png" alt="Activation" width="220">
+</p>
+<p align="center">
+  <img src="docs/screenshots/dimmy-settings-audio.png" alt="Audio" width="220">
+  <img src="docs/screenshots/dimmy-settings-appearance.png" alt="Appearance" width="220">
+  <img src="docs/screenshots/dimmy-settings-stats.png" alt="Stats" width="220">
 </p>
 
 </details>
