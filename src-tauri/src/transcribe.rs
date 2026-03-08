@@ -87,9 +87,12 @@ async fn transcribe_audio_deepgram(
     language: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let mut url = api_url.to_string();
+    let sep = if url.contains('?') { "&" } else { "?" };
     if !language.is_empty() {
-        let sep = if url.contains('?') { "&" } else { "?" };
         url = format!("{}{}language={}", url, sep, language);
+    } else {
+        // Auto-detect language when none specified
+        url = format!("{}{}detect_language=true", url, sep);
     }
 
     let client = reqwest::Client::builder()

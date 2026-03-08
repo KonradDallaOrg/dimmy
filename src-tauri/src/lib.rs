@@ -709,6 +709,17 @@ fn start_recording(
                         // Entire chunk was noise/silence — skip sending to Whisper
                         continue;
                     }
+                    // Skip very short speech segments (<0.5s) — STT models hallucinate on tiny audio
+                    let min_speech_samples = sample_rate / 2;
+                    if p.len() < min_speech_samples {
+                        if debug_log_on {
+                            debug_transcription(&format!(
+                                "CHUNK SKIP | speech too short: {:.2}s < 0.5s",
+                                p.len() as f64 / sample_rate as f64
+                            ));
+                        }
+                        continue;
+                    }
                     p
                 } else {
                     chunk_data
