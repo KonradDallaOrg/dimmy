@@ -57,15 +57,16 @@ Get the latest release for your platform:
 
 Dimmy needs an API key for speech-to-text transcription. Choose a provider:
 
-| Provider | Type | Models | Free Tier |
-|----------|------|--------|-----------|
-| **Groq** (recommended) | STT + LLM | whisper-large-v3, whisper-large-v3-turbo, llama-3.3-70b | Yes (rate limited) |
-| **OpenAI** | STT + LLM | gpt-4o-transcribe, gpt-4o-mini-transcribe, whisper-1, gpt-4o-mini | ~$0.006/min |
-| **Deepgram** | STT | Nova-3, Nova-2 | $200 free credits |
-| **Google Gemini** | STT + LLM | gemini-2.5-flash, gemini-2.5-pro | Yes |
-| **Anthropic** | LLM | Claude Haiku 4.5, Claude Sonnet 4 | No |
+| Provider | Type | Models | Free Tier | Get Key |
+|----------|------|--------|-----------|---------|
+| **Groq** (recommended) | STT + LLM | whisper-large-v3, whisper-large-v3-turbo, llama-3.3-70b | Yes (rate limited) | [console.groq.com/keys](https://console.groq.com/keys) |
+| **OpenAI** | STT + LLM | gpt-4o-transcribe, gpt-4o-mini-transcribe, whisper-1, gpt-4o-mini | ~$0.006/min | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
+| **Deepgram** | STT | Nova-3, Nova-2 | $200 free credits | [console.deepgram.com](https://console.deepgram.com/) |
+| **Google Gemini** | STT + LLM | gemini-2.5-flash, gemini-2.5-pro | Yes | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
+| **Anthropic** | LLM only | Claude Haiku 4.5, Claude Sonnet 4 | No | [console.anthropic.com/keys](https://console.anthropic.com/settings/keys) |
+| **OpenRouter** | LLM only | Llama 3.3 70B, DeepSeek R1 | Yes (free models) | [openrouter.ai/keys](https://openrouter.ai/keys) |
 
-Get your key from the provider's dashboard and paste it in Settings. You can also use any **custom endpoint** compatible with the OpenAI API format. Keys are stored securely in your OS keyring (Windows Credential Manager, macOS Keychain, Linux Secret Service) — never in plain text.
+Paste your key in Settings → **API Key**. Keys are stored securely in your OS keyring (Windows Credential Manager, macOS Keychain, Linux Secret Service) — never in plain text. You can also use any **custom endpoint** compatible with the OpenAI API format.
 
 ### Transcription Settings
 
