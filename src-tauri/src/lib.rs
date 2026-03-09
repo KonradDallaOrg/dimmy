@@ -2202,6 +2202,70 @@ pub fn run() {
                     }
                 }
 
+                // Windows: remove DWM border and ensure fully transparent background
+                #[cfg(target_os = "windows")]
+                {
+                    use std::ffi::c_void;
+
+                    #[repr(C)]
+                    struct MARGINS {
+                        left: i32,
+                        right: i32,
+                        top: i32,
+                        bottom: i32,
+                    }
+
+                    extern "system" {
+                        fn DwmExtendFrameIntoClientArea(
+                            hwnd: *mut c_void,
+                            margins: *const MARGINS,
+                        ) -> i32;
+                        fn DwmSetWindowAttribute(
+                            hwnd: *mut c_void,
+                            attr: u32,
+                            value: *const c_void,
+                            size: u32,
+                        ) -> i32;
+                    }
+
+                    const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
+                    const DWMWCP_DONOTROUND: u32 = 1;
+                    const DWMWA_BORDER_COLOR: u32 = 34;
+                    const DWMWA_COLOR_NONE: u32 = 0xFFFFFFFE;
+
+                    if let Ok(hwnd) = window.hwnd() {
+                        let hwnd = hwnd.0 as *mut c_void;
+                        unsafe {
+                            // Extend frame into entire client area for transparency
+                            let margins = MARGINS {
+                                left: -1,
+                                right: -1,
+                                top: -1,
+                                bottom: -1,
+                            };
+                            DwmExtendFrameIntoClientArea(hwnd, &margins);
+
+                            // Disable rounded corners (removes DWM border)
+                            let corner = DWMWCP_DONOTROUND;
+                            DwmSetWindowAttribute(
+                                hwnd,
+                                DWMWA_WINDOW_CORNER_PREFERENCE,
+                                &corner as *const u32 as *const c_void,
+                                std::mem::size_of::<u32>() as u32,
+                            );
+
+                            // Set border color to none
+                            let color = DWMWA_COLOR_NONE;
+                            DwmSetWindowAttribute(
+                                hwnd,
+                                DWMWA_BORDER_COLOR,
+                                &color as *const u32 as *const c_void,
+                                std::mem::size_of::<u32>() as u32,
+                            );
+                        }
+                    }
+                }
+
                 // Open DevTools in debug builds
                 #[cfg(debug_assertions)]
                 window.open_devtools();
