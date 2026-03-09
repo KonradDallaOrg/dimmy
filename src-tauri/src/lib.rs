@@ -2169,24 +2169,22 @@ pub fn run() {
                 // macOS: ensure fully transparent NSWindow (fixes Retina border artifacts)
                 #[cfg(target_os = "macos")]
                 {
-                    use tauri::WebviewWindowExt;
-                    if let Ok(ns_window_ptr) = window.ns_window() {
-                        unsafe {
-                            use std::ffi::c_void;
-                            type Id = *mut c_void;
-                            type BOOL = i8;
+                    unsafe {
+                        use std::ffi::{c_int, c_void};
+                        type Id = *mut c_void;
 
-                            extern "C" {
-                                fn objc_msgSend(obj: Id, sel: *const c_void, ...) -> Id;
-                                fn sel_registerName(name: *const u8) -> *const c_void;
-                                fn objc_getClass(name: *const u8) -> Id;
-                            }
+                        extern "C" {
+                            fn objc_msgSend(obj: Id, sel: *const c_void, ...) -> Id;
+                            fn sel_registerName(name: *const u8) -> *const c_void;
+                            fn objc_getClass(name: *const u8) -> Id;
+                        }
 
-                            let ns_win = ns_window_ptr as Id;
-
+                        // Get NSWindow pointer via Tauri's raw window handle
+                        let ns_win: Id = window.ns_window().unwrap_or(std::ptr::null_mut() as _) as Id;
+                        if !ns_win.is_null() {
                             // [nsWindow setOpaque:NO]
                             let sel_set_opaque = sel_registerName(b"setOpaque:\0".as_ptr());
-                            objc_msgSend(ns_win, sel_set_opaque, 0 as BOOL);
+                            objc_msgSend(ns_win, sel_set_opaque, 0 as c_int);
 
                             // [NSColor clearColor]
                             let ns_color_class = objc_getClass(b"NSColor\0".as_ptr());
@@ -2199,7 +2197,7 @@ pub fn run() {
 
                             // [nsWindow setHasShadow:NO]
                             let sel_set_shadow = sel_registerName(b"setHasShadow:\0".as_ptr());
-                            objc_msgSend(ns_win, sel_set_shadow, 0 as BOOL);
+                            objc_msgSend(ns_win, sel_set_shadow, 0 as c_int);
                         }
                     }
                 }
