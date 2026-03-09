@@ -152,6 +152,9 @@ function switchView(view) {
   settingsPanel.classList.remove('open');
   currentView = view;
 
+  // Pill-shaped for micro/pill, rectangular for rec/settings
+  container.classList.toggle('expanded-mode', view === 'rec' || view === 'settings');
+
   if (view === 'micro') {
     pill.classList.add('micro');
     deviceName.classList.add('hide');

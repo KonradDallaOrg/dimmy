@@ -1884,28 +1884,63 @@ fn resize_window(
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
     if let Some(win) = app_handle.get_webview_window("main") {
-        // Read LIVE top-left position before resize (captures user drags)
-        let top_left = if let Ok(pos) = win.outer_position() {
+        // Read LIVE position + size before resize (captures user drags)
+        let prev = if let (Ok(pos), Ok(size)) = (win.outer_position(), win.outer_size()) {
             let scale = win.scale_factor().unwrap_or(1.0);
-            Some((pos.x as f64 / scale, pos.y as f64 / scale))
+            let x = pos.x as f64 / scale;
+            let y = pos.y as f64 / scale;
+            let pw = size.width as f64 / scale;
+            let ph = size.height as f64 / scale;
+            Some((x, y, pw, ph))
         } else {
             None
         };
 
         win.set_size(LogicalSize::new(w, h))
             .map_err(|e| e.to_string())?;
-        // Re-enforce always-on-top (can be lost after show/hide cycles on some OS)
         let _ = win.set_always_on_top(true);
 
-        if let Some((x, y)) = top_left {
-            // Keep top-left position stable across resizes
-            let (x, y) = clamp_to_work_area(&win, x, y, w, h);
-            let _ = win.set_position(LogicalPosition::new(x, y));
-            // Update stored anchor (bottom-right for persistence)
+        if let Some((old_x, old_y, old_w, old_h)) = prev {
+            // Get screen dimensions for smart anchor flipping
+            let (screen_w, screen_h) = get_work_area()
+                .map(|(sw, sh)| {
+                    let scale = win.scale_factor().unwrap_or(1.0);
+                    (sw as f64 / scale, sh as f64 / scale)
+                })
+                .unwrap_or((1920.0, 1080.0));
+
+            // Determine which screen edges the window is closest to.
+            // Use distances from each edge, not center — this way a pill in the
+            // bottom-right corner always anchors bottom-right regardless of
+            // how large the settings panel is.
+            let dist_left = old_x;
+            let dist_right = screen_w - (old_x + old_w);
+            let dist_top = old_y;
+            let dist_bottom = screen_h - (old_y + old_h);
+
+            let new_x = if dist_right <= dist_left {
+                // Closer to right edge: anchor right edge (expand/shrink left)
+                (old_x + old_w - w).max(0.0)
+            } else {
+                // Closer to left edge: anchor left edge (expand/shrink right)
+                old_x
+            };
+            let new_y = if dist_bottom <= dist_top {
+                // Closer to bottom: anchor bottom edge (expand/shrink up)
+                (old_y + old_h - h).max(0.0)
+            } else {
+                // Closer to top: anchor top edge (expand/shrink down)
+                old_y
+            };
+
+            let (new_x, new_y) = clamp_to_work_area(&win, new_x, new_y, w, h);
+            let _ = win.set_position(LogicalPosition::new(new_x, new_y));
+
+            // Store bottom-right as anchor for persistence
             let _ = state
                 .window_anchor
                 .lock()
-                .map(|mut a| *a = Some((x + w, y + h)));
+                .map(|mut a| *a = Some((new_x + w, new_y + h)));
         } else {
             position_bottom_right(&win, w, h);
         }
@@ -2265,8 +2300,11 @@ pub fn run() {
                     }
 
                     const GWL_STYLE: i32 = -16;
+                    const GWL_EXSTYLE: i32 = -20;
                     const WS_POPUP: isize = 0x80000000u32 as isize;
                     const WS_VISIBLE: isize = 0x10000000;
+                    const WS_EX_LAYERED: isize = 0x00080000;
+                    const WS_EX_TOOLWINDOW: isize = 0x00000080;
                     const SWP_FRAMECHANGED: u32 = 0x0020;
                     const SWP_NOMOVE: u32 = 0x0002;
                     const SWP_NOSIZE: u32 = 0x0001;
@@ -2279,9 +2317,24 @@ pub fn run() {
                     if let Ok(hwnd) = window.hwnd() {
                         let hwnd = hwnd.0 as *mut c_void;
                         unsafe {
-                            // Set WS_POPUP to remove DWM frame entirely
+                            // WS_POPUP removes DWM caption frame
                             let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
-                            SetWindowLongPtrW(hwnd, GWL_STYLE, (style | WS_POPUP) & !0x00C00000 /* remove WS_CAPTION */ | WS_VISIBLE);
+                            SetWindowLongPtrW(
+                                hwnd,
+                                GWL_STYLE,
+                                (style | WS_POPUP) & !0x00C00000 | WS_VISIBLE,
+                            );
+
+                            // WS_EX_LAYERED + WS_EX_TOOLWINDOW: layered window
+                            // prevents DWM from compositing its own border/shadow
+                            let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+                            SetWindowLongPtrW(
+                                hwnd,
+                                GWL_EXSTYLE,
+                                ex_style | WS_EX_LAYERED | WS_EX_TOOLWINDOW,
+                            );
+
+                            // Apply style changes
                             SetWindowPos(
                                 hwnd,
                                 std::ptr::null_mut(),

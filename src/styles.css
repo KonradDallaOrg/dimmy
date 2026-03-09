@@ -117,12 +117,17 @@ body {
 
 #container {
   background: linear-gradient(135deg, var(--bg-primary), var(--bg-secondary));
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 12px;
+  border: none;
+  border-radius: 9999px;
   overflow: hidden;
   /* margin gives anti-alias pixels room to blend against transparent background
      instead of the window edge, preventing white fringe artifacts */
   margin: 2px;
+}
+
+/* Expanded views (recording, settings) need rectangular corners, not pill-shaped */
+#container.expanded-mode {
+  border-radius: 12px;
 }
 
 /* === Pill row === */
