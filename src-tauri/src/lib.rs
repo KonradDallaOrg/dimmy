@@ -2221,23 +2221,33 @@ pub fn run() {
                     }
                 }
 
-                // Windows: remove DWM border and ensure fully transparent background
+                // Windows: remove DWM border artifacts on transparent overlay window.
+                // Tauri already calls DwmEnableBlurBehindWindow with an empty region
+                // for `transparent: true`. We add:
+                // 1. WS_POPUP style — removes the DWM caption frame entirely
+                // 2. DWMWCP_DONOTROUND — disables Win11 auto-rounded corners
+                // 3. DWMWA_COLOR_NONE border — removes the 1px DWM border
+                // NOTE: Do NOT use DwmExtendFrameIntoClientArea(-1) — it adds glass
+                // blur/shadow, making the border worse.
                 #[cfg(target_os = "windows")]
                 {
                     use std::ffi::c_void;
 
-                    #[repr(C)]
-                    struct MARGINS {
-                        left: i32,
-                        right: i32,
-                        top: i32,
-                        bottom: i32,
-                    }
-
                     extern "system" {
-                        fn DwmExtendFrameIntoClientArea(
+                        fn GetWindowLongPtrW(hwnd: *mut c_void, index: i32) -> isize;
+                        fn SetWindowLongPtrW(
                             hwnd: *mut c_void,
-                            margins: *const MARGINS,
+                            index: i32,
+                            new_long: isize,
+                        ) -> isize;
+                        fn SetWindowPos(
+                            hwnd: *mut c_void,
+                            insert_after: *mut c_void,
+                            x: i32,
+                            y: i32,
+                            cx: i32,
+                            cy: i32,
+                            flags: u32,
                         ) -> i32;
                         fn DwmSetWindowAttribute(
                             hwnd: *mut c_void,
@@ -2247,6 +2257,13 @@ pub fn run() {
                         ) -> i32;
                     }
 
+                    const GWL_STYLE: i32 = -16;
+                    const WS_POPUP: isize = 0x80000000u32 as isize;
+                    const WS_VISIBLE: isize = 0x10000000;
+                    const SWP_FRAMECHANGED: u32 = 0x0020;
+                    const SWP_NOMOVE: u32 = 0x0002;
+                    const SWP_NOSIZE: u32 = 0x0001;
+                    const SWP_NOZORDER: u32 = 0x0004;
                     const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
                     const DWMWCP_DONOTROUND: u32 = 1;
                     const DWMWA_BORDER_COLOR: u32 = 34;
@@ -2255,16 +2272,17 @@ pub fn run() {
                     if let Ok(hwnd) = window.hwnd() {
                         let hwnd = hwnd.0 as *mut c_void;
                         unsafe {
-                            // Extend frame into entire client area for transparency
-                            let margins = MARGINS {
-                                left: -1,
-                                right: -1,
-                                top: -1,
-                                bottom: -1,
-                            };
-                            DwmExtendFrameIntoClientArea(hwnd, &margins);
+                            // Set WS_POPUP to remove DWM frame entirely
+                            let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+                            SetWindowLongPtrW(hwnd, GWL_STYLE, (style | WS_POPUP) & !0x00C00000 /* remove WS_CAPTION */ | WS_VISIBLE);
+                            SetWindowPos(
+                                hwnd,
+                                std::ptr::null_mut(),
+                                0, 0, 0, 0,
+                                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
+                            );
 
-                            // Disable rounded corners (removes DWM border)
+                            // Disable Win11 rounded corners
                             let corner = DWMWCP_DONOTROUND;
                             DwmSetWindowAttribute(
                                 hwnd,
