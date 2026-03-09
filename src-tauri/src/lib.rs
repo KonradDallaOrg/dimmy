@@ -20,6 +20,19 @@ const DEFAULT_LLM_MODEL: &str = "llama-3.3-70b-versatile";
 const MAX_RECORDING_SECS: usize = 30 * 60; // 30 minutes hard cap
 const MAX_LOG_BYTES: u64 = 1_048_576; // 1 MB log rotation threshold
 
+/// Default shortcut: Cmd+Opt+D on macOS (2 modifiers alone triggers too easily),
+/// Win+Alt on Windows/Linux (safe because Win+Alt isn't commonly used).
+fn default_shortcut() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        "win+alt+d"
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        "win+alt"
+    }
+}
+
 fn config_dir_path() -> Option<std::path::PathBuf> {
     dirs::config_dir().map(|p| p.join("dimmy"))
 }
@@ -261,7 +274,7 @@ fn load_config_file() -> AppConfig {
                     selected_device: v["selected_device"].as_str().map(|s| s.to_string()),
                     language: v["language"].as_str().unwrap_or("").to_string(),
                     shortcut_mode: v["shortcut_mode"].as_str().unwrap_or("toggle").to_string(),
-                    shortcut: v["shortcut"].as_str().unwrap_or("win+alt").to_string(),
+                    shortcut: v["shortcut"].as_str().unwrap_or(default_shortcut()).to_string(),
                     prompt: v["prompt"].as_str().unwrap_or(DEFAULT_PROMPT).to_string(),
                     llm_enabled: v["llm_enabled"].as_bool().unwrap_or(defaults.llm_enabled),
                     llm_style: v["llm_style"]

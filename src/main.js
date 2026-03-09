@@ -5,7 +5,8 @@ const W = 360;
 const MICRO_W = 56;
 const PILL_H = 32;
 const REC_H = 64;
-const SETTINGS_H = 380;
+const SETTINGS_W = 480;
+const SETTINGS_H = 520;
 const BAR_COUNT = 28;
 const BAR_W = 7;
 const BAR_GAP = 2;
@@ -102,6 +103,18 @@ if (accessibilityOpenBtn) {
   });
 }
 
+// Drag the pill via Tauri's startDragging API (works reliably on all platforms
+// including macOS where -webkit-app-region: drag can be flaky with Tauri 2)
+pill.addEventListener('mousedown', async (e) => {
+  // Only drag on left click, skip if clicking a button/input
+  if (e.button !== 0) return;
+  if (e.target.closest('button, input, select, textarea, a')) return;
+  try {
+    const win = window.__TAURI__.window.getCurrentWindow();
+    await win.startDragging();
+  } catch (_) {}
+});
+
 let isRecording = false;
 let waveformInterval = null;
 let timerInterval = null;
@@ -155,7 +168,7 @@ function switchView(view) {
   } else if (view === 'settings') {
     pill.classList.remove('micro');
     settingsPanel.classList.add('open');
-    setWindowSizeWH(W, SETTINGS_H);
+    setWindowSizeWH(SETTINGS_W, SETTINGS_H);
   }
 }
 
@@ -817,7 +830,7 @@ function toggleLlmKeyField() {
 function resizeSettingsWindow() {
   // Fixed height — content scrolls within the panel
   if (currentView === 'settings') {
-    setWindowSizeWH(W, SETTINGS_H);
+    setWindowSizeWH(SETTINGS_W, SETTINGS_H);
   }
 }
 

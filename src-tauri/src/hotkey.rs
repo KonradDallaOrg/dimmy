@@ -248,10 +248,17 @@ pub fn set_shortcut(combo: &str) {
             return;
         }
     }
-    // Fallback: cmd+option on macOS, win+alt elsewhere
+    // Fallback: cmd+option+D on macOS, win+alt on Windows/Linux
     KEY1_CODES.store(group_to_packed(GROUP_WIN), Ordering::SeqCst);
     KEY2_CODES.store(group_to_packed(GROUP_ALT), Ordering::SeqCst);
-    KEY3_CODE.store(0, Ordering::SeqCst);
+    #[cfg(target_os = "macos")]
+    {
+        KEY3_CODE.store(name_to_vk("d"), Ordering::SeqCst); // D key
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        KEY3_CODE.store(0, Ordering::SeqCst);
+    }
     KEY3_DOWN.store(false, Ordering::SeqCst);
 }
 

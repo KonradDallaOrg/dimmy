@@ -306,18 +306,18 @@ body {
 
 #settings-layout {
   display: flex;
-  height: 348px;
+  height: 488px;
 }
 
 /* Sidebar nav */
 #settings-nav {
   display: flex;
   flex-direction: column;
-  width: 36px;
+  width: 40px;
   background: rgba(0, 0, 0, 0.12);
   border-right: 1px solid var(--border-divider);
-  padding: 4px 0;
-  gap: 1px;
+  padding: 6px 0;
+  gap: 2px;
   flex-shrink: 0;
 }
 
@@ -325,8 +325,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 34px;
+  width: 40px;
+  height: 38px;
   background: none;
   border: none;
   border-left: 2px solid transparent;
@@ -348,8 +348,8 @@ body {
 }
 
 .nav-item svg {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   flex-shrink: 0;
 }
 
@@ -365,7 +365,7 @@ body {
 #settings-pages {
   flex: 1;
   overflow-y: auto;
-  padding: 8px 12px;
+  padding: 12px 16px;
 }
 
 #settings-pages::-webkit-scrollbar { width: 3px; }
@@ -375,7 +375,7 @@ body {
 .settings-page {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 #settings-bottom {
@@ -398,9 +398,9 @@ body {
   background-size: 10px 6px;
   border: 1px solid var(--border-subtle);
   color: var(--text-primary);
-  padding: 5px 24px 5px 8px;
+  padding: 6px 24px 6px 10px;
   border-radius: 6px;
-  font-size: 11px;
+  font-size: 12px;
   font-family: inherit;
   outline: none;
   width: 100%;
@@ -461,7 +461,7 @@ body {
 }
 
 #settings-panel label {
-  font-size: 9px;
+  font-size: 10px;
   color: var(--text-label);
   text-transform: uppercase;
   letter-spacing: 1px;
@@ -477,9 +477,9 @@ body {
   background: var(--bg-input);
   border: 1px solid var(--border-subtle);
   color: var(--text-primary);
-  padding: 4px 6px;
+  padding: 6px 8px;
   border-radius: 4px;
-  font-size: 11px;
+  font-size: 12px;
   outline: none;
   width: 100%;
   transition: border-color 0.2s;
