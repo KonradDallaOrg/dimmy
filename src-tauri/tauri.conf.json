@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicholasio/tauri-schema/refs/heads/v2/schema.json",
   "productName": "Dimmy",
-  "version": "0.3.29",
+  "version": "0.3.30",
   "identifier": "com.dimmy.voice",
   "build": {
     "frontendDist": "../src",
@@ -40,8 +40,8 @@
     "windows": [
       {
         "title": "Dimmy",
-        "width": 56,
-        "height": 32,
+        "width": 60,
+        "height": 36,
         "decorations": false,
         "transparent": true,
         "shadow": false,

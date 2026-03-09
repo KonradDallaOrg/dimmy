@@ -1,12 +1,14 @@
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
-const W = 360;
-const MICRO_W = 56;
-const PILL_H = 32;
-const REC_H = 64;
-const SETTINGS_W = 480;
-const SETTINGS_H = 520;
+// Container has 2px margin on each side for clean anti-aliased rounded corners
+const MARGIN = 4; // 2px margin * 2 sides
+const W = 360 + MARGIN;
+const MICRO_W = 56 + MARGIN;
+const PILL_H = 32 + MARGIN;
+const REC_H = 64 + MARGIN;
+const SETTINGS_W = 480 + MARGIN;
+const SETTINGS_H = 520 + MARGIN;
 const BAR_COUNT = 28;
 const BAR_W = 7;
 const BAR_GAP = 2;

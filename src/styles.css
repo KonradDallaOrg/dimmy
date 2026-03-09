@@ -117,10 +117,12 @@ body {
 
 #container {
   background: linear-gradient(135deg, var(--bg-primary), var(--bg-secondary));
-  border: none;
+  border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 12px;
   overflow: hidden;
-  box-shadow: var(--shadow-container);
+  /* margin gives anti-alias pixels room to blend against transparent background
+     instead of the window edge, preventing white fringe artifacts */
+  margin: 2px;
 }
 
 /* === Pill row === */

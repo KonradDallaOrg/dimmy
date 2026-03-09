@@ -1884,16 +1884,12 @@ fn resize_window(
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
     if let Some(win) = app_handle.get_webview_window("main") {
-        // Compute anchor from LIVE window position (captures user drags since last resize)
-        let anchor = {
-            if let (Ok(pos), Ok(size)) = (win.outer_position(), win.outer_size()) {
-                let scale = win.scale_factor().unwrap_or(1.0);
-                let right = pos.x as f64 / scale + size.width as f64 / scale;
-                let bottom = pos.y as f64 / scale + size.height as f64 / scale;
-                Some((right, bottom))
-            } else {
-                *state.window_anchor.lock().map_err(|e| e.to_string())?
-            }
+        // Read LIVE top-left position before resize (captures user drags)
+        let top_left = if let Ok(pos) = win.outer_position() {
+            let scale = win.scale_factor().unwrap_or(1.0);
+            Some((pos.x as f64 / scale, pos.y as f64 / scale))
+        } else {
+            None
         };
 
         win.set_size(LogicalSize::new(w, h))
@@ -1901,17 +1897,15 @@ fn resize_window(
         // Re-enforce always-on-top (can be lost after show/hide cycles on some OS)
         let _ = win.set_always_on_top(true);
 
-        if let Some((right, bottom)) = anchor {
-            let x = (right - w).max(0.0);
-            let y = (bottom - h).max(0.0);
-            // Clamp to work area so the window never overlaps the taskbar or goes off-screen
+        if let Some((x, y)) = top_left {
+            // Keep top-left position stable across resizes
             let (x, y) = clamp_to_work_area(&win, x, y, w, h);
             let _ = win.set_position(LogicalPosition::new(x, y));
-            // Update stored anchor
+            // Update stored anchor (bottom-right for persistence)
             let _ = state
                 .window_anchor
                 .lock()
-                .map(|mut a| *a = Some((right, bottom)));
+                .map(|mut a| *a = Some((x + w, y + h)));
         } else {
             position_bottom_right(&win, w, h);
         }
@@ -2321,8 +2315,8 @@ pub fn run() {
                 window.open_devtools();
 
                 // Position from saved anchor or default bottom-right
-                let win_w = 220.0_f64;
-                let win_h = 32.0_f64;
+                let win_w = 60.0_f64; // MICRO_W + margin
+                let win_h = 36.0_f64; // PILL_H + margin
                 {
                     let anchor = *app
                         .state::<AppState>()
@@ -2373,8 +2367,8 @@ pub fn run() {
                             "show" => {
                                 if let Some(win) = app_handle.get_webview_window("main") {
                                     // Restore saved anchor position (clamped to work area)
-                                    let micro_w = 56.0_f64;
-                                    let micro_h = 32.0_f64;
+                                    let micro_w = 60.0_f64; // MICRO_W + margin
+                                    let micro_h = 36.0_f64; // PILL_H + margin
                                     let st: tauri::State<'_, AppState> = app_handle.state();
                                     let anchor = st
                                         .window_anchor
