@@ -1934,18 +1934,16 @@ fn prompt_accessibility() -> bool {
                 value_callbacks: *const std::ffi::c_void,
             ) -> *const std::ffi::c_void;
             fn CFRelease(cf: *const std::ffi::c_void);
-            static kCFBooleanTrue: *const std::ffi::c_void;
-            static kCFTypeDictionaryKeyCallBacks: u8;
-            static kCFTypeDictionaryValueCallBacks: u8;
-        }
-
-        // "AXTrustedCheckOptionPrompt" as CFString
-        extern "C" {
             fn CFStringCreateWithCString(
                 alloc: *const std::ffi::c_void,
                 c_str: *const u8,
                 encoding: u32,
             ) -> *const std::ffi::c_void;
+            static kCFBooleanTrue: *const std::ffi::c_void;
+            // These are CFDictionaryKeyCallBacks / CFDictionaryValueCallBacks structs.
+            // Declare as opaque bytes and take their address to get the correct pointer.
+            static kCFTypeDictionaryKeyCallBacks: [u8; 0];
+            static kCFTypeDictionaryValueCallBacks: [u8; 0];
         }
 
         unsafe {
@@ -1961,8 +1959,8 @@ fn prompt_accessibility() -> bool {
                 keys.as_ptr(),
                 values.as_ptr(),
                 1,
-                &kCFTypeDictionaryKeyCallBacks as *const u8 as *const std::ffi::c_void,
-                &kCFTypeDictionaryValueCallBacks as *const u8 as *const std::ffi::c_void,
+                kCFTypeDictionaryKeyCallBacks.as_ptr() as *const std::ffi::c_void,
+                kCFTypeDictionaryValueCallBacks.as_ptr() as *const std::ffi::c_void,
             );
             let trusted = AXIsProcessTrustedWithOptions(options);
             CFRelease(options);
@@ -2167,6 +2165,44 @@ pub fn run() {
                 let _ = window.set_shadow(false);
                 use tauri::window::Color;
                 let _ = window.set_background_color(Some(Color(0, 0, 0, 0)));
+
+                // macOS: ensure fully transparent NSWindow (fixes Retina border artifacts)
+                #[cfg(target_os = "macos")]
+                {
+                    use tauri::WebviewWindowExt;
+                    if let Ok(ns_window_ptr) = window.ns_window() {
+                        unsafe {
+                            use std::ffi::c_void;
+                            type Id = *mut c_void;
+                            type BOOL = i8;
+
+                            extern "C" {
+                                fn objc_msgSend(obj: Id, sel: *const c_void, ...) -> Id;
+                                fn sel_registerName(name: *const u8) -> *const c_void;
+                                fn objc_getClass(name: *const u8) -> Id;
+                            }
+
+                            let ns_win = ns_window_ptr as Id;
+
+                            // [nsWindow setOpaque:NO]
+                            let sel_set_opaque = sel_registerName(b"setOpaque:\0".as_ptr());
+                            objc_msgSend(ns_win, sel_set_opaque, 0 as BOOL);
+
+                            // [NSColor clearColor]
+                            let ns_color_class = objc_getClass(b"NSColor\0".as_ptr());
+                            let sel_clear_color = sel_registerName(b"clearColor\0".as_ptr());
+                            let clear: Id = objc_msgSend(ns_color_class, sel_clear_color);
+
+                            // [nsWindow setBackgroundColor:[NSColor clearColor]]
+                            let sel_set_bg = sel_registerName(b"setBackgroundColor:\0".as_ptr());
+                            objc_msgSend(ns_win, sel_set_bg, clear);
+
+                            // [nsWindow setHasShadow:NO]
+                            let sel_set_shadow = sel_registerName(b"setHasShadow:\0".as_ptr());
+                            objc_msgSend(ns_win, sel_set_shadow, 0 as BOOL);
+                        }
+                    }
+                }
 
                 // Open DevTools in debug builds
                 #[cfg(debug_assertions)]
