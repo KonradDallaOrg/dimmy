@@ -173,6 +173,14 @@ cd src-tauri
 cargo tauri build
 ```
 
+> **Note:** `cargo tauri build` requires a signing key for the auto-updater. If you get an error about `TAURI_SIGNING_PRIVATE_KEY`, generate a local key:
+> ```bash
+> cargo tauri signer generate -w ~/.tauri/dimmy.key
+> export TAURI_SIGNING_PRIVATE_KEY=$(cat ~/.tauri/dimmy.key)
+> cargo tauri build
+> ```
+> This is only needed for release builds. For development, use `cargo tauri dev` instead (no key required).
+
 ## Development
 
 ```bash
