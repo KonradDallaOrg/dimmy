@@ -1738,15 +1738,13 @@ fn get_work_area() -> Option<(i32, i32)> {
         fn sel_registerName(name: *const u8) -> *mut std::ffi::c_void;
     }
 
-    // Use objc_msgSend for pointer-returning calls and
-    // objc_msgSend_stret for struct-returning calls on x86_64.
-    // On aarch64 all returns go through objc_msgSend.
+    // IMPORTANT: on ARM64 (Apple Silicon), objc_msgSend is NOT variadic.
+    // Declaring it as variadic causes the compiler to use the C variadic ABI
+    // (stack-based args) instead of register-based, producing garbage pointers
+    // and SIGSEGV / PAC failures. Declare as raw symbol and transmute to typed
+    // function pointers for each call signature.
     extern "C" {
-        fn objc_msgSend(
-            obj: *mut std::ffi::c_void,
-            sel: *mut std::ffi::c_void,
-            ...
-        ) -> *mut std::ffi::c_void;
+        fn objc_msgSend();
     }
 
     #[cfg(target_arch = "x86_64")]
@@ -1755,17 +1753,24 @@ fn get_work_area() -> Option<(i32, i32)> {
             stret: *mut NSRect,
             obj: *mut std::ffi::c_void,
             sel: *mut std::ffi::c_void,
-            ...
         );
     }
 
+    type MsgSendPtr = unsafe extern "C" fn(
+        *mut std::ffi::c_void,
+        *mut std::ffi::c_void,
+    ) -> *mut std::ffi::c_void;
+
     unsafe {
+        let send_ptr: MsgSendPtr =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+
         let ns_screen = objc_getClass(b"NSScreen\0".as_ptr());
         if ns_screen.is_null() {
             return None;
         }
         let main_screen_sel = sel_registerName(b"mainScreen\0".as_ptr());
-        let screen = objc_msgSend(ns_screen, main_screen_sel);
+        let screen = send_ptr(ns_screen, main_screen_sel);
         if screen.is_null() {
             return None;
         }
@@ -1779,12 +1784,12 @@ fn get_work_area() -> Option<(i32, i32)> {
         #[cfg(target_arch = "aarch64")]
         {
             // On ARM64, objc_msgSend returns structs directly
-            let msg_send: unsafe extern "C" fn(
+            let msg_send_rect: unsafe extern "C" fn(
                 *mut std::ffi::c_void,
                 *mut std::ffi::c_void,
-            ) -> NSRect = std::mem::transmute(objc_msgSend as *const ());
-            visible = msg_send(screen, visible_frame_sel);
-            full = msg_send(screen, frame_sel);
+            ) -> NSRect = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            visible = msg_send_rect(screen, visible_frame_sel);
+            full = msg_send_rect(screen, frame_sel);
         }
 
         #[cfg(target_arch = "x86_64")]
@@ -2167,37 +2172,51 @@ pub fn run() {
                 let _ = window.set_background_color(Some(Color(0, 0, 0, 0)));
 
                 // macOS: ensure fully transparent NSWindow (fixes Retina border artifacts)
+                // IMPORTANT: on ARM64 (Apple Silicon), objc_msgSend is NOT variadic.
+                // We must declare it without args and transmute to typed function pointers,
+                // otherwise the compiler uses the C variadic ABI (stack-based) instead of
+                // the register-based ABI, producing garbage return values and SIGSEGV.
                 #[cfg(target_os = "macos")]
                 {
                     unsafe {
                         use std::ffi::{c_int, c_void};
                         type Id = *mut c_void;
+                        type Sel = *const c_void;
+
+                        // Typed function pointers for objc_msgSend with different signatures
+                        type MsgSendNoArgs = unsafe extern "C" fn(Id, Sel) -> Id;
+                        type MsgSendInt = unsafe extern "C" fn(Id, Sel, c_int) -> Id;
+                        type MsgSendObj = unsafe extern "C" fn(Id, Sel, Id) -> Id;
 
                         extern "C" {
-                            fn objc_msgSend(obj: Id, sel: *const c_void, ...) -> Id;
-                            fn sel_registerName(name: *const u8) -> *const c_void;
+                            fn objc_msgSend(); // raw symbol — cast before calling
+                            fn sel_registerName(name: *const u8) -> Sel;
                             fn objc_getClass(name: *const u8) -> Id;
                         }
+
+                        let send: MsgSendNoArgs = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+                        let send_int: MsgSendInt = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+                        let send_obj: MsgSendObj = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
 
                         // Get NSWindow pointer via Tauri's raw window handle
                         let ns_win: Id = window.ns_window().unwrap_or(std::ptr::null_mut() as _) as Id;
                         if !ns_win.is_null() {
                             // [nsWindow setOpaque:NO]
                             let sel_set_opaque = sel_registerName(b"setOpaque:\0".as_ptr());
-                            objc_msgSend(ns_win, sel_set_opaque, 0 as c_int);
+                            send_int(ns_win, sel_set_opaque, 0 as c_int);
 
                             // [NSColor clearColor]
                             let ns_color_class = objc_getClass(b"NSColor\0".as_ptr());
                             let sel_clear_color = sel_registerName(b"clearColor\0".as_ptr());
-                            let clear: Id = objc_msgSend(ns_color_class, sel_clear_color);
+                            let clear: Id = send(ns_color_class, sel_clear_color);
 
                             // [nsWindow setBackgroundColor:[NSColor clearColor]]
                             let sel_set_bg = sel_registerName(b"setBackgroundColor:\0".as_ptr());
-                            objc_msgSend(ns_win, sel_set_bg, clear);
+                            send_obj(ns_win, sel_set_bg, clear);
 
                             // [nsWindow setHasShadow:NO]
                             let sel_set_shadow = sel_registerName(b"setHasShadow:\0".as_ptr());
-                            objc_msgSend(ns_win, sel_set_shadow, 0 as c_int);
+                            send_int(ns_win, sel_set_shadow, 0 as c_int);
                         }
                     }
                 }
