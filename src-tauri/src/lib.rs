@@ -1876,6 +1876,27 @@ fn position_bottom_right(win: &tauri::WebviewWindow, w: f64, h: f64) {
     }
 }
 
+/// Force WebView2 to redraw with transparent background.
+/// On Windows, DWM can lose the transparent compositing after z-order changes
+/// or resize. Calling InvalidateRect forces a full repaint that restores it.
+#[cfg(target_os = "windows")]
+fn force_transparent_redraw(win: &tauri::WebviewWindow) {
+    use tauri::window::Color;
+    let _ = win.set_background_color(Some(Color(0, 0, 0, 0)));
+    if let Ok(hwnd) = win.hwnd() {
+        unsafe {
+            extern "system" {
+                fn InvalidateRect(
+                    hwnd: *mut std::ffi::c_void,
+                    rect: *const std::ffi::c_void,
+                    erase: i32,
+                ) -> i32;
+            }
+            InvalidateRect(hwnd.0 as *mut std::ffi::c_void, std::ptr::null(), 1);
+        }
+    }
+}
+
 #[tauri::command]
 fn resize_window(
     w: f64,
@@ -1899,6 +1920,8 @@ fn resize_window(
         win.set_size(LogicalSize::new(w, h))
             .map_err(|e| e.to_string())?;
         let _ = win.set_always_on_top(true);
+        #[cfg(target_os = "windows")]
+        force_transparent_redraw(&win);
 
         if let Some((old_x, old_y, old_w, old_h)) = prev {
             // Get screen dimensions for smart anchor flipping
@@ -2439,6 +2462,8 @@ pub fn run() {
                                     let _ = win.show();
                                     let _ = win.set_always_on_top(true);
                                     let _ = win.set_focus();
+                                    #[cfg(target_os = "windows")]
+                                    force_transparent_redraw(&win);
                                 }
                             }
                             "quit" => {
@@ -2529,31 +2554,16 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building Dimmy")
         .run(|app_handle, event| {
-            // Windows: re-apply transparent background when window regains focus.
-            // WebView2 can lose its transparent compositing after DWM z-order
-            // changes (another window overlapping). Forcing a redraw via
-            // InvalidateRect restores it — same thing that happens on drag.
+            // Windows: re-apply transparent background on focus and resize.
+            // WebView2 loses transparency after DWM z-order/composition changes.
             #[cfg(target_os = "windows")]
             if let tauri::RunEvent::WindowEvent {
-                event: tauri::WindowEvent::Focused(true),
+                event: tauri::WindowEvent::Focused(true) | tauri::WindowEvent::Resized(_),
                 ..
             } = &event
             {
                 if let Some(win) = app_handle.get_webview_window("main") {
-                    use tauri::window::Color;
-                    let _ = win.set_background_color(Some(Color(0, 0, 0, 0)));
-                    if let Ok(hwnd) = win.hwnd() {
-                        unsafe {
-                            extern "system" {
-                                fn InvalidateRect(
-                                    hwnd: *mut std::ffi::c_void,
-                                    rect: *const std::ffi::c_void,
-                                    erase: i32,
-                                ) -> i32;
-                            }
-                            InvalidateRect(hwnd.0 as *mut std::ffi::c_void, std::ptr::null(), 1);
-                        }
-                    }
+                    force_transparent_redraw(&win);
                 }
             }
 
