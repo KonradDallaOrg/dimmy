@@ -9,7 +9,8 @@ const PILL_H = 32 + MARGIN;
 const REC_H = 64 + MARGIN;
 const SETTINGS_W = 480 + MARGIN;
 const SETTINGS_H = 520 + MARGIN;
-const BAR_W = 3;
+const BAR_COUNT = 28;
+const BAR_W = 7;
 const BAR_GAP = 2;
 
 // LLM style -> dot color map
@@ -545,10 +546,8 @@ async function pollWaveform() {
     }
     const norm = Math.min(1.0, amp / peakAmplitude * 0.85);
     energyHistory.push(norm);
-    // Keep enough history to fill widest possible view (~200 bars at 3px+2px)
-    const maxBars = 200;
-    if (energyHistory.length > maxBars) {
-      energyHistory = energyHistory.slice(energyHistory.length - maxBars);
+    if (energyHistory.length > BAR_COUNT) {
+      energyHistory = energyHistory.slice(energyHistory.length - BAR_COUNT);
     }
     drawBars();
   } catch (_) {}
@@ -562,12 +561,10 @@ function drawBars() {
 
   waveformCtx.clearRect(0, 0, w, h);
 
-  // Fill entire width: compute how many bars fit
-  const barCount = Math.floor((w + BAR_GAP) / (BAR_W + BAR_GAP));
-  const totalW = barCount * (BAR_W + BAR_GAP) - BAR_GAP;
+  const totalW = BAR_COUNT * (BAR_W + BAR_GAP) - BAR_GAP;
   const offsetX = (w - totalW) / 2;
 
-  for (let i = 0; i < barCount; i++) {
+  for (let i = 0; i < BAR_COUNT; i++) {
     const val = i < energyHistory.length ? energyHistory[i] : 0;
     const barH = Math.max(2, Math.floor(val * h));
     const x = offsetX + i * (BAR_W + BAR_GAP);
