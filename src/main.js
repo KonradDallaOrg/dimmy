@@ -292,12 +292,12 @@ pill.addEventListener('wheel', async (e) => {
       showStatus(result.style);
     }
     updateStyleIndicator();
-    // Flash status for 1.5s
+    // Flash status for 3s
     if (styleFlashTimeout) clearTimeout(styleFlashTimeout);
     styleFlashTimeout = setTimeout(() => {
       hideStatus();
       styleFlashTimeout = null;
-    }, 1500);
+    }, 3000);
   } catch (err) {
     console.error('cycle error:', err);
   }
