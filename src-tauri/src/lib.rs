@@ -2524,6 +2524,24 @@ pub fn run() {
                     std::thread::sleep(std::time::Duration::from_millis(10));
                 }
             });
+
+            // Windows: periodic transparency guard.
+            // WebView2 loses transparent compositing unpredictably (alt-tab,
+            // virtual desktop switch, nearby window resize, display scaling, etc.).
+            // A 500ms timer is the only reliable way to keep the pill transparent.
+            #[cfg(target_os = "windows")]
+            {
+                let transparency_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                        if let Some(win) = transparency_handle.get_webview_window("main") {
+                            force_transparent_redraw(&win);
+                        }
+                    }
+                });
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
