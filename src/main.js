@@ -9,7 +9,7 @@ const PILL_H = 32 + MARGIN;
 const REC_H = 64 + MARGIN;
 const SETTINGS_W = 480 + MARGIN;
 const SETTINGS_H = 520 + MARGIN;
-const BAR_COUNT = 28;
+const BAR_COUNT = 39;
 const BAR_W = 7;
 const BAR_GAP = 2;
 
