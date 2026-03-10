@@ -2340,12 +2340,16 @@ pub fn run() {
                     if let Ok(hwnd) = window.hwnd() {
                         let hwnd = hwnd.0 as *mut c_void;
                         unsafe {
-                            // WS_POPUP removes DWM caption frame
+                            // WS_POPUP removes DWM caption frame.
+                            // Remove WS_CLIPCHILDREN — it prevents the WebView2
+                            // child from being repainted after DWM recomposition,
+                            // causing the white background flicker (wry#1331).
+                            const WS_CLIPCHILDREN: isize = 0x02000000;
                             let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
                             SetWindowLongPtrW(
                                 hwnd,
                                 GWL_STYLE,
-                                (style | WS_POPUP) & !0x00C00000 | WS_VISIBLE,
+                                (style | WS_POPUP) & !0x00C00000 & !WS_CLIPCHILDREN | WS_VISIBLE,
                             );
 
                             // WS_EX_LAYERED + WS_EX_TOOLWINDOW: layered window
