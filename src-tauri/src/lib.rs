@@ -868,9 +868,10 @@ async fn stop_recording(
         .lock()
         .map_err(|e| e.to_string())?;
 
+    let sr = *state.audio_sample_rate.lock().map_err(|e| e.to_string())?;
+
     if debug_log_on {
-        let total_duration_secs = buffer.len() as f64
-            / *state.audio_sample_rate.lock().map_err(|e| e.to_string())? as f64;
+        let total_duration_secs = buffer.len() as f64 / sr as f64;
         debug_transcription(&format!(
             "---------- STOP RECORDING | total_samples={} | duration={:.2}s ----------",
             buffer.len(),
@@ -882,8 +883,6 @@ async fn stop_recording(
         "chunk-status",
         serde_json::json!({ "index": 0, "status": "final" }),
     );
-
-    let sr = *state.audio_sample_rate.lock().map_err(|e| e.to_string())?;
     let preprocess_final = *state
         .preprocessing_enabled
         .lock()
@@ -900,45 +899,45 @@ async fn stop_recording(
         .lock()
         .map_err(|e| e.to_string())?
         .clone();
+    let raw_sample_count = buffer.len();
+    let raw = audio::RawAudio { samples: buffer, sample_rate: sr };
+
+    // Audio debug: save raw session WAV
     if let Some(ref dir) = debug_session_dir {
-        if let Ok(raw_wav) = audio::encode_wav(&buffer, sr) {
+        if let Ok(raw_wav) = raw.to_wav() {
             save_debug_wav(dir, "session_raw.wav", &raw_wav);
         }
     }
 
-    // Preprocess final buffer: highpass + VAD + normalize (if enabled)
-    let audio_data = if preprocess_final {
-        let processed = preprocess::process_buffer(&buffer, sr);
-        if processed.is_empty() {
-            // Still save metadata even when no speech detected
-            if let Some(ref dir) = debug_session_dir {
-                let duration = buffer.len() as f64 / sr as f64;
-                save_debug_metadata(dir, sr, &debug_device, true, duration, 0);
-            }
-            return Err("No speech detected in recording".into());
+    // Typed pipeline: RawAudio → ProcessedAudio → WavPayload
+    let processed = raw.preprocess(preprocess_final);
+    if processed.is_empty() {
+        // Still save metadata even when no speech detected
+        if let Some(ref dir) = debug_session_dir {
+            let duration = raw_sample_count as f64 / sr as f64;
+            save_debug_metadata(dir, sr, &debug_device, true, duration, 0);
         }
-        processed
-    } else {
-        buffer
-    };
-    // Downsample to 16kHz before sending to Whisper (reduces upload by ~3x)
-    let resampled = preprocess::downsample_to_16k(&audio_data, sr);
-    let wav_data = audio::encode_wav(&resampled, 16000).map_err(|e| e.to_string())?;
+        return Err("No speech detected in recording".into());
+    }
 
-    // Audio debug: save processed session WAV at original sample rate (not downsampled)
+    // Audio debug: save processed session WAV at original sample rate
     if let Some(ref dir) = debug_session_dir {
-        if let Ok(proc_wav) = audio::encode_wav(&audio_data, sr) {
+        if let Ok(proc_wav) = processed.to_wav() {
             save_debug_wav(dir, "session_processed.wav", &proc_wav);
         }
-        let duration = audio_data.len() as f64 / sr as f64;
+        let duration = processed.samples.len() as f64 / sr as f64;
         save_debug_metadata(dir, sr, &debug_device, preprocess_final, duration, 0);
     }
 
+    // Downsample to 16kHz + encode WAV
+    let audio::WavPayload { data: wav_data, duration_secs: wav_duration } =
+        processed.to_wav_payload().map_err(|e| e.to_string())?;
+
     if debug_log_on {
         debug_transcription(&format!(
-            "FINAL | wav_size={} bytes | audio_samples={} | sending to Whisper...",
+            "FINAL | wav_size={} bytes | duration={:.2}s | sending to Whisper...",
             wav_data.len(),
-            audio_data.len()
+            wav_duration
         ));
     }
     let final_send_time = std::time::Instant::now();

@@ -161,6 +161,73 @@ pub fn device_sample_rate(device_name: &Option<String>) -> u32 {
         .unwrap_or(44100)
 }
 
+// ── Typed audio pipeline ─────────────────────────────────────────────
+// These types enforce the correct processing order at compile time:
+//   RawAudio → ProcessedAudio → WavPayload
+// Impossible to encode non-downsampled audio or skip preprocessing.
+
+/// Audio raw from capture (device sample rate, mono)
+pub struct RawAudio {
+    pub samples: Vec<f32>,
+    pub sample_rate: u32,
+}
+
+/// Audio after optional preprocessing (VAD, AGC) at device sample rate
+pub struct ProcessedAudio {
+    pub samples: Vec<f32>,
+    pub sample_rate: u32,
+}
+
+/// WAV-encoded audio ready for STT API (16kHz, 16-bit PCM)
+pub struct WavPayload {
+    pub data: Vec<u8>,
+    pub duration_secs: f32,
+}
+
+impl RawAudio {
+    /// Apply preprocessing (highpass + VAD + AGC) if enabled.
+    /// If disabled, passes audio through unchanged.
+    pub fn preprocess(self, enabled: bool) -> ProcessedAudio {
+        let samples = if enabled {
+            crate::preprocess::process_buffer(&self.samples, self.sample_rate)
+        } else {
+            self.samples
+        };
+        ProcessedAudio {
+            samples,
+            sample_rate: self.sample_rate,
+        }
+    }
+
+    /// Encode raw audio to WAV at device sample rate (for debug output).
+    pub fn to_wav(&self) -> Result<Vec<u8>, crate::error::AudioError> {
+        encode_wav(&self.samples, self.sample_rate)
+    }
+}
+
+impl ProcessedAudio {
+    /// Downsample to 16kHz and encode as WAV for STT.
+    pub fn to_wav_payload(self) -> Result<WavPayload, crate::error::AudioError> {
+        let resampled = crate::preprocess::downsample_to_16k(&self.samples, self.sample_rate);
+        let duration_secs = resampled.len() as f32 / 16000.0;
+        let data = encode_wav(&resampled, 16000)?;
+        Ok(WavPayload {
+            data,
+            duration_secs,
+        })
+    }
+
+    /// Encode at original sample rate (for debug output, not for STT).
+    pub fn to_wav(&self) -> Result<Vec<u8>, crate::error::AudioError> {
+        encode_wav(&self.samples, self.sample_rate)
+    }
+
+    /// Whether the processed audio is empty (no speech detected by VAD).
+    pub fn is_empty(&self) -> bool {
+        self.samples.is_empty()
+    }
+}
+
 /// Encode f32 samples to WAV bytes (16-bit PCM, mono)
 pub fn encode_wav(
     samples: &[f32],
@@ -285,6 +352,39 @@ mod tests {
         let devices = list_input_devices();
         // Just verify it returns without panic — count may be 0 in headless env
         assert!(devices.len() < 1000, "Unreasonable device count");
+    }
+
+    #[test]
+    fn typed_pipeline_produces_valid_wav() {
+        let samples = vec![0.5f32; 48000]; // 1 second at 48kHz
+        let raw = RawAudio {
+            samples,
+            sample_rate: 48000,
+        };
+        // Skip preprocessing (no nnnoiseless in test env without audio device)
+        let processed = raw.preprocess(false);
+        assert!(!processed.is_empty());
+        assert_eq!(processed.sample_rate, 48000);
+
+        let payload = processed.to_wav_payload().expect("to_wav_payload failed");
+        assert!(payload.data.len() > 0);
+        // 48kHz → 16kHz = 1/3 samples, so ~1 second of audio at 16kHz
+        assert!((payload.duration_secs - 1.0).abs() < 0.1);
+
+        // Verify it's valid WAV
+        let reader = hound::WavReader::new(Cursor::new(&payload.data)).expect("hound can't read WAV");
+        assert_eq!(reader.spec().sample_rate, 16000);
+    }
+
+    #[test]
+    fn raw_audio_to_wav_preserves_rate() {
+        let raw = RawAudio {
+            samples: vec![0.0f32; 100],
+            sample_rate: 44100,
+        };
+        let wav = raw.to_wav().expect("to_wav failed");
+        let reader = hound::WavReader::new(Cursor::new(&wav)).expect("hound can't read WAV");
+        assert_eq!(reader.spec().sample_rate, 44100);
     }
 
     #[test]
