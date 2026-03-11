@@ -1,5 +1,6 @@
 mod audio;
 pub mod error;
+pub mod provider;
 mod hotkey;
 mod llm;
 mod preprocess;
@@ -403,7 +404,7 @@ fn migrate_plaintext_key() {
                 if let Some(key) = v["api_key"].as_str() {
                     if !key.is_empty() {
                         let api_url = v["api_url"].as_str().unwrap_or(DEFAULT_API_URL);
-                        let provider = url_to_provider(api_url);
+                        let provider = Provider::from_url(api_url);
                         log(&format!(
                             "Migrating plaintext API key to secure storage (provider={})...",
                             provider
@@ -427,27 +428,10 @@ fn migrate_plaintext_key() {
 // Keys are stored per-provider so switching providers doesn't lose keys.
 // Keyring entries: "dimmy" / "api-key-{provider}" and "llm-key-{provider}"
 
-/// Derive a provider identifier from a URL hostname.
-fn url_to_provider(url: &str) -> &str {
-    if url.contains("groq.com") {
-        "groq"
-    } else if url.contains("openai.com") {
-        "openai"
-    } else if url.contains("openrouter.ai") {
-        "openrouter"
-    } else if url.contains("googleapis.com") {
-        "gemini"
-    } else if url.contains("deepgram.com") {
-        "deepgram"
-    } else if url.contains("anthropic.com") {
-        "anthropic"
-    } else {
-        "custom"
-    }
-}
+use provider::Provider;
 
-fn save_key_for_provider(prefix: &str, provider: &str, key: &str) -> Result<(), String> {
-    let entry_name = format!("{}-{}", prefix, provider);
+fn save_key_for_provider(prefix: &str, provider: Provider, key: &str) -> Result<(), String> {
+    let entry_name = format!("{}-{}", prefix, provider.as_str());
     let entry = keyring::Entry::new("dimmy", &entry_name).map_err(|e| {
         log(&format!(
             "ERROR: keyring Entry::new({}) failed: {}",
@@ -466,8 +450,8 @@ fn save_key_for_provider(prefix: &str, provider: &str, key: &str) -> Result<(), 
     Ok(())
 }
 
-fn load_key_for_provider(prefix: &str, provider: &str) -> Option<String> {
-    let entry_name = format!("{}-{}", prefix, provider);
+fn load_key_for_provider(prefix: &str, provider: Provider) -> Option<String> {
+    let entry_name = format!("{}-{}", prefix, provider.as_str());
     match keyring::Entry::new("dimmy", &entry_name) {
         Ok(entry) => match entry.get_password() {
             Ok(key) => {
@@ -480,8 +464,8 @@ fn load_key_for_provider(prefix: &str, provider: &str) -> Option<String> {
     }
 }
 
-fn has_key_for_provider(prefix: &str, provider: &str) -> bool {
-    let entry_name = format!("{}-{}", prefix, provider);
+fn has_key_for_provider(prefix: &str, provider: Provider) -> bool {
+    let entry_name = format!("{}-{}", prefix, provider.as_str());
     match keyring::Entry::new("dimmy", &entry_name) {
         Ok(entry) => entry.get_password().is_ok(),
         Err(_) => false,
@@ -499,7 +483,7 @@ fn migrate_keyring_to_per_provider(api_url: &str, llm_api_url: &str) {
     // Migrate transcription key
     if let Ok(entry) = keyring::Entry::new("dimmy", "api-key") {
         if let Ok(key) = entry.get_password() {
-            let provider = url_to_provider(api_url);
+            let provider = Provider::from_url(api_url);
             log(&format!("Migrating old api-key to api-key-{}", provider));
             let _ = save_key_for_provider("api-key", provider, &key);
             delete_key("dimmy", "api-key");
@@ -508,7 +492,7 @@ fn migrate_keyring_to_per_provider(api_url: &str, llm_api_url: &str) {
     // Migrate LLM key
     if let Ok(entry) = keyring::Entry::new("dimmy", "llm-api-key") {
         if let Ok(key) = entry.get_password() {
-            let provider = url_to_provider(llm_api_url);
+            let provider = Provider::from_url(llm_api_url);
             log(&format!(
                 "Migrating old llm-api-key to llm-key-{}",
                 provider
@@ -1023,7 +1007,7 @@ fn set_config(
     ));
 
     // Save transcription API key for the provider derived from the URL
-    let transcription_provider = url_to_provider(&api_url);
+    let transcription_provider = Provider::from_url(&api_url);
     if let Some(ref key) = api_key {
         if !key.is_empty() {
             save_key_for_provider("api-key", transcription_provider, key)?;
@@ -1033,7 +1017,7 @@ fn set_config(
 
     // Handle separate LLM API key (provider derived from LLM URL)
     let llm_url_for_provider = llm_api_url.as_deref().unwrap_or(&api_url);
-    let llm_provider = url_to_provider(llm_url_for_provider);
+    let llm_provider = Provider::from_url(llm_url_for_provider);
     if let Some(ref key) = llm_api_key {
         if !key.is_empty() {
             save_key_for_provider("llm-key", llm_provider, key)?;
@@ -1168,14 +1152,14 @@ fn set_config(
 
     // When provider changes, load the stored key for the new provider into AppState
     if api_key.is_none() || api_key.as_deref() == Some("") {
-        let provider = url_to_provider(&api_url);
+        let provider = Provider::from_url(&api_url);
         if let Some(key) = load_key_for_provider("api-key", provider) {
             *state.api_key.lock().map_err(|e| e.to_string())? = Some(key);
         }
     }
     if llm_api_key.is_none() || llm_api_key.as_deref() == Some("") {
         let llm_url = state.llm_api_url.lock().map_err(|e| e.to_string())?.clone();
-        let provider = url_to_provider(&llm_url);
+        let provider = Provider::from_url(&llm_url);
         if let Some(key) = load_key_for_provider("llm-key", provider) {
             *state.llm_api_key.lock().map_err(|e| e.to_string())? = Some(key);
         }
@@ -1245,19 +1229,19 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
     let tones: Vec<&str> = llm::LlmTone::ALL.iter().map(|t| t.as_str()).collect();
 
     // Per-provider key flags
-    let has_groq_key = has_key_for_provider("api-key", "groq");
-    let has_openai_key = has_key_for_provider("api-key", "openai");
-    let has_gemini_key = has_key_for_provider("api-key", "gemini");
-    let has_deepgram_key = has_key_for_provider("api-key", "deepgram");
-    let has_custom_key = has_key_for_provider("api-key", "custom");
+    let has_groq_key = has_key_for_provider("api-key", Provider::Groq);
+    let has_openai_key = has_key_for_provider("api-key", Provider::OpenAI);
+    let has_gemini_key = has_key_for_provider("api-key", Provider::Gemini);
+    let has_deepgram_key = has_key_for_provider("api-key", Provider::Deepgram);
+    let has_custom_key = has_key_for_provider("api-key", Provider::Custom);
     // LLM key flags: check dedicated llm-key first, fall back to api-key for same provider.
     // Keys are per-provider — if you entered an OpenAI key for transcription, it works for LLM too.
-    let has_llm_groq_key = has_key_for_provider("llm-key", "groq") || has_key_for_provider("api-key", "groq");
-    let has_llm_openai_key = has_key_for_provider("llm-key", "openai") || has_key_for_provider("api-key", "openai");
-    let has_llm_openrouter_key = has_key_for_provider("llm-key", "openrouter") || has_key_for_provider("api-key", "openrouter");
-    let has_llm_gemini_key = has_key_for_provider("llm-key", "gemini") || has_key_for_provider("api-key", "gemini");
-    let has_llm_anthropic_key = has_key_for_provider("llm-key", "anthropic") || has_key_for_provider("api-key", "anthropic");
-    let has_llm_custom_key = has_key_for_provider("llm-key", "custom") || has_key_for_provider("api-key", "custom");
+    let has_llm_groq_key = has_key_for_provider("llm-key", Provider::Groq) || has_key_for_provider("api-key", Provider::Groq);
+    let has_llm_openai_key = has_key_for_provider("llm-key", Provider::OpenAI) || has_key_for_provider("api-key", Provider::OpenAI);
+    let has_llm_openrouter_key = has_key_for_provider("llm-key", Provider::OpenRouter) || has_key_for_provider("api-key", Provider::OpenRouter);
+    let has_llm_gemini_key = has_key_for_provider("llm-key", Provider::Gemini) || has_key_for_provider("api-key", Provider::Gemini);
+    let has_llm_anthropic_key = has_key_for_provider("llm-key", Provider::Anthropic) || has_key_for_provider("api-key", Provider::Anthropic);
+    let has_llm_custom_key = has_key_for_provider("llm-key", Provider::Custom) || has_key_for_provider("api-key", Provider::Custom);
 
     Ok(serde_json::json!({
         "has_key": has_key,
@@ -1359,7 +1343,7 @@ async fn process_with_llm(
         if llm_key.is_some() {
             llm_key
         } else {
-            let llm_provider = url_to_provider(&api_url);
+            let llm_provider = Provider::from_url(&api_url);
             load_key_for_provider("api-key", llm_provider)
         }
     };
@@ -2145,8 +2129,8 @@ pub fn run() {
     migrate_keyring_to_per_provider(&file_cfg.api_url, &file_cfg.llm_api_url);
 
     // Load the key for the current provider
-    let transcription_provider = url_to_provider(&file_cfg.api_url);
-    let llm_provider = url_to_provider(&file_cfg.llm_api_url);
+    let transcription_provider = Provider::from_url(&file_cfg.api_url);
+    let llm_provider = Provider::from_url(&file_cfg.llm_api_url);
     let stored_key = load_key_for_provider("api-key", transcription_provider);
     let stored_llm_key = load_key_for_provider("llm-key", llm_provider);
     // SECURITY: never log the actual key value — only whether one exists

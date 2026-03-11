@@ -1,6 +1,8 @@
 use base64::Engine;
 use reqwest::multipart;
 
+use crate::provider::Provider;
+
 #[derive(serde::Deserialize)]
 struct TranscriptionResponse {
     text: String,
@@ -19,23 +21,17 @@ pub async fn transcribe_audio(
 ) -> Result<String, crate::error::TranscribeError> {
     // SECURITY: reject HTTP URLs to prevent API key leak over plaintext,
     // except localhost/127.0.0.1 for self-hosted setups
-    if let Ok(parsed) = url::Url::parse(api_url) {
-        if parsed.scheme() == "http" {
-            let host = parsed.host_str().unwrap_or("");
-            if host != "localhost" && host != "127.0.0.1" && host != "::1" {
-                return Err(crate::error::TranscribeError::InsecureUrl(api_url.to_string()));
-            }
+    if !Provider::is_secure_url(api_url) {
+        return Err(crate::error::TranscribeError::InsecureUrl(api_url.to_string()));
+    }
+
+    // Route to provider-specific path
+    match Provider::from_url(api_url) {
+        Provider::Deepgram => return transcribe_audio_deepgram(api_url, api_key, wav_data, language).await,
+        Provider::Gemini if api_url.contains("generateContent") => {
+            return transcribe_audio_gemini(api_url, api_key, wav_data, language).await;
         }
-    }
-
-    // Route to Deepgram-specific path
-    if api_url.contains("deepgram.com") {
-        return transcribe_audio_deepgram(api_url, api_key, wav_data, language).await;
-    }
-
-    // Route to Gemini-specific path if the URL points to googleapis.com
-    if api_url.contains("googleapis.com") && api_url.contains("generateContent") {
-        return transcribe_audio_gemini(api_url, api_key, wav_data, language).await;
+        _ => {}
     }
 
     let file_part = multipart::Part::bytes(wav_data.to_vec())

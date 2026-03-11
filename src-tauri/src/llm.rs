@@ -306,15 +306,10 @@ pub async fn process_text(
 
     // SECURITY: reject HTTP URLs to prevent API key leak over plaintext,
     // except localhost/127.0.0.1 for self-hosted setups
-    if let Ok(parsed) = url::Url::parse(api_url) {
-        if parsed.scheme() == "http" {
-            let host = parsed.host_str().unwrap_or("");
-            if host != "localhost" && host != "127.0.0.1" && host != "::1" {
-                return Err(crate::error::LlmError::Network(
-                    format!("Refusing HTTP (HTTPS required): {}", api_url),
-                ));
-            }
-        }
+    if !crate::provider::Provider::is_secure_url(api_url) {
+        return Err(crate::error::LlmError::Network(
+            format!("Refusing HTTP (HTTPS required): {}", api_url),
+        ));
     }
 
     // Wrap transcription in tags so the LLM sees it as data, not a conversation.
@@ -334,7 +329,7 @@ pub async fn process_text(
         .build()?;
 
     // Route to Anthropic Messages API if URL points to anthropic.com
-    let is_anthropic = api_url.contains("anthropic.com");
+    let is_anthropic = crate::provider::Provider::from_url(api_url).is_anthropic();
 
     let response = if is_anthropic {
         let body = serde_json::json!({
