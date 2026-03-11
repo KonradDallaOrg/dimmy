@@ -14,6 +14,7 @@
       <span id="device-name">Loading...</span>
       <span id="timer" class="hide">00:00</span>
       <span id="status-text" class="hide"></span>
+      <canvas id="waveform-inline" class="hide"></canvas>
       <div id="chunk-dots"></div>
       <button id="settings-btn" title="Settings">&#9881;</button>
     </div>
@@ -325,6 +326,11 @@
                 <option value="dark">Dark</option>
                 <option value="light">Light</option>
               </select>
+
+              <label class="checkbox-label">
+                <input type="checkbox" id="compact-mode-enabled" />
+                Compact recording <span class="hint-text">(pill stays small, no transcript preview)</span>
+              </label>
             </div>
 
             <!-- ===== STATS ===== -->

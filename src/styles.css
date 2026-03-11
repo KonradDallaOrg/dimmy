@@ -125,6 +125,20 @@ body {
   margin: 2px;
 }
 
+/* Recording border — subtle glow when actively recording */
+#container.recording-active {
+  border: 1.5px solid rgba(255, 255, 255, 0.20);
+  margin: 0.5px; /* compensate for border so total size stays same */
+}
+[data-theme="light"] #container.recording-active {
+  border-color: rgba(0, 0, 0, 0.15);
+}
+@media (prefers-color-scheme: light) {
+  [data-theme="auto"] #container.recording-active {
+    border-color: rgba(0, 0, 0, 0.15);
+  }
+}
+
 /* Expanded views (recording, settings) need rectangular corners, not pill-shaped */
 #container.expanded-mode {
   border-radius: 12px;
@@ -144,21 +158,21 @@ body {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #34d399;
+  background: #41B0B1;
   flex-shrink: 0;
   transition: background 0.3s, box-shadow 0.3s;
-  box-shadow: 0 0 4px rgba(52, 211, 153, 0.3);
+  box-shadow: 0 0 4px rgba(65, 176, 177, 0.3);
 }
 
 #dot.recording {
-  background: #f87171;
-  box-shadow: 0 0 8px rgba(248, 113, 113, 0.5);
+  background: #ef4444;
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.4);
   animation: pulse 1s ease-in-out infinite;
 }
 
 #dot.transcribing {
-  background: #818cf8;
-  box-shadow: 0 0 8px rgba(129, 140, 248, 0.4);
+  background: #5198C9;
+  box-shadow: 0 0 8px rgba(81, 152, 201, 0.4);
   animation: pulse 1.2s ease-in-out infinite;
 }
 
@@ -169,19 +183,19 @@ body {
 
 /* LLM style indicator — uses CSS custom property for color */
 #dot.styled {
-  background: var(--style-color, #34d399);
-  box-shadow: 0 0 4px var(--style-color, rgba(52, 211, 153, 0.3));
+  background: var(--style-color, #41B0B1);
+  box-shadow: 0 0 4px var(--style-color, rgba(65, 176, 177, 0.3));
 }
 
 #dot.llm-processing {
-  background: #a78bfa;
-  box-shadow: 0 0 8px rgba(167, 139, 250, 0.5);
-  animation: pulse-purple 1s ease-in-out infinite;
+  background: #5198C9;
+  box-shadow: 0 0 8px rgba(81, 152, 201, 0.5);
+  animation: pulse-blue 1s ease-in-out infinite;
 }
 
-@keyframes pulse-purple {
-  0%, 100% { opacity: 1; box-shadow: 0 0 8px rgba(167, 139, 250, 0.5); }
-  50% { opacity: 0.5; box-shadow: 0 0 14px rgba(167, 139, 250, 0.7); }
+@keyframes pulse-blue {
+  0%, 100% { opacity: 1; box-shadow: 0 0 8px rgba(81, 152, 201, 0.5); }
+  50% { opacity: 0.5; box-shadow: 0 0 14px rgba(81, 152, 201, 0.7); }
 }
 
 @keyframes pulse {
@@ -202,7 +216,7 @@ body {
 #timer {
   font-size: 10px;
   font-weight: 600;
-  color: #f87171;
+  color: #ef4444;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.5px;
 }
@@ -213,6 +227,14 @@ body {
   white-space: nowrap;
   letter-spacing: 0.3px;
   text-transform: uppercase;
+}
+
+/* Inline waveform — compact mode, lives inside pill row */
+#waveform-inline {
+  height: 20px;
+  flex: 1;
+  min-width: 0;
+  border-radius: 2px;
 }
 
 /* Chunk dots — inside pill row */
@@ -235,10 +257,10 @@ body {
   animation: pulse 0.6s ease-in-out infinite;
 }
 
-.chunk-dot.done { background: #34d399; }
-.chunk-dot.error { background: #f87171; }
+.chunk-dot.done { background: #41B0B1; }
+.chunk-dot.error { background: #ef4444; }
 .chunk-dot.final {
-  background: #818cf8;
+  background: #5198C9;
   animation: pulse 0.8s ease-in-out infinite;
 }
 
@@ -453,7 +475,7 @@ body {
 
 #key-hint,
 #llm-key-hint {
-  color: #34d399;
+  color: #41B0B1;
   font-size: 8px;
   font-weight: 400;
 }
@@ -572,7 +594,7 @@ body {
 }
 
 #save-btn {
-  background: linear-gradient(135deg, #6366f1, #818cf8);
+  background: linear-gradient(135deg, #41B0B1, #5198C9, #818cf8);
   color: white;
   border: none;
   padding: 6px 14px;
@@ -623,7 +645,7 @@ body {
 }
 
 #update-status.checking { color: var(--text-tertiary); }
-#update-status.available { color: #34d399; cursor: pointer; }
+#update-status.available { color: #41B0B1; cursor: pointer; }
 #update-status.available:hover { text-decoration: underline; }
 #update-status.error { color: #fbbf24; }
 #update-status.installing { color: #818cf8; }

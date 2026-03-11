@@ -15,7 +15,7 @@ const BAR_GAP = 2;
 
 // LLM style -> dot color map
 const STYLE_COLORS = {
-  off: '#34d399',      // green — LLM off
+  off: '#41B0B1',      // teal — LLM off
   correct: '#2dd4bf',  // teal
   summarize: '#fbbf24', // amber
   elaborate: '#4ade80', // light green
@@ -38,6 +38,9 @@ const timerEl = document.getElementById('timer');
 const statusText = document.getElementById('status-text');
 const settingsBtn = document.getElementById('settings-btn');
 const chunkDots = document.getElementById('chunk-dots');
+const waveformInline = document.getElementById('waveform-inline');
+const waveformInlineCtx = waveformInline.getContext('2d');
+const compactModeCheckbox = document.getElementById('compact-mode-enabled');
 
 const recPanel = document.getElementById('rec-panel');
 const waveformCanvas = document.getElementById('waveform');
@@ -89,6 +92,7 @@ function applyTheme(theme) {
 // Apply saved theme immediately on load
 applyTheme(localStorage.getItem('dimmy-theme') || 'auto');
 
+
 themeSelect.addEventListener('change', () => applyTheme(themeSelect.value));
 
 // Accessibility buttons (macOS)
@@ -127,6 +131,7 @@ let shrinkTimeout = null;
 let energyHistory = [];
 let waveformPending = false;
 let peakAmplitude = 0.0001; // auto-scaling: tracks recent peak mic level
+let compactMode = false;
 
 // LLM state
 let llmEnabled = false;
@@ -164,7 +169,7 @@ function switchView(view) {
     setWindowSizeWH(MICRO_W, PILL_H);
   } else if (view === 'pill') {
     pill.classList.remove('micro');
-    deviceName.classList.remove('hide');
+    if (!isRecording) deviceName.classList.remove('hide');
     setWindowSizeWH(W, PILL_H);
   } else if (view === 'rec') {
     pill.classList.remove('micro');
@@ -213,6 +218,7 @@ function updateStyleIndicator() {
 // INIT
 // ========================
 async function init() {
+  compactMode = localStorage.getItem('dimmy-compact') === 'true';
   try {
     const name = await invoke('get_audio_device');
     deviceName.textContent = name;
@@ -404,8 +410,9 @@ async function startRecording() {
   isRecording = true;
   settingsBtn.disabled = true;
   dot.className = 'recording';
+  container.classList.add('recording-active');
   showTimer();
-  showStatus('rec');
+  if (!compactMode) showStatus('rec');
 
   chunkTexts = [];
   energyHistory = [];
@@ -413,7 +420,13 @@ async function startRecording() {
   transcriptText.textContent = '';
   chunkDots.innerHTML = '';
 
-  switchView('rec');
+  if (compactMode) {
+    // Compact: stay at pill height, show inline waveform
+    waveformInline.classList.remove('hide');
+    switchView('pill');
+  } else {
+    switchView('rec');
+  }
 
   recordingStart = Date.now();
   updateTimerDisplay();
@@ -426,7 +439,11 @@ async function startRecording() {
   setTimeout(() => {
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        setupCanvas();
+        if (compactMode) {
+          setupInlineCanvas();
+        } else {
+          setupCanvas();
+        }
         waveformInterval = setInterval(pollWaveform, 30);
       });
     });
@@ -439,6 +456,8 @@ async function stopRecording() {
   const speakingSecs = (Date.now() - recordingStart) / 1000;
 
   dot.className = 'transcribing';
+  container.classList.remove('recording-active');
+  waveformInline.classList.add('hide');
   showStatus('transcribing');
 
   try {
@@ -483,6 +502,8 @@ async function stopRecording() {
     }, 2000);
   } catch (err) {
     isRecording = false;
+    container.classList.remove('recording-active');
+    waveformInline.classList.add('hide');
     dot.className = 'error';
     showStatus(String(err).substring(0, 30));
     setTimeout(() => {
@@ -532,6 +553,14 @@ function setupCanvas() {
   waveformCtx.scale(dpr, dpr);
 }
 
+function setupInlineCanvas() {
+  const rect = waveformInline.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  waveformInline.width = rect.width * dpr;
+  waveformInline.height = rect.height * dpr;
+  waveformInlineCtx.scale(dpr, dpr);
+}
+
 // PS1-style: one RMS energy reading per tick, scrolling bar history
 async function pollWaveform() {
   if (waveformPending) return;
@@ -546,8 +575,10 @@ async function pollWaveform() {
     }
     const norm = Math.min(1.0, amp / peakAmplitude * 0.85);
     energyHistory.push(norm);
-    if (energyHistory.length > BAR_COUNT) {
-      energyHistory = energyHistory.slice(energyHistory.length - BAR_COUNT);
+    // Keep enough history for whichever canvas is active
+    const maxBars = compactMode ? 200 : BAR_COUNT;
+    if (energyHistory.length > maxBars) {
+      energyHistory = energyHistory.slice(energyHistory.length - maxBars);
     }
     drawBars();
   } catch (_) {}
@@ -555,31 +586,45 @@ async function pollWaveform() {
 }
 
 function drawBars() {
-  const rect = waveformCanvas.getBoundingClientRect();
+  const canvas = compactMode ? waveformInline : waveformCanvas;
+  const ctx = compactMode ? waveformInlineCtx : waveformCtx;
+  const rect = canvas.getBoundingClientRect();
   const w = rect.width;
   const h = rect.height;
 
-  waveformCtx.clearRect(0, 0, w, h);
+  ctx.clearRect(0, 0, w, h);
 
-  const totalW = BAR_COUNT * (BAR_W + BAR_GAP) - BAR_GAP;
-  const offsetX = (w - totalW) / 2;
+  // Compact mode: adapt bar sizing to available width
+  const barW = compactMode ? 3 : BAR_W;
+  const barGap = compactMode ? 1.5 : BAR_GAP;
+  const barCount = compactMode ? Math.floor((w + barGap) / (barW + barGap)) : BAR_COUNT;
 
-  for (let i = 0; i < BAR_COUNT; i++) {
-    const val = i < energyHistory.length ? energyHistory[i] : 0;
+  // Trim history to bar count
+  const history = energyHistory.slice(-barCount);
+
+  const totalW = barCount * (barW + barGap) - barGap;
+  // Compact: align bars to the right so new bars appear on the right edge
+  // Normal: center bars in the canvas
+  const offsetX = compactMode
+    ? w - totalW + (barCount - history.length) * (barW + barGap)
+    : (w - totalW) / 2;
+
+  for (let i = 0; i < history.length; i++) {
+    const val = history[i];
     const barH = Math.max(2, Math.floor(val * h));
-    const x = offsetX + i * (BAR_W + BAR_GAP);
+    const x = offsetX + i * (barW + barGap);
 
     if (val >= 0.7) {
-      waveformCtx.fillStyle = '#818cf8';
+      ctx.fillStyle = '#5198C9';
     } else if (val > 0.05) {
-      waveformCtx.fillStyle = '#6366f1';
+      ctx.fillStyle = '#41B0B1';
     } else {
-      waveformCtx.fillStyle = '#312e81';
+      ctx.fillStyle = '#1a4a4b';
     }
 
-    waveformCtx.beginPath();
-    waveformCtx.roundRect(x, h - barH, BAR_W, barH, 1);
-    waveformCtx.fill();
+    ctx.beginPath();
+    ctx.roundRect(x, h - barH, barW, barH, 1);
+    ctx.fill();
   }
 }
 
@@ -695,6 +740,9 @@ async function openSettings() {
     } else {
       customFields.classList.add('hide');
     }
+
+    // Compact mode
+    compactModeCheckbox.checked = compactMode;
 
     // Preprocessing
     preprocessingCheckbox.checked = config.preprocessing_enabled !== false;
@@ -1027,6 +1075,8 @@ saveBtn.addEventListener('click', async () => {
     });
 
     // Update local state
+    compactMode = compactModeCheckbox.checked;
+    localStorage.setItem('dimmy-compact', compactMode);
     llmEnabled = llmEnabledVal;
     llmStyle = llmStyleVal;
     llmTone = llmToneVal;

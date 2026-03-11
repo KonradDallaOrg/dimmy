@@ -12,3 +12,4 @@ CLAUDE.md
 .cargo/
 .env
 tests/test_audio.wav
+demo/
