@@ -165,7 +165,7 @@ pub fn device_sample_rate(device_name: &Option<String>) -> u32 {
 pub fn encode_wav(
     samples: &[f32],
     sample_rate: u32,
-) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+) -> Result<Vec<u8>, crate::error::AudioError> {
     let spec = hound::WavSpec {
         channels: 1,
         sample_rate,

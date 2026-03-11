@@ -150,7 +150,7 @@ pub async fn process_text(
     tone: &str,
     custom_prompt: &str,
     translate_to: &str,
-) -> Result<String, Box<dyn std::error::Error>> {
+) -> Result<String, crate::error::LlmError> {
     let system_prompt = build_system_prompt(style, tone, custom_prompt, translate_to);
     if system_prompt.is_empty() {
         return Ok(text.to_string());
@@ -162,7 +162,9 @@ pub async fn process_text(
         if parsed.scheme() == "http" {
             let host = parsed.host_str().unwrap_or("");
             if host != "localhost" && host != "127.0.0.1" && host != "::1" {
-                return Err("Refusing to send API key over HTTP. Use HTTPS or localhost.".into());
+                return Err(crate::error::LlmError::Network(
+                    format!("Refusing HTTP (HTTPS required): {}", api_url),
+                ));
             }
         }
     }
@@ -225,7 +227,7 @@ pub async fn process_text(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(format!("LLM API error {}: {}", status, &body[..body.len().min(200)]).into());
+        return Err(crate::error::LlmError::Api { status: status.as_u16(), body: body[..body.len().min(200)].to_string() });
     }
 
     let content = if is_anthropic {

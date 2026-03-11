@@ -16,14 +16,14 @@ pub async fn transcribe_audio(
     wav_data: &[u8],
     language: &str,
     prompt: &str,
-) -> Result<String, Box<dyn std::error::Error>> {
+) -> Result<String, crate::error::TranscribeError> {
     // SECURITY: reject HTTP URLs to prevent API key leak over plaintext,
     // except localhost/127.0.0.1 for self-hosted setups
     if let Ok(parsed) = url::Url::parse(api_url) {
         if parsed.scheme() == "http" {
             let host = parsed.host_str().unwrap_or("");
             if host != "localhost" && host != "127.0.0.1" && host != "::1" {
-                return Err("Refusing to send API key over HTTP. Use HTTPS or localhost.".into());
+                return Err(crate::error::TranscribeError::InsecureUrl(api_url.to_string()));
             }
         }
     }
@@ -71,7 +71,7 @@ pub async fn transcribe_audio(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(format!("API error {}: {}", status, &body[..body.len().min(200)]).into());
+        return Err(crate::error::TranscribeError::Api { status: status.as_u16(), body: body[..body.len().min(200)].to_string() });
     }
 
     let result: TranscriptionResponse = response.json().await?;
@@ -85,7 +85,7 @@ async fn transcribe_audio_deepgram(
     api_key: &str,
     wav_data: &[u8],
     language: &str,
-) -> Result<String, Box<dyn std::error::Error>> {
+) -> Result<String, crate::error::TranscribeError> {
     let mut url = api_url.to_string();
     let sep = if url.contains('?') { "&" } else { "?" };
     if !language.is_empty() {
@@ -110,7 +110,7 @@ async fn transcribe_audio_deepgram(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(format!("Deepgram API error {}: {}", status, &body[..body.len().min(200)]).into());
+        return Err(crate::error::TranscribeError::Api { status: status.as_u16(), body: body[..body.len().min(200)].to_string() });
     }
 
     let result: serde_json::Value = response.json().await?;
@@ -121,7 +121,7 @@ async fn transcribe_audio_deepgram(
         .to_string();
 
     if text.is_empty() {
-        return Err("Deepgram returned empty transcription".into());
+        return Err(crate::error::TranscribeError::Empty);
     }
 
     Ok(text)
@@ -135,7 +135,7 @@ async fn transcribe_audio_gemini(
     api_key: &str,
     wav_data: &[u8],
     language: &str,
-) -> Result<String, Box<dyn std::error::Error>> {
+) -> Result<String, crate::error::TranscribeError> {
     let audio_b64 = base64::engine::general_purpose::STANDARD.encode(wav_data);
 
     let lang_hint = if !language.is_empty() {
@@ -178,7 +178,7 @@ async fn transcribe_audio_gemini(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(format!("Gemini API error {}: {}", status, &body[..body.len().min(200)]).into());
+        return Err(crate::error::TranscribeError::Api { status: status.as_u16(), body: body[..body.len().min(200)].to_string() });
     }
 
     // Gemini response: { "candidates": [{ "content": { "parts": [{ "text": "..." }] } }] }
@@ -190,7 +190,7 @@ async fn transcribe_audio_gemini(
         .to_string();
 
     if text.is_empty() {
-        return Err("Gemini returned empty transcription".into());
+        return Err(crate::error::TranscribeError::Empty);
     }
 
     Ok(text)
