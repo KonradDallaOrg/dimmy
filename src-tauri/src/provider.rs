@@ -78,6 +78,40 @@ impl Provider {
     }
 }
 
+// ── Keyring scoping ──────────────────────────────────────────────────
+
+/// Keyring entry scope — prevents mixing up STT and LLM keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyringScope {
+    /// Transcription / STT API key
+    Stt(Provider),
+    /// LLM post-processing API key
+    Llm(Provider),
+}
+
+impl KeyringScope {
+    /// Keyring entry name (e.g. "api-key-groq", "llm-key-anthropic").
+    pub fn entry_name(&self) -> String {
+        match self {
+            Self::Stt(p) => format!("api-key-{}", p.as_str()),
+            Self::Llm(p) => format!("llm-key-{}", p.as_str()),
+        }
+    }
+
+    /// The provider for this scope.
+    pub fn provider(&self) -> Provider {
+        match self {
+            Self::Stt(p) | Self::Llm(p) => *p,
+        }
+    }
+}
+
+impl std::fmt::Display for KeyringScope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.entry_name())
+    }
+}
+
 impl std::fmt::Display for Provider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
@@ -171,6 +205,24 @@ mod tests {
     #[test]
     fn insecure_url_rejected() {
         assert!(!Provider::is_secure_url("http://api.groq.com/v1"));
+    }
+
+    #[test]
+    fn keyring_scope_stt() {
+        assert_eq!(KeyringScope::Stt(Provider::Groq).entry_name(), "api-key-groq");
+        assert_eq!(KeyringScope::Stt(Provider::OpenAI).entry_name(), "api-key-openai");
+    }
+
+    #[test]
+    fn keyring_scope_llm() {
+        assert_eq!(KeyringScope::Llm(Provider::Anthropic).entry_name(), "llm-key-anthropic");
+        assert_eq!(KeyringScope::Llm(Provider::OpenRouter).entry_name(), "llm-key-openrouter");
+    }
+
+    #[test]
+    fn keyring_scope_provider() {
+        assert_eq!(KeyringScope::Stt(Provider::Groq).provider(), Provider::Groq);
+        assert_eq!(KeyringScope::Llm(Provider::Anthropic).provider(), Provider::Anthropic);
     }
 
     #[test]
