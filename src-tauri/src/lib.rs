@@ -165,8 +165,8 @@ struct AppConfig {
     prompt: String,
     // LLM post-processing fields
     llm_enabled: bool,
-    llm_style: String,
-    llm_tone: String,
+    llm_style: llm::LlmStyle,
+    llm_tone: llm::LlmTone,
     llm_custom_prompt: String,
     llm_translate_to: String,
     llm_api_url: String,
@@ -200,8 +200,8 @@ impl Default for AppConfig {
             .to_string(),
             prompt: DEFAULT_PROMPT.to_string(),
             llm_enabled: false,
-            llm_style: "off".to_string(),
-            llm_tone: "none".to_string(),
+            llm_style: llm::LlmStyle::Off,
+            llm_tone: llm::LlmTone::None,
             llm_custom_prompt: String::new(),
             llm_translate_to: "none".to_string(),
             llm_api_url: DEFAULT_LLM_URL.to_string(),
@@ -233,8 +233,8 @@ fn save_config_file(cfg: &AppConfig) {
             "shortcut": cfg.shortcut,
             "prompt": cfg.prompt,
             "llm_enabled": cfg.llm_enabled,
-            "llm_style": cfg.llm_style,
-            "llm_tone": cfg.llm_tone,
+            "llm_style": cfg.llm_style.as_str(),
+            "llm_tone": cfg.llm_tone.as_str(),
             "llm_custom_prompt": cfg.llm_custom_prompt,
             "llm_translate_to": cfg.llm_translate_to,
             "llm_api_url": cfg.llm_api_url,
@@ -278,14 +278,12 @@ fn load_config_file() -> AppConfig {
                     shortcut: v["shortcut"].as_str().unwrap_or(default_shortcut()).to_string(),
                     prompt: v["prompt"].as_str().unwrap_or(DEFAULT_PROMPT).to_string(),
                     llm_enabled: v["llm_enabled"].as_bool().unwrap_or(defaults.llm_enabled),
-                    llm_style: v["llm_style"]
-                        .as_str()
-                        .unwrap_or(&defaults.llm_style)
-                        .to_string(),
-                    llm_tone: v["llm_tone"]
-                        .as_str()
-                        .unwrap_or(&defaults.llm_tone)
-                        .to_string(),
+                    llm_style: llm::LlmStyle::from_str_lossy(
+                        v["llm_style"].as_str().unwrap_or("off"),
+                    ),
+                    llm_tone: llm::LlmTone::from_str_lossy(
+                        v["llm_tone"].as_str().unwrap_or("none"),
+                    ),
                     llm_custom_prompt: v["llm_custom_prompt"]
                         .as_str()
                         .unwrap_or(&defaults.llm_custom_prompt)
@@ -538,8 +536,8 @@ pub struct AppState {
     pub streaming_active: Arc<AtomicBool>,
     // LLM post-processing state
     pub llm_enabled: Mutex<bool>,
-    pub llm_style: Mutex<String>,
-    pub llm_tone: Mutex<String>,
+    pub llm_style: Mutex<llm::LlmStyle>,
+    pub llm_tone: Mutex<llm::LlmTone>,
     pub llm_custom_prompt: Mutex<String>,
     pub llm_translate_to: Mutex<String>,
     pub llm_api_url: Mutex<String>,
@@ -1048,10 +1046,10 @@ fn set_config(
         *state.llm_enabled.lock().map_err(|e| e.to_string())? = v;
     }
     if let Some(ref v) = llm_style {
-        *state.llm_style.lock().map_err(|e| e.to_string())? = v.clone();
+        *state.llm_style.lock().map_err(|e| e.to_string())? = llm::LlmStyle::from_str_lossy(v);
     }
     if let Some(ref v) = llm_tone {
-        *state.llm_tone.lock().map_err(|e| e.to_string())? = v.clone();
+        *state.llm_tone.lock().map_err(|e| e.to_string())? = llm::LlmTone::from_str_lossy(v);
     }
     if let Some(ref v) = llm_custom_prompt {
         *state.llm_custom_prompt.lock().map_err(|e| e.to_string())? = v.clone();
@@ -1207,8 +1205,8 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
     let devices = audio::list_input_devices();
 
     let llm_enabled = *state.llm_enabled.lock().map_err(|e| e.to_string())?;
-    let llm_style = state.llm_style.lock().map_err(|e| e.to_string())?.clone();
-    let llm_tone = state.llm_tone.lock().map_err(|e| e.to_string())?.clone();
+    let llm_style = *state.llm_style.lock().map_err(|e| e.to_string())?;
+    let llm_tone = *state.llm_tone.lock().map_err(|e| e.to_string())?;
     let llm_custom_prompt = state
         .llm_custom_prompt
         .lock()
@@ -1243,8 +1241,8 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
     let shortcut = state.shortcut.lock().map_err(|e| e.to_string())?.clone();
     let shortcut_label = hotkey::current_label();
 
-    let styles: Vec<&str> = llm::STYLES.iter().map(|(name, _)| *name).collect();
-    let tones: Vec<&str> = llm::TONES.iter().map(|(name, _)| *name).collect();
+    let styles: Vec<&str> = llm::LlmStyle::ALL.iter().map(|s| s.as_str()).collect();
+    let tones: Vec<&str> = llm::LlmTone::ALL.iter().map(|t| t.as_str()).collect();
 
     // Per-provider key flags
     let has_groq_key = has_key_for_provider("api-key", "groq");
@@ -1271,8 +1269,8 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
         "selected_device": selected_device,
         "devices": devices,
         "llm_enabled": llm_enabled,
-        "llm_style": llm_style,
-        "llm_tone": llm_tone,
+        "llm_style": llm_style.as_str(),
+        "llm_tone": llm_tone.as_str(),
         "llm_custom_prompt": llm_custom_prompt,
         "llm_translate_to": llm_translate_to,
         "llm_api_url": llm_api_url,
@@ -1326,18 +1324,18 @@ async fn process_with_llm(
     app_handle: tauri::AppHandle,
 ) -> Result<String, String> {
     let enabled = *state.llm_enabled.lock().map_err(|e| e.to_string())?;
-    let style = state.llm_style.lock().map_err(|e| e.to_string())?.clone();
+    let style = *state.llm_style.lock().map_err(|e| e.to_string())?;
     let translate_to = state.llm_translate_to.lock().map_err(|e| e.to_string())?.clone();
     let translating = !translate_to.is_empty() && translate_to != "none";
 
     if !enabled && !translating {
         return Ok(text);
     }
-    if style == "off" && !translating {
+    if style.is_off() && !translating {
         return Ok(text);
     }
 
-    let tone = state.llm_tone.lock().map_err(|e| e.to_string())?.clone();
+    let tone = *state.llm_tone.lock().map_err(|e| e.to_string())?;
     let custom_prompt = state
         .llm_custom_prompt
         .lock()
@@ -1391,8 +1389,8 @@ async fn process_with_llm(
         &model,
         &api_key,
         &text,
-        &style,
-        &tone,
+        style,
+        tone,
         &custom_prompt,
         &translate_to,
     )
@@ -1458,18 +1456,8 @@ fn cycle_llm_style(
     state: tauri::State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
     let mut style = state.llm_style.lock().map_err(|e| e.to_string())?;
-    let total = llm::STYLES.len();
-    let current_idx = llm::STYLES
-        .iter()
-        .position(|(n, _)| *n == style.as_str())
-        .unwrap_or(0);
-    let new_idx = if direction > 0 {
-        (current_idx + 1) % total
-    } else {
-        (current_idx + total - 1) % total
-    };
-    let (new_name, _) = llm::STYLES[new_idx];
-    *style = new_name.to_string();
+    let new_style = style.cycle(direction);
+    *style = new_style;
 
     // Also enable/disable LLM based on style + translate_to
     if let Ok(mut enabled) = state.llm_enabled.lock() {
@@ -1478,17 +1466,18 @@ fn cycle_llm_style(
             .lock()
             .map(|t| !t.is_empty() && *t != "none")
             .unwrap_or(false);
-        *enabled = new_name != "off" || translating;
+        *enabled = !new_style.is_off() || translating;
     }
 
     // Persist to config file
     drop(style);
     save_current_config(&state)?;
 
+    let new_idx = llm::LlmStyle::ALL.iter().position(|s| *s == new_style).unwrap_or(0);
     Ok(serde_json::json!({
-        "style": new_name,
+        "style": new_style.as_str(),
         "index": new_idx,
-        "total": total,
+        "total": llm::LlmStyle::ALL.len(),
     }))
 }
 
@@ -1498,26 +1487,17 @@ fn cycle_llm_tone(
     state: tauri::State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
     let mut tone = state.llm_tone.lock().map_err(|e| e.to_string())?;
-    let total = llm::TONES.len();
-    let current_idx = llm::TONES
-        .iter()
-        .position(|(n, _)| *n == tone.as_str())
-        .unwrap_or(0);
-    let new_idx = if direction > 0 {
-        (current_idx + 1) % total
-    } else {
-        (current_idx + total - 1) % total
-    };
-    let (new_name, _) = llm::TONES[new_idx];
-    *tone = new_name.to_string();
+    let new_tone = tone.cycle(direction);
+    *tone = new_tone;
 
     drop(tone);
     save_current_config(&state)?;
 
+    let new_idx = llm::LlmTone::ALL.iter().position(|t| *t == new_tone).unwrap_or(0);
     Ok(serde_json::json!({
-        "tone": new_name,
+        "tone": new_tone.as_str(),
         "index": new_idx,
-        "total": total,
+        "total": llm::LlmTone::ALL.len(),
     }))
 }
 
@@ -1539,8 +1519,8 @@ fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
     let shortcut = state.shortcut.lock().map_err(|e| e.to_string())?.clone();
     let prompt = state.prompt.lock().map_err(|e| e.to_string())?.clone();
     let llm_enabled = *state.llm_enabled.lock().map_err(|e| e.to_string())?;
-    let llm_style = state.llm_style.lock().map_err(|e| e.to_string())?.clone();
-    let llm_tone = state.llm_tone.lock().map_err(|e| e.to_string())?.clone();
+    let llm_style = *state.llm_style.lock().map_err(|e| e.to_string())?;
+    let llm_tone = *state.llm_tone.lock().map_err(|e| e.to_string())?;
     let llm_custom_prompt = state
         .llm_custom_prompt
         .lock()
@@ -2172,7 +2152,7 @@ pub fn run() {
     // SECURITY: never log the actual key value — only whether one exists
     log(&format!("Config loaded: url={}, model={}, device={:?}, provider={}, has_key={}, llm_provider={}, llm_enabled={}, llm_style={}",
         file_cfg.api_url, file_cfg.api_model, file_cfg.selected_device, transcription_provider,
-        stored_key.is_some(), llm_provider, file_cfg.llm_enabled, file_cfg.llm_style));
+        stored_key.is_some(), llm_provider, file_cfg.llm_enabled, file_cfg.llm_style.as_str()));
 
     let shortcut_preset = file_cfg.shortcut.clone();
 
@@ -2816,8 +2796,8 @@ mod tests {
     fn llm_config_defaults() {
         let cfg = AppConfig::default();
         assert!(!cfg.llm_enabled, "LLM should be disabled by default");
-        assert_eq!(cfg.llm_style, "off");
-        assert_eq!(cfg.llm_tone, "none");
+        assert_eq!(cfg.llm_style, llm::LlmStyle::Off);
+        assert_eq!(cfg.llm_tone, llm::LlmTone::None);
         assert!(cfg.llm_custom_prompt.is_empty());
         assert_eq!(cfg.llm_translate_to, "none");
         assert_eq!(cfg.llm_api_url, DEFAULT_LLM_URL);
@@ -2854,8 +2834,8 @@ mod tests {
             false
         );
         assert_eq!(
-            v["llm_style"].as_str().unwrap_or(&defaults.llm_style),
-            "off"
+            llm::LlmStyle::from_str_lossy(v["llm_style"].as_str().unwrap_or("off")),
+            llm::LlmStyle::Off
         );
 
         let _ = std::fs::remove_dir_all(&tmp);

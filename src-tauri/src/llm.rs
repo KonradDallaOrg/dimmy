@@ -22,71 +22,219 @@ spoken numbers to digits (e.g. \"three hundred forty two\" → \"342\"), \
 currencies (e.g. \"three hundred dollars\" → \"$300\"), \
 and format emails, phone numbers, and URLs when dictated naturally.";
 
-/// (name, system prompt instruction)
-pub const STYLES: &[(&str, &str)] = &[
-    ("off", ""),
-    ("correct", "Apply this transformation: fix grammar, spelling, and punctuation errors. Remove filler words and verbal tics (um, uh, ehm, like, you know, so, I mean, basically, right, well, allora, praticamente, cioè, insomma, tipo, diciamo, ecco, niente, comunque). Preserve the original meaning, intent, and language exactly."),
-    ("summarize", "Apply this transformation: condense the transcription to its key points. Preserve the original language. Output only the condensed version."),
-    ("elaborate", "Apply this transformation: expand the transcription with more detail and context while keeping the same meaning and language. Output only the expanded version."),
-    ("comprehensible", "Apply this transformation: rewrite the transcription to be clearer and easier to understand, keeping the same meaning and language."),
-    ("professional", "Apply this transformation: rewrite the transcription in a professional, polished tone suitable for business communication. Keep the same language."),
-    ("prompt", "Apply this transformation: reshape the transcription into a clear, well-structured prompt ready to be sent to an advanced AI model (ChatGPT, Claude, etc.). Fix grammar, remove filler words, organize the request logically, and make the intent explicit. If the user expressed a question, keep it as a question. If they described a task, frame it as a clear instruction. Keep the same language. Output only the resulting prompt, nothing else."),
-    ("genz", "Apply this transformation: rewrite the transcription in Gen-Z internet slang. Adapt to the INPUT LANGUAGE. If English: use 'no cap', 'fr fr', 'lowkey', 'slay', 'bestie', 'it\'s giving', 'vibe check', 'main character energy', 'periodt', 'bussin', 'based', 'sus'. If Italian: use 'cringe', 'triggerare', 'shippare', 'flex', 'vibe', 'ghostare', 'droppare', 'slay', 'bestie', 'main character energy', 'no vabbè', 'cioè raga', 'letteralmente', 'mi sento molto attacked'. If other language: adapt Gen-Z energy and mix in universally known English zoomer slang. Go hard."),
-    ("boomer", "Apply this transformation: rewrite the transcription as a boomer would type. Adapt to the INPUT LANGUAGE. Use excessive ellipsis (......), random Capitalization of Words, overly polite and formal phrasing. If English: 'Kind Regards....', 'GOD BLESS...', 'As I was saying to my colleague...'. If Italian: 'BUONGIORNO A TUTTI......', 'Cordiali Saluti.....', 'Come dicevo al mio Collega l altro giorno......', 'Distinti Saluti e Buona Giornata...'. Type like someone who just discovered the internet and treats every message like a formal letter. Keep the same language as input."),
-    ("emoji", "Apply this transformation: rewrite the transcription with heavy emoji usage. Add relevant emojis after key words and sentences. Use emojis to replace words where possible (e.g. ❤️ for love, 🔥 for great, 💀 for funny, ✨ for emphasis, 👀 for attention). Make every sentence pop with 2-4 emojis. This style is language-agnostic — emojis work in every language. Keep the same meaning and language. Go maximum emoji."),
-    ("acronyms", "Apply this transformation: rewrite the transcription inserting well-known acronyms and internet abbreviations. These acronyms are used universally across languages: IMO, TBH, NGL, GOAT, ASAP, FWIW, AFAIK, FYI, BTW, IMHO, SMH, LMAO, IRL, IIRC, AKA, LMK, IDK, YMMV, OMG, LOL, ROFL, WTF, TLDR. Insert them naturally mid-sentence regardless of the input language — e.g. Italian: 'TBH questa riunione è stata GOAT, NGL il progetto è ASAP'. Keep the same language as input but sprinkle English acronyms everywhere."),
-    ("imbruttito", "Apply this transformation: rewrite the transcription in the style of 'Il Milanese Imbruttito' — mix Italian with gratuitous English business jargon and Milanese attitude. Use terms like 'performare', 'deliverare', 'schedulare', 'il meeting', 'la call', 'la deadline', 'pushare', 'il budget', 'droppare', 'skippare', 'il feedback', 'il team', 'asap', 'il workflow', 'il target', 'la revenue', 'il mindset'. Add Milanese impatience and corporate buzzwords. If input is English, TRANSLATE to Italian first then apply the Imbruttito style. Always output in Italian with anglicisms."),
-    ("custom", ""),
-];
+// ── LlmStyle enum ────────────────────────────────────────────────────
 
-/// (name, system prompt modifier)
-pub const TONES: &[(&str, &str)] = &[
-    ("none", ""),
-    ("formal", "Use a formal register and vocabulary."),
-    ("friendly", "Use a warm, friendly, and approachable tone."),
-    (
-        "concise",
-        "Be as brief as possible. Remove unnecessary words.",
-    ),
-    (
-        "academic",
-        "Use an academic, scholarly tone with precise language.",
-    ),
-];
+/// What the LLM does with the text. Exhaustive — adding a variant forces
+/// updating `instruction()`, `cycle()`, and serialization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LlmStyle {
+    Off,
+    Correct,
+    Summarize,
+    Elaborate,
+    Comprehensible,
+    Professional,
+    Prompt,
+    Genz,
+    Boomer,
+    Emoji,
+    Acronyms,
+    Imbruttito,
+    Custom,
+}
+
+impl LlmStyle {
+    /// All variants in display/cycle order.
+    pub const ALL: &[LlmStyle] = &[
+        Self::Off,
+        Self::Correct,
+        Self::Summarize,
+        Self::Elaborate,
+        Self::Comprehensible,
+        Self::Professional,
+        Self::Prompt,
+        Self::Genz,
+        Self::Boomer,
+        Self::Emoji,
+        Self::Acronyms,
+        Self::Imbruttito,
+        Self::Custom,
+    ];
+
+    /// System prompt instruction for this style.
+    pub fn instruction(&self) -> &'static str {
+        match self {
+            Self::Off => "",
+            Self::Correct => "Apply this transformation: fix grammar, spelling, and punctuation errors. Remove filler words and verbal tics (um, uh, ehm, like, you know, so, I mean, basically, right, well, allora, praticamente, cioè, insomma, tipo, diciamo, ecco, niente, comunque). Preserve the original meaning, intent, and language exactly.",
+            Self::Summarize => "Apply this transformation: condense the transcription to its key points. Preserve the original language. Output only the condensed version.",
+            Self::Elaborate => "Apply this transformation: expand the transcription with more detail and context while keeping the same meaning and language. Output only the expanded version.",
+            Self::Comprehensible => "Apply this transformation: rewrite the transcription to be clearer and easier to understand, keeping the same meaning and language.",
+            Self::Professional => "Apply this transformation: rewrite the transcription in a professional, polished tone suitable for business communication. Keep the same language.",
+            Self::Prompt => "Apply this transformation: reshape the transcription into a clear, well-structured prompt ready to be sent to an advanced AI model (ChatGPT, Claude, etc.). Fix grammar, remove filler words, organize the request logically, and make the intent explicit. If the user expressed a question, keep it as a question. If they described a task, frame it as a clear instruction. Keep the same language. Output only the resulting prompt, nothing else.",
+            Self::Genz => "Apply this transformation: rewrite the transcription in Gen-Z internet slang. Adapt to the INPUT LANGUAGE. If English: use 'no cap', 'fr fr', 'lowkey', 'slay', 'bestie', 'it's giving', 'vibe check', 'main character energy', 'periodt', 'bussin', 'based', 'sus'. If Italian: use 'cringe', 'triggerare', 'shippare', 'flex', 'vibe', 'ghostare', 'droppare', 'slay', 'bestie', 'main character energy', 'no vabbè', 'cioè raga', 'letteralmente', 'mi sento molto attacked'. If other language: adapt Gen-Z energy and mix in universally known English zoomer slang. Go hard.",
+            Self::Boomer => "Apply this transformation: rewrite the transcription as a boomer would type. Adapt to the INPUT LANGUAGE. Use excessive ellipsis (......), random Capitalization of Words, overly polite and formal phrasing. If English: 'Kind Regards....', 'GOD BLESS...', 'As I was saying to my colleague...'. If Italian: 'BUONGIORNO A TUTTI......', 'Cordiali Saluti.....', 'Come dicevo al mio Collega l altro giorno......', 'Distinti Saluti e Buona Giornata...'. Type like someone who just discovered the internet and treats every message like a formal letter. Keep the same language as input.",
+            Self::Emoji => "Apply this transformation: rewrite the transcription with heavy emoji usage. Add relevant emojis after key words and sentences. Use emojis to replace words where possible (e.g. ❤️ for love, 🔥 for great, 💀 for funny, ✨ for emphasis, 👀 for attention). Make every sentence pop with 2-4 emojis. This style is language-agnostic — emojis work in every language. Keep the same meaning and language. Go maximum emoji.",
+            Self::Acronyms => "Apply this transformation: rewrite the transcription inserting well-known acronyms and internet abbreviations. These acronyms are used universally across languages: IMO, TBH, NGL, GOAT, ASAP, FWIW, AFAIK, FYI, BTW, IMHO, SMH, LMAO, IRL, IIRC, AKA, LMK, IDK, YMMV, OMG, LOL, ROFL, WTF, TLDR. Insert them naturally mid-sentence regardless of the input language — e.g. Italian: 'TBH questa riunione è stata GOAT, NGL il progetto è ASAP'. Keep the same language as input but sprinkle English acronyms everywhere.",
+            Self::Imbruttito => "Apply this transformation: rewrite the transcription in the style of 'Il Milanese Imbruttito' — mix Italian with gratuitous English business jargon and Milanese attitude. Use terms like 'performare', 'deliverare', 'schedulare', 'il meeting', 'la call', 'la deadline', 'pushare', 'il budget', 'droppare', 'skippare', 'il feedback', 'il team', 'asap', 'il workflow', 'il target', 'la revenue', 'il mindset'. Add Milanese impatience and corporate buzzwords. If input is English, TRANSLATE to Italian first then apply the Imbruttito style. Always output in Italian with anglicisms.",
+            Self::Custom => "",
+        }
+    }
+
+    /// String name for serialization to config/JSON.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Correct => "correct",
+            Self::Summarize => "summarize",
+            Self::Elaborate => "elaborate",
+            Self::Comprehensible => "comprehensible",
+            Self::Professional => "professional",
+            Self::Prompt => "prompt",
+            Self::Genz => "genz",
+            Self::Boomer => "boomer",
+            Self::Emoji => "emoji",
+            Self::Acronyms => "acronyms",
+            Self::Imbruttito => "imbruttito",
+            Self::Custom => "custom",
+        }
+    }
+
+    /// Cycle to the next/previous style. `direction > 0` = forward.
+    pub fn cycle(&self, direction: i32) -> Self {
+        let total = Self::ALL.len();
+        let current_idx = Self::ALL.iter().position(|s| s == self).unwrap_or(0);
+        let new_idx = if direction > 0 {
+            (current_idx + 1) % total
+        } else {
+            (current_idx + total - 1) % total
+        };
+        Self::ALL[new_idx]
+    }
+
+    /// Parse from string, defaulting to Off for unknown values.
+    pub fn from_str_lossy(s: &str) -> Self {
+        Self::ALL
+            .iter()
+            .find(|v| v.as_str() == s)
+            .copied()
+            .unwrap_or(Self::Off)
+    }
+
+    /// Returns true if this style means "do nothing" (no LLM call needed).
+    pub fn is_off(&self) -> bool {
+        *self == Self::Off
+    }
+}
+
+impl std::fmt::Display for LlmStyle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+// ── LlmTone enum ─────────────────────────────────────────────────────
+
+/// How the LLM writes the result. Exhaustive — adding a variant forces
+/// updating `instruction()`, `cycle()`, and serialization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LlmTone {
+    None,
+    Formal,
+    Friendly,
+    Concise,
+    Academic,
+}
+
+impl LlmTone {
+    /// All variants in display/cycle order.
+    pub const ALL: &[LlmTone] = &[
+        Self::None,
+        Self::Formal,
+        Self::Friendly,
+        Self::Concise,
+        Self::Academic,
+    ];
+
+    /// System prompt modifier for this tone.
+    pub fn instruction(&self) -> &'static str {
+        match self {
+            Self::None => "",
+            Self::Formal => "Use a formal register and vocabulary.",
+            Self::Friendly => "Use a warm, friendly, and approachable tone.",
+            Self::Concise => "Be as brief as possible. Remove unnecessary words.",
+            Self::Academic => "Use an academic, scholarly tone with precise language.",
+        }
+    }
+
+    /// String name for serialization to config/JSON.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Formal => "formal",
+            Self::Friendly => "friendly",
+            Self::Concise => "concise",
+            Self::Academic => "academic",
+        }
+    }
+
+    /// Cycle to the next/previous tone. `direction > 0` = forward.
+    pub fn cycle(&self, direction: i32) -> Self {
+        let total = Self::ALL.len();
+        let current_idx = Self::ALL.iter().position(|t| t == self).unwrap_or(0);
+        let new_idx = if direction > 0 {
+            (current_idx + 1) % total
+        } else {
+            (current_idx + total - 1) % total
+        };
+        Self::ALL[new_idx]
+    }
+
+    /// Parse from string, defaulting to None for unknown values.
+    pub fn from_str_lossy(s: &str) -> Self {
+        Self::ALL
+            .iter()
+            .find(|v| v.as_str() == s)
+            .copied()
+            .unwrap_or(Self::None)
+    }
+
+    /// Returns true if this tone adds no modification.
+    pub fn is_none(&self) -> bool {
+        *self == Self::None
+    }
+}
+
+impl std::fmt::Display for LlmTone {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 /// Build the system prompt from a style + tone + translate_to combination.
-/// If style is "off" and translate_to is empty/none, returns empty string (caller should skip LLM).
-/// If style is "custom", uses `custom_prompt` instead of the style instruction.
+/// If style is Off and translate_to is empty/none, returns empty string (caller should skip LLM).
+/// If style is Custom, uses `custom_prompt` instead of the style instruction.
 /// If translate_to is set, adds a translation instruction and removes the "do not translate" rule.
 pub fn build_system_prompt(
-    style: &str,
-    tone: &str,
+    style: LlmStyle,
+    tone: LlmTone,
     custom_prompt: &str,
     translate_to: &str,
 ) -> String {
     let translating = !translate_to.is_empty() && translate_to != "none";
 
-    if style == "off" && !translating {
+    if style.is_off() && !translating {
         return String::new();
     }
 
-    let style_instruction = if style == "custom" {
-        custom_prompt.to_string()
-    } else if style == "off" {
-        String::new()
-    } else {
-        STYLES
-            .iter()
-            .find(|(name, _)| *name == style)
-            .map(|(_, instr)| instr.to_string())
-            .unwrap_or_default()
+    let style_instruction = match style {
+        LlmStyle::Custom => custom_prompt.to_string(),
+        LlmStyle::Off => String::new(),
+        _ => style.instruction().to_string(),
     };
 
-    let tone_modifier = TONES
-        .iter()
-        .find(|(name, _)| *name == tone)
-        .map(|(_, instr)| instr.to_string())
-        .unwrap_or_default();
+    let tone_modifier = tone.instruction();
 
     let translate_instruction = if translating {
         format!("Translate the output to {}.", translate_to)
@@ -97,7 +245,7 @@ pub fn build_system_prompt(
     // Compose task parts
     let parts: Vec<&str> = [
         style_instruction.as_str(),
-        tone_modifier.as_str(),
+        tone_modifier,
         translate_instruction.as_str(),
     ]
     .iter()
@@ -146,8 +294,8 @@ pub async fn process_text(
     model: &str,
     api_key: &str,
     text: &str,
-    style: &str,
-    tone: &str,
+    style: LlmStyle,
+    tone: LlmTone,
     custom_prompt: &str,
     translate_to: &str,
 ) -> Result<String, crate::error::LlmError> {
@@ -256,19 +404,19 @@ mod tests {
 
     #[test]
     fn off_returns_empty() {
-        let prompt = build_system_prompt("off", "none", "", "none");
+        let prompt = build_system_prompt(LlmStyle::Off, LlmTone::None, "", "none");
         assert!(prompt.is_empty());
     }
 
     #[test]
     fn off_ignores_tone() {
-        let prompt = build_system_prompt("off", "formal", "", "none");
+        let prompt = build_system_prompt(LlmStyle::Off, LlmTone::Formal, "", "none");
         assert!(prompt.is_empty());
     }
 
     #[test]
     fn preamble_included() {
-        let prompt = build_system_prompt("correct", "none", "", "none");
+        let prompt = build_system_prompt(LlmStyle::Correct, LlmTone::None, "", "none");
         assert!(prompt.contains("text post-processor"));
         assert!(prompt.contains("NEVER answer questions"));
         assert!(prompt.contains("[TRANSCRIPTION]"));
@@ -276,128 +424,175 @@ mod tests {
 
     #[test]
     fn correct_no_tone() {
-        let prompt = build_system_prompt("correct", "none", "", "none");
+        let prompt = build_system_prompt(LlmStyle::Correct, LlmTone::None, "", "none");
         assert!(prompt.contains("fix grammar"));
         assert!(!prompt.contains("formal register"));
     }
 
     #[test]
     fn correct_with_formal_tone() {
-        let prompt = build_system_prompt("correct", "formal", "", "none");
+        let prompt = build_system_prompt(LlmStyle::Correct, LlmTone::Formal, "", "none");
         assert!(prompt.contains("fix grammar"));
         assert!(prompt.contains("formal"));
     }
 
     #[test]
     fn summarize_with_concise() {
-        let prompt = build_system_prompt("summarize", "concise", "", "none");
+        let prompt = build_system_prompt(LlmStyle::Summarize, LlmTone::Concise, "", "none");
         assert!(prompt.contains("condense"));
         assert!(prompt.contains("brief"));
     }
 
     #[test]
     fn elaborate_with_friendly() {
-        let prompt = build_system_prompt("elaborate", "friendly", "", "none");
+        let prompt = build_system_prompt(LlmStyle::Elaborate, LlmTone::Friendly, "", "none");
         assert!(prompt.contains("expand"));
         assert!(prompt.contains("friendly"));
     }
 
     #[test]
     fn comprehensible_with_academic() {
-        let prompt = build_system_prompt("comprehensible", "academic", "", "none");
+        let prompt = build_system_prompt(LlmStyle::Comprehensible, LlmTone::Academic, "", "none");
         assert!(prompt.contains("clearer"));
         assert!(prompt.contains("academic"));
     }
 
     #[test]
     fn professional_no_tone() {
-        let prompt = build_system_prompt("professional", "none", "", "none");
+        let prompt = build_system_prompt(LlmStyle::Professional, LlmTone::None, "", "none");
         assert!(prompt.contains("professional"));
     }
 
     #[test]
     fn custom_uses_custom_prompt() {
-        let prompt = build_system_prompt("custom", "none", "Rewrite formally", "none");
+        let prompt = build_system_prompt(LlmStyle::Custom, LlmTone::None, "Rewrite formally", "none");
         assert!(prompt.contains("Rewrite formally"));
         assert!(prompt.contains("Do NOT translate"));
     }
 
     #[test]
     fn custom_with_tone() {
-        let prompt = build_system_prompt("custom", "formal", "Rewrite", "none");
+        let prompt = build_system_prompt(LlmStyle::Custom, LlmTone::Formal, "Rewrite", "none");
         assert!(prompt.contains("Rewrite"));
         assert!(prompt.contains("formal"));
     }
 
     #[test]
     fn custom_empty_prompt_with_tone() {
-        let prompt = build_system_prompt("custom", "friendly", "", "none");
+        let prompt = build_system_prompt(LlmStyle::Custom, LlmTone::Friendly, "", "none");
         assert!(prompt.contains("friendly"));
     }
 
     #[test]
-    fn unknown_style_returns_tone_only() {
-        let prompt = build_system_prompt("nonexistent", "formal", "", "none");
-        assert!(prompt.contains("formal"));
+    fn all_styles_have_instructions() {
+        // Every non-Off/Custom style must have a non-empty instruction
+        for style in LlmStyle::ALL {
+            match style {
+                LlmStyle::Off | LlmStyle::Custom => {
+                    assert!(style.instruction().is_empty());
+                }
+                _ => {
+                    assert!(!style.instruction().is_empty(), "{} has empty instruction", style);
+                }
+            }
+        }
     }
 
     #[test]
-    fn unknown_tone_returns_style_only() {
-        let prompt = build_system_prompt("correct", "nonexistent", "", "none");
-        assert!(prompt.contains("fix grammar"));
+    fn all_styles_have_unique_names() {
+        let names: Vec<&str> = LlmStyle::ALL.iter().map(|s| s.as_str()).collect();
+        let mut deduped = names.clone();
+        deduped.sort();
+        deduped.dedup();
+        assert_eq!(names.len(), deduped.len(), "duplicate style names");
     }
 
     #[test]
-    fn all_styles_covered() {
-        let names: Vec<&str> = STYLES.iter().map(|(n, _)| *n).collect();
-        assert!(names.contains(&"off"));
-        assert!(names.contains(&"correct"));
-        assert!(names.contains(&"summarize"));
-        assert!(names.contains(&"elaborate"));
-        assert!(names.contains(&"comprehensible"));
-        assert!(names.contains(&"professional"));
-        assert!(names.contains(&"prompt"));
-        assert!(names.contains(&"genz"));
-        assert!(names.contains(&"boomer"));
-        assert!(names.contains(&"emoji"));
-        assert!(names.contains(&"acronyms"));
-        assert!(names.contains(&"imbruttito"));
-        assert!(names.contains(&"custom"));
+    fn all_tones_have_unique_names() {
+        let names: Vec<&str> = LlmTone::ALL.iter().map(|t| t.as_str()).collect();
+        let mut deduped = names.clone();
+        deduped.sort();
+        deduped.dedup();
+        assert_eq!(names.len(), deduped.len(), "duplicate tone names");
     }
 
     #[test]
-    fn all_tones_covered() {
-        let names: Vec<&str> = TONES.iter().map(|(n, _)| *n).collect();
-        assert!(names.contains(&"none"));
-        assert!(names.contains(&"formal"));
-        assert!(names.contains(&"friendly"));
-        assert!(names.contains(&"concise"));
-        assert!(names.contains(&"academic"));
+    fn style_cycle_forward() {
+        assert_eq!(LlmStyle::Off.cycle(1), LlmStyle::Correct);
+        assert_eq!(LlmStyle::Custom.cycle(1), LlmStyle::Off); // wraps
+    }
+
+    #[test]
+    fn style_cycle_backward() {
+        assert_eq!(LlmStyle::Off.cycle(-1), LlmStyle::Custom); // wraps
+        assert_eq!(LlmStyle::Correct.cycle(-1), LlmStyle::Off);
+    }
+
+    #[test]
+    fn tone_cycle_forward() {
+        assert_eq!(LlmTone::None.cycle(1), LlmTone::Formal);
+        assert_eq!(LlmTone::Academic.cycle(1), LlmTone::None); // wraps
+    }
+
+    #[test]
+    fn tone_cycle_backward() {
+        assert_eq!(LlmTone::None.cycle(-1), LlmTone::Academic); // wraps
+    }
+
+    #[test]
+    fn style_from_str_lossy() {
+        assert_eq!(LlmStyle::from_str_lossy("correct"), LlmStyle::Correct);
+        assert_eq!(LlmStyle::from_str_lossy("genz"), LlmStyle::Genz);
+        assert_eq!(LlmStyle::from_str_lossy("nonexistent"), LlmStyle::Off);
+    }
+
+    #[test]
+    fn tone_from_str_lossy() {
+        assert_eq!(LlmTone::from_str_lossy("formal"), LlmTone::Formal);
+        assert_eq!(LlmTone::from_str_lossy("nonexistent"), LlmTone::None);
+    }
+
+    #[test]
+    fn style_serde_roundtrip() {
+        let style = LlmStyle::Correct;
+        let json = serde_json::to_string(&style).unwrap();
+        assert_eq!(json, "\"correct\"");
+        let back: LlmStyle = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, style);
+    }
+
+    #[test]
+    fn tone_serde_roundtrip() {
+        let tone = LlmTone::Formal;
+        let json = serde_json::to_string(&tone).unwrap();
+        assert_eq!(json, "\"formal\"");
+        let back: LlmTone = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, tone);
     }
 
     // Translation tests
     #[test]
     fn translate_only_activates_llm() {
-        let prompt = build_system_prompt("off", "none", "", "English");
+        let prompt = build_system_prompt(LlmStyle::Off, LlmTone::None, "", "English");
         assert!(!prompt.is_empty());
         assert!(prompt.contains("Translate the output to English."));
     }
 
     #[test]
     fn translate_removes_no_translate_rule() {
-        let prompt = build_system_prompt("off", "none", "", "English");
+        let prompt = build_system_prompt(LlmStyle::Off, LlmTone::None, "", "English");
         assert!(!prompt.contains("Do NOT translate"));
     }
 
     #[test]
     fn no_translate_keeps_rule() {
-        let prompt = build_system_prompt("correct", "none", "", "none");
+        let prompt = build_system_prompt(LlmStyle::Correct, LlmTone::None, "", "none");
         assert!(prompt.contains("Do NOT translate"));
     }
 
     #[test]
     fn translate_with_style() {
-        let prompt = build_system_prompt("correct", "none", "", "Italiano");
+        let prompt = build_system_prompt(LlmStyle::Correct, LlmTone::None, "", "Italiano");
         assert!(prompt.contains("fix grammar"));
         assert!(prompt.contains("Translate the output to Italiano."));
         assert!(!prompt.contains("Do NOT translate"));
@@ -405,7 +600,7 @@ mod tests {
 
     #[test]
     fn translate_with_style_and_tone() {
-        let prompt = build_system_prompt("correct", "formal", "", "Deutsch");
+        let prompt = build_system_prompt(LlmStyle::Correct, LlmTone::Formal, "", "Deutsch");
         assert!(prompt.contains("fix grammar"));
         assert!(prompt.contains("formal"));
         assert!(prompt.contains("Translate the output to Deutsch."));
@@ -413,7 +608,7 @@ mod tests {
 
     #[test]
     fn translate_empty_string_is_noop() {
-        let prompt = build_system_prompt("off", "none", "", "");
+        let prompt = build_system_prompt(LlmStyle::Off, LlmTone::None, "", "");
         assert!(prompt.is_empty());
     }
 }
