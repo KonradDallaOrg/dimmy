@@ -75,6 +75,12 @@ pub struct AudioPreprocessor {
 
 impl AudioPreprocessor {
     pub fn new(sample_rate: u32) -> Self {
+        // Invariant: sample rate must be positive (0 would cause division-by-zero downstream)
+        debug_assert!(sample_rate > 0, "sample_rate must be > 0, got {}", sample_rate);
+        // Invariant: AGC constants must be valid for MonoAgc::new()
+        debug_assert!(TARGET_RMS > 0.0 && TARGET_RMS <= 1.0, "TARGET_RMS out of range: {}", TARGET_RMS);
+        debug_assert!(AGC_DISTORTION > 0.0 && AGC_DISTORTION < 1.0, "AGC_DISTORTION out of range: {}", AGC_DISTORTION);
+
         // Build highpass filter at 80Hz (Butterworth, 2nd order)
         let highpass = if sample_rate >= 1000 {
             Coefficients::<f32>::from_params(
@@ -156,6 +162,19 @@ impl AudioPreprocessor {
             *s = s.clamp(-1.0, 1.0);
         }
 
+        // Invariant: all output samples must be in [-1.0, 1.0] after clamping
+        debug_assert!(
+            output.iter().all(|&s| (-1.0..=1.0).contains(&s)),
+            "output contains samples outside [-1.0, 1.0]"
+        );
+        // Invariant: preprocessing can only remove samples (VAD strips silence), never add
+        debug_assert!(
+            output.len() <= samples.len(),
+            "output length {} exceeds input length {}",
+            output.len(),
+            samples.len()
+        );
+
         output
     }
 
@@ -182,6 +201,14 @@ impl AudioPreprocessor {
             // nnnoiseless expects [-32768.0, 32767.0]
             self.frame_buf.push(sample * 32767.0);
             self.original_buf.push(sample);
+
+            // Invariant: frame_buf must never exceed the expected frame size
+            debug_assert!(
+                self.frame_buf.len() <= DENOISE_FRAME_SIZE,
+                "frame_buf length {} exceeds DENOISE_FRAME_SIZE {}",
+                self.frame_buf.len(),
+                DENOISE_FRAME_SIZE
+            );
 
             if self.frame_buf.len() == DENOISE_FRAME_SIZE {
                 let voice_prob = denoise.process_frame(&mut denoise_output, &self.frame_buf);
@@ -227,6 +254,16 @@ impl AudioPreprocessor {
 
                 self.frame_buf.clear();
                 self.original_buf.clear();
+
+                // Invariant: counters should not overflow to absurd values (indicates logic bug)
+                debug_assert!(
+                    self.silence_frames <= 1_000_000,
+                    "silence_frames overflowed to {}", self.silence_frames
+                );
+                debug_assert!(
+                    self.speech_frames <= 1_000_000,
+                    "speech_frames overflowed to {}", self.speech_frames
+                );
             }
         }
 
@@ -263,6 +300,8 @@ impl AudioPreprocessor {
 /// Process a complete audio buffer (used for final transcription on stop_recording).
 /// Creates a fresh preprocessor, processes the entire buffer, returns cleaned audio.
 pub fn process_buffer(samples: &[f32], sample_rate: u32) -> Vec<f32> {
+    // Invariant: sample rate must be positive
+    debug_assert!(sample_rate > 0, "process_buffer: sample_rate must be > 0, got {}", sample_rate);
     let mut proc = AudioPreprocessor::new(sample_rate);
     proc.process(samples)
 }
@@ -271,6 +310,9 @@ pub fn process_buffer(samples: &[f32], sample_rate: u32) -> Vec<f32> {
 /// Uses a lowpass anti-aliasing filter + linear interpolation.
 /// Returns samples at 16kHz. If source is already 16kHz, returns a clone.
 pub fn downsample_to_16k(samples: &[f32], source_rate: u32) -> Vec<f32> {
+    // Invariant: source rate must be positive (0 would cause division-by-zero)
+    debug_assert!(source_rate > 0, "downsample_to_16k: source_rate must be > 0, got {}", source_rate);
+
     if source_rate <= WHISPER_SAMPLE_RATE {
         return samples.to_vec();
     }
@@ -308,6 +350,20 @@ pub fn downsample_to_16k(samples: &[f32], source_rate: u32) -> Vec<f32> {
         let s1 = filtered[(idx + 1).min(filtered.len() - 1)];
         output.push(s0 + (s1 - s0) * frac);
     }
+
+    // Invariant: output length should be approximately input_length * 16000 / source_rate (within 1 sample)
+    let expected_len = (samples.len() as f64 * WHISPER_SAMPLE_RATE as f64 / source_rate as f64).floor() as usize;
+    debug_assert!(
+        (output.len() as isize - expected_len as isize).unsigned_abs() <= 1,
+        "downsample output length {} deviates from expected {} by more than 1 sample",
+        output.len(),
+        expected_len
+    );
+    // Invariant: all output samples must be finite (no NaN or Inf from interpolation)
+    debug_assert!(
+        output.iter().all(|s| s.is_finite()),
+        "downsample output contains NaN or Inf"
+    );
 
     output
 }
