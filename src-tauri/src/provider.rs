@@ -18,6 +18,8 @@ pub enum Provider {
 impl Provider {
     /// Detect provider from an API URL.
     pub fn from_url(url: &str) -> Self {
+        // URL must not be empty — caller should validate before reaching here
+        debug_assert!(!url.is_empty(), "from_url called with empty URL");
         if url.contains("groq.com") {
             Self::Groq
         } else if url.contains("openai.com") {
@@ -66,6 +68,8 @@ impl Provider {
 
     /// Whether the URL uses HTTPS (or is localhost, which is exempt).
     pub fn is_secure_url(url: &str) -> bool {
+        // URL must not be empty — caller should validate before reaching here
+        debug_assert!(!url.is_empty(), "is_secure_url called with empty URL");
         if let Ok(parsed) = url::Url::parse(url) {
             if parsed.scheme() == "http" {
                 let host = parsed.host_str().unwrap_or("");
@@ -92,10 +96,14 @@ pub enum KeyringScope {
 impl KeyringScope {
     /// Keyring entry name (e.g. "api-key-groq", "llm-key-anthropic").
     pub fn entry_name(&self) -> String {
-        match self {
+        let name = match self {
             Self::Stt(p) => format!("api-key-{}", p.as_str()),
             Self::Llm(p) => format!("llm-key-{}", p.as_str()),
-        }
+        };
+        // Entry name must be non-empty and contain a dash separator
+        debug_assert!(!name.is_empty(), "entry_name produced empty string");
+        debug_assert!(name.contains('-'), "entry_name missing dash separator: {}", name);
+        name
     }
 
     /// The provider for this scope.

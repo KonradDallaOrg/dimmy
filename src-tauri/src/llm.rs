@@ -109,7 +109,14 @@ impl LlmStyle {
         } else {
             (current_idx + total - 1) % total
         };
-        Self::ALL[new_idx]
+        let result = Self::ALL[new_idx];
+        // Cycling must produce a different variant (unless there's only one)
+        debug_assert!(
+            total == 1 || result != *self,
+            "cycle() returned the same style: {:?}",
+            self
+        );
+        result
     }
 
     /// Parse from string, defaulting to Off for unknown values.
@@ -132,6 +139,9 @@ impl std::fmt::Display for LlmStyle {
         f.write_str(self.as_str())
     }
 }
+
+// Compile-time guard: adding a variant without updating ALL will fail this assertion.
+const _: () = assert!(LlmStyle::ALL.len() == 13, "LlmStyle::ALL must contain exactly 13 variants");
 
 // ── LlmTone enum ─────────────────────────────────────────────────────
 
@@ -212,6 +222,9 @@ impl std::fmt::Display for LlmTone {
     }
 }
 
+// Compile-time guard: adding a variant without updating ALL will fail this assertion.
+const _: () = assert!(LlmTone::ALL.len() == 5, "LlmTone::ALL must contain exactly 5 variants");
+
 /// Build the system prompt from a style + tone + translate_to combination.
 /// If style is Off and translate_to is empty/none, returns empty string (caller should skip LLM).
 /// If style is Custom, uses `custom_prompt` instead of the style instruction.
@@ -231,7 +244,12 @@ pub fn build_system_prompt(
     let style_instruction = match style {
         LlmStyle::Custom => custom_prompt.to_string(),
         LlmStyle::Off => String::new(),
-        _ => style.instruction().to_string(),
+        _ => {
+            let instr = style.instruction();
+            // Non-Off/Custom styles must have a non-empty instruction
+            debug_assert!(!instr.is_empty(), "style {:?} returned empty instruction", style);
+            instr.to_string()
+        }
     };
 
     let tone_modifier = tone.instruction();
@@ -270,7 +288,14 @@ pub fn build_system_prompt(
         PREAMBLE.to_string()
     };
 
-    format!("{}\n\n{}", preamble, task)
+    let prompt = format!("{}\n\n{}", preamble, task);
+    // Sanity bound: prevents runaway prompt composition
+    debug_assert!(
+        prompt.len() < 10_000,
+        "composed prompt is unreasonably long: {} chars",
+        prompt.len()
+    );
+    prompt
 }
 
 #[derive(serde::Deserialize)]
@@ -323,6 +348,9 @@ pub async fn process_text(
     // Minimum 512 — some providers (Gemini) count tokens differently and need headroom.
     let estimated_input_tokens = (text.len() as f64 * 0.75).ceil() as u64;
     let max_tokens = (estimated_input_tokens * 3).max(512);
+    // max_tokens must be positive and within a sane upper bound
+    debug_assert!(max_tokens > 0, "max_tokens must be positive");
+    debug_assert!(max_tokens < 100_000, "max_tokens exceeds sanity bound: {}", max_tokens);
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
