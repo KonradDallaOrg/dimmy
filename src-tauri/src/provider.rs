@@ -74,7 +74,9 @@ impl Provider {
             if parsed.scheme() == "http" {
                 let host = parsed.host_str().unwrap_or("");
                 // host_str() returns "::1" for http://[::1]:port
-                return host == "localhost" || host == "127.0.0.1" || host == "::1"
+                return host == "localhost"
+                    || host == "127.0.0.1"
+                    || host == "::1"
                     || host == "[::1]";
             }
         }
@@ -102,7 +104,11 @@ impl KeyringScope {
         };
         // Entry name must be non-empty and contain a dash separator
         assert!(!name.is_empty(), "entry_name produced empty string");
-        assert!(name.contains('-'), "entry_name missing dash separator: {}", name);
+        assert!(
+            name.contains('-'),
+            "entry_name missing dash separator: {}",
+            name
+        );
         name
     }
 
@@ -217,20 +223,35 @@ mod tests {
 
     #[test]
     fn keyring_scope_stt() {
-        assert_eq!(KeyringScope::Stt(Provider::Groq).entry_name(), "api-key-groq");
-        assert_eq!(KeyringScope::Stt(Provider::OpenAI).entry_name(), "api-key-openai");
+        assert_eq!(
+            KeyringScope::Stt(Provider::Groq).entry_name(),
+            "api-key-groq"
+        );
+        assert_eq!(
+            KeyringScope::Stt(Provider::OpenAI).entry_name(),
+            "api-key-openai"
+        );
     }
 
     #[test]
     fn keyring_scope_llm() {
-        assert_eq!(KeyringScope::Llm(Provider::Anthropic).entry_name(), "llm-key-anthropic");
-        assert_eq!(KeyringScope::Llm(Provider::OpenRouter).entry_name(), "llm-key-openrouter");
+        assert_eq!(
+            KeyringScope::Llm(Provider::Anthropic).entry_name(),
+            "llm-key-anthropic"
+        );
+        assert_eq!(
+            KeyringScope::Llm(Provider::OpenRouter).entry_name(),
+            "llm-key-openrouter"
+        );
     }
 
     #[test]
     fn keyring_scope_provider() {
         assert_eq!(KeyringScope::Stt(Provider::Groq).provider(), Provider::Groq);
-        assert_eq!(KeyringScope::Llm(Provider::Anthropic).provider(), Provider::Anthropic);
+        assert_eq!(
+            KeyringScope::Llm(Provider::Anthropic).provider(),
+            Provider::Anthropic
+        );
     }
 
     #[test]

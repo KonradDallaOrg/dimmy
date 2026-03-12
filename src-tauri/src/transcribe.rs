@@ -22,12 +22,16 @@ pub async fn transcribe_audio(
     // SECURITY: reject HTTP URLs to prevent API key leak over plaintext,
     // except localhost/127.0.0.1 for self-hosted setups
     if !Provider::is_secure_url(api_url) {
-        return Err(crate::error::TranscribeError::InsecureUrl(api_url.to_string()));
+        return Err(crate::error::TranscribeError::InsecureUrl(
+            api_url.to_string(),
+        ));
     }
 
     // Route to provider-specific path
     match Provider::from_url(api_url) {
-        Provider::Deepgram => return transcribe_audio_deepgram(api_url, api_key, wav_data, language).await,
+        Provider::Deepgram => {
+            return transcribe_audio_deepgram(api_url, api_key, wav_data, language).await
+        }
         Provider::Gemini if api_url.contains("generateContent") => {
             return transcribe_audio_gemini(api_url, api_key, wav_data, language).await;
         }
@@ -67,7 +71,10 @@ pub async fn transcribe_audio(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(crate::error::TranscribeError::Api { status: status.as_u16(), body: body[..body.len().min(200)].to_string() });
+        return Err(crate::error::TranscribeError::Api {
+            status: status.as_u16(),
+            body: body[..body.len().min(200)].to_string(),
+        });
     }
 
     let result: TranscriptionResponse = response.json().await?;
@@ -106,7 +113,10 @@ async fn transcribe_audio_deepgram(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(crate::error::TranscribeError::Api { status: status.as_u16(), body: body[..body.len().min(200)].to_string() });
+        return Err(crate::error::TranscribeError::Api {
+            status: status.as_u16(),
+            body: body[..body.len().min(200)].to_string(),
+        });
     }
 
     let result: serde_json::Value = response.json().await?;
@@ -174,7 +184,10 @@ async fn transcribe_audio_gemini(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(crate::error::TranscribeError::Api { status: status.as_u16(), body: body[..body.len().min(200)].to_string() });
+        return Err(crate::error::TranscribeError::Api {
+            status: status.as_u16(),
+            body: body[..body.len().min(200)].to_string(),
+        });
     }
 
     // Gemini response: { "candidates": [{ "content": { "parts": [{ "text": "..." }] } }] }

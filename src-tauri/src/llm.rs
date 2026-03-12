@@ -141,7 +141,10 @@ impl std::fmt::Display for LlmStyle {
 }
 
 // Compile-time guard: adding a variant without updating ALL will fail this assertion.
-const _: () = assert!(LlmStyle::ALL.len() == 13, "LlmStyle::ALL must contain exactly 13 variants");
+const _: () = assert!(
+    LlmStyle::ALL.len() == 13,
+    "LlmStyle::ALL must contain exactly 13 variants"
+);
 
 // ── LlmTone enum ─────────────────────────────────────────────────────
 
@@ -223,7 +226,10 @@ impl std::fmt::Display for LlmTone {
 }
 
 // Compile-time guard: adding a variant without updating ALL will fail this assertion.
-const _: () = assert!(LlmTone::ALL.len() == 5, "LlmTone::ALL must contain exactly 5 variants");
+const _: () = assert!(
+    LlmTone::ALL.len() == 5,
+    "LlmTone::ALL must contain exactly 5 variants"
+);
 
 /// Build the system prompt from a style + tone + translate_to combination.
 /// If style is Off and translate_to is empty/none, returns empty string (caller should skip LLM).
@@ -247,7 +253,11 @@ pub fn build_system_prompt(
         _ => {
             let instr = style.instruction();
             // Non-Off/Custom styles must have a non-empty instruction
-            assert!(!instr.is_empty(), "style {:?} returned empty instruction", style);
+            assert!(
+                !instr.is_empty(),
+                "style {:?} returned empty instruction",
+                style
+            );
             instr.to_string()
         }
     };
@@ -279,11 +289,10 @@ pub fn build_system_prompt(
 
     // When translating, remove rule #6 ("do not translate") from preamble
     let preamble = if translating {
-        PREAMBLE
-            .replace(
-                "6. Keep the same language as the input. Do NOT translate.\n",
-                "",
-            )
+        PREAMBLE.replace(
+            "6. Keep the same language as the input. Do NOT translate.\n",
+            "",
+        )
     } else {
         PREAMBLE.to_string()
     };
@@ -332,9 +341,10 @@ pub async fn process_text(
     // SECURITY: reject HTTP URLs to prevent API key leak over plaintext,
     // except localhost/127.0.0.1 for self-hosted setups
     if !crate::provider::Provider::is_secure_url(api_url) {
-        return Err(crate::error::LlmError::Network(
-            format!("Refusing HTTP (HTTPS required): {}", api_url),
-        ));
+        return Err(crate::error::LlmError::Network(format!(
+            "Refusing HTTP (HTTPS required): {}",
+            api_url
+        )));
     }
 
     // Wrap transcription in tags so the LLM sees it as data, not a conversation.
@@ -350,7 +360,11 @@ pub async fn process_text(
     let max_tokens = (estimated_input_tokens * 3).max(512);
     // max_tokens must be positive and within a sane upper bound
     assert!(max_tokens > 0, "max_tokens must be positive");
-    assert!(max_tokens < 100_000, "max_tokens exceeds sanity bound: {}", max_tokens);
+    assert!(
+        max_tokens < 100_000,
+        "max_tokens exceeds sanity bound: {}",
+        max_tokens
+    );
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
@@ -398,7 +412,10 @@ pub async fn process_text(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(crate::error::LlmError::Api { status: status.as_u16(), body: body[..body.len().min(200)].to_string() });
+        return Err(crate::error::LlmError::Api {
+            status: status.as_u16(),
+            body: body[..body.len().min(200)].to_string(),
+        });
     }
 
     let content = if is_anthropic {
@@ -488,7 +505,8 @@ mod tests {
 
     #[test]
     fn custom_uses_custom_prompt() {
-        let prompt = build_system_prompt(LlmStyle::Custom, LlmTone::None, "Rewrite formally", "none");
+        let prompt =
+            build_system_prompt(LlmStyle::Custom, LlmTone::None, "Rewrite formally", "none");
         assert!(prompt.contains("Rewrite formally"));
         assert!(prompt.contains("Do NOT translate"));
     }
@@ -515,7 +533,11 @@ mod tests {
                     assert!(style.instruction().is_empty());
                 }
                 _ => {
-                    assert!(!style.instruction().is_empty(), "{} has empty instruction", style);
+                    assert!(
+                        !style.instruction().is_empty(),
+                        "{} has empty instruction",
+                        style
+                    );
                 }
             }
         }

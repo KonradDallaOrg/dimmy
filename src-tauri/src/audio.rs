@@ -203,7 +203,10 @@ impl RawAudio {
     /// If disabled, passes audio through unchanged.
     pub fn preprocess(self, enabled: bool) -> ProcessedAudio {
         // Raw audio must have a valid sample rate
-        assert!(self.sample_rate > 0, "RawAudio sample_rate must be positive");
+        assert!(
+            self.sample_rate > 0,
+            "RawAudio sample_rate must be positive"
+        );
 
         let samples = if enabled {
             crate::preprocess::process_buffer(&self.samples, self.sample_rate)
@@ -258,10 +261,7 @@ impl ProcessedAudio {
 }
 
 /// Encode f32 samples to WAV bytes (16-bit PCM, mono)
-pub fn encode_wav(
-    samples: &[f32],
-    sample_rate: u32,
-) -> Result<Vec<u8>, crate::error::AudioError> {
+pub fn encode_wav(samples: &[f32], sample_rate: u32) -> Result<Vec<u8>, crate::error::AudioError> {
     // Sample rate must be positive and within sane hardware limits
     assert!(sample_rate > 0, "encode_wav: sample_rate must be positive");
     assert!(
@@ -411,7 +411,8 @@ mod tests {
         assert!((payload.duration_secs - 1.0).abs() < 0.1);
 
         // Verify it's valid WAV
-        let reader = hound::WavReader::new(Cursor::new(&payload.data)).expect("hound can't read WAV");
+        let reader =
+            hound::WavReader::new(Cursor::new(&payload.data)).expect("hound can't read WAV");
         assert_eq!(reader.spec().sample_rate, 16000);
     }
 

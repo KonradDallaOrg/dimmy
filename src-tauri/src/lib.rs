@@ -1,9 +1,9 @@
 pub mod audio;
 pub mod error;
-pub mod provider;
 mod hotkey;
 pub mod llm;
 pub mod preprocess;
+pub mod provider;
 mod transcribe;
 
 use audio::AudioCommand;
@@ -88,7 +88,10 @@ fn save_debug_metadata(
         "timestamp": chrono::Local::now().to_rfc3339(),
     });
     let path = dir.join("metadata.json");
-    let _ = std::fs::write(&path, serde_json::to_string_pretty(&meta).unwrap_or_default());
+    let _ = std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&meta).unwrap_or_default(),
+    );
 }
 
 /// Append a line to the transcription debug log for chunk vs final comparison.
@@ -276,7 +279,10 @@ fn load_config_file() -> AppConfig {
                     selected_device: v["selected_device"].as_str().map(|s| s.to_string()),
                     language: v["language"].as_str().unwrap_or("").to_string(),
                     shortcut_mode: v["shortcut_mode"].as_str().unwrap_or("toggle").to_string(),
-                    shortcut: v["shortcut"].as_str().unwrap_or(default_shortcut()).to_string(),
+                    shortcut: v["shortcut"]
+                        .as_str()
+                        .unwrap_or(default_shortcut())
+                        .to_string(),
                     prompt: v["prompt"].as_str().unwrap_or(DEFAULT_PROMPT).to_string(),
                     llm_enabled: v["llm_enabled"].as_bool().unwrap_or(defaults.llm_enabled),
                     llm_style: llm::LlmStyle::from_str_lossy(
@@ -582,10 +588,7 @@ fn start_recording(
         .lock()
         .map_err(|e| e.to_string())?;
 
-    let debug_log_on = *state
-        .llm_log_enabled
-        .lock()
-        .map_err(|e| e.to_string())?;
+    let debug_log_on = *state.llm_log_enabled.lock().map_err(|e| e.to_string())?;
 
     let audio_debug_on = *state
         .audio_debug_enabled
@@ -694,7 +697,11 @@ fn start_recording(
                 debug_chunk_idx += 1;
                 if let Some(ref dir) = debug_session_dir {
                     if let Ok(raw_wav) = audio::encode_wav(&chunk_data, sample_rate as u32) {
-                        save_debug_wav(dir, &format!("chunk_{:03}_raw.wav", debug_chunk_idx), &raw_wav);
+                        save_debug_wav(
+                            dir,
+                            &format!("chunk_{:03}_raw.wav", debug_chunk_idx),
+                            &raw_wav,
+                        );
                     }
                 }
 
@@ -724,7 +731,11 @@ fn start_recording(
                 // Save processed chunk WAV for audio debug (after preprocessing)
                 if let Some(ref dir) = debug_session_dir {
                     if let Ok(proc_wav) = audio::encode_wav(&processed, sample_rate as u32) {
-                        save_debug_wav(dir, &format!("chunk_{:03}_processed.wav", debug_chunk_idx), &proc_wav);
+                        save_debug_wav(
+                            dir,
+                            &format!("chunk_{:03}_processed.wav", debug_chunk_idx),
+                            &proc_wav,
+                        );
                     }
                 }
 
@@ -734,7 +745,11 @@ fn start_recording(
                 if debug_log_on {
                     debug_transcription(&format!(
                         "CHUNK #{} | samples={} | duration={:.2}s | offset={}..{}",
-                        chunk_index, processed.len(), chunk_duration_secs, offset.saturating_sub(processed.len()), offset
+                        chunk_index,
+                        processed.len(),
+                        chunk_duration_secs,
+                        offset.saturating_sub(processed.len()),
+                        offset
                     ));
                 }
 
@@ -749,14 +764,14 @@ fn start_recording(
                 let chunk_send_time = std::time::Instant::now();
                 // Downsample to 16kHz before sending to Whisper (reduces upload by ~3x)
                 let resampled = preprocess::downsample_to_16k(&processed, sample_rate as u32);
-                let wav_result =
-                    audio::encode_wav(&resampled, 16000).map_err(|e| e.to_string());
+                let wav_result = audio::encode_wav(&resampled, 16000).map_err(|e| e.to_string());
                 match wav_result {
                     Ok(wav_data) => {
                         if debug_log_on {
                             debug_transcription(&format!(
                                 "CHUNK #{} | wav_size={} bytes | sending to Whisper...",
-                                chunk_index, wav_data.len()
+                                chunk_index,
+                                wav_data.len()
                             ));
                         }
                         match transcribe::transcribe_audio(
@@ -769,7 +784,9 @@ fn start_recording(
                                     let elapsed = chunk_send_time.elapsed();
                                     debug_transcription(&format!(
                                         "CHUNK #{} | latency={:.0}ms | text=\"{}\"",
-                                        chunk_index, elapsed.as_millis(), text
+                                        chunk_index,
+                                        elapsed.as_millis(),
+                                        text
                                     ));
                                 }
                                 let _ = handle.emit(
@@ -785,7 +802,9 @@ fn start_recording(
                                     let elapsed = chunk_send_time.elapsed();
                                     debug_transcription(&format!(
                                         "CHUNK #{} | ERROR after {:.0}ms | {}",
-                                        chunk_index, elapsed.as_millis(), e
+                                        chunk_index,
+                                        elapsed.as_millis(),
+                                        e
                                     ));
                                 }
                                 let _ = handle.emit(
@@ -863,10 +882,7 @@ async fn stop_recording(
         return Err("No audio captured".into());
     }
 
-    let debug_log_on = *state
-        .llm_log_enabled
-        .lock()
-        .map_err(|e| e.to_string())?;
+    let debug_log_on = *state.llm_log_enabled.lock().map_err(|e| e.to_string())?;
 
     let sr = *state.audio_sample_rate.lock().map_err(|e| e.to_string())?;
 
@@ -900,7 +916,10 @@ async fn stop_recording(
         .map_err(|e| e.to_string())?
         .clone();
     let raw_sample_count = buffer.len();
-    let raw = audio::RawAudio { samples: buffer, sample_rate: sr };
+    let raw = audio::RawAudio {
+        samples: buffer,
+        sample_rate: sr,
+    };
 
     // Audio debug: save raw session WAV
     if let Some(ref dir) = debug_session_dir {
@@ -930,8 +949,10 @@ async fn stop_recording(
     }
 
     // Downsample to 16kHz + encode WAV
-    let audio::WavPayload { data: wav_data, duration_secs: wav_duration } =
-        processed.to_wav_payload().map_err(|e| e.to_string())?;
+    let audio::WavPayload {
+        data: wav_data,
+        duration_secs: wav_duration,
+    } = processed.to_wav_payload().map_err(|e| e.to_string())?;
 
     if debug_log_on {
         debug_transcription(&format!(
@@ -1235,12 +1256,18 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
     let has_custom_key = has_key(KeyringScope::Stt(Provider::Custom));
     // LLM key flags: check dedicated llm-key first, fall back to api-key for same provider.
     // Keys are per-provider — if you entered an OpenAI key for transcription, it works for LLM too.
-    let has_llm_groq_key = has_key(KeyringScope::Llm(Provider::Groq)) || has_key(KeyringScope::Stt(Provider::Groq));
-    let has_llm_openai_key = has_key(KeyringScope::Llm(Provider::OpenAI)) || has_key(KeyringScope::Stt(Provider::OpenAI));
-    let has_llm_openrouter_key = has_key(KeyringScope::Llm(Provider::OpenRouter)) || has_key(KeyringScope::Stt(Provider::OpenRouter));
-    let has_llm_gemini_key = has_key(KeyringScope::Llm(Provider::Gemini)) || has_key(KeyringScope::Stt(Provider::Gemini));
-    let has_llm_anthropic_key = has_key(KeyringScope::Llm(Provider::Anthropic)) || has_key(KeyringScope::Stt(Provider::Anthropic));
-    let has_llm_custom_key = has_key(KeyringScope::Llm(Provider::Custom)) || has_key(KeyringScope::Stt(Provider::Custom));
+    let has_llm_groq_key =
+        has_key(KeyringScope::Llm(Provider::Groq)) || has_key(KeyringScope::Stt(Provider::Groq));
+    let has_llm_openai_key = has_key(KeyringScope::Llm(Provider::OpenAI))
+        || has_key(KeyringScope::Stt(Provider::OpenAI));
+    let has_llm_openrouter_key = has_key(KeyringScope::Llm(Provider::OpenRouter))
+        || has_key(KeyringScope::Stt(Provider::OpenRouter));
+    let has_llm_gemini_key = has_key(KeyringScope::Llm(Provider::Gemini))
+        || has_key(KeyringScope::Stt(Provider::Gemini));
+    let has_llm_anthropic_key = has_key(KeyringScope::Llm(Provider::Anthropic))
+        || has_key(KeyringScope::Stt(Provider::Anthropic));
+    let has_llm_custom_key = has_key(KeyringScope::Llm(Provider::Custom))
+        || has_key(KeyringScope::Stt(Provider::Custom));
 
     Ok(serde_json::json!({
         "has_key": has_stt_key,
@@ -1308,7 +1335,11 @@ async fn process_with_llm(
 ) -> Result<String, String> {
     let enabled = *state.llm_enabled.lock().map_err(|e| e.to_string())?;
     let style = *state.llm_style.lock().map_err(|e| e.to_string())?;
-    let translate_to = state.llm_translate_to.lock().map_err(|e| e.to_string())?.clone();
+    let translate_to = state
+        .llm_translate_to
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     let translating = !translate_to.is_empty() && translate_to != "none";
 
     if !enabled && !translating {
@@ -1456,7 +1487,10 @@ fn cycle_llm_style(
     drop(style);
     save_current_config(&state)?;
 
-    let new_idx = llm::LlmStyle::ALL.iter().position(|s| *s == new_style).unwrap_or(0);
+    let new_idx = llm::LlmStyle::ALL
+        .iter()
+        .position(|s| *s == new_style)
+        .unwrap_or(0);
     Ok(serde_json::json!({
         "style": new_style.as_str(),
         "index": new_idx,
@@ -1476,7 +1510,10 @@ fn cycle_llm_tone(
     drop(tone);
     save_current_config(&state)?;
 
-    let new_idx = llm::LlmTone::ALL.iter().position(|t| *t == new_tone).unwrap_or(0);
+    let new_idx = llm::LlmTone::ALL
+        .iter()
+        .position(|t| *t == new_tone)
+        .unwrap_or(0);
     Ok(serde_json::json!({
         "tone": new_tone.as_str(),
         "index": new_idx,
@@ -1733,14 +1770,11 @@ fn get_work_area() -> Option<(i32, i32)> {
         );
     }
 
-    type MsgSendPtr = unsafe extern "C" fn(
-        *mut std::ffi::c_void,
-        *mut std::ffi::c_void,
-    ) -> *mut std::ffi::c_void;
+    type MsgSendPtr =
+        unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
 
     unsafe {
-        let send_ptr: MsgSendPtr =
-            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let send_ptr: MsgSendPtr = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
 
         let ns_screen = objc_getClass(b"NSScreen\0".as_ptr());
         if ns_screen.is_null() {
@@ -2223,12 +2257,16 @@ pub fn run() {
                             fn objc_getClass(name: *const u8) -> Id;
                         }
 
-                        let send: MsgSendNoArgs = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-                        let send_int: MsgSendInt = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-                        let send_obj: MsgSendObj = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+                        let send: MsgSendNoArgs =
+                            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+                        let send_int: MsgSendInt =
+                            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+                        let send_obj: MsgSendObj =
+                            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
 
                         // Get NSWindow pointer via Tauri's raw window handle
-                        let ns_win: Id = window.ns_window().unwrap_or(std::ptr::null_mut() as _) as Id;
+                        let ns_win: Id =
+                            window.ns_window().unwrap_or(std::ptr::null_mut() as _) as Id;
                         if !ns_win.is_null() {
                             // [nsWindow setOpaque:NO]
                             let sel_set_opaque = sel_registerName(b"setOpaque:\0".as_ptr());
@@ -2329,7 +2367,10 @@ pub fn run() {
                             SetWindowPos(
                                 hwnd,
                                 std::ptr::null_mut(),
-                                0, 0, 0, 0,
+                                0,
+                                0,
+                                0,
+                                0,
                                 SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
                             );
 
@@ -2414,15 +2455,12 @@ pub fn run() {
                                     let micro_w = 60.0_f64; // MICRO_W + margin
                                     let micro_h = 36.0_f64; // PILL_H + margin
                                     let st: tauri::State<'_, AppState> = app_handle.state();
-                                    let anchor = st
-                                        .window_anchor
-                                        .lock()
-                                        .ok()
-                                        .and_then(|a| *a);
+                                    let anchor = st.window_anchor.lock().ok().and_then(|a| *a);
                                     if let Some((right, bottom)) = anchor {
                                         let x = (right - micro_w).max(0.0);
                                         let y = (bottom - micro_h).max(0.0);
-                                        let (x, y) = clamp_to_work_area(&win, x, y, micro_w, micro_h);
+                                        let (x, y) =
+                                            clamp_to_work_area(&win, x, y, micro_w, micro_h);
                                         let _ = win.set_position(LogicalPosition::new(x, y));
                                     } else {
                                         position_bottom_right(&win, micro_w, micro_h);
@@ -2500,12 +2538,10 @@ pub fn run() {
             #[cfg(target_os = "windows")]
             {
                 let transparency_handle = app.handle().clone();
-                std::thread::spawn(move || {
-                    loop {
-                        std::thread::sleep(std::time::Duration::from_millis(500));
-                        if let Some(win) = transparency_handle.get_webview_window("main") {
-                            force_transparent_redraw(&win);
-                        }
+                std::thread::spawn(move || loop {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    if let Some(win) = transparency_handle.get_webview_window("main") {
+                        force_transparent_redraw(&win);
                     }
                 });
             }
