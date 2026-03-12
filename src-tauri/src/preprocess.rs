@@ -182,9 +182,14 @@ impl AudioPreprocessor {
         let mut output = speech;
         self.agc.process(&mut output);
 
-        // Clamp to [-1.0, 1.0] after AGC (safety net)
+        // Clamp to [-1.0, 1.0] after AGC (safety net).
+        // AGC can produce NaN on long recordings — treat as silence.
         for s in output.iter_mut() {
-            *s = s.clamp(-1.0, 1.0);
+            *s = if s.is_finite() {
+                s.clamp(-1.0, 1.0)
+            } else {
+                0.0
+            };
         }
 
         // Invariant: all output samples must be in [-1.0, 1.0] after clamping
