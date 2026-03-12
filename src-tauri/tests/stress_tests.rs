@@ -9,8 +9,9 @@
 //! - WAV encoding at scale
 //! - Concurrent buffer access patterns
 //!
-//! Run with: cargo test --test stress_tests -- --nocapture
-//! Run overnight: cargo test --test stress_tests -- --nocapture 2>&1 | tee stress_results.log
+//! Quick tests (CI):     cargo test --test stress_tests
+//! All tests (local):    cargo test --test stress_tests -- --include-ignored --nocapture
+//! Heavy tests only:     cargo test --test stress_tests -- --ignored --nocapture
 
 use std::io::Cursor;
 use std::sync::{Arc, Mutex};
@@ -66,6 +67,7 @@ fn speech_and_silence(
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
+#[ignore] // ~10min, 345 MB — run locally with: cargo test -- --ignored
 fn wav_encode_30min_48khz() {
     // 30 minutes at 48kHz = 86.4M samples = ~345 MB of f32
     // This is the MAX recording the app allows
@@ -206,6 +208,7 @@ fn wav_encode_various_sample_rates() {
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
+#[ignore] // ~5min, 329 MB
 fn preprocess_30min_audio() {
     let sample_rate = 48000u32;
     let duration_secs = 30.0 * 60.0;
@@ -262,6 +265,7 @@ fn preprocess_30min_audio() {
 }
 
 #[test]
+#[ignore] // ~10min, 1000 chunks
 fn preprocess_incremental_1000_chunks() {
     // Simulate chunk streaming: 1000 chunks of 5 seconds each
     let sample_rate = 48000u32;
@@ -401,6 +405,7 @@ fn preprocess_dc_offset() {
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
+#[ignore] // ~2min, 329 MB
 fn downsample_30min_48khz_to_16khz() {
     let sample_rate = 48000u32;
     let duration_secs = 30.0 * 60.0;
@@ -501,6 +506,7 @@ fn downsample_empty_input() {
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
+#[ignore] // ~5min, 329 MB
 fn pipeline_full_30min() {
     let sample_rate = 48000u32;
     let _duration = 30.0 * 60.0;
@@ -817,6 +823,7 @@ fn concurrent_buffer_clone_and_clear() {
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
+#[ignore] // ~8min, progressive 1-30min allocations
 fn memory_pipeline_peak_measurement() {
     // Measure peak memory during the full pipeline
     println!("=== Memory Pipeline Peak ===");
@@ -1198,6 +1205,7 @@ fn fuzz_wav_encode_random_lengths() {
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
+#[ignore] // ~10min, 100 recording sessions
 fn endurance_repeated_pipeline_100_cycles() {
     // Simulate 100 recording sessions back-to-back
     // Each: generate audio → preprocess → downsample → encode → verify
@@ -1250,6 +1258,7 @@ fn endurance_repeated_pipeline_100_cycles() {
 }
 
 #[test]
+#[ignore] // ~2min, 50 sessions × 3 phases
 fn endurance_preprocessor_state_reset() {
     // Verify preprocessor state doesn't corrupt across many sessions
     let sample_rate = 48000u32;
