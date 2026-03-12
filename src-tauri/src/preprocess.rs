@@ -75,6 +75,24 @@ pub struct AudioPreprocessor {
 
 impl AudioPreprocessor {
     pub fn new(sample_rate: u32) -> Self {
+        // Invariant: sample rate must be positive (0 would cause division-by-zero downstream)
+        assert!(
+            sample_rate > 0,
+            "sample_rate must be > 0, got {}",
+            sample_rate
+        );
+        // Compile-time guard: AGC constants must be valid for MonoAgc::new()
+        const {
+            assert!(
+                TARGET_RMS > 0.0 && TARGET_RMS <= 1.0,
+                "TARGET_RMS out of range"
+            );
+            assert!(
+                AGC_DISTORTION > 0.0 && AGC_DISTORTION < 1.0,
+                "AGC_DISTORTION out of range"
+            );
+        }
+
         // Build highpass filter at 80Hz (Butterworth, 2nd order)
         let highpass = if sample_rate >= 1000 {
             Coefficients::<f32>::from_params(
@@ -129,11 +147,24 @@ impl AudioPreprocessor {
             return Vec::new();
         }
 
+        // Step 0: Clamp input to [-1.0, 1.0] — extreme values (f32::MAX, Inf, NaN)
+        // would corrupt the highpass filter state and cause downstream FFT crashes.
+        let sanitized: Vec<f32> = samples
+            .iter()
+            .map(|&s| {
+                if s.is_finite() {
+                    s.clamp(-1.0, 1.0)
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+
         // Step 1: Highpass filter (in-place on a copy)
         let filtered: Vec<f32> = if let Some(ref mut hp) = self.highpass {
-            samples.iter().map(|&s| hp.run(s)).collect()
+            sanitized.iter().map(|&s| hp.run(s)).collect()
         } else {
-            samples.to_vec()
+            sanitized
         };
 
         // Step 2: VAD — keep only speech frames
@@ -155,6 +186,16 @@ impl AudioPreprocessor {
         for s in output.iter_mut() {
             *s = s.clamp(-1.0, 1.0);
         }
+
+        // Invariant: all output samples must be in [-1.0, 1.0] after clamping
+        assert!(
+            output.iter().all(|&s| (-1.0..=1.0).contains(&s)),
+            "output contains samples outside [-1.0, 1.0]"
+        );
+        // Note: output.len() CAN exceed samples.len() for a single call because the VAD
+        // buffers partial frames internally. A 959-sample input plus 1 buffered sample from
+        // a previous call can produce 960 samples (2 complete frames). The invariant holds
+        // cumulatively across all calls, not per-call.
 
         output
     }
@@ -179,9 +220,20 @@ impl AudioPreprocessor {
         let mut denoise_output = vec![0.0f32; DENOISE_FRAME_SIZE];
 
         for &sample in samples {
+            // Clamp to [-1.0, 1.0] before scaling — extreme values (f32::MAX) would
+            // overflow when multiplied by 32767.0, producing Inf that crashes nnnoiseless/FFT.
+            let clamped = sample.clamp(-1.0, 1.0);
             // nnnoiseless expects [-32768.0, 32767.0]
-            self.frame_buf.push(sample * 32767.0);
-            self.original_buf.push(sample);
+            self.frame_buf.push(clamped * 32767.0);
+            self.original_buf.push(clamped);
+
+            // Invariant: frame_buf must never exceed the expected frame size
+            assert!(
+                self.frame_buf.len() <= DENOISE_FRAME_SIZE,
+                "frame_buf length {} exceeds DENOISE_FRAME_SIZE {}",
+                self.frame_buf.len(),
+                DENOISE_FRAME_SIZE
+            );
 
             if self.frame_buf.len() == DENOISE_FRAME_SIZE {
                 let voice_prob = denoise.process_frame(&mut denoise_output, &self.frame_buf);
@@ -227,6 +279,18 @@ impl AudioPreprocessor {
 
                 self.frame_buf.clear();
                 self.original_buf.clear();
+
+                // Invariant: counters should not overflow to absurd values (indicates logic bug)
+                assert!(
+                    self.silence_frames <= 1_000_000,
+                    "silence_frames overflowed to {}",
+                    self.silence_frames
+                );
+                assert!(
+                    self.speech_frames <= 1_000_000,
+                    "speech_frames overflowed to {}",
+                    self.speech_frames
+                );
             }
         }
 
@@ -263,6 +327,12 @@ impl AudioPreprocessor {
 /// Process a complete audio buffer (used for final transcription on stop_recording).
 /// Creates a fresh preprocessor, processes the entire buffer, returns cleaned audio.
 pub fn process_buffer(samples: &[f32], sample_rate: u32) -> Vec<f32> {
+    // Invariant: sample rate must be positive
+    assert!(
+        sample_rate > 0,
+        "process_buffer: sample_rate must be > 0, got {}",
+        sample_rate
+    );
     let mut proc = AudioPreprocessor::new(sample_rate);
     proc.process(samples)
 }
@@ -271,6 +341,13 @@ pub fn process_buffer(samples: &[f32], sample_rate: u32) -> Vec<f32> {
 /// Uses a lowpass anti-aliasing filter + linear interpolation.
 /// Returns samples at 16kHz. If source is already 16kHz, returns a clone.
 pub fn downsample_to_16k(samples: &[f32], source_rate: u32) -> Vec<f32> {
+    // Invariant: source rate must be positive (0 would cause division-by-zero)
+    assert!(
+        source_rate > 0,
+        "downsample_to_16k: source_rate must be > 0, got {}",
+        source_rate
+    );
+
     if source_rate <= WHISPER_SAMPLE_RATE {
         return samples.to_vec();
     }
@@ -309,6 +386,21 @@ pub fn downsample_to_16k(samples: &[f32], source_rate: u32) -> Vec<f32> {
         output.push(s0 + (s1 - s0) * frac);
     }
 
+    // Invariant: output length should be approximately input_length * 16000 / source_rate (within 1 sample)
+    let expected_len =
+        (samples.len() as f64 * WHISPER_SAMPLE_RATE as f64 / source_rate as f64).floor() as usize;
+    assert!(
+        (output.len() as isize - expected_len as isize).unsigned_abs() <= 1,
+        "downsample output length {} deviates from expected {} by more than 1 sample",
+        output.len(),
+        expected_len
+    );
+    // Invariant: all output samples must be finite (no NaN or Inf from interpolation)
+    assert!(
+        output.iter().all(|s| s.is_finite()),
+        "downsample output contains NaN or Inf"
+    );
+
     output
 }
 
@@ -319,16 +411,14 @@ mod tests {
     #[test]
     fn agc_boosts_quiet_audio() {
         let mut proc = AudioPreprocessor::new(44100); // non-48k → no VAD, just highpass + AGC
-        // Feed quiet audio — AGC should boost it
+                                                      // Feed quiet audio — AGC should boost it
         let quiet: Vec<f32> = (0..44100)
             .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 44100.0).sin() * 0.02)
             .collect();
-        let rms_before =
-            (quiet.iter().map(|s| s * s).sum::<f32>() / quiet.len() as f32).sqrt();
+        let rms_before = (quiet.iter().map(|s| s * s).sum::<f32>() / quiet.len() as f32).sqrt();
         let out = proc.process(&quiet);
         assert!(!out.is_empty(), "Should produce output");
-        let rms_after =
-            (out.iter().map(|s| s * s).sum::<f32>() / out.len() as f32).sqrt();
+        let rms_after = (out.iter().map(|s| s * s).sum::<f32>() / out.len() as f32).sqrt();
         assert!(
             rms_after > rms_before,
             "AGC should boost quiet audio: before={:.4} after={:.4}",
@@ -418,7 +508,11 @@ mod tests {
             .collect();
         let out = downsample_to_16k(&samples, 48000);
         // 48000 / 3 = 16000
-        assert_eq!(out.len(), 16000, "Should produce exactly 16000 samples for 1 second");
+        assert_eq!(
+            out.len(),
+            16000,
+            "Should produce exactly 16000 samples for 1 second"
+        );
     }
 
     #[test]
@@ -429,7 +523,11 @@ mod tests {
         let out = downsample_to_16k(&samples, 44100);
         // 44100 / 2.75625 ≈ 16000
         let expected = (44100.0_f64 / (44100.0_f64 / 16000.0_f64)).floor() as usize;
-        assert_eq!(out.len(), expected, "Should produce ~16000 samples for 1 second of 44100Hz");
+        assert_eq!(
+            out.len(),
+            expected,
+            "Should produce ~16000 samples for 1 second of 44100Hz"
+        );
     }
 
     #[test]
@@ -465,6 +563,9 @@ mod tests {
         let out = proc.process(&speech);
         // With onset confirmation (MIN_SPEECH_FRAMES=3), very short signals may or may not pass.
         // The key test is that the output length is reasonable (not vastly inflated).
-        assert!(out.len() <= speech.len(), "Output should not exceed input length");
+        assert!(
+            out.len() <= speech.len(),
+            "Output should not exceed input length"
+        );
     }
 }

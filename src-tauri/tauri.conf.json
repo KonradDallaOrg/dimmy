@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicholasio/tauri-schema/refs/heads/v2/schema.json",
   "productName": "Dimmy",
-  "version": "0.3.39",
+  "version": "0.3.40",
   "identifier": "com.dimmy.voice",
   "build": {
     "frontendDist": "../src",
@@ -51,7 +51,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://github.com https://api.github.com https://objects.githubusercontent.com"
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; connect-src 'self' http://ipc.localhost https://github.com https://api.github.com https://objects.githubusercontent.com"
     }
   },
   "plugins": {

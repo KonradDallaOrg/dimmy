@@ -1,7 +1,9 @@
-mod audio;
+pub mod audio;
+pub mod error;
 mod hotkey;
-mod llm;
-mod preprocess;
+pub mod llm;
+pub mod preprocess;
+pub mod provider;
 mod transcribe;
 
 use audio::AudioCommand;
@@ -86,7 +88,10 @@ fn save_debug_metadata(
         "timestamp": chrono::Local::now().to_rfc3339(),
     });
     let path = dir.join("metadata.json");
-    let _ = std::fs::write(&path, serde_json::to_string_pretty(&meta).unwrap_or_default());
+    let _ = std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&meta).unwrap_or_default(),
+    );
 }
 
 /// Append a line to the transcription debug log for chunk vs final comparison.
@@ -164,8 +169,8 @@ struct AppConfig {
     prompt: String,
     // LLM post-processing fields
     llm_enabled: bool,
-    llm_style: String,
-    llm_tone: String,
+    llm_style: llm::LlmStyle,
+    llm_tone: llm::LlmTone,
     llm_custom_prompt: String,
     llm_translate_to: String,
     llm_api_url: String,
@@ -199,8 +204,8 @@ impl Default for AppConfig {
             .to_string(),
             prompt: DEFAULT_PROMPT.to_string(),
             llm_enabled: false,
-            llm_style: "off".to_string(),
-            llm_tone: "none".to_string(),
+            llm_style: llm::LlmStyle::Off,
+            llm_tone: llm::LlmTone::None,
             llm_custom_prompt: String::new(),
             llm_translate_to: "none".to_string(),
             llm_api_url: DEFAULT_LLM_URL.to_string(),
@@ -232,8 +237,8 @@ fn save_config_file(cfg: &AppConfig) {
             "shortcut": cfg.shortcut,
             "prompt": cfg.prompt,
             "llm_enabled": cfg.llm_enabled,
-            "llm_style": cfg.llm_style,
-            "llm_tone": cfg.llm_tone,
+            "llm_style": cfg.llm_style.as_str(),
+            "llm_tone": cfg.llm_tone.as_str(),
             "llm_custom_prompt": cfg.llm_custom_prompt,
             "llm_translate_to": cfg.llm_translate_to,
             "llm_api_url": cfg.llm_api_url,
@@ -274,17 +279,18 @@ fn load_config_file() -> AppConfig {
                     selected_device: v["selected_device"].as_str().map(|s| s.to_string()),
                     language: v["language"].as_str().unwrap_or("").to_string(),
                     shortcut_mode: v["shortcut_mode"].as_str().unwrap_or("toggle").to_string(),
-                    shortcut: v["shortcut"].as_str().unwrap_or(default_shortcut()).to_string(),
+                    shortcut: v["shortcut"]
+                        .as_str()
+                        .unwrap_or(default_shortcut())
+                        .to_string(),
                     prompt: v["prompt"].as_str().unwrap_or(DEFAULT_PROMPT).to_string(),
                     llm_enabled: v["llm_enabled"].as_bool().unwrap_or(defaults.llm_enabled),
-                    llm_style: v["llm_style"]
-                        .as_str()
-                        .unwrap_or(&defaults.llm_style)
-                        .to_string(),
-                    llm_tone: v["llm_tone"]
-                        .as_str()
-                        .unwrap_or(&defaults.llm_tone)
-                        .to_string(),
+                    llm_style: llm::LlmStyle::from_str_lossy(
+                        v["llm_style"].as_str().unwrap_or("off"),
+                    ),
+                    llm_tone: llm::LlmTone::from_str_lossy(
+                        v["llm_tone"].as_str().unwrap_or("none"),
+                    ),
                     llm_custom_prompt: v["llm_custom_prompt"]
                         .as_str()
                         .unwrap_or(&defaults.llm_custom_prompt)
@@ -404,12 +410,12 @@ fn migrate_plaintext_key() {
                 if let Some(key) = v["api_key"].as_str() {
                     if !key.is_empty() {
                         let api_url = v["api_url"].as_str().unwrap_or(DEFAULT_API_URL);
-                        let provider = url_to_provider(api_url);
+                        let provider = Provider::from_url(api_url);
                         log(&format!(
                             "Migrating plaintext API key to secure storage (provider={})...",
                             provider
                         ));
-                        match save_key_for_provider("api-key", provider, key) {
+                        match save_key(KeyringScope::Stt(provider), key) {
                             Ok(()) => log("Key migrated to secure storage"),
                             Err(e) => log(&format!("WARNING: migration failed: {}", e)),
                         }
@@ -428,51 +434,34 @@ fn migrate_plaintext_key() {
 // Keys are stored per-provider so switching providers doesn't lose keys.
 // Keyring entries: "dimmy" / "api-key-{provider}" and "llm-key-{provider}"
 
-/// Derive a provider identifier from a URL hostname.
-fn url_to_provider(url: &str) -> &str {
-    if url.contains("groq.com") {
-        "groq"
-    } else if url.contains("openai.com") {
-        "openai"
-    } else if url.contains("openrouter.ai") {
-        "openrouter"
-    } else if url.contains("googleapis.com") {
-        "gemini"
-    } else if url.contains("deepgram.com") {
-        "deepgram"
-    } else if url.contains("anthropic.com") {
-        "anthropic"
-    } else {
-        "custom"
-    }
-}
+use provider::{KeyringScope, Provider};
 
-fn save_key_for_provider(prefix: &str, provider: &str, key: &str) -> Result<(), String> {
-    let entry_name = format!("{}-{}", prefix, provider);
-    let entry = keyring::Entry::new("dimmy", &entry_name).map_err(|e| {
+fn save_key(scope: KeyringScope, key: &str) -> Result<(), String> {
+    let name = scope.entry_name();
+    let entry = keyring::Entry::new("dimmy", &name).map_err(|e| {
         log(&format!(
             "ERROR: keyring Entry::new({}) failed: {}",
-            entry_name, e
+            name, e
         ));
         format!("Credential store error: {}", e)
     })?;
     entry.set_password(key).map_err(|e| {
         log(&format!(
             "ERROR: keyring set_password({}) failed: {}",
-            entry_name, e
+            name, e
         ));
         format!("Failed to save key: {}", e)
     })?;
-    log(&format!("Key saved to secure storage: {}", entry_name));
+    log(&format!("Key saved to secure storage: {}", name));
     Ok(())
 }
 
-fn load_key_for_provider(prefix: &str, provider: &str) -> Option<String> {
-    let entry_name = format!("{}-{}", prefix, provider);
-    match keyring::Entry::new("dimmy", &entry_name) {
+fn load_key(scope: KeyringScope) -> Option<String> {
+    let name = scope.entry_name();
+    match keyring::Entry::new("dimmy", &name) {
         Ok(entry) => match entry.get_password() {
             Ok(key) => {
-                log(&format!("Key loaded from secure storage: {}", entry_name));
+                log(&format!("Key loaded from secure storage: {}", name));
                 Some(key)
             }
             Err(_) => None,
@@ -481,9 +470,9 @@ fn load_key_for_provider(prefix: &str, provider: &str) -> Option<String> {
     }
 }
 
-fn has_key_for_provider(prefix: &str, provider: &str) -> bool {
-    let entry_name = format!("{}-{}", prefix, provider);
-    match keyring::Entry::new("dimmy", &entry_name) {
+fn has_key(scope: KeyringScope) -> bool {
+    let name = scope.entry_name();
+    match keyring::Entry::new("dimmy", &name) {
         Ok(entry) => entry.get_password().is_ok(),
         Err(_) => false,
     }
@@ -500,21 +489,21 @@ fn migrate_keyring_to_per_provider(api_url: &str, llm_api_url: &str) {
     // Migrate transcription key
     if let Ok(entry) = keyring::Entry::new("dimmy", "api-key") {
         if let Ok(key) = entry.get_password() {
-            let provider = url_to_provider(api_url);
+            let provider = Provider::from_url(api_url);
             log(&format!("Migrating old api-key to api-key-{}", provider));
-            let _ = save_key_for_provider("api-key", provider, &key);
+            let _ = save_key(KeyringScope::Stt(provider), &key);
             delete_key("dimmy", "api-key");
         }
     }
     // Migrate LLM key
     if let Ok(entry) = keyring::Entry::new("dimmy", "llm-api-key") {
         if let Ok(key) = entry.get_password() {
-            let provider = url_to_provider(llm_api_url);
+            let provider = Provider::from_url(llm_api_url);
             log(&format!(
                 "Migrating old llm-api-key to llm-key-{}",
                 provider
             ));
-            let _ = save_key_for_provider("llm-key", provider, &key);
+            let _ = save_key(KeyringScope::Llm(provider), &key);
             delete_key("dimmy", "llm-api-key");
         }
     }
@@ -537,8 +526,8 @@ pub struct AppState {
     pub streaming_active: Arc<AtomicBool>,
     // LLM post-processing state
     pub llm_enabled: Mutex<bool>,
-    pub llm_style: Mutex<String>,
-    pub llm_tone: Mutex<String>,
+    pub llm_style: Mutex<llm::LlmStyle>,
+    pub llm_tone: Mutex<llm::LlmTone>,
     pub llm_custom_prompt: Mutex<String>,
     pub llm_translate_to: Mutex<String>,
     pub llm_api_url: Mutex<String>,
@@ -599,10 +588,7 @@ fn start_recording(
         .lock()
         .map_err(|e| e.to_string())?;
 
-    let debug_log_on = *state
-        .llm_log_enabled
-        .lock()
-        .map_err(|e| e.to_string())?;
+    let debug_log_on = *state.llm_log_enabled.lock().map_err(|e| e.to_string())?;
 
     let audio_debug_on = *state
         .audio_debug_enabled
@@ -711,7 +697,11 @@ fn start_recording(
                 debug_chunk_idx += 1;
                 if let Some(ref dir) = debug_session_dir {
                     if let Ok(raw_wav) = audio::encode_wav(&chunk_data, sample_rate as u32) {
-                        save_debug_wav(dir, &format!("chunk_{:03}_raw.wav", debug_chunk_idx), &raw_wav);
+                        save_debug_wav(
+                            dir,
+                            &format!("chunk_{:03}_raw.wav", debug_chunk_idx),
+                            &raw_wav,
+                        );
                     }
                 }
 
@@ -741,7 +731,11 @@ fn start_recording(
                 // Save processed chunk WAV for audio debug (after preprocessing)
                 if let Some(ref dir) = debug_session_dir {
                     if let Ok(proc_wav) = audio::encode_wav(&processed, sample_rate as u32) {
-                        save_debug_wav(dir, &format!("chunk_{:03}_processed.wav", debug_chunk_idx), &proc_wav);
+                        save_debug_wav(
+                            dir,
+                            &format!("chunk_{:03}_processed.wav", debug_chunk_idx),
+                            &proc_wav,
+                        );
                     }
                 }
 
@@ -751,7 +745,11 @@ fn start_recording(
                 if debug_log_on {
                     debug_transcription(&format!(
                         "CHUNK #{} | samples={} | duration={:.2}s | offset={}..{}",
-                        chunk_index, processed.len(), chunk_duration_secs, offset.saturating_sub(processed.len()), offset
+                        chunk_index,
+                        processed.len(),
+                        chunk_duration_secs,
+                        offset.saturating_sub(processed.len()),
+                        offset
                     ));
                 }
 
@@ -766,14 +764,14 @@ fn start_recording(
                 let chunk_send_time = std::time::Instant::now();
                 // Downsample to 16kHz before sending to Whisper (reduces upload by ~3x)
                 let resampled = preprocess::downsample_to_16k(&processed, sample_rate as u32);
-                let wav_result =
-                    audio::encode_wav(&resampled, 16000).map_err(|e| e.to_string());
+                let wav_result = audio::encode_wav(&resampled, 16000).map_err(|e| e.to_string());
                 match wav_result {
                     Ok(wav_data) => {
                         if debug_log_on {
                             debug_transcription(&format!(
                                 "CHUNK #{} | wav_size={} bytes | sending to Whisper...",
-                                chunk_index, wav_data.len()
+                                chunk_index,
+                                wav_data.len()
                             ));
                         }
                         match transcribe::transcribe_audio(
@@ -786,7 +784,9 @@ fn start_recording(
                                     let elapsed = chunk_send_time.elapsed();
                                     debug_transcription(&format!(
                                         "CHUNK #{} | latency={:.0}ms | text=\"{}\"",
-                                        chunk_index, elapsed.as_millis(), text
+                                        chunk_index,
+                                        elapsed.as_millis(),
+                                        text
                                     ));
                                 }
                                 let _ = handle.emit(
@@ -802,7 +802,9 @@ fn start_recording(
                                     let elapsed = chunk_send_time.elapsed();
                                     debug_transcription(&format!(
                                         "CHUNK #{} | ERROR after {:.0}ms | {}",
-                                        chunk_index, elapsed.as_millis(), e
+                                        chunk_index,
+                                        elapsed.as_millis(),
+                                        e
                                     ));
                                 }
                                 let _ = handle.emit(
@@ -880,14 +882,12 @@ async fn stop_recording(
         return Err("No audio captured".into());
     }
 
-    let debug_log_on = *state
-        .llm_log_enabled
-        .lock()
-        .map_err(|e| e.to_string())?;
+    let debug_log_on = *state.llm_log_enabled.lock().map_err(|e| e.to_string())?;
+
+    let sr = *state.audio_sample_rate.lock().map_err(|e| e.to_string())?;
 
     if debug_log_on {
-        let total_duration_secs = buffer.len() as f64
-            / *state.audio_sample_rate.lock().map_err(|e| e.to_string())? as f64;
+        let total_duration_secs = buffer.len() as f64 / sr as f64;
         debug_transcription(&format!(
             "---------- STOP RECORDING | total_samples={} | duration={:.2}s ----------",
             buffer.len(),
@@ -899,8 +899,6 @@ async fn stop_recording(
         "chunk-status",
         serde_json::json!({ "index": 0, "status": "final" }),
     );
-
-    let sr = *state.audio_sample_rate.lock().map_err(|e| e.to_string())?;
     let preprocess_final = *state
         .preprocessing_enabled
         .lock()
@@ -917,45 +915,50 @@ async fn stop_recording(
         .lock()
         .map_err(|e| e.to_string())?
         .clone();
+    let raw_sample_count = buffer.len();
+    let raw = audio::RawAudio {
+        samples: buffer,
+        sample_rate: sr,
+    };
+
+    // Audio debug: save raw session WAV
     if let Some(ref dir) = debug_session_dir {
-        if let Ok(raw_wav) = audio::encode_wav(&buffer, sr) {
+        if let Ok(raw_wav) = raw.to_wav() {
             save_debug_wav(dir, "session_raw.wav", &raw_wav);
         }
     }
 
-    // Preprocess final buffer: highpass + VAD + normalize (if enabled)
-    let audio_data = if preprocess_final {
-        let processed = preprocess::process_buffer(&buffer, sr);
-        if processed.is_empty() {
-            // Still save metadata even when no speech detected
-            if let Some(ref dir) = debug_session_dir {
-                let duration = buffer.len() as f64 / sr as f64;
-                save_debug_metadata(dir, sr, &debug_device, true, duration, 0);
-            }
-            return Err("No speech detected in recording".into());
+    // Typed pipeline: RawAudio → ProcessedAudio → WavPayload
+    let processed = raw.preprocess(preprocess_final);
+    if processed.is_empty() {
+        // Still save metadata even when no speech detected
+        if let Some(ref dir) = debug_session_dir {
+            let duration = raw_sample_count as f64 / sr as f64;
+            save_debug_metadata(dir, sr, &debug_device, true, duration, 0);
         }
-        processed
-    } else {
-        buffer
-    };
-    // Downsample to 16kHz before sending to Whisper (reduces upload by ~3x)
-    let resampled = preprocess::downsample_to_16k(&audio_data, sr);
-    let wav_data = audio::encode_wav(&resampled, 16000).map_err(|e| e.to_string())?;
+        return Err("No speech detected in recording".into());
+    }
 
-    // Audio debug: save processed session WAV at original sample rate (not downsampled)
+    // Audio debug: save processed session WAV at original sample rate
     if let Some(ref dir) = debug_session_dir {
-        if let Ok(proc_wav) = audio::encode_wav(&audio_data, sr) {
+        if let Ok(proc_wav) = processed.to_wav() {
             save_debug_wav(dir, "session_processed.wav", &proc_wav);
         }
-        let duration = audio_data.len() as f64 / sr as f64;
+        let duration = processed.samples.len() as f64 / sr as f64;
         save_debug_metadata(dir, sr, &debug_device, preprocess_final, duration, 0);
     }
 
+    // Downsample to 16kHz + encode WAV
+    let audio::WavPayload {
+        data: wav_data,
+        duration_secs: wav_duration,
+    } = processed.to_wav_payload().map_err(|e| e.to_string())?;
+
     if debug_log_on {
         debug_transcription(&format!(
-            "FINAL | wav_size={} bytes | audio_samples={} | sending to Whisper...",
+            "FINAL | wav_size={} bytes | duration={:.2}s | sending to Whisper...",
             wav_data.len(),
-            audio_data.len()
+            wav_duration
         ));
     }
     let final_send_time = std::time::Instant::now();
@@ -1024,20 +1027,20 @@ fn set_config(
     ));
 
     // Save transcription API key for the provider derived from the URL
-    let transcription_provider = url_to_provider(&api_url);
+    let transcription_provider = Provider::from_url(&api_url);
     if let Some(ref key) = api_key {
         if !key.is_empty() {
-            save_key_for_provider("api-key", transcription_provider, key)?;
+            save_key(KeyringScope::Stt(transcription_provider), key)?;
             *state.api_key.lock().map_err(|e| e.to_string())? = Some(key.clone());
         }
     }
 
     // Handle separate LLM API key (provider derived from LLM URL)
     let llm_url_for_provider = llm_api_url.as_deref().unwrap_or(&api_url);
-    let llm_provider = url_to_provider(llm_url_for_provider);
+    let llm_provider = Provider::from_url(llm_url_for_provider);
     if let Some(ref key) = llm_api_key {
         if !key.is_empty() {
-            save_key_for_provider("llm-key", llm_provider, key)?;
+            save_key(KeyringScope::Llm(llm_provider), key)?;
             *state.llm_api_key.lock().map_err(|e| e.to_string())? = Some(key.clone());
         }
     }
@@ -1047,10 +1050,10 @@ fn set_config(
         *state.llm_enabled.lock().map_err(|e| e.to_string())? = v;
     }
     if let Some(ref v) = llm_style {
-        *state.llm_style.lock().map_err(|e| e.to_string())? = v.clone();
+        *state.llm_style.lock().map_err(|e| e.to_string())? = llm::LlmStyle::from_str_lossy(v);
     }
     if let Some(ref v) = llm_tone {
-        *state.llm_tone.lock().map_err(|e| e.to_string())? = v.clone();
+        *state.llm_tone.lock().map_err(|e| e.to_string())? = llm::LlmTone::from_str_lossy(v);
     }
     if let Some(ref v) = llm_custom_prompt {
         *state.llm_custom_prompt.lock().map_err(|e| e.to_string())? = v.clone();
@@ -1096,8 +1099,8 @@ fn set_config(
     // Build AppConfig from current state for saving (acquire each lock individually)
     let cur_shortcut = state.shortcut.lock().map_err(|e| e.to_string())?.clone();
     let cur_llm_enabled = *state.llm_enabled.lock().map_err(|e| e.to_string())?;
-    let cur_llm_style = state.llm_style.lock().map_err(|e| e.to_string())?.clone();
-    let cur_llm_tone = state.llm_tone.lock().map_err(|e| e.to_string())?.clone();
+    let cur_llm_style = *state.llm_style.lock().map_err(|e| e.to_string())?;
+    let cur_llm_tone = *state.llm_tone.lock().map_err(|e| e.to_string())?;
     let cur_llm_custom_prompt = state
         .llm_custom_prompt
         .lock()
@@ -1169,15 +1172,15 @@ fn set_config(
 
     // When provider changes, load the stored key for the new provider into AppState
     if api_key.is_none() || api_key.as_deref() == Some("") {
-        let provider = url_to_provider(&api_url);
-        if let Some(key) = load_key_for_provider("api-key", provider) {
+        let provider = Provider::from_url(&api_url);
+        if let Some(key) = load_key(KeyringScope::Stt(provider)) {
             *state.api_key.lock().map_err(|e| e.to_string())? = Some(key);
         }
     }
     if llm_api_key.is_none() || llm_api_key.as_deref() == Some("") {
         let llm_url = state.llm_api_url.lock().map_err(|e| e.to_string())?.clone();
-        let provider = url_to_provider(&llm_url);
-        if let Some(key) = load_key_for_provider("llm-key", provider) {
+        let provider = Provider::from_url(&llm_url);
+        if let Some(key) = load_key(KeyringScope::Llm(provider)) {
             *state.llm_api_key.lock().map_err(|e| e.to_string())? = Some(key);
         }
     }
@@ -1188,7 +1191,7 @@ fn set_config(
 
 #[tauri::command]
 fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
-    let has_key = state.api_key.lock().map_err(|e| e.to_string())?.is_some();
+    let has_stt_key = state.api_key.lock().map_err(|e| e.to_string())?.is_some();
     let api_url = state.api_url.lock().map_err(|e| e.to_string())?.clone();
     let api_model = state.api_model.lock().map_err(|e| e.to_string())?.clone();
     let language = state.language.lock().map_err(|e| e.to_string())?.clone();
@@ -1206,8 +1209,8 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
     let devices = audio::list_input_devices();
 
     let llm_enabled = *state.llm_enabled.lock().map_err(|e| e.to_string())?;
-    let llm_style = state.llm_style.lock().map_err(|e| e.to_string())?.clone();
-    let llm_tone = state.llm_tone.lock().map_err(|e| e.to_string())?.clone();
+    let llm_style = *state.llm_style.lock().map_err(|e| e.to_string())?;
+    let llm_tone = *state.llm_tone.lock().map_err(|e| e.to_string())?;
     let llm_custom_prompt = state
         .llm_custom_prompt
         .lock()
@@ -1242,26 +1245,32 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
     let shortcut = state.shortcut.lock().map_err(|e| e.to_string())?.clone();
     let shortcut_label = hotkey::current_label();
 
-    let styles: Vec<&str> = llm::STYLES.iter().map(|(name, _)| *name).collect();
-    let tones: Vec<&str> = llm::TONES.iter().map(|(name, _)| *name).collect();
+    let styles: Vec<&str> = llm::LlmStyle::ALL.iter().map(|s| s.as_str()).collect();
+    let tones: Vec<&str> = llm::LlmTone::ALL.iter().map(|t| t.as_str()).collect();
 
     // Per-provider key flags
-    let has_groq_key = has_key_for_provider("api-key", "groq");
-    let has_openai_key = has_key_for_provider("api-key", "openai");
-    let has_gemini_key = has_key_for_provider("api-key", "gemini");
-    let has_deepgram_key = has_key_for_provider("api-key", "deepgram");
-    let has_custom_key = has_key_for_provider("api-key", "custom");
+    let has_groq_key = has_key(KeyringScope::Stt(Provider::Groq));
+    let has_openai_key = has_key(KeyringScope::Stt(Provider::OpenAI));
+    let has_gemini_key = has_key(KeyringScope::Stt(Provider::Gemini));
+    let has_deepgram_key = has_key(KeyringScope::Stt(Provider::Deepgram));
+    let has_custom_key = has_key(KeyringScope::Stt(Provider::Custom));
     // LLM key flags: check dedicated llm-key first, fall back to api-key for same provider.
     // Keys are per-provider — if you entered an OpenAI key for transcription, it works for LLM too.
-    let has_llm_groq_key = has_key_for_provider("llm-key", "groq") || has_key_for_provider("api-key", "groq");
-    let has_llm_openai_key = has_key_for_provider("llm-key", "openai") || has_key_for_provider("api-key", "openai");
-    let has_llm_openrouter_key = has_key_for_provider("llm-key", "openrouter") || has_key_for_provider("api-key", "openrouter");
-    let has_llm_gemini_key = has_key_for_provider("llm-key", "gemini") || has_key_for_provider("api-key", "gemini");
-    let has_llm_anthropic_key = has_key_for_provider("llm-key", "anthropic") || has_key_for_provider("api-key", "anthropic");
-    let has_llm_custom_key = has_key_for_provider("llm-key", "custom") || has_key_for_provider("api-key", "custom");
+    let has_llm_groq_key =
+        has_key(KeyringScope::Llm(Provider::Groq)) || has_key(KeyringScope::Stt(Provider::Groq));
+    let has_llm_openai_key = has_key(KeyringScope::Llm(Provider::OpenAI))
+        || has_key(KeyringScope::Stt(Provider::OpenAI));
+    let has_llm_openrouter_key = has_key(KeyringScope::Llm(Provider::OpenRouter))
+        || has_key(KeyringScope::Stt(Provider::OpenRouter));
+    let has_llm_gemini_key = has_key(KeyringScope::Llm(Provider::Gemini))
+        || has_key(KeyringScope::Stt(Provider::Gemini));
+    let has_llm_anthropic_key = has_key(KeyringScope::Llm(Provider::Anthropic))
+        || has_key(KeyringScope::Stt(Provider::Anthropic));
+    let has_llm_custom_key = has_key(KeyringScope::Llm(Provider::Custom))
+        || has_key(KeyringScope::Stt(Provider::Custom));
 
     Ok(serde_json::json!({
-        "has_key": has_key,
+        "has_key": has_stt_key,
         "api_url": api_url,
         "api_model": api_model,
         "language": language,
@@ -1270,8 +1279,8 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
         "selected_device": selected_device,
         "devices": devices,
         "llm_enabled": llm_enabled,
-        "llm_style": llm_style,
-        "llm_tone": llm_tone,
+        "llm_style": llm_style.as_str(),
+        "llm_tone": llm_tone.as_str(),
         "llm_custom_prompt": llm_custom_prompt,
         "llm_translate_to": llm_translate_to,
         "llm_api_url": llm_api_url,
@@ -1325,18 +1334,22 @@ async fn process_with_llm(
     app_handle: tauri::AppHandle,
 ) -> Result<String, String> {
     let enabled = *state.llm_enabled.lock().map_err(|e| e.to_string())?;
-    let style = state.llm_style.lock().map_err(|e| e.to_string())?.clone();
-    let translate_to = state.llm_translate_to.lock().map_err(|e| e.to_string())?.clone();
+    let style = *state.llm_style.lock().map_err(|e| e.to_string())?;
+    let translate_to = state
+        .llm_translate_to
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     let translating = !translate_to.is_empty() && translate_to != "none";
 
     if !enabled && !translating {
         return Ok(text);
     }
-    if style == "off" && !translating {
+    if style.is_off() && !translating {
         return Ok(text);
     }
 
-    let tone = state.llm_tone.lock().map_err(|e| e.to_string())?.clone();
+    let tone = *state.llm_tone.lock().map_err(|e| e.to_string())?;
     let custom_prompt = state
         .llm_custom_prompt
         .lock()
@@ -1360,8 +1373,8 @@ async fn process_with_llm(
         if llm_key.is_some() {
             llm_key
         } else {
-            let llm_provider = url_to_provider(&api_url);
-            load_key_for_provider("api-key", llm_provider)
+            let llm_provider = Provider::from_url(&api_url);
+            load_key(KeyringScope::Stt(llm_provider))
         }
     };
 
@@ -1390,8 +1403,8 @@ async fn process_with_llm(
         &model,
         &api_key,
         &text,
-        &style,
-        &tone,
+        style,
+        tone,
         &custom_prompt,
         &translate_to,
     )
@@ -1457,18 +1470,8 @@ fn cycle_llm_style(
     state: tauri::State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
     let mut style = state.llm_style.lock().map_err(|e| e.to_string())?;
-    let total = llm::STYLES.len();
-    let current_idx = llm::STYLES
-        .iter()
-        .position(|(n, _)| *n == style.as_str())
-        .unwrap_or(0);
-    let new_idx = if direction > 0 {
-        (current_idx + 1) % total
-    } else {
-        (current_idx + total - 1) % total
-    };
-    let (new_name, _) = llm::STYLES[new_idx];
-    *style = new_name.to_string();
+    let new_style = style.cycle(direction);
+    *style = new_style;
 
     // Also enable/disable LLM based on style + translate_to
     if let Ok(mut enabled) = state.llm_enabled.lock() {
@@ -1477,17 +1480,21 @@ fn cycle_llm_style(
             .lock()
             .map(|t| !t.is_empty() && *t != "none")
             .unwrap_or(false);
-        *enabled = new_name != "off" || translating;
+        *enabled = !new_style.is_off() || translating;
     }
 
     // Persist to config file
     drop(style);
     save_current_config(&state)?;
 
+    let new_idx = llm::LlmStyle::ALL
+        .iter()
+        .position(|s| *s == new_style)
+        .unwrap_or(0);
     Ok(serde_json::json!({
-        "style": new_name,
+        "style": new_style.as_str(),
         "index": new_idx,
-        "total": total,
+        "total": llm::LlmStyle::ALL.len(),
     }))
 }
 
@@ -1497,26 +1504,20 @@ fn cycle_llm_tone(
     state: tauri::State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
     let mut tone = state.llm_tone.lock().map_err(|e| e.to_string())?;
-    let total = llm::TONES.len();
-    let current_idx = llm::TONES
-        .iter()
-        .position(|(n, _)| *n == tone.as_str())
-        .unwrap_or(0);
-    let new_idx = if direction > 0 {
-        (current_idx + 1) % total
-    } else {
-        (current_idx + total - 1) % total
-    };
-    let (new_name, _) = llm::TONES[new_idx];
-    *tone = new_name.to_string();
+    let new_tone = tone.cycle(direction);
+    *tone = new_tone;
 
     drop(tone);
     save_current_config(&state)?;
 
+    let new_idx = llm::LlmTone::ALL
+        .iter()
+        .position(|t| *t == new_tone)
+        .unwrap_or(0);
     Ok(serde_json::json!({
-        "tone": new_name,
+        "tone": new_tone.as_str(),
         "index": new_idx,
-        "total": total,
+        "total": llm::LlmTone::ALL.len(),
     }))
 }
 
@@ -1538,8 +1539,8 @@ fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
     let shortcut = state.shortcut.lock().map_err(|e| e.to_string())?.clone();
     let prompt = state.prompt.lock().map_err(|e| e.to_string())?.clone();
     let llm_enabled = *state.llm_enabled.lock().map_err(|e| e.to_string())?;
-    let llm_style = state.llm_style.lock().map_err(|e| e.to_string())?.clone();
-    let llm_tone = state.llm_tone.lock().map_err(|e| e.to_string())?.clone();
+    let llm_style = *state.llm_style.lock().map_err(|e| e.to_string())?;
+    let llm_tone = *state.llm_tone.lock().map_err(|e| e.to_string())?;
     let llm_custom_prompt = state
         .llm_custom_prompt
         .lock()
@@ -1769,14 +1770,11 @@ fn get_work_area() -> Option<(i32, i32)> {
         );
     }
 
-    type MsgSendPtr = unsafe extern "C" fn(
-        *mut std::ffi::c_void,
-        *mut std::ffi::c_void,
-    ) -> *mut std::ffi::c_void;
+    type MsgSendPtr =
+        unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
 
     unsafe {
-        let send_ptr: MsgSendPtr =
-            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let send_ptr: MsgSendPtr = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
 
         let ns_screen = objc_getClass(b"NSScreen\0".as_ptr());
         if ns_screen.is_null() {
@@ -2164,14 +2162,14 @@ pub fn run() {
     migrate_keyring_to_per_provider(&file_cfg.api_url, &file_cfg.llm_api_url);
 
     // Load the key for the current provider
-    let transcription_provider = url_to_provider(&file_cfg.api_url);
-    let llm_provider = url_to_provider(&file_cfg.llm_api_url);
-    let stored_key = load_key_for_provider("api-key", transcription_provider);
-    let stored_llm_key = load_key_for_provider("llm-key", llm_provider);
+    let transcription_provider = Provider::from_url(&file_cfg.api_url);
+    let llm_provider = Provider::from_url(&file_cfg.llm_api_url);
+    let stored_key = load_key(KeyringScope::Stt(transcription_provider));
+    let stored_llm_key = load_key(KeyringScope::Llm(llm_provider));
     // SECURITY: never log the actual key value — only whether one exists
     log(&format!("Config loaded: url={}, model={}, device={:?}, provider={}, has_key={}, llm_provider={}, llm_enabled={}, llm_style={}",
         file_cfg.api_url, file_cfg.api_model, file_cfg.selected_device, transcription_provider,
-        stored_key.is_some(), llm_provider, file_cfg.llm_enabled, file_cfg.llm_style));
+        stored_key.is_some(), llm_provider, file_cfg.llm_enabled, file_cfg.llm_style.as_str()));
 
     let shortcut_preset = file_cfg.shortcut.clone();
 
@@ -2259,12 +2257,16 @@ pub fn run() {
                             fn objc_getClass(name: *const u8) -> Id;
                         }
 
-                        let send: MsgSendNoArgs = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-                        let send_int: MsgSendInt = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-                        let send_obj: MsgSendObj = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+                        let send: MsgSendNoArgs =
+                            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+                        let send_int: MsgSendInt =
+                            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+                        let send_obj: MsgSendObj =
+                            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
 
                         // Get NSWindow pointer via Tauri's raw window handle
-                        let ns_win: Id = window.ns_window().unwrap_or(std::ptr::null_mut() as _) as Id;
+                        let ns_win: Id =
+                            window.ns_window().unwrap_or(std::ptr::null_mut() as _) as Id;
                         if !ns_win.is_null() {
                             // [nsWindow setOpaque:NO]
                             let sel_set_opaque = sel_registerName(b"setOpaque:\0".as_ptr());
@@ -2365,7 +2367,10 @@ pub fn run() {
                             SetWindowPos(
                                 hwnd,
                                 std::ptr::null_mut(),
-                                0, 0, 0, 0,
+                                0,
+                                0,
+                                0,
+                                0,
                                 SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
                             );
 
@@ -2450,15 +2455,12 @@ pub fn run() {
                                     let micro_w = 60.0_f64; // MICRO_W + margin
                                     let micro_h = 36.0_f64; // PILL_H + margin
                                     let st: tauri::State<'_, AppState> = app_handle.state();
-                                    let anchor = st
-                                        .window_anchor
-                                        .lock()
-                                        .ok()
-                                        .and_then(|a| *a);
+                                    let anchor = st.window_anchor.lock().ok().and_then(|a| *a);
                                     if let Some((right, bottom)) = anchor {
                                         let x = (right - micro_w).max(0.0);
                                         let y = (bottom - micro_h).max(0.0);
-                                        let (x, y) = clamp_to_work_area(&win, x, y, micro_w, micro_h);
+                                        let (x, y) =
+                                            clamp_to_work_area(&win, x, y, micro_w, micro_h);
                                         let _ = win.set_position(LogicalPosition::new(x, y));
                                     } else {
                                         position_bottom_right(&win, micro_w, micro_h);
@@ -2536,12 +2538,10 @@ pub fn run() {
             #[cfg(target_os = "windows")]
             {
                 let transparency_handle = app.handle().clone();
-                std::thread::spawn(move || {
-                    loop {
-                        std::thread::sleep(std::time::Duration::from_millis(500));
-                        if let Some(win) = transparency_handle.get_webview_window("main") {
-                            force_transparent_redraw(&win);
-                        }
+                std::thread::spawn(move || loop {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    if let Some(win) = transparency_handle.get_webview_window("main") {
+                        force_transparent_redraw(&win);
                     }
                 });
             }
@@ -2815,8 +2815,8 @@ mod tests {
     fn llm_config_defaults() {
         let cfg = AppConfig::default();
         assert!(!cfg.llm_enabled, "LLM should be disabled by default");
-        assert_eq!(cfg.llm_style, "off");
-        assert_eq!(cfg.llm_tone, "none");
+        assert_eq!(cfg.llm_style, llm::LlmStyle::Off);
+        assert_eq!(cfg.llm_tone, llm::LlmTone::None);
         assert!(cfg.llm_custom_prompt.is_empty());
         assert_eq!(cfg.llm_translate_to, "none");
         assert_eq!(cfg.llm_api_url, DEFAULT_LLM_URL);
@@ -2853,8 +2853,8 @@ mod tests {
             false
         );
         assert_eq!(
-            v["llm_style"].as_str().unwrap_or(&defaults.llm_style),
-            "off"
+            llm::LlmStyle::from_str_lossy(v["llm_style"].as_str().unwrap_or("off")),
+            llm::LlmStyle::Off
         );
 
         let _ = std::fs::remove_dir_all(&tmp);
