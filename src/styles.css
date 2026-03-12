@@ -117,25 +117,31 @@ body {
 
 #container {
   background: linear-gradient(135deg, var(--bg-primary), var(--bg-secondary));
-  border: none;
+  border: 1.5px solid rgba(255, 255, 255, 0.12);
   border-radius: 9999px;
   overflow: hidden;
-  /* margin gives anti-alias pixels room to blend against transparent background
-     instead of the window edge, preventing white fringe artifacts */
-  margin: 2px;
+  /* margin compensates for border so total size stays consistent */
+  margin: 0.5px;
+}
+[data-theme="light"] #container {
+  border-color: rgba(0, 0, 0, 0.12);
+}
+@media (prefers-color-scheme: light) {
+  [data-theme="auto"] #container {
+    border-color: rgba(0, 0, 0, 0.12);
+  }
 }
 
-/* Recording border — subtle glow when actively recording */
+/* Recording border — brighter when actively recording */
 #container.recording-active {
-  border: 1.5px solid rgba(255, 255, 255, 0.20);
-  margin: 0.5px; /* compensate for border so total size stays same */
+  border-color: rgba(255, 255, 255, 0.25);
 }
 [data-theme="light"] #container.recording-active {
-  border-color: rgba(0, 0, 0, 0.15);
+  border-color: rgba(0, 0, 0, 0.20);
 }
 @media (prefers-color-scheme: light) {
   [data-theme="auto"] #container.recording-active {
-    border-color: rgba(0, 0, 0, 0.15);
+    border-color: rgba(0, 0, 0, 0.20);
   }
 }
 

@@ -66,6 +66,55 @@ impl Provider {
         *self == Self::Gemini
     }
 
+    /// Validate a URL for use as an API endpoint.
+    /// Rejects: non-HTTPS (except localhost), dangerous schemes, null bytes,
+    /// CRLF injection, credentials in URL, unparseable URLs.
+    pub fn validate_url(url: &str) -> Result<(), String> {
+        if url.is_empty() {
+            return Err("URL is empty".into());
+        }
+        // Reject null bytes and CRLF (header injection)
+        if url.bytes().any(|b| b == 0 || b == b'\r' || b == b'\n') {
+            return Err("URL contains forbidden bytes (null/CR/LF)".into());
+        }
+        let parsed = url::Url::parse(url).map_err(|e| format!("Invalid URL: {}", e))?;
+        // Only allow http and https schemes
+        match parsed.scheme() {
+            "https" => {}
+            "http" => {
+                let host = parsed.host_str().unwrap_or("");
+                if host != "localhost" && host != "127.0.0.1" && host != "::1" && host != "[::1]" {
+                    return Err(format!(
+                        "HTTP not allowed for remote host '{}' (use HTTPS)",
+                        host
+                    ));
+                }
+            }
+            scheme => return Err(format!("Scheme '{}' not allowed (use HTTPS)", scheme)),
+        }
+        // Reject credentials in URL (could leak in logs/errors)
+        if parsed.username() != "" || parsed.password().is_some() {
+            return Err("URL must not contain credentials (user:pass@)".into());
+        }
+        Ok(())
+    }
+
+    /// Scrub an API key from a text string (e.g., error body).
+    /// Replaces the full key and any prefix >=8 chars with [REDACTED].
+    pub fn scrub_api_key(text: &str, key: &str) -> String {
+        if key.len() < 4 {
+            return text.to_string();
+        }
+        // Replace full key
+        let mut result = text.replace(key, "[REDACTED]");
+        // Also scrub any prefix of 8+ chars (partial key exposure)
+        if key.len() >= 8 {
+            let prefix = &key[..8];
+            result = result.replace(prefix, "[REDACTED]");
+        }
+        result
+    }
+
     /// Whether the URL uses HTTPS (or is localhost, which is exempt).
     pub fn is_secure_url(url: &str) -> bool {
         // URL must not be empty — caller should validate before reaching here
@@ -261,5 +310,99 @@ mod tests {
         assert_eq!(json, "\"groq\"");
         let back: Provider = serde_json::from_str(&json).unwrap();
         assert_eq!(back, provider);
+    }
+
+    // ── URL validation tests (TDD: these define the security contract) ──
+
+    #[test]
+    fn validate_url_accepts_valid_https() {
+        assert!(Provider::validate_url("https://api.groq.com/v1/audio").is_ok());
+        assert!(Provider::validate_url("https://api.openai.com/v1/audio").is_ok());
+    }
+
+    #[test]
+    fn validate_url_accepts_localhost_http() {
+        assert!(Provider::validate_url("http://localhost:8080/v1").is_ok());
+        assert!(Provider::validate_url("http://127.0.0.1:5000/v1").is_ok());
+        assert!(Provider::validate_url("http://[::1]:8080/v1").is_ok());
+    }
+
+    #[test]
+    fn validate_url_rejects_insecure_http() {
+        assert!(Provider::validate_url("http://api.groq.com/v1").is_err());
+        assert!(Provider::validate_url("http://evil.com/steal").is_err());
+    }
+
+    #[test]
+    fn validate_url_rejects_dangerous_schemes() {
+        assert!(Provider::validate_url("javascript:alert(1)").is_err());
+        assert!(Provider::validate_url("file:///etc/passwd").is_err());
+        assert!(Provider::validate_url("ftp://files.com/data").is_err());
+        assert!(Provider::validate_url("data:text/html,<h1>hi</h1>").is_err());
+    }
+
+    #[test]
+    fn validate_url_rejects_null_bytes() {
+        assert!(Provider::validate_url("https://api.groq.com/v1\0injected").is_err());
+    }
+
+    #[test]
+    fn validate_url_rejects_crlf_injection() {
+        assert!(Provider::validate_url("https://api.groq.com/v1\r\nX-Injected: true").is_err());
+    }
+
+    #[test]
+    fn validate_url_rejects_empty_and_garbage() {
+        assert!(Provider::validate_url("").is_err());
+        assert!(Provider::validate_url("not a url at all").is_err());
+        assert!(Provider::validate_url("://missing-scheme").is_err());
+    }
+
+    #[test]
+    fn validate_url_rejects_credentials_in_url() {
+        // user:password@ in URL could leak credentials in logs
+        assert!(Provider::validate_url("https://user:pass@api.groq.com/v1").is_err());
+    }
+
+    // ── API key scrubbing tests ──
+
+    #[test]
+    fn scrub_key_removes_key_from_text() {
+        let key = "sk-proj-abc123xyz";
+        let body = format!("Error: invalid key {}", key);
+        let scrubbed = Provider::scrub_api_key(&body, key);
+        assert!(
+            !scrubbed.contains(key),
+            "Key should be scrubbed: {}",
+            scrubbed
+        );
+        assert!(scrubbed.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn scrub_key_noop_when_key_absent() {
+        let body = "Error: rate limit exceeded";
+        let scrubbed = Provider::scrub_api_key(body, "sk-secret-key");
+        assert_eq!(scrubbed, body);
+    }
+
+    #[test]
+    fn scrub_key_handles_empty_key() {
+        let body = "Error: something";
+        let scrubbed = Provider::scrub_api_key(body, "");
+        assert_eq!(scrubbed, body);
+    }
+
+    #[test]
+    fn scrub_key_handles_partial_key_prefix() {
+        // Even if only first 8 chars of key appear, should scrub
+        let key = "sk-proj-abc123xyz789longkey";
+        let body = "Auth: sk-proj-abc123xyz789longkey failed";
+        let scrubbed = Provider::scrub_api_key(&body, key);
+        assert!(
+            !scrubbed.contains("sk-proj-abc"),
+            "Partial key leaked: {}",
+            scrubbed
+        );
     }
 }

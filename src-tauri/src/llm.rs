@@ -341,13 +341,9 @@ pub async fn process_text(
         return Ok(text.to_string());
     }
 
-    // SECURITY: reject HTTP URLs to prevent API key leak over plaintext,
-    // except localhost/127.0.0.1 for self-hosted setups
-    if !crate::provider::Provider::is_secure_url(api_url) {
-        return Err(crate::error::LlmError::Network(format!(
-            "Refusing HTTP (HTTPS required): {}",
-            api_url
-        )));
+    // SECURITY: validate URL — reject non-HTTPS, dangerous schemes, CRLF injection, etc.
+    if let Err(reason) = crate::provider::Provider::validate_url(api_url) {
+        return Err(crate::error::LlmError::Network(reason));
     }
 
     // Wrap transcription in tags so the LLM sees it as data, not a conversation.
@@ -417,7 +413,7 @@ pub async fn process_text(
         let body = response.text().await.unwrap_or_default();
         return Err(crate::error::LlmError::Api {
             status: status.as_u16(),
-            body: body[..body.len().min(200)].to_string(),
+            body: crate::provider::Provider::scrub_api_key(&body[..body.len().min(200)], api_key),
         });
     }
 
