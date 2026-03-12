@@ -157,7 +157,8 @@ body {
   gap: 6px;
   padding: 6px 10px;
   height: 32px;
-  -webkit-app-region: drag;
+  /* Drag handled programmatically via startDragging() in JS —
+     CSS app-region: drag blocks wheel and other mouse events */
 }
 
 #dot {
