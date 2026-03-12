@@ -111,7 +111,7 @@ impl LlmStyle {
         };
         let result = Self::ALL[new_idx];
         // Cycling must produce a different variant (unless there's only one)
-        debug_assert!(
+        assert!(
             total == 1 || result != *self,
             "cycle() returned the same style: {:?}",
             self
@@ -247,7 +247,7 @@ pub fn build_system_prompt(
         _ => {
             let instr = style.instruction();
             // Non-Off/Custom styles must have a non-empty instruction
-            debug_assert!(!instr.is_empty(), "style {:?} returned empty instruction", style);
+            assert!(!instr.is_empty(), "style {:?} returned empty instruction", style);
             instr.to_string()
         }
     };
@@ -290,7 +290,7 @@ pub fn build_system_prompt(
 
     let prompt = format!("{}\n\n{}", preamble, task);
     // Sanity bound: prevents runaway prompt composition
-    debug_assert!(
+    assert!(
         prompt.len() < 10_000,
         "composed prompt is unreasonably long: {} chars",
         prompt.len()
@@ -349,8 +349,8 @@ pub async fn process_text(
     let estimated_input_tokens = (text.len() as f64 * 0.75).ceil() as u64;
     let max_tokens = (estimated_input_tokens * 3).max(512);
     // max_tokens must be positive and within a sane upper bound
-    debug_assert!(max_tokens > 0, "max_tokens must be positive");
-    debug_assert!(max_tokens < 100_000, "max_tokens exceeds sanity bound: {}", max_tokens);
+    assert!(max_tokens > 0, "max_tokens must be positive");
+    assert!(max_tokens < 100_000, "max_tokens exceeds sanity bound: {}", max_tokens);
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))

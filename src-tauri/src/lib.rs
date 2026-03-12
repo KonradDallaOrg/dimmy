@@ -1,9 +1,9 @@
-mod audio;
+pub mod audio;
 pub mod error;
 pub mod provider;
 mod hotkey;
-mod llm;
-mod preprocess;
+pub mod llm;
+pub mod preprocess;
 mod transcribe;
 
 use audio::AudioCommand;

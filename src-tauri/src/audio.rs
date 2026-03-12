@@ -161,12 +161,12 @@ pub fn device_sample_rate(device_name: &Option<String>) -> u32 {
         .unwrap_or(44100);
 
     // Returned rate must be within valid audio hardware range
-    debug_assert!(
+    assert!(
         rate >= 8000,
         "device_sample_rate: rate {} below 8kHz minimum",
         rate
     );
-    debug_assert!(
+    assert!(
         rate <= 192000,
         "device_sample_rate: rate {} above 192kHz maximum",
         rate
@@ -203,7 +203,7 @@ impl RawAudio {
     /// If disabled, passes audio through unchanged.
     pub fn preprocess(self, enabled: bool) -> ProcessedAudio {
         // Raw audio must have a valid sample rate
-        debug_assert!(self.sample_rate > 0, "RawAudio sample_rate must be positive");
+        assert!(self.sample_rate > 0, "RawAudio sample_rate must be positive");
 
         let samples = if enabled {
             crate::preprocess::process_buffer(&self.samples, self.sample_rate)
@@ -226,7 +226,7 @@ impl ProcessedAudio {
     /// Downsample to 16kHz and encode as WAV for STT.
     pub fn to_wav_payload(self) -> Result<WavPayload, crate::error::AudioError> {
         // Processed audio must have a valid sample rate before resampling
-        debug_assert!(
+        assert!(
             self.sample_rate > 0,
             "ProcessedAudio sample_rate must be positive"
         );
@@ -236,9 +236,9 @@ impl ProcessedAudio {
         let data = encode_wav(&resampled, 16000)?;
 
         // WAV output must start with RIFF header
-        debug_assert!(data.starts_with(b"RIFF"), "WAV data missing RIFF header");
+        assert!(data.starts_with(b"RIFF"), "WAV data missing RIFF header");
         // Duration cannot be negative
-        debug_assert!(duration_secs >= 0.0, "WAV duration must be non-negative");
+        assert!(duration_secs >= 0.0, "WAV duration must be non-negative");
 
         Ok(WavPayload {
             data,
@@ -263,17 +263,11 @@ pub fn encode_wav(
     sample_rate: u32,
 ) -> Result<Vec<u8>, crate::error::AudioError> {
     // Sample rate must be positive and within sane hardware limits
-    debug_assert!(sample_rate > 0, "encode_wav: sample_rate must be positive");
-    debug_assert!(
+    assert!(sample_rate > 0, "encode_wav: sample_rate must be positive");
+    assert!(
         sample_rate <= 192000,
         "encode_wav: sample_rate exceeds 192kHz sanity limit"
     );
-    // All input samples must be finite (no NaN or Inf from broken DSP)
-    debug_assert!(
-        samples.iter().all(|s| s.is_finite()),
-        "encode_wav: input contains NaN or Inf samples"
-    );
-
     let spec = hound::WavSpec {
         channels: 1,
         sample_rate,
@@ -285,7 +279,11 @@ pub fn encode_wav(
     {
         let mut writer = hound::WavWriter::new(&mut cursor, spec)?;
         for &sample in samples {
-            let s16 = (sample * 32767.0).clamp(-32768.0, 32767.0) as i16;
+            // Sanitize: NaN/Inf → 0 (silence), then clamp to 16-bit range.
+            // NaN/Inf should never reach here if the pipeline is correct, but
+            // crashing the app in production over a corrupt sample is worse.
+            let safe = if sample.is_finite() { sample } else { 0.0 };
+            let s16 = (safe * 32767.0).clamp(-32768.0, 32767.0) as i16;
             writer.write_sample(s16)?;
         }
         writer.finalize()?;
