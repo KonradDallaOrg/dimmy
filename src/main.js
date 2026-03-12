@@ -246,9 +246,11 @@ async function loadLlmState() {
 // HOVER — expand micro on mouse enter, shrink back on leave
 // ========================
 let hoverTimeout = null;
+let isHovering = false;
 const container = document.getElementById('container');
 
 container.addEventListener('mouseenter', () => {
+  isHovering = true;
   if (hoverTimeout) { clearTimeout(hoverTimeout); hoverTimeout = null; }
   if (currentView === 'micro' && !isRecording) {
     switchView('pill');
@@ -256,6 +258,7 @@ container.addEventListener('mouseenter', () => {
 });
 
 container.addEventListener('mouseleave', () => {
+  isHovering = false;
   if (hoverTimeout) { clearTimeout(hoverTimeout); hoverTimeout = null; }
   if (currentView === 'pill' && !isRecording) {
     hoverTimeout = setTimeout(() => {
@@ -269,15 +272,15 @@ container.addEventListener('mouseleave', () => {
 
 // Fallback: if somehow stuck in pill after hover, auto-shrink
 setInterval(() => {
-  if (currentView === 'pill' && !isRecording && !hoverTimeout && !shrinkTimeout) {
+  if (currentView === 'pill' && !isRecording && !isHovering && !hoverTimeout && !shrinkTimeout) {
     switchView('micro');
   }
 }, 5000);
 
 // ========================
-// SCROLL-WHEEL CYCLING on pill (LLM style/tone)
+// SCROLL-WHEEL CYCLING on container (LLM style/tone)
 // ========================
-pill.addEventListener('wheel', async (e) => {
+container.addEventListener('wheel', async (e) => {
   // Only cycle when not recording and not in settings
   if (isRecording || currentView === 'settings') return;
   e.preventDefault();
@@ -356,12 +359,13 @@ listen('llm-status', (event) => {
     dot.className = 'llm-processing';
     showStatus('enhancing');
   } else if (status === 'done') {
+    dot.className = '';
     updateStyleIndicator();
   } else if (status === 'error') {
     console.error('LLM error:', error);
     // Brief error indication, then back to normal
     showStatus('llm err');
-    setTimeout(() => updateStyleIndicator(), 2000);
+    setTimeout(() => { dot.className = ''; updateStyleIndicator(); }, 2000);
   }
 });
 
@@ -509,6 +513,7 @@ async function stopRecording() {
     setTimeout(() => {
       switchView('pill');
       hideTimer();
+      dot.className = '';
       updateStyleIndicator();
       hideStatus();
       settingsBtn.disabled = false;
