@@ -1099,8 +1099,8 @@ fn set_config(
     // Build AppConfig from current state for saving (acquire each lock individually)
     let cur_shortcut = state.shortcut.lock().map_err(|e| e.to_string())?.clone();
     let cur_llm_enabled = *state.llm_enabled.lock().map_err(|e| e.to_string())?;
-    let cur_llm_style = state.llm_style.lock().map_err(|e| e.to_string())?.clone();
-    let cur_llm_tone = state.llm_tone.lock().map_err(|e| e.to_string())?.clone();
+    let cur_llm_style = *state.llm_style.lock().map_err(|e| e.to_string())?;
+    let cur_llm_tone = *state.llm_tone.lock().map_err(|e| e.to_string())?;
     let cur_llm_custom_prompt = state
         .llm_custom_prompt
         .lock()

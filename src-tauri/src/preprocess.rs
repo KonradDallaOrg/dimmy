@@ -81,17 +81,17 @@ impl AudioPreprocessor {
             "sample_rate must be > 0, got {}",
             sample_rate
         );
-        // Invariant: AGC constants must be valid for MonoAgc::new()
-        assert!(
-            TARGET_RMS > 0.0 && TARGET_RMS <= 1.0,
-            "TARGET_RMS out of range: {}",
-            TARGET_RMS
-        );
-        assert!(
-            AGC_DISTORTION > 0.0 && AGC_DISTORTION < 1.0,
-            "AGC_DISTORTION out of range: {}",
-            AGC_DISTORTION
-        );
+        // Compile-time guard: AGC constants must be valid for MonoAgc::new()
+        const {
+            assert!(
+                TARGET_RMS > 0.0 && TARGET_RMS <= 1.0,
+                "TARGET_RMS out of range"
+            );
+            assert!(
+                AGC_DISTORTION > 0.0 && AGC_DISTORTION < 1.0,
+                "AGC_DISTORTION out of range"
+            );
+        }
 
         // Build highpass filter at 80Hz (Butterworth, 2nd order)
         let highpass = if sample_rate >= 1000 {

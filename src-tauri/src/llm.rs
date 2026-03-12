@@ -141,6 +141,7 @@ impl std::fmt::Display for LlmStyle {
 }
 
 // Compile-time guard: adding a variant without updating ALL will fail this assertion.
+#[allow(clippy::assertions_on_constants)]
 const _: () = assert!(
     LlmStyle::ALL.len() == 13,
     "LlmStyle::ALL must contain exactly 13 variants"
@@ -226,6 +227,7 @@ impl std::fmt::Display for LlmTone {
 }
 
 // Compile-time guard: adding a variant without updating ALL will fail this assertion.
+#[allow(clippy::assertions_on_constants)]
 const _: () = assert!(
     LlmTone::ALL.len() == 5,
     "LlmTone::ALL must contain exactly 5 variants"
@@ -323,6 +325,7 @@ struct ChatMessage {
 }
 
 /// Send text to an OpenAI-compatible chat completions endpoint for processing.
+#[allow(clippy::too_many_arguments)]
 pub async fn process_text(
     api_url: &str,
     model: &str,
