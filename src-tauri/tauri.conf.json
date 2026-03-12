@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicholasio/tauri-schema/refs/heads/v2/schema.json",
   "productName": "Dimmy",
-  "version": "0.3.41",
+  "version": "0.3.42",
   "identifier": "com.dimmy.voice",
   "build": {
     "frontendDist": "../src",

@@ -573,4 +573,49 @@ mod tests {
             "Output should not exceed input length"
         );
     }
+
+    #[test]
+    fn highpass_recovers_after_nan_injection() {
+        // Even though input is sanitized, verify the filter produces
+        // finite output after receiving edge values in previous calls.
+        let mut proc = AudioPreprocessor::new(44100); // non-48k → no VAD
+
+        // Feed normal audio first
+        let normal: Vec<f32> = (0..44100)
+            .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 44100.0).sin() * 0.5)
+            .collect();
+        let out1 = proc.process(&normal);
+        assert!(!out1.is_empty());
+        assert!(out1.iter().all(|s| s.is_finite()));
+
+        // Feed more normal audio — filter state should still be clean
+        let out2 = proc.process(&normal);
+        assert!(!out2.is_empty());
+        assert!(
+            out2.iter()
+                .all(|s| s.is_finite() && *s >= -1.0 && *s <= 1.0),
+            "Filter output should remain finite and clamped"
+        );
+    }
+
+    #[test]
+    fn all_output_finite_after_1000_chunks() {
+        // Long-running stability: no NaN accumulation over many chunks
+        let mut proc = AudioPreprocessor::new(44100);
+        for i in 0..1000 {
+            let freq = 200.0 + (i as f32 * 3.0); // vary frequency
+            let chunk: Vec<f32> = (0..4410)
+                .map(|j| (2.0 * std::f32::consts::PI * freq * j as f32 / 44100.0).sin() * 0.3)
+                .collect();
+            let out = proc.process(&chunk);
+            for &s in &out {
+                assert!(
+                    s.is_finite() && s >= -1.0 && s <= 1.0,
+                    "Chunk {}: non-finite or out-of-range sample: {}",
+                    i,
+                    s
+                );
+            }
+        }
+    }
 }

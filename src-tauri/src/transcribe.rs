@@ -19,12 +19,9 @@ pub async fn transcribe_audio(
     language: &str,
     prompt: &str,
 ) -> Result<String, crate::error::TranscribeError> {
-    // SECURITY: reject HTTP URLs to prevent API key leak over plaintext,
-    // except localhost/127.0.0.1 for self-hosted setups
-    if !Provider::is_secure_url(api_url) {
-        return Err(crate::error::TranscribeError::InsecureUrl(
-            api_url.to_string(),
-        ));
+    // SECURITY: validate URL — reject non-HTTPS, dangerous schemes, CRLF injection, etc.
+    if let Err(reason) = Provider::validate_url(api_url) {
+        return Err(crate::error::TranscribeError::InsecureUrl(reason));
     }
 
     // Route to provider-specific path
@@ -71,9 +68,10 @@ pub async fn transcribe_audio(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
+        let body = Provider::scrub_api_key(&body[..body.len().min(200)], api_key);
         return Err(crate::error::TranscribeError::Api {
             status: status.as_u16(),
-            body: body[..body.len().min(200)].to_string(),
+            body,
         });
     }
 
@@ -115,7 +113,7 @@ async fn transcribe_audio_deepgram(
         let body = response.text().await.unwrap_or_default();
         return Err(crate::error::TranscribeError::Api {
             status: status.as_u16(),
-            body: body[..body.len().min(200)].to_string(),
+            body: Provider::scrub_api_key(&body[..body.len().min(200)], api_key),
         });
     }
 
@@ -186,7 +184,7 @@ async fn transcribe_audio_gemini(
         let body = response.text().await.unwrap_or_default();
         return Err(crate::error::TranscribeError::Api {
             status: status.as_u16(),
-            body: body[..body.len().min(200)].to_string(),
+            body: Provider::scrub_api_key(&body[..body.len().min(200)], api_key),
         });
     }
 
