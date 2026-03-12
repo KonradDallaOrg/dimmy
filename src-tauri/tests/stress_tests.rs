@@ -22,9 +22,7 @@ use std::time::Instant;
 fn sine_wave(freq: f32, sample_rate: u32, duration_secs: f32) -> Vec<f32> {
     let num_samples = (sample_rate as f32 * duration_secs) as usize;
     (0..num_samples)
-        .map(|i| {
-            (2.0 * std::f32::consts::PI * freq * i as f32 / sample_rate as f32).sin() * 0.5
-        })
+        .map(|i| (2.0 * std::f32::consts::PI * freq * i as f32 / sample_rate as f32).sin() * 0.5)
         .collect()
 }
 
@@ -91,7 +89,8 @@ fn wav_encode_30min_48khz() {
 
     // Encode to WAV
     let start = Instant::now();
-    let wav = dimmy_lib::audio::encode_wav(&samples, sample_rate).expect("encode_wav failed on 30min audio");
+    let wav = dimmy_lib::audio::encode_wav(&samples, sample_rate)
+        .expect("encode_wav failed on 30min audio");
     let encode_time = start.elapsed();
 
     println!("  WAV size: {} MB", wav.len() / 1_048_576);
@@ -154,16 +153,24 @@ fn wav_encode_extreme_values() {
     // Values beyond [-1, 1] should be clamped to i16 range
     assert_eq!(decoded.len(), samples.len());
     for &s in &decoded {
-        assert!(s >= i16::MIN && s <= i16::MAX, "Sample out of i16 range: {}", s);
+        assert!(
+            s >= i16::MIN && s <= i16::MAX,
+            "Sample out of i16 range: {}",
+            s
+        );
     }
-    println!("WAV encode extreme values: PASS ✓ ({} samples)", decoded.len());
+    println!(
+        "WAV encode extreme values: PASS ✓ ({} samples)",
+        decoded.len()
+    );
 }
 
 #[test]
 fn wav_encode_nan_and_inf() {
     // NaN and Inf are sanitized to 0.0 (silence) — encode_wav should never crash.
     let samples = vec![f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, f32::NAN];
-    let wav = dimmy_lib::audio::encode_wav(&samples, 44100).expect("encode_wav should not fail on NaN/Inf");
+    let wav = dimmy_lib::audio::encode_wav(&samples, 44100)
+        .expect("encode_wav should not fail on NaN/Inf");
 
     assert_eq!(&wav[0..4], b"RIFF");
     let mut reader = hound::WavReader::new(Cursor::new(&wav)).expect("Can't read WAV");
@@ -180,7 +187,9 @@ fn wav_encode_nan_and_inf() {
 
 #[test]
 fn wav_encode_various_sample_rates() {
-    let rates = [8000, 11025, 16000, 22050, 32000, 44100, 48000, 96000, 192000];
+    let rates = [
+        8000, 11025, 16000, 22050, 32000, 44100, 48000, 96000, 192000,
+    ];
     let samples = sine_wave(440.0, 48000, 1.0); // 1 second of audio
 
     for &rate in &rates {
@@ -203,13 +212,21 @@ fn preprocess_30min_audio() {
     let num_samples = (sample_rate as f64 * duration_secs as f64) as usize;
 
     println!("=== Preprocess 30min @ 48kHz ===");
-    println!("  Samples: {} ({} MB)", num_samples, num_samples * 4 / 1_048_576);
+    println!(
+        "  Samples: {} ({} MB)",
+        num_samples,
+        num_samples * 4 / 1_048_576
+    );
 
     // Generate speech-like audio (sine + silence pattern)
     let start = Instant::now();
     let audio = speech_and_silence(sample_rate, 8.0, 2.0, 180); // 180 cycles × 10s = 30min
     let gen_time = start.elapsed();
-    println!("  Generated {} samples in {:.2}s", audio.len(), gen_time.as_secs_f64());
+    println!(
+        "  Generated {} samples in {:.2}s",
+        audio.len(),
+        gen_time.as_secs_f64()
+    );
 
     // Process entire buffer (like stop_recording does)
     let start = Instant::now();
@@ -218,7 +235,10 @@ fn preprocess_30min_audio() {
 
     println!("  Input samples:  {}", audio.len());
     println!("  Output samples: {}", processed.len());
-    println!("  Reduction: {:.1}%", (1.0 - processed.len() as f64 / audio.len() as f64) * 100.0);
+    println!(
+        "  Reduction: {:.1}%",
+        (1.0 - processed.len() as f64 / audio.len() as f64) * 100.0
+    );
     println!("  Process time: {:.2}s", proc_time.as_secs_f64());
 
     // Invariants
@@ -248,7 +268,10 @@ fn preprocess_incremental_1000_chunks() {
     let chunk_duration = 5.0; // seconds
     let num_chunks = 1000;
 
-    println!("=== Preprocess {} chunks × {:.0}s ===", num_chunks, chunk_duration);
+    println!(
+        "=== Preprocess {} chunks × {:.0}s ===",
+        num_chunks, chunk_duration
+    );
 
     let mut preprocessor = dimmy_lib::preprocess::AudioPreprocessor::new(sample_rate);
     let mut total_input = 0usize;
@@ -284,11 +307,26 @@ fn preprocess_incremental_1000_chunks() {
     }
     let elapsed = start.elapsed();
 
-    println!("  Total input:  {} samples ({} MB)", total_input, total_input * 4 / 1_048_576);
-    println!("  Total output: {} samples ({} MB)", total_output, total_output * 4 / 1_048_576);
+    println!(
+        "  Total input:  {} samples ({} MB)",
+        total_input,
+        total_input * 4 / 1_048_576
+    );
+    println!(
+        "  Total output: {} samples ({} MB)",
+        total_output,
+        total_output * 4 / 1_048_576
+    );
     println!("  Empty chunks: {}/{}", empty_chunks, num_chunks);
-    println!("  Reduction: {:.1}%", (1.0 - total_output as f64 / total_input as f64) * 100.0);
-    println!("  Total time: {:.2}s ({:.2}ms/chunk)", elapsed.as_secs_f64(), elapsed.as_secs_f64() * 1000.0 / num_chunks as f64);
+    println!(
+        "  Reduction: {:.1}%",
+        (1.0 - total_output as f64 / total_input as f64) * 100.0
+    );
+    println!(
+        "  Total time: {:.2}s ({:.2}ms/chunk)",
+        elapsed.as_secs_f64(),
+        elapsed.as_secs_f64() * 1000.0 / num_chunks as f64
+    );
     println!("  PASS ✓");
 }
 
@@ -326,7 +364,11 @@ fn preprocess_extreme_sample_values() {
         assert!(s.is_finite(), "Non-finite sample in output: {}", s);
         assert!(s >= -1.0 && s <= 1.0, "Unclamped sample: {}", s);
     }
-    println!("Preprocess extreme values: PASS ✓ (input={}, output={})", chunk.len(), processed.len());
+    println!(
+        "Preprocess extreme values: PASS ✓ (input={}, output={})",
+        chunk.len(),
+        processed.len()
+    );
 }
 
 #[test]
@@ -365,7 +407,11 @@ fn downsample_30min_48khz_to_16khz() {
     let num_samples = (sample_rate as f64 * duration_secs as f64) as usize;
 
     println!("=== Downsample 30min 48kHz→16kHz ===");
-    println!("  Input: {} samples ({} MB)", num_samples, num_samples * 4 / 1_048_576);
+    println!(
+        "  Input: {} samples ({} MB)",
+        num_samples,
+        num_samples * 4 / 1_048_576
+    );
 
     let audio = sine_wave(440.0, sample_rate, duration_secs as f32);
     assert_eq!(audio.len(), num_samples);
@@ -375,13 +421,22 @@ fn downsample_30min_48khz_to_16khz() {
     let elapsed = start.elapsed();
 
     let expected_len = (num_samples as f64 * 16000.0 / 48000.0).floor() as usize;
-    println!("  Output: {} samples ({} MB)", downsampled.len(), downsampled.len() * 4 / 1_048_576);
+    println!(
+        "  Output: {} samples ({} MB)",
+        downsampled.len(),
+        downsampled.len() * 4 / 1_048_576
+    );
     println!("  Expected: ~{} samples", expected_len);
     println!("  Time: {:.2}s", elapsed.as_secs_f64());
 
     // Verify approximate length (within 1 sample)
     let diff = (downsampled.len() as i64 - expected_len as i64).abs();
-    assert!(diff <= 1, "Length mismatch: got {} expected ~{}", downsampled.len(), expected_len);
+    assert!(
+        diff <= 1,
+        "Length mismatch: got {} expected ~{}",
+        downsampled.len(),
+        expected_len
+    );
 
     // All samples should be finite
     for (i, &s) in downsampled.iter().enumerate() {
@@ -402,7 +457,13 @@ fn downsample_various_rates() {
         let expected = (audio.len() as f64 * 16000.0 / rate as f64).floor() as usize;
         let diff = (downsampled.len() as i64 - expected as i64).abs();
 
-        assert!(diff <= 1, "Rate {}: got {} expected ~{}", rate, downsampled.len(), expected);
+        assert!(
+            diff <= 1,
+            "Rate {}: got {} expected ~{}",
+            rate,
+            downsampled.len(),
+            expected
+        );
         for &s in &downsampled {
             assert!(s.is_finite(), "NaN/Inf in downsample from rate {}", rate);
         }
@@ -448,7 +509,11 @@ fn pipeline_full_30min() {
 
     let start = Instant::now();
     let audio = speech_and_silence(sample_rate, 8.0, 2.0, 180);
-    println!("  Generated {} samples in {:.2}s", audio.len(), start.elapsed().as_secs_f64());
+    println!(
+        "  Generated {} samples in {:.2}s",
+        audio.len(),
+        start.elapsed().as_secs_f64()
+    );
 
     // RawAudio → ProcessedAudio → WavPayload
     let raw = dimmy_lib::audio::RawAudio {
@@ -459,7 +524,11 @@ fn pipeline_full_30min() {
     let start = Instant::now();
     let processed = raw.preprocess(true);
     let preprocess_time = start.elapsed();
-    println!("  Preprocessed: {} samples in {:.2}s", processed.samples.len(), preprocess_time.as_secs_f64());
+    println!(
+        "  Preprocessed: {} samples in {:.2}s",
+        processed.samples.len(),
+        preprocess_time.as_secs_f64()
+    );
 
     if processed.is_empty() {
         println!("  (No speech detected — VAD stripped all audio)");
@@ -471,7 +540,11 @@ fn pipeline_full_30min() {
     let payload = processed.to_wav_payload().expect("to_wav_payload failed");
     let wav_time = start.elapsed();
 
-    println!("  WAV: {} bytes, {:.2}s duration", payload.data.len(), payload.duration_secs);
+    println!(
+        "  WAV: {} bytes, {:.2}s duration",
+        payload.data.len(),
+        payload.duration_secs
+    );
     println!("  Encode time: {:.2}s", wav_time.as_secs_f64());
     assert!(payload.duration_secs > 0.0);
     assert!(&payload.data[0..4] == b"RIFF");
@@ -494,7 +567,10 @@ fn pipeline_no_preprocessing() {
 
     let payload = processed.to_wav_payload().expect("to_wav_payload failed");
     assert!(payload.duration_secs > 59.0 && payload.duration_secs < 61.0);
-    println!("Pipeline no-preprocess 1min: PASS ✓ (duration={:.2}s)", payload.duration_secs);
+    println!(
+        "Pipeline no-preprocess 1min: PASS ✓ (duration={:.2}s)",
+        payload.duration_secs
+    );
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -502,10 +578,7 @@ fn pipeline_no_preprocessing() {
 // ══════════════════════════════════════════════════════════════════════
 
 /// Simulate the chunk splitting algorithm from lib.rs without Tauri dependencies
-fn simulate_chunk_splitting(
-    audio: &[f32],
-    sample_rate: usize,
-) -> Vec<(usize, usize)> {
+fn simulate_chunk_splitting(audio: &[f32], sample_rate: usize) -> Vec<(usize, usize)> {
     let min_chunk = sample_rate * 5;
     let max_chunk = sample_rate * 12;
     let silence_threshold: f32 = 0.01;
@@ -563,7 +636,13 @@ fn chunk_split_30min_speech() {
     // Verify chunks don't overlap and are within bounds
     for (i, &(start, end)) in chunks.iter().enumerate() {
         assert!(end > start, "Chunk {} has zero length", i);
-        assert!(end <= audio.len(), "Chunk {} exceeds buffer: {} > {}", i, end, audio.len());
+        assert!(
+            end <= audio.len(),
+            "Chunk {} exceeds buffer: {} > {}",
+            i,
+            end,
+            audio.len()
+        );
         let chunk_secs = (end - start) as f64 / sample_rate as f64;
         assert!(
             chunk_secs >= 5.0 - 0.001,
@@ -593,11 +672,17 @@ fn chunk_split_30min_speech() {
 
     // Print chunk stats
     if !chunks.is_empty() {
-        let durations: Vec<f64> = chunks.iter().map(|(s, e)| (e - s) as f64 / sample_rate as f64).collect();
+        let durations: Vec<f64> = chunks
+            .iter()
+            .map(|(s, e)| (e - s) as f64 / sample_rate as f64)
+            .collect();
         let min_dur = durations.iter().cloned().fold(f64::INFINITY, f64::min);
         let max_dur = durations.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
         let avg_dur = durations.iter().sum::<f64>() / durations.len() as f64;
-        println!("  Chunk duration: min={:.2}s avg={:.2}s max={:.2}s", min_dur, avg_dur, max_dur);
+        println!(
+            "  Chunk duration: min={:.2}s avg={:.2}s max={:.2}s",
+            min_dur, avg_dur, max_dur
+        );
     }
     println!("  PASS ✓");
 }
@@ -609,7 +694,10 @@ fn chunk_split_continuous_noise() {
     let audio = white_noise(sample_rate as u32, 120.0, 0.5); // 2 minutes of noise
 
     let chunks = simulate_chunk_splitting(&audio, sample_rate);
-    println!("Chunk split continuous noise: {} chunks from 2min ✓", chunks.len());
+    println!(
+        "Chunk split continuous noise: {} chunks from 2min ✓",
+        chunks.len()
+    );
 
     // All chunks should be at max length (12s) since no silence found
     for (i, &(start, end)) in chunks.iter().enumerate() {
@@ -625,7 +713,10 @@ fn chunk_split_pure_silence() {
     let audio = silence(sample_rate as u32, 120.0); // 2 minutes of silence
 
     let chunks = simulate_chunk_splitting(&audio, sample_rate);
-    println!("Chunk split pure silence: {} chunks from 2min ✓", chunks.len());
+    println!(
+        "Chunk split pure silence: {} chunks from 2min ✓",
+        chunks.len()
+    );
 
     for (i, &(start, end)) in chunks.iter().enumerate() {
         assert!(end > start, "Empty chunk {} at offset {}", i, start);
@@ -791,7 +882,11 @@ fn llm_style_cycle_exhaustive() {
     );
 
     // Verify we're back at start
-    assert_eq!(current, LlmStyle::Off, "Full forward cycle didn't return to start");
+    assert_eq!(
+        current,
+        LlmStyle::Off,
+        "Full forward cycle didn't return to start"
+    );
 
     // Backward cycle
     visited.clear();
@@ -804,7 +899,11 @@ fn llm_style_cycle_exhaustive() {
         LlmStyle::ALL.len(),
         "Backward cycle didn't visit all styles"
     );
-    assert_eq!(current, LlmStyle::Off, "Full backward cycle didn't return to start");
+    assert_eq!(
+        current,
+        LlmStyle::Off,
+        "Full backward cycle didn't return to start"
+    );
 
     println!("LLM style cycle exhaustive: PASS ✓ (13 styles × 2 directions)");
 }
@@ -828,7 +927,7 @@ fn llm_tone_cycle_exhaustive() {
 
 #[test]
 fn llm_all_style_tone_combinations() {
-    use dimmy_lib::llm::{LlmStyle, LlmTone, build_system_prompt};
+    use dimmy_lib::llm::{build_system_prompt, LlmStyle, LlmTone};
 
     let mut count = 0;
     for &style in LlmStyle::ALL {
@@ -842,7 +941,12 @@ fn llm_all_style_tone_combinations() {
 
             // Non-off styles should produce non-empty prompts
             if !style.is_off() {
-                assert!(!prompt.is_empty(), "{}+{} produced empty prompt", style, tone);
+                assert!(
+                    !prompt.is_empty(),
+                    "{}+{} produced empty prompt",
+                    style,
+                    tone
+                );
             }
 
             // No prompt should be absurdly long
@@ -871,7 +975,12 @@ fn llm_style_serde_all() {
 
         // Also test from_str_lossy
         let from_str = LlmStyle::from_str_lossy(style.as_str());
-        assert_eq!(from_str, style, "from_str_lossy failed for {}", style.as_str());
+        assert_eq!(
+            from_str,
+            style,
+            "from_str_lossy failed for {}",
+            style.as_str()
+        );
     }
     println!("LLM style serde all: PASS ✓");
 }
@@ -898,9 +1007,16 @@ fn provider_urls_exhaustive() {
 
     for (url, expected) in &test_cases {
         let actual = Provider::from_url(url);
-        assert_eq!(actual, *expected, "URL '{}' → {:?}, expected {:?}", url, actual, expected);
+        assert_eq!(
+            actual, *expected,
+            "URL '{}' → {:?}, expected {:?}",
+            url, actual, expected
+        );
     }
-    println!("Provider URLs exhaustive: PASS ✓ ({} cases)", test_cases.len());
+    println!(
+        "Provider URLs exhaustive: PASS ✓ ({} cases)",
+        test_cases.len()
+    );
 }
 
 #[test]
@@ -936,11 +1052,19 @@ fn error_display_all_variants() {
         AudioError::Capture("test".into()).into(),
         AudioError::Encode("test".into()).into(),
         TranscribeError::NoApiKey("groq".into()).into(),
-        TranscribeError::Api { status: 401, body: "Unauthorized".into() }.into(),
+        TranscribeError::Api {
+            status: 401,
+            body: "Unauthorized".into(),
+        }
+        .into(),
         TranscribeError::Empty.into(),
         TranscribeError::Network("timeout".into()).into(),
         TranscribeError::InsecureUrl("http://evil.com".into()).into(),
-        LlmError::Api { status: 500, body: "Internal".into() }.into(),
+        LlmError::Api {
+            status: 500,
+            body: "Internal".into(),
+        }
+        .into(),
         LlmError::Network("timeout".into()).into(),
         LlmError::NoApiKey("openai".into()).into(),
         DimmyError::Config("bad config".into()),
@@ -956,7 +1080,10 @@ fn error_display_all_variants() {
         let json = serde_json::to_string(err).unwrap();
         assert!(!json.is_empty());
     }
-    println!("Error display all variants: PASS ✓ ({} variants)", errors.len());
+    println!(
+        "Error display all variants: PASS ✓ ({} variants)",
+        errors.len()
+    );
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -970,8 +1097,7 @@ fn fuzz_preprocess_random_lengths() {
 
     // Test with various random-ish lengths including edge cases
     let lengths = [
-        0, 1, 2, 3, 10, 100, 479, 480, 481, 959, 960, 961,
-        1000, 4800, 48000, 96000, 480000,
+        0, 1, 2, 3, 10, 100, 479, 480, 481, 959, 960, 961, 1000, 4800, 48000, 96000, 480000,
     ];
 
     let mut total_input = 0usize;
@@ -1000,7 +1126,10 @@ fn fuzz_preprocess_random_lengths() {
         total_output,
         total_input
     );
-    println!("Fuzz preprocess random lengths: PASS ✓ ({} lengths)", lengths.len());
+    println!(
+        "Fuzz preprocess random lengths: PASS ✓ ({} lengths)",
+        lengths.len()
+    );
 }
 
 #[test]
@@ -1027,10 +1156,17 @@ fn fuzz_downsample_random_lengths() {
         }
 
         for &s in &out {
-            assert!(s.is_finite(), "NaN/Inf in downsample output for len={}", len);
+            assert!(
+                s.is_finite(),
+                "NaN/Inf in downsample output for len={}",
+                len
+            );
         }
     }
-    println!("Fuzz downsample random lengths: PASS ✓ ({} lengths)", lengths.len());
+    println!(
+        "Fuzz downsample random lengths: PASS ✓ ({} lengths)",
+        lengths.len()
+    );
 }
 
 #[test]
@@ -1044,9 +1180,17 @@ fn fuzz_wav_encode_random_lengths() {
 
         assert_eq!(&wav[0..4], b"RIFF", "Bad header for len={}", len);
         let reader = hound::WavReader::new(Cursor::new(&wav)).unwrap();
-        assert_eq!(reader.len() as usize, len, "Sample count mismatch for len={}", len);
+        assert_eq!(
+            reader.len() as usize,
+            len,
+            "Sample count mismatch for len={}",
+            len
+        );
     }
-    println!("Fuzz WAV encode random lengths: PASS ✓ ({} lengths)", lengths.len());
+    println!(
+        "Fuzz WAV encode random lengths: PASS ✓ ({} lengths)",
+        lengths.len()
+    );
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1061,7 +1205,10 @@ fn endurance_repeated_pipeline_100_cycles() {
     let session_duration = 30.0; // 30 seconds each
     let num_sessions = 100;
 
-    println!("=== Endurance: {} sessions × {:.0}s ===", num_sessions, session_duration);
+    println!(
+        "=== Endurance: {} sessions × {:.0}s ===",
+        num_sessions, session_duration
+    );
 
     let total_start = Instant::now();
     let mut total_wav_bytes = 0u64;
@@ -1084,10 +1231,21 @@ fn endurance_repeated_pipeline_100_cycles() {
 
     let total_time = total_start.elapsed();
     println!("  Total sessions: {}", num_sessions);
-    println!("  Total samples: {} ({} MB)", total_samples, total_samples * 4 / 1_048_576);
+    println!(
+        "  Total samples: {} ({} MB)",
+        total_samples,
+        total_samples * 4 / 1_048_576
+    );
     println!("  Total WAV: {} MB", total_wav_bytes / 1_048_576);
-    println!("  Total time: {:.2}s ({:.0}ms/session)", total_time.as_secs_f64(), total_time.as_secs_f64() * 1000.0 / num_sessions as f64);
-    println!("  Throughput: {:.1} sessions/sec", num_sessions as f64 / total_time.as_secs_f64());
+    println!(
+        "  Total time: {:.2}s ({:.0}ms/session)",
+        total_time.as_secs_f64(),
+        total_time.as_secs_f64() * 1000.0 / num_sessions as f64
+    );
+    println!(
+        "  Throughput: {:.1} sessions/sec",
+        num_sessions as f64 / total_time.as_secs_f64()
+    );
     println!("  PASS ✓");
 }
 
