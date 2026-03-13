@@ -240,12 +240,12 @@ pub async fn transcribe_chunked(
 
     if estimated <= max_wav_bytes {
         // Fits in one request — pass through unchanged (no chunking overhead)
-        let payload = audio.to_wav_payload().map_err(|e| {
-            crate::error::TranscribeError::Api {
+        let payload = audio
+            .to_wav_payload()
+            .map_err(|e| crate::error::TranscribeError::Api {
                 status: 0,
                 body: e.to_string(),
-            }
-        })?;
+            })?;
         return transcribe_audio(api_url, model, api_key, &payload.data, language, prompt).await;
     }
 
@@ -278,12 +278,12 @@ pub async fn transcribe_chunked(
             cb(i + 1, total);
         }
 
-        let payload = chunk.to_wav_payload().map_err(|e| {
-            crate::error::TranscribeError::Api {
+        let payload = chunk
+            .to_wav_payload()
+            .map_err(|e| crate::error::TranscribeError::Api {
                 status: 0,
                 body: format!("chunk {}/{}: {}", i + 1, total, e),
-            }
-        })?;
+            })?;
 
         let text =
             transcribe_audio(api_url, model, api_key, &payload.data, language, prompt).await?;

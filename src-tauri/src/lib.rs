@@ -956,7 +956,10 @@ async fn stop_recording(
         let estimated = processed.estimate_wav_size();
         debug_transcription(&format!(
             "FINAL | estimated_wav={} bytes | limit={} bytes ({:?}) | chunked={}",
-            estimated, max_bytes, provider, estimated > max_bytes
+            estimated,
+            max_bytes,
+            provider,
+            estimated > max_bytes
         ));
     }
 

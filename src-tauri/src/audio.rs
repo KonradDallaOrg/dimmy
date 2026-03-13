@@ -269,7 +269,7 @@ impl ProcessedAudio {
         let ratio = self.sample_rate as f64 / 16000.0;
         let output_samples = (self.samples.len() as f64 / ratio).ceil() as usize;
         let size = output_samples * 2 + 44; // 16-bit mono PCM + WAV header
-        // Size must be at least the header
+                                            // Size must be at least the header
         assert!(size >= 44, "estimate_wav_size: size below header minimum");
         size
     }
@@ -321,9 +321,8 @@ impl ProcessedAudio {
                         break;
                     }
                     let window = &self.samples[win_start..pos];
-                    let rms = (window.iter().map(|s| s * s).sum::<f32>()
-                        / window.len() as f32)
-                        .sqrt();
+                    let rms =
+                        (window.iter().map(|s| s * s).sum::<f32>() / window.len() as f32).sqrt();
                     if rms < silence_threshold {
                         split_at = Some(pos);
                         break;
@@ -620,7 +619,11 @@ mod tests {
             sample_rate: sr as u32,
         };
         let chunks = audio.split_at_silence(sr * 12);
-        assert!(chunks.len() >= 2, "Should split, got {} chunks", chunks.len());
+        assert!(
+            chunks.len() >= 2,
+            "Should split, got {} chunks",
+            chunks.len()
+        );
         // First chunk should find the silence and cut there (~11s, not 12s)
         assert!(
             chunks[0].samples.len() <= sr * 11 + sr / 2,
@@ -628,11 +631,7 @@ mod tests {
             chunks[0].samples.len() / sr
         );
         for (i, chunk) in chunks.iter().enumerate() {
-            assert!(
-                chunk.samples.len() <= sr * 12,
-                "Chunk {} exceeds max",
-                i
-            );
+            assert!(chunk.samples.len() <= sr * 12, "Chunk {} exceeds max", i);
         }
     }
 
@@ -645,7 +644,11 @@ mod tests {
             sample_rate: sr as u32,
         };
         let chunks = audio.split_at_silence(sr * 10);
-        assert!(chunks.len() >= 3, "25s / 10s = at least 3 chunks, got {}", chunks.len());
+        assert!(
+            chunks.len() >= 3,
+            "25s / 10s = at least 3 chunks, got {}",
+            chunks.len()
+        );
         for (i, chunk) in chunks.iter().enumerate() {
             assert!(
                 chunk.samples.len() <= sr * 10,

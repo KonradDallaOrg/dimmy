@@ -57,8 +57,8 @@ impl Provider {
     pub fn max_file_bytes(&self) -> usize {
         let limit = match self {
             Self::Deepgram => 2 * 1024 * 1024 * 1024, // 2 GB
-            Self::Gemini => 20 * 1024 * 1024,          // 20 MB (inline_data limit)
-            _ => 25 * 1024 * 1024,                     // 25 MB (Groq, OpenAI, OpenRouter, etc.)
+            Self::Gemini => 20 * 1024 * 1024,         // 20 MB (inline_data limit)
+            _ => 25 * 1024 * 1024,                    // 25 MB (Groq, OpenAI, OpenRouter, etc.)
         };
         // Limit must be positive — a zero limit would prevent all uploads
         assert!(limit > 0, "max_file_bytes produced zero for {:?}", self);
