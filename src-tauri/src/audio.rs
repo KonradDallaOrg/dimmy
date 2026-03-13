@@ -258,6 +258,99 @@ impl ProcessedAudio {
     pub fn is_empty(&self) -> bool {
         self.samples.is_empty()
     }
+
+    /// Estimate WAV file size after downsampling to 16kHz, without encoding.
+    /// Formula: ceil(samples / downsample_ratio) * 2 bytes + 44 byte WAV header.
+    pub fn estimate_wav_size(&self) -> usize {
+        assert!(
+            self.sample_rate > 0,
+            "estimate_wav_size: sample_rate must be positive"
+        );
+        let ratio = self.sample_rate as f64 / 16000.0;
+        let output_samples = (self.samples.len() as f64 / ratio).ceil() as usize;
+        let size = output_samples * 2 + 44; // 16-bit mono PCM + WAV header
+        // Size must be at least the header
+        assert!(size >= 44, "estimate_wav_size: size below header minimum");
+        size
+    }
+
+    /// Split audio into chunks, each at most `max_chunk_samples` long.
+    /// Searches backwards from the max boundary in the last 25% for a silence
+    /// window (RMS < 0.01 for 300ms). If no silence found, force-splits at max.
+    /// All chunks inherit the same sample_rate. Total samples in = total samples out.
+    pub fn split_at_silence(self, max_chunk_samples: usize) -> Vec<ProcessedAudio> {
+        assert!(
+            max_chunk_samples > 0,
+            "split_at_silence: max_chunk_samples must be positive"
+        );
+        let sr = self.sample_rate;
+        let total = self.samples.len();
+
+        if total <= max_chunk_samples {
+            return vec![ProcessedAudio {
+                samples: self.samples,
+                sample_rate: sr,
+            }];
+        }
+
+        let silence_threshold: f32 = 0.01;
+        let silence_window = ((sr as f64 * 0.3) as usize).max(1); // 300ms, min 1
+        let mut chunks = Vec::new();
+        let mut offset = 0;
+
+        while offset < total {
+            let remaining = total - offset;
+            if remaining <= max_chunk_samples {
+                chunks.push(ProcessedAudio {
+                    samples: self.samples[offset..total].to_vec(),
+                    sample_rate: sr,
+                });
+                break;
+            }
+
+            // Search for silence in the last 25% of the chunk window
+            let chunk_end = (offset + max_chunk_samples).min(total);
+            let search_start = offset + (max_chunk_samples - max_chunk_samples / 4);
+            let mut split_at = None;
+
+            if chunk_end > silence_window + offset {
+                let scan_from = search_start.max(offset + silence_window);
+                for pos in (scan_from..chunk_end).rev() {
+                    let win_start = pos.saturating_sub(silence_window);
+                    if win_start < offset {
+                        break;
+                    }
+                    let window = &self.samples[win_start..pos];
+                    let rms = (window.iter().map(|s| s * s).sum::<f32>()
+                        / window.len() as f32)
+                        .sqrt();
+                    if rms < silence_threshold {
+                        split_at = Some(pos);
+                        break;
+                    }
+                }
+            }
+
+            let end = split_at.unwrap_or(chunk_end);
+            // Defensive: never produce a zero-length chunk (would infinite-loop)
+            let end = end.max(offset + 1);
+            chunks.push(ProcessedAudio {
+                samples: self.samples[offset..end].to_vec(),
+                sample_rate: sr,
+            });
+            offset = end;
+        }
+
+        // Post-condition: total samples preserved
+        let out_total: usize = chunks.iter().map(|c| c.samples.len()).sum();
+        assert_eq!(
+            out_total, total,
+            "split_at_silence lost samples: {} in, {} out",
+            total, out_total
+        );
+
+        chunks
+    }
 }
 
 /// Encode f32 samples to WAV bytes (16-bit PCM, mono)
@@ -435,5 +528,168 @@ mod tests {
         let _ = tx.send(AudioCommand::Stop);
         // Drop sender — thread should exit cleanly
         drop(tx);
+    }
+
+    // ── WAV size estimation ──
+
+    #[test]
+    fn estimate_wav_size_1sec_48khz() {
+        // 1 sec at 48kHz → 16000 samples at 16kHz → 32000 bytes + 44 header = 32044
+        let audio = ProcessedAudio {
+            samples: vec![0.0; 48000],
+            sample_rate: 48000,
+        };
+        let est = audio.estimate_wav_size();
+        assert!(
+            (est as i64 - 32044).abs() < 100,
+            "Expected ~32044, got {}",
+            est
+        );
+    }
+
+    #[test]
+    fn estimate_wav_size_30min() {
+        let audio = ProcessedAudio {
+            samples: vec![0.0; 48000 * 30 * 60],
+            sample_rate: 48000,
+        };
+        let est = audio.estimate_wav_size();
+        // 30min at 16kHz 16-bit mono = ~57.6 MB
+        assert!(
+            est > 50_000_000 && est < 60_000_000,
+            "30min should be ~57MB, got {}",
+            est
+        );
+    }
+
+    #[test]
+    fn estimate_wav_size_empty() {
+        let audio = ProcessedAudio {
+            samples: vec![],
+            sample_rate: 48000,
+        };
+        // Empty audio → just the 44-byte header
+        assert_eq!(audio.estimate_wav_size(), 44);
+    }
+
+    #[test]
+    fn estimate_vs_actual_wav_size() {
+        // Estimate should be within 1% of actual encoded size
+        let audio = ProcessedAudio {
+            samples: vec![0.5; 48000 * 10], // 10 sec
+            sample_rate: 48000,
+        };
+        let estimated = audio.estimate_wav_size();
+        // Actually encode to compare
+        let resampled = crate::preprocess::downsample_to_16k(&audio.samples, audio.sample_rate);
+        let actual = encode_wav(&resampled, 16000).unwrap().len();
+        let diff = (estimated as f64 - actual as f64).abs() / actual as f64;
+        assert!(
+            diff < 0.01,
+            "Estimate {} vs actual {} differs by {:.1}%",
+            estimated,
+            actual,
+            diff * 100.0
+        );
+    }
+
+    // ── Audio splitting ──
+
+    #[test]
+    fn split_short_audio_no_split() {
+        let audio = ProcessedAudio {
+            samples: vec![0.5; 48000 * 5],
+            sample_rate: 48000,
+        };
+        let chunks = audio.split_at_silence(48000 * 600); // 600s max
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].samples.len(), 48000 * 5);
+        assert_eq!(chunks[0].sample_rate, 48000);
+    }
+
+    #[test]
+    fn split_at_silence_boundary() {
+        // 25s: 10s speech + 1s silence + 14s speech. Max chunk = 12s.
+        // First chunk should cut at silence (~11s), second chunk = 12s, third = remainder
+        let sr: usize = 48000;
+        let mut samples = vec![0.5f32; sr * 10];
+        samples.extend(vec![0.0f32; sr]);
+        samples.extend(vec![0.5f32; sr * 14]);
+        let audio = ProcessedAudio {
+            samples,
+            sample_rate: sr as u32,
+        };
+        let chunks = audio.split_at_silence(sr * 12);
+        assert!(chunks.len() >= 2, "Should split, got {} chunks", chunks.len());
+        // First chunk should find the silence and cut there (~11s, not 12s)
+        assert!(
+            chunks[0].samples.len() <= sr * 11 + sr / 2,
+            "First chunk should split at silence near 11s, got {}s",
+            chunks[0].samples.len() / sr
+        );
+        for (i, chunk) in chunks.iter().enumerate() {
+            assert!(
+                chunk.samples.len() <= sr * 12,
+                "Chunk {} exceeds max",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn split_force_at_max_no_silence() {
+        // Continuous speech → must force-split at max
+        let sr: usize = 48000;
+        let audio = ProcessedAudio {
+            samples: vec![0.5f32; sr * 25],
+            sample_rate: sr as u32,
+        };
+        let chunks = audio.split_at_silence(sr * 10);
+        assert!(chunks.len() >= 3, "25s / 10s = at least 3 chunks, got {}", chunks.len());
+        for (i, chunk) in chunks.iter().enumerate() {
+            assert!(
+                chunk.samples.len() <= sr * 10,
+                "Chunk {} exceeds max: {}s",
+                i,
+                chunk.samples.len() / sr
+            );
+        }
+    }
+
+    #[test]
+    fn split_preserves_all_samples() {
+        let sr: usize = 48000;
+        let total = sr * 20;
+        let audio = ProcessedAudio {
+            samples: (0..total).map(|i| (i as f32 / sr as f32).sin()).collect(),
+            sample_rate: sr as u32,
+        };
+        let chunks = audio.split_at_silence(sr * 8);
+        let reconstructed: usize = chunks.iter().map(|c| c.samples.len()).sum();
+        assert_eq!(reconstructed, total, "Split must not lose samples");
+    }
+
+    #[test]
+    fn split_preserves_sample_rate() {
+        let audio = ProcessedAudio {
+            samples: vec![0.5; 48000 * 20],
+            sample_rate: 44100,
+        };
+        let chunks = audio.split_at_silence(48000 * 8);
+        for chunk in &chunks {
+            assert_eq!(chunk.sample_rate, 44100, "Chunk must inherit sample rate");
+        }
+    }
+
+    #[test]
+    fn split_single_sample_over_max() {
+        // Edge case: max_chunk_samples = 0 should not infinite loop
+        // We'll use 1 as max to avoid division issues
+        let audio = ProcessedAudio {
+            samples: vec![0.5; 100],
+            sample_rate: 48000,
+        };
+        let chunks = audio.split_at_silence(1);
+        assert_eq!(chunks.iter().map(|c| c.samples.len()).sum::<usize>(), 100);
     }
 }
