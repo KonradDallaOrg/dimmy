@@ -228,7 +228,7 @@ pub async fn transcribe_chunked(
     language: &str,
     prompt: &str,
     max_wav_bytes: usize,
-    on_progress: Option<&dyn Fn(usize, usize)>,
+    on_progress: Option<&(dyn Fn(usize, usize) + Send + Sync)>,
 ) -> Result<String, crate::error::TranscribeError> {
     // max_wav_bytes must be positive — zero would force infinite chunking
     assert!(
