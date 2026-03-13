@@ -314,8 +314,13 @@ impl AudioPreprocessor {
                         if self.silence_frames <= SILENCE_GRACE_FRAMES {
                             speech_audio.extend_from_slice(&self.original_buf);
                         } else {
-                            // Grace expired — exit speech mode
+                            // Grace expired — exit speech mode.
+                            // Reset AGC: dagc produces NaN after processing silence
+                            // frames (from the grace period), which permanently
+                            // corrupts all subsequent output. Fresh AGC on next
+                            // speech segment prevents this.
                             self.in_speech = false;
+                            self.agc = MonoAgc::new(TARGET_RMS, AGC_DISTORTION).unwrap();
                         }
                     }
                     // If not in speech and below threshold: drop frame
@@ -671,6 +676,103 @@ mod tests {
             out.len(),
             total_speech_samples,
             out.len() as f64 / total_speech_samples as f64 * 100.0
+        );
+    }
+
+    #[test]
+    fn dagc_produces_nan_after_silence() {
+        // Documents the dagc library bug: feeding zero samples corrupts state permanently.
+        // This is the root cause of the "first recording after app launch" bug where
+        // speech after a 5s+ pause gets killed.
+        let mut agc = MonoAgc::new(TARGET_RMS, AGC_DISTORTION).unwrap();
+
+        // Feed 1s of speech-level audio
+        let mut speech: Vec<f32> = (0..48000)
+            .map(|i| (2.0 * std::f32::consts::PI * 200.0 * i as f32 / 48000.0).sin() * 0.3)
+            .collect();
+        agc.process(&mut speech);
+
+        // Feed 3s of silence (grace period duration)
+        let mut silence = vec![0.0f32; 48000 * 3];
+        agc.process(&mut silence);
+
+        // Feed 1s of speech again — dagc will produce ALL NaN
+        let mut speech2: Vec<f32> = (0..48000)
+            .map(|i| (2.0 * std::f32::consts::PI * 200.0 * i as f32 / 48000.0).sin() * 0.3)
+            .collect();
+        agc.process(&mut speech2);
+
+        let nan_count = speech2.iter().filter(|s| !s.is_finite()).count();
+        assert!(
+            nan_count == speech2.len(),
+            "Expected ALL NaN from dagc after silence (got {}/{}). \
+             If dagc fixed this upstream, we can simplify our AGC reset logic.",
+            nan_count,
+            speech2.len()
+        );
+    }
+
+    #[test]
+    fn agc_reset_recovers_after_silence() {
+        // After resetting AGC (as we do when grace expires), speech is preserved.
+        let mut agc = MonoAgc::new(TARGET_RMS, AGC_DISTORTION).unwrap();
+
+        // Feed 1s speech → 3s silence (simulates grace period)
+        let mut speech: Vec<f32> = (0..48000)
+            .map(|i| (2.0 * std::f32::consts::PI * 200.0 * i as f32 / 48000.0).sin() * 0.3)
+            .collect();
+        agc.process(&mut speech);
+        let mut silence = vec![0.0f32; 48000 * 3];
+        agc.process(&mut silence);
+
+        // Reset AGC (this is what our fix does)
+        agc = MonoAgc::new(TARGET_RMS, AGC_DISTORTION).unwrap();
+
+        // Feed 1s of speech — should work fine now
+        let mut speech2: Vec<f32> = (0..48000)
+            .map(|i| (2.0 * std::f32::consts::PI * 200.0 * i as f32 / 48000.0).sin() * 0.3)
+            .collect();
+        agc.process(&mut speech2);
+
+        let nan_count = speech2.iter().filter(|s| !s.is_finite()).count();
+        let rms = (speech2.iter().map(|s| s * s).sum::<f32>() / speech2.len() as f32).sqrt();
+        assert_eq!(nan_count, 0, "AGC should produce no NaN after reset");
+        assert!(
+            rms > 0.01,
+            "AGC should produce audible output after reset: RMS={:.6}",
+            rms
+        );
+    }
+
+    #[test]
+    fn speech_long_pause_speech_preserves_second_segment() {
+        // Simulate: 10s speech → 5s silence (exceeds 3s grace!) → 10s speech
+        // The VAD must re-enter speech mode after the grace period expires.
+        // This is the exact pattern that caused the user's bug: first recording
+        // after app launch, speech → 5s pause → speech killed.
+        let sr = 48000u32;
+        let speech1 = generate_speech_like(sr, 10.0, 0.3);
+        let silence = vec![0.0f32; sr as usize * 5]; // 5s silence (> 3s grace)
+        let speech2 = generate_speech_like(sr, 10.0, 0.3);
+
+        let mut full_audio = Vec::new();
+        full_audio.extend_from_slice(&speech1);
+        full_audio.extend_from_slice(&silence);
+        full_audio.extend_from_slice(&speech2);
+
+        let out = process_buffer(&full_audio, sr);
+
+        // Both speech segments should be preserved.
+        // speech1 (10s) + speech2 (10s) = 20s = 960000 samples.
+        // Output should have at least 50% of total speech (onset trimming is OK, dropping isn't).
+        let total_speech = speech1.len() + speech2.len();
+        assert!(
+            out.len() > total_speech / 2,
+            "VAD killed speech after 5s pause: output {:.1}s vs {:.1}s total speech ({:.0}% preserved). \
+             Speech after a long pause must NOT be dropped.",
+            out.len() as f64 / sr as f64,
+            total_speech as f64 / sr as f64,
+            out.len() as f64 / total_speech as f64 * 100.0
         );
     }
 
