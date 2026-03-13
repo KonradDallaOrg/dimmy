@@ -350,6 +350,14 @@ listen('transcription-final', (event) => {
   showStatus('done');
 });
 
+listen('final-chunk-progress', (event) => {
+  const { current, total } = event.payload;
+  if (total > 1) {
+    transcriptText.textContent = `Processing ${current}/${total}...`;
+    transcriptText.scrollLeft = transcriptText.scrollWidth;
+  }
+});
+
 // ========================
 // LLM STATUS EVENTS
 // ========================

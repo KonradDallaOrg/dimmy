@@ -948,23 +948,40 @@ async fn stop_recording(
         save_debug_metadata(dir, sr, &debug_device, preprocess_final, duration, 0);
     }
 
-    // Downsample to 16kHz + encode WAV
-    let audio::WavPayload {
-        data: wav_data,
-        duration_secs: wav_duration,
-    } = processed.to_wav_payload().map_err(|e| e.to_string())?;
+    // Determine provider file size limit for chunking decision
+    let provider = provider::Provider::from_url(&api_url);
+    let max_bytes = provider.max_file_bytes();
 
     if debug_log_on {
+        let estimated = processed.estimate_wav_size();
         debug_transcription(&format!(
-            "FINAL | wav_size={} bytes | duration={:.2}s | sending to Whisper...",
-            wav_data.len(),
-            wav_duration
+            "FINAL | estimated_wav={} bytes | limit={} bytes ({:?}) | chunked={}",
+            estimated,
+            max_bytes,
+            provider,
+            estimated > max_bytes
         ));
     }
+
     let final_send_time = std::time::Instant::now();
 
-    let transcript = transcribe::transcribe_audio(
-        &api_url, &api_model, &api_key, &wav_data, &language, &prompt,
+    // Use chunked transcription — transparent pass-through for short recordings,
+    // automatic splitting for recordings that exceed the provider's file limit.
+    let handle_ref = &app_handle;
+    let transcript = transcribe::transcribe_chunked(
+        &api_url,
+        &api_model,
+        &api_key,
+        processed,
+        &language,
+        &prompt,
+        max_bytes,
+        Some(&|current, total| {
+            let _ = handle_ref.emit(
+                "final-chunk-progress",
+                serde_json::json!({ "current": current, "total": total }),
+            );
+        }),
     )
     .await
     .map_err(|e| e.to_string())?;

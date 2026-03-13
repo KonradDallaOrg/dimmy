@@ -51,6 +51,20 @@ impl Provider {
         }
     }
 
+    /// Maximum file size in bytes this provider accepts for STT upload.
+    /// Used to decide whether to chunk a long recording before sending.
+    /// Returns a conservative 25MB default for unknown/custom providers.
+    pub fn max_file_bytes(&self) -> usize {
+        let limit = match self {
+            Self::Deepgram => 2 * 1024 * 1024 * 1024, // 2 GB
+            Self::Gemini => 20 * 1024 * 1024,         // 20 MB (inline_data limit)
+            _ => 25 * 1024 * 1024,                    // 25 MB (Groq, OpenAI, OpenRouter, etc.)
+        };
+        // Limit must be positive — a zero limit would prevent all uploads
+        assert!(limit > 0, "max_file_bytes produced zero for {:?}", self);
+        limit
+    }
+
     /// Whether this provider uses the Anthropic Messages API format.
     pub fn is_anthropic(&self) -> bool {
         *self == Self::Anthropic
@@ -403,6 +417,48 @@ mod tests {
             !scrubbed.contains("sk-proj-abc"),
             "Partial key leaked: {}",
             scrubbed
+        );
+    }
+
+    // ── Provider file size limits (TDD: these define the upload contract) ──
+
+    #[test]
+    fn provider_file_limits_known_providers() {
+        assert_eq!(Provider::Groq.max_file_bytes(), 25 * 1024 * 1024);
+        assert_eq!(Provider::OpenAI.max_file_bytes(), 25 * 1024 * 1024);
+        assert_eq!(Provider::OpenRouter.max_file_bytes(), 25 * 1024 * 1024);
+        assert_eq!(Provider::Deepgram.max_file_bytes(), 2 * 1024 * 1024 * 1024);
+        assert_eq!(Provider::Gemini.max_file_bytes(), 20 * 1024 * 1024);
+        assert_eq!(Provider::Anthropic.max_file_bytes(), 25 * 1024 * 1024);
+        assert_eq!(Provider::Custom.max_file_bytes(), 25 * 1024 * 1024);
+    }
+
+    #[test]
+    fn provider_file_limits_are_positive() {
+        // Every provider must have a positive, non-zero limit
+        for provider in [
+            Provider::Groq,
+            Provider::OpenAI,
+            Provider::OpenRouter,
+            Provider::Gemini,
+            Provider::Deepgram,
+            Provider::Anthropic,
+            Provider::Custom,
+        ] {
+            assert!(
+                provider.max_file_bytes() > 0,
+                "{:?} has zero file limit",
+                provider
+            );
+        }
+    }
+
+    #[test]
+    fn deepgram_limit_much_larger_than_others() {
+        // Deepgram's 2GB limit must be significantly larger than the 25MB default
+        assert!(
+            Provider::Deepgram.max_file_bytes() > Provider::Groq.max_file_bytes() * 10,
+            "Deepgram limit should be >> Groq limit"
         );
     }
 }
