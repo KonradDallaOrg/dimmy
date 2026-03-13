@@ -111,6 +111,9 @@ body {
   overflow: hidden;
   user-select: none;
   -webkit-user-select: none;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
 
 .hide { display: none !important; }
@@ -122,6 +125,9 @@ body {
   overflow: hidden;
   /* margin compensates for border so total size stays consistent */
   margin: 0.5px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
 }
 [data-theme="light"] #container {
   border-color: rgba(0, 0, 0, 0.12);
@@ -299,6 +305,11 @@ body {
   opacity: 1;
 }
 
+#settings-panel.open {
+  flex: 1;
+  min-height: 0;
+}
+
 /* === Recording panel === */
 #rec-panel {
   gap: 1px;
@@ -342,7 +353,8 @@ body {
 
 #settings-layout {
   display: flex;
-  height: 488px;
+  flex: 1;
+  min-height: 0;
 }
 
 /* Sidebar nav */

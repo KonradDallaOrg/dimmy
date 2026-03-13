@@ -28,14 +28,6 @@
     <!-- Settings panel — sidebar nav + page content -->
     <div id="settings-panel" class="panel">
 
-      <div id="accessibility-warning" class="hide" style="background:#7f1d1d;color:#fca5a5;padding:6px 8px;border-radius:0;font-size:11px">
-        Accessibility permission required for global shortcuts and paste.
-        <span style="display:flex;gap:4px;margin-top:4px">
-          <button id="accessibility-grant-btn" type="button" style="font-size:10px;padding:2px 6px;background:#fbbf24;color:#000;border:none;border-radius:3px;cursor:pointer">Grant Permission</button>
-          <button id="accessibility-open-btn" type="button" style="font-size:10px;padding:2px 6px;background:transparent;color:#fbbf24;border:1px solid #fbbf24;border-radius:3px;cursor:pointer">Open Settings</button>
-        </span>
-      </div>
-
       <div id="settings-layout">
         <nav id="settings-nav">
           <button class="nav-item active" data-section="transcription" title="Transcription">
@@ -63,6 +55,14 @@
 
         <div id="settings-main">
           <div id="settings-pages">
+
+            <div id="accessibility-warning" class="hide" style="background:#7f1d1d;color:#fca5a5;padding:6px 8px;border-radius:4px;font-size:11px;margin-bottom:8px">
+              Accessibility permission required for global shortcuts and paste.
+              <span style="display:flex;gap:4px;margin-top:4px">
+                <button id="accessibility-grant-btn" type="button" style="font-size:10px;padding:2px 6px;background:#fbbf24;color:#000;border:none;border-radius:3px;cursor:pointer">Grant Permission</button>
+                <button id="accessibility-open-btn" type="button" style="font-size:10px;padding:2px 6px;background:transparent;color:#fbbf24;border:1px solid #fbbf24;border-radius:3px;cursor:pointer">Open Settings</button>
+              </span>
+            </div>
 
             <!-- ===== TRANSCRIPTION ===== -->
             <div class="settings-page" data-page="transcription">

@@ -25,20 +25,25 @@ const REQUIRED_SAMPLE_RATE: u32 = 48000;
 
 /// Voice probability threshold to START considering speech (onset).
 /// Higher than offset to prevent flickering on noise bursts.
-const VAD_ONSET_THRESHOLD: f32 = 0.6;
+const VAD_ONSET_THRESHOLD: f32 = 0.5;
 
 /// Voice probability threshold to STOP speech (offset / hysteresis).
 /// Lower than onset — once we're in speech, we keep going until confidence drops below this.
-const VAD_OFFSET_THRESHOLD: f32 = 0.35;
+const VAD_OFFSET_THRESHOLD: f32 = 0.3;
 
 /// Minimum consecutive speech frames before activating (prevents brief noise from triggering).
 /// At 48kHz with 480-sample frames, each frame = 10ms → 3 frames = 30ms.
 const MIN_SPEECH_FRAMES: usize = 3;
 
 /// Number of silence frames to keep after speech ends (grace period).
-/// At 48kHz with 480-sample frames, each frame = 10ms → 50 frames = 500ms.
-/// Longer grace captures sentence-final phonemes that trail off.
-const SILENCE_GRACE_FRAMES: usize = 50;
+/// At 48kHz with 480-sample frames, each frame = 10ms → 300 frames = 3s.
+/// Natural speech pauses can be 500ms–2s; generous grace prevents premature cutoff.
+const SILENCE_GRACE_FRAMES: usize = 300;
+
+/// RMS energy floor: frames above this are "clearly audible" and should not be
+/// dropped even if nnnoiseless voice probability is low. Prevents the VAD from
+/// killing loud speech when the RNN model drifts after long recordings.
+const ENERGY_FLOOR: f32 = 0.015;
 
 /// Target RMS level for AGC. 0.2 ≈ -14dBFS — loud enough for clear STT input.
 const TARGET_RMS: f32 = 0.2;
@@ -67,6 +72,10 @@ pub struct AudioPreprocessor {
     speech_frames: usize,
     /// Whether we're currently in confirmed speech mode
     in_speech: bool,
+    /// Whether speech has been confirmed at least once in this session.
+    /// After first speech, onset is easier (lower threshold) to handle
+    /// nnnoiseless RNN drift on long recordings.
+    has_spoken: bool,
     /// Whether the device sample rate supports VAD (must be 48kHz)
     vad_enabled: bool,
     /// Device sample rate
@@ -135,6 +144,7 @@ impl AudioPreprocessor {
             silence_frames: 0,
             speech_frames: 0,
             in_speech: false,
+            has_spoken: false,
             vad_enabled,
             sample_rate,
         }
@@ -205,12 +215,26 @@ impl AudioPreprocessor {
         output
     }
 
-    /// VAD using nnnoiseless voice probability with hysteresis state machine.
+    /// Compute RMS energy of a frame of original (non-scaled) samples.
+    fn frame_rms(samples: &[f32]) -> f32 {
+        if samples.is_empty() {
+            return 0.0;
+        }
+        let sum_sq: f32 = samples.iter().map(|s| s * s).sum();
+        (sum_sq / samples.len() as f32).sqrt()
+    }
+
+    /// VAD using nnnoiseless voice probability with hysteresis state machine
+    /// and energy-based fallback.
     ///
     /// State machine:
     /// - IDLE: waiting for speech onset (voice_prob > ONSET_THRESHOLD for MIN_SPEECH_FRAMES)
     /// - SPEECH: confirmed speech, keep emitting until offset
     /// - GRACE: speech ended, keep emitting for SILENCE_GRACE_FRAMES then transition to IDLE
+    ///
+    /// Energy fallback: if a frame has RMS > ENERGY_FLOOR and speech was previously
+    /// confirmed (has_spoken), treat it as speech regardless of voice_prob. This prevents
+    /// nnnoiseless RNN drift from killing loud, clear speech on long recordings.
     ///
     /// Sends original (filtered) audio to output, not the denoised version.
     fn vad_filter(&mut self, samples: &[f32]) -> Vec<f32> {
@@ -242,9 +266,23 @@ impl AudioPreprocessor {
 
             if self.frame_buf.len() == DENOISE_FRAME_SIZE {
                 let voice_prob = denoise.process_frame(&mut denoise_output, &self.frame_buf);
+                let rms = Self::frame_rms(&self.original_buf);
 
-                if voice_prob > VAD_ONSET_THRESHOLD {
-                    // High-confidence speech
+                // Energy-based override: loud frame + prior speech → treat as speech.
+                // This catches cases where nnnoiseless RNN drifts on long recordings
+                // and stops detecting legitimate speech.
+                let energy_override = self.has_spoken && rms > ENERGY_FLOOR;
+
+                // Effective onset: after first speech, use offset threshold for easier
+                // re-entry (speech momentum — person is still talking).
+                let effective_onset = if self.has_spoken {
+                    VAD_OFFSET_THRESHOLD
+                } else {
+                    VAD_ONSET_THRESHOLD
+                };
+
+                if voice_prob > effective_onset || energy_override {
+                    // Speech detected (by probability or energy)
                     self.speech_frames += 1;
                     self.silence_frames = 0;
 
@@ -254,6 +292,7 @@ impl AudioPreprocessor {
                     } else if self.speech_frames >= MIN_SPEECH_FRAMES {
                         // Onset confirmed — flush pending frames and enter speech mode
                         self.in_speech = true;
+                        self.has_spoken = true;
                         speech_audio.append(&mut pending);
                         speech_audio.extend_from_slice(&self.original_buf);
                     } else {
@@ -310,6 +349,7 @@ impl AudioPreprocessor {
         self.silence_frames = 0;
         self.speech_frames = 0;
         self.in_speech = false;
+        self.has_spoken = false;
         if self.vad_enabled {
             self.denoise = Some(DenoiseState::new());
         }
@@ -454,9 +494,9 @@ mod tests {
     fn preprocessor_silence_is_stripped() {
         let mut proc = AudioPreprocessor::new(48000);
         // Feed enough silence frames to exceed grace period
-        let silence = vec![0.0f32; 480 * 80]; // 80 frames of silence (800ms > 500ms grace)
+        let silence = vec![0.0f32; 480 * 400]; // 400 frames of silence (4s > 3s grace)
         let out = proc.process(&silence);
-        // After grace period (50 frames = 500ms), silence should be stripped
+        // After grace period (300 frames = 3s), silence should be stripped
         assert!(
             out.len() < silence.len(),
             "Silence should be partially stripped"
@@ -480,11 +520,13 @@ mod tests {
         proc.silence_frames = 100;
         proc.speech_frames = 5;
         proc.in_speech = true;
+        proc.has_spoken = true;
         proc.reset();
         assert!(proc.frame_buf.is_empty());
         assert_eq!(proc.silence_frames, 0);
         assert_eq!(proc.speech_frames, 0);
         assert!(!proc.in_speech);
+        assert!(!proc.has_spoken);
     }
 
     #[test]
@@ -571,6 +613,126 @@ mod tests {
         assert!(
             out.len() <= speech.len(),
             "Output should not exceed input length"
+        );
+    }
+
+    /// Generate a speech-like signal: broadband noise shaped by amplitude envelope.
+    /// More realistic than a pure tone for VAD testing.
+    fn generate_speech_like(sample_rate: u32, duration_secs: f32, amplitude: f32) -> Vec<f32> {
+        let n = (sample_rate as f32 * duration_secs) as usize;
+        let mut rng_state: u32 = 42;
+        (0..n)
+            .map(|i| {
+                // Simple pseudo-random noise (xorshift32)
+                rng_state ^= rng_state << 13;
+                rng_state ^= rng_state >> 17;
+                rng_state ^= rng_state << 5;
+                let noise = (rng_state as f32 / u32::MAX as f32) * 2.0 - 1.0;
+                // Modulate with low-frequency envelope (simulates speech rhythm)
+                let envelope =
+                    (2.0 * std::f32::consts::PI * 3.0 * i as f32 / sample_rate as f32).sin()
+                        * 0.3
+                        + 0.7;
+                // Mix with tonal component (vocal fundamental ~150Hz)
+                let tone =
+                    (2.0 * std::f32::consts::PI * 150.0 * i as f32 / sample_rate as f32).sin();
+                (noise * 0.3 + tone * 0.7) * envelope * amplitude
+            })
+            .collect()
+    }
+
+    #[test]
+    fn speech_pause_speech_preserves_all_segments() {
+        // Simulate: 3s speech → 1s silence → 3s speech → 0.5s silence → 3s speech
+        // All speech segments should be preserved (grace period = 3s covers 1s pause).
+        let sr = 48000u32;
+        let speech1 = generate_speech_like(sr, 3.0, 0.3);
+        let silence1 = vec![0.0f32; sr as usize]; // 1s silence
+        let speech2 = generate_speech_like(sr, 3.0, 0.3);
+        let silence2 = vec![0.0f32; sr as usize / 2]; // 0.5s silence
+        let speech3 = generate_speech_like(sr, 3.0, 0.3);
+
+        let total_speech_samples = speech1.len() + speech2.len() + speech3.len();
+
+        let mut full_audio = Vec::new();
+        full_audio.extend_from_slice(&speech1);
+        full_audio.extend_from_slice(&silence1);
+        full_audio.extend_from_slice(&speech2);
+        full_audio.extend_from_slice(&silence2);
+        full_audio.extend_from_slice(&speech3);
+
+        let out = process_buffer(&full_audio, sr);
+
+        // Output should contain at least 50% of total speech samples.
+        // (VAD may trim edges, but should NOT drop entire segments.)
+        assert!(
+            out.len() > total_speech_samples / 2,
+            "VAD dropped too much speech: output {} samples vs {} total speech samples \
+             ({:.0}% preserved). Speech-pause-speech pattern should preserve most audio.",
+            out.len(),
+            total_speech_samples,
+            out.len() as f64 / total_speech_samples as f64 * 100.0
+        );
+    }
+
+    #[test]
+    fn long_recording_preserves_speech() {
+        // Simulate a 30-second continuous speech recording.
+        // The VAD must NOT kill speech after the first few seconds.
+        let sr = 48000u32;
+        let speech = generate_speech_like(sr, 30.0, 0.3);
+        let input_len = speech.len();
+
+        let out = process_buffer(&speech, sr);
+
+        // At minimum, 40% of input should survive (VAD strips some noise-like frames,
+        // but should NOT truncate to just the first few seconds).
+        let min_expected = input_len * 40 / 100;
+        assert!(
+            out.len() > min_expected,
+            "VAD killed most of a 30s recording: output {} samples ({:.1}s) vs input {} ({:.1}s). \
+             Minimum expected: {} samples ({:.1}s)",
+            out.len(),
+            out.len() as f64 / sr as f64,
+            input_len,
+            input_len as f64 / sr as f64,
+            min_expected,
+            min_expected as f64 / sr as f64,
+        );
+    }
+
+    #[test]
+    fn energy_floor_prevents_dropping_loud_speech() {
+        // Generate audio that is clearly audible (high RMS) — even if nnnoiseless
+        // doesn't classify it as speech, the energy floor should keep it.
+        let sr = 48000u32;
+        // First: some "speech" to set has_spoken = true
+        let speech = generate_speech_like(sr, 1.0, 0.3);
+        // Then: loud broadband noise (simulates speech that nnnoiseless might not detect)
+        let loud: Vec<f32> = (0..sr as usize * 5)
+            .map(|i| {
+                let mut rng = (i as u32).wrapping_mul(2654435761);
+                rng ^= rng << 13;
+                rng ^= rng >> 17;
+                rng ^= rng << 5;
+                ((rng as f32 / u32::MAX as f32) * 2.0 - 1.0) * 0.15 // RMS ~0.087 >> ENERGY_FLOOR
+            })
+            .collect();
+
+        let mut full = Vec::new();
+        full.extend_from_slice(&speech);
+        full.extend_from_slice(&loud);
+
+        let out = process_buffer(&full, sr);
+
+        // The loud section should be mostly preserved due to energy floor
+        let min_expected = loud.len() / 2;
+        assert!(
+            out.len() > min_expected,
+            "Energy floor failed: only {} samples output from {} input. \
+             Loud audio should not be dropped.",
+            out.len(),
+            full.len()
         );
     }
 
