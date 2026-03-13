@@ -300,8 +300,13 @@ impl AudioPreprocessor {
                         pending.extend_from_slice(&self.original_buf);
                     }
                 } else if voice_prob > VAD_OFFSET_THRESHOLD && self.in_speech {
-                    // Hysteresis: still above offset threshold while in speech → continue
-                    speech_audio.extend_from_slice(&self.original_buf);
+                    // Hysteresis: still above offset threshold while in speech → continue.
+                    // Only emit if frame has energy — silence frames must NEVER reach AGC
+                    // because dagc produces NaN on zero-amplitude input, permanently
+                    // corrupting all subsequent output.
+                    if rms > ENERGY_FLOOR {
+                        speech_audio.extend_from_slice(&self.original_buf);
+                    }
                     // Don't reset speech_frames (we're in speech), but don't increment either
                 } else {
                     // Below threshold
@@ -309,18 +314,16 @@ impl AudioPreprocessor {
                     pending.clear(); // Discard unconfirmed onset frames
 
                     if self.in_speech {
-                        // Grace period — keep short silences (natural pauses)
+                        // Grace period — keep in_speech=true to prevent premature exit
+                        // during natural pauses. Do NOT emit silence frames: dagc
+                        // (AGC) produces NaN on zero-amplitude input, permanently
+                        // corrupting all subsequent output. The grace period only
+                        // delays the in_speech→false transition; it does not need
+                        // to output audio.
                         self.silence_frames += 1;
-                        if self.silence_frames <= SILENCE_GRACE_FRAMES {
-                            speech_audio.extend_from_slice(&self.original_buf);
-                        } else {
-                            // Grace expired — exit speech mode.
-                            // Reset AGC: dagc produces NaN after processing silence
-                            // frames (from the grace period), which permanently
-                            // corrupts all subsequent output. Fresh AGC on next
-                            // speech segment prevents this.
+                        if self.silence_frames > SILENCE_GRACE_FRAMES {
+                            // Grace expired — exit speech mode
                             self.in_speech = false;
-                            self.agc = MonoAgc::new(TARGET_RMS, AGC_DISTORTION).unwrap();
                         }
                     }
                     // If not in speech and below threshold: drop frame
@@ -773,6 +776,89 @@ mod tests {
             out.len() as f64 / sr as f64,
             total_speech as f64 / sr as f64,
             out.len() as f64 / total_speech as f64 * 100.0
+        );
+    }
+
+    #[test]
+    fn no_nan_in_output_after_silence_gap() {
+        // REGRESSION: dagc produces NaN on zero-amplitude input. If silence
+        // frames reach AGC (e.g., from VAD grace period), the NaN propagates
+        // to all subsequent samples, which get clamped to 0.0 — killing speech.
+        //
+        // This test feeds process_buffer a single buffer (like stop_recording does)
+        // with speech → 7s silence → speech, and verifies no NaN/zero sections
+        // in the output.
+        let sr = 48000u32;
+        let speech1 = generate_speech_like(sr, 15.0, 0.3);
+        let silence = vec![0.0f32; sr as usize * 7]; // 7s silence (>> 3s grace)
+        let speech2 = generate_speech_like(sr, 15.0, 0.3);
+
+        let mut full = Vec::new();
+        full.extend_from_slice(&speech1);
+        full.extend_from_slice(&silence);
+        full.extend_from_slice(&speech2);
+
+        let out = process_buffer(&full, sr);
+
+        // All output samples must be finite (no NaN from dagc)
+        let nan_count = out.iter().filter(|s| !s.is_finite()).count();
+        assert_eq!(
+            nan_count, 0,
+            "process_buffer produced {} NaN samples — dagc silence corruption leaked through",
+            nan_count
+        );
+
+        // Check for long runs of zero (NaN clamped to 0.0).
+        // A run of > 1s of consecutive zeros means speech was killed.
+        let max_zero_run = {
+            let mut max_run = 0usize;
+            let mut current_run = 0usize;
+            for &s in &out {
+                if s.abs() < 1e-10 {
+                    current_run += 1;
+                    max_run = max_run.max(current_run);
+                } else {
+                    current_run = 0;
+                }
+            }
+            max_run
+        };
+        let one_second = sr as usize;
+        assert!(
+            max_zero_run < one_second,
+            "Output has {:.1}s of consecutive zeros (NaN→0.0 corruption). \
+             Max allowed: 1.0s. Silence must not reach AGC.",
+            max_zero_run as f64 / sr as f64
+        );
+    }
+
+    #[test]
+    fn output_no_nan_with_multiple_silence_gaps() {
+        // Multiple silence gaps: speech → 5s silence → speech → 8s silence → speech
+        // Each gap exceeds grace. All speech segments must survive.
+        let sr = 48000u32;
+        let mut full = Vec::new();
+        full.extend_from_slice(&generate_speech_like(sr, 10.0, 0.3));
+        full.extend_from_slice(&vec![0.0f32; sr as usize * 5]);
+        full.extend_from_slice(&generate_speech_like(sr, 10.0, 0.3));
+        full.extend_from_slice(&vec![0.0f32; sr as usize * 8]);
+        full.extend_from_slice(&generate_speech_like(sr, 10.0, 0.3));
+
+        let out = process_buffer(&full, sr);
+
+        // No NaN
+        assert!(
+            out.iter().all(|s| s.is_finite()),
+            "NaN in output with multiple silence gaps"
+        );
+
+        // Total speech is 30s. Output should preserve at least 40%.
+        let min = sr as usize * 30 * 40 / 100;
+        assert!(
+            out.len() > min,
+            "Multiple gaps killed speech: {:.1}s output vs 30s speech ({:.0}%)",
+            out.len() as f64 / sr as f64,
+            out.len() as f64 / (sr as f64 * 30.0) * 100.0
         );
     }
 
