@@ -300,21 +300,24 @@ call_stt() {
       text=$(echo "$resp" | jq -r '.results.channels[0].alternatives[0].transcript // empty' 2>/dev/null)
       ;;
     gemini)
-      WAV_DATA=$(base64 -w0 "$wav_file" 2>/dev/null || base64 "$wav_file" 2>/dev/null)
-      local body
-      body=$(jq -n --arg data "$WAV_DATA" --arg lang "$lang" '{
-        contents: [{
-          parts: [
-            { text: ("Transcribe this audio exactly as spoken. Output ONLY the transcribed text. Language: " + $lang) },
-            { inline_data: { mime_type: "audio/wav", data: $data } }
-          ]
-        }],
-        generationConfig: { maxOutputTokens: 8192 }
-      }')
+      # Pipe base64 via stdin to avoid ARG_MAX on large files
+      local body_file
+      body_file=$(mktemp)
+      (base64 -w0 "$wav_file" 2>/dev/null || base64 "$wav_file" 2>/dev/null) | \
+        jq -Rs --arg lang "$lang" '{
+          contents: [{
+            parts: [
+              { text: ("Transcribe this audio exactly as spoken. Output ONLY the transcribed text. Language: " + $lang) },
+              { inline_data: { mime_type: "audio/wav", data: . } }
+            ]
+          }],
+          generationConfig: { maxOutputTokens: 8192 }
+        }' > "$body_file"
       resp=$(curl -sS --max-time 300 "$url" \
         -H "x-goog-api-key: $key" \
         -H "Content-Type: application/json" \
-        -d "$body" 2>&1) || { echo "ERROR:curl failed"; return; }
+        -d @"$body_file" 2>&1) || { rm -f "$body_file"; echo "ERROR:curl failed"; return; }
+      rm -f "$body_file"
       text=$(echo "$resp" | jq -r '.candidates[0].content.parts[0].text // empty' 2>/dev/null)
       ;;
   esac
