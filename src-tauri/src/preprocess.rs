@@ -630,8 +630,7 @@ mod tests {
                 let noise = (rng_state as f32 / u32::MAX as f32) * 2.0 - 1.0;
                 // Modulate with low-frequency envelope (simulates speech rhythm)
                 let envelope =
-                    (2.0 * std::f32::consts::PI * 3.0 * i as f32 / sample_rate as f32).sin()
-                        * 0.3
+                    (2.0 * std::f32::consts::PI * 3.0 * i as f32 / sample_rate as f32).sin() * 0.3
                         + 0.7;
                 // Mix with tonal component (vocal fundamental ~150Hz)
                 let tone =
