@@ -220,6 +220,7 @@ async fn transcribe_audio_gemini(
 /// concatenates results with spaces.
 ///
 /// `on_progress` is called before sending each chunk: (current_1indexed, total_chunks).
+#[allow(clippy::too_many_arguments)]
 pub async fn transcribe_chunked(
     api_url: &str,
     model: &str,
