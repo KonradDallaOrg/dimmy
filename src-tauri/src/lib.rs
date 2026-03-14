@@ -2282,6 +2282,14 @@ pub fn run() {
                             std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
 
                         // Get NSWindow pointer via Tauri's raw window handle
+                        // MsgSend variant for unsigned long (NSUInteger / styleMask)
+                        type MsgSendULong = unsafe extern "C" fn(Id, Sel, std::ffi::c_ulong) -> Id;
+                        type MsgSendGetULong = unsafe extern "C" fn(Id, Sel) -> std::ffi::c_ulong;
+                        let send_ulong: MsgSendULong =
+                            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+                        let send_get_ulong: MsgSendGetULong =
+                            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+
                         let ns_win: Id =
                             window.ns_window().unwrap_or(std::ptr::null_mut() as _) as Id;
                         if !ns_win.is_null() {
@@ -2301,6 +2309,32 @@ pub fn run() {
                             // [nsWindow setHasShadow:NO]
                             let sel_set_shadow = sel_registerName(b"setHasShadow:\0".as_ptr());
                             send_int(ns_win, sel_set_shadow, 0 as c_int);
+
+                            // [nsWindow setTitlebarAppearsTransparent:YES]
+                            let sel_titlebar_transparent =
+                                sel_registerName(b"setTitlebarAppearsTransparent:\0".as_ptr());
+                            send_int(ns_win, sel_titlebar_transparent, 1 as c_int);
+
+                            // Add NSFullSizeContentViewWindowMask to existing styleMask
+                            // NSFullSizeContentViewWindowMask = 1 << 15 = 32768
+                            let sel_style_mask = sel_registerName(b"styleMask\0".as_ptr());
+                            let current_mask = send_get_ulong(ns_win, sel_style_mask);
+                            let sel_set_style_mask = sel_registerName(b"setStyleMask:\0".as_ptr());
+                            send_ulong(
+                                ns_win,
+                                sel_set_style_mask,
+                                current_mask | (1u64 << 15) as std::ffi::c_ulong,
+                            );
+
+                            // Set drawsBackground:NO on the WKWebView content view
+                            // to eliminate the opaque web view background
+                            let sel_content_view = sel_registerName(b"contentView\0".as_ptr());
+                            let content_view: Id = send(ns_win, sel_content_view);
+                            if !content_view.is_null() {
+                                let sel_set_draws =
+                                    sel_registerName(b"setDrawsBackground:\0".as_ptr());
+                                send_int(content_view, sel_set_draws, 0 as c_int);
+                            }
                         }
                     }
                 }

@@ -121,6 +121,47 @@ pill.addEventListener('mousedown', async (e) => {
   } catch (_) {}
 });
 
+// Right-click context menu on pill — Settings + Quit
+pill.addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  // Remove any existing context menu
+  const old = document.getElementById('pill-context-menu');
+  if (old) old.remove();
+
+  const menu = document.createElement('div');
+  menu.id = 'pill-context-menu';
+  menu.innerHTML = `
+    <button data-action="settings">&#9881; Settings</button>
+    <button data-action="quit">&#10005; Quit</button>
+  `;
+  document.body.appendChild(menu);
+
+  // Position near cursor but keep within window
+  const x = Math.min(e.clientX, window.innerWidth - 120);
+  const y = Math.min(e.clientY, window.innerHeight - 70);
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+
+  menu.addEventListener('click', async (ev) => {
+    const action = ev.target.dataset.action;
+    if (action === 'settings') {
+      settingsBtn.click();
+    } else if (action === 'quit') {
+      window.__TAURI__.window.getCurrentWindow().close();
+    }
+    menu.remove();
+  });
+
+  // Close menu on click outside
+  const closeMenu = (ev) => {
+    if (!menu.contains(ev.target)) {
+      menu.remove();
+      document.removeEventListener('click', closeMenu);
+    }
+  };
+  setTimeout(() => document.addEventListener('click', closeMenu), 0);
+});
+
 let isRecording = false;
 let waveformInterval = null;
 let timerInterval = null;
