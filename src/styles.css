@@ -669,38 +669,17 @@ body {
 #update-status.error { color: #fbbf24; }
 #update-status.installing { color: #818cf8; }
 
-/* === Pill context menu (right-click) === */
-#pill-context-menu {
-  position: fixed;
-  z-index: 9999;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-subtle);
-  border-radius: 0 0 12px 12px;
-  padding: 2px 4px 4px;
-  display: flex;
-  flex-direction: column;
-}
-
-#pill-context-menu button {
+#quit-btn {
   background: none;
   border: none;
-  color: var(--text-primary);
-  font-size: 12px;
-  padding: 6px 10px;
-  text-align: left;
-  border-radius: 5px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-#pill-context-menu button:hover {
-  background: var(--bg-input-hover);
-}
-
-#pill-context-menu button[data-action="quit"] {
   color: #ef4444;
+  font-size: 8px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  letter-spacing: 0.5px;
 }
-
-#pill-context-menu button[data-action="quit"]:hover {
+#quit-btn:hover {
   background: rgba(239, 68, 68, 0.15);
 }
+
