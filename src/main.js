@@ -122,11 +122,61 @@ pill.addEventListener('mousedown', async (e) => {
 });
 
 // Right-click context menu on pill — Settings + Quit
-pill.addEventListener('contextmenu', (e) => {
+// The Tauri window is tiny (36px), so we must expand it to fit the menu,
+// then shrink back on dismiss.
+const CONTEXT_MENU_H = 68; // 2 buttons ~30px each + padding
+let contextMenuOpen = false;
+let viewBeforeContextMenu = null; // to restore micro if needed
+
+function dismissContextMenu() {
+  const menu = document.getElementById('pill-context-menu');
+  if (menu) menu.remove();
+  if (contextMenuOpen) {
+    contextMenuOpen = false;
+    // Restore: if was micro, shrink back; otherwise just restore pill height
+    if (viewBeforeContextMenu === 'micro') {
+      switchView('micro');
+    } else {
+      setWindowSizeWH(W, PILL_H);
+    }
+    viewBeforeContextMenu = null;
+  }
+  document.removeEventListener('click', onDocClickDismiss);
+  document.removeEventListener('contextmenu', onDocContextDismiss);
+  document.removeEventListener('keydown', onEscDismiss);
+}
+
+function onDocClickDismiss(ev) {
+  const menu = document.getElementById('pill-context-menu');
+  if (menu && !menu.contains(ev.target)) dismissContextMenu();
+}
+function onDocContextDismiss(ev) {
+  ev.preventDefault();
+  // Right-click anywhere dismisses (pill handler will re-open if on pill)
+  dismissContextMenu();
+}
+function onEscDismiss(ev) {
+  if (ev.key === 'Escape') dismissContextMenu();
+}
+
+pill.addEventListener('contextmenu', async (e) => {
   e.preventDefault();
-  // Remove any existing context menu
-  const old = document.getElementById('pill-context-menu');
-  if (old) old.remove();
+  // If already open, dismiss first
+  if (contextMenuOpen) { dismissContextMenu(); return; }
+
+  // Remember state so we can restore on dismiss
+  viewBeforeContextMenu = currentView;
+  contextMenuOpen = true;
+
+  // If micro, expand to pill width first so menu text fits
+  if (currentView === 'micro') {
+    pill.classList.remove('micro');
+    deviceName.classList.remove('hide');
+    currentView = 'pill';
+  }
+
+  // Expand window downward to fit menu below pill
+  await setWindowSizeWH(W, PILL_H + CONTEXT_MENU_H);
 
   const menu = document.createElement('div');
   menu.id = 'pill-context-menu';
@@ -136,30 +186,27 @@ pill.addEventListener('contextmenu', (e) => {
   `;
   document.body.appendChild(menu);
 
-  // Position near cursor but keep within window
-  const x = Math.min(e.clientX, window.innerWidth - 120);
-  const y = Math.min(e.clientY, window.innerHeight - 70);
-  menu.style.left = x + 'px';
-  menu.style.top = y + 'px';
+  // Position below the pill, full width
+  menu.style.left = '2px';
+  menu.style.top = PILL_H + 'px';
+  menu.style.width = (W - MARGIN) + 'px';
 
-  menu.addEventListener('click', async (ev) => {
+  menu.addEventListener('click', (ev) => {
     const action = ev.target.dataset.action;
     if (action === 'settings') {
+      dismissContextMenu();
       settingsBtn.click();
     } else if (action === 'quit') {
       window.__TAURI__.window.getCurrentWindow().close();
     }
-    menu.remove();
   });
 
-  // Close menu on click outside
-  const closeMenu = (ev) => {
-    if (!menu.contains(ev.target)) {
-      menu.remove();
-      document.removeEventListener('click', closeMenu);
-    }
-  };
-  setTimeout(() => document.addEventListener('click', closeMenu), 0);
+  // Dismiss on click outside, right-click anywhere, or Escape
+  setTimeout(() => {
+    document.addEventListener('click', onDocClickDismiss);
+    document.addEventListener('contextmenu', onDocContextDismiss);
+    document.addEventListener('keydown', onEscDismiss);
+  }, 0);
 });
 
 let isRecording = false;
@@ -301,10 +348,10 @@ container.addEventListener('mouseenter', () => {
 container.addEventListener('mouseleave', () => {
   isHovering = false;
   if (hoverTimeout) { clearTimeout(hoverTimeout); hoverTimeout = null; }
-  if (currentView === 'pill' && !isRecording) {
+  if (currentView === 'pill' && !isRecording && !contextMenuOpen) {
     hoverTimeout = setTimeout(() => {
       hoverTimeout = null;
-      if (currentView === 'pill' && !isRecording) {
+      if (currentView === 'pill' && !isRecording && !contextMenuOpen) {
         switchView('micro');
       }
     }, 800);
@@ -313,7 +360,7 @@ container.addEventListener('mouseleave', () => {
 
 // Fallback: if somehow stuck in pill after hover, auto-shrink
 setInterval(() => {
-  if (currentView === 'pill' && !isRecording && !isHovering && !hoverTimeout && !shrinkTimeout) {
+  if (currentView === 'pill' && !isRecording && !isHovering && !hoverTimeout && !shrinkTimeout && !contextMenuOpen) {
     switchView('micro');
   }
 }, 5000);

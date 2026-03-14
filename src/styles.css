@@ -675,12 +675,10 @@ body {
   z-index: 9999;
   background: var(--bg-secondary);
   border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  padding: 4px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  border-radius: 0 0 12px 12px;
+  padding: 2px 4px 4px;
   display: flex;
   flex-direction: column;
-  min-width: 110px;
 }
 
 #pill-context-menu button {
