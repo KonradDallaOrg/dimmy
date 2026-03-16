@@ -2245,7 +2245,10 @@ pub fn run() {
             stats_total_speaking_secs: Mutex::new(file_cfg.stats_total_speaking_secs),
         })
         .setup(move |app| {
-            // Remove Windows DWM border and set transparent background
+            // Window starts hidden (visible: false in tauri.conf.json) to avoid
+            // a white flash. We configure transparency manually below, then show it.
+            // NOTE: transparent is set to false in tauri.conf.json to work around
+            // a tao crash on macOS 26 (Tahoe) — see tao#1171.
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_shadow(false);
                 use tauri::window::Color;
@@ -2339,17 +2342,28 @@ pub fn run() {
                     }
                 }
 
-                // Windows: remove DWM border artifacts on transparent overlay window.
-                // Tauri already calls DwmEnableBlurBehindWindow with an empty region
-                // for `transparent: true`. We add:
-                // 1. WS_POPUP style — removes the DWM caption frame entirely
-                // 2. DWMWCP_DONOTROUND — disables Win11 auto-rounded corners
-                // 3. DWMWA_COLOR_NONE border — removes the 1px DWM border
+                // Windows: set up transparent compositing manually.
+                // Previously tao handled this via `transparent: true` in config,
+                // but we disabled that to work around a macOS 26 crash (tao#1171).
+                // We replicate what tao did (DwmEnableBlurBehindWindow with empty
+                // region) plus our own DWM fixes:
+                // 1. DwmEnableBlurBehindWindow — enables transparent compositing
+                // 2. WS_POPUP style — removes the DWM caption frame entirely
+                // 3. DWMWCP_DONOTROUND — disables Win11 auto-rounded corners
+                // 4. DWMWA_COLOR_NONE border — removes the 1px DWM border
                 // NOTE: Do NOT use DwmExtendFrameIntoClientArea(-1) — it adds glass
                 // blur/shadow, making the border worse.
                 #[cfg(target_os = "windows")]
                 {
                     use std::ffi::c_void;
+
+                    #[repr(C)]
+                    struct DWM_BLURBEHIND {
+                        dw_flags: u32,
+                        f_enable: i32,
+                        h_rgn_blur: *mut c_void,
+                        f_transition_on_maximized: i32,
+                    }
 
                     extern "system" {
                         fn GetWindowLongPtrW(hwnd: *mut c_void, index: i32) -> isize;
@@ -2373,6 +2387,10 @@ pub fn run() {
                             value: *const c_void,
                             size: u32,
                         ) -> i32;
+                        fn DwmEnableBlurBehindWindow(
+                            hwnd: *mut c_void,
+                            pbb: *const DWM_BLURBEHIND,
+                        ) -> i32;
                     }
 
                     const GWL_STYLE: i32 = -16;
@@ -2389,10 +2407,23 @@ pub fn run() {
                     const DWMWCP_DONOTROUND: u32 = 1;
                     const DWMWA_BORDER_COLOR: u32 = 34;
                     const DWMWA_COLOR_NONE: u32 = 0xFFFFFFFE;
+                    const DWM_BB_ENABLE: u32 = 0x00000001;
 
                     if let Ok(hwnd) = window.hwnd() {
                         let hwnd = hwnd.0 as *mut c_void;
                         unsafe {
+                            // Enable DWM transparent compositing (replaces what
+                            // tao did with `transparent: true`). An empty blur
+                            // region + fEnable=TRUE creates a fully transparent
+                            // compositing surface.
+                            let bb = DWM_BLURBEHIND {
+                                dw_flags: DWM_BB_ENABLE,
+                                f_enable: 1,
+                                h_rgn_blur: std::ptr::null_mut(),
+                                f_transition_on_maximized: 0,
+                            };
+                            DwmEnableBlurBehindWindow(hwnd, &bb);
+
                             // WS_POPUP removes DWM caption frame.
                             // Remove WS_CLIPCHILDREN — it prevents the WebView2
                             // child from being repainted after DWM recomposition,
@@ -2485,6 +2516,10 @@ pub fn run() {
                         log("Window positioned bottom-right (default)");
                     }
                 }
+
+                // Show window now that transparency is configured (visible: false
+                // in tauri.conf.json prevents the initial opaque flash).
+                let _ = window.show();
             }
             // System tray icon with Show / Quit menu
             {
