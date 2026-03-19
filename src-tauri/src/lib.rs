@@ -2391,6 +2391,13 @@ pub fn run() {
                             hwnd: *mut c_void,
                             pbb: *const DWM_BLURBEHIND,
                         ) -> i32;
+                        fn CreateRectRgn(
+                            left: i32,
+                            top: i32,
+                            right: i32,
+                            bottom: i32,
+                        ) -> *mut c_void;
+                        fn DeleteObject(obj: *mut c_void) -> i32;
                     }
 
                     const GWL_STYLE: i32 = -16;
@@ -2408,21 +2415,28 @@ pub fn run() {
                     const DWMWA_BORDER_COLOR: u32 = 34;
                     const DWMWA_COLOR_NONE: u32 = 0xFFFFFFFE;
                     const DWM_BB_ENABLE: u32 = 0x00000001;
+                    const DWM_BB_BLURREGION: u32 = 0x00000002;
 
                     if let Ok(hwnd) = window.hwnd() {
                         let hwnd = hwnd.0 as *mut c_void;
                         unsafe {
                             // Enable DWM transparent compositing (replaces what
-                            // tao did with `transparent: true`). An empty blur
-                            // region + fEnable=TRUE creates a fully transparent
-                            // compositing surface.
+                            // tao did with `transparent: true`). We must replicate
+                            // tao's exact approach: create an empty GDI region
+                            // (0,0,-1,-1) and pass it with DWM_BB_BLURREGION flag.
+                            // Using null region with only DWM_BB_ENABLE causes DWM
+                            // to apply default blur, producing grey edge artifacts.
+                            let hrgn = CreateRectRgn(0, 0, -1, -1);
                             let bb = DWM_BLURBEHIND {
-                                dw_flags: DWM_BB_ENABLE,
+                                dw_flags: DWM_BB_ENABLE | DWM_BB_BLURREGION,
                                 f_enable: 1,
-                                h_rgn_blur: std::ptr::null_mut(),
+                                h_rgn_blur: hrgn,
                                 f_transition_on_maximized: 0,
                             };
                             DwmEnableBlurBehindWindow(hwnd, &bb);
+                            if !hrgn.is_null() {
+                                DeleteObject(hrgn);
+                            }
 
                             // WS_POPUP removes DWM caption frame.
                             // Remove WS_CLIPCHILDREN — it prevents the WebView2
