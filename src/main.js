@@ -223,7 +223,16 @@ function updateStyleIndicator() {
 async function init() {
   compactMode = localStorage.getItem('dimmy-compact') === 'true';
 
-  // Check if first launch — show onboarding before anything else
+  // Load locale — from config language if available, else system language
+  try {
+    const config = await invoke('get_config');
+    const locale = detectLocale(config.language);
+    await setLocale(locale);
+  } catch (_) {
+    await setLocale(detectLocale());
+  }
+
+  // Check if first launch — show onboarding (locale already loaded above)
   try {
     const needsOb = await invoke('needs_onboarding');
     if (needsOb) {
@@ -231,15 +240,6 @@ async function init() {
       return; // onboarding calls init() again when done
     }
   } catch (_) {}
-
-  // Load locale from config language
-  try {
-    const config = await invoke('get_config');
-    const locale = detectLocale(config.language);
-    await setLocale(locale);
-  } catch (_) {
-    await setLocale('en');
-  }
 
   try {
     const name = await invoke('get_audio_device');
