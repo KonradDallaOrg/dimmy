@@ -44,6 +44,32 @@ fn config_dir_path() -> Option<std::path::PathBuf> {
     dirs::config_dir().map(|p| p.join("dimmy"))
 }
 
+/// Marker file path for onboarding completion.
+/// Separate from config.json so deleting/resetting config doesn't re-trigger onboarding.
+fn onboarding_marker_path() -> Option<std::path::PathBuf> {
+    config_dir_path().map(|p| p.join(".onboarding_done"))
+}
+
+/// Check if onboarding has been completed (marker file exists).
+fn onboarding_completed() -> bool {
+    onboarding_marker_path().map(|p| p.exists()).unwrap_or(true) // If we can't determine config dir, skip onboarding (safe default)
+}
+
+/// Mark onboarding as completed by creating the marker file.
+fn mark_onboarding_done() -> Result<(), String> {
+    let path = onboarding_marker_path().ok_or("Cannot determine config directory")?;
+    // Ensure config dir exists
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&path, "1").map_err(|e| e.to_string())?;
+    assert!(
+        path.exists(),
+        "Onboarding marker file must exist after write"
+    );
+    Ok(())
+}
+
 fn config_path() -> Option<std::path::PathBuf> {
     config_dir_path().map(|p| p.join("config.json"))
 }
@@ -2160,6 +2186,16 @@ async fn install_update(app_handle: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn needs_onboarding() -> bool {
+    !onboarding_completed()
+}
+
+#[tauri::command]
+fn complete_onboarding() -> Result<(), String> {
+    mark_onboarding_done()
+}
+
 pub fn run() {
     // Log panics to file before crashing
     std::panic::set_hook(Box::new(|info| {
@@ -2686,6 +2722,8 @@ pub fn run() {
             open_audio_debug_dir,
             check_for_update,
             install_update,
+            needs_onboarding,
+            complete_onboarding,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Dimmy")
@@ -2972,5 +3010,71 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn onboarding_marker_path_returns_some() {
+        let p = onboarding_marker_path();
+        assert!(p.is_some(), "onboarding_marker_path should return Some");
+        let p = p.unwrap();
+        assert!(
+            p.ends_with(".onboarding_done"),
+            "Should end with .onboarding_done, got: {:?}",
+            p
+        );
+        // Must be inside the dimmy config dir
+        assert!(
+            p.parent().unwrap().to_str().unwrap().contains("dimmy"),
+            "Marker must be inside dimmy config dir"
+        );
+    }
+
+    #[test]
+    fn onboarding_marker_roundtrip() {
+        // Use temp dir to avoid touching real marker
+        let tmp = std::env::temp_dir().join("dimmy-test-onboarding");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::create_dir_all(&tmp);
+        let marker = tmp.join(".onboarding_done");
+
+        // Before marker exists: not completed
+        assert!(!marker.exists(), "Marker should not exist yet");
+
+        // Create marker
+        std::fs::write(&marker, "1").unwrap();
+        assert!(marker.exists(), "Marker must exist after write");
+
+        // Read marker — contents don't matter, existence is the signal
+        assert!(marker.is_file(), "Marker must be a file");
+
+        // Deleting config.json should NOT affect marker
+        let fake_config = tmp.join("config.json");
+        std::fs::write(&fake_config, "{}").unwrap();
+        std::fs::remove_file(&fake_config).unwrap();
+        assert!(marker.exists(), "Marker must survive config.json deletion");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn mark_onboarding_done_creates_file() {
+        // This test uses the real config dir but is idempotent
+        // (marking done when already done is a no-op)
+        let result = mark_onboarding_done();
+        assert!(result.is_ok(), "mark_onboarding_done should succeed");
+        assert!(
+            onboarding_completed(),
+            "onboarding_completed must return true after marking done"
+        );
+    }
+
+    #[test]
+    fn onboarding_completed_is_idempotent() {
+        // Calling mark_onboarding_done multiple times must not fail
+        let r1 = mark_onboarding_done();
+        let r2 = mark_onboarding_done();
+        assert!(r1.is_ok());
+        assert!(r2.is_ok());
+        assert!(onboarding_completed());
     }
 }

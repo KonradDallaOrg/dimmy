@@ -1,5 +1,6 @@
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
+import { t, setLocale, detectLocale, applyTranslations } from './i18n.js';
 
 // Container has 2px margin on each side for clean anti-aliased rounded corners
 const MARGIN = 4; // 2px margin * 2 sides
@@ -9,6 +10,8 @@ const PILL_H = 32 + MARGIN;
 const REC_H = 64 + MARGIN;
 const SETTINGS_W = 480 + MARGIN;
 const SETTINGS_H = 530 + MARGIN;
+const ONBOARDING_W = 348 + MARGIN;
+const ONBOARDING_H = 480 + MARGIN;
 const BAR_COUNT = 39;
 const BAR_W = 7;
 const BAR_GAP = 2;
@@ -219,12 +222,31 @@ function updateStyleIndicator() {
 // ========================
 async function init() {
   compactMode = localStorage.getItem('dimmy-compact') === 'true';
+
+  // Check if first launch — show onboarding before anything else
+  try {
+    const needsOb = await invoke('needs_onboarding');
+    if (needsOb) {
+      await showOnboarding();
+      return; // onboarding calls init() again when done
+    }
+  } catch (_) {}
+
+  // Load locale from config language
+  try {
+    const config = await invoke('get_config');
+    const locale = detectLocale(config.language);
+    await setLocale(locale);
+  } catch (_) {
+    await setLocale('en');
+  }
+
   try {
     const name = await invoke('get_audio_device');
     deviceName.textContent = name;
     deviceName.title = name;
   } catch (_) {
-    deviceName.textContent = 'No mic';
+    deviceName.textContent = t('pill.no_mic');
   }
   await loadLlmState();
   switchView('micro');
@@ -337,23 +359,23 @@ listen('chunk-status', (event) => {
     showStatus(`#${index}`);
   } else if (status === 'error') {
     updateChunkDot(index, 'error');
-    showStatus('err');
+    showStatus(t('pill.err'));
   } else if (status === 'final') {
     addChunkDot(0, 'final');
-    showStatus('final');
+    showStatus(t('pill.final'));
   }
 });
 
 listen('transcription-final', (event) => {
   transcriptText.textContent = event.payload.text;
   transcriptText.scrollLeft = transcriptText.scrollWidth;
-  showStatus('done');
+  showStatus(t('pill.done'));
 });
 
 listen('final-chunk-progress', (event) => {
   const { current, total } = event.payload;
   if (total > 1) {
-    transcriptText.textContent = `Processing ${current}/${total}...`;
+    transcriptText.textContent = t('pill.processing', { current, total });
     transcriptText.scrollLeft = transcriptText.scrollWidth;
   }
 });
@@ -365,14 +387,14 @@ listen('llm-status', (event) => {
   const { status, error } = event.payload;
   if (status === 'processing') {
     dot.className = 'llm-processing';
-    showStatus('enhancing');
+    showStatus(t('pill.enhancing'));
   } else if (status === 'done') {
     dot.className = '';
     updateStyleIndicator();
   } else if (status === 'error') {
     console.error('LLM error:', error);
     // Brief error indication, then back to normal
-    showStatus('llm err');
+    showStatus(t('pill.llm_err'));
     setTimeout(() => { dot.className = ''; updateStyleIndicator(); }, 2000);
   }
 });
@@ -424,12 +446,13 @@ async function startRecording() {
   dot.className = 'recording';
   container.classList.add('recording-active');
   showTimer();
-  if (!compactMode) showStatus('rec');
+  if (!compactMode) showStatus(t('pill.rec'));
 
   chunkTexts = [];
   energyHistory = [];
   peakAmplitude = 0.0001;
   transcriptText.textContent = '';
+  transcriptText.setAttribute('data-placeholder', t('pill.listening'));
   chunkDots.innerHTML = '';
 
   if (compactMode) {
@@ -470,7 +493,7 @@ async function stopRecording() {
   dot.className = 'transcribing';
   container.classList.remove('recording-active');
   waveformInline.classList.add('hide');
-  showStatus('transcribing');
+  showStatus(t('pill.transcribing'));
 
   try {
     let text = await invoke('stop_recording');
@@ -481,7 +504,7 @@ async function stopRecording() {
     // LLM post-processing if enabled (style or translate active)
     if (llmEnabled) {
       dot.className = 'llm-processing';
-      showStatus('enhancing');
+      showStatus(t('pill.enhancing'));
       try {
         text = await invoke('process_with_llm', { text });
       } catch (llmErr) {
@@ -494,7 +517,7 @@ async function stopRecording() {
 
     dot.className = '';
     updateStyleIndicator();
-    showStatus('pasting');
+    showStatus(t('pill.pasting'));
 
     try { await invoke('paste_text', { text }); } catch (_) {}
 
@@ -504,7 +527,7 @@ async function stopRecording() {
       try { await invoke('update_stats', { words: wordCount, speakingSecs }); } catch (_) {}
     }
 
-    showStatus('done');
+    showStatus(t('pill.done'));
     setTimeout(() => {
       switchView('pill');
       hideTimer();
@@ -708,7 +731,7 @@ async function openSettings() {
     deviceSelect.innerHTML = '';
     const defaultOpt = document.createElement('option');
     defaultOpt.value = '';
-    defaultOpt.textContent = 'System Default';
+    defaultOpt.textContent = t('audio.system_default');
     deviceSelect.appendChild(defaultOpt);
     if (config.devices) {
       for (const dev of config.devices) {
@@ -724,8 +747,8 @@ async function openSettings() {
     languageSelect.value = config.language || '';
 
     // Shortcut key
-    shortcutLabel.textContent = config.shortcut_label || 'Press to set';
-    shortcutRecordBtn.textContent = 'Change';
+    shortcutLabel.textContent = config.shortcut_label || t('activation.press_to_set');
+    shortcutRecordBtn.textContent = t('activation.change');
 
     // Shortcut mode
     shortcutModeSelect.value = config.shortcut_mode || 'toggle';
@@ -824,37 +847,37 @@ async function openSettings() {
   const updateStatus = document.getElementById('update-status');
   try {
     const version = await invoke('get_version');
-    versionText.textContent = `Dimmy v${version}`;
+    versionText.textContent = t('app.version', { version });
   } catch (_) {}
 
   // Async update check
-  updateStatus.textContent = 'checking...';
+  updateStatus.textContent = t('update.checking');
   updateStatus.className = 'checking';
   (async () => {
     try {
       const newVersion = await invoke('check_for_update');
       if (newVersion) {
-        updateStatus.textContent = `Update v${newVersion} available`;
+        updateStatus.textContent = t('update.available', { version: newVersion });
         updateStatus.className = 'available';
         updateStatus.onclick = async () => {
-          updateStatus.textContent = 'Installing...';
+          updateStatus.textContent = t('update.installing');
           updateStatus.className = 'installing';
           updateStatus.onclick = null;
           try {
             await invoke('install_update');
-            updateStatus.textContent = 'Restart to apply';
+            updateStatus.textContent = t('update.restart');
           } catch (e) {
-            updateStatus.textContent = `Update failed: ${e}`;
+            updateStatus.textContent = t('update.failed');
             updateStatus.className = 'error';
             console.error('install_update:', e);
           }
         };
       } else {
-        updateStatus.textContent = 'Up to date';
+        updateStatus.textContent = t('update.up_to_date');
         updateStatus.className = '';
       }
     } catch (e) {
-      updateStatus.textContent = 'Update check failed';
+      updateStatus.textContent = t('update.check_failed');
       updateStatus.className = 'error';
       console.error('Update check failed:', e);
     }
@@ -968,15 +991,15 @@ shortcutRecordBtn.addEventListener('click', async () => {
 
   // Visual feedback BEFORE IPC to avoid race condition
   shortcutRecording = true;
-  shortcutRecordBtn.textContent = 'Cancel';
-  shortcutLabel.textContent = '2 modifiers (+ optional key)...';
+  shortcutRecordBtn.textContent = t('settings.cancel');
+  shortcutLabel.textContent = t('activation.recording_hint');
 
   try {
     await invoke('start_shortcut_recording');
   } catch (err) {
     console.error('start_shortcut_recording failed:', err);
-    shortcutLabel.textContent = 'Recording failed';
-    shortcutRecordBtn.textContent = 'Change';
+    shortcutLabel.textContent = t('activation.recording_failed');
+    shortcutRecordBtn.textContent = t('activation.change');
     shortcutRecording = false;
     return;
   }
@@ -990,11 +1013,11 @@ shortcutRecordBtn.addEventListener('click', async () => {
         if (shortcutAutoCancel) { clearTimeout(shortcutAutoCancel); shortcutAutoCancel = null; }
         shortcutRecording = false;
         shortcutLabel.textContent = result.label;
-        shortcutRecordBtn.textContent = 'Change';
+        shortcutRecordBtn.textContent = t('activation.change');
       }
     } catch (err) {
       console.error('poll_shortcut_recording error:', err);
-      shortcutLabel.textContent = 'Error: ' + String(err).substring(0, 30);
+      shortcutLabel.textContent = t('error.generic', { error: String(err).substring(0, 30) });
     }
   }, 100);
 
@@ -1106,6 +1129,150 @@ saveBtn.addEventListener('click', async () => {
     closeSettings();
   } catch (err) {
     console.error('save:', err);
-    keyHint.textContent = 'Save failed: ' + err;
+    keyHint.textContent = t('error.save_failed', { error: err });
   }
 });
+
+// ========================
+// ONBOARDING (first launch only)
+// ========================
+const providerLinks = {
+  groq:     { url: 'https://console.groq.com/keys',       name: 'Groq',    placeholder: 'gsk_...',  free: true },
+  deepgram: { url: 'https://console.deepgram.com/',        name: 'Deepgram', placeholder: 'dg_...',  free: true },
+  openai:   { url: 'https://platform.openai.com/api-keys', name: 'OpenAI',  placeholder: 'sk-...',  free: false },
+  gemini:   { url: 'https://aistudio.google.com/apikey',   name: 'Gemini',  placeholder: 'AIza...', free: true },
+};
+
+async function showOnboarding() {
+  const overlay = document.getElementById('onboarding-overlay');
+  if (!overlay) return;
+
+  // Show overlay and resize window
+  overlay.classList.remove('hide');
+  container.classList.add('expanded-mode');
+  pill.classList.add('hide');
+  await setWindowSizeWH(ONBOARDING_W, ONBOARDING_H);
+
+  const track = overlay.querySelector('.ob-track');
+  const segments = overlay.querySelectorAll('.ob-seg');
+  const counter = overlay.querySelector('.ob-counter');
+  const backBtn = overlay.querySelector('.ob-back');
+  const nextBtn = overlay.querySelector('.ob-next');
+  const providerSelect = overlay.querySelector('#ob-provider');
+  const apiKeyInput = overlay.querySelector('#ob-api-key');
+  const providerHint = overlay.querySelector('#ob-provider-hint');
+
+  let current = 0;
+  const total = segments.length;
+
+  function goTo(i) {
+    current = i;
+    track.style.transform = `translateX(-${current * 100}%)`;
+    segments.forEach((seg, idx) => {
+      seg.classList.remove('active', 'done');
+      if (idx < current) seg.classList.add('done');
+      if (idx === current) seg.classList.add('active');
+    });
+    counter.textContent = `${current + 1} / ${total}`;
+    backBtn.classList.toggle('ob-invisible', current === 0);
+    if (current === total - 1) nextBtn.textContent = t('onboarding.start');
+    else if (current === total - 2) nextBtn.textContent = t('onboarding.done');
+    else nextBtn.textContent = t('onboarding.continue');
+  }
+
+  function updateProviderHint() {
+    const info = providerLinks[providerSelect.value];
+    if (!info) return;
+    const freeText = info.free ? ' ' + t('onboarding.api_key_hint_free') : '';
+    providerHint.innerHTML =
+      `${t('onboarding.api_key_hint_prefix')} <a href="${info.url}" target="_blank">${t('onboarding.api_key_hint_link', { provider: info.name })}</a>${freeText}`;
+    apiKeyInput.placeholder = info.placeholder;
+  }
+
+  providerSelect.addEventListener('change', updateProviderHint);
+  updateProviderHint();
+
+  // Option card selection
+  overlay.querySelectorAll('.ob-option-card').forEach(card => {
+    card.addEventListener('click', () => {
+      card.parentElement.querySelectorAll('.ob-option-card').forEach(c => c.classList.remove('selected'));
+      card.classList.add('selected');
+    });
+  });
+
+  // Style chip selection
+  overlay.querySelectorAll('.ob-style-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      chip.parentElement.querySelectorAll('.ob-style-chip').forEach(c => c.classList.remove('selected'));
+      chip.classList.add('selected');
+    });
+  });
+
+  nextBtn.addEventListener('click', async () => {
+    if (current < total - 1) {
+      goTo(current + 1);
+    } else {
+      await finishOnboarding();
+    }
+  });
+
+  backBtn.addEventListener('click', () => {
+    if (current > 0) goTo(current - 1);
+  });
+
+  async function finishOnboarding() {
+    // Gather values
+    const lang = overlay.querySelector('#ob-language').value;
+    const provider = providerSelect.value;
+    const apiKey = apiKeyInput.value.trim();
+    const mode = overlay.querySelector('.ob-option-card.selected')?.dataset.mode || 'hold';
+    const styleChip = overlay.querySelector('.ob-style-chip.selected');
+    const style = styleChip?.dataset.style || 'off';
+    const translateTo = overlay.querySelector('#ob-translate').value;
+
+    // Map provider to URL + model
+    const providerMap = {
+      groq:     { url: 'https://api.groq.com/openai/v1/audio/transcriptions', model: 'whisper-large-v3-turbo' },
+      deepgram: { url: 'https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&punctuate=true&paragraphs=true', model: 'nova-3' },
+      openai:   { url: 'https://api.openai.com/v1/audio/transcriptions', model: 'whisper-1' },
+      gemini:   { url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent', model: 'gemini-2.5-flash' },
+    };
+    const prov = providerMap[provider] || providerMap.groq;
+
+    try {
+      await invoke('set_config', {
+        apiKey: apiKey || null,
+        apiUrl: prov.url,
+        apiModel: prov.model,
+        language: lang,
+        shortcutMode: mode,
+        shortcut: null,
+        selectedDevice: null,
+        prompt: '',
+        llmEnabled: style !== 'off' || translateTo !== 'none' ? true : null,
+        llmStyle: style !== 'off' ? style : null,
+        llmTone: null,
+        llmCustomPrompt: null,
+        llmTranslateTo: translateTo !== 'none' ? translateTo : null,
+        llmApiUrl: null,
+        llmApiModel: null,
+        llmUseSameKey: true,
+        llmApiKey: null,
+        llmLogEnabled: null,
+        preprocessingEnabled: true,
+        chunkStreamingEnabled: true,
+        audioDebugEnabled: null,
+      });
+      await invoke('complete_onboarding');
+    } catch (e) {
+      console.error('onboarding save:', e);
+    }
+
+    // Hide onboarding, show app
+    overlay.classList.add('hide');
+    pill.classList.remove('hide');
+    init(); // Re-init with saved config
+  }
+
+  goTo(0);
+}
