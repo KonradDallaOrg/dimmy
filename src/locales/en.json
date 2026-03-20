@@ -155,5 +155,9 @@
   "onboarding.start": "Start!",
 
   "error.save_failed": "Save failed: {{error}}",
-  "error.generic": "Error: {{error}}"
+  "error.generic": "Error: {{error}}",
+
+  "key_hint.saved": "({{provider}} key saved)",
+  "key_hint.saved_placeholder": "({{provider}} key saved) enter new to change",
+  "key_hint.llm_placeholder": "Separate LLM API key..."
 }

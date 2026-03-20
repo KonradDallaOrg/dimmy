@@ -557,15 +557,15 @@ async function stopRecording() {
 // STATS FORMATTING
 // ========================
 function formatDuration(totalSecs) {
-  if (totalSecs < 60) return Math.round(totalSecs) + 's';
-  if (totalSecs < 3600) return (totalSecs / 60).toFixed(1) + ' min';
-  return (totalSecs / 3600).toFixed(1) + ' hrs';
+  if (totalSecs < 60) return Math.round(totalSecs) + t('stats.seconds');
+  if (totalSecs < 3600) return (totalSecs / 60).toFixed(1) + ' ' + t('stats.minutes');
+  return (totalSecs / 3600).toFixed(1) + ' ' + t('stats.hours');
 }
 
 function formatTimeSaved(mins) {
-  if (mins < 1) return Math.round(mins * 60) + 's';
-  if (mins < 60) return mins.toFixed(1) + ' min';
-  return (mins / 60).toFixed(1) + ' hrs';
+  if (mins < 1) return Math.round(mins * 60) + t('stats.seconds');
+  if (mins < 60) return mins.toFixed(1) + ' ' + t('stats.minutes');
+  return (mins / 60).toFixed(1) + ' ' + t('stats.hours');
 }
 
 // ========================
@@ -691,8 +691,8 @@ function updateApiKeyHint(url) {
   const hasKey = providerKeyFlags['has_' + provider + '_key'];
   const name = providerLabel(provider);
   apiKeyInput.value = '';
-  apiKeyInput.placeholder = hasKey ? `(${name} key saved) enter new to change` : 'sk-... or gsk_...';
-  keyHint.textContent = hasKey ? `(${name} key saved)` : '';
+  apiKeyInput.placeholder = hasKey ? t('key_hint.saved_placeholder', { provider: name }) : 'sk-... or gsk_...';
+  keyHint.textContent = hasKey ? t('key_hint.saved', { provider: name }) : '';
 }
 
 function updateLlmKeyHint(url) {
@@ -700,9 +700,9 @@ function updateLlmKeyHint(url) {
   const hasKey = providerKeyFlags['has_llm_' + provider + '_key'];
   const name = providerLabel(provider);
   llmApiKeyInput.value = '';
-  llmApiKeyInput.placeholder = hasKey ? `(${name} key saved) enter new to change` : 'Separate LLM API key...';
+  llmApiKeyInput.placeholder = hasKey ? t('key_hint.saved_placeholder', { provider: name }) : t('key_hint.llm_placeholder');
   if (llmKeyHint) {
-    llmKeyHint.textContent = hasKey ? `(${name} key saved)` : '';
+    llmKeyHint.textContent = hasKey ? t('key_hint.saved', { provider: name }) : '';
   }
 }
 
@@ -982,7 +982,7 @@ shortcutRecordBtn.addEventListener('click', async () => {
   if (shortcutRecording) {
     // Cancel
     await invoke('cancel_shortcut_recording');
-    shortcutRecordBtn.textContent = 'Change';
+    shortcutRecordBtn.textContent = t('activation.change');
     shortcutRecording = false;
     if (shortcutPollInterval) { clearInterval(shortcutPollInterval); shortcutPollInterval = null; }
     if (shortcutAutoCancel) { clearTimeout(shortcutAutoCancel); shortcutAutoCancel = null; }

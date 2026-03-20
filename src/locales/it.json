@@ -155,5 +155,9 @@
   "onboarding.start": "Inizia!",
 
   "error.save_failed": "Salvataggio fallito: {{error}}",
-  "error.generic": "Errore: {{error}}"
+  "error.generic": "Errore: {{error}}",
+
+  "key_hint.saved": "(chiave {{provider}} salvata)",
+  "key_hint.saved_placeholder": "(chiave {{provider}} salvata) inserisci nuova per cambiare",
+  "key_hint.llm_placeholder": "Chiave API LLM separata..."
 }
