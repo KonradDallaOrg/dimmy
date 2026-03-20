@@ -9,6 +9,8 @@ dist/
 *.AppImage
 *.deb
 CLAUDE.md
+NEGATIVE-SPACE-PLAN.md
+docs/superpowers/
 .cargo/
 .env
 tests/test_audio.wav
