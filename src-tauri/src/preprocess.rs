@@ -349,6 +349,39 @@ impl AudioPreprocessor {
         speech_audio
     }
 
+    /// Flush any residual samples remaining in the VAD frame buffer.
+    /// When recording stops mid-speech, up to 479 samples (~10ms at 48kHz) may
+    /// be sitting in `frame_buf` waiting to complete a 480-sample frame. If we're
+    /// currently in speech mode, these samples represent the tail end of the user's
+    /// utterance and must not be silently discarded.
+    ///
+    /// Returns the residual samples (with AGC applied) if in speech, empty otherwise.
+    pub fn flush(&mut self) -> Vec<f32> {
+        if !self.in_speech || self.original_buf.is_empty() {
+            self.frame_buf.clear();
+            self.original_buf.clear();
+            return Vec::new();
+        }
+
+        // Emit the residual original samples (already highpass-filtered)
+        let mut tail = std::mem::take(&mut self.original_buf);
+        self.frame_buf.clear();
+
+        // Apply AGC to maintain consistent volume with the rest of the output
+        self.agc.process(&mut tail);
+
+        // Clamp after AGC (same safety net as process())
+        for s in tail.iter_mut() {
+            *s = if s.is_finite() {
+                s.clamp(-1.0, 1.0)
+            } else {
+                0.0
+            };
+        }
+
+        tail
+    }
+
     /// Reset state between recordings
     #[allow(dead_code)]
     pub fn reset(&mut self) {
@@ -387,7 +420,12 @@ pub fn process_buffer(samples: &[f32], sample_rate: u32) -> Vec<f32> {
         sample_rate
     );
     let mut proc = AudioPreprocessor::new(sample_rate);
-    proc.process(samples)
+    let mut output = proc.process(samples);
+    // Flush residual samples from the VAD frame buffer — up to 479 samples (~10ms)
+    // that were buffered waiting for a complete 480-sample frame. Without this,
+    // the very tail of speech is silently discarded.
+    output.extend(proc.flush());
+    output
 }
 
 /// Downsample audio to 16kHz for Whisper (which internally resamples to 16kHz anyway).
@@ -945,6 +983,76 @@ mod tests {
                 .all(|s| s.is_finite() && *s >= -1.0 && *s <= 1.0),
             "Filter output should remain finite and clamped"
         );
+    }
+
+    #[test]
+    fn flush_emits_residual_samples_during_speech() {
+        // When recording stops mid-speech, up to 479 samples may be in frame_buf.
+        // flush() must emit them to avoid losing the tail of the utterance.
+        let mut proc = AudioPreprocessor::new(48000);
+
+        // Feed speech to enter speech mode (need enough frames for onset confirmation)
+        let speech = generate_speech_like(48000, 1.0, 0.3);
+        let out = proc.process(&speech);
+        assert!(!out.is_empty(), "Should detect speech");
+        assert!(proc.in_speech, "Should be in speech mode");
+
+        // Now feed a partial frame (less than 480 samples) — simulates recording stop
+        let partial: Vec<f32> = (0..200)
+            .map(|i| (2.0 * std::f32::consts::PI * 200.0 * i as f32 / 48000.0).sin() * 0.3)
+            .collect();
+        let _ = proc.process(&partial);
+
+        // frame_buf should have residual samples (partial frame didn't complete)
+        assert!(
+            !proc.original_buf.is_empty(),
+            "Should have residual samples in buffer"
+        );
+
+        // flush() should emit them
+        let flushed = proc.flush();
+        assert!(
+            !flushed.is_empty(),
+            "flush() should emit residual samples during speech"
+        );
+        assert!(
+            flushed
+                .iter()
+                .all(|s| s.is_finite() && *s >= -1.0 && *s <= 1.0),
+            "Flushed samples must be finite and clamped"
+        );
+    }
+
+    #[test]
+    fn flush_emits_nothing_when_not_in_speech() {
+        let mut proc = AudioPreprocessor::new(48000);
+        // Feed silence — should NOT enter speech mode
+        let silence = vec![0.0f32; 480 * 5];
+        let _ = proc.process(&silence);
+        assert!(!proc.in_speech);
+        let flushed = proc.flush();
+        assert!(
+            flushed.is_empty(),
+            "flush() should emit nothing outside speech"
+        );
+    }
+
+    #[test]
+    fn process_buffer_includes_residual_tail() {
+        // process_buffer() should include flushed residual samples.
+        // Feed speech that doesn't end on a 480-sample frame boundary.
+        let sr = 48000u32;
+        let speech = generate_speech_like(sr, 2.0, 0.3);
+        // Add a partial frame (100 extra samples, not aligned to 480)
+        let extra: Vec<f32> = (0..100)
+            .map(|i| (2.0 * std::f32::consts::PI * 200.0 * i as f32 / sr as f32).sin() * 0.3)
+            .collect();
+        let mut full = speech;
+        full.extend_from_slice(&extra);
+
+        let out = process_buffer(&full, sr);
+        // Output should be non-empty and include the tail
+        assert!(!out.is_empty(), "process_buffer should produce output");
     }
 
     #[test]

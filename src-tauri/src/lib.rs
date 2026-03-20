@@ -21,6 +21,11 @@ const DEFAULT_LLM_URL: &str = "https://api.groq.com/openai/v1/chat/completions";
 const DEFAULT_LLM_MODEL: &str = "llama-3.3-70b-versatile";
 const MAX_RECORDING_SECS: usize = 30 * 60; // 30 minutes hard cap
 const MAX_LOG_BYTES: u64 = 1_048_576; // 1 MB log rotation threshold
+/// Tail buffer: keep recording for this long after the user releases the hotkey.
+/// Catches trailing audio when the user's finger lifts slightly before finishing
+/// the last syllable. Same approach used by Discord (~200ms), TeamSpeak, Mumble.
+/// 300ms is generous enough for dictation without feeling laggy.
+const STOP_TAIL_MS: u64 = 300;
 
 /// Default shortcut: Cmd+Opt+D on macOS (2 modifiers alone triggers too easily),
 /// Win+Alt on Windows/Linux (safe because Win+Alt isn't commonly used).
@@ -843,19 +848,28 @@ async fn stop_recording(
 ) -> Result<String, String> {
     state.streaming_active.store(false, Ordering::SeqCst);
 
-    let (buffer, api_key, api_url, api_model, language, prompt) = {
+    // Mark as not recording (release lock immediately so UI can update)
+    {
         let mut recording = state.recording.lock().map_err(|e| e.to_string())?;
         *recording = false;
+    }
 
-        state
-            .audio_tx
-            .lock()
-            .map_err(|e| e.to_string())?
-            .send(AudioCommand::Stop)
-            .map_err(|e| e.to_string())?;
+    // Tail buffer: keep the cpal stream alive for STOP_TAIL_MS so trailing
+    // audio (last syllable as user lifts finger) is still captured into the buffer.
+    tokio::time::sleep(std::time::Duration::from_millis(STOP_TAIL_MS)).await;
 
-        std::thread::sleep(std::time::Duration::from_millis(50));
+    // Now stop the audio stream
+    state
+        .audio_tx
+        .lock()
+        .map_err(|e| e.to_string())?
+        .send(AudioCommand::Stop)
+        .map_err(|e| e.to_string())?;
 
+    // Small delay for cpal to flush any in-flight callback
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let (buffer, api_key, api_url, api_model, language, prompt) = {
         let buffer = {
             let mut buf = state.audio_buffer.lock().map_err(|e| e.to_string())?;
             let data = buf.clone();
