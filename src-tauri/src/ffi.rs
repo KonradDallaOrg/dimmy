@@ -47,10 +47,22 @@ fn write_to_buf(s: &str, buf: *mut c_char, buf_len: c_int) -> c_int {
     let bytes = s.as_bytes();
     let max = (buf_len - 1) as usize; // leave room for null terminator
     let copy_len = bytes.len().min(max);
+
+    // Negative space: copy_len must fit within buffer (excluding null terminator)
+    assert!(
+        copy_len < buf_len as usize,
+        "copy_len {} must be < buf_len {}",
+        copy_len,
+        buf_len
+    );
+
     unsafe {
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf as *mut u8, copy_len);
         *buf.add(copy_len) = 0; // null terminator
     }
+
+    // Postcondition: returned length matches what we wrote
+    assert!(copy_len as c_int >= 0, "copy_len must be non-negative");
     copy_len as c_int
 }
 
@@ -228,6 +240,12 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
 /// Transcript is written to `out_buf` (null-terminated).
 #[no_mangle]
 pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    // Preconditions: caller must provide a valid buffer
+    if out_buf.is_null() || buf_len <= 0 {
+        log("ERROR: dimmy_stop_recording called with null buffer or invalid length");
+        return -1;
+    }
+
     let st = state();
 
     // Stop audio capture
@@ -558,11 +576,18 @@ pub extern "C" fn dimmy_get_amplitude() -> c_float {
         return 0.0;
     }
     // Peak amplitude of last ~800 samples (~50ms at 16kHz)
+    // Use fold that skips NaN/Inf samples defensively
     let start = buffer.len().saturating_sub(800);
-    let peak = buffer[start..]
-        .iter()
-        .fold(0.0f32, |max, &s| max.max(s.abs()));
-    peak.min(1.0)
+    let peak = buffer[start..].iter().fold(0.0f32, |max, &s| {
+        let abs = s.abs();
+        if abs.is_finite() {
+            max.max(abs)
+        } else {
+            max
+        }
+    });
+    // clamp guarantees [0.0, 1.0]; NaN filtered in fold above
+    peak.clamp(0.0, 1.0)
 }
 
 /// Get device list as JSON array. Caller must NOT free the returned pointer.
@@ -577,8 +602,16 @@ pub extern "C" fn dimmy_list_devices_json(out_buf: *mut c_char, buf_len: c_int) 
 // ── LLM ─────────────────────────────────────────────────────────────
 
 /// Cycle LLM style. direction: +1 = next, -1 = previous.
+/// Invalid direction is silently ignored (logged).
 #[no_mangle]
 pub extern "C" fn dimmy_cycle_llm_style(direction: c_int) {
+    if direction != 1 && direction != -1 {
+        log(&format!(
+            "ERROR: dimmy_cycle_llm_style called with invalid direction: {}",
+            direction
+        ));
+        return;
+    }
     let st = state();
     if let Ok(mut style) = st.llm_style.lock() {
         let styles = crate::llm::LlmStyle::ALL;
@@ -603,8 +636,16 @@ pub extern "C" fn dimmy_cycle_llm_style(direction: c_int) {
 }
 
 /// Cycle LLM tone. direction: +1 = next, -1 = previous.
+/// Invalid direction is silently ignored (logged).
 #[no_mangle]
 pub extern "C" fn dimmy_cycle_llm_tone(direction: c_int) {
+    if direction != 1 && direction != -1 {
+        log(&format!(
+            "ERROR: dimmy_cycle_llm_tone called with invalid direction: {}",
+            direction
+        ));
+        return;
+    }
     let st = state();
     if let Ok(mut tone) = st.llm_tone.lock() {
         let tones = crate::llm::LlmTone::ALL;
@@ -625,9 +666,25 @@ pub extern "C" fn dimmy_cycle_llm_tone(direction: c_int) {
 
 // ── Stats ───────────────────────────────────────────────────────────
 
-/// Update cumulative stats.
+/// Update cumulative stats. Returns 0=OK, -1=invalid input.
 #[no_mangle]
-pub extern "C" fn dimmy_update_stats(words: c_int, speaking_secs: f64) {
+pub extern "C" fn dimmy_update_stats(words: c_int, speaking_secs: f64) -> c_int {
+    // Preconditions: stats must be non-negative and finite
+    if words < 0 {
+        log(&format!(
+            "ERROR: dimmy_update_stats called with negative words: {}",
+            words
+        ));
+        return -1;
+    }
+    if speaking_secs < 0.0 || !speaking_secs.is_finite() {
+        log(&format!(
+            "ERROR: dimmy_update_stats called with invalid speaking_secs: {}",
+            speaking_secs
+        ));
+        return -1;
+    }
+
     let st = state();
     if let Ok(mut w) = st.stats_total_words.lock() {
         *w += words as u64;
@@ -639,6 +696,7 @@ pub extern "C" fn dimmy_update_stats(words: c_int, speaking_secs: f64) {
     if let Ok(cfg) = crate::snapshot_config(st) {
         save_config_file(&cfg);
     }
+    0
 }
 
 // ── Utility ─────────────────────────────────────────────────────────
@@ -655,4 +713,575 @@ pub extern "C" fn dimmy_has_api_key() -> c_int {
 pub extern "C" fn dimmy_is_recording() -> c_int {
     let st = state();
     st.recording.lock().map(|r| *r as c_int).unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::c_char;
+
+    // ── write_to_buf tests ──────────────────────────────────────────
+
+    #[test]
+    fn write_to_buf_normal_string() {
+        let mut buf = vec![0u8; 64];
+        let ptr = buf.as_mut_ptr() as *mut c_char;
+        let result = write_to_buf("hello", ptr, 64);
+        assert_eq!(result, 5, "should return number of bytes written");
+        let written = unsafe { CStr::from_ptr(ptr).to_str().unwrap() };
+        assert_eq!(written, "hello");
+    }
+
+    #[test]
+    fn write_to_buf_null_pointer_returns_neg1() {
+        let result = write_to_buf("hello", std::ptr::null_mut(), 64);
+        assert_eq!(result, -1, "null buffer must return -1");
+    }
+
+    #[test]
+    fn write_to_buf_zero_length_returns_neg1() {
+        let mut buf = vec![0u8; 64];
+        let ptr = buf.as_mut_ptr() as *mut c_char;
+        let result = write_to_buf("hello", ptr, 0);
+        assert_eq!(result, -1, "zero buf_len must return -1");
+    }
+
+    #[test]
+    fn write_to_buf_negative_length_returns_neg1() {
+        let mut buf = vec![0u8; 64];
+        let ptr = buf.as_mut_ptr() as *mut c_char;
+        let result = write_to_buf("hello", ptr, -5);
+        assert_eq!(result, -1, "negative buf_len must return -1");
+    }
+
+    #[test]
+    fn write_to_buf_truncates_long_string() {
+        let mut buf = vec![0u8; 4]; // room for 3 chars + null
+        let ptr = buf.as_mut_ptr() as *mut c_char;
+        let result = write_to_buf("hello", ptr, 4);
+        assert_eq!(result, 3, "should truncate to buf_len - 1");
+        let written = unsafe { CStr::from_ptr(ptr).to_str().unwrap() };
+        assert_eq!(written, "hel");
+    }
+
+    #[test]
+    fn write_to_buf_empty_string() {
+        let mut buf = vec![0xFFu8; 8];
+        let ptr = buf.as_mut_ptr() as *mut c_char;
+        let result = write_to_buf("", ptr, 8);
+        assert_eq!(result, 0, "empty string writes 0 bytes");
+        assert_eq!(buf[0], 0, "null terminator at position 0");
+    }
+
+    #[test]
+    fn write_to_buf_exact_fit() {
+        // "ab" needs 3 bytes (2 chars + null)
+        let mut buf = vec![0u8; 3];
+        let ptr = buf.as_mut_ptr() as *mut c_char;
+        let result = write_to_buf("ab", ptr, 3);
+        assert_eq!(result, 2);
+        let written = unsafe { CStr::from_ptr(ptr).to_str().unwrap() };
+        assert_eq!(written, "ab");
+    }
+
+    #[test]
+    fn write_to_buf_one_byte_buffer_only_null() {
+        let mut buf = vec![0xFFu8; 1];
+        let ptr = buf.as_mut_ptr() as *mut c_char;
+        let result = write_to_buf("hello", ptr, 1);
+        assert_eq!(result, 0, "1-byte buffer can only hold null terminator");
+        assert_eq!(buf[0], 0);
+    }
+
+    // ── emit_event tests ────────────────────────────────────────────
+
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static TEST_CB_CALLED: AtomicBool = AtomicBool::new(false);
+
+    // Use UnsafeCell for test callback data to avoid static_mut_refs warning
+    use std::cell::UnsafeCell;
+    struct TestBuf(UnsafeCell<[u8; 512]>);
+    unsafe impl Sync for TestBuf {}
+    static TEST_CB_DATA: TestBuf = TestBuf(UnsafeCell::new([0; 512]));
+
+    extern "C" fn test_callback(ptr: *const c_char) {
+        TEST_CB_CALLED.store(true, Ordering::SeqCst);
+        if !ptr.is_null() {
+            let s = unsafe { CStr::from_ptr(ptr) };
+            let bytes = s.to_bytes();
+            unsafe {
+                let buf = &mut *TEST_CB_DATA.0.get();
+                let len = bytes.len().min(511);
+                buf[..len].copy_from_slice(&bytes[..len]);
+                buf[len] = 0;
+            }
+        }
+    }
+
+    #[test]
+    fn emit_event_with_no_callback_does_not_panic() {
+        // Reset callback to None
+        if let Ok(mut guard) = EVENT_CALLBACK.lock() {
+            *guard = None;
+        }
+        // Should not panic
+        emit_event("test", "{}");
+    }
+
+    #[test]
+    fn emit_event_calls_registered_callback() {
+        TEST_CB_CALLED.store(false, Ordering::SeqCst);
+        unsafe {
+            *TEST_CB_DATA.0.get() = [0; 512];
+        }
+
+        if let Ok(mut guard) = EVENT_CALLBACK.lock() {
+            *guard = Some(test_callback);
+        }
+
+        emit_event("recording_started", r#"{"foo":"bar"}"#);
+
+        assert!(
+            TEST_CB_CALLED.load(Ordering::SeqCst),
+            "callback must be called"
+        );
+        let received = unsafe { CStr::from_ptr((*TEST_CB_DATA.0.get()).as_ptr() as *const c_char) };
+        let json_str = received.to_str().unwrap();
+        assert!(json_str.contains(r#""event":"recording_started""#));
+        assert!(json_str.contains(r#""payload":{"foo":"bar"}"#));
+
+        // Cleanup
+        if let Ok(mut guard) = EVENT_CALLBACK.lock() {
+            *guard = None;
+        }
+    }
+
+    // ── Test helper: minimal AppState for unit tests ────────────────
+
+    use std::sync::Once;
+
+    static INIT_TEST_STATE: Once = Once::new();
+
+    /// Initialize GLOBAL_STATE with a minimal AppState for testing.
+    /// Safe to call multiple times — OnceLock + Once ensure single init.
+    fn ensure_test_state() {
+        INIT_TEST_STATE.call_once(|| {
+            let (tx, _rx) = std::sync::mpsc::channel();
+            let test_state = AppState {
+                recording: Mutex::new(false),
+                api_key: Mutex::new(Some("test-key-123".to_string())),
+                api_url: Mutex::new(
+                    "https://api.groq.com/openai/v1/audio/transcriptions".to_string(),
+                ),
+                api_model: Mutex::new("whisper-large-v3-turbo".to_string()),
+                language: Mutex::new("en".to_string()),
+                prompt: Mutex::new(String::new()),
+                shortcut_mode: Mutex::new("toggle".to_string()),
+                shortcut: Mutex::new("ctrl+shift".to_string()),
+                selected_device: Mutex::new(None),
+                audio_sample_rate: Mutex::new(16000),
+                transcript: Mutex::new(String::new()),
+                audio_buffer: Arc::new(Mutex::new(Vec::new())),
+                audio_tx: Mutex::new(tx),
+                streaming_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                llm_enabled: Mutex::new(false),
+                llm_style: Mutex::new(crate::llm::LlmStyle::Off),
+                llm_tone: Mutex::new(crate::llm::LlmTone::None),
+                llm_custom_prompt: Mutex::new(String::new()),
+                llm_translate_to: Mutex::new(String::new()),
+                llm_api_url: Mutex::new(String::new()),
+                llm_api_model: Mutex::new(String::new()),
+                llm_use_same_key: Mutex::new(true),
+                llm_api_key: Mutex::new(None),
+                llm_log_enabled: Mutex::new(false),
+                chunk_streaming_enabled: Mutex::new(false),
+                preprocessing_enabled: Mutex::new(true),
+                audio_debug_enabled: Mutex::new(false),
+                use_keyring: Mutex::new(false),
+                key_store: crate::keystore::KeyStore::new(),
+                audio_debug_session_dir: Mutex::new(None),
+                window_anchor: Mutex::new(None),
+                stats_total_words: Mutex::new(100),
+                stats_total_speaking_secs: Mutex::new(60.0),
+            };
+            let _ = GLOBAL_STATE.set(test_state);
+        });
+    }
+
+    // ── dimmy_has_api_key tests ─────────────────────────────────────
+
+    #[test]
+    fn has_api_key_returns_1_when_key_set() {
+        ensure_test_state();
+        let result = dimmy_has_api_key();
+        assert_eq!(result, 1, "test state has api key");
+    }
+
+    // ── dimmy_is_recording tests ────────────────────────────────────
+
+    #[test]
+    fn is_recording_returns_0_when_not_recording() {
+        ensure_test_state();
+        // Ensure not recording
+        if let Ok(mut r) = state().recording.lock() {
+            *r = false;
+        }
+        assert_eq!(dimmy_is_recording(), 0);
+    }
+
+    #[test]
+    fn is_recording_returns_1_when_recording() {
+        ensure_test_state();
+        if let Ok(mut r) = state().recording.lock() {
+            *r = true;
+        }
+        let result = dimmy_is_recording();
+        // Reset
+        if let Ok(mut r) = state().recording.lock() {
+            *r = false;
+        }
+        assert_eq!(result, 1);
+    }
+
+    // ── dimmy_get_amplitude tests ───────────────────────────────────
+
+    #[test]
+    fn get_amplitude_returns_zero_for_empty_buffer() {
+        ensure_test_state();
+        if let Ok(mut b) = state().audio_buffer.lock() {
+            b.clear();
+        }
+        let amp = dimmy_get_amplitude();
+        assert_eq!(amp, 0.0);
+    }
+
+    #[test]
+    fn get_amplitude_returns_peak_value() {
+        ensure_test_state();
+        if let Ok(mut b) = state().audio_buffer.lock() {
+            b.clear();
+            // Put some samples in
+            b.extend_from_slice(&[0.1, -0.5, 0.3, 0.7, -0.2]);
+        }
+        let amp = dimmy_get_amplitude();
+        assert!((amp - 0.7).abs() < 0.001, "peak should be 0.7, got {}", amp);
+    }
+
+    #[test]
+    fn get_amplitude_clamps_to_1() {
+        ensure_test_state();
+        if let Ok(mut b) = state().audio_buffer.lock() {
+            b.clear();
+            b.extend_from_slice(&[0.5, 2.0, 0.3]); // 2.0 exceeds range
+        }
+        let amp = dimmy_get_amplitude();
+        assert!(amp <= 1.0, "amplitude must be clamped to 1.0, got {}", amp);
+    }
+
+    // ── dimmy_start_recording tests ─────────────────────────────────
+
+    #[test]
+    fn start_recording_returns_neg2_if_already_recording() {
+        ensure_test_state();
+        if let Ok(mut r) = state().recording.lock() {
+            *r = true;
+        }
+        let result = dimmy_start_recording();
+        // Reset
+        if let Ok(mut r) = state().recording.lock() {
+            *r = false;
+        }
+        assert_eq!(result, -2, "already recording should return -2");
+    }
+
+    #[test]
+    fn start_recording_returns_neg1_if_no_key() {
+        ensure_test_state();
+        // Temporarily remove key
+        let old_key = state().api_key.lock().unwrap().take();
+        if let Ok(mut r) = state().recording.lock() {
+            *r = false;
+        }
+        let result = dimmy_start_recording();
+        // Restore key
+        *state().api_key.lock().unwrap() = old_key;
+        assert_eq!(result, -1, "no API key should return -1");
+    }
+
+    // ── dimmy_cancel_recording tests ────────────────────────────────
+
+    #[test]
+    fn cancel_recording_clears_buffer_and_stops() {
+        ensure_test_state();
+        // Set up as if recording
+        if let Ok(mut r) = state().recording.lock() {
+            *r = true;
+        }
+        if let Ok(mut b) = state().audio_buffer.lock() {
+            b.extend_from_slice(&[0.1, 0.2, 0.3]);
+        }
+
+        dimmy_cancel_recording();
+
+        let is_rec = state().recording.lock().map(|r| *r).unwrap_or(true);
+        let buf_len = state().audio_buffer.lock().map(|b| b.len()).unwrap_or(999);
+        assert!(!is_rec, "recording must be false after cancel");
+        assert_eq!(buf_len, 0, "buffer must be cleared after cancel");
+    }
+
+    // ── dimmy_cycle_llm_style tests ─────────────────────────────────
+
+    #[test]
+    fn cycle_llm_style_forward_wraps_around() {
+        ensure_test_state();
+        // Set to last style
+        let styles = crate::llm::LlmStyle::ALL;
+        if let Ok(mut s) = state().llm_style.lock() {
+            *s = styles[styles.len() - 1];
+        }
+        dimmy_cycle_llm_style(1);
+        let current = *state().llm_style.lock().unwrap();
+        assert_eq!(current, styles[0], "should wrap to first style");
+    }
+
+    #[test]
+    fn cycle_llm_style_backward_wraps_around() {
+        ensure_test_state();
+        let styles = crate::llm::LlmStyle::ALL;
+        if let Ok(mut s) = state().llm_style.lock() {
+            *s = styles[0];
+        }
+        dimmy_cycle_llm_style(-1);
+        let current = *state().llm_style.lock().unwrap();
+        assert_eq!(
+            current,
+            styles[styles.len() - 1],
+            "should wrap to last style"
+        );
+    }
+
+    // ── dimmy_cycle_llm_tone tests ──────────────────────────────────
+
+    #[test]
+    fn cycle_llm_tone_forward_wraps_around() {
+        ensure_test_state();
+        let tones = crate::llm::LlmTone::ALL;
+        if let Ok(mut t) = state().llm_tone.lock() {
+            *t = tones[tones.len() - 1];
+        }
+        dimmy_cycle_llm_tone(1);
+        let current = *state().llm_tone.lock().unwrap();
+        assert_eq!(current, tones[0], "should wrap to first tone");
+    }
+
+    // ── dimmy_update_stats tests ────────────────────────────────────
+
+    #[test]
+    fn update_stats_accumulates() {
+        ensure_test_state();
+        let words_before = *state().stats_total_words.lock().unwrap();
+        let secs_before = *state().stats_total_speaking_secs.lock().unwrap();
+
+        dimmy_update_stats(42, 10.5);
+
+        let words_after = *state().stats_total_words.lock().unwrap();
+        let secs_after = *state().stats_total_speaking_secs.lock().unwrap();
+
+        assert_eq!(words_after, words_before + 42);
+        assert!((secs_after - (secs_before + 10.5)).abs() < 0.001);
+    }
+
+    // ── dimmy_get_config_json tests ─────────────────────────────────
+
+    #[test]
+    fn get_config_json_returns_valid_json() {
+        ensure_test_state();
+        let mut buf = vec![0u8; 8192];
+        let ptr = buf.as_mut_ptr() as *mut c_char;
+        let len = dimmy_get_config_json(ptr, 8192);
+        assert!(len > 0, "should return positive length");
+
+        let json_str = unsafe { CStr::from_ptr(ptr).to_str().unwrap() };
+        let parsed: serde_json::Value =
+            serde_json::from_str(json_str).expect("config JSON must be valid");
+        assert!(parsed["has_key"].as_bool().unwrap(), "test state has key");
+        assert_eq!(parsed["language"].as_str().unwrap(), "en");
+    }
+
+    #[test]
+    fn get_config_json_null_buf_returns_neg1() {
+        ensure_test_state();
+        let result = dimmy_get_config_json(std::ptr::null_mut(), 100);
+        assert_eq!(result, -1);
+    }
+
+    // ── dimmy_set_config_json tests ─────────────────────────────────
+
+    #[test]
+    fn set_config_json_applies_language() {
+        ensure_test_state();
+        let json = CString::new(r#"{"language":"it"}"#).unwrap();
+        let result = unsafe { dimmy_set_config_json(json.as_ptr()) };
+        assert_eq!(result, 0, "valid JSON should return 0");
+
+        let lang = state().language.lock().unwrap().clone();
+        assert_eq!(lang, "it");
+
+        // Restore
+        let restore = CString::new(r#"{"language":"en"}"#).unwrap();
+        unsafe { dimmy_set_config_json(restore.as_ptr()) };
+    }
+
+    #[test]
+    fn set_config_json_null_ptr_returns_neg1() {
+        ensure_test_state();
+        let result = unsafe { dimmy_set_config_json(std::ptr::null()) };
+        assert_eq!(result, -1);
+    }
+
+    #[test]
+    fn set_config_json_malformed_json_returns_neg1() {
+        ensure_test_state();
+        let bad = CString::new("not json at all {{{").unwrap();
+        let result = unsafe { dimmy_set_config_json(bad.as_ptr()) };
+        assert_eq!(result, -1, "malformed JSON must return -1");
+    }
+
+    // ── dimmy_list_devices_json tests ───────────────────────────────
+
+    #[test]
+    fn list_devices_json_returns_valid_json_array() {
+        ensure_test_state();
+        let mut buf = vec![0u8; 4096];
+        let ptr = buf.as_mut_ptr() as *mut c_char;
+        let len = dimmy_list_devices_json(ptr, 4096);
+        assert!(len >= 2, "should return at least '[]'");
+
+        let json_str = unsafe { CStr::from_ptr(ptr).to_str().unwrap() };
+        let parsed: serde_json::Value =
+            serde_json::from_str(json_str).expect("device list must be valid JSON");
+        assert!(parsed.is_array(), "must be a JSON array");
+    }
+
+    // ── dimmy_set_event_callback tests ──────────────────────────────
+
+    #[test]
+    fn set_event_callback_replaces_previous() {
+        extern "C" fn cb1(_: *const c_char) {}
+        extern "C" fn cb2(_: *const c_char) {}
+
+        dimmy_set_event_callback(cb1);
+        let first = EVENT_CALLBACK.lock().unwrap().unwrap() as usize;
+
+        dimmy_set_event_callback(cb2);
+        let second = EVENT_CALLBACK.lock().unwrap().unwrap() as usize;
+
+        assert_ne!(first, second, "callback should be replaced");
+
+        // Cleanup
+        if let Ok(mut guard) = EVENT_CALLBACK.lock() {
+            *guard = None;
+        }
+    }
+
+    // ── Negative space: invalid input returns error codes ──────────
+
+    #[test]
+    fn update_stats_rejects_negative_words() {
+        ensure_test_state();
+        let result = dimmy_update_stats(-1, 5.0);
+        assert_eq!(result, -1, "negative words must return -1");
+    }
+
+    #[test]
+    fn update_stats_rejects_negative_secs() {
+        ensure_test_state();
+        let result = dimmy_update_stats(0, -1.0);
+        assert_eq!(result, -1, "negative secs must return -1");
+    }
+
+    #[test]
+    fn update_stats_rejects_nan_secs() {
+        ensure_test_state();
+        let result = dimmy_update_stats(0, f64::NAN);
+        assert_eq!(result, -1, "NaN secs must return -1");
+    }
+
+    #[test]
+    fn update_stats_rejects_inf_secs() {
+        ensure_test_state();
+        let result = dimmy_update_stats(0, f64::INFINITY);
+        assert_eq!(result, -1, "Inf secs must return -1");
+    }
+
+    #[test]
+    fn cycle_style_ignores_zero_direction() {
+        ensure_test_state();
+        let before = *state().llm_style.lock().unwrap();
+        dimmy_cycle_llm_style(0);
+        let after = *state().llm_style.lock().unwrap();
+        assert_eq!(
+            before, after,
+            "style should not change on invalid direction"
+        );
+    }
+
+    #[test]
+    fn cycle_tone_ignores_invalid_direction() {
+        ensure_test_state();
+        let before = *state().llm_tone.lock().unwrap();
+        dimmy_cycle_llm_tone(5);
+        let after = *state().llm_tone.lock().unwrap();
+        assert_eq!(before, after, "tone should not change on invalid direction");
+    }
+
+    #[test]
+    fn get_amplitude_handles_nan_in_buffer() {
+        ensure_test_state();
+        if let Ok(mut b) = state().audio_buffer.lock() {
+            b.clear();
+            b.extend_from_slice(&[0.1, f32::NAN, 0.3]);
+        }
+        let amp = dimmy_get_amplitude();
+        // NaN should be filtered out, peak = max(0.1, 0.3) = 0.3
+        assert!(
+            (amp - 0.3).abs() < 0.001,
+            "NaN should be filtered, got {}",
+            amp
+        );
+    }
+
+    #[test]
+    fn get_amplitude_handles_all_nan_buffer() {
+        ensure_test_state();
+        if let Ok(mut b) = state().audio_buffer.lock() {
+            b.clear();
+            b.extend_from_slice(&[f32::NAN, f32::NAN, f32::NAN]);
+        }
+        let amp = dimmy_get_amplitude();
+        assert_eq!(amp, 0.0, "all-NaN buffer should return 0.0");
+    }
+
+    #[test]
+    fn stop_recording_rejects_null_buffer() {
+        ensure_test_state();
+        // Make sure not recording so it doesn't try to actually transcribe
+        if let Ok(mut r) = state().recording.lock() {
+            *r = false;
+        }
+        let result = dimmy_stop_recording(std::ptr::null_mut(), 100);
+        assert_eq!(result, -1, "null buffer must return -1");
+    }
+
+    #[test]
+    fn stop_recording_rejects_zero_length() {
+        ensure_test_state();
+        if let Ok(mut r) = state().recording.lock() {
+            *r = false;
+        }
+        let mut buf = vec![0u8; 64];
+        let result = dimmy_stop_recording(buf.as_mut_ptr() as *mut c_char, 0);
+        assert_eq!(result, -1, "zero buf_len must return -1");
+    }
 }
