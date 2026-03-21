@@ -600,6 +600,16 @@ fn start_recording(
     if *recording {
         return Err("Already recording".into());
     }
+
+    // Fail fast if no API key is configured — don't start audio capture
+    // only to error out later in stop_recording.
+    {
+        let has_key = state.api_key.lock().map_err(|e| e.to_string())?.is_some();
+        if !has_key {
+            return Err("No API key configured. Set one in Settings.".into());
+        }
+    }
+
     *recording = true;
 
     let selected_device = state
@@ -2235,7 +2245,8 @@ fn complete_onboarding() -> Result<(), String> {
 pub fn run() {
     // Log panics to file before crashing
     std::panic::set_hook(Box::new(|info| {
-        let msg = format!("PANIC: {}", info);
+        let bt = std::backtrace::Backtrace::force_capture();
+        let msg = format!("PANIC: {}\nBacktrace:\n{}", info, bt);
         eprintln!("{}", msg);
         // Write directly to log file since log() might not work during panic
         if let Some(path) = log_path() {
@@ -2415,15 +2426,10 @@ pub fn run() {
                                 current_mask | (1u64 << 15) as std::ffi::c_ulong,
                             );
 
-                            // Set drawsBackground:NO on the WKWebView content view
-                            // to eliminate the opaque web view background
-                            let sel_content_view = sel_registerName(b"contentView\0".as_ptr());
-                            let content_view: Id = send(ns_win, sel_content_view);
-                            if !content_view.is_null() {
-                                let sel_set_draws =
-                                    sel_registerName(b"setDrawsBackground:\0".as_ptr());
-                                send_int(content_view, sel_set_draws, 0 as c_int);
-                            }
+                            // NOTE: setDrawsBackground:NO on WKWebView contentView is
+                            // intentionally omitted — it causes a panic on macOS 26 (Tahoe)
+                            // inside did_finish_launching. Transparency still works via
+                            // setOpaque:NO + clearColor background on NSWindow.
                         }
                     }
                 }
