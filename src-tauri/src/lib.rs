@@ -50,9 +50,22 @@ fn onboarding_marker_path() -> Option<std::path::PathBuf> {
     config_dir_path().map(|p| p.join(".onboarding_done"))
 }
 
-/// Check if onboarding has been completed (marker file exists).
+/// Check if onboarding has been completed.
+/// Returns true if: marker file exists, OR config.json exists (existing user upgrading).
+/// This prevents the onboarding from appearing for existing users who upgrade to a
+/// version that introduces onboarding — they already have a working config.
 fn onboarding_completed() -> bool {
-    onboarding_marker_path().map(|p| p.exists()).unwrap_or(true) // If we can't determine config dir, skip onboarding (safe default)
+    // If marker exists, done
+    if onboarding_marker_path().map(|p| p.exists()).unwrap_or(true) {
+        return true;
+    }
+    // If config.json exists, this is an existing user — auto-mark as done
+    if config_path().map(|p| p.exists()).unwrap_or(false) {
+        log("Existing config.json found — skipping onboarding for upgrade user");
+        let _ = mark_onboarding_done();
+        return true;
+    }
+    false
 }
 
 /// Mark onboarding as completed by creating the marker file.
@@ -918,13 +931,13 @@ async fn stop_recording(
         (buffer, api_key, api_url, api_model, language, prompt)
     };
 
-    if buffer.is_empty() {
-        return Err("No audio captured".into());
-    }
-
     let debug_log_on = *state.llm_log_enabled.lock().map_err(|e| e.to_string())?;
 
     let sr = *state.audio_sample_rate.lock().map_err(|e| e.to_string())?;
+
+    if buffer.is_empty() {
+        return Err("No audio captured".into());
+    }
 
     if debug_log_on {
         let total_duration_secs = buffer.len() as f64 / sr as f64;
