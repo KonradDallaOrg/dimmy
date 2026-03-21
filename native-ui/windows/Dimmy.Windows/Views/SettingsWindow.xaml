@@ -1,0 +1,226 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="Dimmy.Windows.Views.SettingsWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:Dimmy.Windows.Views.Controls"
+    Title="Dimmy Settings">
+
+  <Grid>
+    <Grid.RowDefinitions>
+      <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+
+    <NavigationView x:Name="NavView" PaneDisplayMode="Left" IsBackButtonVisible="Collapsed"
+                    IsSettingsVisible="False" SelectionChanged="Nav_SelectionChanged">
+      <NavigationView.MenuItems>
+        <NavigationViewItem Content="General" Tag="general">
+          <NavigationViewItem.Icon><FontIcon Glyph="&#xE713;" /></NavigationViewItem.Icon>
+        </NavigationViewItem>
+        <NavigationViewItem Content="Shortcut" Tag="shortcut">
+          <NavigationViewItem.Icon><FontIcon Glyph="&#xE765;" /></NavigationViewItem.Icon>
+        </NavigationViewItem>
+        <NavigationViewItem Content="Output" Tag="output">
+          <NavigationViewItem.Icon><FontIcon Glyph="&#xE8A1;" /></NavigationViewItem.Icon>
+        </NavigationViewItem>
+        <NavigationViewItem Content="Overlay" Tag="overlay">
+          <NavigationViewItem.Icon><FontIcon Glyph="&#xE740;" /></NavigationViewItem.Icon>
+        </NavigationViewItem>
+        <NavigationViewItem Content="About" Tag="about">
+          <NavigationViewItem.Icon><FontIcon Glyph="&#xE946;" /></NavigationViewItem.Icon>
+        </NavigationViewItem>
+        <NavigationViewItem Content="Stats" Tag="stats"
+                            Visibility="{x:Bind ViewModel.IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+          <NavigationViewItem.Icon><FontIcon Glyph="&#xE9D9;" /></NavigationViewItem.Icon>
+        </NavigationViewItem>
+        <NavigationViewItem Content="Debug" Tag="debug"
+                            Visibility="{x:Bind ViewModel.IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+          <NavigationViewItem.Icon><FontIcon Glyph="&#xEBE8;" /></NavigationViewItem.Icon>
+        </NavigationViewItem>
+      </NavigationView.MenuItems>
+
+      <NavigationView.FooterMenuItems>
+        <NavigationViewItem SelectsOnInvoked="False">
+          <ToggleSwitch Header="Advanced" IsOn="{x:Bind ViewModel.IsAdvanced, Mode=TwoWay}" />
+        </NavigationViewItem>
+      </NavigationView.FooterMenuItems>
+
+      <ScrollViewer Padding="24">
+        <Grid>
+          <!-- ═══ General Tab ═══ -->
+          <StackPanel x:Name="GeneralPanel" Spacing="16" Visibility="Visible">
+            <ComboBox Header="Language" Width="200"
+                      SelectedValue="{x:Bind ViewModel.Language, Mode=TwoWay}"
+                      SelectedValuePath="Key" DisplayMemberPath="Value"
+                      ItemsSource="{x:Bind ViewModel.LanguageItems}" />
+            <ComboBox Header="Style" Width="200"
+                      SelectedItem="{x:Bind ViewModel.LlmStyle, Mode=TwoWay}"
+                      ItemsSource="{x:Bind ViewModel.LlmStyleItems}" />
+            <StackPanel Orientation="Horizontal" Spacing="12">
+              <RadioButton Content="Auto" GroupName="Theme" IsChecked="True" />
+              <RadioButton Content="Light" GroupName="Theme" />
+              <RadioButton Content="Dark" GroupName="Theme" />
+            </StackPanel>
+            <ToggleSwitch Header="Launch at login" IsEnabled="False" />
+            <ToggleSwitch Header="Show in taskbar" />
+            <PasswordBox Header="API Key" Width="300"
+                         PlaceholderText="{x:Bind ViewModel.HasApiKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}" />
+
+            <!-- Advanced: Provider, Model, Custom endpoint, etc. -->
+            <StackPanel Spacing="12"
+                        Visibility="{x:Bind ViewModel.IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+              <ComboBox Header="Provider &amp; Model" Width="300"
+                        SelectedValue="{x:Bind ViewModel.ApiUrl, Mode=TwoWay}"
+                        SelectedValuePath="Url" DisplayMemberPath="Name"
+                        ItemsSource="{x:Bind ViewModel.ProviderPresetItems}" />
+              <TextBox Header="Custom endpoint URL" Width="300"
+                       Text="{x:Bind ViewModel.ApiUrl, Mode=TwoWay}" />
+              <TextBox Header="Custom model" Width="200"
+                       Text="{x:Bind ViewModel.ApiModel, Mode=TwoWay}" />
+              <TextBox Header="Prompt / Vocabulary" Width="400" AcceptsReturn="True"
+                       TextWrapping="Wrap" Height="80"
+                       Text="{x:Bind ViewModel.Prompt, Mode=TwoWay}" />
+              <ToggleSwitch Header="Chunk streaming"
+                            IsOn="{x:Bind ViewModel.ChunkStreamingEnabled, Mode=TwoWay}" />
+              <ComboBox Header="Audio input device" Width="300"
+                        SelectedItem="{x:Bind ViewModel.SelectedDevice, Mode=TwoWay}"
+                        ItemsSource="{x:Bind ViewModel.Devices}" />
+              <ToggleSwitch Header="Preprocessing"
+                            IsOn="{x:Bind ViewModel.PreprocessingEnabled, Mode=TwoWay}" />
+              <ToggleSwitch Header="Use keyring"
+                            IsOn="{x:Bind ViewModel.UseKeyring, Mode=TwoWay}" />
+            </StackPanel>
+          </StackPanel>
+
+          <!-- ═══ Shortcut Tab ═══ -->
+          <StackPanel x:Name="ShortcutPanel" Spacing="16" Visibility="Collapsed">
+            <controls:ShortcutRecorder Shortcut="{x:Bind ViewModel.Shortcut, Mode=TwoWay}" />
+            <StackPanel Orientation="Horizontal" Spacing="16">
+              <RadioButton Content="Push-to-Talk" GroupName="ShortcutMode"
+                           IsChecked="{x:Bind ViewModel.ShortcutMode, Mode=TwoWay, Converter={StaticResource StringToBoolConverter}, ConverterParameter=hold}" />
+              <RadioButton Content="Toggle" GroupName="ShortcutMode"
+                           IsChecked="{x:Bind ViewModel.ShortcutMode, Mode=TwoWay, Converter={StaticResource StringToBoolConverter}, ConverterParameter=toggle}" />
+            </StackPanel>
+          </StackPanel>
+
+          <!-- ═══ Output Tab ═══ -->
+          <StackPanel x:Name="OutputPanel" Spacing="16" Visibility="Collapsed">
+            <ComboBox Header="Style" Width="200"
+                      SelectedItem="{x:Bind ViewModel.LlmStyle, Mode=TwoWay}"
+                      ItemsSource="{x:Bind ViewModel.LlmStyleItems}" />
+            <ToggleSwitch Header="Remove filler words" IsEnabled="False" />
+            <ToggleSwitch Header="Auto-punctuation" IsEnabled="False" />
+            <ToggleSwitch Header="Auto-capitalization" IsEnabled="False" />
+            <ToggleSwitch Header="Restore clipboard" IsEnabled="False" />
+            <ComboBox Header="Paste method" Width="200">
+              <x:String>Ctrl+V</x:String>
+              <x:String>Keystrokes</x:String>
+            </ComboBox>
+
+            <!-- Advanced: Tone, Translate, LLM config -->
+            <StackPanel Spacing="12"
+                        Visibility="{x:Bind ViewModel.IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+              <ComboBox Header="Tone" Width="200"
+                        SelectedItem="{x:Bind ViewModel.LlmTone, Mode=TwoWay}"
+                        ItemsSource="{x:Bind ViewModel.LlmToneItems}" />
+              <ComboBox Header="Translate to" Width="200">
+                <x:String>None</x:String>
+                <x:String>EN</x:String>
+                <x:String>IT</x:String>
+                <x:String>DE</x:String>
+                <x:String>FR</x:String>
+                <x:String>ES</x:String>
+              </ComboBox>
+              <TextBox Header="Custom LLM endpoint" Width="300"
+                       Text="{x:Bind ViewModel.LlmApiUrl, Mode=TwoWay}" />
+              <TextBox Header="Custom LLM model" Width="200"
+                       Text="{x:Bind ViewModel.LlmApiModel, Mode=TwoWay}" />
+              <ToggleSwitch Header="Use same API key"
+                            IsOn="{x:Bind ViewModel.LlmUseSameKey, Mode=TwoWay}" />
+              <PasswordBox Header="LLM API Key" Width="300" />
+              <TextBox Header="Custom prompt" Width="400" AcceptsReturn="True"
+                       TextWrapping="Wrap" Height="80"
+                       Text="{x:Bind ViewModel.LlmCustomPrompt, Mode=TwoWay}" />
+            </StackPanel>
+          </StackPanel>
+
+          <!-- ═══ Overlay Tab ═══ -->
+          <StackPanel x:Name="OverlayPanel" Spacing="16" Visibility="Collapsed">
+            <ToggleSwitch Header="Show overlay" IsOn="True" />
+            <ComboBox Header="Default position" Width="200">
+              <x:String>Top Right</x:String>
+              <x:String>Top Left</x:String>
+              <x:String>Bottom Right</x:String>
+              <x:String>Bottom Left</x:String>
+              <x:String>Bottom Center</x:String>
+            </ComboBox>
+            <Button Content="Reset position" />
+            <ComboBox Header="Idle opacity" Width="200">
+              <x:String>Nearly invisible</x:String>
+              <x:String>Subtle</x:String>
+              <x:String>Visible</x:String>
+            </ComboBox>
+            <ComboBox Header="Border style" Width="200">
+              <x:String>Rainbow</x:String>
+              <x:String>Blue pulse</x:String>
+              <x:String>Green</x:String>
+              <x:String>None</x:String>
+            </ComboBox>
+            <ComboBox Header="Waveform style" Width="200">
+              <x:String>Bars</x:String>
+              <x:String>Line</x:String>
+              <x:String>Dots</x:String>
+            </ComboBox>
+            <TextBlock Text="You can always drag the pill to reposition it"
+                       FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+          </StackPanel>
+
+          <!-- ═══ About Tab ═══ -->
+          <StackPanel x:Name="AboutPanel" Spacing="8" Visibility="Collapsed"
+                      HorizontalAlignment="Center" VerticalAlignment="Center">
+            <Ellipse Width="48" Height="48" Fill="{ThemeResource AccentFillColorDefaultBrush}"
+                     HorizontalAlignment="Center" />
+            <TextBlock Text="Dimmy" FontSize="20" FontWeight="Bold" HorizontalAlignment="Center" />
+            <TextBlock x:Name="VersionText" FontSize="12"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                       HorizontalAlignment="Center" />
+            <TextBlock Text="Voice dictation that stays out of your way" FontSize="12"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                       HorizontalAlignment="Center" />
+            <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}"
+                    Margin="0,8" Width="200" />
+            <TextBlock Text="Made with irony" FontSize="11"
+                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                       HorizontalAlignment="Center" />
+          </StackPanel>
+
+          <!-- ═══ Stats Tab (Advanced only) ═══ -->
+          <StackPanel x:Name="StatsPanel" Spacing="12" Visibility="Collapsed">
+            <TextBlock Text="Total words dictated" FontSize="14" />
+            <TextBlock Text="{x:Bind ViewModel.StatsTotalWords, Mode=OneWay}" FontSize="28" FontWeight="Bold" />
+            <TextBlock Text="Total speaking time" FontSize="14" Margin="0,16,0,0" />
+            <TextBlock x:Name="SpeakingTimeText" FontSize="28" FontWeight="Bold" />
+            <TextBlock Text="Time saved estimate" FontSize="14" Margin="0,16,0,0" />
+            <TextBlock x:Name="TimeSavedText" FontSize="28" FontWeight="Bold" />
+          </StackPanel>
+
+          <!-- ═══ Debug Tab (Advanced only) ═══ -->
+          <StackPanel x:Name="DebugPanel" Spacing="12" Visibility="Collapsed">
+            <ToggleSwitch Header="LLM log enabled"
+                          IsOn="{x:Bind ViewModel.LlmLogEnabled, Mode=TwoWay}" />
+            <ToggleSwitch Header="Audio debug"
+                          IsOn="{x:Bind ViewModel.AudioDebugEnabled, Mode=TwoWay}" />
+          </StackPanel>
+        </Grid>
+      </ScrollViewer>
+    </NavigationView>
+
+    <!-- Footer: Save / Cancel -->
+    <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right"
+                Spacing="8" Margin="16">
+      <Button Content="Cancel" Click="Cancel_Click" />
+      <Button Content="Save" Click="Save_Click" Style="{ThemeResource AccentButtonStyle}" />
+    </StackPanel>
+  </Grid>
+</Window>

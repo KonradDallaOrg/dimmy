@@ -13,6 +13,7 @@
             <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityInverter" />
             <converters:BoolToOpacityConverter x:Key="BoolToOpacityConverter" />
             <converters:StringEqualityConverter x:Key="StringToBoolConverter" />
+            <converters:BoolToApiKeyPlaceholderConverter x:Key="BoolToApiKeyPlaceholder" />
         </ResourceDictionary>
     </Application.Resources>
 </Application>
