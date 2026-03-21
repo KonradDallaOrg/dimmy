@@ -1,0 +1,221 @@
+name: Staging Release
+
+on:
+  push:
+    branches: [staging]
+
+permissions:
+  contents: write
+
+jobs:
+  # Only build if CI passes (lint + test run inline)
+  lint:
+    name: Lint
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libasound2-dev \
+            libxdo-dev
+
+      - name: Version consistency
+        working-directory: src-tauri
+        run: |
+          CARGO_VER=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          TAURI_VER=$(grep '"version"' tauri.conf.json | head -1 | sed 's/.*"\([0-9][^"]*\)".*/\1/')
+          if [ "$CARGO_VER" != "$TAURI_VER" ]; then
+            echo "::error::Version mismatch: Cargo.toml=$CARGO_VER vs tauri.conf.json=$TAURI_VER"
+            exit 1
+          fi
+
+      - name: Format
+        working-directory: src-tauri
+        run: cargo fmt --check
+
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy -- -D warnings
+
+  test:
+    name: Test
+    runs-on: ubuntu-22.04
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libasound2-dev \
+            libxdo-dev
+
+      - name: Run tests
+        working-directory: src-tauri
+        run: cargo test
+
+  create-staging-release:
+    name: Create Staging Release
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create.outputs.id }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version + short SHA
+        id: version
+        run: |
+          VER=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          SHA=$(git rev-parse --short HEAD)
+          echo "version=${VER}-staging.${SHA}" >> "$GITHUB_OUTPUT"
+          echo "base_version=${VER}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate changelog
+        run: |
+          # Commits since last staging release or divergence from main
+          LAST_MAIN=$(git merge-base HEAD origin/main 2>/dev/null || echo "")
+          if [ -n "$LAST_MAIN" ]; then
+            COMMITS=$(git log --pretty=format:"- %s" "${LAST_MAIN}..HEAD" 2>/dev/null || echo "- Initial staging build")
+          else
+            COMMITS=$(git log --pretty=format:"- %s" -20 HEAD)
+          fi
+          {
+            echo "## Staging Build"
+            echo ""
+            echo "**This is a pre-release for testing. Not for production use.**"
+            echo ""
+            echo "### Changes since main"
+            echo "$COMMITS"
+            echo ""
+            echo "## Downloads"
+            echo ""
+            echo "| Platform | File |"
+            echo "|----------|------|"
+            echo "| Windows | \`.msi\` |"
+            echo "| macOS (Apple Silicon) | \`.dmg\` (aarch64) |"
+            echo "| macOS (Intel) | \`.dmg\` (x64) |"
+            echo "| Linux (Debian/Ubuntu) | \`.deb\` |"
+            echo "| Linux (AppImage) | \`.AppImage\` |"
+          } > changelog.md
+
+      - name: Delete previous staging release
+        continue-on-error: true
+        run: gh release delete staging-latest --yes --cleanup-tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create GitHub Release
+        id: create
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: staging-latest
+          name: "Dimmy ${{ steps.version.outputs.version }} (Staging)"
+          body_path: changelog.md
+          draft: true
+          prerelease: true
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: create-staging-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libasound2-dev \
+            libxdo-dev
+
+      - name: Build and upload release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          releaseId: ${{ needs.create-staging-release.outputs.release_id }}
+          updaterJsonPreferNsis: true
+          args: --target ${{ matrix.target }}
+          projectPath: src-tauri
+
+  publish-staging:
+    name: Publish Staging Release
+    needs: [create-staging-release, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: ${{ needs.create-staging-release.outputs.release_id }},
+              draft: false,
+              prerelease: true
+            });
