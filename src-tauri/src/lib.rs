@@ -256,7 +256,7 @@ impl Default for AppConfig {
             llm_api_model: DEFAULT_LLM_MODEL.to_string(),
             llm_use_same_key: true,
             llm_log_enabled: false,
-            chunk_streaming_enabled: true,
+            chunk_streaming_enabled: false,
             preprocessing_enabled: true,
             audio_debug_enabled: false,
             window_anchor_right: None,
