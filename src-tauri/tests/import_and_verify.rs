@@ -54,7 +54,10 @@ fn import_keys_to_local_store() {
         "No keys found in .env — create .env with GROQ_KEY, OPENAI_KEY, etc."
     );
 
-    println!("\n=== Step 1: Save {} keys to local encrypted file ===\n", found.len());
+    println!(
+        "\n=== Step 1: Save {} keys to local encrypted file ===\n",
+        found.len()
+    );
     for (scope, key) in &found {
         store
             .save_key(*scope, key, false)
@@ -80,7 +83,10 @@ fn import_keys_to_local_store() {
         println!("  [OK] {} = {} (verified)", scope.entry_name(), preview);
     }
 
-    println!("\n=== All {} keys imported and verified! ===\n", found.len());
+    println!(
+        "\n=== All {} keys imported and verified! ===\n",
+        found.len()
+    );
 
     // Show where the file is
     if let Some(dir) = dirs::config_dir() {
