@@ -41,6 +41,9 @@ const timerEl = document.getElementById('timer');
 const statusText = document.getElementById('status-text');
 const settingsBtn = document.getElementById('settings-btn');
 const chunkDots = document.getElementById('chunk-dots');
+const recBtn = document.getElementById('rec-btn');
+const recIconPlay = document.getElementById('rec-icon-play');
+const recIconStop = document.getElementById('rec-icon-stop');
 const waveformInline = document.getElementById('waveform-inline');
 const waveformInlineCtx = waveformInline.getContext('2d');
 const compactModeCheckbox = document.getElementById('compact-mode-enabled');
@@ -124,6 +127,12 @@ pill.addEventListener('mousedown', async (e) => {
   } catch (_) {}
 });
 
+// Play/Stop button toggles recording
+recBtn.addEventListener('click', async (e) => {
+  e.stopPropagation();
+  if (isRecording) await stopRecording(); else await startRecording();
+});
+
 let isRecording = false;
 let waveformInterval = null;
 let timerInterval = null;
@@ -169,13 +178,16 @@ function switchView(view) {
     timerEl.classList.add('hide');
     statusText.classList.add('hide');
     chunkDots.innerHTML = '';
+    recBtn.classList.add('hide');
     setWindowSizeWH(MICRO_W, PILL_H);
   } else if (view === 'pill') {
     pill.classList.remove('micro');
+    recBtn.classList.remove('hide');
     if (!isRecording) deviceName.classList.remove('hide');
     setWindowSizeWH(W, PILL_H);
   } else if (view === 'rec') {
     pill.classList.remove('micro');
+    recBtn.classList.remove('hide');
     recPanel.classList.add('open');
     setWindowSizeWH(W, REC_H);
   } else if (view === 'settings') {
@@ -443,6 +455,9 @@ async function startRecording() {
 
   isRecording = true;
   settingsBtn.disabled = true;
+  recBtn.classList.add('recording');
+  recIconPlay.classList.add('hide');
+  recIconStop.classList.remove('hide');
   dot.className = 'recording';
   container.classList.add('recording-active');
   showTimer();
@@ -529,6 +544,9 @@ async function stopRecording() {
 
     showStatus(t('pill.done'));
     setTimeout(() => {
+      recBtn.classList.remove('recording');
+      recIconPlay.classList.remove('hide');
+      recIconStop.classList.add('hide');
       switchView('pill');
       hideTimer();
       hideStatus();
@@ -542,6 +560,9 @@ async function stopRecording() {
     dot.className = 'error';
     showStatus(String(err).substring(0, 30));
     setTimeout(() => {
+      recBtn.classList.remove('recording');
+      recIconPlay.classList.remove('hide');
+      recIconStop.classList.add('hide');
       switchView('pill');
       hideTimer();
       dot.className = '';
