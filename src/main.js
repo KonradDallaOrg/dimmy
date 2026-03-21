@@ -1147,11 +1147,22 @@ async function showOnboarding() {
   const overlay = document.getElementById('onboarding-overlay');
   if (!overlay) return;
 
-  // Show overlay and resize window
+  // Show overlay and center window on screen
   overlay.classList.remove('hide');
   container.classList.add('expanded-mode');
   pill.classList.add('hide');
-  await setWindowSizeWH(ONBOARDING_W, ONBOARDING_H);
+  await invoke('center_window', { w: ONBOARDING_W, h: ONBOARDING_H });
+
+  // Allow dragging the onboarding window via the progress bar area
+  const progressBar = overlay.querySelector('.ob-progress');
+  progressBar.style.cursor = 'grab';
+  progressBar.addEventListener('mousedown', async (e) => {
+    if (e.button !== 0) return;
+    try {
+      const win = window.__TAURI__.window.getCurrentWindow();
+      await win.startDragging();
+    } catch (_) {}
+  });
 
   const track = overlay.querySelector('.ob-track');
   const segments = overlay.querySelectorAll('.ob-seg');

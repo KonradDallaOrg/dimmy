@@ -1091,7 +1091,7 @@ dependencies = [
 
 [[package]]
 name = "dimmy"
-version = "0.3.57"
+version = "0.3.58"
 dependencies = [
  "arboard",
  "base64 0.22.1",

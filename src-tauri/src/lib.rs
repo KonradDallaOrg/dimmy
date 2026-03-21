@@ -2027,6 +2027,29 @@ fn resize_window(
 }
 
 #[tauri::command]
+fn center_window(w: f64, h: f64, app_handle: tauri::AppHandle) -> Result<(), String> {
+    if let Some(win) = app_handle.get_webview_window("main") {
+        win.set_size(LogicalSize::new(w, h))
+            .map_err(|e| e.to_string())?;
+        let _ = win.set_always_on_top(true);
+        #[cfg(target_os = "windows")]
+        force_transparent_redraw(&win);
+
+        let (screen_w, screen_h) = get_work_area()
+            .map(|(sw, sh)| {
+                let scale = win.scale_factor().unwrap_or(1.0);
+                (sw as f64 / scale, sh as f64 / scale)
+            })
+            .unwrap_or((1920.0, 1080.0));
+
+        let x = ((screen_w - w) / 2.0).max(0.0);
+        let y = ((screen_h - h) / 2.0).max(0.0);
+        let _ = win.set_position(LogicalPosition::new(x, y));
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn check_accessibility() -> bool {
     #[cfg(target_os = "macos")]
     {
@@ -2724,6 +2747,7 @@ pub fn run() {
             install_update,
             needs_onboarding,
             complete_onboarding,
+            center_window,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Dimmy")
