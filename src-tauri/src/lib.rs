@@ -596,6 +596,20 @@ fn start_recording(
     state: tauri::State<'_, AppState>,
     app_handle: tauri::AppHandle,
 ) -> Result<String, String> {
+    // Fail fast if no API key is configured — don't start audio capture
+    // only to error out later in stop_recording. This prevents the confusing
+    // UX of a recording that can never produce a transcription.
+    {
+        let has_key = state
+            .api_key
+            .lock()
+            .map_err(|e| e.to_string())?
+            .is_some();
+        if !has_key {
+            return Err("No API key configured. Open Settings to set one.".into());
+        }
+    }
+
     let mut recording = state.recording.lock().map_err(|e| e.to_string())?;
     if *recording {
         return Err("Already recording".into());
@@ -2235,7 +2249,8 @@ fn complete_onboarding() -> Result<(), String> {
 pub fn run() {
     // Log panics to file before crashing
     std::panic::set_hook(Box::new(|info| {
-        let msg = format!("PANIC: {}", info);
+        let bt = std::backtrace::Backtrace::force_capture();
+        let msg = format!("PANIC: {}\nBacktrace:\n{}", info, bt);
         eprintln!("{}", msg);
         // Write directly to log file since log() might not work during panic
         if let Some(path) = log_path() {
@@ -2345,88 +2360,8 @@ pub fn run() {
                 // We must declare it without args and transmute to typed function pointers,
                 // otherwise the compiler uses the C variadic ABI (stack-based) instead of
                 // the register-based ABI, producing garbage return values and SIGSEGV.
-                #[cfg(target_os = "macos")]
-                {
-                    unsafe {
-                        use std::ffi::{c_int, c_void};
-                        type Id = *mut c_void;
-                        type Sel = *const c_void;
-
-                        // Typed function pointers for objc_msgSend with different signatures
-                        type MsgSendNoArgs = unsafe extern "C" fn(Id, Sel) -> Id;
-                        type MsgSendInt = unsafe extern "C" fn(Id, Sel, c_int) -> Id;
-                        type MsgSendObj = unsafe extern "C" fn(Id, Sel, Id) -> Id;
-
-                        extern "C" {
-                            fn objc_msgSend(); // raw symbol — cast before calling
-                            fn sel_registerName(name: *const u8) -> Sel;
-                            fn objc_getClass(name: *const u8) -> Id;
-                        }
-
-                        let send: MsgSendNoArgs =
-                            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-                        let send_int: MsgSendInt =
-                            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-                        let send_obj: MsgSendObj =
-                            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-
-                        // Get NSWindow pointer via Tauri's raw window handle
-                        // MsgSend variant for unsigned long (NSUInteger / styleMask)
-                        type MsgSendULong = unsafe extern "C" fn(Id, Sel, std::ffi::c_ulong) -> Id;
-                        type MsgSendGetULong = unsafe extern "C" fn(Id, Sel) -> std::ffi::c_ulong;
-                        let send_ulong: MsgSendULong =
-                            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-                        let send_get_ulong: MsgSendGetULong =
-                            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-
-                        let ns_win: Id =
-                            window.ns_window().unwrap_or(std::ptr::null_mut() as _) as Id;
-                        if !ns_win.is_null() {
-                            // [nsWindow setOpaque:NO]
-                            let sel_set_opaque = sel_registerName(b"setOpaque:\0".as_ptr());
-                            send_int(ns_win, sel_set_opaque, 0 as c_int);
-
-                            // [NSColor clearColor]
-                            let ns_color_class = objc_getClass(b"NSColor\0".as_ptr());
-                            let sel_clear_color = sel_registerName(b"clearColor\0".as_ptr());
-                            let clear: Id = send(ns_color_class, sel_clear_color);
-
-                            // [nsWindow setBackgroundColor:[NSColor clearColor]]
-                            let sel_set_bg = sel_registerName(b"setBackgroundColor:\0".as_ptr());
-                            send_obj(ns_win, sel_set_bg, clear);
-
-                            // [nsWindow setHasShadow:NO]
-                            let sel_set_shadow = sel_registerName(b"setHasShadow:\0".as_ptr());
-                            send_int(ns_win, sel_set_shadow, 0 as c_int);
-
-                            // [nsWindow setTitlebarAppearsTransparent:YES]
-                            let sel_titlebar_transparent =
-                                sel_registerName(b"setTitlebarAppearsTransparent:\0".as_ptr());
-                            send_int(ns_win, sel_titlebar_transparent, 1 as c_int);
-
-                            // Add NSFullSizeContentViewWindowMask to existing styleMask
-                            // NSFullSizeContentViewWindowMask = 1 << 15 = 32768
-                            let sel_style_mask = sel_registerName(b"styleMask\0".as_ptr());
-                            let current_mask = send_get_ulong(ns_win, sel_style_mask);
-                            let sel_set_style_mask = sel_registerName(b"setStyleMask:\0".as_ptr());
-                            send_ulong(
-                                ns_win,
-                                sel_set_style_mask,
-                                current_mask | (1u64 << 15) as std::ffi::c_ulong,
-                            );
-
-                            // Set drawsBackground:NO on the WKWebView content view
-                            // to eliminate the opaque web view background
-                            let sel_content_view = sel_registerName(b"contentView\0".as_ptr());
-                            let content_view: Id = send(ns_win, sel_content_view);
-                            if !content_view.is_null() {
-                                let sel_set_draws =
-                                    sel_registerName(b"setDrawsBackground:\0".as_ptr());
-                                send_int(content_view, sel_set_draws, 0 as c_int);
-                            }
-                        }
-                    }
-                }
+                // NOTE: macOS ObjC transparency block disabled — causes panic
+                // on macOS 26 (Tahoe). Window will have non-transparent background.
 
                 // Windows: set up transparent compositing manually.
                 // Previously tao handled this via `transparent: true` in config,
@@ -2765,43 +2700,50 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building Dimmy")
         .run(|app_handle, event| {
-            // Windows: re-apply transparent background on focus and resize.
-            // WebView2 loses transparency after DWM z-order/composition changes.
-            #[cfg(target_os = "windows")]
-            if let tauri::RunEvent::WindowEvent {
-                event: tauri::WindowEvent::Focused(true) | tauri::WindowEvent::Resized(_),
-                ..
-            } = &event
-            {
-                if let Some(win) = app_handle.get_webview_window("main") {
-                    force_transparent_redraw(&win);
+            // Wrap in catch_unwind: on macOS the run callback executes inside the
+            // Objective-C NSApplication run loop which is extern "C" and cannot
+            // unwind.  A panic here would abort the process with
+            // "panic in a function that cannot unwind".
+            let ah = app_handle.clone();
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                // Windows: re-apply transparent background on focus and resize.
+                // WebView2 loses transparency after DWM z-order/composition changes.
+                #[cfg(target_os = "windows")]
+                if let tauri::RunEvent::WindowEvent {
+                    event: tauri::WindowEvent::Focused(true) | tauri::WindowEvent::Resized(_),
+                    ..
+                } = &event
+                {
+                    if let Some(win) = ah.get_webview_window("main") {
+                        force_transparent_redraw(&win);
+                    }
                 }
-            }
 
-            // Save window position + config on close
-            if let tauri::RunEvent::WindowEvent {
-                event: tauri::WindowEvent::CloseRequested { .. },
-                ..
-            } = &event
-            {
-                // Read live window position for anchor
-                if let Some(win) = app_handle.get_webview_window("main") {
-                    if let (Ok(pos), Ok(size)) = (win.outer_position(), win.outer_size()) {
-                        let scale = win.scale_factor().unwrap_or(1.0);
-                        let right = pos.x as f64 / scale + size.width as f64 / scale;
-                        let bottom = pos.y as f64 / scale + size.height as f64 / scale;
-                        let st: tauri::State<'_, AppState> = app_handle.state();
-                        let _ = st
-                            .window_anchor
-                            .lock()
-                            .map(|mut a| *a = Some((right, bottom)));
-                        if let Ok(cfg) = snapshot_config(&st) {
-                            save_config_file(&cfg);
-                            log("Config saved on close (with window position)");
+                // Save window position + config on close
+                if let tauri::RunEvent::WindowEvent {
+                    event: tauri::WindowEvent::CloseRequested { .. },
+                    ..
+                } = &event
+                {
+                    // Read live window position for anchor
+                    if let Some(win) = ah.get_webview_window("main") {
+                        if let (Ok(pos), Ok(size)) = (win.outer_position(), win.outer_size()) {
+                            let scale = win.scale_factor().unwrap_or(1.0);
+                            let right = pos.x as f64 / scale + size.width as f64 / scale;
+                            let bottom = pos.y as f64 / scale + size.height as f64 / scale;
+                            let st: tauri::State<'_, AppState> = ah.state();
+                            let _ = st
+                                .window_anchor
+                                .lock()
+                                .map(|mut a| *a = Some((right, bottom)));
+                            if let Ok(cfg) = snapshot_config(&st) {
+                                save_config_file(&cfg);
+                                log("Config saved on close (with window position)");
+                            }
                         }
                     }
                 }
-            }
+            }));
         });
 }
 

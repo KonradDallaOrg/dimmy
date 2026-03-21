@@ -36,6 +36,9 @@ const STYLE_COLORS = {
 // DOM
 const pill = document.getElementById('pill');
 const dot = document.getElementById('dot');
+const recBtn = document.getElementById('rec-btn');
+const recIconPlay = document.getElementById('rec-icon-play');
+const recIconStop = document.getElementById('rec-icon-stop');
 const deviceName = document.getElementById('device-name');
 const timerEl = document.getElementById('timer');
 const statusText = document.getElementById('status-text');
@@ -114,14 +117,30 @@ if (accessibilityOpenBtn) {
 
 // Drag the pill via Tauri's startDragging API (works reliably on all platforms
 // including macOS where -webkit-app-region: drag can be flaky with Tauri 2)
+let pillMouseDownAt = 0;
+let pillMouseDownPos = [0, 0];
+
 pill.addEventListener('mousedown', async (e) => {
-  // Only drag on left click, skip if clicking a button/input
   if (e.button !== 0) return;
   if (e.target.closest('button, input, select, textarea, a')) return;
+  pillMouseDownAt = Date.now();
+  pillMouseDownPos = [e.screenX, e.screenY];
   try {
     const win = window.__TAURI__.window.getCurrentWindow();
     await win.startDragging();
   } catch (_) {}
+});
+
+pill.addEventListener('click', async (e) => {
+  if (e.button !== 0) return;
+  if (e.target.closest('button, input, select, textarea, a')) return;
+  // Only toggle if it was a quick click (not a drag)
+  const elapsed = Date.now() - pillMouseDownAt;
+  const dx = Math.abs(e.screenX - pillMouseDownPos[0]);
+  const dy = Math.abs(e.screenY - pillMouseDownPos[1]);
+  if (elapsed < 300 && dx < 5 && dy < 5) {
+    if (isRecording) await stopRecording(); else await startRecording();
+  }
 });
 
 let isRecording = false;
@@ -340,6 +359,12 @@ container.addEventListener('wheel', async (e) => {
 listen('shortcut-start', async () => { if (!isRecording) await startRecording(); });
 listen('shortcut-stop', async () => { if (isRecording) await stopRecording(); });
 
+// Play/Stop button
+recBtn.addEventListener('click', async (e) => {
+  e.stopPropagation();
+  if (isRecording) await stopRecording(); else await startRecording();
+});
+
 // ========================
 // STREAMING EVENTS
 // ========================
@@ -445,6 +470,9 @@ async function startRecording() {
   settingsBtn.disabled = true;
   dot.className = 'recording';
   container.classList.add('recording-active');
+  recBtn.classList.add('recording');
+  recIconPlay.classList.add('hide');
+  recIconStop.classList.remove('hide');
   showTimer();
   if (!compactMode) showStatus(t('pill.rec'));
 
@@ -498,6 +526,9 @@ async function stopRecording() {
   try {
     let text = await invoke('stop_recording');
     isRecording = false;
+    recBtn.classList.remove('recording');
+    recIconPlay.classList.remove('hide');
+    recIconStop.classList.add('hide');
     transcriptText.textContent = text;
     transcriptText.scrollLeft = transcriptText.scrollWidth;
 
@@ -537,6 +568,9 @@ async function stopRecording() {
     }, 2000);
   } catch (err) {
     isRecording = false;
+    recBtn.classList.remove('recording');
+    recIconPlay.classList.remove('hide');
+    recIconStop.classList.add('hide');
     container.classList.remove('recording-active');
     waveformInline.classList.add('hide');
     dot.className = 'error';

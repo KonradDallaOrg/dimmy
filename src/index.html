@@ -10,6 +10,10 @@
   <div id="container">
     <!-- Pill row — ALWAYS visible -->
     <div id="pill">
+      <button id="rec-btn" title="Record" aria-label="Toggle recording">
+        <svg id="rec-icon-play" viewBox="0 0 16 16" width="12" height="12" fill="currentColor"><path d="M4 2.5v11l9-5.5z"/></svg>
+        <svg id="rec-icon-stop" class="hide" viewBox="0 0 16 16" width="10" height="10" fill="currentColor"><rect x="2" y="2" width="12" height="12" rx="2"/></svg>
+      </button>
       <div id="dot" data-i18n-title="pill.ready" title="Ready"></div>
       <span id="device-name" data-i18n="pill.loading">Loading...</span>
       <span id="timer" class="hide">00:00</span>

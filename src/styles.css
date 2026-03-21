@@ -132,6 +132,9 @@ body {
 [data-theme="light"] #container {
   border-color: rgba(0, 0, 0, 0.12);
 }
+[data-theme="light"] #rec-btn:hover {
+  background: rgba(0, 0, 0, 0.08);
+}
 @media (prefers-color-scheme: light) {
   [data-theme="auto"] #container {
     border-color: rgba(0, 0, 0, 0.12);
@@ -275,6 +278,34 @@ body {
 .chunk-dot.final {
   background: #5198C9;
   animation: pulse 0.8s ease-in-out infinite;
+}
+
+/* Play/Stop button */
+#rec-btn {
+  -webkit-app-region: no-drag;
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 2px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  transition: color 0.2s, background 0.2s;
+}
+#rec-btn:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.1);
+}
+#rec-btn.recording {
+  color: #ef4444;
+}
+#rec-btn.recording:hover {
+  background: rgba(239, 68, 68, 0.15);
 }
 
 #settings-btn {
