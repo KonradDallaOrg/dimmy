@@ -47,6 +47,7 @@ const recIconStop = document.getElementById('rec-icon-stop');
 const waveformInline = document.getElementById('waveform-inline');
 const waveformInlineCtx = waveformInline.getContext('2d');
 const compactModeCheckbox = document.getElementById('compact-mode-enabled');
+const useKeyringCheckbox = document.getElementById('use-keyring');
 
 const recPanel = document.getElementById('rec-panel');
 const waveformCanvas = document.getElementById('waveform');
@@ -801,6 +802,9 @@ async function openSettings() {
     // Compact mode
     compactModeCheckbox.checked = compactMode;
 
+    // Key storage
+    useKeyringCheckbox.checked = config.use_keyring || false;
+
     // Preprocessing
     preprocessingCheckbox.checked = config.preprocessing_enabled !== false;
     audioDebugCheckbox.checked = config.audio_debug_enabled || false;
@@ -1133,6 +1137,7 @@ saveBtn.addEventListener('click', async () => {
       llmUseSameKey: llmUseSameKey,
       llmLogEnabled: llmLogEnabled,
       llmApiKey: llmApiKey,
+      useKeyring: useKeyringCheckbox.checked,
     });
 
     // Update local state
@@ -1292,8 +1297,9 @@ async function showOnboarding() {
         llmApiKey: null,
         llmLogEnabled: null,
         preprocessingEnabled: true,
-        chunkStreamingEnabled: true,
+        chunkStreamingEnabled: null,
         audioDebugEnabled: null,
+        useKeyring: null,
       });
       await invoke('complete_onboarding');
     } catch (e) {

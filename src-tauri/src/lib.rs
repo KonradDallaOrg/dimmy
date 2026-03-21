@@ -1,6 +1,7 @@
 pub mod audio;
 pub mod error;
 mod hotkey;
+pub mod keystore;
 pub mod llm;
 pub mod preprocess;
 pub mod provider;
@@ -224,6 +225,7 @@ struct AppConfig {
     chunk_streaming_enabled: bool,
     preprocessing_enabled: bool,
     audio_debug_enabled: bool,
+    use_keyring: bool,
     // Window position — bottom-right anchor in logical pixels
     window_anchor_right: Option<f64>,
     window_anchor_bottom: Option<f64>,
@@ -259,6 +261,7 @@ impl Default for AppConfig {
             chunk_streaming_enabled: false,
             preprocessing_enabled: true,
             audio_debug_enabled: false,
+            use_keyring: false,
             window_anchor_right: None,
             window_anchor_bottom: None,
             stats_total_words: 0,
@@ -292,6 +295,7 @@ fn save_config_file(cfg: &AppConfig) {
             "chunk_streaming_enabled": cfg.chunk_streaming_enabled,
             "preprocessing_enabled": cfg.preprocessing_enabled,
             "audio_debug_enabled": cfg.audio_debug_enabled,
+            "use_keyring": cfg.use_keyring,
             "stats_total_words": cfg.stats_total_words,
             "stats_total_speaking_secs": cfg.stats_total_speaking_secs,
         });
@@ -366,6 +370,7 @@ fn load_config_file() -> AppConfig {
                     audio_debug_enabled: v["audio_debug_enabled"]
                         .as_bool()
                         .unwrap_or(defaults.audio_debug_enabled),
+                    use_keyring: v["use_keyring"].as_bool().unwrap_or(defaults.use_keyring),
                     window_anchor_right: v["window_anchor_right"].as_f64(),
                     window_anchor_bottom: v["window_anchor_bottom"].as_f64(),
                     stats_total_words: v["stats_total_words"].as_u64().unwrap_or(0),
@@ -447,7 +452,7 @@ fn migrate_from_pai_voice() {
 }
 
 /// Migrate: if old config.json has api_key in plain text, move to secure storage and REMOVE from file
-fn migrate_plaintext_key() {
+fn migrate_plaintext_key(store: &keystore::KeyStore, use_keyring: bool) {
     if let Some(path) = config_path() {
         if let Ok(data) = std::fs::read_to_string(&path) {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
@@ -459,7 +464,12 @@ fn migrate_plaintext_key() {
                             "Migrating plaintext API key to secure storage (provider={})...",
                             provider
                         ));
-                        match save_key(KeyringScope::Stt(provider), key) {
+                        match save_key_with_store(
+                            store,
+                            KeyringScope::Stt(provider),
+                            key,
+                            use_keyring,
+                        ) {
                             Ok(()) => log("Key migrated to secure storage"),
                             Err(e) => log(&format!("WARNING: migration failed: {}", e)),
                         }
@@ -476,67 +486,44 @@ fn migrate_plaintext_key() {
 
 // ── Per-provider secure key storage ─────────────────────────────────
 // Keys are stored per-provider so switching providers doesn't lose keys.
-// Keyring entries: "dimmy" / "api-key-{provider}" and "llm-key-{provider}"
+// Key storage: routes through KeyStore (local encrypted file or OS keyring)
 
 use provider::{KeyringScope, Provider};
 
-fn save_key(scope: KeyringScope, key: &str) -> Result<(), String> {
-    let name = scope.entry_name();
-    let entry = keyring::Entry::new("dimmy", &name).map_err(|e| {
-        log(&format!(
-            "ERROR: keyring Entry::new({}) failed: {}",
-            name, e
-        ));
-        format!("Credential store error: {}", e)
-    })?;
-    entry.set_password(key).map_err(|e| {
-        log(&format!(
-            "ERROR: keyring set_password({}) failed: {}",
-            name, e
-        ));
-        format!("Failed to save key: {}", e)
-    })?;
-    log(&format!("Key saved to secure storage: {}", name));
-    Ok(())
+/// Convenience wrappers that read use_keyring from AppState.
+/// These maintain the same call signatures used throughout lib.rs.
+fn save_key_with_store(
+    store: &keystore::KeyStore,
+    scope: KeyringScope,
+    key: &str,
+    use_keyring: bool,
+) -> Result<(), String> {
+    store.save_key(scope, key, use_keyring)
 }
 
-fn load_key(scope: KeyringScope) -> Option<String> {
-    let name = scope.entry_name();
-    match keyring::Entry::new("dimmy", &name) {
-        Ok(entry) => match entry.get_password() {
-            Ok(key) => {
-                log(&format!("Key loaded from secure storage: {}", name));
-                Some(key)
-            }
-            Err(_) => None,
-        },
-        Err(_) => None,
-    }
+fn load_key_with_store(
+    store: &keystore::KeyStore,
+    scope: KeyringScope,
+    use_keyring: bool,
+) -> Option<String> {
+    store.load_key(scope, use_keyring)
 }
 
-fn has_key(scope: KeyringScope) -> bool {
-    let name = scope.entry_name();
-    match keyring::Entry::new("dimmy", &name) {
-        Ok(entry) => entry.get_password().is_ok(),
-        Err(_) => false,
-    }
-}
-
-fn delete_key(service: &str, name: &str) {
-    if let Ok(entry) = keyring::Entry::new(service, name) {
-        let _ = entry.delete_credential();
-    }
-}
-
-/// Migrate old single "api-key" and "llm-api-key" entries to per-provider entries.
-fn migrate_keyring_to_per_provider(api_url: &str, llm_api_url: &str) {
+/// Migrate old single "api-key" and "llm-api-key" keyring entries to per-provider entries.
+/// This handles the legacy format from before per-provider key storage.
+fn migrate_keyring_to_per_provider(
+    store: &keystore::KeyStore,
+    api_url: &str,
+    llm_api_url: &str,
+    use_keyring: bool,
+) {
     // Migrate transcription key
     if let Ok(entry) = keyring::Entry::new("dimmy", "api-key") {
         if let Ok(key) = entry.get_password() {
             let provider = Provider::from_url(api_url);
             log(&format!("Migrating old api-key to api-key-{}", provider));
-            let _ = save_key(KeyringScope::Stt(provider), &key);
-            delete_key("dimmy", "api-key");
+            let _ = save_key_with_store(store, KeyringScope::Stt(provider), &key, use_keyring);
+            store.delete_legacy_key("dimmy", "api-key");
         }
     }
     // Migrate LLM key
@@ -547,8 +534,8 @@ fn migrate_keyring_to_per_provider(api_url: &str, llm_api_url: &str) {
                 "Migrating old llm-api-key to llm-key-{}",
                 provider
             ));
-            let _ = save_key(KeyringScope::Llm(provider), &key);
-            delete_key("dimmy", "llm-api-key");
+            let _ = save_key_with_store(store, KeyringScope::Llm(provider), &key, use_keyring);
+            store.delete_legacy_key("dimmy", "llm-api-key");
         }
     }
 }
@@ -582,6 +569,8 @@ pub struct AppState {
     pub chunk_streaming_enabled: Mutex<bool>,
     pub preprocessing_enabled: Mutex<bool>,
     pub audio_debug_enabled: Mutex<bool>,
+    pub use_keyring: Mutex<bool>,
+    pub key_store: keystore::KeyStore,
     /// Path to current audio debug session directory (set during recording, cleared on stop)
     pub audio_debug_session_dir: Mutex<Option<std::path::PathBuf>>,
     /// Bottom-right anchor in logical pixels — persisted across restarts
@@ -1099,6 +1088,7 @@ fn set_config(
     preprocessing_enabled: Option<bool>,
     chunk_streaming_enabled: Option<bool>,
     audio_debug_enabled: Option<bool>,
+    use_keyring: Option<bool>,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     log(&format!(
@@ -1107,10 +1097,16 @@ fn set_config(
     ));
 
     // Save transcription API key for the provider derived from the URL
+    let use_kr = *state.use_keyring.lock().map_err(|e| e.to_string())?;
     let transcription_provider = Provider::from_url(&api_url);
     if let Some(ref key) = api_key {
         if !key.is_empty() {
-            save_key(KeyringScope::Stt(transcription_provider), key)?;
+            save_key_with_store(
+                &state.key_store,
+                KeyringScope::Stt(transcription_provider),
+                key,
+                use_kr,
+            )?;
             *state.api_key.lock().map_err(|e| e.to_string())? = Some(key.clone());
         }
     }
@@ -1120,7 +1116,12 @@ fn set_config(
     let llm_provider = Provider::from_url(llm_url_for_provider);
     if let Some(ref key) = llm_api_key {
         if !key.is_empty() {
-            save_key(KeyringScope::Llm(llm_provider), key)?;
+            save_key_with_store(
+                &state.key_store,
+                KeyringScope::Llm(llm_provider),
+                key,
+                use_kr,
+            )?;
             *state.llm_api_key.lock().map_err(|e| e.to_string())? = Some(key.clone());
         }
     }
@@ -1170,6 +1171,25 @@ fn set_config(
             .audio_debug_enabled
             .lock()
             .map_err(|e| e.to_string())? = v;
+    }
+    if let Some(v) = use_keyring {
+        let old_use_kr = *state.use_keyring.lock().map_err(|e| e.to_string())?;
+        if v != old_use_kr {
+            // Migrate keys between backends
+            match state.key_store.migrate_keys(v) {
+                Ok(n) => log(&format!(
+                    "Migrated {} keys to {}",
+                    n,
+                    if v {
+                        "OS keyring"
+                    } else {
+                        "local encrypted store"
+                    }
+                )),
+                Err(e) => log(&format!("WARNING: key migration failed: {}", e)),
+            }
+            *state.use_keyring.lock().map_err(|e| e.to_string())? = v;
+        }
     }
     if let Some(ref v) = shortcut {
         *state.shortcut.lock().map_err(|e| e.to_string())? = v.clone();
@@ -1232,6 +1252,7 @@ fn set_config(
         chunk_streaming_enabled: cur_chunk_streaming_enabled,
         preprocessing_enabled: cur_preprocessing_enabled,
         audio_debug_enabled: cur_audio_debug_enabled,
+        use_keyring: *state.use_keyring.lock().map_err(|e| e.to_string())?,
         window_anchor_right: cur_anchor.map(|(r, _)| r),
         window_anchor_bottom: cur_anchor.map(|(_, b)| b),
         stats_total_words: *state.stats_total_words.lock().map_err(|e| e.to_string())?,
@@ -1253,14 +1274,18 @@ fn set_config(
     // When provider changes, load the stored key for the new provider into AppState
     if api_key.is_none() || api_key.as_deref() == Some("") {
         let provider = Provider::from_url(&api_url);
-        if let Some(key) = load_key(KeyringScope::Stt(provider)) {
+        if let Some(key) =
+            load_key_with_store(&state.key_store, KeyringScope::Stt(provider), use_kr)
+        {
             *state.api_key.lock().map_err(|e| e.to_string())? = Some(key);
         }
     }
     if llm_api_key.is_none() || llm_api_key.as_deref() == Some("") {
         let llm_url = state.llm_api_url.lock().map_err(|e| e.to_string())?.clone();
         let provider = Provider::from_url(&llm_url);
-        if let Some(key) = load_key(KeyringScope::Llm(provider)) {
+        if let Some(key) =
+            load_key_with_store(&state.key_store, KeyringScope::Llm(provider), use_kr)
+        {
             *state.llm_api_key.lock().map_err(|e| e.to_string())? = Some(key);
         }
     }
@@ -1328,26 +1353,61 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
     let styles: Vec<&str> = llm::LlmStyle::ALL.iter().map(|s| s.as_str()).collect();
     let tones: Vec<&str> = llm::LlmTone::ALL.iter().map(|t| t.as_str()).collect();
 
+    let use_kr = *state.use_keyring.lock().map_err(|e| e.to_string())?;
+
     // Per-provider key flags
-    let has_groq_key = has_key(KeyringScope::Stt(Provider::Groq));
-    let has_openai_key = has_key(KeyringScope::Stt(Provider::OpenAI));
-    let has_gemini_key = has_key(KeyringScope::Stt(Provider::Gemini));
-    let has_deepgram_key = has_key(KeyringScope::Stt(Provider::Deepgram));
-    let has_custom_key = has_key(KeyringScope::Stt(Provider::Custom));
+    let has_groq_key = state
+        .key_store
+        .has_key(KeyringScope::Stt(Provider::Groq), use_kr);
+    let has_openai_key = state
+        .key_store
+        .has_key(KeyringScope::Stt(Provider::OpenAI), use_kr);
+    let has_gemini_key = state
+        .key_store
+        .has_key(KeyringScope::Stt(Provider::Gemini), use_kr);
+    let has_deepgram_key = state
+        .key_store
+        .has_key(KeyringScope::Stt(Provider::Deepgram), use_kr);
+    let has_custom_key = state
+        .key_store
+        .has_key(KeyringScope::Stt(Provider::Custom), use_kr);
     // LLM key flags: check dedicated llm-key first, fall back to api-key for same provider.
-    // Keys are per-provider — if you entered an OpenAI key for transcription, it works for LLM too.
-    let has_llm_groq_key =
-        has_key(KeyringScope::Llm(Provider::Groq)) || has_key(KeyringScope::Stt(Provider::Groq));
-    let has_llm_openai_key = has_key(KeyringScope::Llm(Provider::OpenAI))
-        || has_key(KeyringScope::Stt(Provider::OpenAI));
-    let has_llm_openrouter_key = has_key(KeyringScope::Llm(Provider::OpenRouter))
-        || has_key(KeyringScope::Stt(Provider::OpenRouter));
-    let has_llm_gemini_key = has_key(KeyringScope::Llm(Provider::Gemini))
-        || has_key(KeyringScope::Stt(Provider::Gemini));
-    let has_llm_anthropic_key = has_key(KeyringScope::Llm(Provider::Anthropic))
-        || has_key(KeyringScope::Stt(Provider::Anthropic));
-    let has_llm_custom_key = has_key(KeyringScope::Llm(Provider::Custom))
-        || has_key(KeyringScope::Stt(Provider::Custom));
+    let has_llm_groq_key = state
+        .key_store
+        .has_key(KeyringScope::Llm(Provider::Groq), use_kr)
+        || state
+            .key_store
+            .has_key(KeyringScope::Stt(Provider::Groq), use_kr);
+    let has_llm_openai_key = state
+        .key_store
+        .has_key(KeyringScope::Llm(Provider::OpenAI), use_kr)
+        || state
+            .key_store
+            .has_key(KeyringScope::Stt(Provider::OpenAI), use_kr);
+    let has_llm_openrouter_key = state
+        .key_store
+        .has_key(KeyringScope::Llm(Provider::OpenRouter), use_kr)
+        || state
+            .key_store
+            .has_key(KeyringScope::Stt(Provider::OpenRouter), use_kr);
+    let has_llm_gemini_key = state
+        .key_store
+        .has_key(KeyringScope::Llm(Provider::Gemini), use_kr)
+        || state
+            .key_store
+            .has_key(KeyringScope::Stt(Provider::Gemini), use_kr);
+    let has_llm_anthropic_key = state
+        .key_store
+        .has_key(KeyringScope::Llm(Provider::Anthropic), use_kr)
+        || state
+            .key_store
+            .has_key(KeyringScope::Stt(Provider::Anthropic), use_kr);
+    let has_llm_custom_key = state
+        .key_store
+        .has_key(KeyringScope::Llm(Provider::Custom), use_kr)
+        || state
+            .key_store
+            .has_key(KeyringScope::Stt(Provider::Custom), use_kr);
 
     Ok(serde_json::json!({
         "has_key": has_stt_key,
@@ -1371,6 +1431,7 @@ fn get_config(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, St
         "chunk_streaming_enabled": *state.chunk_streaming_enabled.lock().map_err(|e| e.to_string())?,
         "preprocessing_enabled": preprocessing_enabled,
         "audio_debug_enabled": audio_debug_enabled,
+        "use_keyring": use_kr,
         "shortcut": shortcut,
         "shortcut_label": shortcut_label,
         "llm_styles": styles,
@@ -1454,7 +1515,8 @@ async fn process_with_llm(
             llm_key
         } else {
             let llm_provider = Provider::from_url(&api_url);
-            load_key(KeyringScope::Stt(llm_provider))
+            let use_kr = *state.use_keyring.lock().map_err(|e| e.to_string())?;
+            load_key_with_store(&state.key_store, KeyringScope::Stt(llm_provider), use_kr)
         }
     };
 
@@ -1673,6 +1735,7 @@ fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         chunk_streaming_enabled,
         preprocessing_enabled,
         audio_debug_enabled,
+        use_keyring: *state.use_keyring.lock().map_err(|e| e.to_string())?,
         window_anchor_right: anchor.map(|(r, _)| r),
         window_anchor_bottom: anchor.map(|(_, b)| b),
         stats_total_words: *state.stats_total_words.lock().map_err(|e| e.to_string())?,
@@ -2268,18 +2331,25 @@ pub fn run() {
     }
 
     migrate_from_pai_voice();
-    migrate_plaintext_key();
 
     let file_cfg = load_config_file();
+    let use_kr = file_cfg.use_keyring;
+    let key_store = keystore::KeyStore::new();
+
+    migrate_plaintext_key(&key_store, use_kr);
 
     // Migrate old single keyring entries to per-provider entries
-    migrate_keyring_to_per_provider(&file_cfg.api_url, &file_cfg.llm_api_url);
+    migrate_keyring_to_per_provider(&key_store, &file_cfg.api_url, &file_cfg.llm_api_url, use_kr);
 
     // Load the key for the current provider
     let transcription_provider = Provider::from_url(&file_cfg.api_url);
     let llm_provider = Provider::from_url(&file_cfg.llm_api_url);
-    let stored_key = load_key(KeyringScope::Stt(transcription_provider));
-    let stored_llm_key = load_key(KeyringScope::Llm(llm_provider));
+    let stored_key = load_key_with_store(
+        &key_store,
+        KeyringScope::Stt(transcription_provider),
+        use_kr,
+    );
+    let stored_llm_key = load_key_with_store(&key_store, KeyringScope::Llm(llm_provider), use_kr);
     // SECURITY: never log the actual key value — only whether one exists
     log(&format!("Config loaded: url={}, model={}, device={:?}, provider={}, has_key={}, llm_provider={}, llm_enabled={}, llm_style={}",
         file_cfg.api_url, file_cfg.api_model, file_cfg.selected_device, transcription_provider,
@@ -2331,6 +2401,8 @@ pub fn run() {
             chunk_streaming_enabled: Mutex::new(file_cfg.chunk_streaming_enabled),
             preprocessing_enabled: Mutex::new(file_cfg.preprocessing_enabled),
             audio_debug_enabled: Mutex::new(file_cfg.audio_debug_enabled),
+            use_keyring: Mutex::new(file_cfg.use_keyring),
+            key_store,
             audio_debug_session_dir: Mutex::new(None),
             window_anchor: Mutex::new(
                 match (file_cfg.window_anchor_right, file_cfg.window_anchor_bottom) {
@@ -2983,7 +3055,8 @@ mod tests {
 
     #[test]
     fn migrate_plaintext_key_no_panic_without_key() {
-        migrate_plaintext_key();
+        let store = keystore::KeyStore::new();
+        migrate_plaintext_key(&store, false);
     }
 
     #[test]
