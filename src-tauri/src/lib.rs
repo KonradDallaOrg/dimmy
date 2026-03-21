@@ -1,11 +1,12 @@
 pub mod audio;
 pub mod error;
+pub mod ffi;
 mod hotkey;
 pub mod keystore;
 pub mod llm;
 pub mod preprocess;
 pub mod provider;
-mod transcribe;
+pub mod transcribe;
 
 use audio::AudioCommand;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -41,7 +42,7 @@ fn default_shortcut() -> &'static str {
     }
 }
 
-fn config_dir_path() -> Option<std::path::PathBuf> {
+pub(crate) fn config_dir_path() -> Option<std::path::PathBuf> {
     dirs::config_dir().map(|p| p.join("dimmy"))
 }
 
@@ -88,7 +89,7 @@ fn config_path() -> Option<std::path::PathBuf> {
     config_dir_path().map(|p| p.join("config.json"))
 }
 
-fn log_path() -> Option<std::path::PathBuf> {
+pub(crate) fn log_path() -> Option<std::path::PathBuf> {
     config_dir_path().map(|p| p.join("dimmy.log"))
 }
 
@@ -204,7 +205,7 @@ pub(crate) fn log(msg: &str) {
 }
 
 /// Non-sensitive config persisted to disk.
-struct AppConfig {
+pub(crate) struct AppConfig {
     api_url: String,
     api_model: String,
     selected_device: Option<String>,
@@ -271,7 +272,7 @@ impl Default for AppConfig {
 }
 
 /// Save non-sensitive config to file (NO api_key — that goes to keyring ONLY)
-fn save_config_file(cfg: &AppConfig) {
+pub(crate) fn save_config_file(cfg: &AppConfig) {
     if let Some(path) = config_path() {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -316,7 +317,7 @@ fn save_config_file(cfg: &AppConfig) {
 }
 
 /// Load non-sensitive config from file. Missing LLM fields use defaults (backward compatible).
-fn load_config_file() -> AppConfig {
+pub(crate) fn load_config_file() -> AppConfig {
     let defaults = AppConfig::default();
     if let Some(path) = config_path() {
         if let Ok(data) = std::fs::read_to_string(&path) {
@@ -452,7 +453,7 @@ fn migrate_from_pai_voice() {
 }
 
 /// Migrate: if old config.json has api_key in plain text, move to secure storage and REMOVE from file
-fn migrate_plaintext_key(store: &keystore::KeyStore, use_keyring: bool) {
+pub(crate) fn migrate_plaintext_key(store: &keystore::KeyStore, use_keyring: bool) {
     if let Some(path) = config_path() {
         if let Ok(data) = std::fs::read_to_string(&path) {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
@@ -492,7 +493,7 @@ use provider::{KeyringScope, Provider};
 
 /// Convenience wrappers that read use_keyring from AppState.
 /// These maintain the same call signatures used throughout lib.rs.
-fn save_key_with_store(
+pub(crate) fn save_key_with_store(
     store: &keystore::KeyStore,
     scope: KeyringScope,
     key: &str,
@@ -501,7 +502,7 @@ fn save_key_with_store(
     store.save_key(scope, key, use_keyring)
 }
 
-fn load_key_with_store(
+pub(crate) fn load_key_with_store(
     store: &keystore::KeyStore,
     scope: KeyringScope,
     use_keyring: bool,
@@ -511,7 +512,7 @@ fn load_key_with_store(
 
 /// Migrate old single "api-key" and "llm-api-key" keyring entries to per-provider entries.
 /// This handles the legacy format from before per-provider key storage.
-fn migrate_keyring_to_per_provider(
+pub(crate) fn migrate_keyring_to_per_provider(
     store: &keystore::KeyStore,
     api_url: &str,
     llm_api_url: &str,
@@ -1664,7 +1665,7 @@ fn cycle_llm_tone(
 }
 
 /// Build AppConfig by acquiring each mutex individually (one at a time, no overlapping locks).
-fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
+pub(crate) fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
     let api_url = state.api_url.lock().map_err(|e| e.to_string())?.clone();
     let api_model = state.api_model.lock().map_err(|e| e.to_string())?.clone();
     let selected_device = state

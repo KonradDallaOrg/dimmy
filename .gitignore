@@ -17,3 +17,4 @@ tests/test_audio.wav
 tests/audio/
 tests/results/
 demo/
+mockup/
