@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RootNamespace>Dimmy.Windows</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Platforms>x86;x64;ARM64</Platforms>
+    <RuntimeIdentifiers>win-x86;win-x64;win-arm64</RuntimeIdentifiers>
+    <UseWinUI>true</UseWinUI>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <WindowsPackageType>None</WindowsPackageType>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.5.250311000" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.1742" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
+    <PackageReference Include="H.NotifyIcon.WinUI" Version="2.2.0" />
+  </ItemGroup>
+
+  <!-- Copy dimmy.dll from Rust build output to bin dir -->
+  <Target Name="CopyDimmyDll" AfterTargets="Build">
+    <PropertyGroup>
+      <DimmyDllSource>$(MSBuildThisFileDirectory)..\..\..\src-tauri\target\release\dimmy.dll</DimmyDllSource>
+    </PropertyGroup>
+    <Copy SourceFiles="$(DimmyDllSource)" DestinationFolder="$(OutputPath)"
+          Condition="Exists('$(DimmyDllSource)')" SkipUnchangedFiles="true" />
+    <Warning Text="dimmy.dll not found at $(DimmyDllSource). Run 'cargo build --release --lib' first."
+             Condition="!Exists('$(DimmyDllSource)')" />
+  </Target>
+</Project>
