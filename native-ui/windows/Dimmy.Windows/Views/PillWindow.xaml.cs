@@ -27,8 +27,8 @@ public sealed partial class PillWindow : Window
     private bool _isDragging;
     private global::Windows.Foundation.Point _dragStart;
 
-    private const int PillWidth = 320;
-    private const int PillHeight = 96;
+    private const int PillWidth = 260;
+    private const int PillHeight = 60;
 
     public PillWindow(AppViewModel vm)
     {
@@ -255,6 +255,19 @@ public sealed partial class PillWindow : Window
         byte g = Convert.ToByte(hex[2..4], 16);
         byte b = Convert.ToByte(hex[4..6], 16);
         return global::Windows.UI.Color.FromArgb(255, r, g, b);
+    }
+
+    // ── Hover opacity ────────────────────────────────────────────────
+    private void Pill_PointerEntered(object sender, PointerRoutedEventArgs e)
+    {
+        if (_vm.CurrentState == AppState.Idle)
+            RootGrid.Opacity = 0.95;
+    }
+
+    private void Pill_PointerExited(object sender, PointerRoutedEventArgs e)
+    {
+        if (_vm.CurrentState == AppState.Idle)
+            RootGrid.Opacity = 0.5;
     }
 
     // ── Drag support ─────────────────────────────────────────────────
