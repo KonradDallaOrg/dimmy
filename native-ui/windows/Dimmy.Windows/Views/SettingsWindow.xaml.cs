@@ -14,6 +14,7 @@ public sealed partial class SettingsWindow : Window
     public SettingsWindow()
     {
         this.InitializeComponent();
+        ((FrameworkElement)Content).DataContext = ViewModel;
         Title = "Dimmy Settings";
 
         var appWindow = WindowHelper.GetAppWindow(this);

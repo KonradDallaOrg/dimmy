@@ -31,18 +31,18 @@
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE946;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
         <NavigationViewItem Content="Stats" Tag="stats"
-                            Visibility="{x:Bind ViewModel.IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                            Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE9D9;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
         <NavigationViewItem Content="Debug" Tag="debug"
-                            Visibility="{x:Bind ViewModel.IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                            Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xEBE8;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
       </NavigationView.MenuItems>
 
       <NavigationView.FooterMenuItems>
         <NavigationViewItem SelectsOnInvoked="False">
-          <ToggleSwitch Header="Advanced" IsOn="{x:Bind ViewModel.IsAdvanced, Mode=TwoWay}" />
+          <ToggleSwitch Header="Advanced" IsOn="{Binding IsAdvanced, Mode=TwoWay}" />
         </NavigationViewItem>
       </NavigationView.FooterMenuItems>
 
@@ -51,12 +51,12 @@
           <!-- ═══ General Tab ═══ -->
           <StackPanel x:Name="GeneralPanel" Spacing="16" Visibility="Visible">
             <ComboBox Header="Language" Width="200"
-                      SelectedValue="{x:Bind ViewModel.Language, Mode=TwoWay}"
+                      SelectedValue="{Binding Language, Mode=TwoWay}"
                       SelectedValuePath="Key" DisplayMemberPath="Value"
-                      ItemsSource="{x:Bind ViewModel.LanguageItems}" />
+                      ItemsSource="{Binding LanguageItems}" />
             <ComboBox Header="Style" Width="200"
-                      SelectedItem="{x:Bind ViewModel.LlmStyle, Mode=TwoWay}"
-                      ItemsSource="{x:Bind ViewModel.LlmStyleItems}" />
+                      SelectedItem="{Binding LlmStyle, Mode=TwoWay}"
+                      ItemsSource="{Binding LlmStyleItems}" />
             <StackPanel Orientation="Horizontal" Spacing="12">
               <RadioButton Content="Auto" GroupName="Theme" IsChecked="True" />
               <RadioButton Content="Light" GroupName="Theme" />
@@ -65,50 +65,50 @@
             <ToggleSwitch Header="Launch at login" IsEnabled="False" />
             <ToggleSwitch Header="Show in taskbar" />
             <PasswordBox Header="API Key" Width="300"
-                         PlaceholderText="{x:Bind ViewModel.HasApiKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}" />
+                         PlaceholderText="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}" />
 
             <!-- Advanced: Provider, Model, Custom endpoint, etc. -->
             <StackPanel Spacing="12"
-                        Visibility="{x:Bind ViewModel.IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                        Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
               <ComboBox Header="Provider &amp; Model" Width="300"
-                        SelectedValue="{x:Bind ViewModel.ApiUrl, Mode=TwoWay}"
+                        SelectedValue="{Binding ApiUrl, Mode=TwoWay}"
                         SelectedValuePath="Url" DisplayMemberPath="Name"
-                        ItemsSource="{x:Bind ViewModel.ProviderPresetItems}" />
+                        ItemsSource="{Binding ProviderPresetItems}" />
               <TextBox Header="Custom endpoint URL" Width="300"
-                       Text="{x:Bind ViewModel.ApiUrl, Mode=TwoWay}" />
+                       Text="{Binding ApiUrl, Mode=TwoWay}" />
               <TextBox Header="Custom model" Width="200"
-                       Text="{x:Bind ViewModel.ApiModel, Mode=TwoWay}" />
+                       Text="{Binding ApiModel, Mode=TwoWay}" />
               <TextBox Header="Prompt / Vocabulary" Width="400" AcceptsReturn="True"
                        TextWrapping="Wrap" Height="80"
-                       Text="{x:Bind ViewModel.Prompt, Mode=TwoWay}" />
+                       Text="{Binding Prompt, Mode=TwoWay}" />
               <ToggleSwitch Header="Chunk streaming"
-                            IsOn="{x:Bind ViewModel.ChunkStreamingEnabled, Mode=TwoWay}" />
+                            IsOn="{Binding ChunkStreamingEnabled, Mode=TwoWay}" />
               <ComboBox Header="Audio input device" Width="300"
-                        SelectedItem="{x:Bind ViewModel.SelectedDevice, Mode=TwoWay}"
-                        ItemsSource="{x:Bind ViewModel.Devices}" />
+                        SelectedItem="{Binding SelectedDevice, Mode=TwoWay}"
+                        ItemsSource="{Binding Devices}" />
               <ToggleSwitch Header="Preprocessing"
-                            IsOn="{x:Bind ViewModel.PreprocessingEnabled, Mode=TwoWay}" />
+                            IsOn="{Binding PreprocessingEnabled, Mode=TwoWay}" />
               <ToggleSwitch Header="Use keyring"
-                            IsOn="{x:Bind ViewModel.UseKeyring, Mode=TwoWay}" />
+                            IsOn="{Binding UseKeyring, Mode=TwoWay}" />
             </StackPanel>
           </StackPanel>
 
           <!-- ═══ Shortcut Tab ═══ -->
           <StackPanel x:Name="ShortcutPanel" Spacing="16" Visibility="Collapsed">
-            <controls:ShortcutRecorder Shortcut="{x:Bind ViewModel.Shortcut, Mode=TwoWay}" />
+            <controls:ShortcutRecorder Shortcut="{Binding Shortcut, Mode=TwoWay}" />
             <StackPanel Orientation="Horizontal" Spacing="16">
               <RadioButton Content="Push-to-Talk" GroupName="ShortcutMode"
-                           IsChecked="{x:Bind ViewModel.ShortcutMode, Mode=TwoWay, Converter={StaticResource StringToBoolConverter}, ConverterParameter=hold}" />
+                           IsChecked="{Binding ShortcutMode, Mode=TwoWay, Converter={StaticResource StringToBoolConverter}, ConverterParameter=hold}" />
               <RadioButton Content="Toggle" GroupName="ShortcutMode"
-                           IsChecked="{x:Bind ViewModel.ShortcutMode, Mode=TwoWay, Converter={StaticResource StringToBoolConverter}, ConverterParameter=toggle}" />
+                           IsChecked="{Binding ShortcutMode, Mode=TwoWay, Converter={StaticResource StringToBoolConverter}, ConverterParameter=toggle}" />
             </StackPanel>
           </StackPanel>
 
           <!-- ═══ Output Tab ═══ -->
           <StackPanel x:Name="OutputPanel" Spacing="16" Visibility="Collapsed">
             <ComboBox Header="Style" Width="200"
-                      SelectedItem="{x:Bind ViewModel.LlmStyle, Mode=TwoWay}"
-                      ItemsSource="{x:Bind ViewModel.LlmStyleItems}" />
+                      SelectedItem="{Binding LlmStyle, Mode=TwoWay}"
+                      ItemsSource="{Binding LlmStyleItems}" />
             <ToggleSwitch Header="Remove filler words" IsEnabled="False" />
             <ToggleSwitch Header="Auto-punctuation" IsEnabled="False" />
             <ToggleSwitch Header="Auto-capitalization" IsEnabled="False" />
@@ -120,10 +120,10 @@
 
             <!-- Advanced: Tone, Translate, LLM config -->
             <StackPanel Spacing="12"
-                        Visibility="{x:Bind ViewModel.IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                        Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
               <ComboBox Header="Tone" Width="200"
-                        SelectedItem="{x:Bind ViewModel.LlmTone, Mode=TwoWay}"
-                        ItemsSource="{x:Bind ViewModel.LlmToneItems}" />
+                        SelectedItem="{Binding LlmTone, Mode=TwoWay}"
+                        ItemsSource="{Binding LlmToneItems}" />
               <ComboBox Header="Translate to" Width="200">
                 <x:String>None</x:String>
                 <x:String>EN</x:String>
@@ -133,15 +133,15 @@
                 <x:String>ES</x:String>
               </ComboBox>
               <TextBox Header="Custom LLM endpoint" Width="300"
-                       Text="{x:Bind ViewModel.LlmApiUrl, Mode=TwoWay}" />
+                       Text="{Binding LlmApiUrl, Mode=TwoWay}" />
               <TextBox Header="Custom LLM model" Width="200"
-                       Text="{x:Bind ViewModel.LlmApiModel, Mode=TwoWay}" />
+                       Text="{Binding LlmApiModel, Mode=TwoWay}" />
               <ToggleSwitch Header="Use same API key"
-                            IsOn="{x:Bind ViewModel.LlmUseSameKey, Mode=TwoWay}" />
+                            IsOn="{Binding LlmUseSameKey, Mode=TwoWay}" />
               <PasswordBox Header="LLM API Key" Width="300" />
               <TextBox Header="Custom prompt" Width="400" AcceptsReturn="True"
                        TextWrapping="Wrap" Height="80"
-                       Text="{x:Bind ViewModel.LlmCustomPrompt, Mode=TwoWay}" />
+                       Text="{Binding LlmCustomPrompt, Mode=TwoWay}" />
             </StackPanel>
           </StackPanel>
 
@@ -198,7 +198,7 @@
           <!-- ═══ Stats Tab (Advanced only) ═══ -->
           <StackPanel x:Name="StatsPanel" Spacing="12" Visibility="Collapsed">
             <TextBlock Text="Total words dictated" FontSize="14" />
-            <TextBlock Text="{x:Bind ViewModel.StatsTotalWords, Mode=OneWay}" FontSize="28" FontWeight="Bold" />
+            <TextBlock Text="{Binding StatsTotalWords, Mode=OneWay}" FontSize="28" FontWeight="Bold" />
             <TextBlock Text="Total speaking time" FontSize="14" Margin="0,16,0,0" />
             <TextBlock x:Name="SpeakingTimeText" FontSize="28" FontWeight="Bold" />
             <TextBlock Text="Time saved estimate" FontSize="14" Margin="0,16,0,0" />
@@ -208,9 +208,9 @@
           <!-- ═══ Debug Tab (Advanced only) ═══ -->
           <StackPanel x:Name="DebugPanel" Spacing="12" Visibility="Collapsed">
             <ToggleSwitch Header="LLM log enabled"
-                          IsOn="{x:Bind ViewModel.LlmLogEnabled, Mode=TwoWay}" />
+                          IsOn="{Binding LlmLogEnabled, Mode=TwoWay}" />
             <ToggleSwitch Header="Audio debug"
-                          IsOn="{x:Bind ViewModel.AudioDebugEnabled, Mode=TwoWay}" />
+                          IsOn="{Binding AudioDebugEnabled, Mode=TwoWay}" />
           </StackPanel>
         </Grid>
       </ScrollViewer>

@@ -11,6 +11,7 @@ public sealed partial class OnboardingWindow : Window
     public OnboardingWindow()
     {
         this.InitializeComponent();
+        ((FrameworkElement)Content).DataContext = ViewModel;
         Title = "Dimmy";
 
         var appWindow = WindowHelper.GetAppWindow(this);

@@ -15,7 +15,7 @@
         <!-- Step 0: Welcome -->
         <StackPanel x:Name="Step0Panel" Spacing="12" VerticalAlignment="Center"
                     HorizontalAlignment="Center"
-                    Visibility="{x:Bind ViewModel.IsStep0, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                    Visibility="{Binding IsStep0, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
             <Ellipse Width="64" Height="64" Fill="{ThemeResource AccentFillColorDefaultBrush}"
                      HorizontalAlignment="Center" />
             <TextBlock Text="Dimmy" FontSize="32" FontWeight="Bold"
@@ -34,7 +34,7 @@
         <!-- Step 1: Shortcut -->
         <StackPanel x:Name="Step1Panel" Spacing="12" VerticalAlignment="Center"
                     HorizontalAlignment="Center"
-                    Visibility="{x:Bind ViewModel.IsStep1, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                    Visibility="{Binding IsStep1, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
             <TextBlock Text="Your Shortcut" FontSize="28" FontWeight="Bold"
                        HorizontalAlignment="Center" />
             <TextBlock Text="Hold to dictate, release to paste" FontSize="14"
@@ -44,7 +44,7 @@
                     CornerRadius="8" Padding="24,16" HorizontalAlignment="Center"
                     MinWidth="200" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1">
-                <TextBlock Text="{x:Bind ViewModel.Shortcut, Mode=OneWay}"
+                <TextBlock Text="{Binding Shortcut, Mode=OneWay}"
                            FontSize="24" FontWeight="SemiBold" HorizontalAlignment="Center" />
             </Border>
             <TextBlock Text="Click to change" FontSize="12"
@@ -53,9 +53,9 @@
             <StackPanel Orientation="Horizontal" Spacing="16" HorizontalAlignment="Center"
                         Margin="0,12,0,0">
                 <RadioButton Content="Push-to-Talk" GroupName="Mode"
-                             IsChecked="{x:Bind ViewModel.ShortcutMode, Mode=TwoWay, Converter={StaticResource StringToBoolConverter}, ConverterParameter=hold}" />
+                             IsChecked="{Binding ShortcutMode, Mode=TwoWay, Converter={StaticResource StringToBoolConverter}, ConverterParameter=hold}" />
                 <RadioButton Content="Toggle" GroupName="Mode"
-                             IsChecked="{x:Bind ViewModel.ShortcutMode, Mode=TwoWay, Converter={StaticResource StringToBoolConverter}, ConverterParameter=toggle}" />
+                             IsChecked="{Binding ShortcutMode, Mode=TwoWay, Converter={StaticResource StringToBoolConverter}, ConverterParameter=toggle}" />
             </StackPanel>
             <StackPanel Orientation="Horizontal" Spacing="12" HorizontalAlignment="Center"
                         Margin="0,16,0,0">
@@ -68,15 +68,15 @@
         <!-- Step 2: Try It -->
         <StackPanel x:Name="Step2Panel" Spacing="12" VerticalAlignment="Center"
                     HorizontalAlignment="Center"
-                    Visibility="{x:Bind ViewModel.IsStep2, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-            <StackPanel Visibility="{x:Bind ViewModel.IsTrialSuccess, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Invert}"
+                    Visibility="{Binding IsStep2, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+            <StackPanel Visibility="{Binding IsTrialSuccess, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Invert}"
                         Spacing="12" HorizontalAlignment="Center">
                 <TextBlock Text="Try it!" FontSize="28" FontWeight="Bold"
                            HorizontalAlignment="Center" />
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
                     <TextBlock Text="Hold " FontSize="14"
                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                    <TextBlock Text="{x:Bind ViewModel.Shortcut, Mode=OneWay}" FontSize="14"
+                    <TextBlock Text="{Binding Shortcut, Mode=OneWay}" FontSize="14"
                                FontWeight="SemiBold"
                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                     <TextBlock Text=" and say something" FontSize="14"
@@ -88,13 +88,13 @@
                 <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                         CornerRadius="8" Padding="16" MinHeight="80" MinWidth="300"
                         BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
-                    <TextBlock Text="{x:Bind ViewModel.TrialText, Mode=OneWay}"
+                    <TextBlock Text="{Binding TrialText, Mode=OneWay}"
                                TextWrapping="Wrap" VerticalAlignment="Center"
                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                 </Border>
             </StackPanel>
 
-            <StackPanel Visibility="{x:Bind ViewModel.IsTrialSuccess, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+            <StackPanel Visibility="{Binding IsTrialSuccess, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
                         Spacing="12" HorizontalAlignment="Center">
                 <FontIcon Glyph="&#xE73E;" FontSize="56" Foreground="Green"
                           HorizontalAlignment="Center" />
@@ -107,7 +107,7 @@
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
                         <TextBlock Text="Hold " FontSize="13"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                        <TextBlock Text="{x:Bind ViewModel.Shortcut, Mode=OneWay}" FontSize="13"
+                        <TextBlock Text="{Binding Shortcut, Mode=OneWay}" FontSize="13"
                                    FontWeight="SemiBold"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                         <TextBlock Text=" anywhere to dictate." FontSize="13"
@@ -121,7 +121,7 @@
 
             <Button Content="Back" Click="PrevStep_Click" Width="90"
                     HorizontalAlignment="Center" Margin="0,8,0,0"
-                    Visibility="{x:Bind ViewModel.IsTrialSuccess, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Invert}" />
+                    Visibility="{Binding IsTrialSuccess, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Invert}" />
         </StackPanel>
 
         <!-- Progress dots -->
@@ -130,10 +130,10 @@
                      Fill="{ThemeResource AccentFillColorDefaultBrush}" />
             <Ellipse Width="8" Height="8"
                      Fill="{ThemeResource AccentFillColorDefaultBrush}"
-                     Opacity="{x:Bind ViewModel.Step1Reached, Mode=OneWay, Converter={StaticResource BoolToOpacityConverter}, ConverterParameter=Invert}" />
+                     Opacity="{Binding Step1Reached, Mode=OneWay, Converter={StaticResource BoolToOpacityConverter}, ConverterParameter=Invert}" />
             <Ellipse Width="8" Height="8"
                      Fill="{ThemeResource AccentFillColorDefaultBrush}"
-                     Opacity="{x:Bind ViewModel.Step2Reached, Mode=OneWay, Converter={StaticResource BoolToOpacityConverter}, ConverterParameter=Invert}" />
+                     Opacity="{Binding Step2Reached, Mode=OneWay, Converter={StaticResource BoolToOpacityConverter}, ConverterParameter=Invert}" />
         </StackPanel>
     </Grid>
 </Window>
