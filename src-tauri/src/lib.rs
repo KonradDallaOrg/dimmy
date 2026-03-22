@@ -19,8 +19,8 @@ const DEFAULT_MODEL: &str = "whisper-large-v3-turbo";
 /// Default prompt guides Whisper to produce punctuated, well-formatted output.
 /// Whisper mimics the style of this text — punctuation, capitalization, etc.
 const DEFAULT_PROMPT: &str = "Hello, how are you? Fine, thanks! Today we'll discuss an interesting topic. Ciao, come stai? Bene, grazie! Oggi parliamo di un argomento interessante.";
-const DEFAULT_LLM_URL: &str = "https://api.groq.com/openai/v1/chat/completions";
-const DEFAULT_LLM_MODEL: &str = "llama-3.3-70b-versatile";
+pub(crate) const DEFAULT_LLM_URL: &str = "https://api.groq.com/openai/v1/chat/completions";
+pub(crate) const DEFAULT_LLM_MODEL: &str = "llama-3.3-70b-versatile";
 const MAX_RECORDING_SECS: usize = 30 * 60; // 30 minutes hard cap
 const MAX_LOG_BYTES: u64 = 1_048_576; // 1 MB log rotation threshold
 /// Tail buffer: keep recording for this long after the user releases the hotkey.

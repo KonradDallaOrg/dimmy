@@ -57,6 +57,11 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern void dimmy_cycle_llm_tone(int direction);
 
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_process_with_llm(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string text,
+        byte[] outBuf, int bufLen);
+
     // ── Stats ────────────────────────────────────────────────────────
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_update_stats(int words, double speakingSecs);

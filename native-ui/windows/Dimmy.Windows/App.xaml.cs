@@ -220,35 +220,21 @@ public partial class App : Application
 
             if (_appViewModel.IsRecording)
             {
-                // Stop recording + transcribe on background thread with timeout
+                // Stop recording → transcribe → LLM enhance → paste
                 try
                 {
-                    var transcribeTask = Task.Run(() =>
+                    var result = await Services.TranscriptionService.StopAndProcessAsync();
+                    if (result.IsSuccess)
                     {
-                        var buf = new byte[65536];
-                        int len = DimmyNative.dimmy_stop_recording(buf, buf.Length);
-                        return len > 0 ? Encoding.UTF8.GetString(buf, 0, len) : null;
-                    });
-
-                    System.Diagnostics.Debug.WriteLine("[Dimmy] stop_recording called...");
-                    var completed = await Task.WhenAny(transcribeTask, Task.Delay(30000));
-                    if (completed == transcribeTask)
-                    {
-                        var text = await transcribeTask;
-                        System.Diagnostics.Debug.WriteLine($"[Dimmy] transcript result: len={text?.Length ?? -1}");
-                        if (!string.IsNullOrEmpty(text))
-                        {
-                            await TextInjectionService.PasteText(text, _appViewModel.KeepInClipboard);
-                        }
-                        else if (_appViewModel.CurrentState == AppState.Transcribing)
-                        {
-                            _appViewModel.SetError("Empty transcription");
-                        }
+                        await TextInjectionService.PasteText(result.Text!, _appViewModel.KeepInClipboard);
                     }
-                    else
+                    else if (result.IsTimeout)
                     {
-                        System.Diagnostics.Debug.WriteLine("[Dimmy] transcription TIMEOUT");
-                        _appViewModel.SetError("Transcription timed out (30s)");
+                        _appViewModel.SetError(result.Error!);
+                    }
+                    else if (_appViewModel.CurrentState == AppState.Transcribing)
+                    {
+                        _appViewModel.SetError("Empty transcription");
                     }
                 }
                 catch (Exception ex)

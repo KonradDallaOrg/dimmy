@@ -490,23 +490,13 @@ public sealed partial class PillWindow : Window
     {
         try
         {
-            var transcribeTask = Task.Run(() =>
-            {
-                var buf = new byte[65536];
-                int len = DimmyNative.dimmy_stop_recording(buf, buf.Length);
-                return len > 0 ? Encoding.UTF8.GetString(buf, 0, len) : null;
-            });
-            var completed = await Task.WhenAny(transcribeTask, Task.Delay(30000));
-            if (completed == transcribeTask)
-            {
-                var text = await transcribeTask;
-                if (!string.IsNullOrEmpty(text))
-                    await TextInjectionService.PasteText(text, _vm.KeepInClipboard);
-                else
-                    _vm.SetError("Empty transcription");
-            }
+            var result = await Services.TranscriptionService.StopAndProcessAsync();
+            if (result.IsSuccess)
+                await TextInjectionService.PasteText(result.Text!, _vm.KeepInClipboard);
+            else if (result.IsTimeout)
+                _vm.SetError(result.Error!);
             else
-                _vm.SetError("Transcription timed out");
+                _vm.SetError("Empty transcription");
         }
         catch (Exception ex) { _vm.SetError(ex.Message); }
     }

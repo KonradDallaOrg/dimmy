@@ -664,6 +664,135 @@ pub extern "C" fn dimmy_cycle_llm_tone(direction: c_int) {
     }
 }
 
+/// Process text through LLM enhancement. Reads style/tone/config from global state.
+/// Returns length written to buffer, or -1 on error, 0 if LLM disabled/style=Off.
+///
+/// # Safety
+/// `text_ptr` must be a valid null-terminated UTF-8 C string.
+/// `out_buf` must point to a buffer of at least `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_process_with_llm(
+    text_ptr: *const c_char,
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    // Preconditions
+    if text_ptr.is_null() {
+        log("ERROR: dimmy_process_with_llm called with null text_ptr");
+        return -1;
+    }
+    if out_buf.is_null() || buf_len <= 0 {
+        log("ERROR: dimmy_process_with_llm called with null/invalid buffer");
+        return -1;
+    }
+
+    let text = match CStr::from_ptr(text_ptr).to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            log("ERROR: dimmy_process_with_llm: invalid UTF-8 in text_ptr");
+            return -1;
+        }
+    };
+
+    // Empty text → return empty (not an error)
+    if text.is_empty() {
+        return write_to_buf("", out_buf, buf_len);
+    }
+
+    let st = state();
+
+    // Check if LLM is enabled
+    let enabled = st.llm_enabled.lock().map(|e| *e).unwrap_or(false);
+    if !enabled {
+        return write_to_buf(text, out_buf, buf_len);
+    }
+
+    let style = st.llm_style.lock().map(|s| *s).unwrap_or(crate::llm::LlmStyle::Off);
+    if style == crate::llm::LlmStyle::Off {
+        return write_to_buf(text, out_buf, buf_len);
+    }
+
+    let tone = st.llm_tone.lock().map(|t| *t).unwrap_or(crate::llm::LlmTone::None);
+    let custom_prompt = st.llm_custom_prompt.lock().map(|p| p.clone()).unwrap_or_default();
+    let translate_to = st.llm_translate_to.lock().map(|t| t.clone()).unwrap_or_default();
+
+    // Resolve LLM API URL and key (may use same as STT)
+    let use_same_key = st.llm_use_same_key.lock().map(|k| *k).unwrap_or(true);
+    let llm_url = st.llm_api_url.lock().map(|u| u.clone()).unwrap_or_default();
+    let llm_model = st.llm_api_model.lock().map(|m| m.clone()).unwrap_or_default();
+
+    let api_key = if use_same_key {
+        st.api_key.lock().ok().and_then(|k| k.clone())
+    } else {
+        st.llm_api_key.lock().ok().and_then(|k| k.clone())
+    };
+
+    let api_key = match api_key {
+        Some(k) if !k.is_empty() => k,
+        _ => {
+            log("ERROR: dimmy_process_with_llm: no LLM API key available");
+            emit_event("error", r#"{"message":"No LLM API key configured"}"#);
+            // Return original text on key error (graceful degradation)
+            return write_to_buf(text, out_buf, buf_len);
+        }
+    };
+
+    // Resolve URL: use LLM-specific URL or default
+    let api_url = if !llm_url.is_empty() {
+        llm_url
+    } else {
+        crate::DEFAULT_LLM_URL.to_string()
+    };
+
+    let api_model = if !llm_model.is_empty() {
+        llm_model
+    } else {
+        crate::DEFAULT_LLM_MODEL.to_string()
+    };
+
+    emit_event("status", r#"{"state":"processing"}"#);
+
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            log(&format!("ERROR: dimmy_process_with_llm: failed to create runtime: {}", e));
+            return write_to_buf(text, out_buf, buf_len);
+        }
+    };
+
+    let result = rt.block_on(crate::llm::process_text(
+        &api_url,
+        &api_model,
+        &api_key,
+        text,
+        style,
+        tone,
+        &custom_prompt,
+        &translate_to,
+    ));
+
+    match result {
+        Ok(enhanced) => {
+            log(&format!(
+                "LLM processing complete: {} chars → {} chars",
+                text.len(),
+                enhanced.len()
+            ));
+            write_to_buf(&enhanced, out_buf, buf_len)
+        }
+        Err(e) => {
+            let err_msg = format!("{}", e);
+            log(&format!("ERROR: LLM processing failed: {}", err_msg));
+            emit_event(
+                "error",
+                &format!(r#"{{"message":"LLM: {}"}}"#, err_msg.replace('"', "\\\"")),
+            );
+            // Return original text on LLM failure (graceful degradation)
+            write_to_buf(text, out_buf, buf_len)
+        }
+    }
+}
+
 // ── Stats ───────────────────────────────────────────────────────────
 
 /// Update cumulative stats. Returns 0=OK, -1=invalid input.
@@ -1283,5 +1412,171 @@ mod tests {
         let mut buf = vec![0u8; 64];
         let result = dimmy_stop_recording(buf.as_mut_ptr() as *mut c_char, 0);
         assert_eq!(result, -1, "zero buf_len must return -1");
+    }
+
+    // ── dimmy_process_with_llm tests ────────────────────────────────
+
+    #[test]
+    fn process_with_llm_rejects_null_text() {
+        ensure_test_state();
+        let mut buf = vec![0u8; 1024];
+        let result = unsafe {
+            dimmy_process_with_llm(
+                std::ptr::null(),
+                buf.as_mut_ptr() as *mut c_char,
+                buf.len() as c_int,
+            )
+        };
+        assert_eq!(result, -1, "null text_ptr must return -1");
+    }
+
+    #[test]
+    fn process_with_llm_rejects_null_buffer() {
+        ensure_test_state();
+        let text = CString::new("hello world").unwrap();
+        let result = unsafe {
+            dimmy_process_with_llm(text.as_ptr(), std::ptr::null_mut(), 1024)
+        };
+        assert_eq!(result, -1, "null out_buf must return -1");
+    }
+
+    #[test]
+    fn process_with_llm_rejects_zero_buf_len() {
+        ensure_test_state();
+        let text = CString::new("hello world").unwrap();
+        let mut buf = vec![0u8; 64];
+        let result = unsafe {
+            dimmy_process_with_llm(
+                text.as_ptr(),
+                buf.as_mut_ptr() as *mut c_char,
+                0,
+            )
+        };
+        assert_eq!(result, -1, "zero buf_len must return -1");
+    }
+
+    #[test]
+    fn process_with_llm_empty_text_returns_empty() {
+        ensure_test_state();
+        let text = CString::new("").unwrap();
+        let mut buf = vec![0u8; 1024];
+        let result = unsafe {
+            dimmy_process_with_llm(
+                text.as_ptr(),
+                buf.as_mut_ptr() as *mut c_char,
+                buf.len() as c_int,
+            )
+        };
+        assert_eq!(result, 0, "empty text should return 0 length");
+    }
+
+    #[test]
+    fn process_with_llm_passthrough_when_disabled() {
+        ensure_test_state();
+        // Ensure LLM is disabled
+        if let Ok(mut e) = state().llm_enabled.lock() {
+            *e = false;
+        }
+        if let Ok(mut s) = state().llm_style.lock() {
+            *s = crate::llm::LlmStyle::Off;
+        }
+
+        let input = "Hello world, this is a test.";
+        let text = CString::new(input).unwrap();
+        let mut buf = vec![0u8; 1024];
+        let result = unsafe {
+            dimmy_process_with_llm(
+                text.as_ptr(),
+                buf.as_mut_ptr() as *mut c_char,
+                buf.len() as c_int,
+            )
+        };
+        assert!(result > 0, "should return positive length");
+        let output = unsafe {
+            CStr::from_ptr(buf.as_ptr() as *const c_char)
+                .to_str()
+                .unwrap()
+        };
+        assert_eq!(output, input, "disabled LLM should pass through unchanged");
+    }
+
+    #[test]
+    fn process_with_llm_passthrough_when_style_off() {
+        ensure_test_state();
+        // Enable LLM but set style to Off
+        if let Ok(mut e) = state().llm_enabled.lock() {
+            *e = true;
+        }
+        if let Ok(mut s) = state().llm_style.lock() {
+            *s = crate::llm::LlmStyle::Off;
+        }
+
+        let input = "Test passthrough with style off";
+        let text = CString::new(input).unwrap();
+        let mut buf = vec![0u8; 1024];
+        let result = unsafe {
+            dimmy_process_with_llm(
+                text.as_ptr(),
+                buf.as_mut_ptr() as *mut c_char,
+                buf.len() as c_int,
+            )
+        };
+        assert!(result > 0);
+        let output = unsafe {
+            CStr::from_ptr(buf.as_ptr() as *const c_char)
+                .to_str()
+                .unwrap()
+        };
+        assert_eq!(output, input, "style=Off should pass through unchanged");
+
+        // Cleanup
+        if let Ok(mut e) = state().llm_enabled.lock() {
+            *e = false;
+        }
+    }
+
+    #[test]
+    fn process_with_llm_graceful_no_key() {
+        ensure_test_state();
+        // Enable LLM with a real style but remove the key
+        if let Ok(mut e) = state().llm_enabled.lock() {
+            *e = true;
+        }
+        if let Ok(mut s) = state().llm_style.lock() {
+            *s = crate::llm::LlmStyle::Professional;
+        }
+        if let Ok(mut k) = state().llm_use_same_key.lock() {
+            *k = true;
+        }
+        let old_key = state().api_key.lock().unwrap().take();
+
+        let input = "Graceful degradation test";
+        let text = CString::new(input).unwrap();
+        let mut buf = vec![0u8; 1024];
+        let result = unsafe {
+            dimmy_process_with_llm(
+                text.as_ptr(),
+                buf.as_mut_ptr() as *mut c_char,
+                buf.len() as c_int,
+            )
+        };
+
+        // Should return original text (graceful degradation)
+        assert!(result > 0, "should still return text on no-key");
+        let output = unsafe {
+            CStr::from_ptr(buf.as_ptr() as *const c_char)
+                .to_str()
+                .unwrap()
+        };
+        assert_eq!(output, input, "no key → return original text");
+
+        // Restore
+        *state().api_key.lock().unwrap() = old_key;
+        if let Ok(mut e) = state().llm_enabled.lock() {
+            *e = false;
+        }
+        if let Ok(mut s) = state().llm_style.lock() {
+            *s = crate::llm::LlmStyle::Off;
+        }
     }
 }
