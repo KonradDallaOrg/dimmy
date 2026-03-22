@@ -42,21 +42,31 @@ public partial class App : Application
     {
         _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
 
-        // 1. Initialize Rust core
-        int result = DimmyNative.dimmy_init();
-        if (result != 0)
+        try
         {
-            System.Diagnostics.Debug.WriteLine("FATAL: dimmy_init() returned " + result);
-            Exit();
-            return;
+            // 1. Initialize Rust core
+            int result = DimmyNative.dimmy_init();
+            if (result != 0)
+            {
+                System.Diagnostics.Debug.WriteLine("FATAL: dimmy_init() returned " + result);
+                // Show a window anyway so app doesn't silently die
+                var errorWin = new OnboardingWindow();
+                errorWin.Activate();
+                return;
+            }
+
+            // 2. Register event callback
+            _eventCallbackDelegate = OnNativeEvent;
+            DimmyNative.dimmy_set_event_callback(_eventCallbackDelegate);
+
+            // 3. Load config into ViewModel
+            LoadConfigIntoViewModel();
         }
-
-        // 2. Register event callback
-        _eventCallbackDelegate = OnNativeEvent;
-        DimmyNative.dimmy_set_event_callback(_eventCallbackDelegate);
-
-        // 3. Load config into ViewModel
-        LoadConfigIntoViewModel();
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"FFI init error: {ex.GetType().Name}: {ex.Message}");
+            // Continue without FFI — at least show the UI
+        }
 
         // 4. Check onboarding
         bool onboardingDone = IsOnboardingComplete();
@@ -106,8 +116,15 @@ public partial class App : Application
 
     private void OnNativeEvent(IntPtr jsonPtr)
     {
-        var json = DimmyNative.MarshalEventJson(jsonPtr);
-        _dispatcherQueue?.TryEnqueue(() => _appViewModel.HandleEvent(json));
+        try
+        {
+            var json = DimmyNative.MarshalEventJson(jsonPtr);
+            _dispatcherQueue?.TryEnqueue(() => _appViewModel.HandleEvent(json));
+        }
+        catch
+        {
+            // Defensive: never let FFI callback crash the app
+        }
     }
 
     private void LoadConfigIntoViewModel()
