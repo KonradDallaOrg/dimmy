@@ -15,9 +15,9 @@ public sealed partial class OnboardingWindow : Window
         Title = "Dimmy";
 
         var appWindow = WindowHelper.GetAppWindow(this);
-        appWindow.Resize(new global::Windows.Graphics.SizeInt32(520, 440));
+        appWindow?.Resize(new global::Windows.Graphics.SizeInt32(520, 440));
 
-        if (appWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter presenter)
+        if (appWindow?.Presenter is Microsoft.UI.Windowing.OverlappedPresenter presenter)
         {
             presenter.IsResizable = false;
             presenter.IsMaximizable = false;

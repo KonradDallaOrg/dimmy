@@ -6,32 +6,15 @@
     xmlns:controls="using:Dimmy.Windows.Views.Controls"
     Title="Dimmy Settings">
 
-  <Grid RequestedTheme="Light">
+  <Grid RequestedTheme="Light" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
     <Grid.RowDefinitions>
       <RowDefinition Height="*" />
       <RowDefinition Height="Auto" />
     </Grid.RowDefinitions>
 
-    <NavigationView x:Name="NavView" RequestedTheme="Light" PaneDisplayMode="Left"
+    <NavigationView x:Name="NavView" PaneDisplayMode="Left"
                     IsBackButtonVisible="Collapsed"
                     IsSettingsVisible="False" SelectionChanged="Nav_SelectionChanged">
-      <!-- Force light pane background — override BOTH Default and Dark theme dictionaries -->
-      <NavigationView.Resources>
-        <ResourceDictionary>
-          <ResourceDictionary.ThemeDictionaries>
-            <ResourceDictionary x:Key="Default">
-              <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="#F3F3F3" />
-              <SolidColorBrush x:Key="NavigationViewExpandedPaneBackground" Color="#F3F3F3" />
-              <SolidColorBrush x:Key="NavigationViewContentBackground" Color="White" />
-            </ResourceDictionary>
-            <ResourceDictionary x:Key="Dark">
-              <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="#F3F3F3" />
-              <SolidColorBrush x:Key="NavigationViewExpandedPaneBackground" Color="#F3F3F3" />
-              <SolidColorBrush x:Key="NavigationViewContentBackground" Color="White" />
-            </ResourceDictionary>
-          </ResourceDictionary.ThemeDictionaries>
-        </ResourceDictionary>
-      </NavigationView.Resources>
       <NavigationView.MenuItems>
         <NavigationViewItem Content="General" Tag="general">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE713;" /></NavigationViewItem.Icon>
@@ -68,6 +51,11 @@
           <Grid>
             <!-- ═══ General Tab ═══ -->
             <StackPanel x:Name="GeneralPanel" Spacing="16" Visibility="Visible">
+              <StackPanel Orientation="Horizontal" Spacing="12">
+                <RadioButton Content="Auto" GroupName="Theme" Tag="Default" Checked="Theme_Checked" IsChecked="True" />
+                <RadioButton Content="Light" GroupName="Theme" Tag="Light" Checked="Theme_Checked" />
+                <RadioButton Content="Dark" GroupName="Theme" Tag="Dark" Checked="Theme_Checked" />
+              </StackPanel>
               <ComboBox Header="Language" Width="200"
                         SelectedValue="{Binding Language, Mode=TwoWay}"
                         SelectedValuePath="Key" DisplayMemberPath="Value"

@@ -16,21 +16,16 @@ public sealed partial class SettingsWindow : Window
     {
         this.InitializeComponent();
 
-        // Force light theme on the entire window content
         if (Content is FrameworkElement root)
         {
             root.RequestedTheme = ElementTheme.Light;
             root.DataContext = ViewModel;
         }
 
-        // Force light theme on NavigationView pane (it uses a separate visual tree)
-        NavView.RequestedTheme = ElementTheme.Light;
-        NavView.PaneDisplayMode = NavigationViewPaneDisplayMode.Left;
-
         Title = "Dimmy Settings";
 
         var appWindow = WindowHelper.GetAppWindow(this);
-        appWindow.Resize(new global::Windows.Graphics.SizeInt32(620, 480));
+        appWindow?.Resize(new global::Windows.Graphics.SizeInt32(620, 480));
 
         LoadConfig();
         SyncProviderComboBox();
@@ -133,6 +128,19 @@ public sealed partial class SettingsWindow : Window
         DimmyNative.dimmy_set_config_json(json);
         App.Instance?.ReloadConfig();
         this.Close();
+    }
+
+    private void Theme_Checked(object sender, RoutedEventArgs e)
+    {
+        if (sender is RadioButton rb && rb.Tag is string tag && Content is FrameworkElement root)
+        {
+            root.RequestedTheme = tag switch
+            {
+                "Light" => ElementTheme.Light,
+                "Dark" => ElementTheme.Dark,
+                _ => ElementTheme.Default,
+            };
+        }
     }
 
     private void Cancel_Click(object sender, RoutedEventArgs e)

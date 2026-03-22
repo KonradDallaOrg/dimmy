@@ -59,10 +59,10 @@ public sealed partial class PillWindow : Window
     {
         ExtendsContentIntoTitleBar = true;
         var appWindow = WindowHelper.GetAppWindow(this);
-        appWindow.Resize(new global::Windows.Graphics.SizeInt32(PillWidth, PillHeight));
+        appWindow?.Resize(new global::Windows.Graphics.SizeInt32(PillWidth, PillHeight));
 
         // Borderless, no taskbar entry
-        if (appWindow.Presenter is OverlappedPresenter presenter)
+        if (appWindow?.Presenter is OverlappedPresenter presenter)
         {
             presenter.IsResizable = false;
             presenter.SetBorderAndTitleBar(false, false);
@@ -366,6 +366,7 @@ public sealed partial class PillWindow : Window
         var dy = current.Y - _dragStart.Y;
 
         var appWindow = WindowHelper.GetAppWindow(this);
+        if (appWindow is null) return;
         var pos = appWindow.Position;
         appWindow.Move(new global::Windows.Graphics.PointInt32(
             pos.X + (int)dx, pos.Y + (int)dy));

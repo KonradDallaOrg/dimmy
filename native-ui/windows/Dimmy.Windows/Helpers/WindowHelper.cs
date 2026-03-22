@@ -32,11 +32,18 @@ public static class WindowHelper
     public static IntPtr GetHwnd(Window window) =>
         WindowNative.GetWindowHandle(window);
 
-    public static AppWindow GetAppWindow(Window window)
+    public static AppWindow? GetAppWindow(Window window)
     {
-        var hwnd = GetHwnd(window);
-        var windowId = Win32Interop.GetWindowIdFromWindow(hwnd);
-        return AppWindow.GetFromWindowId(windowId);
+        try
+        {
+            var hwnd = GetHwnd(window);
+            var windowId = Win32Interop.GetWindowIdFromWindow(hwnd);
+            return AppWindow.GetFromWindowId(windowId);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     public static void SetTopmost(Window window)
@@ -58,7 +65,7 @@ public static class WindowHelper
         var screenW = GetSystemMetrics(SM_CXSCREEN);
         var screenH = GetSystemMetrics(SM_CYSCREEN);
         var appWindow = GetAppWindow(window);
-        appWindow.MoveAndResize(new global::Windows.Graphics.RectInt32(
+        appWindow?.MoveAndResize(new global::Windows.Graphics.RectInt32(
             screenW - width - margin,
             screenH - height - margin,
             width, height));
@@ -74,6 +81,6 @@ public static class WindowHelper
         x = Math.Max(0, Math.Min(x, screenW - width));
         y = Math.Max(0, Math.Min(y, screenH - height));
         var appWindow = GetAppWindow(window);
-        appWindow.MoveAndResize(new global::Windows.Graphics.RectInt32(x, y, width, height));
+        appWindow?.MoveAndResize(new global::Windows.Graphics.RectInt32(x, y, width, height));
     }
 }
