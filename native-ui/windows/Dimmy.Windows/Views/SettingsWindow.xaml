@@ -15,11 +15,22 @@
     <NavigationView x:Name="NavView" RequestedTheme="Light" PaneDisplayMode="Left"
                     IsBackButtonVisible="Collapsed"
                     IsSettingsVisible="False" SelectionChanged="Nav_SelectionChanged">
-      <!-- Force light pane background — NavigationView ignores RequestedTheme for its pane -->
+      <!-- Force light pane background — override BOTH Default and Dark theme dictionaries -->
       <NavigationView.Resources>
-        <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="#F3F3F3" />
-        <SolidColorBrush x:Key="NavigationViewExpandedPaneBackground" Color="#F3F3F3" />
-        <SolidColorBrush x:Key="NavigationViewContentBackground" Color="White" />
+        <ResourceDictionary>
+          <ResourceDictionary.ThemeDictionaries>
+            <ResourceDictionary x:Key="Default">
+              <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="#F3F3F3" />
+              <SolidColorBrush x:Key="NavigationViewExpandedPaneBackground" Color="#F3F3F3" />
+              <SolidColorBrush x:Key="NavigationViewContentBackground" Color="White" />
+            </ResourceDictionary>
+            <ResourceDictionary x:Key="Dark">
+              <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="#F3F3F3" />
+              <SolidColorBrush x:Key="NavigationViewExpandedPaneBackground" Color="#F3F3F3" />
+              <SolidColorBrush x:Key="NavigationViewContentBackground" Color="White" />
+            </ResourceDictionary>
+          </ResourceDictionary.ThemeDictionaries>
+        </ResourceDictionary>
       </NavigationView.Resources>
       <NavigationView.MenuItems>
         <NavigationViewItem Content="General" Tag="general">
@@ -47,179 +58,179 @@
         </NavigationViewItem>
       </NavigationView.MenuItems>
 
-      <NavigationView.FooterMenuItems>
-        <NavigationViewItem SelectsOnInvoked="False">
-          <ToggleSwitch Header="Advanced" IsOn="{Binding IsAdvanced, Mode=TwoWay}" />
-        </NavigationViewItem>
-      </NavigationView.FooterMenuItems>
-
       <ScrollViewer Padding="24">
-        <Grid>
-          <!-- ═══ General Tab ═══ -->
-          <StackPanel x:Name="GeneralPanel" Spacing="16" Visibility="Visible">
-            <ComboBox Header="Language" Width="200"
-                      SelectedValue="{Binding Language, Mode=TwoWay}"
-                      SelectedValuePath="Key" DisplayMemberPath="Value"
-                      ItemsSource="{Binding LanguageItems}" />
-            <ComboBox Header="Style" Width="200"
-                      SelectedItem="{Binding LlmStyle, Mode=TwoWay}"
-                      ItemsSource="{Binding LlmStyleItems}" />
-            <StackPanel Orientation="Horizontal" Spacing="12">
-              <RadioButton Content="Auto" GroupName="Theme" IsChecked="True" />
-              <RadioButton Content="Light" GroupName="Theme" />
-              <RadioButton Content="Dark" GroupName="Theme" />
-            </StackPanel>
-            <ToggleSwitch Header="Launch at login" IsEnabled="False" />
-            <ToggleSwitch Header="Show in taskbar" />
-            <PasswordBox x:Name="ApiKeyBox" Header="API Key" Width="300"
-                         PlaceholderText="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}" />
-
-            <!-- Advanced: Provider, Model, Custom endpoint, etc. -->
-            <StackPanel Spacing="12"
-                        Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-              <ComboBox Header="Provider &amp; Model" Width="300"
-                        SelectedValue="{Binding ApiUrl, Mode=TwoWay}"
-                        SelectedValuePath="Url" DisplayMemberPath="Name"
-                        ItemsSource="{Binding ProviderPresetItems}" />
-              <TextBox Header="Custom endpoint URL" Width="300"
-                       Text="{Binding ApiUrl, Mode=TwoWay}" />
-              <TextBox Header="Custom model" Width="200"
-                       Text="{Binding ApiModel, Mode=TwoWay}" />
-              <TextBox Header="Prompt / Vocabulary" Width="400" AcceptsReturn="True"
-                       TextWrapping="Wrap" Height="80"
-                       Text="{Binding Prompt, Mode=TwoWay}" />
-              <ToggleSwitch Header="Chunk streaming"
-                            IsOn="{Binding ChunkStreamingEnabled, Mode=TwoWay}" />
-              <ComboBox Header="Audio input device" Width="300"
-                        SelectedItem="{Binding SelectedDevice, Mode=TwoWay}"
-                        ItemsSource="{Binding Devices}" />
-              <ToggleSwitch Header="Preprocessing"
-                            IsOn="{Binding PreprocessingEnabled, Mode=TwoWay}" />
-              <ToggleSwitch Header="Use keyring"
-                            IsOn="{Binding UseKeyring, Mode=TwoWay}" />
-            </StackPanel>
+        <StackPanel Spacing="16">
+          <!-- Advanced toggle — inside content area so it doesn't get cut when pane collapses -->
+          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,0,8">
+            <ToggleSwitch Header="Advanced" IsOn="{Binding IsAdvanced, Mode=TwoWay}" />
           </StackPanel>
 
-          <!-- ═══ Shortcut Tab ═══ -->
-          <StackPanel x:Name="ShortcutPanel" Spacing="16" Visibility="Collapsed">
-            <controls:ShortcutRecorder Shortcut="{Binding Shortcut, Mode=TwoWay}" />
-            <StackPanel Orientation="Horizontal" Spacing="16">
-              <RadioButton Content="Push-to-Talk" GroupName="ShortcutMode"
-                           IsChecked="{Binding ShortcutMode, Mode=TwoWay, Converter={StaticResource StringToBoolConverter}, ConverterParameter=hold}" />
-              <RadioButton Content="Toggle" GroupName="ShortcutMode"
-                           IsChecked="{Binding ShortcutMode, Mode=TwoWay, Converter={StaticResource StringToBoolConverter}, ConverterParameter=toggle}" />
+          <Grid>
+            <!-- ═══ General Tab ═══ -->
+            <StackPanel x:Name="GeneralPanel" Spacing="16" Visibility="Visible">
+              <ComboBox Header="Language" Width="200"
+                        SelectedValue="{Binding Language, Mode=TwoWay}"
+                        SelectedValuePath="Key" DisplayMemberPath="Value"
+                        ItemsSource="{Binding LanguageItems}" />
+              <ComboBox Header="Style" Width="200"
+                        SelectedItem="{Binding LlmStyle, Mode=TwoWay}"
+                        ItemsSource="{Binding LlmStyleItems}" />
+              <ToggleSwitch Header="Launch at login" IsEnabled="False" />
+              <ToggleSwitch Header="Show in taskbar" />
+              <PasswordBox x:Name="ApiKeyBox" Header="API Key" Width="300"
+                           PlaceholderText="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}" />
+
+              <!-- Advanced: Provider preset ComboBox + custom fields -->
+              <StackPanel Spacing="12"
+                          Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                <ComboBox x:Name="ProviderComboBox" Header="Provider" Width="300"
+                          SelectionChanged="Provider_SelectionChanged">
+                  <ComboBoxItem Content="Groq — whisper-large-v3-turbo" Tag="groq" />
+                  <ComboBoxItem Content="OpenAI — whisper-1" Tag="openai" />
+                  <ComboBoxItem Content="Deepgram — nova-3" Tag="deepgram" />
+                  <ComboBoxItem Content="Gemini — gemini-2.0-flash" Tag="gemini" />
+                  <ComboBoxItem Content="Custom endpoint" Tag="custom" />
+                </ComboBox>
+                <TextBox x:Name="CustomUrlBox" Header="Custom endpoint URL" Width="300"
+                         Text="{Binding ApiUrl, Mode=TwoWay}" Visibility="Collapsed" />
+                <TextBox x:Name="CustomModelBox" Header="Custom model" Width="200"
+                         Text="{Binding ApiModel, Mode=TwoWay}" Visibility="Collapsed" />
+                <TextBox Header="Prompt / Vocabulary" Width="400" AcceptsReturn="True"
+                         TextWrapping="Wrap" Height="80"
+                         Text="{Binding Prompt, Mode=TwoWay}" />
+                <ToggleSwitch Header="Chunk streaming"
+                              IsOn="{Binding ChunkStreamingEnabled, Mode=TwoWay}" />
+                <ComboBox Header="Audio input device" Width="300"
+                          SelectedItem="{Binding SelectedDevice, Mode=TwoWay}"
+                          ItemsSource="{Binding Devices}" />
+                <ToggleSwitch Header="Preprocessing"
+                              IsOn="{Binding PreprocessingEnabled, Mode=TwoWay}" />
+                <ToggleSwitch Header="Use keyring"
+                              IsOn="{Binding UseKeyring, Mode=TwoWay}" />
+              </StackPanel>
             </StackPanel>
-          </StackPanel>
 
-          <!-- ═══ Output Tab ═══ -->
-          <StackPanel x:Name="OutputPanel" Spacing="16" Visibility="Collapsed">
-            <ComboBox Header="Style" Width="200"
-                      SelectedItem="{Binding LlmStyle, Mode=TwoWay}"
-                      ItemsSource="{Binding LlmStyleItems}" />
-            <ToggleSwitch Header="Remove filler words" IsEnabled="False" />
-            <ToggleSwitch Header="Auto-punctuation" IsEnabled="False" />
-            <ToggleSwitch Header="Auto-capitalization" IsEnabled="False" />
-            <ToggleSwitch Header="Restore clipboard" IsEnabled="False" />
-            <ComboBox Header="Paste method" Width="200">
-              <x:String>Ctrl+V</x:String>
-              <x:String>Keystrokes</x:String>
-            </ComboBox>
+            <!-- ═══ Shortcut Tab ═══ -->
+            <StackPanel x:Name="ShortcutPanel" Spacing="16" Visibility="Collapsed">
+              <controls:ShortcutRecorder Shortcut="{Binding Shortcut, Mode=TwoWay}" />
+              <StackPanel Orientation="Horizontal" Spacing="16">
+                <RadioButton Content="Push-to-Talk" GroupName="ShortcutMode"
+                             IsChecked="{Binding ShortcutMode, Mode=TwoWay, Converter={StaticResource StringToBoolConverter}, ConverterParameter=hold}" />
+                <RadioButton Content="Toggle" GroupName="ShortcutMode"
+                             IsChecked="{Binding ShortcutMode, Mode=TwoWay, Converter={StaticResource StringToBoolConverter}, ConverterParameter=toggle}" />
+              </StackPanel>
+            </StackPanel>
 
-            <!-- Advanced: Tone, Translate, LLM config -->
-            <StackPanel Spacing="12"
-                        Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-              <ComboBox Header="Tone" Width="200"
-                        SelectedItem="{Binding LlmTone, Mode=TwoWay}"
-                        ItemsSource="{Binding LlmToneItems}" />
-              <ComboBox Header="Translate to" Width="200">
-                <x:String>None</x:String>
-                <x:String>EN</x:String>
-                <x:String>IT</x:String>
-                <x:String>DE</x:String>
-                <x:String>FR</x:String>
-                <x:String>ES</x:String>
+            <!-- ═══ Output Tab ═══ -->
+            <StackPanel x:Name="OutputPanel" Spacing="16" Visibility="Collapsed">
+              <ComboBox Header="Style" Width="200"
+                        SelectedItem="{Binding LlmStyle, Mode=TwoWay}"
+                        ItemsSource="{Binding LlmStyleItems}" />
+              <ToggleSwitch Header="Remove filler words" IsEnabled="False" />
+              <ToggleSwitch Header="Auto-punctuation" IsEnabled="False" />
+              <ToggleSwitch Header="Auto-capitalization" IsEnabled="False" />
+              <ToggleSwitch Header="Restore clipboard" IsEnabled="False" />
+              <ComboBox Header="Paste method" Width="200">
+                <x:String>Ctrl+V</x:String>
+                <x:String>Keystrokes</x:String>
               </ComboBox>
-              <TextBox Header="Custom LLM endpoint" Width="300"
-                       Text="{Binding LlmApiUrl, Mode=TwoWay}" />
-              <TextBox Header="Custom LLM model" Width="200"
-                       Text="{Binding LlmApiModel, Mode=TwoWay}" />
-              <ToggleSwitch Header="Use same API key"
-                            IsOn="{Binding LlmUseSameKey, Mode=TwoWay}" />
-              <PasswordBox x:Name="LlmApiKeyBox" Header="LLM API Key" Width="300" />
-              <TextBox Header="Custom prompt" Width="400" AcceptsReturn="True"
-                       TextWrapping="Wrap" Height="80"
-                       Text="{Binding LlmCustomPrompt, Mode=TwoWay}" />
+
+              <!-- Advanced: Tone, Translate, LLM config -->
+              <StackPanel Spacing="12"
+                          Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                <ComboBox Header="Tone" Width="200"
+                          SelectedItem="{Binding LlmTone, Mode=TwoWay}"
+                          ItemsSource="{Binding LlmToneItems}" />
+                <ComboBox Header="Translate to" Width="200">
+                  <x:String>None</x:String>
+                  <x:String>EN</x:String>
+                  <x:String>IT</x:String>
+                  <x:String>DE</x:String>
+                  <x:String>FR</x:String>
+                  <x:String>ES</x:String>
+                </ComboBox>
+                <TextBox Header="Custom LLM endpoint" Width="300"
+                         Text="{Binding LlmApiUrl, Mode=TwoWay}" />
+                <TextBox Header="Custom LLM model" Width="200"
+                         Text="{Binding LlmApiModel, Mode=TwoWay}" />
+                <ToggleSwitch Header="Use same API key"
+                              IsOn="{Binding LlmUseSameKey, Mode=TwoWay}" />
+                <PasswordBox x:Name="LlmApiKeyBox" Header="LLM API Key" Width="300" />
+                <TextBox Header="Custom prompt" Width="400" AcceptsReturn="True"
+                         TextWrapping="Wrap" Height="80"
+                         Text="{Binding LlmCustomPrompt, Mode=TwoWay}" />
+              </StackPanel>
             </StackPanel>
-          </StackPanel>
 
-          <!-- ═══ Overlay Tab ═══ -->
-          <StackPanel x:Name="OverlayPanel" Spacing="16" Visibility="Collapsed">
-            <ToggleSwitch Header="Show overlay" IsOn="True" />
-            <ComboBox Header="Default position" Width="200">
-              <x:String>Top Right</x:String>
-              <x:String>Top Left</x:String>
-              <x:String>Bottom Right</x:String>
-              <x:String>Bottom Left</x:String>
-              <x:String>Bottom Center</x:String>
-            </ComboBox>
-            <Button Content="Reset position" />
-            <ComboBox Header="Idle opacity" Width="200">
-              <x:String>Nearly invisible</x:String>
-              <x:String>Subtle</x:String>
-              <x:String>Visible</x:String>
-            </ComboBox>
-            <ComboBox Header="Border style" Width="200">
-              <x:String>Rainbow</x:String>
-              <x:String>Blue pulse</x:String>
-              <x:String>Green</x:String>
-              <x:String>None</x:String>
-            </ComboBox>
-            <ComboBox Header="Waveform style" Width="200">
-              <x:String>Bars</x:String>
-              <x:String>Line</x:String>
-              <x:String>Dots</x:String>
-            </ComboBox>
-            <TextBlock Text="You can always drag the pill to reposition it"
-                       FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-          </StackPanel>
+            <!-- ═══ Overlay Tab ═══ -->
+            <StackPanel x:Name="OverlayPanel" Spacing="16" Visibility="Collapsed">
+              <ToggleSwitch Header="Show overlay" IsOn="True" />
+              <ComboBox Header="Default position" Width="200">
+                <x:String>Top Right</x:String>
+                <x:String>Top Left</x:String>
+                <x:String>Bottom Right</x:String>
+                <x:String>Bottom Left</x:String>
+                <x:String>Bottom Center</x:String>
+              </ComboBox>
+              <Button Content="Reset position" />
+              <ComboBox Header="Idle opacity" Width="200">
+                <x:String>Nearly invisible</x:String>
+                <x:String>Subtle</x:String>
+                <x:String>Visible</x:String>
+              </ComboBox>
+              <ComboBox Header="Border style" Width="200">
+                <x:String>Rainbow</x:String>
+                <x:String>Blue pulse</x:String>
+                <x:String>Green</x:String>
+                <x:String>None</x:String>
+              </ComboBox>
+              <ComboBox Header="Waveform style" Width="200">
+                <x:String>Bars</x:String>
+                <x:String>Line</x:String>
+                <x:String>Dots</x:String>
+              </ComboBox>
+              <TextBlock Text="You can always drag the pill to reposition it"
+                         FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+            </StackPanel>
 
-          <!-- ═══ About Tab ═══ -->
-          <StackPanel x:Name="AboutPanel" Spacing="8" Visibility="Collapsed"
-                      HorizontalAlignment="Center" VerticalAlignment="Center">
-            <Ellipse Width="48" Height="48" Fill="{ThemeResource AccentFillColorDefaultBrush}"
-                     HorizontalAlignment="Center" />
-            <TextBlock Text="Dimmy" FontSize="20" FontWeight="Bold" HorizontalAlignment="Center" />
-            <TextBlock x:Name="VersionText" FontSize="12"
-                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+            <!-- ═══ About Tab ═══ -->
+            <StackPanel x:Name="AboutPanel" Spacing="8" Visibility="Collapsed"
+                        HorizontalAlignment="Center" VerticalAlignment="Center">
+              <Ellipse Width="48" Height="48" Fill="{ThemeResource AccentFillColorDefaultBrush}"
                        HorizontalAlignment="Center" />
-            <TextBlock Text="Voice dictation that stays out of your way" FontSize="12"
-                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                       HorizontalAlignment="Center" />
-            <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}"
-                    Margin="0,8" Width="200" />
-            <TextBlock Text="Made with irony" FontSize="11"
-                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                       HorizontalAlignment="Center" />
-          </StackPanel>
+              <TextBlock Text="Dimmy" FontSize="20" FontWeight="Bold" HorizontalAlignment="Center" />
+              <TextBlock x:Name="VersionText" FontSize="12"
+                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                         HorizontalAlignment="Center" />
+              <TextBlock Text="Voice dictation that stays out of your way" FontSize="12"
+                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                         HorizontalAlignment="Center" />
+              <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}"
+                      Margin="0,8" Width="200" />
+              <TextBlock Text="Made with irony" FontSize="11"
+                         Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                         HorizontalAlignment="Center" />
+            </StackPanel>
 
-          <!-- ═══ Stats Tab (Advanced only) ═══ -->
-          <StackPanel x:Name="StatsPanel" Spacing="12" Visibility="Collapsed">
-            <TextBlock Text="Total words dictated" FontSize="14" />
-            <TextBlock Text="{Binding StatsTotalWords, Mode=OneWay}" FontSize="28" FontWeight="Bold" />
-            <TextBlock Text="Total speaking time" FontSize="14" Margin="0,16,0,0" />
-            <TextBlock x:Name="SpeakingTimeText" FontSize="28" FontWeight="Bold" />
-            <TextBlock Text="Time saved estimate" FontSize="14" Margin="0,16,0,0" />
-            <TextBlock x:Name="TimeSavedText" FontSize="28" FontWeight="Bold" />
-          </StackPanel>
+            <!-- ═══ Stats Tab (Advanced only) ═══ -->
+            <StackPanel x:Name="StatsPanel" Spacing="12" Visibility="Collapsed">
+              <TextBlock Text="Total words dictated" FontSize="14" />
+              <TextBlock Text="{Binding StatsTotalWords, Mode=OneWay}" FontSize="28" FontWeight="Bold" />
+              <TextBlock Text="Total speaking time" FontSize="14" Margin="0,16,0,0" />
+              <TextBlock x:Name="SpeakingTimeText" FontSize="28" FontWeight="Bold" />
+              <TextBlock Text="Time saved estimate" FontSize="14" Margin="0,16,0,0" />
+              <TextBlock x:Name="TimeSavedText" FontSize="28" FontWeight="Bold" />
+            </StackPanel>
 
-          <!-- ═══ Debug Tab (Advanced only) ═══ -->
-          <StackPanel x:Name="DebugPanel" Spacing="12" Visibility="Collapsed">
-            <ToggleSwitch Header="LLM log enabled"
-                          IsOn="{Binding LlmLogEnabled, Mode=TwoWay}" />
-            <ToggleSwitch Header="Audio debug"
-                          IsOn="{Binding AudioDebugEnabled, Mode=TwoWay}" />
-          </StackPanel>
-        </Grid>
+            <!-- ═══ Debug Tab (Advanced only) ═══ -->
+            <StackPanel x:Name="DebugPanel" Spacing="12" Visibility="Collapsed">
+              <ToggleSwitch Header="LLM log enabled"
+                            IsOn="{Binding LlmLogEnabled, Mode=TwoWay}" />
+              <ToggleSwitch Header="Audio debug"
+                            IsOn="{Binding AudioDebugEnabled, Mode=TwoWay}" />
+            </StackPanel>
+          </Grid>
+        </StackPanel>
       </ScrollViewer>
     </NavigationView>
 

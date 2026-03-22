@@ -4,9 +4,9 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
-    <!-- 7 bars, 3px wide, 1.5px radius, white 90% opacity -->
-    <StackPanel Orientation="Horizontal" Spacing="2" VerticalAlignment="Center"
-                HorizontalAlignment="Center" Height="20">
+    <!-- 7 bars, 3px wide, 3px spacing, 1.5px radius, white 90% opacity, 18px container -->
+    <StackPanel Orientation="Horizontal" Spacing="3" VerticalAlignment="Center"
+                HorizontalAlignment="Center" Height="18">
         <Border x:Name="Bar0" Width="3" CornerRadius="1.5" Background="#E6FFFFFF" Height="3" VerticalAlignment="Bottom" />
         <Border x:Name="Bar1" Width="3" CornerRadius="1.5" Background="#E6FFFFFF" Height="5" VerticalAlignment="Bottom" />
         <Border x:Name="Bar2" Width="3" CornerRadius="1.5" Background="#E6FFFFFF" Height="8" VerticalAlignment="Bottom" />

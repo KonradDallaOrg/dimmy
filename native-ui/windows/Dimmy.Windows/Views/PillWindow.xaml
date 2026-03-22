@@ -5,16 +5,17 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:controls="using:Dimmy.Windows.Views.Controls">
 
-    <Grid x:Name="RootGrid" Background="Transparent" Padding="10">
-        <!-- RainbowBorder wraps PillBorder — its Padding creates the visible border gap.
-             Recording: Padding=2 + rainbow gradient Background.
-             Completing: Padding=0 + green BorderBrush/BorderThickness.
-             All other states: Padding=0, no background/border — invisible wrapper. -->
-        <Border x:Name="RainbowBorder" CornerRadius="20" Padding="0"
-                HorizontalAlignment="Center" VerticalAlignment="Center">
+    <Grid x:Name="RootGrid" Background="Transparent" Padding="12">
+        <!-- Single outer border: rainbow bg shows through 2px Padding gap when recording -->
+        <Border x:Name="OuterBorder" CornerRadius="20" Padding="0"
+                HorizontalAlignment="Center" VerticalAlignment="Center"
+                BorderThickness="0.5">
+            <Border.BorderBrush>
+                <SolidColorBrush Color="White" Opacity="0.12" />
+            </Border.BorderBrush>
 
-            <!-- Main pill content: height ~36px → CornerRadius=18 for stadium shape -->
-            <Border x:Name="PillBorder" CornerRadius="18" Padding="16,8"
+            <Border x:Name="PillBorder" CornerRadius="18" Height="36"
+                    Padding="14,0"
                     PointerPressed="Pill_PointerPressed"
                     PointerMoved="Pill_PointerMoved"
                     PointerReleased="Pill_PointerReleased"
@@ -24,18 +25,18 @@
                     <AcrylicBrush TintColor="#1a1a1a" TintOpacity="0.85" FallbackColor="#1a1a1a" />
                 </Border.Background>
 
-                <Grid>
+                <Grid VerticalAlignment="Center">
                     <!-- Idle state -->
                     <StackPanel x:Name="IdlePanel" Orientation="Horizontal" Spacing="6"
                                 VerticalAlignment="Center" Visibility="Visible">
                         <Ellipse x:Name="StyleDot" Width="8" Height="8" />
                         <TextBlock x:Name="DeviceText" FontSize="11"
                                    Foreground="#88FFFFFF" VerticalAlignment="Center" />
-                        <TextBlock x:Name="LanguageLabel" FontSize="10"
-                                   Foreground="#66FFFFFF" VerticalAlignment="Center"
+                        <TextBlock x:Name="LanguageLabel" FontSize="12" FontWeight="SemiBold"
+                                   Foreground="#88FFFFFF" VerticalAlignment="Center"
                                    Visibility="Collapsed" Margin="4,0,0,0" />
-                        <TextBlock x:Name="ShortcutLabel" FontSize="10"
-                                   Foreground="#66FFFFFF" VerticalAlignment="Center"
+                        <TextBlock x:Name="ShortcutLabel" FontSize="11" FontFamily="Consolas"
+                                   Foreground="#88FFFFFF" VerticalAlignment="Center"
                                    Visibility="Collapsed" Margin="4,0,0,0" />
                         <Button x:Name="GearButton" Background="Transparent" Padding="2"
                                 BorderThickness="0" Click="Settings_Click" MinWidth="0" MinHeight="0">
