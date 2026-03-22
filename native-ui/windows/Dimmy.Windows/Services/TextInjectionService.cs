@@ -45,20 +45,20 @@ public static class TextInjectionService
     /// </summary>
     public static async Task PasteText(string text)
     {
-        // Save clipboard (using Windows.ApplicationModel.DataTransfer)
-        var dataPackage = new Windows.ApplicationModel.DataTransfer.DataPackage();
+        // Save clipboard (using global::Windows.ApplicationModel.DataTransfer)
+        var dataPackage = new global::Windows.ApplicationModel.DataTransfer.DataPackage();
         string? previousText = null;
         try
         {
-            var content = Windows.ApplicationModel.DataTransfer.Clipboard.GetContent();
-            if (content.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.Text))
+            var content = global::Windows.ApplicationModel.DataTransfer.Clipboard.GetContent();
+            if (content.Contains(global::Windows.ApplicationModel.DataTransfer.StandardDataFormats.Text))
                 previousText = await content.GetTextAsync();
         }
         catch { /* clipboard may be locked */ }
 
         // Set our text
         dataPackage.SetText(text);
-        Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dataPackage);
+        global::Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dataPackage);
 
         // Small delay for clipboard to settle
         await Task.Delay(50);
@@ -77,9 +77,9 @@ public static class TextInjectionService
         await Task.Delay(150);
         if (previousText != null)
         {
-            var restore = new Windows.ApplicationModel.DataTransfer.DataPackage();
+            var restore = new global::Windows.ApplicationModel.DataTransfer.DataPackage();
             restore.SetText(previousText);
-            Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(restore);
+            global::Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(restore);
         }
     }
 

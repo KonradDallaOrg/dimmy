@@ -145,7 +145,7 @@ public partial class App : Application
     {
         if (_pillWindow == null) return;
         var appWindow = WindowHelper.GetAppWindow(_pillWindow);
-        if (appWindow.IsVisible) _pillWindow.Hide();
+        if (appWindow.IsVisible) appWindow.Hide();
         else _pillWindow.Activate();
     }
 

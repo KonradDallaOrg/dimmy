@@ -17,7 +17,7 @@ public sealed partial class SettingsWindow : Window
         Title = "Dimmy Settings";
 
         var appWindow = WindowHelper.GetAppWindow(this);
-        appWindow.Resize(new Windows.Graphics.SizeInt32(620, 440));
+        appWindow.Resize(new global::Windows.Graphics.SizeInt32(620, 440));
         ExtendsContentIntoTitleBar = true;
 
         LoadConfig();
