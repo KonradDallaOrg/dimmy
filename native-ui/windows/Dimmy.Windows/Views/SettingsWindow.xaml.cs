@@ -14,7 +14,12 @@ public sealed partial class SettingsWindow : Window
     public SettingsWindow()
     {
         this.InitializeComponent();
-        ((FrameworkElement)Content).DataContext = ViewModel;
+        // Force light theme on the entire window content (including NavigationView pane)
+        if (Content is FrameworkElement root)
+        {
+            root.RequestedTheme = ElementTheme.Light;
+            root.DataContext = ViewModel;
+        }
         Title = "Dimmy Settings";
 
         var appWindow = WindowHelper.GetAppWindow(this);
