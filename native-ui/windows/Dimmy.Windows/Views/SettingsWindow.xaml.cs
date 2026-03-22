@@ -29,12 +29,55 @@ public sealed partial class SettingsWindow : Window
 
         LoadConfig();
         SyncProviderComboBox();
+        SyncLlmProviderComboBox();
+        SyncLanguageComboBox();
     }
 
     private void LoadConfig()
     {
-        var json = DimmyNative.ReadBuffer(DimmyNative.dimmy_get_config_json, 16384);
-        if (json != null) ViewModel.LoadFromJson(json);
+        // Read from config.json file first — it has all fields including UI-only ones
+        string? fileJson = null;
+        try
+        {
+            var configDir = System.Environment.GetFolderPath(System.Environment.SpecialFolder.ApplicationData);
+            var path = System.IO.Path.Combine(configDir, "dimmy", "config.json");
+            if (System.IO.File.Exists(path))
+                fileJson = System.IO.File.ReadAllText(path);
+        }
+        catch { }
+
+        if (!string.IsNullOrEmpty(fileJson))
+            ViewModel.LoadFromJson(fileJson);
+
+        // Also read from FFI for runtime-only fields (has_key, has_llm_key, devices)
+        // that are NOT in config.json (Rust computes them from keystore)
+        try
+        {
+            var ffiJson = DimmyNative.ReadBuffer(DimmyNative.dimmy_get_config_json, 16384);
+            if (!string.IsNullOrEmpty(ffiJson))
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(ffiJson);
+                var r = doc.RootElement;
+                if (r.TryGetProperty("has_key", out var hk))
+                    ViewModel.HasApiKey = hk.GetBoolean();
+                if (r.TryGetProperty("has_llm_key", out var hlk))
+                    ViewModel.HasLlmKey = hlk.GetBoolean();
+                if (r.TryGetProperty("devices", out var devArr) &&
+                    devArr.ValueKind == System.Text.Json.JsonValueKind.Array)
+                {
+                    var list = new System.Collections.Generic.List<string>();
+                    foreach (var d in devArr.EnumerateArray())
+                        if (d.GetString() is string s) list.Add(s);
+                    ViewModel.Devices = list;
+                }
+            }
+        }
+        catch { }
+
+        System.Diagnostics.Debug.WriteLine(
+            $"[Settings] Loaded: has_key={ViewModel.HasApiKey}, has_llm_key={ViewModel.HasLlmKey}, " +
+            $"llm_enabled={ViewModel.LlmStyle != "off"}, llm_style={ViewModel.LlmStyle}, " +
+            $"llm_url={ViewModel.LlmApiUrl}, use_same_key={ViewModel.LlmUseSameKey}");
     }
 
     /// <summary>
@@ -62,6 +105,70 @@ public sealed partial class SettingsWindow : Window
         ProviderComboBox.SelectedIndex = ProviderComboBox.Items.Count - 1;
         CustomUrlBox.Visibility = Visibility.Visible;
         CustomModelBox.Visibility = Visibility.Visible;
+    }
+
+    private void SyncLlmProviderComboBox()
+    {
+        var preset = SettingsViewModel.LlmProviderPresets.FirstOrDefault(p =>
+            !string.IsNullOrEmpty(p.Url) && p.Url == ViewModel.LlmApiUrl);
+
+        if (preset != null)
+        {
+            var tag = preset.Name.ToLowerInvariant();
+            for (int i = 0; i < LlmProviderComboBox.Items.Count; i++)
+            {
+                if (LlmProviderComboBox.Items[i] is ComboBoxItem item && item.Tag is string t && t == tag)
+                {
+                    LlmProviderComboBox.SelectedIndex = i;
+                    return;
+                }
+            }
+        }
+
+        // No match — select "Custom endpoint" (last item)
+        LlmProviderComboBox.SelectedIndex = LlmProviderComboBox.Items.Count - 1;
+        LlmCustomUrlBox.Visibility = Visibility.Visible;
+        LlmCustomModelBox.Visibility = Visibility.Visible;
+    }
+
+    private void LlmProvider_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (sender is ComboBox cb && cb.SelectedItem is ComboBoxItem item && item.Tag is string tag)
+        {
+            var preset = SettingsViewModel.LlmProviderPresets.FirstOrDefault(p =>
+                p.Name.ToLowerInvariant() == tag);
+
+            if (preset != null && !string.IsNullOrEmpty(preset.Url))
+            {
+                ViewModel.LlmApiUrl = preset.Url;
+                ViewModel.LlmApiModel = preset.DefaultModel;
+                LlmCustomUrlBox.Visibility = Visibility.Collapsed;
+                LlmCustomModelBox.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                LlmCustomUrlBox.Visibility = Visibility.Visible;
+                LlmCustomModelBox.Visibility = Visibility.Visible;
+            }
+        }
+    }
+
+    private void SyncLanguageComboBox()
+    {
+        for (int i = 0; i < SettingsViewModel.Languages.Count; i++)
+        {
+            if (SettingsViewModel.Languages[i].Key == ViewModel.Language)
+            {
+                LanguageComboBox.SelectedIndex = i;
+                return;
+            }
+        }
+    }
+
+    private void Language_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (LanguageComboBox.SelectedItem is System.Collections.Generic.KeyValuePair<string, string> kvp)
+            ViewModel.Language = kvp.Key;
     }
 
     private void Provider_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -125,8 +232,17 @@ public sealed partial class SettingsWindow : Window
             ViewModel.LlmApiKey = LlmApiKeyBox.Password;
 
         var json = ViewModel.ToJson();
-        DimmyNative.dimmy_set_config_json(json);
+
+        // 1. Tell Rust to update its in-memory state
+        //    (Rust will also rewrite config.json, dropping unknown fields — that's OK)
+        try { DimmyNative.dimmy_set_config_json(json); } catch { }
+
+        // 2. Wait a moment for Rust to finish writing, then overwrite with COMPLETE config
+        System.Threading.Thread.Sleep(50);
+        SaveFullConfig(json);
+
         App.Instance?.ReloadConfig();
+        App.Instance?.ApplySettings(ViewModel);
         this.Close();
     }
 
@@ -141,6 +257,83 @@ public sealed partial class SettingsWindow : Window
                 _ => ElementTheme.Default,
             };
         }
+    }
+
+    private void BorderStyle_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (sender is ComboBox cb && cb.SelectedItem is string style)
+            App.Instance?.ApplySettings(ViewModel);
+    }
+
+    private void WaveformStyle_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (sender is ComboBox cb && cb.SelectedItem is string style)
+            App.Instance?.ApplySettings(ViewModel);
+    }
+
+    private void OverlayPosition_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (sender is ComboBox cb && cb.SelectedItem is string pos)
+            App.Instance?.ApplySettings(ViewModel);
+    }
+
+    private void ResetPosition_Click(object sender, RoutedEventArgs e)
+    {
+        ViewModel.OverlayPosition = "Bottom Right";
+        App.Instance?.ApplySettings(ViewModel);
+    }
+
+    /// <summary>
+    /// Write the complete config to config.json, merging with any existing
+    /// fields (e.g. fields written by Rust that the ViewModel doesn't track).
+    /// </summary>
+    private void SaveFullConfig(string viewModelJson)
+    {
+        try
+        {
+            var configDir = System.Environment.GetFolderPath(System.Environment.SpecialFolder.ApplicationData);
+            var dimmyDir = System.IO.Path.Combine(configDir, "dimmy");
+            System.IO.Directory.CreateDirectory(dimmyDir);
+            var path = System.IO.Path.Combine(dimmyDir, "config.json");
+            var dict = new System.Collections.Generic.Dictionary<string, object?>();
+
+            // Read existing file first (preserves Rust-only fields)
+            if (System.IO.File.Exists(path))
+            {
+                var existing = System.IO.File.ReadAllText(path);
+                using var existingDoc = System.Text.Json.JsonDocument.Parse(existing);
+                foreach (var prop in existingDoc.RootElement.EnumerateObject())
+                {
+                    dict[prop.Name] = prop.Value.ValueKind switch
+                    {
+                        System.Text.Json.JsonValueKind.String => prop.Value.GetString(),
+                        System.Text.Json.JsonValueKind.Number => prop.Value.GetDouble(),
+                        System.Text.Json.JsonValueKind.True => true,
+                        System.Text.Json.JsonValueKind.False => false,
+                        _ => null
+                    };
+                }
+            }
+
+            // Overlay all ViewModel fields on top
+            using var vmDoc = System.Text.Json.JsonDocument.Parse(viewModelJson);
+            foreach (var prop in vmDoc.RootElement.EnumerateObject())
+            {
+                dict[prop.Name] = prop.Value.ValueKind switch
+                {
+                    System.Text.Json.JsonValueKind.String => prop.Value.GetString(),
+                    System.Text.Json.JsonValueKind.Number => prop.Value.GetDouble(),
+                    System.Text.Json.JsonValueKind.True => true,
+                    System.Text.Json.JsonValueKind.False => false,
+                    _ => null
+                };
+            }
+
+            var json = System.Text.Json.JsonSerializer.Serialize(dict,
+                new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+            System.IO.File.WriteAllText(path, json);
+        }
+        catch { }
     }
 
     private void Cancel_Click(object sender, RoutedEventArgs e)

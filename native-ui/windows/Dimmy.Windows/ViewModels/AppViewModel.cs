@@ -39,6 +39,11 @@ public partial class AppViewModel : ObservableObject
     [ObservableProperty] private string _shortcut = "Win+Alt";
     [ObservableProperty] private string _shortcutMode = "toggle";
     [ObservableProperty] private string _timerText = "00:00";
+    [ObservableProperty] private string _borderStyle = "Rainbow";
+    [ObservableProperty] private string _waveformStyle = "Bars";
+    [ObservableProperty] private string _overlayPosition = "Bottom Right";
+    [ObservableProperty] private bool _keepInClipboard;
+    [ObservableProperty] private bool _showInTaskbar;
 
     public string LlmStyleColor =>
         StyleColors.TryGetValue(LlmStyle, out var color) ? color : "#41B0B1";

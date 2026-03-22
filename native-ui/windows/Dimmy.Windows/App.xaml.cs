@@ -38,6 +38,29 @@ public partial class App : Application
         LoadConfigIntoViewModel();
     }
 
+    /// <summary>Apply settings directly from the SettingsViewModel (avoids Rust roundtrip for UI-only fields).</summary>
+    public void ApplySettings(ViewModels.SettingsViewModel settings)
+    {
+        _appViewModel.BorderStyle = settings.BorderStyle;
+        _appViewModel.WaveformStyle = settings.WaveformStyle;
+        _appViewModel.Language = settings.Language;
+        _appViewModel.LlmStyle = settings.LlmStyle;
+        _appViewModel.ShortcutMode = settings.ShortcutMode;
+        _appViewModel.KeepInClipboard = settings.KeepInClipboard;
+
+        if (_appViewModel.ShowInTaskbar != settings.ShowInTaskbar)
+        {
+            _appViewModel.ShowInTaskbar = settings.ShowInTaskbar;
+            ApplyTaskbarVisibility();
+        }
+
+        if (_appViewModel.OverlayPosition != settings.OverlayPosition)
+        {
+            _appViewModel.OverlayPosition = settings.OverlayPosition;
+            RepositionPill();
+        }
+    }
+
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
         _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
@@ -61,6 +84,9 @@ public partial class App : Application
 
             // 3. Load config into ViewModel
             LoadConfigIntoViewModel();
+
+
+
         }
         catch (Exception ex)
         {
@@ -106,6 +132,13 @@ public partial class App : Application
             onTogglePill: TogglePill,
             onSettingsClick: OpenSettings,
             onQuitClick: Quit);
+
+        // Initialize tray icon with the pill window's HWND
+        if (_pillWindow != null)
+        {
+            var hwnd = WindowHelper.GetHwnd(_pillWindow);
+            _trayService.Initialize(hwnd);
+        }
     }
 
     private void OnboardingWindow_Closed(object sender, WindowEventArgs args)
@@ -129,7 +162,24 @@ public partial class App : Application
 
     private void LoadConfigIntoViewModel()
     {
-        var json = DimmyNative.ReadBuffer(DimmyNative.dimmy_get_config_json, 16384);
+        // Always read from config.json file — it's the complete source of truth.
+        string? json = null;
+        try
+        {
+            var configDir = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            var path = Path.Combine(configDir, "dimmy", "config.json");
+            if (File.Exists(path))
+                json = File.ReadAllText(path);
+        }
+        catch { }
+
+        // Fallback to FFI if file not found
+        if (string.IsNullOrEmpty(json))
+        {
+            try { json = DimmyNative.ReadBuffer(DimmyNative.dimmy_get_config_json, 16384); }
+            catch { }
+        }
+
         if (json == null) return;
 
         try
@@ -146,6 +196,16 @@ public partial class App : Application
                 _appViewModel.LlmStyle = style.GetString() ?? "off";
             if (r.TryGetProperty("selected_device", out var dev))
                 _appViewModel.DeviceName = dev.GetString() ?? "";
+            if (r.TryGetProperty("border_style", out var bs))
+                _appViewModel.BorderStyle = bs.GetString() ?? "Rainbow";
+            if (r.TryGetProperty("waveform_style", out var ws))
+                _appViewModel.WaveformStyle = ws.GetString() ?? "Bars";
+            if (r.TryGetProperty("overlay_position", out var op))
+                _appViewModel.OverlayPosition = op.GetString() ?? "Bottom Right";
+            if (r.TryGetProperty("keep_in_clipboard", out var kc))
+                _appViewModel.KeepInClipboard = kc.GetBoolean();
+            if (r.TryGetProperty("show_in_taskbar", out var sit))
+                _appViewModel.ShowInTaskbar = sit.GetBoolean();
         }
         catch { }
     }
@@ -154,41 +214,118 @@ public partial class App : Application
     {
         _dispatcherQueue?.TryEnqueue(async () =>
         {
+            // Show pill if hidden — hotkey should always bring it back
+            if (!IsPillVisible())
+                ShowPill();
+
             if (_appViewModel.IsRecording)
             {
-                // Stop recording + transcribe on background thread
-                var text = await Task.Run(() =>
+                // Stop recording + transcribe on background thread with timeout
+                try
                 {
-                    var buf = new byte[65536];
-                    int len = DimmyNative.dimmy_stop_recording(buf, buf.Length);
-                    return len > 0 ? Encoding.UTF8.GetString(buf, 0, len) : null;
-                });
-                if (!string.IsNullOrEmpty(text))
+                    var transcribeTask = Task.Run(() =>
+                    {
+                        var buf = new byte[65536];
+                        int len = DimmyNative.dimmy_stop_recording(buf, buf.Length);
+                        return len > 0 ? Encoding.UTF8.GetString(buf, 0, len) : null;
+                    });
+
+                    System.Diagnostics.Debug.WriteLine("[Dimmy] stop_recording called...");
+                    var completed = await Task.WhenAny(transcribeTask, Task.Delay(30000));
+                    if (completed == transcribeTask)
+                    {
+                        var text = await transcribeTask;
+                        System.Diagnostics.Debug.WriteLine($"[Dimmy] transcript result: len={text?.Length ?? -1}");
+                        if (!string.IsNullOrEmpty(text))
+                        {
+                            await TextInjectionService.PasteText(text, _appViewModel.KeepInClipboard);
+                        }
+                        else if (_appViewModel.CurrentState == AppState.Transcribing)
+                        {
+                            _appViewModel.SetError("Empty transcription");
+                        }
+                    }
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine("[Dimmy] transcription TIMEOUT");
+                        _appViewModel.SetError("Transcription timed out (30s)");
+                    }
+                }
+                catch (Exception ex)
                 {
-                    await TextInjectionService.PasteText(text);
+                    _appViewModel.SetError(ex.Message);
                 }
             }
             else
             {
-                DimmyNative.dimmy_start_recording();
+                var result = DimmyNative.dimmy_start_recording();
+                if (result == -1)
+                    _appViewModel.SetError("No API key configured");
+                else if (result < 0)
+                    _appViewModel.SetError($"Recording failed ({result})");
             }
         });
     }
 
-    private void TogglePill()
+    private void ApplyTaskbarVisibility()
+    {
+        if (_pillWindow == null) return;
+        var hwnd = WindowHelper.GetHwnd(_pillWindow);
+        WindowHelper.SetTaskbarVisibility(hwnd, _appViewModel.ShowInTaskbar);
+    }
+
+    public void RepositionPill()
+    {
+        if (_pillWindow == null) return;
+        WindowHelper.PositionByPreset(_pillWindow, _appViewModel.OverlayPosition, 240, 60);
+    }
+
+    public void HidePill()
     {
         if (_pillWindow == null) return;
         var appWindow = WindowHelper.GetAppWindow(_pillWindow);
-        if (appWindow is null) return;
-        if (appWindow.IsVisible) appWindow.Hide();
-        else _pillWindow.Activate();
+        appWindow?.Hide();
+        _trayService?.UpdateState("Dimmy — Hidden (hotkey still active)", "");
     }
+
+    public void ShowPill()
+    {
+        if (_pillWindow == null) return;
+        _pillWindow.Activate();
+        _trayService?.UpdateState("Dimmy — Ready", "");
+    }
+
+    private bool IsPillVisible()
+    {
+        if (_pillWindow == null) return false;
+        var appWindow = WindowHelper.GetAppWindow(_pillWindow);
+        return appWindow?.IsVisible ?? false;
+    }
+
+    private void TogglePill()
+    {
+        if (IsPillVisible()) HidePill();
+        else ShowPill();
+    }
+
+    private SettingsWindow? _settingsWindow;
+
+    public void OpenSettingsWindow() => OpenSettings();
 
     private void OpenSettings()
     {
-        var settings = new SettingsWindow();
-        settings.Activate();
+        // Only allow one settings window at a time
+        if (_settingsWindow != null)
+        {
+            try { _settingsWindow.Activate(); return; }
+            catch { _settingsWindow = null; }
+        }
+        _settingsWindow = new SettingsWindow();
+        _settingsWindow.Closed += (_, _) => _settingsWindow = null;
+        _settingsWindow.Activate();
     }
+
+    public void QuitApp() => Quit();
 
     private void Quit()
     {
@@ -202,8 +339,7 @@ public partial class App : Application
     {
         var configDir = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         var marker = Path.Combine(configDir, "dimmy", ".onboarding_done");
-        var config = Path.Combine(configDir, "dimmy", "config.json");
-        return File.Exists(marker) || File.Exists(config);
+        return File.Exists(marker);
     }
 
     private static void MarkOnboardingComplete()

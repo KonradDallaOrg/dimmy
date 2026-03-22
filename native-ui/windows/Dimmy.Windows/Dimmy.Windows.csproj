@@ -15,6 +15,9 @@
     <AppxPackage>false</AppxPackage>
     <EnableMsixTooling>false</EnableMsixTooling>
     <MrtCoreGenPriFileEnabled>false</MrtCoreGenPriFileEnabled>
+    <AppxGeneratePriEnabled>false</AppxGeneratePriEnabled>
+    <ShouldComputeInputPris>false</ShouldComputeInputPris>
+    <EnableDefaultWindowsAppSdkPRIResourceItems>false</EnableDefaultWindowsAppSdkPRIResourceItems>
   </PropertyGroup>
 
   <ItemGroup>
@@ -22,6 +25,12 @@
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.1742" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
     <PackageReference Include="H.NotifyIcon.WinUI" Version="2.2.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="Assets\dimmy.ico">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
   <!-- Copy dimmy_lib.dll from Rust build output to bin dir -->

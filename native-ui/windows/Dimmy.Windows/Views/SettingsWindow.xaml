@@ -56,16 +56,17 @@
                 <RadioButton Content="Light" GroupName="Theme" Tag="Light" Checked="Theme_Checked" />
                 <RadioButton Content="Dark" GroupName="Theme" Tag="Dark" Checked="Theme_Checked" />
               </StackPanel>
-              <ComboBox Header="Language" Width="200"
-                        SelectedValue="{Binding Language, Mode=TwoWay}"
-                        SelectedValuePath="Key" DisplayMemberPath="Value"
-                        ItemsSource="{Binding LanguageItems}" />
+              <ComboBox x:Name="LanguageComboBox" Header="Language" Width="200"
+                        DisplayMemberPath="Value"
+                        ItemsSource="{Binding LanguageItems}"
+                        SelectionChanged="Language_SelectionChanged" />
               <ComboBox Header="Style" Width="200"
                         SelectedItem="{Binding LlmStyle, Mode=TwoWay}"
                         ItemsSource="{Binding LlmStyleItems}" />
               <ToggleSwitch Header="Launch at login" IsEnabled="False" />
-              <ToggleSwitch Header="Show in taskbar" />
-              <PasswordBox x:Name="ApiKeyBox" Header="API Key" Width="300"
+              <ToggleSwitch Header="Show in taskbar"
+                            IsOn="{Binding ShowInTaskbar, Mode=TwoWay}" />
+              <PasswordBox x:Name="ApiKeyBox" Header="API Key" Width="300" HorizontalAlignment="Left"
                            PlaceholderText="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}" />
 
               <!-- Advanced: Provider preset ComboBox + custom fields -->
@@ -83,8 +84,8 @@
                          Text="{Binding ApiUrl, Mode=TwoWay}" Visibility="Collapsed" />
                 <TextBox x:Name="CustomModelBox" Header="Custom model" Width="200"
                          Text="{Binding ApiModel, Mode=TwoWay}" Visibility="Collapsed" />
-                <TextBox Header="Prompt / Vocabulary" Width="400" AcceptsReturn="True"
-                         TextWrapping="Wrap" Height="80"
+                <TextBox Header="Prompt / Vocabulary" Width="400" HorizontalAlignment="Left"
+                         AcceptsReturn="True" TextWrapping="Wrap" Height="80"
                          Text="{Binding Prompt, Mode=TwoWay}" />
                 <ToggleSwitch Header="Chunk streaming"
                               IsOn="{Binding ChunkStreamingEnabled, Mode=TwoWay}" />
@@ -117,13 +118,34 @@
               <ToggleSwitch Header="Remove filler words" IsEnabled="False" />
               <ToggleSwitch Header="Auto-punctuation" IsEnabled="False" />
               <ToggleSwitch Header="Auto-capitalization" IsEnabled="False" />
-              <ToggleSwitch Header="Restore clipboard" IsEnabled="False" />
+              <ToggleSwitch Header="Keep in clipboard"
+                            IsOn="{Binding KeepInClipboard, Mode=TwoWay}" />
               <ComboBox Header="Paste method" Width="200">
                 <x:String>Ctrl+V</x:String>
                 <x:String>Keystrokes</x:String>
               </ComboBox>
 
-              <!-- Advanced: Tone, Translate, LLM config -->
+              <!-- LLM Provider -->
+              <ComboBox x:Name="LlmProviderComboBox" Header="LLM Provider" Width="300"
+                        SelectionChanged="LlmProvider_SelectionChanged">
+                <ComboBoxItem Content="Groq — llama-3.3-70b-versatile (free)" Tag="groq" />
+                <ComboBoxItem Content="OpenAI — gpt-4o-mini" Tag="openai" />
+                <ComboBoxItem Content="OpenRouter — llama-3.3-70b (free)" Tag="openrouter" />
+                <ComboBoxItem Content="Gemini — gemini-2.5-flash (free)" Tag="gemini" />
+                <ComboBoxItem Content="Anthropic — claude-haiku-4.5" Tag="anthropic" />
+                <ComboBoxItem Content="Custom endpoint" Tag="custom" />
+              </ComboBox>
+              <TextBox x:Name="LlmCustomUrlBox" Header="Custom LLM endpoint" Width="300"
+                       HorizontalAlignment="Left" Visibility="Collapsed"
+                       Text="{Binding LlmApiUrl, Mode=TwoWay}" />
+              <TextBox x:Name="LlmCustomModelBox" Header="Custom LLM model" Width="200"
+                       HorizontalAlignment="Left" Visibility="Collapsed"
+                       Text="{Binding LlmApiModel, Mode=TwoWay}" />
+              <ToggleSwitch Header="Use same API key"
+                            IsOn="{Binding LlmUseSameKey, Mode=TwoWay}" />
+              <PasswordBox x:Name="LlmApiKeyBox" Header="LLM API Key" Width="300" HorizontalAlignment="Left" />
+
+              <!-- Advanced: Tone, Translate, Custom prompt -->
               <StackPanel Spacing="12"
                           Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
                 <ComboBox Header="Tone" Width="200"
@@ -137,15 +159,8 @@
                   <x:String>FR</x:String>
                   <x:String>ES</x:String>
                 </ComboBox>
-                <TextBox Header="Custom LLM endpoint" Width="300"
-                         Text="{Binding LlmApiUrl, Mode=TwoWay}" />
-                <TextBox Header="Custom LLM model" Width="200"
-                         Text="{Binding LlmApiModel, Mode=TwoWay}" />
-                <ToggleSwitch Header="Use same API key"
-                              IsOn="{Binding LlmUseSameKey, Mode=TwoWay}" />
-                <PasswordBox x:Name="LlmApiKeyBox" Header="LLM API Key" Width="300" />
-                <TextBox Header="Custom prompt" Width="400" AcceptsReturn="True"
-                         TextWrapping="Wrap" Height="80"
+                <TextBox Header="Custom prompt" Width="400" HorizontalAlignment="Left"
+                         AcceptsReturn="True" TextWrapping="Wrap" Height="80"
                          Text="{Binding LlmCustomPrompt, Mode=TwoWay}" />
               </StackPanel>
             </StackPanel>
@@ -153,27 +168,37 @@
             <!-- ═══ Overlay Tab ═══ -->
             <StackPanel x:Name="OverlayPanel" Spacing="16" Visibility="Collapsed">
               <ToggleSwitch Header="Show overlay" IsOn="True" />
-              <ComboBox Header="Default position" Width="200">
+              <ComboBox Header="Default position" Width="200"
+                        SelectedItem="{Binding OverlayPosition, Mode=TwoWay}"
+                        SelectionChanged="OverlayPosition_SelectionChanged">
                 <x:String>Top Right</x:String>
                 <x:String>Top Left</x:String>
                 <x:String>Bottom Right</x:String>
                 <x:String>Bottom Left</x:String>
                 <x:String>Bottom Center</x:String>
               </ComboBox>
-              <Button Content="Reset position" />
+              <Button Content="Reset position" Click="ResetPosition_Click" />
               <ComboBox Header="Idle opacity" Width="200">
                 <x:String>Nearly invisible</x:String>
                 <x:String>Subtle</x:String>
                 <x:String>Visible</x:String>
               </ComboBox>
-              <ComboBox Header="Border style" Width="200">
+              <ComboBox Header="Border style" Width="200"
+                        SelectedItem="{Binding BorderStyle, Mode=TwoWay}"
+                        SelectionChanged="BorderStyle_SelectionChanged">
                 <x:String>Rainbow</x:String>
-                <x:String>Blue pulse</x:String>
+                <x:String>Blue</x:String>
                 <x:String>Green</x:String>
+                <x:String>Purple</x:String>
+                <x:String>Orange</x:String>
                 <x:String>None</x:String>
               </ComboBox>
-              <ComboBox Header="Waveform style" Width="200">
+              <ComboBox Header="Waveform style" Width="200"
+                        SelectedItem="{Binding WaveformStyle, Mode=TwoWay}"
+                        SelectionChanged="WaveformStyle_SelectionChanged">
                 <x:String>Bars</x:String>
+                <x:String>Bars Center</x:String>
+                <x:String>Bars Round</x:String>
                 <x:String>Line</x:String>
                 <x:String>Dots</x:String>
               </ComboBox>

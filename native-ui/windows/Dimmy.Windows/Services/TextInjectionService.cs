@@ -88,11 +88,11 @@ public static class TextInjectionService
     /// Paste text using Win32 clipboard + SendInput(Ctrl+V).
     /// Same approach as the Tauri version: save clipboard → set text → Ctrl+V → restore.
     /// </summary>
-    public static async Task PasteText(string text)
+    public static async Task PasteText(string text, bool keepInClipboard = false)
     {
-        // Save current clipboard text
+        // Save current clipboard text (only if we plan to restore it)
         string? previousText = null;
-        if (OpenClipboard(IntPtr.Zero))
+        if (!keepInClipboard && OpenClipboard(IntPtr.Zero))
         {
             try
             {
@@ -130,11 +130,14 @@ public static class TextInjectionService
         uint sent = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
         System.Diagnostics.Debug.WriteLine($"SendInput sent {sent} of {inputs.Length} events, struct size={Marshal.SizeOf<INPUT>()}");
 
-        // Restore after 150ms
-        await Task.Delay(150);
-        if (previousText != null)
+        // Restore after 150ms (only if keepInClipboard is false)
+        if (!keepInClipboard)
         {
-            SetClipboardText(previousText);
+            await Task.Delay(150);
+            if (previousText != null)
+            {
+                SetClipboardText(previousText);
+            }
         }
     }
 

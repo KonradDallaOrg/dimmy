@@ -18,6 +18,16 @@ public partial class SettingsViewModel : ObservableObject
         new("Custom", "", ""),
     ];
 
+    public static readonly List<ProviderPreset> LlmProviderPresets =
+    [
+        new("Groq", "https://api.groq.com/openai/v1/chat/completions", "llama-3.3-70b-versatile"),
+        new("OpenAI", "https://api.openai.com/v1/chat/completions", "gpt-4o-mini"),
+        new("OpenRouter", "https://openrouter.ai/api/v1/chat/completions", "meta-llama/llama-3.3-70b-instruct:free"),
+        new("Gemini", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-2.5-flash"),
+        new("Anthropic", "https://api.anthropic.com/v1/messages", "claude-haiku-4-5-20251001"),
+        new("Custom", "", ""),
+    ];
+
     public static readonly List<KeyValuePair<string, string>> Languages =
     [
         new("it", "Italiano"),
@@ -67,6 +77,11 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _llmTranslateTo = "";
     [ObservableProperty] private bool _llmLogEnabled;
     [ObservableProperty] private bool _audioDebugEnabled;
+    [ObservableProperty] private string _borderStyle = "Rainbow";
+    [ObservableProperty] private string _waveformStyle = "Bars";
+    [ObservableProperty] private string _overlayPosition = "Bottom Right";
+    [ObservableProperty] private bool _keepInClipboard;
+    [ObservableProperty] private bool _showInTaskbar;
     [ObservableProperty] private long _statsTotalWords;
     [ObservableProperty] private double _statsTotalSpeakingSecs;
 
@@ -104,6 +119,11 @@ public partial class SettingsViewModel : ObservableObject
             LlmTranslateTo = r.TryGetProperty("llm_translate_to", out var lt) ? lt.GetString() ?? "" : "";
             LlmLogEnabled = r.TryGetProperty("llm_log_enabled", out var lle) && lle.GetBoolean();
             AudioDebugEnabled = r.TryGetProperty("audio_debug_enabled", out var ade) && ade.GetBoolean();
+            BorderStyle = r.TryGetProperty("border_style", out var bs) ? bs.GetString() ?? "Rainbow" : "Rainbow";
+            WaveformStyle = r.TryGetProperty("waveform_style", out var ws) ? ws.GetString() ?? "Bars" : "Bars";
+            OverlayPosition = r.TryGetProperty("overlay_position", out var op) ? op.GetString() ?? "Bottom Right" : "Bottom Right";
+            KeepInClipboard = r.TryGetProperty("keep_in_clipboard", out var kc) && kc.GetBoolean();
+            ShowInTaskbar = r.TryGetProperty("show_in_taskbar", out var sit) && sit.GetBoolean();
             StatsTotalWords = r.TryGetProperty("stats_total_words", out var stw) ? stw.GetInt64() : 0;
             StatsTotalSpeakingSecs = r.TryGetProperty("stats_total_speaking_secs", out var sts) ? sts.GetDouble() : 0;
 
@@ -136,7 +156,7 @@ public partial class SettingsViewModel : ObservableObject
             ["preprocessing_enabled"] = PreprocessingEnabled,
             ["chunk_streaming_enabled"] = ChunkStreamingEnabled,
             ["use_keyring"] = UseKeyring,
-            ["llm_enabled"] = LlmEnabled,
+            ["llm_enabled"] = LlmStyle != "off",
             ["llm_api_url"] = LlmApiUrl,
             ["llm_api_model"] = LlmApiModel,
             ["llm_use_same_key"] = LlmUseSameKey,
@@ -144,6 +164,11 @@ public partial class SettingsViewModel : ObservableObject
             ["llm_translate_to"] = LlmTranslateTo,
             ["llm_log_enabled"] = LlmLogEnabled,
             ["audio_debug_enabled"] = AudioDebugEnabled,
+            ["border_style"] = BorderStyle,
+            ["waveform_style"] = WaveformStyle,
+            ["overlay_position"] = OverlayPosition,
+            ["keep_in_clipboard"] = KeepInClipboard,
+            ["show_in_taskbar"] = ShowInTaskbar,
         };
         if (!string.IsNullOrEmpty(ApiKey)) dict["api_key"] = ApiKey;
         if (!string.IsNullOrEmpty(LlmApiKey)) dict["llm_api_key"] = LlmApiKey;
