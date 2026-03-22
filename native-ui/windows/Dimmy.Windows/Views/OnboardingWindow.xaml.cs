@@ -1,5 +1,6 @@
 using Microsoft.UI.Xaml;
 using Dimmy.Windows.Helpers;
+using Dimmy.Windows.Interop;
 using Dimmy.Windows.ViewModels;
 
 namespace Dimmy.Windows.Views;
@@ -39,6 +40,18 @@ public sealed partial class OnboardingWindow : Window
 
     private void FinishOnboarding_Click(object sender, RoutedEventArgs e)
     {
+        // Save onboarding choices to Rust config
+        try
+        {
+            var configJson = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                shortcut = ViewModel.Shortcut,
+                shortcut_mode = ViewModel.ShortcutMode,
+            });
+            DimmyNative.dimmy_set_config_json(configJson);
+        }
+        catch { }
+
         this.Close();
     }
 }

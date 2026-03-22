@@ -323,8 +323,8 @@ pub(crate) fn load_config_file() -> AppConfig {
         if let Ok(data) = std::fs::read_to_string(&path) {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
                 return AppConfig {
-                    api_url: v["api_url"].as_str().unwrap_or(DEFAULT_API_URL).to_string(),
-                    api_model: v["api_model"].as_str().unwrap_or(DEFAULT_MODEL).to_string(),
+                    api_url: v["api_url"].as_str().filter(|s| !s.is_empty()).unwrap_or(DEFAULT_API_URL).to_string(),
+                    api_model: v["api_model"].as_str().filter(|s| !s.is_empty()).unwrap_or(DEFAULT_MODEL).to_string(),
                     selected_device: v["selected_device"].as_str().map(|s| s.to_string()),
                     language: v["language"].as_str().unwrap_or("").to_string(),
                     shortcut_mode: v["shortcut_mode"].as_str().unwrap_or("toggle").to_string(),
