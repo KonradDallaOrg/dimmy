@@ -11,9 +11,10 @@
     <WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>
     <WindowsPackageType>None</WindowsPackageType>
     <Nullable>enable</Nullable>
-    <!-- Disable PRI generation — unpackaged app, no .resw processing needed at build time -->
+    <!-- Disable PRI/MSIX — unpackaged app, .resw processing not available without full VS workload -->
     <AppxPackage>false</AppxPackage>
     <EnableMsixTooling>false</EnableMsixTooling>
+    <MrtCoreGenPriFileEnabled>false</MrtCoreGenPriFileEnabled>
   </PropertyGroup>
 
   <ItemGroup>
