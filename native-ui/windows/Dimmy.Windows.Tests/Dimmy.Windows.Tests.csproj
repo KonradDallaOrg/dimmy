@@ -4,6 +4,9 @@
     <UseWinUI>true</UseWinUI>
     <IsPackable>false</IsPackable>
     <Nullable>enable</Nullable>
+    <AppxPackage>false</AppxPackage>
+    <EnableMsixTooling>false</EnableMsixTooling>
+    <MrtCoreGenPriFileEnabled>false</MrtCoreGenPriFileEnabled>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
