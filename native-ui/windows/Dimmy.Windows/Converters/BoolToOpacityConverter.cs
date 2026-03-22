@@ -1,3 +1,4 @@
+using System;
 using Microsoft.UI.Xaml.Data;
 
 namespace Dimmy.Windows.Converters;

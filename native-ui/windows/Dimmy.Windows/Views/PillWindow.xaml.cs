@@ -22,7 +22,7 @@ public sealed partial class PillWindow : Window
 
     // Drag state
     private bool _isDragging;
-    private Windows.Foundation.Point _dragStart;
+    private global::Windows.Foundation.Point _dragStart;
 
     private const int PillWidth = 320;
     private const int PillHeight = 96;
@@ -176,13 +176,13 @@ public sealed partial class PillWindow : Window
         _recordingTimer.Start();
     }
 
-    private static Windows.UI.Color ParseColor(string hex)
+    private static global::Windows.UI.Color ParseColor(string hex)
     {
         hex = hex.TrimStart('#');
         byte r = Convert.ToByte(hex[0..2], 16);
         byte g = Convert.ToByte(hex[2..4], 16);
         byte b = Convert.ToByte(hex[4..6], 16);
-        return Windows.UI.Color.FromArgb(255, r, g, b);
+        return global::Windows.UI.Color.FromArgb(255, r, g, b);
     }
 
     // ── Drag support ─────────────────────────────────────────────────

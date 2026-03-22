@@ -12,8 +12,8 @@ public sealed partial class WaveformControl : UserControl
     private readonly Random _rng = new();
     private DispatcherTimer? _timer;
 
-    private const double MinHeight = 3.0;
-    private const double MaxHeight = 16.0;
+    private const double BarMinHeight = 3.0;
+    private const double BarMaxHeight = 16.0;
     private const double Smoothing = 0.3; // Interpolation factor
 
     public static readonly DependencyProperty AmplitudeProperty =
@@ -41,7 +41,7 @@ public sealed partial class WaveformControl : UserControl
         this.InitializeComponent();
         _bars = [Bar0, Bar1, Bar2, Bar3, Bar4, Bar5, Bar6];
         _currentHeights = new double[7];
-        for (int i = 0; i < 7; i++) _currentHeights[i] = MinHeight;
+        for (int i = 0; i < 7; i++) _currentHeights[i] = BarMinHeight;
     }
 
     private static void OnIsActiveChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -64,8 +64,8 @@ public sealed partial class WaveformControl : UserControl
         // Reset bars to minimum
         for (int i = 0; i < _bars.Length; i++)
         {
-            _currentHeights[i] = MinHeight;
-            _bars[i].Height = MinHeight;
+            _currentHeights[i] = BarMinHeight;
+            _bars[i].Height = BarMinHeight;
         }
     }
 
@@ -77,8 +77,8 @@ public sealed partial class WaveformControl : UserControl
         {
             // Target height: amplitude * weight * max, with some randomness
             double jitter = 0.8 + _rng.NextDouble() * 0.4; // 0.8–1.2
-            double target = MinHeight + (amp * _barWeights[i] * jitter * (MaxHeight - MinHeight));
-            target = Math.Clamp(target, MinHeight, MaxHeight);
+            double target = BarMinHeight + (amp * _barWeights[i] * jitter * (BarMaxHeight - BarMinHeight));
+            target = Math.Clamp(target, BarMinHeight, BarMaxHeight);
 
             // Smooth interpolation
             _currentHeights[i] += (target - _currentHeights[i]) * Smoothing;
