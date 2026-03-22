@@ -6,7 +6,7 @@
     xmlns:controls="using:Dimmy.Windows.Views.Controls"
     Title="Dimmy Settings">
 
-  <Grid>
+  <Grid RequestedTheme="Light">
     <Grid.RowDefinitions>
       <RowDefinition Height="*" />
       <RowDefinition Height="Auto" />
