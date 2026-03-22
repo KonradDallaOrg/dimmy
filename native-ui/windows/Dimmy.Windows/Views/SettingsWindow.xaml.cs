@@ -60,8 +60,15 @@ public sealed partial class SettingsWindow : Window
 
     private void Save_Click(object sender, RoutedEventArgs e)
     {
+        // Pull password values from PasswordBoxes into ViewModel before serializing
+        if (!string.IsNullOrEmpty(ApiKeyBox.Password))
+            ViewModel.ApiKey = ApiKeyBox.Password;
+        if (!string.IsNullOrEmpty(LlmApiKeyBox.Password))
+            ViewModel.LlmApiKey = LlmApiKeyBox.Password;
+
         var json = ViewModel.ToJson();
         DimmyNative.dimmy_set_config_json(json);
+        App.Instance?.ReloadConfig();
         this.Close();
     }
 

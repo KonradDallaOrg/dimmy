@@ -15,6 +15,8 @@ namespace Dimmy.Windows;
 
 public partial class App : Application
 {
+    public static App? Instance { get; private set; }
+
     private AppViewModel _appViewModel = new();
     private PillWindow? _pillWindow;
     private OnboardingWindow? _onboardingWindow;
@@ -27,7 +29,13 @@ public partial class App : Application
 
     public App()
     {
+        Instance = this;
         this.InitializeComponent();
+    }
+
+    public void ReloadConfig()
+    {
+        LoadConfigIntoViewModel();
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
@@ -71,6 +79,7 @@ public partial class App : Application
         _pillWindow.Activate();
 
         _trayService = new TrayService(
+            vm: _appViewModel,
             onTogglePill: TogglePill,
             onSettingsClick: OpenSettings,
             onQuitClick: Quit);

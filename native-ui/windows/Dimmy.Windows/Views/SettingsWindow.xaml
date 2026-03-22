@@ -64,7 +64,7 @@
             </StackPanel>
             <ToggleSwitch Header="Launch at login" IsEnabled="False" />
             <ToggleSwitch Header="Show in taskbar" />
-            <PasswordBox Header="API Key" Width="300"
+            <PasswordBox x:Name="ApiKeyBox" Header="API Key" Width="300"
                          PlaceholderText="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}" />
 
             <!-- Advanced: Provider, Model, Custom endpoint, etc. -->
@@ -138,7 +138,7 @@
                        Text="{Binding LlmApiModel, Mode=TwoWay}" />
               <ToggleSwitch Header="Use same API key"
                             IsOn="{Binding LlmUseSameKey, Mode=TwoWay}" />
-              <PasswordBox Header="LLM API Key" Width="300" />
+              <PasswordBox x:Name="LlmApiKeyBox" Header="LLM API Key" Width="300" />
               <TextBox Header="Custom prompt" Width="400" AcceptsReturn="True"
                        TextWrapping="Wrap" Height="80"
                        Text="{Binding LlmCustomPrompt, Mode=TwoWay}" />
