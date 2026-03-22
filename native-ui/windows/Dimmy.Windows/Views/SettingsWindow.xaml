@@ -15,6 +15,12 @@
     <NavigationView x:Name="NavView" RequestedTheme="Light" PaneDisplayMode="Left"
                     IsBackButtonVisible="Collapsed"
                     IsSettingsVisible="False" SelectionChanged="Nav_SelectionChanged">
+      <!-- Force light pane background — NavigationView ignores RequestedTheme for its pane -->
+      <NavigationView.Resources>
+        <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="#F3F3F3" />
+        <SolidColorBrush x:Key="NavigationViewExpandedPaneBackground" Color="#F3F3F3" />
+        <SolidColorBrush x:Key="NavigationViewContentBackground" Color="White" />
+      </NavigationView.Resources>
       <NavigationView.MenuItems>
         <NavigationViewItem Content="General" Tag="general">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE713;" /></NavigationViewItem.Icon>
