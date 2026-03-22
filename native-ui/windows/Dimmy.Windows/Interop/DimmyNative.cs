@@ -9,7 +9,7 @@ namespace Dimmy.Windows.Interop;
 /// </summary>
 public static class DimmyNative
 {
-    private const string DLL = "dimmy";
+    private const string DLL = "dimmy_lib";
 
     // ── Callback delegate ────────────────────────────────────────────
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
