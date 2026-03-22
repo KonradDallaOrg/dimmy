@@ -23,7 +23,7 @@ Write-Host ""
 # Step 1: Restore NuGet packages
 if (-not $TestOnly) {
     Write-Host "[1/4] Restoring NuGet packages..." -ForegroundColor Yellow
-    dotnet restore $SolutionFile --runtime "win-$Platform"
+    dotnet restore $SolutionFile --runtime "win-$Platform" --configfile "$ProjectDir\NuGet.config"
     if ($LASTEXITCODE -ne 0) { Write-Error "Restore failed"; exit 1 }
     Write-Host "  OK" -ForegroundColor Green
 }
