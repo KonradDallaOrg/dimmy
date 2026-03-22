@@ -4,6 +4,7 @@
     <UseWinUI>true</UseWinUI>
     <IsPackable>false</IsPackable>
     <Nullable>enable</Nullable>
+    <Platforms>x86;x64;ARM64</Platforms>
     <AppxPackage>false</AppxPackage>
     <EnableMsixTooling>false</EnableMsixTooling>
     <MrtCoreGenPriFileEnabled>false</MrtCoreGenPriFileEnabled>
