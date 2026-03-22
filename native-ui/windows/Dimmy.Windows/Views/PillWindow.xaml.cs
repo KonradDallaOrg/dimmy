@@ -246,29 +246,29 @@ public sealed partial class PillWindow : Window
     }
 
     // ── Rainbow border animation ──────────────────────────────────────
-    // macOS HSV colors converted to RGB (9 stops from AngularGradient)
-    private static readonly (double Offset, global::Windows.UI.Color Color)[] RainbowStops =
+    // macOS HSV colors converted to hex (9 stops from AngularGradient)
+    private static readonly (double Offset, string Hex)[] RainbowHexStops =
     [
-        (0.000, ParseColor("#FF4D4D")),   // hue 0.0, sat 0.7, bri 1.0
-        (0.125, ParseColor("#FF6633")),   // hue 0.08, sat 0.8, bri 1.0
-        (0.250, ParseColor("#FFB84D")),   // hue 0.15, sat 0.7, bri 1.0
-        (0.375, ParseColor("#49F249")),   // hue 0.35, sat 0.7, bri 0.95
-        (0.500, ParseColor("#66E0FF")),   // hue 0.52, sat 0.6, bri 1.0
-        (0.625, ParseColor("#4D7AFF")),   // hue 0.62, sat 0.7, bri 1.0
-        (0.750, ParseColor("#9966FF")),   // hue 0.75, sat 0.6, bri 1.0
-        (0.875, ParseColor("#E066FF")),   // hue 0.85, sat 0.6, bri 1.0
-        (1.000, ParseColor("#FF4D8C")),   // hue 0.95, sat 0.7, bri 1.0
+        (0.000, "#FF4D4D"),   // hue 0.0, sat 0.7, bri 1.0
+        (0.125, "#FF6633"),   // hue 0.08, sat 0.8, bri 1.0
+        (0.250, "#FFB84D"),   // hue 0.15, sat 0.7, bri 1.0
+        (0.375, "#49F249"),   // hue 0.35, sat 0.7, bri 0.95
+        (0.500, "#66E0FF"),   // hue 0.52, sat 0.6, bri 1.0
+        (0.625, "#4D7AFF"),   // hue 0.62, sat 0.7, bri 1.0
+        (0.750, "#9966FF"),   // hue 0.75, sat 0.6, bri 1.0
+        (0.875, "#E066FF"),   // hue 0.85, sat 0.6, bri 1.0
+        (1.000, "#FF4D8C"),   // hue 0.95, sat 0.7, bri 1.0
     ];
 
     private void StartRainbowAnimation()
     {
-        // Build the gradient brush once
+        // Build the gradient brush once (lazy — avoid calling ParseColor in static init)
         if (_rainbowBrush is null)
         {
             _rainbowBrush = new LinearGradientBrush();
-            foreach (var (offset, color) in RainbowStops)
+            foreach (var (offset, hex) in RainbowHexStops)
             {
-                _rainbowBrush.GradientStops.Add(new GradientStop { Offset = offset, Color = color });
+                _rainbowBrush.GradientStops.Add(new GradientStop { Offset = offset, Color = ParseColor(hex) });
             }
         }
         OuterBorder.Background = _rainbowBrush;
