@@ -19,7 +19,7 @@ public class HotkeyServiceTests
         var (modifiers, vk) = HotkeyService.ParseShortcut("Ctrl+Shift+A");
         Assert.True((modifiers & HotkeyService.MOD_CONTROL) != 0);
         Assert.True((modifiers & HotkeyService.MOD_SHIFT) != 0);
-        Assert.Equal(0x41, vk); // VK_A
+        Assert.Equal(0x41u, vk); // VK_A
     }
 
     [Fact]
