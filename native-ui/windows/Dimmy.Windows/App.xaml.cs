@@ -73,21 +73,29 @@ public partial class App : Application
         }
     }
 
-    private void StartNormalMode()
+    /// <summary>Show pill + register hotkey. Safe to call multiple times.</summary>
+    public void ShowPillAndHotkey()
     {
+        if (_pillWindow != null) return; // already shown
+
         _pillWindow = new PillWindow(_appViewModel);
         _pillWindow.Activate();
+
+        _hotkeyService = new HotkeyService();
+        _hotkeyService.HotkeyPressed += OnHotkeyPressed;
+        var hwnd = WindowHelper.GetHwnd(_pillWindow);
+        _hotkeyService.Register(hwnd, _appViewModel.Shortcut);
+    }
+
+    private void StartNormalMode()
+    {
+        ShowPillAndHotkey();
 
         _trayService = new TrayService(
             vm: _appViewModel,
             onTogglePill: TogglePill,
             onSettingsClick: OpenSettings,
             onQuitClick: Quit);
-
-        _hotkeyService = new HotkeyService();
-        _hotkeyService.HotkeyPressed += OnHotkeyPressed;
-        var hwnd = WindowHelper.GetHwnd(_pillWindow);
-        _hotkeyService.Register(hwnd, _appViewModel.Shortcut);
     }
 
     private void OnboardingWindow_Closed(object sender, WindowEventArgs args)

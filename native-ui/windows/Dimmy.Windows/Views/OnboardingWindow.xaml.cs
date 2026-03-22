@@ -24,7 +24,17 @@ public sealed partial class OnboardingWindow : Window
         }
     }
 
-    private void NextStep_Click(object sender, RoutedEventArgs e) => ViewModel.NextStep();
+    private void NextStep_Click(object sender, RoutedEventArgs e)
+    {
+        ViewModel.NextStep();
+
+        // When reaching "Try It" (step 2), show the pill so user can test recording
+        if (ViewModel.CurrentStep == 2)
+        {
+            App.Instance?.ShowPillAndHotkey();
+        }
+    }
+
     private void PrevStep_Click(object sender, RoutedEventArgs e) => ViewModel.PreviousStep();
 
     private void FinishOnboarding_Click(object sender, RoutedEventArgs e)
