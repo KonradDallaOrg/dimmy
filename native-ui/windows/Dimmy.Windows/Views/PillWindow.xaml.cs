@@ -19,6 +19,9 @@ public sealed partial class PillWindow : Window
     private DateTime _recordingStartTime;
     private DispatcherTimer? _completingTimer;
     private DispatcherTimer? _errorTimer;
+    private DispatcherTimer? _rainbowTimer;
+    private LinearGradientBrush? _rainbowBrush;
+    private DateTime _rainbowStartTime;
 
     // Drag state
     private bool _isDragging;
@@ -82,6 +85,11 @@ public sealed partial class PillWindow : Window
         // Stop timers
         _amplitudeTimer?.Stop();
         _recordingTimer?.Stop();
+        _rainbowTimer?.Stop();
+
+        // Hide border decorations
+        RainbowBorder.Visibility = Visibility.Collapsed;
+        CompletionBorder.Visibility = Visibility.Collapsed;
 
         switch (_vm.CurrentState)
         {
@@ -108,6 +116,9 @@ public sealed partial class PillWindow : Window
                 StartRecordingTimer();
                 // Waveform active
                 Waveform.IsActive = true;
+                // Rainbow border
+                RainbowBorder.Visibility = Visibility.Visible;
+                StartRainbowAnimation();
                 break;
 
             case AppState.Transcribing:
@@ -126,6 +137,7 @@ public sealed partial class PillWindow : Window
 
             case AppState.Completing:
                 CompletingPanel.Visibility = Visibility.Visible;
+                CompletionBorder.Visibility = Visibility.Visible;
                 RootGrid.Opacity = 1.0;
                 // Auto-return to idle after 1.2s
                 _completingTimer ??= new DispatcherTimer();
@@ -174,6 +186,66 @@ public sealed partial class PillWindow : Window
             TimerText.Text = $"{(int)elapsed.TotalMinutes:D2}:{elapsed.Seconds:D2}";
         };
         _recordingTimer.Start();
+    }
+
+    // ── Rainbow border animation ──────────────────────────────────────
+    // 9 hue stops, full 360° rotation in 2.5 seconds (~30 FPS via 33 ms tick)
+    private static readonly (double Offset, global::Windows.UI.Color Color)[] RainbowStops =
+    [
+        (0.000, ParseColor("#FF0000")),
+        (0.125, ParseColor("#FF6600")),
+        (0.250, ParseColor("#FFCC00")),
+        (0.375, ParseColor("#33CC00")),
+        (0.500, ParseColor("#00CCCC")),
+        (0.625, ParseColor("#0066FF")),
+        (0.750, ParseColor("#6600FF")),
+        (0.875, ParseColor("#CC00CC")),
+        (1.000, ParseColor("#FF0066")),
+    ];
+
+    private void StartRainbowAnimation()
+    {
+        // Build the gradient brush once
+        if (_rainbowBrush is null)
+        {
+            _rainbowBrush = new LinearGradientBrush();
+            foreach (var (offset, color) in RainbowStops)
+            {
+                _rainbowBrush.GradientStops.Add(new GradientStop { Offset = offset, Color = color });
+            }
+            RainbowBorder.Background = _rainbowBrush;
+        }
+
+        _rainbowStartTime = DateTime.UtcNow;
+
+        if (_rainbowTimer is null)
+        {
+            _rainbowTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1000.0 / 30) };
+            _rainbowTimer.Tick += RainbowTimer_Tick;
+        }
+        _rainbowTimer.Start();
+    }
+
+    private void RainbowTimer_Tick(object? sender, object e)
+    {
+        if (_rainbowBrush is null) return;
+
+        // Full rotation every 2.5 seconds → 144°/s
+        var elapsed = (DateTime.UtcNow - _rainbowStartTime).TotalSeconds;
+        var angleDeg = elapsed * 144.0 % 360.0;
+        var angleRad = angleDeg * Math.PI / 180.0;
+
+        // Convert angle to a unit-vector StartPoint / EndPoint centred on (0.5, 0.5)
+        var cos = Math.Cos(angleRad);
+        var sin = Math.Sin(angleRad);
+
+        // Scale so the endpoint always reaches the edge of the [0,1]×[0,1] space
+        var scale = 0.5 / Math.Max(Math.Abs(cos), Math.Abs(sin));
+        var cx = 0.5;
+        var cy = 0.5;
+
+        _rainbowBrush.StartPoint = new global::Windows.Foundation.Point(cx - cos * scale, cy - sin * scale);
+        _rainbowBrush.EndPoint   = new global::Windows.Foundation.Point(cx + cos * scale, cy + sin * scale);
     }
 
     private static global::Windows.UI.Color ParseColor(string hex)

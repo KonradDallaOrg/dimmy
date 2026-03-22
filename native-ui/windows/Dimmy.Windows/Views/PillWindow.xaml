@@ -6,6 +6,25 @@
     xmlns:controls="using:Dimmy.Windows.Views.Controls">
 
     <Grid x:Name="RootGrid" Background="Transparent" Padding="20">
+
+        <!-- Rainbow border (behind pill, Recording state only) -->
+        <Border x:Name="RainbowBorder" CornerRadius="15" Padding="2"
+                Visibility="Collapsed"
+                HorizontalAlignment="Center" VerticalAlignment="Center"
+                MinWidth="284" MinHeight="60">
+            <!-- Background (LinearGradientBrush) set in code-behind and animated via DispatcherTimer -->
+        </Border>
+
+        <!-- Green completion border (Completing state only) -->
+        <Border x:Name="CompletionBorder" CornerRadius="15"
+                BorderThickness="1.5" Visibility="Collapsed"
+                HorizontalAlignment="Center" VerticalAlignment="Center"
+                MinWidth="284" MinHeight="60">
+            <Border.BorderBrush>
+                <SolidColorBrush Color="#4ade80" Opacity="0.4" />
+            </Border.BorderBrush>
+        </Border>
+
         <!-- Pill container: 280×56 content + 20px glow padding each side = 320×96 -->
         <Border x:Name="PillBorder" CornerRadius="14" Padding="12,8"
                 HorizontalAlignment="Center" VerticalAlignment="Center"
