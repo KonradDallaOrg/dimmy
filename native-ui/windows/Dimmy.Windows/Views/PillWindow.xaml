@@ -6,132 +6,86 @@
     xmlns:controls="using:Dimmy.Windows.Views.Controls">
 
     <Grid x:Name="RootGrid" Background="Transparent" Padding="10">
-        <!-- Rainbow border container — gradient background shows through 2px Padding gap -->
-        <Border x:Name="RainbowBorder" CornerRadius="22" Padding="2"
-                HorizontalAlignment="Center" VerticalAlignment="Center"
-                Visibility="Collapsed">
-            <Border.Background>
-                <LinearGradientBrush x:Name="RainbowBrushPlaceholder">
-                    <GradientStop Offset="0" Color="#FF0000" />
-                    <GradientStop Offset="0.17" Color="#FF6600" />
-                    <GradientStop Offset="0.33" Color="#FFEE00" />
-                    <GradientStop Offset="0.5" Color="#00FF66" />
-                    <GradientStop Offset="0.67" Color="#0066FF" />
-                    <GradientStop Offset="0.83" Color="#AA00FF" />
-                    <GradientStop Offset="1" Color="#FF0066" />
-                </LinearGradientBrush>
-            </Border.Background>
-            <!-- Inner fill masks the center, leaving only the 2px gradient gap as the border -->
-            <Border CornerRadius="20" Padding="14,8">
+        <!-- RainbowBorder wraps PillBorder — its Padding creates the visible border gap.
+             Recording: Padding=2 + rainbow gradient Background.
+             Completing: Padding=0 + green BorderBrush/BorderThickness.
+             All other states: Padding=0, no background/border — invisible wrapper. -->
+        <Border x:Name="RainbowBorder" CornerRadius="22" Padding="0"
+                HorizontalAlignment="Center" VerticalAlignment="Center">
+
+            <!-- Main pill content -->
+            <Border x:Name="PillBorder" CornerRadius="20" Padding="14,8"
+                    PointerPressed="Pill_PointerPressed"
+                    PointerMoved="Pill_PointerMoved"
+                    PointerReleased="Pill_PointerReleased"
+                    PointerEntered="Pill_PointerEntered"
+                    PointerExited="Pill_PointerExited">
                 <Border.Background>
                     <AcrylicBrush TintColor="#1a1a1a" TintOpacity="0.85" FallbackColor="#1a1a1a" />
                 </Border.Background>
-                <!-- Invisible content to match PillBorder size — this forces same dimensions -->
+
                 <Grid>
-                    <StackPanel Orientation="Horizontal" Spacing="6"
-                                VerticalAlignment="Center" Visibility="Collapsed">
-                        <Ellipse Width="8" Height="8" />
-                        <TextBlock FontSize="11" Text="placeholder" />
-                        <Button Background="Transparent" Padding="2" BorderThickness="0"
-                                MinWidth="0" MinHeight="0" IsHitTestVisible="False">
-                            <FontIcon Glyph="&#xE713;" FontSize="12" />
+                    <!-- Idle state -->
+                    <StackPanel x:Name="IdlePanel" Orientation="Horizontal" Spacing="6"
+                                VerticalAlignment="Center" Visibility="Visible">
+                        <Ellipse x:Name="StyleDot" Width="8" Height="8" />
+                        <TextBlock x:Name="DeviceText" FontSize="11"
+                                   Foreground="#88FFFFFF" VerticalAlignment="Center" />
+                        <TextBlock x:Name="LanguageLabel" FontSize="10"
+                                   Foreground="#66FFFFFF" VerticalAlignment="Center"
+                                   Visibility="Collapsed" Margin="4,0,0,0" />
+                        <TextBlock x:Name="ShortcutLabel" FontSize="10"
+                                   Foreground="#66FFFFFF" VerticalAlignment="Center"
+                                   Visibility="Collapsed" Margin="4,0,0,0" />
+                        <Button x:Name="GearButton" Background="Transparent" Padding="2"
+                                BorderThickness="0" Click="Settings_Click" MinWidth="0" MinHeight="0">
+                            <FontIcon Glyph="&#xE713;" FontSize="12" Foreground="#88FFFFFF" />
                         </Button>
                     </StackPanel>
-                    <StackPanel Orientation="Horizontal" Spacing="6"
+
+                    <!-- Recording state -->
+                    <StackPanel x:Name="RecordingPanel" Orientation="Horizontal" Spacing="6"
                                 VerticalAlignment="Center" Visibility="Collapsed">
-                        <controls:WaveformControl Width="40" Height="18" />
-                        <TextBlock FontSize="13" Text="00:00" FontWeight="SemiBold" />
-                        <Button Background="Transparent" Padding="2" BorderThickness="0"
-                                MinWidth="0" MinHeight="0" IsHitTestVisible="False">
-                            <Border Width="10" Height="10" CornerRadius="2" />
+                        <controls:WaveformControl x:Name="Waveform" Width="40" Height="18" />
+                        <TextBlock x:Name="TimerText" FontSize="13" Foreground="#EEFFFFFF"
+                                   VerticalAlignment="Center" Text="00:00" FontWeight="SemiBold" />
+                        <Button x:Name="StopButton" Background="Transparent" Padding="2"
+                                BorderThickness="0" Visibility="Collapsed" Click="Stop_Click"
+                                MinWidth="0" MinHeight="0">
+                            <Border Width="10" Height="10" Background="#EEFFFFFF" CornerRadius="2" />
                         </Button>
+                    </StackPanel>
+
+                    <!-- Transcribing state -->
+                    <StackPanel x:Name="TranscribingPanel" Orientation="Horizontal" Spacing="6"
+                                VerticalAlignment="Center" Visibility="Collapsed">
+                        <ProgressRing IsActive="True" Width="14" Height="14" />
+                        <TextBlock Text="Transcribing..." FontSize="12" Foreground="#EEFFFFFF" />
+                        <TextBlock x:Name="ChunkText" FontSize="10" Foreground="#88FFFFFF" />
+                    </StackPanel>
+
+                    <!-- Processing state -->
+                    <StackPanel x:Name="ProcessingPanel" Orientation="Horizontal" Spacing="6"
+                                VerticalAlignment="Center" Visibility="Collapsed">
+                        <ProgressRing IsActive="True" Width="14" Height="14" />
+                        <TextBlock Text="Processing..." FontSize="12" Foreground="#EEFFFFFF" />
+                    </StackPanel>
+
+                    <!-- Completing state -->
+                    <StackPanel x:Name="CompletingPanel" Orientation="Horizontal" Spacing="4"
+                                VerticalAlignment="Center" Visibility="Collapsed">
+                        <FontIcon x:Name="CheckIcon" Glyph="&#xE73E;" FontSize="14"
+                                  Foreground="#4ade80" />
+                    </StackPanel>
+
+                    <!-- Error state -->
+                    <StackPanel x:Name="ErrorPanel" Orientation="Horizontal" Spacing="4"
+                                VerticalAlignment="Center" Visibility="Collapsed">
+                        <TextBlock x:Name="ErrorText" FontSize="11" Foreground="#ef4444"
+                                   MaxWidth="200" TextTrimming="CharacterEllipsis" />
                     </StackPanel>
                 </Grid>
             </Border>
-        </Border>
-
-        <!-- Green completion border -->
-        <Border x:Name="CompletionBorder" CornerRadius="22"
-                BorderThickness="1.5" Visibility="Collapsed"
-                HorizontalAlignment="Center" VerticalAlignment="Center">
-            <Border.BorderBrush>
-                <SolidColorBrush Color="#4ade80" Opacity="0.4" />
-            </Border.BorderBrush>
-        </Border>
-
-        <!-- Main pill -->
-        <Border x:Name="PillBorder" CornerRadius="20" Padding="14,8"
-                HorizontalAlignment="Center" VerticalAlignment="Center"
-                PointerPressed="Pill_PointerPressed"
-                PointerMoved="Pill_PointerMoved"
-                PointerReleased="Pill_PointerReleased"
-                PointerEntered="Pill_PointerEntered"
-                PointerExited="Pill_PointerExited">
-            <Border.Background>
-                <AcrylicBrush TintColor="#1a1a1a" TintOpacity="0.85" FallbackColor="#1a1a1a" />
-            </Border.Background>
-
-            <Grid>
-                <!-- Idle state -->
-                <StackPanel x:Name="IdlePanel" Orientation="Horizontal" Spacing="6"
-                            VerticalAlignment="Center" Visibility="Visible">
-                    <Ellipse x:Name="StyleDot" Width="8" Height="8" />
-                    <TextBlock x:Name="DeviceText" FontSize="11"
-                               Foreground="#88FFFFFF" VerticalAlignment="Center" />
-                    <TextBlock x:Name="LanguageLabel" FontSize="10"
-                               Foreground="#66FFFFFF" VerticalAlignment="Center"
-                               Visibility="Collapsed" Margin="4,0,0,0" />
-                    <TextBlock x:Name="ShortcutLabel" FontSize="10"
-                               Foreground="#66FFFFFF" VerticalAlignment="Center"
-                               Visibility="Collapsed" Margin="4,0,0,0" />
-                    <Button x:Name="GearButton" Background="Transparent" Padding="2"
-                            BorderThickness="0" Click="Settings_Click" MinWidth="0" MinHeight="0">
-                        <FontIcon Glyph="&#xE713;" FontSize="12" Foreground="#88FFFFFF" />
-                    </Button>
-                </StackPanel>
-
-                <!-- Recording state -->
-                <StackPanel x:Name="RecordingPanel" Orientation="Horizontal" Spacing="6"
-                            VerticalAlignment="Center" Visibility="Collapsed">
-                    <controls:WaveformControl x:Name="Waveform" Width="40" Height="18" />
-                    <TextBlock x:Name="TimerText" FontSize="13" Foreground="#EEFFFFFF"
-                               VerticalAlignment="Center" Text="00:00" FontWeight="SemiBold" />
-                    <Button x:Name="StopButton" Background="Transparent" Padding="2"
-                            BorderThickness="0" Visibility="Collapsed" Click="Stop_Click"
-                            MinWidth="0" MinHeight="0">
-                        <Border Width="10" Height="10" Background="#EEFFFFFF" CornerRadius="2" />
-                    </Button>
-                </StackPanel>
-
-                <!-- Transcribing state -->
-                <StackPanel x:Name="TranscribingPanel" Orientation="Horizontal" Spacing="6"
-                            VerticalAlignment="Center" Visibility="Collapsed">
-                    <ProgressRing IsActive="True" Width="14" Height="14" />
-                    <TextBlock Text="Transcribing..." FontSize="12" Foreground="#EEFFFFFF" />
-                    <TextBlock x:Name="ChunkText" FontSize="10" Foreground="#88FFFFFF" />
-                </StackPanel>
-
-                <!-- Processing state -->
-                <StackPanel x:Name="ProcessingPanel" Orientation="Horizontal" Spacing="6"
-                            VerticalAlignment="Center" Visibility="Collapsed">
-                    <ProgressRing IsActive="True" Width="14" Height="14" />
-                    <TextBlock Text="Processing..." FontSize="12" Foreground="#EEFFFFFF" />
-                </StackPanel>
-
-                <!-- Completing state -->
-                <StackPanel x:Name="CompletingPanel" Orientation="Horizontal" Spacing="4"
-                            VerticalAlignment="Center" Visibility="Collapsed">
-                    <FontIcon x:Name="CheckIcon" Glyph="&#xE73E;" FontSize="14"
-                              Foreground="#4ade80" />
-                </StackPanel>
-
-                <!-- Error state -->
-                <StackPanel x:Name="ErrorPanel" Orientation="Horizontal" Spacing="4"
-                            VerticalAlignment="Center" Visibility="Collapsed">
-                    <TextBlock x:Name="ErrorText" FontSize="11" Foreground="#ef4444"
-                               MaxWidth="200" TextTrimming="CharacterEllipsis" />
-                </StackPanel>
-            </Grid>
         </Border>
     </Grid>
 </Window>

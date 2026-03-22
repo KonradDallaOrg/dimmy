@@ -90,9 +90,11 @@ public sealed partial class PillWindow : Window
         _recordingTimer?.Stop();
         _rainbowTimer?.Stop();
 
-        // Hide border decorations
-        RainbowBorder.Visibility = Visibility.Collapsed;
-        CompletionBorder.Visibility = Visibility.Collapsed;
+        // Reset RainbowBorder to invisible wrapper (no padding = no visible border)
+        RainbowBorder.Padding = new Thickness(0);
+        RainbowBorder.Background = null;
+        RainbowBorder.BorderBrush = null;
+        RainbowBorder.BorderThickness = new Thickness(0);
 
         // Hide hover labels
         LanguageLabel.Visibility = Visibility.Collapsed;
@@ -123,8 +125,8 @@ public sealed partial class PillWindow : Window
                 StartRecordingTimer();
                 // Waveform active
                 Waveform.IsActive = true;
-                // Rainbow border
-                RainbowBorder.Visibility = Visibility.Visible;
+                // Rainbow border — Padding creates the 2px gap, gradient Background fills it
+                RainbowBorder.Padding = new Thickness(2);
                 StartRainbowAnimation();
                 break;
 
@@ -144,7 +146,11 @@ public sealed partial class PillWindow : Window
 
             case AppState.Completing:
                 CompletingPanel.Visibility = Visibility.Visible;
-                CompletionBorder.Visibility = Visibility.Visible;
+                // Green completion border via RainbowBorder
+                RainbowBorder.Padding = new Thickness(1.5);
+                RainbowBorder.BorderBrush = new SolidColorBrush(
+                    global::Windows.UI.Color.FromArgb(102, 74, 222, 128)); // #4ade80 @ 40%
+                RainbowBorder.BorderThickness = new Thickness(1.5);
                 RootGrid.Opacity = 1.0;
                 // Auto-return to idle after 1.2s
                 _completingTimer ??= new DispatcherTimer();

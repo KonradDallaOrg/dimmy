@@ -12,7 +12,8 @@
       <RowDefinition Height="Auto" />
     </Grid.RowDefinitions>
 
-    <NavigationView x:Name="NavView" PaneDisplayMode="Left" IsBackButtonVisible="Collapsed"
+    <NavigationView x:Name="NavView" RequestedTheme="Light" PaneDisplayMode="Left"
+                    IsBackButtonVisible="Collapsed"
                     IsSettingsVisible="False" SelectionChanged="Nav_SelectionChanged">
       <NavigationView.MenuItems>
         <NavigationViewItem Content="General" Tag="general">
