@@ -119,9 +119,12 @@
                         Click="FinishOnboarding_Click" Margin="0,8,0,0" />
             </StackPanel>
 
-            <Button Content="Back" Click="PrevStep_Click" Width="90"
-                    HorizontalAlignment="Center" Margin="0,8,0,0"
-                    Visibility="{Binding IsTrialSuccess, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Invert}" />
+            <StackPanel Orientation="Horizontal" Spacing="12" HorizontalAlignment="Center" Margin="0,8,0,0"
+                        Visibility="{Binding IsTrialSuccess, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Invert}">
+                <Button Content="Back" Click="PrevStep_Click" Width="90" />
+                <Button Content="Start Using Dimmy" Click="FinishOnboarding_Click"
+                        Style="{ThemeResource AccentButtonStyle}" Width="180" />
+            </StackPanel>
         </StackPanel>
 
         <!-- Progress dots -->
