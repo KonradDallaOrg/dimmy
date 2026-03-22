@@ -10,11 +10,11 @@
              Recording: Padding=2 + rainbow gradient Background.
              Completing: Padding=0 + green BorderBrush/BorderThickness.
              All other states: Padding=0, no background/border — invisible wrapper. -->
-        <Border x:Name="RainbowBorder" CornerRadius="22" Padding="0"
+        <Border x:Name="RainbowBorder" CornerRadius="100" Padding="0"
                 HorizontalAlignment="Center" VerticalAlignment="Center">
 
             <!-- Main pill content -->
-            <Border x:Name="PillBorder" CornerRadius="20" Padding="14,8"
+            <Border x:Name="PillBorder" CornerRadius="100" Padding="16,8"
                     PointerPressed="Pill_PointerPressed"
                     PointerMoved="Pill_PointerMoved"
                     PointerReleased="Pill_PointerReleased"

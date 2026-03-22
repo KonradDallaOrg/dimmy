@@ -13,8 +13,8 @@ public sealed partial class WaveformControl : UserControl
     private DispatcherTimer? _timer;
 
     private const double BarMinHeight = 3.0;
-    private const double BarMaxHeight = 16.0;
-    private const double Smoothing = 0.3; // Interpolation factor
+    private const double BarMaxHeight = 20.0;
+    private const double Smoothing = 0.5; // Higher = more reactive
 
     public static readonly DependencyProperty AmplitudeProperty =
         DependencyProperty.Register(nameof(Amplitude), typeof(float),
@@ -53,7 +53,7 @@ public sealed partial class WaveformControl : UserControl
 
     private void StartAnimation()
     {
-        _timer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1000.0 / 12) }; // ~12 FPS
+        _timer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1000.0 / 24) }; // ~24 FPS for smoother animation
         _timer.Tick += Timer_Tick;
         _timer.Start();
     }
@@ -76,7 +76,7 @@ public sealed partial class WaveformControl : UserControl
         for (int i = 0; i < _bars.Length; i++)
         {
             // Target height: amplitude * weight * max, with some randomness
-            double jitter = 0.8 + _rng.NextDouble() * 0.4; // 0.8–1.2
+            double jitter = 0.6 + _rng.NextDouble() * 0.8; // 0.6–1.4 wider range for more movement
             double target = BarMinHeight + (amp * _barWeights[i] * jitter * (BarMaxHeight - BarMinHeight));
             target = Math.Clamp(target, BarMinHeight, BarMaxHeight);
 

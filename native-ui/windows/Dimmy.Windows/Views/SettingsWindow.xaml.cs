@@ -14,16 +14,24 @@ public sealed partial class SettingsWindow : Window
     public SettingsWindow()
     {
         this.InitializeComponent();
-        // Force light theme on the entire window content (including NavigationView pane)
+
+        // Force light theme on the entire window content
         if (Content is FrameworkElement root)
         {
             root.RequestedTheme = ElementTheme.Light;
             root.DataContext = ViewModel;
         }
+
+        // Force light theme on NavigationView pane (it uses a separate visual tree)
+        NavView.RequestedTheme = ElementTheme.Light;
+        NavView.Resources["NavigationViewContentBackground"] =
+            new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.White);
+        NavView.PaneDisplayMode = NavigationViewPaneDisplayMode.Left;
+
         Title = "Dimmy Settings";
 
         var appWindow = WindowHelper.GetAppWindow(this);
-        appWindow.Resize(new global::Windows.Graphics.SizeInt32(620, 440));
+        appWindow.Resize(new global::Windows.Graphics.SizeInt32(620, 480));
 
         LoadConfig();
     }
