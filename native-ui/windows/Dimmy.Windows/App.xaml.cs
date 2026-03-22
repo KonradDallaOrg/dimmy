@@ -48,12 +48,6 @@ public partial class App : Application
         _appViewModel.ShortcutMode = settings.ShortcutMode;
         _appViewModel.KeepInClipboard = settings.KeepInClipboard;
 
-        if (_appViewModel.ShowInTaskbar != settings.ShowInTaskbar)
-        {
-            _appViewModel.ShowInTaskbar = settings.ShowInTaskbar;
-            ApplyTaskbarVisibility();
-        }
-
         if (_appViewModel.OverlayPosition != settings.OverlayPosition)
         {
             _appViewModel.OverlayPosition = settings.OverlayPosition;
@@ -117,9 +111,13 @@ public partial class App : Application
         _pillWindow = new PillWindow(_appViewModel);
         _pillWindow.Activate();
 
+        var hwnd = WindowHelper.GetHwnd(_pillWindow);
+
+        // Force hide from taskbar — belt-and-suspenders with EnableTransparency's TOOLWINDOW
+        WindowHelper.SetTaskbarVisibility(hwnd, false);
+
         _hotkeyService = new HotkeyService();
         _hotkeyService.HotkeyPressed += OnHotkeyPressed;
-        var hwnd = WindowHelper.GetHwnd(_pillWindow);
         _hotkeyService.Register(hwnd, _appViewModel.Shortcut);
     }
 
@@ -204,8 +202,6 @@ public partial class App : Application
                 _appViewModel.OverlayPosition = op.GetString() ?? "Bottom Right";
             if (r.TryGetProperty("keep_in_clipboard", out var kc))
                 _appViewModel.KeepInClipboard = kc.GetBoolean();
-            if (r.TryGetProperty("show_in_taskbar", out var sit))
-                _appViewModel.ShowInTaskbar = sit.GetBoolean();
         }
         catch { }
     }
@@ -251,13 +247,6 @@ public partial class App : Application
                     _appViewModel.SetError($"Recording failed ({result})");
             }
         });
-    }
-
-    private void ApplyTaskbarVisibility()
-    {
-        if (_pillWindow == null) return;
-        var hwnd = WindowHelper.GetHwnd(_pillWindow);
-        WindowHelper.SetTaskbarVisibility(hwnd, _appViewModel.ShowInTaskbar);
     }
 
     public void RepositionPill()

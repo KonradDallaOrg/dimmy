@@ -49,7 +49,6 @@ Hold {0} anywhere to dictate.</value></data>
   <data name="SettingsTheme" xml:space="preserve"><value>Theme</value></data>
   <data name="SettingsApiKey" xml:space="preserve"><value>API Key</value></data>
   <data name="SettingsLaunchAtLogin" xml:space="preserve"><value>Launch at login</value></data>
-  <data name="SettingsShowInTaskbar" xml:space="preserve"><value>Show in taskbar</value></data>
 
   <!-- Pill -->
   <data name="PillTranscribing" xml:space="preserve"><value>Transcribing...</value></data>

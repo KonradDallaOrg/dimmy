@@ -41,59 +41,69 @@
         </NavigationViewItem>
       </NavigationView.MenuItems>
 
-      <ScrollViewer Padding="24">
-        <StackPanel Spacing="16">
-          <!-- Advanced toggle — inside content area so it doesn't get cut when pane collapses -->
-          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,0,8">
+      <ScrollViewer Padding="24,16,24,16">
+        <StackPanel Spacing="12" MaxWidth="480">
+          <!-- Advanced toggle — top-right -->
+          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,0,4">
             <ToggleSwitch Header="Advanced" IsOn="{Binding IsAdvanced, Mode=TwoWay}" />
           </StackPanel>
 
           <Grid>
             <!-- ═══ General Tab ═══ -->
             <StackPanel x:Name="GeneralPanel" Spacing="16" Visibility="Visible">
+              <!-- Theme -->
+              <TextBlock Text="Theme" FontWeight="SemiBold" FontSize="14" />
               <StackPanel Orientation="Horizontal" Spacing="12">
                 <RadioButton Content="Auto" GroupName="Theme" Tag="Default" Checked="Theme_Checked" IsChecked="True" />
                 <RadioButton Content="Light" GroupName="Theme" Tag="Light" Checked="Theme_Checked" />
                 <RadioButton Content="Dark" GroupName="Theme" Tag="Dark" Checked="Theme_Checked" />
               </StackPanel>
-              <ComboBox x:Name="LanguageComboBox" Header="Language" Width="200"
+
+              <!-- Language -->
+              <ComboBox x:Name="LanguageComboBox" Header="Language" Width="240"
                         DisplayMemberPath="Value"
                         ItemsSource="{Binding LanguageItems}"
                         SelectionChanged="Language_SelectionChanged" />
-              <ComboBox Header="Style" Width="200"
-                        SelectedItem="{Binding LlmStyle, Mode=TwoWay}"
-                        ItemsSource="{Binding LlmStyleItems}" />
-              <ToggleSwitch Header="Launch at login" IsEnabled="False" />
-              <ToggleSwitch Header="Show in taskbar"
-                            IsOn="{Binding ShowInTaskbar, Mode=TwoWay}" />
-              <PasswordBox x:Name="ApiKeyBox" Header="API Key" Width="300" HorizontalAlignment="Left"
+
+              <!-- API Key -->
+              <PasswordBox x:Name="ApiKeyBox" Header="STT API Key" Width="320" HorizontalAlignment="Left"
                            PlaceholderText="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}" />
 
-              <!-- Advanced: Provider preset ComboBox + custom fields -->
+              <!-- Startup -->
+              <ToggleSwitch Header="Launch at login" IsEnabled="False" />
+
+              <!-- Advanced: STT Provider -->
               <StackPanel Spacing="12"
                           Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-                <ComboBox x:Name="ProviderComboBox" Header="Provider" Width="300"
+                <TextBlock Text="Speech-to-Text Provider" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
+                <ComboBox x:Name="ProviderComboBox" Header="Provider" Width="360"
                           SelectionChanged="Provider_SelectionChanged">
-                  <ComboBoxItem Content="Groq — whisper-large-v3-turbo" Tag="groq" />
+                  <ComboBoxItem Content="Groq — whisper-large-v3-turbo (free)" Tag="groq" />
+                  <ComboBoxItem Content="Groq — whisper-large-v3 (free)" Tag="groq-v3" />
+                  <ComboBoxItem Content="Groq — distil-whisper-en (free)" Tag="groq-distil" />
                   <ComboBoxItem Content="OpenAI — whisper-1" Tag="openai" />
+                  <ComboBoxItem Content="OpenAI — gpt-4o-transcribe" Tag="openai-4o" />
+                  <ComboBoxItem Content="OpenAI — gpt-4o-mini-transcribe" Tag="openai-4o-mini" />
                   <ComboBoxItem Content="Deepgram — nova-3" Tag="deepgram" />
-                  <ComboBoxItem Content="Gemini — gemini-2.0-flash" Tag="gemini" />
+                  <ComboBoxItem Content="Deepgram — nova-2" Tag="deepgram-nova2" />
+                  <ComboBoxItem Content="Gemini — gemini-2.5-flash (free)" Tag="gemini" />
+                  <ComboBoxItem Content="Gemini — gemini-2.5-pro (free)" Tag="gemini-pro" />
                   <ComboBoxItem Content="Custom endpoint" Tag="custom" />
                 </ComboBox>
-                <TextBox x:Name="CustomUrlBox" Header="Custom endpoint URL" Width="300"
+                <TextBox x:Name="CustomUrlBox" Header="Custom endpoint URL" Width="320"
                          Text="{Binding ApiUrl, Mode=TwoWay}" Visibility="Collapsed" />
-                <TextBox x:Name="CustomModelBox" Header="Custom model" Width="200"
+                <TextBox x:Name="CustomModelBox" Header="Custom model" Width="240"
                          Text="{Binding ApiModel, Mode=TwoWay}" Visibility="Collapsed" />
                 <TextBox Header="Prompt / Vocabulary" Width="400" HorizontalAlignment="Left"
                          AcceptsReturn="True" TextWrapping="Wrap" Height="80"
                          Text="{Binding Prompt, Mode=TwoWay}" />
-                <ToggleSwitch Header="Chunk streaming"
-                              IsOn="{Binding ChunkStreamingEnabled, Mode=TwoWay}" />
-                <ComboBox Header="Audio input device" Width="300"
+                <ComboBox Header="Audio input device" Width="320"
                           SelectedItem="{Binding SelectedDevice, Mode=TwoWay}"
                           ItemsSource="{Binding Devices}" />
                 <ToggleSwitch Header="Preprocessing"
                               IsOn="{Binding PreprocessingEnabled, Mode=TwoWay}" />
+                <ToggleSwitch Header="Chunk streaming"
+                              IsOn="{Binding ChunkStreamingEnabled, Mode=TwoWay}" />
                 <ToggleSwitch Header="Use keyring"
                               IsOn="{Binding UseKeyring, Mode=TwoWay}" />
               </StackPanel>
@@ -101,7 +111,9 @@
 
             <!-- ═══ Shortcut Tab ═══ -->
             <StackPanel x:Name="ShortcutPanel" Spacing="16" Visibility="Collapsed">
+              <TextBlock Text="Hotkey" FontWeight="SemiBold" FontSize="14" />
               <controls:ShortcutRecorder Shortcut="{Binding Shortcut, Mode=TwoWay}" />
+              <TextBlock Text="Mode" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
               <StackPanel Orientation="Horizontal" Spacing="16">
                 <RadioButton Content="Push-to-Talk" GroupName="ShortcutMode"
                              IsChecked="{Binding ShortcutMode, Mode=TwoWay, Converter={StaticResource StringToBoolConverter}, ConverterParameter=hold}" />
@@ -112,47 +124,52 @@
 
             <!-- ═══ Output Tab ═══ -->
             <StackPanel x:Name="OutputPanel" Spacing="16" Visibility="Collapsed">
-              <ComboBox Header="Style" Width="200"
+              <!-- LLM Style -->
+              <TextBlock Text="LLM Enhancement" FontWeight="SemiBold" FontSize="14" />
+              <ComboBox Header="Style" Width="240"
                         SelectedItem="{Binding LlmStyle, Mode=TwoWay}"
                         ItemsSource="{Binding LlmStyleItems}" />
-              <ToggleSwitch Header="Remove filler words" IsEnabled="False" />
-              <ToggleSwitch Header="Auto-punctuation" IsEnabled="False" />
-              <ToggleSwitch Header="Auto-capitalization" IsEnabled="False" />
-              <ToggleSwitch Header="Keep in clipboard"
-                            IsOn="{Binding KeepInClipboard, Mode=TwoWay}" />
-              <ComboBox Header="Paste method" Width="200">
-                <x:String>Ctrl+V</x:String>
-                <x:String>Keystrokes</x:String>
-              </ComboBox>
 
               <!-- LLM Provider -->
-              <ComboBox x:Name="LlmProviderComboBox" Header="LLM Provider" Width="300"
+              <TextBlock Text="LLM Provider" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
+              <ComboBox x:Name="LlmProviderComboBox" Header="Provider" Width="320"
                         SelectionChanged="LlmProvider_SelectionChanged">
-                <ComboBoxItem Content="Groq — llama-3.3-70b-versatile (free)" Tag="groq" />
+                <ComboBoxItem Content="Groq — llama-3.3-70b (free)" Tag="groq" />
                 <ComboBoxItem Content="OpenAI — gpt-4o-mini" Tag="openai" />
                 <ComboBoxItem Content="OpenRouter — llama-3.3-70b (free)" Tag="openrouter" />
+                <ComboBoxItem Content="OpenRouter — DeepSeek R1 (free)" Tag="openrouter-deepseek" />
                 <ComboBoxItem Content="Gemini — gemini-2.5-flash (free)" Tag="gemini" />
                 <ComboBoxItem Content="Anthropic — claude-haiku-4.5" Tag="anthropic" />
+                <ComboBoxItem Content="Anthropic — claude-sonnet-4" Tag="anthropic-sonnet" />
                 <ComboBoxItem Content="Custom endpoint" Tag="custom" />
               </ComboBox>
-              <TextBox x:Name="LlmCustomUrlBox" Header="Custom LLM endpoint" Width="300"
+              <TextBox x:Name="LlmCustomUrlBox" Header="Custom LLM endpoint" Width="320"
                        HorizontalAlignment="Left" Visibility="Collapsed"
                        Text="{Binding LlmApiUrl, Mode=TwoWay}" />
-              <TextBox x:Name="LlmCustomModelBox" Header="Custom LLM model" Width="200"
+              <TextBox x:Name="LlmCustomModelBox" Header="Custom LLM model" Width="240"
                        HorizontalAlignment="Left" Visibility="Collapsed"
                        Text="{Binding LlmApiModel, Mode=TwoWay}" />
-              <ToggleSwitch Header="Use same API key"
+
+              <!-- LLM API Key -->
+              <ToggleSwitch Header="Use same API key as STT"
                             IsOn="{Binding LlmUseSameKey, Mode=TwoWay}" />
-              <PasswordBox x:Name="LlmApiKeyBox" Header="LLM API Key" Width="300" HorizontalAlignment="Left" />
+              <PasswordBox x:Name="LlmApiKeyBox" Header="LLM API Key" Width="320" HorizontalAlignment="Left" />
+
+              <!-- Clipboard -->
+              <TextBlock Text="Clipboard" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
+              <ToggleSwitch Header="Keep in clipboard"
+                            IsOn="{Binding KeepInClipboard, Mode=TwoWay}" />
 
               <!-- Advanced: Tone, Translate, Custom prompt -->
               <StackPanel Spacing="12"
                           Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-                <ComboBox Header="Tone" Width="200"
+                <TextBlock Text="Advanced LLM" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
+                <ComboBox Header="Tone" Width="240"
                           SelectedItem="{Binding LlmTone, Mode=TwoWay}"
                           ItemsSource="{Binding LlmToneItems}" />
-                <ComboBox Header="Translate to" Width="200">
-                  <x:String>None</x:String>
+                <ComboBox Header="Translate to" Width="240"
+                          SelectedItem="{Binding LlmTranslateTo, Mode=TwoWay}">
+                  <x:String>none</x:String>
                   <x:String>EN</x:String>
                   <x:String>IT</x:String>
                   <x:String>DE</x:String>
@@ -167,8 +184,8 @@
 
             <!-- ═══ Overlay Tab ═══ -->
             <StackPanel x:Name="OverlayPanel" Spacing="16" Visibility="Collapsed">
-              <ToggleSwitch Header="Show overlay" IsOn="True" />
-              <ComboBox Header="Default position" Width="200"
+              <TextBlock Text="Position" FontWeight="SemiBold" FontSize="14" />
+              <ComboBox Header="Default position" Width="240"
                         SelectedItem="{Binding OverlayPosition, Mode=TwoWay}"
                         SelectionChanged="OverlayPosition_SelectionChanged">
                 <x:String>Top Right</x:String>
@@ -178,12 +195,11 @@
                 <x:String>Bottom Center</x:String>
               </ComboBox>
               <Button Content="Reset position" Click="ResetPosition_Click" />
-              <ComboBox Header="Idle opacity" Width="200">
-                <x:String>Nearly invisible</x:String>
-                <x:String>Subtle</x:String>
-                <x:String>Visible</x:String>
-              </ComboBox>
-              <ComboBox Header="Border style" Width="200"
+              <TextBlock Text="You can always drag the pill to reposition it"
+                         FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+
+              <TextBlock Text="Appearance" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
+              <ComboBox Header="Border style" Width="240"
                         SelectedItem="{Binding BorderStyle, Mode=TwoWay}"
                         SelectionChanged="BorderStyle_SelectionChanged">
                 <x:String>Rainbow</x:String>
@@ -193,7 +209,7 @@
                 <x:String>Orange</x:String>
                 <x:String>None</x:String>
               </ComboBox>
-              <ComboBox Header="Waveform style" Width="200"
+              <ComboBox Header="Waveform style" Width="240"
                         SelectedItem="{Binding WaveformStyle, Mode=TwoWay}"
                         SelectionChanged="WaveformStyle_SelectionChanged">
                 <x:String>Bars</x:String>
@@ -202,8 +218,6 @@
                 <x:String>Line</x:String>
                 <x:String>Dots</x:String>
               </ComboBox>
-              <TextBlock Text="You can always drag the pill to reposition it"
-                         FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
             </StackPanel>
 
             <!-- ═══ About Tab ═══ -->

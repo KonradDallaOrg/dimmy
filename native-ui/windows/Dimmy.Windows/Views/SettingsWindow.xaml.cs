@@ -25,7 +25,7 @@ public sealed partial class SettingsWindow : Window
         Title = "Dimmy Settings";
 
         var appWindow = WindowHelper.GetAppWindow(this);
-        appWindow?.Resize(new global::Windows.Graphics.SizeInt32(620, 480));
+        appWindow?.Resize(new global::Windows.Graphics.SizeInt32(720, 560));
 
         LoadConfig();
         SyncProviderComboBox();
@@ -85,7 +85,10 @@ public sealed partial class SettingsWindow : Window
     /// </summary>
     private void SyncProviderComboBox()
     {
+        // Match by URL + model (multiple presets can share the same URL, e.g. Groq turbo vs v3)
         var preset = SettingsViewModel.ProviderPresets.FirstOrDefault(p =>
+            !string.IsNullOrEmpty(p.Url) && p.Url == ViewModel.ApiUrl && p.DefaultModel == ViewModel.ApiModel)
+            ?? SettingsViewModel.ProviderPresets.FirstOrDefault(p =>
             !string.IsNullOrEmpty(p.Url) && p.Url == ViewModel.ApiUrl);
 
         if (preset != null)
@@ -109,7 +112,10 @@ public sealed partial class SettingsWindow : Window
 
     private void SyncLlmProviderComboBox()
     {
+        // Match by URL + model (multiple presets can share the same URL, e.g. Anthropic Haiku vs Sonnet)
         var preset = SettingsViewModel.LlmProviderPresets.FirstOrDefault(p =>
+            !string.IsNullOrEmpty(p.Url) && p.Url == ViewModel.LlmApiUrl && p.DefaultModel == ViewModel.LlmApiModel)
+            ?? SettingsViewModel.LlmProviderPresets.FirstOrDefault(p =>
             !string.IsNullOrEmpty(p.Url) && p.Url == ViewModel.LlmApiUrl);
 
         if (preset != null)

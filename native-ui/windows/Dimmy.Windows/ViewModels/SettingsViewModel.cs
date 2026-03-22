@@ -12,9 +12,15 @@ public partial class SettingsViewModel : ObservableObject
     public static readonly List<ProviderPreset> ProviderPresets =
     [
         new("Groq", "https://api.groq.com/openai/v1/audio/transcriptions", "whisper-large-v3-turbo"),
+        new("Groq-v3", "https://api.groq.com/openai/v1/audio/transcriptions", "whisper-large-v3"),
+        new("Groq-Distil", "https://api.groq.com/openai/v1/audio/transcriptions", "distil-whisper-large-v3-en"),
         new("OpenAI", "https://api.openai.com/v1/audio/transcriptions", "whisper-1"),
+        new("OpenAI-4o", "https://api.openai.com/v1/audio/transcriptions", "gpt-4o-transcribe"),
+        new("OpenAI-4o-mini", "https://api.openai.com/v1/audio/transcriptions", "gpt-4o-mini-transcribe"),
         new("Deepgram", "https://api.deepgram.com/v1/listen", "nova-3"),
-        new("Gemini", "https://generativelanguage.googleapis.com/v1beta/models", "gemini-2.0-flash"),
+        new("Deepgram-Nova2", "https://api.deepgram.com/v1/listen", "nova-2"),
+        new("Gemini", "https://generativelanguage.googleapis.com/v1beta/models", "gemini-2.5-flash"),
+        new("Gemini-Pro", "https://generativelanguage.googleapis.com/v1beta/models", "gemini-2.5-pro"),
         new("Custom", "", ""),
     ];
 
@@ -23,8 +29,10 @@ public partial class SettingsViewModel : ObservableObject
         new("Groq", "https://api.groq.com/openai/v1/chat/completions", "llama-3.3-70b-versatile"),
         new("OpenAI", "https://api.openai.com/v1/chat/completions", "gpt-4o-mini"),
         new("OpenRouter", "https://openrouter.ai/api/v1/chat/completions", "meta-llama/llama-3.3-70b-instruct:free"),
+        new("OpenRouter-Deepseek", "https://openrouter.ai/api/v1/chat/completions", "deepseek/deepseek-r1:free"),
         new("Gemini", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-2.5-flash"),
         new("Anthropic", "https://api.anthropic.com/v1/messages", "claude-haiku-4-5-20251001"),
+        new("Anthropic-Sonnet", "https://api.anthropic.com/v1/messages", "claude-sonnet-4-20250514"),
         new("Custom", "", ""),
     ];
 
@@ -123,7 +131,6 @@ public partial class SettingsViewModel : ObservableObject
             WaveformStyle = r.TryGetProperty("waveform_style", out var ws) ? ws.GetString() ?? "Bars" : "Bars";
             OverlayPosition = r.TryGetProperty("overlay_position", out var op) ? op.GetString() ?? "Bottom Right" : "Bottom Right";
             KeepInClipboard = r.TryGetProperty("keep_in_clipboard", out var kc) && kc.GetBoolean();
-            ShowInTaskbar = r.TryGetProperty("show_in_taskbar", out var sit) && sit.GetBoolean();
             StatsTotalWords = r.TryGetProperty("stats_total_words", out var stw) ? stw.GetInt64() : 0;
             StatsTotalSpeakingSecs = r.TryGetProperty("stats_total_speaking_secs", out var sts) ? sts.GetDouble() : 0;
 
@@ -168,7 +175,6 @@ public partial class SettingsViewModel : ObservableObject
             ["waveform_style"] = WaveformStyle,
             ["overlay_position"] = OverlayPosition,
             ["keep_in_clipboard"] = KeepInClipboard,
-            ["show_in_taskbar"] = ShowInTaskbar,
         };
         if (!string.IsNullOrEmpty(ApiKey)) dict["api_key"] = ApiKey;
         if (!string.IsNullOrEmpty(LlmApiKey)) dict["llm_api_key"] = LlmApiKey;

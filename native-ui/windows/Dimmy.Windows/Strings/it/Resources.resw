@@ -49,7 +49,6 @@ Tieni premuto {0} ovunque per dettare.</value></data>
   <data name="SettingsTheme" xml:space="preserve"><value>Tema</value></data>
   <data name="SettingsApiKey" xml:space="preserve"><value>Chiave API</value></data>
   <data name="SettingsLaunchAtLogin" xml:space="preserve"><value>Avvia all'accesso</value></data>
-  <data name="SettingsShowInTaskbar" xml:space="preserve"><value>Mostra nella barra</value></data>
 
   <!-- Pill -->
   <data name="PillTranscribing" xml:space="preserve"><value>Trascrizione...</value></data>
