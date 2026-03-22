@@ -10,11 +10,43 @@
         <Border x:Name="RainbowBorder" CornerRadius="22" Padding="2"
                 HorizontalAlignment="Center" VerticalAlignment="Center"
                 Visibility="Collapsed">
+            <Border.Background>
+                <LinearGradientBrush x:Name="RainbowBrushPlaceholder">
+                    <GradientStop Offset="0" Color="#FF0000" />
+                    <GradientStop Offset="0.17" Color="#FF6600" />
+                    <GradientStop Offset="0.33" Color="#FFEE00" />
+                    <GradientStop Offset="0.5" Color="#00FF66" />
+                    <GradientStop Offset="0.67" Color="#0066FF" />
+                    <GradientStop Offset="0.83" Color="#AA00FF" />
+                    <GradientStop Offset="1" Color="#FF0066" />
+                </LinearGradientBrush>
+            </Border.Background>
             <!-- Inner fill masks the center, leaving only the 2px gradient gap as the border -->
-            <Border CornerRadius="20">
+            <Border CornerRadius="20" Padding="14,8">
                 <Border.Background>
                     <AcrylicBrush TintColor="#1a1a1a" TintOpacity="0.85" FallbackColor="#1a1a1a" />
                 </Border.Background>
+                <!-- Invisible content to match PillBorder size — this forces same dimensions -->
+                <Grid>
+                    <StackPanel Orientation="Horizontal" Spacing="6"
+                                VerticalAlignment="Center" Visibility="Collapsed">
+                        <Ellipse Width="8" Height="8" />
+                        <TextBlock FontSize="11" Text="placeholder" />
+                        <Button Background="Transparent" Padding="2" BorderThickness="0"
+                                MinWidth="0" MinHeight="0" IsHitTestVisible="False">
+                            <FontIcon Glyph="&#xE713;" FontSize="12" />
+                        </Button>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="6"
+                                VerticalAlignment="Center" Visibility="Collapsed">
+                        <controls:WaveformControl Width="40" Height="18" />
+                        <TextBlock FontSize="13" Text="00:00" FontWeight="SemiBold" />
+                        <Button Background="Transparent" Padding="2" BorderThickness="0"
+                                MinWidth="0" MinHeight="0" IsHitTestVisible="False">
+                            <Border Width="10" Height="10" CornerRadius="2" />
+                        </Button>
+                    </StackPanel>
+                </Grid>
             </Border>
         </Border>
 
@@ -46,6 +78,12 @@
                     <Ellipse x:Name="StyleDot" Width="8" Height="8" />
                     <TextBlock x:Name="DeviceText" FontSize="11"
                                Foreground="#88FFFFFF" VerticalAlignment="Center" />
+                    <TextBlock x:Name="LanguageLabel" FontSize="10"
+                               Foreground="#66FFFFFF" VerticalAlignment="Center"
+                               Visibility="Collapsed" Margin="4,0,0,0" />
+                    <TextBlock x:Name="ShortcutLabel" FontSize="10"
+                               Foreground="#66FFFFFF" VerticalAlignment="Center"
+                               Visibility="Collapsed" Margin="4,0,0,0" />
                     <Button x:Name="GearButton" Background="Transparent" Padding="2"
                             BorderThickness="0" Click="Settings_Click" MinWidth="0" MinHeight="0">
                         <FontIcon Glyph="&#xE713;" FontSize="12" Foreground="#88FFFFFF" />

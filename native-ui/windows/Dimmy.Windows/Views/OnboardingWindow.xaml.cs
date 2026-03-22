@@ -16,7 +16,6 @@ public sealed partial class OnboardingWindow : Window
 
         var appWindow = WindowHelper.GetAppWindow(this);
         appWindow.Resize(new global::Windows.Graphics.SizeInt32(520, 440));
-        ExtendsContentIntoTitleBar = true;
 
         if (appWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter presenter)
         {

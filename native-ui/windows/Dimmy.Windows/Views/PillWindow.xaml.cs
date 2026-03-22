@@ -1,4 +1,6 @@
 using System;
+using System.Text;
+using System.Threading.Tasks;
 using Microsoft.UI;
 using Microsoft.UI.Input;
 using Microsoft.UI.Windowing;
@@ -7,6 +9,7 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Dimmy.Windows.Helpers;
 using Dimmy.Windows.Interop;
+using Dimmy.Windows.Services;
 using Dimmy.Windows.ViewModels;
 
 namespace Dimmy.Windows.Views;
@@ -90,6 +93,10 @@ public sealed partial class PillWindow : Window
         // Hide border decorations
         RainbowBorder.Visibility = Visibility.Collapsed;
         CompletionBorder.Visibility = Visibility.Collapsed;
+
+        // Hide hover labels
+        LanguageLabel.Visibility = Visibility.Collapsed;
+        ShortcutLabel.Visibility = Visibility.Collapsed;
 
         switch (_vm.CurrentState)
         {
@@ -189,18 +196,18 @@ public sealed partial class PillWindow : Window
     }
 
     // ── Rainbow border animation ──────────────────────────────────────
-    // 9 hue stops, full 360° rotation in 2.5 seconds (~30 FPS via 33 ms tick)
+    // Vibrant saturated rainbow stops, full 360° rotation in 2.5 seconds (~30 FPS)
     private static readonly (double Offset, global::Windows.UI.Color Color)[] RainbowStops =
     [
         (0.000, ParseColor("#FF0000")),
-        (0.125, ParseColor("#FF6600")),
-        (0.250, ParseColor("#FFCC00")),
-        (0.375, ParseColor("#33CC00")),
-        (0.500, ParseColor("#00CCCC")),
-        (0.625, ParseColor("#0066FF")),
-        (0.750, ParseColor("#6600FF")),
-        (0.875, ParseColor("#CC00CC")),
-        (1.000, ParseColor("#FF0066")),
+        (0.125, ParseColor("#FF8800")),
+        (0.250, ParseColor("#FFEE00")),
+        (0.375, ParseColor("#00FF44")),
+        (0.500, ParseColor("#00DDFF")),
+        (0.625, ParseColor("#0055FF")),
+        (0.750, ParseColor("#8800FF")),
+        (0.875, ParseColor("#FF00CC")),
+        (1.000, ParseColor("#FF0044")),
     ];
 
     private void StartRainbowAnimation()
@@ -213,8 +220,8 @@ public sealed partial class PillWindow : Window
             {
                 _rainbowBrush.GradientStops.Add(new GradientStop { Offset = offset, Color = color });
             }
-            RainbowBorder.Background = _rainbowBrush;
         }
+        RainbowBorder.Background = _rainbowBrush;
 
         _rainbowStartTime = DateTime.UtcNow;
 
@@ -230,7 +237,7 @@ public sealed partial class PillWindow : Window
     {
         if (_rainbowBrush is null) return;
 
-        // Full rotation every 2.5 seconds → 144°/s
+        // Full rotation every 2.5 seconds -> 144 deg/s
         var elapsed = (DateTime.UtcNow - _rainbowStartTime).TotalSeconds;
         var angleDeg = elapsed * 144.0 % 360.0;
         var angleRad = angleDeg * Math.PI / 180.0;
@@ -239,7 +246,7 @@ public sealed partial class PillWindow : Window
         var cos = Math.Cos(angleRad);
         var sin = Math.Sin(angleRad);
 
-        // Scale so the endpoint always reaches the edge of the [0,1]×[0,1] space
+        // Scale so the endpoint always reaches the edge of the [0,1]x[0,1] space
         var scale = 0.5 / Math.Max(Math.Abs(cos), Math.Abs(sin));
         var cx = 0.5;
         var cy = 0.5;
@@ -257,17 +264,28 @@ public sealed partial class PillWindow : Window
         return global::Windows.UI.Color.FromArgb(255, r, g, b);
     }
 
-    // ── Hover opacity ────────────────────────────────────────────────
+    // ── Hover opacity + info labels ──────────────────────────────────
     private void Pill_PointerEntered(object sender, PointerRoutedEventArgs e)
     {
         if (_vm.CurrentState == AppState.Idle)
+        {
             RootGrid.Opacity = 0.95;
+            LanguageLabel.Text = string.IsNullOrEmpty(_vm.Language) ? "" : _vm.Language.ToUpperInvariant();
+            ShortcutLabel.Text = _vm.Shortcut;
+            if (!string.IsNullOrEmpty(LanguageLabel.Text))
+                LanguageLabel.Visibility = Visibility.Visible;
+            ShortcutLabel.Visibility = Visibility.Visible;
+        }
     }
 
     private void Pill_PointerExited(object sender, PointerRoutedEventArgs e)
     {
         if (_vm.CurrentState == AppState.Idle)
+        {
             RootGrid.Opacity = 0.5;
+            LanguageLabel.Visibility = Visibility.Collapsed;
+            ShortcutLabel.Visibility = Visibility.Collapsed;
+        }
     }
 
     // ── Drag support ─────────────────────────────────────────────────
@@ -307,10 +325,18 @@ public sealed partial class PillWindow : Window
         settingsWindow.Activate();
     }
 
-    private void Stop_Click(object sender, RoutedEventArgs e)
+    private async void Stop_Click(object sender, RoutedEventArgs e)
     {
-        // Stop recording in toggle mode
-        // The actual stop + transcribe is handled by HotkeyService
-        DimmyNative.dimmy_cancel_recording();
+        // Stop recording and trigger transcription (same flow as hotkey stop)
+        var text = await Task.Run(() =>
+        {
+            var buf = new byte[65536];
+            int len = DimmyNative.dimmy_stop_recording(buf, buf.Length);
+            return len > 0 ? Encoding.UTF8.GetString(buf, 0, len) : null;
+        });
+        if (!string.IsNullOrEmpty(text))
+        {
+            await TextInjectionService.PasteText(text);
+        }
     }
 }
