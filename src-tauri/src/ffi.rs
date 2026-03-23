@@ -177,10 +177,22 @@ pub extern "C" fn dimmy_init() -> c_int {
     }
 }
 
-/// Shut down: save config and clean up.
+/// Shut down: stop audio, save config and clean up.
 #[no_mangle]
 pub extern "C" fn dimmy_shutdown() {
     if let Some(st) = GLOBAL_STATE.get() {
+        // Stop audio stream first — release microphone handle before process exits
+        if let Ok(tx) = st.audio_tx.lock() {
+            let _ = tx.send(AudioCommand::Stop);
+            log("Audio stream stopped on shutdown");
+        }
+        // Clear recording flag
+        if let Ok(mut r) = st.recording.lock() {
+            *r = false;
+        }
+        // Small delay to let cpal release the device
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
         if let Ok(cfg) = crate::snapshot_config(st) {
             save_config_file(&cfg);
             log("Config saved on shutdown");
@@ -264,7 +276,23 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         Err(_) => return -1,
     };
 
+    // Diagnostic: log buffer stats
+    let buf_len_samples = buffer.len();
+    let peak = buffer.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
+    log(&format!(
+        "[StopRec] buffer: {} samples, peak amplitude: {:.6}",
+        buf_len_samples, peak
+    ));
+
     if buffer.is_empty() {
+        log("[StopRec] buffer empty — returning empty");
+        return write_to_buf("", out_buf, buf_len);
+    }
+
+    // Detect completely silent input (muted mic / privacy blocked)
+    if peak < 1e-7 && buf_len_samples > 4800 {
+        log("[StopRec] Microphone appears muted (all zeros) — check system settings");
+        emit_event("error", r#"{"message":"Microphone is muted — check system sound settings"}"#);
         return write_to_buf("", out_buf, buf_len);
     }
 
@@ -287,7 +315,12 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         sample_rate,
     };
     let processed = raw.preprocess(preprocessing);
+    log(&format!(
+        "[StopRec] after preprocess: {} samples (preprocessing={})",
+        processed.samples.len(), preprocessing
+    ));
     if processed.is_empty() {
+        log("[StopRec] VAD removed all audio — no speech detected");
         emit_event("error", r#"{"message":"No speech detected"}"#);
         return write_to_buf("", out_buf, buf_len);
     }
@@ -596,6 +629,101 @@ pub extern "C" fn dimmy_get_amplitude() -> c_float {
 pub extern "C" fn dimmy_list_devices_json(out_buf: *mut c_char, buf_len: c_int) -> c_int {
     let devices = crate::audio::list_input_devices();
     let json = serde_json::to_string(&devices).unwrap_or_else(|_| "[]".to_string());
+    write_to_buf(&json, out_buf, buf_len)
+}
+
+/// Check audio device health. Returns JSON with diagnostic info.
+/// Fields: has_devices (bool), device_count (int), selected_available (bool),
+/// default_device (string|null), selected_device (string|null),
+/// can_open_stream (bool), error (string|null)
+#[no_mangle]
+pub extern "C" fn dimmy_check_audio_health(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+
+    let host = cpal::default_host();
+    let devices = crate::audio::list_input_devices();
+    let device_count = devices.len();
+    let has_devices = device_count > 0;
+
+    let default_device = host.default_input_device();
+    let default_name = default_device
+        .as_ref()
+        .and_then(|d| d.name().ok())
+        .unwrap_or_default();
+
+    // Check if selected device exists
+    let selected = GLOBAL_STATE
+        .get()
+        .and_then(|st| st.selected_device.lock().ok().and_then(|d| d.clone()));
+    let selected_available = match &selected {
+        Some(name) => devices.iter().any(|d| d == name),
+        None => has_devices, // no selection = will use default
+    };
+
+    // Try to actually open a stream on the target device (quick probe)
+    let mut can_open = false;
+    let mut error: Option<String> = None;
+
+    let probe_device = if let Some(ref name) = selected {
+        host.input_devices()
+            .ok()
+            .and_then(|mut devs| devs.find(|d| d.name().ok().as_deref() == Some(name.as_str())))
+            .or(default_device)
+    } else {
+        default_device
+    };
+
+    if let Some(dev) = probe_device {
+        match dev.default_input_config() {
+            Ok(config) => {
+                // Try building a stream briefly to verify device access
+                let result = dev.build_input_stream(
+                    &config.into(),
+                    |_data: &[f32], _: &cpal::InputCallbackInfo| {},
+                    |err| { let _ = err; },
+                    None,
+                );
+                match result {
+                    Ok(stream) => {
+                        match stream.play() {
+                            Ok(()) => {
+                                can_open = true;
+                                // Drop stream immediately — we just needed to verify
+                                drop(stream);
+                            }
+                            Err(e) => error = Some(format!("Stream play failed: {}", e)),
+                        }
+                    }
+                    Err(e) => error = Some(format!("Cannot open audio stream: {}", e)),
+                }
+            }
+            Err(e) => error = Some(format!("Cannot get device config: {}", e)),
+        }
+    } else {
+        error = Some("No audio input device found".to_string());
+    }
+
+    let selected_json = match &selected {
+        Some(s) => format!("\"{}\"", s.replace('"', "\\\"")),
+        None => "null".to_string(),
+    };
+    let error_json = match &error {
+        Some(e) => format!("\"{}\"", e.replace('"', "\\\"")),
+        None => "null".to_string(),
+    };
+
+    let json = format!(
+        r#"{{"has_devices":{},"device_count":{},"selected_available":{},"default_device":"{}","selected_device":{},"can_open_stream":{},"error":{}}}"#,
+        has_devices,
+        device_count,
+        selected_available,
+        default_name.replace('"', "\\\""),
+        selected_json,
+        can_open,
+        error_json
+    );
+
+    log(&format!("[AudioHealth] {}", json));
     write_to_buf(&json, out_buf, buf_len)
 }
 

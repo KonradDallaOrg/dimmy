@@ -180,8 +180,7 @@ public sealed partial class PillWindow : Window
             case AppState.Recording:
                 RecordingPanel.Visibility = Visibility.Visible;
                 RootGrid.Opacity = 1.0;
-                StopButton.Visibility = _vm.ShortcutMode == "toggle"
-                    ? Visibility.Visible : Visibility.Collapsed;
+                StopButton.Visibility = Visibility.Visible;
                 SetCapsuleShape();
                 ColorBorder.Background = GetIdleBorderBrush();
                 StartAmplitudePolling();
@@ -256,7 +255,13 @@ public sealed partial class PillWindow : Window
             _amplitudeTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1000.0 / 12) };
         if (!_amplitudeHandlerAttached)
         {
-            _amplitudeTimer.Tick += (_, _) => Waveform.Amplitude = DimmyNative.dimmy_get_amplitude();
+            _amplitudeTimer.Tick += (_, _) =>
+            {
+                var amp = DimmyNative.dimmy_get_amplitude();
+                Waveform.Amplitude = amp;
+                System.Diagnostics.Debug.WriteLine($"[AMP] {amp:F4}");
+                Console.WriteLine($"[AMP] {amp:F4}");
+            };
             _amplitudeHandlerAttached = true;
         }
         _amplitudeTimer.Start();

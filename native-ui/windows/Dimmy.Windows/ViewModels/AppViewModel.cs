@@ -28,6 +28,10 @@ public partial class AppViewModel : ObservableObject
 
     [ObservableProperty] private AppState _currentState = AppState.Idle;
     [ObservableProperty] private bool _isRecording;
+
+    /// <summary>When true, ignore late "recording_started" callbacks from Rust.
+    /// Set when PTT release initiates stop before Rust's callback arrives.</summary>
+    public bool SuppressRecordingStarted { get; set; }
     [ObservableProperty] private string _statusText = "";
     [ObservableProperty] private string _errorMessage = "";
     [ObservableProperty] private float _amplitude;
@@ -87,7 +91,15 @@ public partial class AppViewModel : ObservableObject
             switch (eventName)
             {
                 case "recording_started":
-                    SetState(AppState.Recording);
+                    if (SuppressRecordingStarted)
+                    {
+                        SuppressRecordingStarted = false;
+                        // Late callback after PTT stop — ignore to prevent stuck Recording state
+                    }
+                    else
+                    {
+                        SetState(AppState.Recording);
+                    }
                     break;
                 case "recording_cancelled":
                     SetState(AppState.Idle);

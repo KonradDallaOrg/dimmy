@@ -11,6 +11,7 @@ public sealed partial class SettingsWindow : Window
 {
     public SettingsViewModel ViewModel { get; } = new();
     private string _currentTag = "general";
+    private bool _loaded; // suppress SelectionChanged during init
 
     public SettingsWindow()
     {
@@ -31,6 +32,7 @@ public sealed partial class SettingsWindow : Window
         SyncProviderComboBox();
         SyncLlmProviderComboBox();
         SyncLanguageComboBox();
+        _loaded = true;
     }
 
     private void LoadConfig()
@@ -267,19 +269,19 @@ public sealed partial class SettingsWindow : Window
 
     private void BorderStyle_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (sender is ComboBox cb && cb.SelectedItem is string style)
+        if (_loaded && sender is ComboBox cb && cb.SelectedItem is string style)
             App.Instance?.ApplySettings(ViewModel);
     }
 
     private void WaveformStyle_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (sender is ComboBox cb && cb.SelectedItem is string style)
+        if (_loaded && sender is ComboBox cb && cb.SelectedItem is string style)
             App.Instance?.ApplySettings(ViewModel);
     }
 
     private void OverlayPosition_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (sender is ComboBox cb && cb.SelectedItem is string pos)
+        if (_loaded && sender is ComboBox cb && cb.SelectedItem is string pos)
             App.Instance?.ApplySettings(ViewModel);
     }
 

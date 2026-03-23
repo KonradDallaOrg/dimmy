@@ -97,9 +97,11 @@ public sealed partial class ShortcutRecorder : UserControl
             }
         }
 
-        // Validate: need at least 2 modifiers OR 1 special key
-        bool valid = parts.Count(p => p is "Win" or "Ctrl" or "Alt" or "Shift") >= 2
-                  || _pressedKeys.Any(k => k is >= VirtualKey.F1 and <= VirtualKey.F24);
+        // Validate: need at least 1 modifier + 1 non-modifier key, OR 2+ modifiers, OR F-key
+        int modCount = parts.Count(p => p is "Win" or "Ctrl" or "Alt" or "Shift");
+        int nonModCount = parts.Count - modCount;
+        bool hasFKey = _pressedKeys.Any(k => k is >= VirtualKey.F1 and <= VirtualKey.F24);
+        bool valid = (modCount >= 1 && nonModCount >= 1) || modCount >= 2 || hasFKey;
 
         if (valid && parts.Count > 0)
         {

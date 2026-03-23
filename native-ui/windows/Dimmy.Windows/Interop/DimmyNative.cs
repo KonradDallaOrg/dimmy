@@ -50,6 +50,9 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_list_devices_json(byte[] outBuf, int bufLen);
 
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_check_audio_health(byte[] outBuf, int bufLen);
+
     // ── LLM ──────────────────────────────────────────────────────────
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern void dimmy_cycle_llm_style(int direction);

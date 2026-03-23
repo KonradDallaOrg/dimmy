@@ -27,6 +27,22 @@ public partial class App : Application
     // Must be stored as a field to prevent GC collection of the delegate
     private DimmyNative.EventCallback? _eventCallbackDelegate;
 
+    // PTT: tracks that WE started recording (don't wait for Rust event)
+    private volatile bool _pttStarted;
+    // PTT: set by release handler if it fires before/during recording start
+    private volatile bool _pendingStop;
+
+    private static readonly string PttLogPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "dimmy", "ptt.log");
+
+    private static void PttLog(string msg)
+    {
+        var line = $"[{DateTime.Now:HH:mm:ss.fff}] [PTT] {msg}";
+        Console.WriteLine(line);
+        Console.Out.Flush();
+        try { File.AppendAllText(PttLogPath, line + Environment.NewLine); } catch { }
+    }
+
     public App()
     {
         Instance = this;
@@ -45,8 +61,18 @@ public partial class App : Application
         _appViewModel.WaveformStyle = settings.WaveformStyle;
         _appViewModel.Language = settings.Language;
         _appViewModel.LlmStyle = settings.LlmStyle;
-        _appViewModel.ShortcutMode = settings.ShortcutMode;
         _appViewModel.KeepInClipboard = settings.KeepInClipboard;
+
+        _appViewModel.ShortcutMode = settings.ShortcutMode;
+        if (_hotkeyService != null)
+            _hotkeyService.PttMode = settings.ShortcutMode == "hold";
+
+        // Re-register hotkey if shortcut key changed
+        if (_appViewModel.Shortcut != settings.Shortcut)
+        {
+            _appViewModel.Shortcut = settings.Shortcut;
+            _hotkeyService?.Register(_appViewModel.Shortcut);
+        }
 
         if (_appViewModel.OverlayPosition != settings.OverlayPosition)
         {
@@ -116,13 +142,18 @@ public partial class App : Application
         // Force hide from taskbar — belt-and-suspenders with EnableTransparency's TOOLWINDOW
         WindowHelper.SetTaskbarVisibility(hwnd, false);
 
-        _hotkeyService = new HotkeyService();
+        _hotkeyService = new HotkeyService(_dispatcherQueue!);
         _hotkeyService.HotkeyPressed += OnHotkeyPressed;
-        _hotkeyService.Register(hwnd, _appViewModel.Shortcut);
+        _hotkeyService.HotkeyReleased += OnHotkeyReleased;
+        _hotkeyService.PttMode = _appViewModel.ShortcutMode == "hold";
+        _hotkeyService.Register(_appViewModel.Shortcut);
     }
 
     private void StartNormalMode()
     {
+        // Check audio device health before starting
+        CheckAudioHealth();
+
         ShowPillAndHotkey();
 
         _trayService = new TrayService(
@@ -214,39 +245,106 @@ public partial class App : Application
             if (!IsPillVisible())
                 ShowPill();
 
-            if (_appViewModel.IsRecording)
+            if (_appViewModel.ShortcutMode == "hold")
             {
-                // Stop recording → transcribe → LLM enhance → paste
-                try
+                // PTT: press starts recording
+                if (!_appViewModel.IsRecording && !_pttStarted)
                 {
-                    var result = await Services.TranscriptionService.StopAndProcessAsync();
-                    if (result.IsSuccess)
+                    _pendingStop = false; // clear before starting
+                    _pttStarted = true;
+                    _appViewModel.SuppressRecordingStarted = false; // allow recording_started event
+                    PttLog("Starting recording...");
+                    var result = DimmyNative.dimmy_start_recording();
+                    if (result == -1)
                     {
-                        await TextInjectionService.PasteText(result.Text!, _appViewModel.KeepInClipboard);
+                        _pttStarted = false;
+                        _appViewModel.SetError("No API key configured");
                     }
-                    else if (result.IsTimeout)
+                    else if (result < 0)
                     {
-                        _appViewModel.SetError(result.Error!);
+                        _pttStarted = false;
+                        _appViewModel.SetError($"Recording failed ({result})");
                     }
-                    else if (_appViewModel.CurrentState == AppState.Transcribing)
+                    else if (_pendingStop)
                     {
-                        _appViewModel.SetError("Empty transcription");
+                        // Release happened while we were starting — stop immediately
+                        PttLog("Pending stop detected after start — stopping immediately");
+                        _pttStarted = false;
+                        await StopAndProcess();
                     }
-                }
-                catch (Exception ex)
-                {
-                    _appViewModel.SetError(ex.Message);
+                    else
+                    {
+                        PttLog("Recording started OK");
+                    }
                 }
             }
             else
             {
-                var result = DimmyNative.dimmy_start_recording();
-                if (result == -1)
-                    _appViewModel.SetError("No API key configured");
-                else if (result < 0)
-                    _appViewModel.SetError($"Recording failed ({result})");
+                // Toggle mode: press toggles recording on/off
+                if (_appViewModel.IsRecording)
+                    await StopAndProcess();
+                else
+                {
+                    _appViewModel.SuppressRecordingStarted = false; // ensure Rust event is accepted
+                    var result = DimmyNative.dimmy_start_recording();
+                    if (result == -1)
+                        _appViewModel.SetError("No API key configured");
+                    else if (result < 0)
+                        _appViewModel.SetError($"Recording failed ({result})");
+                }
             }
         });
+    }
+
+    private void OnHotkeyReleased()
+    {
+        _pendingStop = true; // signal pressed handler in case it hasn't finished yet
+        _pttStarted = false;
+        PttLog("Key released — enqueueing stop");
+        _dispatcherQueue?.TryEnqueue(async () =>
+        {
+            // Suppress late "recording_started" Rust callbacks that arrive after we stop
+            _appViewModel.SuppressRecordingStarted = true;
+            PttLog($"Release handler executing, state={_appViewModel.CurrentState}");
+            await StopAndProcess();
+            // Belt-and-suspenders: PTT release MUST end recording state
+            if (_appViewModel.CurrentState == AppState.Recording)
+            {
+                PttLog("Force-resetting to Idle (state was still Recording after StopAndProcess)");
+                _appViewModel.SetState(AppState.Idle);
+            }
+        });
+    }
+
+    private async Task StopAndProcess()
+    {
+        try
+        {
+            PttLog("StopAndProcess: calling dimmy_stop_recording...");
+            var result = await Services.TranscriptionService.StopAndProcessAsync();
+            PttLog($"StopAndProcess: IsSuccess={result.IsSuccess}, IsEmpty={result.IsEmpty}, IsTimeout={result.IsTimeout}, Text={result.Text?.Length ?? 0} chars, Error={result.Error}");
+            if (result.IsSuccess)
+            {
+                _appViewModel.SetState(AppState.Idle);
+                PttLog($"StopAndProcess: pasting text ({result.Text!.Length} chars)");
+                await TextInjectionService.PasteText(result.Text!, _appViewModel.KeepInClipboard);
+            }
+            else if (result.IsTimeout)
+            {
+                _appViewModel.SetError(result.Error!);
+            }
+            else
+            {
+                // Empty transcription — always reset to idle
+                PttLog("StopAndProcess: empty result, resetting to Idle");
+                _appViewModel.SetState(AppState.Idle);
+            }
+        }
+        catch (Exception ex)
+        {
+            PttLog($"StopAndProcess: EXCEPTION {ex.GetType().Name}: {ex.Message}");
+            _appViewModel.SetError(ex.Message);
+        }
     }
 
     public void RepositionPill()
@@ -300,12 +398,62 @@ public partial class App : Application
         _settingsWindow.Activate();
     }
 
+    private void CheckAudioHealth()
+    {
+        try
+        {
+            var json = DimmyNative.ReadBuffer(DimmyNative.dimmy_check_audio_health, 4096);
+            if (json == null) return;
+
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var r = doc.RootElement;
+
+            bool hasDevices = r.TryGetProperty("has_devices", out var hd) && hd.GetBoolean();
+            bool canOpen = r.TryGetProperty("can_open_stream", out var co) && co.GetBoolean();
+            bool selectedAvailable = r.TryGetProperty("selected_available", out var sa) && sa.GetBoolean();
+            string? error = r.TryGetProperty("error", out var err) && err.ValueKind != System.Text.Json.JsonValueKind.Null
+                ? err.GetString() : null;
+
+            if (!hasDevices)
+            {
+                _appViewModel.SetError("No microphone found");
+            }
+            else if (!canOpen)
+            {
+                var msg = error ?? "Microphone unavailable";
+                _appViewModel.SetError(msg);
+                System.Diagnostics.Debug.WriteLine($"[AudioHealth] WARNING: {msg}");
+            }
+            else if (!selectedAvailable)
+            {
+                // Selected device gone — will fall back to default, just log
+                System.Diagnostics.Debug.WriteLine("[AudioHealth] Selected device not found, will use default");
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[AudioHealth] Check failed: {ex.Message}");
+        }
+    }
+
     public void QuitApp() => Quit();
 
     private void Quit()
     {
         _hotkeyService?.Dispose();
         _trayService?.Dispose();
+
+        // Cancel any active recording before shutdown to release microphone
+        try
+        {
+            if (_appViewModel.IsRecording || _pttStarted)
+            {
+                DimmyNative.dimmy_cancel_recording();
+                _pttStarted = false;
+            }
+        }
+        catch { }
+
         DimmyNative.dimmy_shutdown();
         Exit();
     }
