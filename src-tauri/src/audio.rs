@@ -101,6 +101,8 @@ pub fn spawn_audio_thread(
                                         crate::log(&format!("[Audio] First F32 callback: {} samples", data.len()));
                                     }
                                     let gain = f32::from_bits(gain_ref.load(std::sync::atomic::Ordering::Relaxed));
+                                    assert!(gain.is_finite(), "audio callback F32: gain must be finite, got {}", gain);
+                                    assert!(gain >= 0.0 && gain <= 2.0, "audio callback F32: gain must be in [0.0, 2.0], got {}", gain);
                                     if let Ok(mut b) = buf.lock() {
                                         if channels > 1 {
                                             for chunk in data.chunks(channels) {
@@ -130,6 +132,8 @@ pub fn spawn_audio_thread(
                                             crate::log(&format!("[Audio] First I16 callback: {} samples", data.len()));
                                         }
                                         let gain = f32::from_bits(gain_ref2.load(std::sync::atomic::Ordering::Relaxed));
+                                        assert!(gain.is_finite(), "audio callback I16: gain must be finite, got {}", gain);
+                                        assert!(gain >= 0.0 && gain <= 2.0, "audio callback I16: gain must be in [0.0, 2.0], got {}", gain);
                                         if let Ok(mut b) = buf2.lock() {
                                             for chunk in data.chunks(channels) {
                                                 let mono: f32 = chunk
@@ -558,10 +562,31 @@ mod tests {
     #[test]
     fn spawn_audio_thread_responds_to_stop() {
         let buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
-        let tx = spawn_audio_thread(buffer.clone());
+        let gain = Arc::new(std::sync::atomic::AtomicU32::new(1.0f32.to_bits()));
+        let tx = spawn_audio_thread(buffer.clone(), gain);
         // Sending Stop should not panic even with no prior Start
         let _ = tx.send(AudioCommand::Stop);
         // Drop sender — thread should exit cleanly
+        drop(tx);
+    }
+
+    #[test]
+    fn spawn_audio_thread_with_half_gain_stop() {
+        // gain=0.5 should not panic on Stop
+        let buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
+        let gain = Arc::new(std::sync::atomic::AtomicU32::new(0.5f32.to_bits()));
+        let tx = spawn_audio_thread(buffer.clone(), gain);
+        let _ = tx.send(AudioCommand::Stop);
+        drop(tx);
+    }
+
+    #[test]
+    fn spawn_audio_thread_with_zero_gain_stop() {
+        // gain=0.0 should not panic on Stop
+        let buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
+        let gain = Arc::new(std::sync::atomic::AtomicU32::new(0.0f32.to_bits()));
+        let tx = spawn_audio_thread(buffer.clone(), gain);
+        let _ = tx.send(AudioCommand::Stop);
         drop(tx);
     }
 

@@ -196,6 +196,11 @@ pub extern "C" fn dimmy_shutdown() {
         if let Ok(mut r) = st.recording.lock() {
             *r = false;
         }
+        // Postcondition: recording must be false after shutdown
+        if let Ok(r) = st.recording.lock() {
+            assert!(!*r, "dimmy_shutdown: recording flag must be false after shutdown");
+        }
+
         // Small delay to let cpal release the device
         std::thread::sleep(std::time::Duration::from_millis(50));
 
@@ -283,6 +288,9 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
             std::thread::sleep(std::time::Duration::from_millis(poll_ms));
             waited += poll_ms;
         }
+        // Assert: buffer wait did not exceed a reasonable maximum
+        assert!(waited <= max_wait_ms + poll_ms,
+            "dimmy_stop_recording: buffer wait {}ms exceeded max {}ms", waited, max_wait_ms);
         if waited >= max_wait_ms {
             log("[StopRec] WARNING: timed out waiting for audio samples");
         }
@@ -310,6 +318,7 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
     // Diagnostic: log buffer stats
     let buf_len_samples = buffer.len();
     let peak = buffer.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
+    assert!(peak.is_finite(), "dimmy_stop_recording: peak amplitude must be finite, got {}", peak);
     log(&format!(
         "[StopRec] buffer: {} samples, peak amplitude: {:.6}",
         buf_len_samples, peak
@@ -331,6 +340,8 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
     if peak >= 0.999 && buf_len_samples > 4800 {
         let clipped = buffer.iter().filter(|&&s| s.abs() >= 0.999).count();
         let clip_pct = clipped as f64 / buf_len_samples as f64 * 100.0;
+        assert!(clip_pct >= 0.0 && clip_pct <= 100.0,
+            "dimmy_stop_recording: clipping percentage must be in [0, 100], got {}", clip_pct);
         if clip_pct > 5.0 {
             log(&format!("[StopRec] WARNING: {:.1}% of samples clipped — audio may be distorted. Lower mic volume or set input_gain < 1.0", clip_pct));
             emit_event("error", r#"{"message":"Microphone input is clipping — lower mic volume in Settings"}"#);
@@ -864,6 +875,10 @@ pub extern "C" fn dimmy_check_audio_health(out_buf: *mut c_char, buf_len: c_int)
         error_json
     );
 
+    // Postcondition: JSON must be valid
+    assert!(serde_json::from_str::<serde_json::Value>(&json).is_ok(),
+        "dimmy_check_audio_health: produced invalid JSON: {}", json);
+
     log(&format!("[AudioHealth] {}", json));
     write_to_buf(&json, out_buf, buf_len)
 }
@@ -1297,6 +1312,11 @@ mod tests {
                 preprocessing_enabled: Mutex::new(true),
                 audio_debug_enabled: Mutex::new(false),
                 use_keyring: Mutex::new(false),
+                border_style: Mutex::new("Rainbow".to_string()),
+                waveform_style: Mutex::new("Bars".to_string()),
+                overlay_position: Mutex::new("Bottom Right".to_string()),
+                keep_in_clipboard: Mutex::new(false),
+                input_gain: Arc::new(std::sync::atomic::AtomicU32::new(1.0f32.to_bits())),
                 key_store: crate::keystore::KeyStore::new(),
                 audio_debug_session_dir: Mutex::new(None),
                 window_anchor: Mutex::new(None),
@@ -1847,5 +1867,48 @@ mod tests {
         if let Ok(mut s) = state().llm_style.lock() {
             *s = crate::llm::LlmStyle::Off;
         }
+    }
+
+    // ── dimmy_check_audio_health tests ────────────────────────────────
+
+    #[test]
+    fn check_audio_health_rejects_null_buffer() {
+        ensure_test_state();
+        let result = dimmy_check_audio_health(std::ptr::null_mut(), 100);
+        assert_eq!(result, -1, "null buffer must return -1");
+    }
+
+    #[test]
+    fn check_audio_health_returns_valid_json() {
+        ensure_test_state();
+        let mut buf = vec![0u8; 4096];
+        let result = dimmy_check_audio_health(buf.as_mut_ptr() as *mut c_char, buf.len() as c_int);
+        assert!(result >= 0, "should return non-negative length, got {}", result);
+        if result > 0 {
+            let output = unsafe {
+                CStr::from_ptr(buf.as_ptr() as *const c_char)
+                    .to_str()
+                    .unwrap()
+            };
+            let parsed: serde_json::Value = serde_json::from_str(output)
+                .expect("dimmy_check_audio_health must return valid JSON");
+            assert!(parsed["has_devices"].is_boolean(), "JSON must have has_devices boolean");
+            assert!(parsed["device_count"].is_number(), "JSON must have device_count number");
+            assert!(parsed["can_open_stream"].is_boolean(), "JSON must have can_open_stream boolean");
+        }
+    }
+
+    // ── dimmy_shutdown tests ──────────────────────────────────────────
+
+    #[test]
+    fn shutdown_clears_recording_flag() {
+        ensure_test_state();
+        // Set recording to true, then shutdown should clear it
+        if let Ok(mut r) = state().recording.lock() {
+            *r = true;
+        }
+        dimmy_shutdown();
+        let recording = state().recording.lock().map(|r| *r).unwrap_or(true);
+        assert!(!recording, "recording flag must be false after shutdown");
     }
 }

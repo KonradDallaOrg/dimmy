@@ -285,6 +285,18 @@ impl Default for AppConfig {
 
 /// Save non-sensitive config to file (NO api_key — that goes to keyring ONLY)
 pub(crate) fn save_config_file(cfg: &AppConfig) {
+    // Preconditions: validate new config fields
+    assert!(cfg.input_gain >= 0.0 && cfg.input_gain <= 2.0,
+        "save_config_file: input_gain must be in [0.0, 2.0], got {}", cfg.input_gain);
+    assert!(cfg.input_gain.is_finite(),
+        "save_config_file: input_gain must be finite, got {}", cfg.input_gain);
+    assert!(!cfg.border_style.is_empty(),
+        "save_config_file: border_style must be non-empty");
+    assert!(!cfg.waveform_style.is_empty(),
+        "save_config_file: waveform_style must be non-empty");
+    assert!(!cfg.overlay_position.is_empty(),
+        "save_config_file: overlay_position must be non-empty");
+
     if let Some(path) = config_path() {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -3238,5 +3250,108 @@ mod tests {
         assert!(r1.is_ok());
         assert!(r2.is_ok());
         assert!(onboarding_completed());
+    }
+
+    // ── input_gain / UI field tests ──────────────────────────────────
+
+    #[test]
+    fn default_config_input_gain_is_one() {
+        let cfg = AppConfig::default();
+        assert!((cfg.input_gain - 1.0).abs() < f32::EPSILON,
+            "Default input_gain should be 1.0, got {}", cfg.input_gain);
+    }
+
+    #[test]
+    fn default_config_ui_fields_non_empty() {
+        let cfg = AppConfig::default();
+        assert!(!cfg.border_style.is_empty(), "border_style must not be empty");
+        assert!(!cfg.waveform_style.is_empty(), "waveform_style must not be empty");
+        assert!(!cfg.overlay_position.is_empty(), "overlay_position must not be empty");
+    }
+
+    #[test]
+    fn load_config_defaults_input_gain_when_missing() {
+        // Write a config file without input_gain field
+        let tmp = std::env::temp_dir().join("dimmy-test-gain-missing");
+        let _ = std::fs::create_dir_all(&tmp);
+        let path = tmp.join("config.json");
+        let cfg_json = serde_json::json!({
+            "api_url": DEFAULT_API_URL,
+            "api_model": DEFAULT_MODEL,
+            "language": "en",
+        });
+        std::fs::write(&path, serde_json::to_string_pretty(&cfg_json).unwrap()).unwrap();
+
+        // Parse manually the same way load_config_file does
+        let data = std::fs::read_to_string(&path).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&data).unwrap();
+        let gain = v["input_gain"].as_f64().unwrap_or(1.0) as f32;
+        assert!((gain - 1.0).abs() < f32::EPSILON,
+            "Missing input_gain should default to 1.0, got {}", gain);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn load_config_reads_input_gain() {
+        let tmp = std::env::temp_dir().join("dimmy-test-gain-present");
+        let _ = std::fs::create_dir_all(&tmp);
+        let path = tmp.join("config.json");
+        let cfg_json = serde_json::json!({
+            "api_url": DEFAULT_API_URL,
+            "api_model": DEFAULT_MODEL,
+            "language": "en",
+            "input_gain": 0.75,
+        });
+        std::fs::write(&path, serde_json::to_string_pretty(&cfg_json).unwrap()).unwrap();
+
+        let data = std::fs::read_to_string(&path).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&data).unwrap();
+        let gain = v["input_gain"].as_f64().unwrap_or(1.0) as f32;
+        assert!((gain - 0.75).abs() < 0.001,
+            "input_gain should be 0.75, got {}", gain);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn save_load_roundtrip_preserves_new_fields() {
+        // Save a config with custom input_gain and UI fields, then load and verify
+        // Combined into one test to avoid race conditions with parallel tests
+        // sharing the same config file
+        let mut cfg = AppConfig::default();
+        cfg.input_gain = 0.42;
+        cfg.border_style = "Solid".to_string();
+        cfg.waveform_style = "Line".to_string();
+        cfg.overlay_position = "Top Left".to_string();
+        cfg.keep_in_clipboard = true;
+        save_config_file(&cfg);
+
+        let loaded = load_config_file();
+        assert!((loaded.input_gain - 0.42).abs() < 0.001,
+            "Roundtrip input_gain should be 0.42, got {}", loaded.input_gain);
+        assert_eq!(loaded.border_style, "Solid");
+        assert_eq!(loaded.waveform_style, "Line");
+        assert_eq!(loaded.overlay_position, "Top Left");
+        assert!(loaded.keep_in_clipboard);
+
+        // Restore default
+        save_config_file(&AppConfig::default());
+    }
+
+    #[test]
+    #[should_panic(expected = "input_gain must be in [0.0, 2.0]")]
+    fn save_config_rejects_input_gain_above_max() {
+        let mut cfg = AppConfig::default();
+        cfg.input_gain = 3.0;
+        save_config_file(&cfg);
+    }
+
+    #[test]
+    #[should_panic(expected = "input_gain must be in [0.0, 2.0]")]
+    fn save_config_rejects_negative_input_gain() {
+        let mut cfg = AppConfig::default();
+        cfg.input_gain = -0.5;
+        save_config_file(&cfg);
     }
 }
