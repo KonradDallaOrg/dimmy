@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
@@ -16,6 +17,9 @@ namespace Dimmy.Windows;
 public partial class App : Application
 {
     public static App? Instance { get; private set; }
+
+    // Single-instance mutex — prevents multiple Dimmy processes
+    private static Mutex? _singleInstanceMutex;
 
     private AppViewModel _appViewModel = new();
     private PillWindow? _pillWindow;
@@ -83,6 +87,15 @@ public partial class App : Application
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
+        // Single-instance guard: exit immediately if another Dimmy is already running
+        _singleInstanceMutex = new Mutex(true, @"Global\DimmySingleInstance", out bool createdNew);
+        if (!createdNew)
+        {
+            // Another instance exists — just exit silently
+            Environment.Exit(0);
+            return;
+        }
+
         _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
 
         try
@@ -455,6 +468,9 @@ public partial class App : Application
         catch { }
 
         DimmyNative.dimmy_shutdown();
+
+        _singleInstanceMutex?.ReleaseMutex();
+        _singleInstanceMutex?.Dispose();
         Exit();
     }
 

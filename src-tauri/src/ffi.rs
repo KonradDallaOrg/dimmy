@@ -158,6 +158,10 @@ pub extern "C" fn dimmy_init() -> c_int {
         preprocessing_enabled: Mutex::new(file_cfg.preprocessing_enabled),
         audio_debug_enabled: Mutex::new(file_cfg.audio_debug_enabled),
         use_keyring: Mutex::new(file_cfg.use_keyring),
+        border_style: Mutex::new(file_cfg.border_style),
+        waveform_style: Mutex::new(file_cfg.waveform_style),
+        overlay_position: Mutex::new(file_cfg.overlay_position),
+        keep_in_clipboard: Mutex::new(file_cfg.keep_in_clipboard),
         key_store,
         audio_debug_session_dir: Mutex::new(None),
         window_anchor: Mutex::new(None),
@@ -260,11 +264,36 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
 
     let st = state();
 
+    // Wait briefly for audio samples to arrive if the stream just started.
+    // The cpal stream can take 100-300ms to produce first samples after Start.
+    // Without this, rapid Start→Stop yields an empty buffer.
+    {
+        let max_wait_ms = 500;
+        let poll_ms = 20;
+        let mut waited = 0;
+        while waited < max_wait_ms {
+            if let Ok(b) = st.audio_buffer.lock() {
+                if !b.is_empty() {
+                    log(&format!("[StopRec] buffer ready after {}ms ({} samples)", waited, b.len()));
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(poll_ms));
+            waited += poll_ms;
+        }
+        if waited >= max_wait_ms {
+            log("[StopRec] WARNING: timed out waiting for audio samples");
+        }
+    }
+
     // Stop audio capture
     let _ = st.audio_tx.lock().map(|tx| tx.send(AudioCommand::Stop));
     if let Ok(mut r) = st.recording.lock() {
         *r = false;
     }
+
+    // Small delay to let in-flight audio callbacks flush
+    std::thread::sleep(std::time::Duration::from_millis(30));
 
     // Get audio buffer
     let buffer = match st.audio_buffer.lock() {
@@ -419,6 +448,10 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "preprocessing_enabled": *st.preprocessing_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "audio_debug_enabled": *st.audio_debug_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "use_keyring": use_kr,
+        "border_style": *st.border_style.lock().unwrap_or_else(|e| e.into_inner()),
+        "waveform_style": *st.waveform_style.lock().unwrap_or_else(|e| e.into_inner()),
+        "overlay_position": *st.overlay_position.lock().unwrap_or_else(|e| e.into_inner()),
+        "keep_in_clipboard": *st.keep_in_clipboard.lock().unwrap_or_else(|e| e.into_inner()),
         "stats_total_words": *st.stats_total_words.lock().unwrap_or_else(|e| e.into_inner()),
         "stats_total_speaking_secs": *st.stats_total_speaking_secs.lock().unwrap_or_else(|e| e.into_inner()),
         // Per-provider key flags
@@ -577,6 +610,28 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
             *a = b;
         }
     }
+    // UI appearance fields (round-tripped for native frontends)
+    if let Some(s) = v["border_style"].as_str() {
+        if let Ok(mut bs) = st.border_style.lock() {
+            *bs = s.to_string();
+        }
+    }
+    if let Some(s) = v["waveform_style"].as_str() {
+        if let Ok(mut ws) = st.waveform_style.lock() {
+            *ws = s.to_string();
+        }
+    }
+    if let Some(s) = v["overlay_position"].as_str() {
+        if let Ok(mut op) = st.overlay_position.lock() {
+            *op = s.to_string();
+        }
+    }
+    if let Some(b) = v["keep_in_clipboard"].as_bool() {
+        if let Ok(mut kc) = st.keep_in_clipboard.lock() {
+            *kc = b;
+        }
+    }
+
     if let Some(b) = v["use_keyring"].as_bool() {
         let old = st.use_keyring.lock().map(|k| *k).unwrap_or(false);
         if b != old {

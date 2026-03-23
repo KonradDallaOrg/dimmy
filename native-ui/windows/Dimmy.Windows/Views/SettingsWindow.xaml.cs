@@ -241,13 +241,9 @@ public sealed partial class SettingsWindow : Window
 
         var json = ViewModel.ToJson();
 
-        // 1. Tell Rust to update its in-memory state
-        //    (Rust will also rewrite config.json, dropping unknown fields — that's OK)
+        // Tell Rust to update in-memory state and save config.json
+        // Rust now knows all fields (including UI appearance), so one writer only.
         try { DimmyNative.dimmy_set_config_json(json); } catch { }
-
-        // 2. Wait a moment for Rust to finish writing, then overwrite with COMPLETE config
-        System.Threading.Thread.Sleep(50);
-        SaveFullConfig(json);
 
         App.Instance?.ReloadConfig();
         App.Instance?.ApplySettings(ViewModel);
@@ -289,59 +285,6 @@ public sealed partial class SettingsWindow : Window
     {
         ViewModel.OverlayPosition = "Bottom Right";
         App.Instance?.ApplySettings(ViewModel);
-    }
-
-    /// <summary>
-    /// Write the complete config to config.json, merging with any existing
-    /// fields (e.g. fields written by Rust that the ViewModel doesn't track).
-    /// </summary>
-    private void SaveFullConfig(string viewModelJson)
-    {
-        try
-        {
-            var configDir = System.Environment.GetFolderPath(System.Environment.SpecialFolder.ApplicationData);
-            var dimmyDir = System.IO.Path.Combine(configDir, "dimmy");
-            System.IO.Directory.CreateDirectory(dimmyDir);
-            var path = System.IO.Path.Combine(dimmyDir, "config.json");
-            var dict = new System.Collections.Generic.Dictionary<string, object?>();
-
-            // Read existing file first (preserves Rust-only fields)
-            if (System.IO.File.Exists(path))
-            {
-                var existing = System.IO.File.ReadAllText(path);
-                using var existingDoc = System.Text.Json.JsonDocument.Parse(existing);
-                foreach (var prop in existingDoc.RootElement.EnumerateObject())
-                {
-                    dict[prop.Name] = prop.Value.ValueKind switch
-                    {
-                        System.Text.Json.JsonValueKind.String => prop.Value.GetString(),
-                        System.Text.Json.JsonValueKind.Number => prop.Value.GetDouble(),
-                        System.Text.Json.JsonValueKind.True => true,
-                        System.Text.Json.JsonValueKind.False => false,
-                        _ => null
-                    };
-                }
-            }
-
-            // Overlay all ViewModel fields on top
-            using var vmDoc = System.Text.Json.JsonDocument.Parse(viewModelJson);
-            foreach (var prop in vmDoc.RootElement.EnumerateObject())
-            {
-                dict[prop.Name] = prop.Value.ValueKind switch
-                {
-                    System.Text.Json.JsonValueKind.String => prop.Value.GetString(),
-                    System.Text.Json.JsonValueKind.Number => prop.Value.GetDouble(),
-                    System.Text.Json.JsonValueKind.True => true,
-                    System.Text.Json.JsonValueKind.False => false,
-                    _ => null
-                };
-            }
-
-            var json = System.Text.Json.JsonSerializer.Serialize(dict,
-                new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
-            System.IO.File.WriteAllText(path, json);
-        }
-        catch { }
     }
 
     private void Cancel_Click(object sender, RoutedEventArgs e)
