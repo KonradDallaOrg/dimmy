@@ -109,4 +109,119 @@ public class SettingsViewModelTests
         vm.LoadFromJson("{\"stats_total_speaking_secs\":100.0}");
         Assert.Equal(300.0, vm.TimeSavedEstimate, 0.1);
     }
+
+    // ── Input Gain ──
+
+    [Fact]
+    public void InputGainPercent_DefaultIs100()
+    {
+        var vm = new SettingsViewModel();
+        Assert.Equal(100, vm.InputGainPercent);
+    }
+
+    [Fact]
+    public void LoadFromJson_ParsesInputGain()
+    {
+        var vm = new SettingsViewModel();
+        vm.LoadFromJson("{\"input_gain\": 0.5}");
+        Assert.Equal(50, vm.InputGainPercent);
+    }
+
+    [Fact]
+    public void LoadFromJson_MissingInputGain_DefaultsTo100()
+    {
+        var vm = new SettingsViewModel();
+        vm.LoadFromJson("{\"language\": \"en\"}");
+        Assert.Equal(100, vm.InputGainPercent);
+    }
+
+    [Fact]
+    public void ToJson_IncludesInputGain()
+    {
+        var vm = new SettingsViewModel();
+        vm.InputGainPercent = 75;
+        var json = vm.ToJson();
+        Assert.Contains("\"input_gain\":0.75", json);
+    }
+
+    [Fact]
+    public void ToJson_InputGain100_SerializesAsOne()
+    {
+        var vm = new SettingsViewModel();
+        vm.InputGainPercent = 100;
+        var json = vm.ToJson();
+        Assert.Contains("\"input_gain\":1", json);
+    }
+
+    // ── UI appearance fields roundtrip ──
+
+    [Fact]
+    public void LoadFromJson_ParsesUiFields()
+    {
+        var vm = new SettingsViewModel();
+        vm.LoadFromJson("""
+        {
+            "border_style": "Solid",
+            "waveform_style": "Dots",
+            "overlay_position": "Top Left",
+            "keep_in_clipboard": true
+        }
+        """);
+        Assert.Equal("Solid", vm.BorderStyle);
+        Assert.Equal("Dots", vm.WaveformStyle);
+        Assert.Equal("Top Left", vm.OverlayPosition);
+        Assert.True(vm.KeepInClipboard);
+    }
+
+    [Fact]
+    public void LoadFromJson_MissingUiFields_DefaultsCorrectly()
+    {
+        var vm = new SettingsViewModel();
+        vm.LoadFromJson("{}");
+        Assert.Equal("Rainbow", vm.BorderStyle);
+        Assert.Equal("Bars", vm.WaveformStyle);
+        Assert.Equal("Bottom Right", vm.OverlayPosition);
+        Assert.False(vm.KeepInClipboard);
+    }
+
+    [Fact]
+    public void ToJson_IncludesAllUiFields()
+    {
+        var vm = new SettingsViewModel();
+        vm.BorderStyle = "Solid";
+        vm.WaveformStyle = "Line";
+        vm.OverlayPosition = "Top Right";
+        vm.KeepInClipboard = true;
+        var json = vm.ToJson();
+        Assert.Contains("\"border_style\":\"Solid\"", json);
+        Assert.Contains("\"waveform_style\":\"Line\"", json);
+        Assert.Contains("\"overlay_position\":\"Top Right\"", json);
+        Assert.Contains("\"keep_in_clipboard\":true", json);
+    }
+
+    [Fact]
+    public void ToJson_RoundTrip_PreservesAllFields()
+    {
+        var vm1 = new SettingsViewModel();
+        vm1.InputGainPercent = 60;
+        vm1.BorderStyle = "Solid";
+        vm1.WaveformStyle = "Dots";
+        vm1.OverlayPosition = "Top Left";
+        vm1.KeepInClipboard = true;
+        vm1.Language = "es";
+        vm1.LlmStyle = "summarize";
+
+        var json = vm1.ToJson();
+
+        var vm2 = new SettingsViewModel();
+        vm2.LoadFromJson(json);
+
+        Assert.Equal(vm1.InputGainPercent, vm2.InputGainPercent);
+        Assert.Equal(vm1.BorderStyle, vm2.BorderStyle);
+        Assert.Equal(vm1.WaveformStyle, vm2.WaveformStyle);
+        Assert.Equal(vm1.OverlayPosition, vm2.OverlayPosition);
+        Assert.Equal(vm1.KeepInClipboard, vm2.KeepInClipboard);
+        Assert.Equal(vm1.Language, vm2.Language);
+        Assert.Equal(vm1.LlmStyle, vm2.LlmStyle);
+    }
 }

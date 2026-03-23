@@ -138,4 +138,82 @@ public class AppViewModelTests
         vm.HandleEvent("{\"event\":\"transcript_ready\",\"payload\":{\"text\":\"hello\"}}");
         Assert.Equal(AppState.Completing, vm.CurrentState);
     }
+
+    // ── State transitions ──
+
+    [Fact]
+    public void SetState_IdleAfterError_ClearsErrorMessage()
+    {
+        var vm = new AppViewModel();
+        vm.SetError("broken");
+        vm.SetState(AppState.Idle);
+        Assert.Equal(AppState.Idle, vm.CurrentState);
+    }
+
+    [Fact]
+    public void SetState_RecordingToTranscribing_IsNotRecording()
+    {
+        var vm = new AppViewModel();
+        vm.SetState(AppState.Recording);
+        Assert.True(vm.IsRecording);
+        vm.SetState(AppState.Transcribing);
+        Assert.False(vm.IsRecording);
+    }
+
+    [Fact]
+    public void SetState_FullCycle_EndsIdle()
+    {
+        var vm = new AppViewModel();
+        vm.SetState(AppState.Recording);
+        vm.SetState(AppState.Transcribing);
+        vm.SetState(AppState.Processing);
+        vm.SetState(AppState.Completing);
+        vm.SetState(AppState.Idle);
+        Assert.Equal(AppState.Idle, vm.CurrentState);
+        Assert.False(vm.IsRecording);
+    }
+
+    // ── HandleEvent edge cases ──
+
+    [Fact]
+    public void HandleEvent_StatusTranscribing_SetsState()
+    {
+        var vm = new AppViewModel();
+        vm.HandleEvent("{\"event\":\"status\",\"payload\":{\"state\":\"transcribing\"}}");
+        Assert.Equal(AppState.Transcribing, vm.CurrentState);
+    }
+
+    [Fact]
+    public void HandleEvent_EmptyPayload_DoesNotThrow()
+    {
+        var vm = new AppViewModel();
+        vm.HandleEvent("{\"event\":\"unknown_event\",\"payload\":{}}");
+        // Should not crash, state unchanged
+        Assert.Equal(AppState.Idle, vm.CurrentState);
+    }
+
+    [Fact]
+    public void HandleEvent_SuppressRecordingStarted_IgnoresEvent()
+    {
+        var vm = new AppViewModel();
+        vm.SuppressRecordingStarted = true;
+        vm.HandleEvent("{\"event\":\"recording_started\",\"payload\":{}}");
+        Assert.NotEqual(AppState.Recording, vm.CurrentState);
+    }
+
+    // ── UI properties ──
+
+    [Fact]
+    public void BorderStyle_DefaultIsRainbow()
+    {
+        var vm = new AppViewModel();
+        Assert.Equal("Rainbow", vm.BorderStyle);
+    }
+
+    [Fact]
+    public void WaveformStyle_DefaultIsBars()
+    {
+        var vm = new AppViewModel();
+        Assert.Equal("Bars", vm.WaveformStyle);
+    }
 }
