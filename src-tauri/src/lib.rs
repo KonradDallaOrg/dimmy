@@ -102,7 +102,7 @@ fn audio_debug_dir() -> Option<std::path::PathBuf> {
 }
 
 /// Create a session directory for audio debug dumps and return its path.
-fn create_audio_debug_session() -> Option<std::path::PathBuf> {
+pub(crate) fn create_debug_session_dir() -> Option<std::path::PathBuf> {
     let base = audio_debug_dir()?;
     let ts = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
     let session_dir = base.join(&ts);
@@ -111,7 +111,7 @@ fn create_audio_debug_session() -> Option<std::path::PathBuf> {
 }
 
 /// Save WAV bytes to a file inside a debug session directory (fire-and-forget).
-fn save_debug_wav(dir: &std::path::Path, filename: &str, wav_data: &[u8]) {
+pub(crate) fn save_debug_wav(dir: &std::path::Path, filename: &str, wav_data: &[u8]) {
     let path = dir.join(filename);
     let _ = std::fs::write(&path, wav_data);
 }
@@ -232,6 +232,8 @@ pub(crate) struct AppConfig {
     waveform_style: String,
     overlay_position: String,
     keep_in_clipboard: bool,
+    /// Input gain (0.0-2.0, default 1.0). Attenuate hot mics (e.g. BT headsets).
+    input_gain: f32,
     // Window position — bottom-right anchor in logical pixels
     window_anchor_right: Option<f64>,
     window_anchor_bottom: Option<f64>,
@@ -272,6 +274,7 @@ impl Default for AppConfig {
             waveform_style: "Bars".to_string(),
             overlay_position: "Bottom Right".to_string(),
             keep_in_clipboard: false,
+            input_gain: 1.0,
             window_anchor_right: None,
             window_anchor_bottom: None,
             stats_total_words: 0,
@@ -310,6 +313,7 @@ pub(crate) fn save_config_file(cfg: &AppConfig) {
             "waveform_style": cfg.waveform_style,
             "overlay_position": cfg.overlay_position,
             "keep_in_clipboard": cfg.keep_in_clipboard,
+            "input_gain": cfg.input_gain,
             "stats_total_words": cfg.stats_total_words,
             "stats_total_speaking_secs": cfg.stats_total_speaking_secs,
         });
@@ -389,6 +393,7 @@ pub(crate) fn load_config_file() -> AppConfig {
                     waveform_style: v["waveform_style"].as_str().unwrap_or("Bars").to_string(),
                     overlay_position: v["overlay_position"].as_str().unwrap_or("Bottom Right").to_string(),
                     keep_in_clipboard: v["keep_in_clipboard"].as_bool().unwrap_or(false),
+                    input_gain: v["input_gain"].as_f64().unwrap_or(1.0) as f32,
                     window_anchor_right: v["window_anchor_right"].as_f64(),
                     window_anchor_bottom: v["window_anchor_bottom"].as_f64(),
                     stats_total_words: v["stats_total_words"].as_u64().unwrap_or(0),
@@ -593,6 +598,8 @@ pub struct AppState {
     pub waveform_style: Mutex<String>,
     pub overlay_position: Mutex<String>,
     pub keep_in_clipboard: Mutex<bool>,
+    /// Input gain as AtomicU32 (f32 bits) — shared with audio capture thread
+    pub input_gain: Arc<std::sync::atomic::AtomicU32>,
     pub key_store: keystore::KeyStore,
     /// Path to current audio debug session directory (set during recording, cleared on stop)
     pub audio_debug_session_dir: Mutex<Option<std::path::PathBuf>>,
@@ -668,7 +675,7 @@ fn start_recording(
 
     // Create debug session directory before spawning async task
     let debug_session_dir = if audio_debug_on {
-        create_audio_debug_session()
+        create_debug_session_dir()
     } else {
         None
     };
@@ -1280,6 +1287,7 @@ fn set_config(
         waveform_style: state.waveform_style.lock().map_err(|e| e.to_string())?.clone(),
         overlay_position: state.overlay_position.lock().map_err(|e| e.to_string())?.clone(),
         keep_in_clipboard: *state.keep_in_clipboard.lock().map_err(|e| e.to_string())?,
+        input_gain: f32::from_bits(state.input_gain.load(std::sync::atomic::Ordering::Relaxed)),
         window_anchor_right: cur_anchor.map(|(r, _)| r),
         window_anchor_bottom: cur_anchor.map(|(_, b)| b),
         stats_total_words: *state.stats_total_words.lock().map_err(|e| e.to_string())?,
@@ -1767,6 +1775,7 @@ pub(crate) fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         waveform_style: state.waveform_style.lock().map_err(|e| e.to_string())?.clone(),
         overlay_position: state.overlay_position.lock().map_err(|e| e.to_string())?.clone(),
         keep_in_clipboard: *state.keep_in_clipboard.lock().map_err(|e| e.to_string())?,
+        input_gain: f32::from_bits(state.input_gain.load(std::sync::atomic::Ordering::Relaxed)),
         window_anchor_right: anchor.map(|(r, _)| r),
         window_anchor_bottom: anchor.map(|(_, b)| b),
         stats_total_words: *state.stats_total_words.lock().map_err(|e| e.to_string())?,
@@ -2389,7 +2398,8 @@ pub fn run() {
     let shortcut_preset = file_cfg.shortcut.clone();
 
     let audio_buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
-    let audio_tx = audio::spawn_audio_thread(audio_buffer.clone());
+    let input_gain_atomic = Arc::new(std::sync::atomic::AtomicU32::new(file_cfg.input_gain.to_bits()));
+    let audio_tx = audio::spawn_audio_thread(audio_buffer.clone(), input_gain_atomic.clone());
 
     tauri::Builder::default()
         // Single-instance MUST be registered first
@@ -2437,6 +2447,7 @@ pub fn run() {
             waveform_style: Mutex::new(file_cfg.waveform_style),
             overlay_position: Mutex::new(file_cfg.overlay_position),
             keep_in_clipboard: Mutex::new(file_cfg.keep_in_clipboard),
+            input_gain: Arc::new(std::sync::atomic::AtomicU32::new(file_cfg.input_gain.to_bits())),
             key_store,
             audio_debug_session_dir: Mutex::new(None),
             window_anchor: Mutex::new(

@@ -27,6 +27,9 @@ public sealed partial class PillWindow : Window
     private DateTime _rainbowStartTime;
 
     private bool _amplitudeHandlerAttached;
+    // Display AGC: tracks a smoothed peak to normalize amplitude for visual feedback.
+    // Adapts like dagc — loud speech doesn't saturate, quiet speech is still visible.
+    private float _displayPeak = 0.05f; // start with small value to avoid divide-by-zero
     private bool _recordingHandlerAttached;
     private bool _completingHandlerAttached;
     private bool _errorHandlerAttached;
@@ -251,6 +254,7 @@ public sealed partial class PillWindow : Window
     // ── Timers ──────────────────────────────────────────────────────
     private void StartAmplitudePolling()
     {
+        _displayPeak = 0.05f; // reset AGC for each new recording
         if (_amplitudeTimer is null)
             _amplitudeTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1000.0 / 12) };
         if (!_amplitudeHandlerAttached)
@@ -258,9 +262,22 @@ public sealed partial class PillWindow : Window
             _amplitudeTimer.Tick += (_, _) =>
             {
                 var amp = DimmyNative.dimmy_get_amplitude();
-                Waveform.Amplitude = amp;
-                System.Diagnostics.Debug.WriteLine($"[AMP] {amp:F4}");
-                Console.WriteLine($"[AMP] {amp:F4}");
+
+                // Display AGC: smoothly track the peak level, then normalize against it.
+                // - When loud: _displayPeak rises fast → normalized value stays <1.0
+                // - When quiet: _displayPeak decays slowly → quiet speech still shows bars
+                // Attack fast (0.3), release slow (0.005) — same principle as dagc.
+                if (amp > _displayPeak)
+                    _displayPeak += (amp - _displayPeak) * 0.3f;  // fast attack
+                else
+                    _displayPeak *= 0.995f;  // slow release (~1.4s to halve at 12Hz)
+
+                // Floor to avoid dead bars when completely silent
+                _displayPeak = Math.Max(_displayPeak, 0.01f);
+
+                // Normalize: current amplitude relative to tracked peak
+                var normalized = amp / _displayPeak;
+                Waveform.Amplitude = Math.Clamp(normalized, 0f, 1f);
             };
             _amplitudeHandlerAttached = true;
         }

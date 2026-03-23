@@ -100,6 +100,10 @@
                 <ComboBox Header="Audio input device" Width="320"
                           SelectedItem="{Binding SelectedDevice, Mode=TwoWay}"
                           ItemsSource="{Binding Devices}" />
+                <Slider x:Name="InputGainSlider" Header="Microphone volume" Width="320"
+                        Minimum="10" Maximum="100" StepFrequency="5"
+                        Value="{Binding InputGainPercent, Mode=TwoWay}"
+                        HorizontalAlignment="Left" />
                 <ToggleSwitch Header="Preprocessing"
                               IsOn="{Binding PreprocessingEnabled, Mode=TwoWay}" />
                 <ToggleSwitch Header="Chunk streaming"

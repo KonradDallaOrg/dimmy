@@ -89,6 +89,7 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _waveformStyle = "Bars";
     [ObservableProperty] private string _overlayPosition = "Bottom Right";
     [ObservableProperty] private bool _keepInClipboard;
+    [ObservableProperty] private int _inputGainPercent = 100;
     [ObservableProperty] private bool _showInTaskbar;
     [ObservableProperty] private long _statsTotalWords;
     [ObservableProperty] private double _statsTotalSpeakingSecs;
@@ -131,6 +132,7 @@ public partial class SettingsViewModel : ObservableObject
             WaveformStyle = r.TryGetProperty("waveform_style", out var ws) ? ws.GetString() ?? "Bars" : "Bars";
             OverlayPosition = r.TryGetProperty("overlay_position", out var op) ? op.GetString() ?? "Bottom Right" : "Bottom Right";
             KeepInClipboard = r.TryGetProperty("keep_in_clipboard", out var kc) && kc.GetBoolean();
+            InputGainPercent = r.TryGetProperty("input_gain", out var ig) ? (int)(ig.GetDouble() * 100) : 100;
             StatsTotalWords = r.TryGetProperty("stats_total_words", out var stw) ? stw.GetInt64() : 0;
             StatsTotalSpeakingSecs = r.TryGetProperty("stats_total_speaking_secs", out var sts) ? sts.GetDouble() : 0;
 
@@ -175,6 +177,7 @@ public partial class SettingsViewModel : ObservableObject
             ["waveform_style"] = WaveformStyle,
             ["overlay_position"] = OverlayPosition,
             ["keep_in_clipboard"] = KeepInClipboard,
+            ["input_gain"] = InputGainPercent / 100.0,
         };
         if (!string.IsNullOrEmpty(ApiKey)) dict["api_key"] = ApiKey;
         if (!string.IsNullOrEmpty(LlmApiKey)) dict["llm_api_key"] = LlmApiKey;

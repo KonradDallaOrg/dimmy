@@ -127,7 +127,8 @@ pub extern "C" fn dimmy_init() -> c_int {
 
     // Audio thread
     let audio_buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
-    let audio_tx = crate::audio::spawn_audio_thread(audio_buffer.clone());
+    let input_gain_atomic = Arc::new(std::sync::atomic::AtomicU32::new(file_cfg.input_gain.to_bits()));
+    let audio_tx = crate::audio::spawn_audio_thread(audio_buffer.clone(), input_gain_atomic.clone());
 
     let app_state = AppState {
         recording: Mutex::new(false),
@@ -162,6 +163,7 @@ pub extern "C" fn dimmy_init() -> c_int {
         waveform_style: Mutex::new(file_cfg.waveform_style),
         overlay_position: Mutex::new(file_cfg.overlay_position),
         keep_in_clipboard: Mutex::new(file_cfg.keep_in_clipboard),
+        input_gain: input_gain_atomic,
         key_store,
         audio_debug_session_dir: Mutex::new(None),
         window_anchor: Mutex::new(None),
@@ -325,6 +327,16 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         return write_to_buf("", out_buf, buf_len);
     }
 
+    // Detect clipping (>5% of samples at ±1.0) — common with BT headsets
+    if peak >= 0.999 && buf_len_samples > 4800 {
+        let clipped = buffer.iter().filter(|&&s| s.abs() >= 0.999).count();
+        let clip_pct = clipped as f64 / buf_len_samples as f64 * 100.0;
+        if clip_pct > 5.0 {
+            log(&format!("[StopRec] WARNING: {:.1}% of samples clipped — audio may be distorted. Lower mic volume or set input_gain < 1.0", clip_pct));
+            emit_event("error", r#"{"message":"Microphone input is clipping — lower mic volume in Settings"}"#);
+        }
+    }
+
     emit_event("status", r#"{"state":"transcribing"}"#);
 
     // Process audio and transcribe (blocking)
@@ -338,16 +350,42 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
     let language = st.language.lock().map(|l| l.clone()).unwrap_or_default();
     let prompt = st.prompt.lock().map(|p| p.clone()).unwrap_or_default();
     let preprocessing = st.preprocessing_enabled.lock().map(|p| *p).unwrap_or(true);
+    // Audio debug: create session directory if enabled
+    let audio_debug = st.audio_debug_enabled.lock().map(|d| *d).unwrap_or(false);
+    let debug_dir = if audio_debug {
+        crate::create_debug_session_dir()
+    } else {
+        None
+    };
+
     // Build typed audio pipeline: RawAudio → ProcessedAudio
     let raw = crate::audio::RawAudio {
         samples: buffer,
         sample_rate,
     };
+
+    // Save raw audio before preprocessing
+    if let Some(ref dir) = debug_dir {
+        if let Ok(raw_wav) = raw.to_wav() {
+            crate::save_debug_wav(dir, "raw.wav", &raw_wav);
+            log(&format!("[Debug] Saved raw.wav ({} bytes) to {:?}", raw_wav.len(), dir));
+        }
+    }
+
     let processed = raw.preprocess(preprocessing);
     log(&format!(
         "[StopRec] after preprocess: {} samples (preprocessing={})",
         processed.samples.len(), preprocessing
     ));
+
+    // Save processed audio
+    if let Some(ref dir) = debug_dir {
+        if let Ok(proc_wav) = processed.to_wav() {
+            crate::save_debug_wav(dir, "processed.wav", &proc_wav);
+            log(&format!("[Debug] Saved processed.wav ({} bytes)", proc_wav.len()));
+        }
+    }
+
     if processed.is_empty() {
         log("[StopRec] VAD removed all audio — no speech detected");
         emit_event("error", r#"{"message":"No speech detected"}"#);
@@ -379,8 +417,50 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         .await
     });
 
+    // Save debug metadata + transcript
+    let (transcript_text, transcript_err) = match &transcript {
+        Ok(text) => (Some(text.as_str()), None),
+        Err(e) => (None, Some(format!("{}", e))),
+    };
+
+    if let Some(ref dir) = debug_dir {
+        let device_name = st.selected_device.lock().ok()
+            .and_then(|d| d.clone()).unwrap_or_default();
+        let llm_style = st.llm_style.lock().map(|s| s.as_str().to_string()).unwrap_or_default();
+        let llm_tone = st.llm_tone.lock().map(|t| t.as_str().to_string()).unwrap_or_default();
+        let input_gain = f32::from_bits(st.input_gain.load(std::sync::atomic::Ordering::Relaxed));
+
+        let metadata = serde_json::json!({
+            "timestamp": chrono::Local::now().to_rfc3339(),
+            "device": device_name,
+            "sample_rate": sample_rate,
+            "raw_samples": buf_len_samples,
+            "peak_amplitude": peak,
+            "preprocessing": preprocessing,
+            "input_gain": input_gain,
+            "provider": api_url,
+            "model": api_model,
+            "language": language,
+            "llm_style": llm_style,
+            "llm_tone": llm_tone,
+            "transcript": transcript_text.unwrap_or(""),
+            "error": transcript_err.as_deref().unwrap_or(""),
+            "duration_secs": buf_len_samples as f64 / sample_rate as f64,
+        });
+        let meta_json = serde_json::to_string_pretty(&metadata).unwrap_or_default();
+        let _ = std::fs::write(dir.join("metadata.json"), &meta_json);
+        log("[Debug] Saved metadata.json");
+    }
+
     match transcript {
         Ok(text) => {
+            let preview: &str = if text.len() > 200 {
+                match text.char_indices().nth(200) {
+                    Some((idx, _)) => &text[..idx],
+                    None => &text,
+                }
+            } else { &text };
+            log(&format!("[StopRec] Whisper raw transcript ({} chars): {:?}", text.len(), preview));
             emit_event(
                 "transcript_ready",
                 &format!(r#"{{"text":"{}"}}"#, text.replace('"', "\\\"")),
@@ -452,6 +532,7 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "waveform_style": *st.waveform_style.lock().unwrap_or_else(|e| e.into_inner()),
         "overlay_position": *st.overlay_position.lock().unwrap_or_else(|e| e.into_inner()),
         "keep_in_clipboard": *st.keep_in_clipboard.lock().unwrap_or_else(|e| e.into_inner()),
+        "input_gain": f32::from_bits(st.input_gain.load(std::sync::atomic::Ordering::Relaxed)),
         "stats_total_words": *st.stats_total_words.lock().unwrap_or_else(|e| e.into_inner()),
         "stats_total_speaking_secs": *st.stats_total_speaking_secs.lock().unwrap_or_else(|e| e.into_inner()),
         // Per-provider key flags
@@ -630,6 +711,11 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
         if let Ok(mut kc) = st.keep_in_clipboard.lock() {
             *kc = b;
         }
+    }
+    if let Some(g) = v["input_gain"].as_f64() {
+        let gain = (g as f32).clamp(0.0, 2.0);
+        st.input_gain.store(gain.to_bits(), std::sync::atomic::Ordering::Relaxed);
+        log(&format!("[Config] input_gain set to {:.2}", gain));
     }
 
     if let Some(b) = v["use_keyring"].as_bool() {

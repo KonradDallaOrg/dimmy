@@ -21,7 +21,11 @@ pub fn list_input_devices() -> Vec<String> {
 /// Spawn a dedicated audio capture thread.
 /// Returns a sender to control the thread.
 /// Captured samples are written to the shared buffer.
-pub fn spawn_audio_thread(buffer: Arc<Mutex<Vec<f32>>>) -> mpsc::Sender<AudioCommand> {
+/// `input_gain` is shared so it can be updated at runtime (0.0-2.0, default 1.0).
+pub fn spawn_audio_thread(
+    buffer: Arc<Mutex<Vec<f32>>>,
+    input_gain: Arc<std::sync::atomic::AtomicU32>,
+) -> mpsc::Sender<AudioCommand> {
     let (tx, rx) = mpsc::channel::<AudioCommand>();
 
     thread::spawn(
@@ -85,6 +89,7 @@ pub fn spawn_audio_thread(buffer: Arc<Mutex<Vec<f32>>>) -> mpsc::Sender<AudioCom
                         }
 
                         let buf = buffer.clone();
+                        let gain_ref = input_gain.clone();
                         let sample_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
                         let sc1 = sample_count.clone();
                         let s = match config.sample_format() {
@@ -93,18 +98,20 @@ pub fn spawn_audio_thread(buffer: Arc<Mutex<Vec<f32>>>) -> mpsc::Sender<AudioCom
                                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                                     let prev = sc1.fetch_add(data.len(), std::sync::atomic::Ordering::Relaxed);
                                     if prev == 0 {
-                                        // Log once when first samples arrive
                                         crate::log(&format!("[Audio] First F32 callback: {} samples", data.len()));
                                     }
+                                    let gain = f32::from_bits(gain_ref.load(std::sync::atomic::Ordering::Relaxed));
                                     if let Ok(mut b) = buf.lock() {
                                         if channels > 1 {
                                             for chunk in data.chunks(channels) {
                                                 let mono =
-                                                    chunk.iter().sum::<f32>() / channels as f32;
+                                                    chunk.iter().sum::<f32>() / channels as f32 * gain;
                                                 b.push(mono);
                                             }
-                                        } else {
+                                        } else if (gain - 1.0).abs() < 0.001 {
                                             b.extend_from_slice(data);
+                                        } else {
+                                            b.extend(data.iter().map(|&s| s * gain));
                                         }
                                     }
                                 },
@@ -113,6 +120,7 @@ pub fn spawn_audio_thread(buffer: Arc<Mutex<Vec<f32>>>) -> mpsc::Sender<AudioCom
                             ),
                             cpal::SampleFormat::I16 => {
                                 let buf2 = buffer.clone();
+                                let gain_ref2 = input_gain.clone();
                                 let sc2 = sample_count.clone();
                                 device.build_input_stream(
                                     &config.clone().into(),
@@ -121,13 +129,14 @@ pub fn spawn_audio_thread(buffer: Arc<Mutex<Vec<f32>>>) -> mpsc::Sender<AudioCom
                                         if prev == 0 {
                                             crate::log(&format!("[Audio] First I16 callback: {} samples", data.len()));
                                         }
+                                        let gain = f32::from_bits(gain_ref2.load(std::sync::atomic::Ordering::Relaxed));
                                         if let Ok(mut b) = buf2.lock() {
                                             for chunk in data.chunks(channels) {
                                                 let mono: f32 = chunk
                                                     .iter()
                                                     .map(|&s| s as f32 / 32768.0)
                                                     .sum::<f32>()
-                                                    / channels as f32;
+                                                    / channels as f32 * gain;
                                                 b.push(mono);
                                             }
                                         }
