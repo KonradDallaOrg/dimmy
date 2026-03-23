@@ -28,10 +28,21 @@ public sealed partial class SettingsWindow : Window
         var appWindow = WindowHelper.GetAppWindow(this);
         appWindow?.Resize(new global::Windows.Graphics.SizeInt32(720, 560));
 
+        // Set window icon
+        try
+        {
+            var iconPath = System.IO.Path.Combine(
+                System.AppContext.BaseDirectory, "Assets", "dimmy.ico");
+            if (System.IO.File.Exists(iconPath))
+                appWindow?.SetIcon(iconPath);
+        }
+        catch { }
+
         LoadConfig();
         SyncProviderComboBox();
         SyncLlmProviderComboBox();
         SyncLanguageComboBox();
+        PopulateStats();
         _loaded = true;
     }
 
@@ -285,6 +296,27 @@ public sealed partial class SettingsWindow : Window
     {
         ViewModel.OverlayPosition = "Bottom Right";
         App.Instance?.ApplySettings(ViewModel);
+    }
+
+    private void PopulateStats()
+    {
+        var secs = ViewModel.StatsTotalSpeakingSecs;
+        var mins = (int)(secs / 60);
+        var hours = mins / 60;
+        var remainMins = mins % 60;
+
+        SpeakingTimeText.Text = hours > 0
+            ? $"{hours}h {remainMins}m"
+            : $"{mins}m {(int)(secs % 60)}s";
+
+        var saved = ViewModel.TimeSavedEstimate;
+        var savedMins = (int)(saved / 60);
+        var savedHours = savedMins / 60;
+        var savedRemainMins = savedMins % 60;
+
+        TimeSavedText.Text = savedHours > 0
+            ? $"~{savedHours}h {savedRemainMins}m"
+            : $"~{savedMins}m";
     }
 
     private void Cancel_Click(object sender, RoutedEventArgs e)

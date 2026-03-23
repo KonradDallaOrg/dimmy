@@ -31,8 +31,7 @@
         <NavigationViewItem Content="About" Tag="about">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE946;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
-        <NavigationViewItem Content="Stats" Tag="stats"
-                            Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+        <NavigationViewItem Content="Stats" Tag="stats">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE9D9;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
         <NavigationViewItem Content="Debug" Tag="debug"

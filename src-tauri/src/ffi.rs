@@ -472,6 +472,12 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
                 }
             } else { &text };
             log(&format!("[StopRec] Whisper raw transcript ({} chars): {:?}", text.len(), preview));
+
+            // Update stats: word count from transcript, duration from audio samples
+            let speaking_secs = buf_len_samples as f64 / sample_rate as f64;
+            let words = text.split_whitespace().count() as c_int;
+            dimmy_update_stats(words, speaking_secs);
+
             emit_event(
                 "transcript_ready",
                 &format!(r#"{{"text":"{}"}}"#, text.replace('"', "\\\"")),

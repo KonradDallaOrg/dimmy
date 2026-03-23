@@ -103,11 +103,13 @@ public class SettingsViewModelTests
     }
 
     [Fact]
-    public void TimeSavedEstimate_Is3xSpeakingTime()
+    public void TimeSavedEstimate_BasedOnWords()
     {
         var vm = new SettingsViewModel();
-        vm.LoadFromJson("{\"stats_total_speaking_secs\":100.0}");
-        Assert.Equal(300.0, vm.TimeSavedEstimate, 0.1);
+        vm.LoadFromJson("{\"stats_total_words\":100}");
+        // 100 words: typing 100/40=2.5min, dictation 100/150=0.67min → saved ~1.83min = ~110s
+        var expected = 100.0 * (1.0 / 40 - 1.0 / 150) * 60;
+        Assert.Equal(expected, vm.TimeSavedEstimate, 0.1);
     }
 
     // ── Input Gain ──

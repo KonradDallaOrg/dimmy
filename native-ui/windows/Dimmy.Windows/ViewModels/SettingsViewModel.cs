@@ -94,7 +94,9 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private long _statsTotalWords;
     [ObservableProperty] private double _statsTotalSpeakingSecs;
 
-    public double TimeSavedEstimate => StatsTotalSpeakingSecs * 3;
+    // Time saved: typing ~40 WPM vs dictation ~150 WPM
+    // saved = (words / 40 - words / 150) * 60 seconds
+    public double TimeSavedEstimate => StatsTotalWords * (1.0 / 40 - 1.0 / 150) * 60;
 
     private string _snapshotJson = "";
     public bool IsDirty => ToJson() != _snapshotJson;
