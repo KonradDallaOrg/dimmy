@@ -488,6 +488,10 @@
 				OTHER_LDFLAGS = (
 					"-lc++",
 					"-lresolv",
+					"-framework",
+					OSAKit,
+					"-framework",
+					Carbon,
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.dimmy.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -529,6 +533,10 @@
 				OTHER_LDFLAGS = (
 					"-lc++",
 					"-lresolv",
+					"-framework",
+					OSAKit,
+					"-framework",
+					Carbon,
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.dimmy.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
