@@ -131,10 +131,13 @@ jobs:
         working-directory: src-tauri
         run: cargo build --lib --release --target aarch64-apple-darwin
 
-      - name: Verify static library
+      - name: Verify static library and remove dylib
         run: |
           ls -lh src-tauri/target/aarch64-apple-darwin/release/libdimmy_lib.a
           file src-tauri/target/aarch64-apple-darwin/release/libdimmy_lib.a
+          # Remove dylib so Xcode links the static .a (not the dynamic .dylib)
+          rm -f src-tauri/target/aarch64-apple-darwin/release/libdimmy_lib.dylib
+          rm -f src-tauri/target/aarch64-apple-darwin/release/deps/libdimmy_lib.dylib
 
       - name: Build Xcode project
         working-directory: native-ui/macos
