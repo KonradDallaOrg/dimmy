@@ -237,6 +237,8 @@
               <TextBlock Text="Voice dictation that stays out of your way" FontSize="12"
                          Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                          HorizontalAlignment="Center" />
+              <HyperlinkButton x:Name="UpdateLink" Content="" Visibility="Collapsed"
+                               HorizontalAlignment="Center" />
               <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}"
                       Margin="0,8" Width="200" />
               <TextBlock Text="Made with irony" FontSize="11"

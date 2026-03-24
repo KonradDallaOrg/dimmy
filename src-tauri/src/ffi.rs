@@ -1127,6 +1127,13 @@ pub extern "C" fn dimmy_has_api_key() -> c_int {
     st.api_key.lock().map(|k| k.is_some() as c_int).unwrap_or(0)
 }
 
+/// Return the version string from Cargo.toml into caller-provided buffer.
+/// Returns number of bytes written, or -1 on error.
+#[no_mangle]
+pub extern "C" fn dimmy_get_version(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    write_to_buf(env!("CARGO_PKG_VERSION"), out_buf, buf_len)
+}
+
 /// Check if recording is active. Returns 1=yes, 0=no.
 #[no_mangle]
 pub extern "C" fn dimmy_is_recording() -> c_int {

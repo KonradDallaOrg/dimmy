@@ -1,4 +1,8 @@
+using System;
 using System.Linq;
+using System.Net.Http;
+using System.Text.Json;
+using System.Threading.Tasks;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Dimmy.Windows.Helpers;
@@ -43,6 +47,7 @@ public sealed partial class SettingsWindow : Window
         SyncLlmProviderComboBox();
         SyncLanguageComboBox();
         PopulateStats();
+        PopulateVersion();
         _loaded = true;
     }
 
@@ -317,6 +322,53 @@ public sealed partial class SettingsWindow : Window
         TimeSavedText.Text = savedHours > 0
             ? $"~{savedHours}h {savedRemainMins}m"
             : $"~{savedMins}m";
+    }
+
+    private string _currentVersion = "0.0.0";
+
+    private void PopulateVersion()
+    {
+        _currentVersion = DimmyNative.ReadBuffer(DimmyNative.dimmy_get_version, 64) ?? "0.0.0";
+        VersionText.Text = $"v{_currentVersion}";
+        _ = CheckForUpdateAsync();
+    }
+
+    private async Task CheckForUpdateAsync()
+    {
+        try
+        {
+            using var http = new HttpClient();
+            http.DefaultRequestHeaders.UserAgent.ParseAdd("Dimmy-Updater");
+            http.Timeout = TimeSpan.FromSeconds(10);
+
+            var resp = await http.GetStringAsync(
+                "https://api.github.com/repos/KonradDallaOrg/dimmy/releases/latest");
+            using var doc = JsonDocument.Parse(resp);
+            var root = doc.RootElement;
+
+            var tagName = root.GetProperty("tag_name").GetString() ?? "";
+            var latestVersion = tagName.TrimStart('v');
+            var htmlUrl = root.GetProperty("html_url").GetString() ?? "";
+
+            if (IsNewerVersion(latestVersion, _currentVersion) && !string.IsNullOrEmpty(htmlUrl))
+            {
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    UpdateLink.Content = $"Update available: v{latestVersion}";
+                    UpdateLink.NavigateUri = new Uri(htmlUrl);
+                    UpdateLink.Visibility = Visibility.Visible;
+                });
+            }
+        }
+        catch { /* no network = no update check, that's fine */ }
+    }
+
+    /// <summary>Compare two semver strings. Returns true if candidate > current.</summary>
+    private static bool IsNewerVersion(string candidate, string current)
+    {
+        if (Version.TryParse(candidate, out var c) && Version.TryParse(current, out var cur))
+            return c > cur;
+        return false;
     }
 
     private void Cancel_Click(object sender, RoutedEventArgs e)
