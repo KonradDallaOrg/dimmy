@@ -156,7 +156,9 @@
               <!-- LLM API Key -->
               <ToggleSwitch Header="Use same API key as STT"
                             IsOn="{Binding LlmUseSameKey, Mode=TwoWay}" />
-              <PasswordBox x:Name="LlmApiKeyBox" Header="LLM API Key" Width="320" HorizontalAlignment="Left" />
+              <PasswordBox x:Name="LlmApiKeyBox" Header="LLM API Key" Width="320" HorizontalAlignment="Left"
+                           PlaceholderText="{Binding HasLlmKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}"
+                           Visibility="{Binding LlmUseSameKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Invert}" />
 
               <!-- Clipboard -->
               <TextBlock Text="Clipboard" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
