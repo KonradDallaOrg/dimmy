@@ -286,16 +286,28 @@ impl Default for AppConfig {
 /// Save non-sensitive config to file (NO api_key — that goes to keyring ONLY)
 pub(crate) fn save_config_file(cfg: &AppConfig) {
     // Preconditions: validate new config fields
-    assert!(cfg.input_gain >= 0.0 && cfg.input_gain <= 2.0,
-        "save_config_file: input_gain must be in [0.0, 2.0], got {}", cfg.input_gain);
-    assert!(cfg.input_gain.is_finite(),
-        "save_config_file: input_gain must be finite, got {}", cfg.input_gain);
-    assert!(!cfg.border_style.is_empty(),
-        "save_config_file: border_style must be non-empty");
-    assert!(!cfg.waveform_style.is_empty(),
-        "save_config_file: waveform_style must be non-empty");
-    assert!(!cfg.overlay_position.is_empty(),
-        "save_config_file: overlay_position must be non-empty");
+    assert!(
+        cfg.input_gain >= 0.0 && cfg.input_gain <= 2.0,
+        "save_config_file: input_gain must be in [0.0, 2.0], got {}",
+        cfg.input_gain
+    );
+    assert!(
+        cfg.input_gain.is_finite(),
+        "save_config_file: input_gain must be finite, got {}",
+        cfg.input_gain
+    );
+    assert!(
+        !cfg.border_style.is_empty(),
+        "save_config_file: border_style must be non-empty"
+    );
+    assert!(
+        !cfg.waveform_style.is_empty(),
+        "save_config_file: waveform_style must be non-empty"
+    );
+    assert!(
+        !cfg.overlay_position.is_empty(),
+        "save_config_file: overlay_position must be non-empty"
+    );
 
     if let Some(path) = config_path() {
         if let Some(parent) = path.parent() {
@@ -352,8 +364,16 @@ pub(crate) fn load_config_file() -> AppConfig {
         if let Ok(data) = std::fs::read_to_string(&path) {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
                 return AppConfig {
-                    api_url: v["api_url"].as_str().filter(|s| !s.is_empty()).unwrap_or(DEFAULT_API_URL).to_string(),
-                    api_model: v["api_model"].as_str().filter(|s| !s.is_empty()).unwrap_or(DEFAULT_MODEL).to_string(),
+                    api_url: v["api_url"]
+                        .as_str()
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or(DEFAULT_API_URL)
+                        .to_string(),
+                    api_model: v["api_model"]
+                        .as_str()
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or(DEFAULT_MODEL)
+                        .to_string(),
                     selected_device: v["selected_device"].as_str().map(|s| s.to_string()),
                     language: v["language"].as_str().unwrap_or("").to_string(),
                     shortcut_mode: v["shortcut_mode"].as_str().unwrap_or("toggle").to_string(),
@@ -403,7 +423,10 @@ pub(crate) fn load_config_file() -> AppConfig {
                     use_keyring: v["use_keyring"].as_bool().unwrap_or(defaults.use_keyring),
                     border_style: v["border_style"].as_str().unwrap_or("Rainbow").to_string(),
                     waveform_style: v["waveform_style"].as_str().unwrap_or("Bars").to_string(),
-                    overlay_position: v["overlay_position"].as_str().unwrap_or("Bottom Right").to_string(),
+                    overlay_position: v["overlay_position"]
+                        .as_str()
+                        .unwrap_or("Bottom Right")
+                        .to_string(),
                     keep_in_clipboard: v["keep_in_clipboard"].as_bool().unwrap_or(false),
                     input_gain: v["input_gain"].as_f64().unwrap_or(1.0) as f32,
                     window_anchor_right: v["window_anchor_right"].as_f64(),
@@ -1295,9 +1318,21 @@ fn set_config(
         preprocessing_enabled: cur_preprocessing_enabled,
         audio_debug_enabled: cur_audio_debug_enabled,
         use_keyring: *state.use_keyring.lock().map_err(|e| e.to_string())?,
-        border_style: state.border_style.lock().map_err(|e| e.to_string())?.clone(),
-        waveform_style: state.waveform_style.lock().map_err(|e| e.to_string())?.clone(),
-        overlay_position: state.overlay_position.lock().map_err(|e| e.to_string())?.clone(),
+        border_style: state
+            .border_style
+            .lock()
+            .map_err(|e| e.to_string())?
+            .clone(),
+        waveform_style: state
+            .waveform_style
+            .lock()
+            .map_err(|e| e.to_string())?
+            .clone(),
+        overlay_position: state
+            .overlay_position
+            .lock()
+            .map_err(|e| e.to_string())?
+            .clone(),
         keep_in_clipboard: *state.keep_in_clipboard.lock().map_err(|e| e.to_string())?,
         input_gain: f32::from_bits(state.input_gain.load(std::sync::atomic::Ordering::Relaxed)),
         window_anchor_right: cur_anchor.map(|(r, _)| r),
@@ -1783,9 +1818,21 @@ pub(crate) fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         preprocessing_enabled,
         audio_debug_enabled,
         use_keyring: *state.use_keyring.lock().map_err(|e| e.to_string())?,
-        border_style: state.border_style.lock().map_err(|e| e.to_string())?.clone(),
-        waveform_style: state.waveform_style.lock().map_err(|e| e.to_string())?.clone(),
-        overlay_position: state.overlay_position.lock().map_err(|e| e.to_string())?.clone(),
+        border_style: state
+            .border_style
+            .lock()
+            .map_err(|e| e.to_string())?
+            .clone(),
+        waveform_style: state
+            .waveform_style
+            .lock()
+            .map_err(|e| e.to_string())?
+            .clone(),
+        overlay_position: state
+            .overlay_position
+            .lock()
+            .map_err(|e| e.to_string())?
+            .clone(),
         keep_in_clipboard: *state.keep_in_clipboard.lock().map_err(|e| e.to_string())?,
         input_gain: f32::from_bits(state.input_gain.load(std::sync::atomic::Ordering::Relaxed)),
         window_anchor_right: anchor.map(|(r, _)| r),
@@ -1944,7 +1991,7 @@ fn get_work_area() -> Option<(i32, i32)> {
     extern "C" {
         // objc_msgSend with different return types
         fn objc_getClass(name: *const u8) -> *mut std::ffi::c_void;
-        fn sel_registerName(name: *const u8) -> *mut std::ffi::c_void;
+        fn sel_registerName(name: *const u8) -> *const std::ffi::c_void;
     }
 
     // IMPORTANT: on ARM64 (Apple Silicon), objc_msgSend is NOT variadic.
@@ -1971,18 +2018,20 @@ fn get_work_area() -> Option<(i32, i32)> {
     unsafe {
         let send_ptr: MsgSendPtr = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
 
-        let ns_screen = objc_getClass(b"NSScreen\0".as_ptr());
+        let ns_screen = objc_getClass(c"NSScreen".as_ptr() as *const u8);
         if ns_screen.is_null() {
             return None;
         }
-        let main_screen_sel = sel_registerName(b"mainScreen\0".as_ptr());
+        let main_screen_sel =
+            sel_registerName(c"mainScreen".as_ptr() as *const u8) as *mut std::ffi::c_void;
         let screen = send_ptr(ns_screen, main_screen_sel);
         if screen.is_null() {
             return None;
         }
 
-        let visible_frame_sel = sel_registerName(b"visibleFrame\0".as_ptr());
-        let frame_sel = sel_registerName(b"frame\0".as_ptr());
+        let visible_frame_sel =
+            sel_registerName(c"visibleFrame".as_ptr() as *const u8) as *mut std::ffi::c_void;
+        let frame_sel = sel_registerName(c"frame".as_ptr() as *const u8) as *mut std::ffi::c_void;
 
         let visible: NSRect;
         let full: NSRect;
@@ -2235,7 +2284,7 @@ fn prompt_accessibility() -> bool {
         unsafe {
             let prompt_key = CFStringCreateWithCString(
                 std::ptr::null(),
-                b"AXTrustedCheckOptionPrompt\0".as_ptr(),
+                c"AXTrustedCheckOptionPrompt".as_ptr() as *const u8,
                 0x0600_0100, // kCFStringEncodingUTF8
             );
             let keys = [prompt_key];
@@ -2410,7 +2459,9 @@ pub fn run() {
     let shortcut_preset = file_cfg.shortcut.clone();
 
     let audio_buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
-    let input_gain_atomic = Arc::new(std::sync::atomic::AtomicU32::new(file_cfg.input_gain.to_bits()));
+    let input_gain_atomic = Arc::new(std::sync::atomic::AtomicU32::new(
+        file_cfg.input_gain.to_bits(),
+    ));
     let audio_tx = audio::spawn_audio_thread(audio_buffer.clone(), input_gain_atomic.clone());
 
     tauri::Builder::default()
@@ -2459,7 +2510,9 @@ pub fn run() {
             waveform_style: Mutex::new(file_cfg.waveform_style),
             overlay_position: Mutex::new(file_cfg.overlay_position),
             keep_in_clipboard: Mutex::new(file_cfg.keep_in_clipboard),
-            input_gain: Arc::new(std::sync::atomic::AtomicU32::new(file_cfg.input_gain.to_bits())),
+            input_gain: Arc::new(std::sync::atomic::AtomicU32::new(
+                file_cfg.input_gain.to_bits(),
+            )),
             key_store,
             audio_debug_session_dir: Mutex::new(None),
             window_anchor: Mutex::new(
@@ -2524,32 +2577,39 @@ pub fn run() {
                             window.ns_window().unwrap_or(std::ptr::null_mut() as _) as Id;
                         if !ns_win.is_null() {
                             // [nsWindow setOpaque:NO]
-                            let sel_set_opaque = sel_registerName(b"setOpaque:\0".as_ptr());
+                            let sel_set_opaque =
+                                sel_registerName(c"setOpaque:".as_ptr() as *const u8);
                             send_int(ns_win, sel_set_opaque, 0 as c_int);
 
                             // [NSColor clearColor]
-                            let ns_color_class = objc_getClass(b"NSColor\0".as_ptr());
-                            let sel_clear_color = sel_registerName(b"clearColor\0".as_ptr());
+                            let ns_color_class = objc_getClass(c"NSColor".as_ptr() as *const u8);
+                            let sel_clear_color =
+                                sel_registerName(c"clearColor".as_ptr() as *const u8);
                             let clear: Id = send(ns_color_class, sel_clear_color);
 
                             // [nsWindow setBackgroundColor:[NSColor clearColor]]
-                            let sel_set_bg = sel_registerName(b"setBackgroundColor:\0".as_ptr());
+                            let sel_set_bg =
+                                sel_registerName(c"setBackgroundColor:".as_ptr() as *const u8);
                             send_obj(ns_win, sel_set_bg, clear);
 
                             // [nsWindow setHasShadow:NO]
-                            let sel_set_shadow = sel_registerName(b"setHasShadow:\0".as_ptr());
+                            let sel_set_shadow =
+                                sel_registerName(c"setHasShadow:".as_ptr() as *const u8);
                             send_int(ns_win, sel_set_shadow, 0 as c_int);
 
                             // [nsWindow setTitlebarAppearsTransparent:YES]
-                            let sel_titlebar_transparent =
-                                sel_registerName(b"setTitlebarAppearsTransparent:\0".as_ptr());
+                            let sel_titlebar_transparent = sel_registerName(
+                                c"setTitlebarAppearsTransparent:".as_ptr() as *const u8,
+                            );
                             send_int(ns_win, sel_titlebar_transparent, 1 as c_int);
 
                             // Add NSFullSizeContentViewWindowMask to existing styleMask
                             // NSFullSizeContentViewWindowMask = 1 << 15 = 32768
-                            let sel_style_mask = sel_registerName(b"styleMask\0".as_ptr());
+                            let sel_style_mask =
+                                sel_registerName(c"styleMask".as_ptr() as *const u8);
                             let current_mask = send_get_ulong(ns_win, sel_style_mask);
-                            let sel_set_style_mask = sel_registerName(b"setStyleMask:\0".as_ptr());
+                            let sel_set_style_mask =
+                                sel_registerName(c"setStyleMask:".as_ptr() as *const u8);
                             send_ulong(
                                 ns_win,
                                 sel_set_style_mask,
@@ -3257,16 +3317,28 @@ mod tests {
     #[test]
     fn default_config_input_gain_is_one() {
         let cfg = AppConfig::default();
-        assert!((cfg.input_gain - 1.0).abs() < f32::EPSILON,
-            "Default input_gain should be 1.0, got {}", cfg.input_gain);
+        assert!(
+            (cfg.input_gain - 1.0).abs() < f32::EPSILON,
+            "Default input_gain should be 1.0, got {}",
+            cfg.input_gain
+        );
     }
 
     #[test]
     fn default_config_ui_fields_non_empty() {
         let cfg = AppConfig::default();
-        assert!(!cfg.border_style.is_empty(), "border_style must not be empty");
-        assert!(!cfg.waveform_style.is_empty(), "waveform_style must not be empty");
-        assert!(!cfg.overlay_position.is_empty(), "overlay_position must not be empty");
+        assert!(
+            !cfg.border_style.is_empty(),
+            "border_style must not be empty"
+        );
+        assert!(
+            !cfg.waveform_style.is_empty(),
+            "waveform_style must not be empty"
+        );
+        assert!(
+            !cfg.overlay_position.is_empty(),
+            "overlay_position must not be empty"
+        );
     }
 
     #[test]
@@ -3286,8 +3358,11 @@ mod tests {
         let data = std::fs::read_to_string(&path).unwrap();
         let v: serde_json::Value = serde_json::from_str(&data).unwrap();
         let gain = v["input_gain"].as_f64().unwrap_or(1.0) as f32;
-        assert!((gain - 1.0).abs() < f32::EPSILON,
-            "Missing input_gain should default to 1.0, got {}", gain);
+        assert!(
+            (gain - 1.0).abs() < f32::EPSILON,
+            "Missing input_gain should default to 1.0, got {}",
+            gain
+        );
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -3308,8 +3383,11 @@ mod tests {
         let data = std::fs::read_to_string(&path).unwrap();
         let v: serde_json::Value = serde_json::from_str(&data).unwrap();
         let gain = v["input_gain"].as_f64().unwrap_or(1.0) as f32;
-        assert!((gain - 0.75).abs() < 0.001,
-            "input_gain should be 0.75, got {}", gain);
+        assert!(
+            (gain - 0.75).abs() < 0.001,
+            "input_gain should be 0.75, got {}",
+            gain
+        );
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -3328,8 +3406,11 @@ mod tests {
         save_config_file(&cfg);
 
         let loaded = load_config_file();
-        assert!((loaded.input_gain - 0.42).abs() < 0.001,
-            "Roundtrip input_gain should be 0.42, got {}", loaded.input_gain);
+        assert!(
+            (loaded.input_gain - 0.42).abs() < 0.001,
+            "Roundtrip input_gain should be 0.42, got {}",
+            loaded.input_gain
+        );
         assert_eq!(loaded.border_style, "Solid");
         assert_eq!(loaded.waveform_style, "Line");
         assert_eq!(loaded.overlay_position, "Top Left");

@@ -127,8 +127,11 @@ pub extern "C" fn dimmy_init() -> c_int {
 
     // Audio thread
     let audio_buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
-    let input_gain_atomic = Arc::new(std::sync::atomic::AtomicU32::new(file_cfg.input_gain.to_bits()));
-    let audio_tx = crate::audio::spawn_audio_thread(audio_buffer.clone(), input_gain_atomic.clone());
+    let input_gain_atomic = Arc::new(std::sync::atomic::AtomicU32::new(
+        file_cfg.input_gain.to_bits(),
+    ));
+    let audio_tx =
+        crate::audio::spawn_audio_thread(audio_buffer.clone(), input_gain_atomic.clone());
 
     let app_state = AppState {
         recording: Mutex::new(false),
@@ -198,7 +201,10 @@ pub extern "C" fn dimmy_shutdown() {
         }
         // Postcondition: recording must be false after shutdown
         if let Ok(r) = st.recording.lock() {
-            assert!(!*r, "dimmy_shutdown: recording flag must be false after shutdown");
+            assert!(
+                !*r,
+                "dimmy_shutdown: recording flag must be false after shutdown"
+            );
         }
 
         // Small delay to let cpal release the device
@@ -281,7 +287,11 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         while waited < max_wait_ms {
             if let Ok(b) = st.audio_buffer.lock() {
                 if !b.is_empty() {
-                    log(&format!("[StopRec] buffer ready after {}ms ({} samples)", waited, b.len()));
+                    log(&format!(
+                        "[StopRec] buffer ready after {}ms ({} samples)",
+                        waited,
+                        b.len()
+                    ));
                     break;
                 }
             }
@@ -289,8 +299,12 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
             waited += poll_ms;
         }
         // Assert: buffer wait did not exceed a reasonable maximum
-        assert!(waited <= max_wait_ms + poll_ms,
-            "dimmy_stop_recording: buffer wait {}ms exceeded max {}ms", waited, max_wait_ms);
+        assert!(
+            waited <= max_wait_ms + poll_ms,
+            "dimmy_stop_recording: buffer wait {}ms exceeded max {}ms",
+            waited,
+            max_wait_ms
+        );
         if waited >= max_wait_ms {
             log("[StopRec] WARNING: timed out waiting for audio samples");
         }
@@ -318,7 +332,11 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
     // Diagnostic: log buffer stats
     let buf_len_samples = buffer.len();
     let peak = buffer.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
-    assert!(peak.is_finite(), "dimmy_stop_recording: peak amplitude must be finite, got {}", peak);
+    assert!(
+        peak.is_finite(),
+        "dimmy_stop_recording: peak amplitude must be finite, got {}",
+        peak
+    );
     log(&format!(
         "[StopRec] buffer: {} samples, peak amplitude: {:.6}",
         buf_len_samples, peak
@@ -332,7 +350,10 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
     // Detect completely silent input (muted mic / privacy blocked)
     if peak < 1e-7 && buf_len_samples > 4800 {
         log("[StopRec] Microphone appears muted (all zeros) — check system settings");
-        emit_event("error", r#"{"message":"Microphone is muted — check system sound settings"}"#);
+        emit_event(
+            "error",
+            r#"{"message":"Microphone is muted — check system sound settings"}"#,
+        );
         return write_to_buf("", out_buf, buf_len);
     }
 
@@ -340,11 +361,17 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
     if peak >= 0.999 && buf_len_samples > 4800 {
         let clipped = buffer.iter().filter(|&&s| s.abs() >= 0.999).count();
         let clip_pct = clipped as f64 / buf_len_samples as f64 * 100.0;
-        assert!(clip_pct >= 0.0 && clip_pct <= 100.0,
-            "dimmy_stop_recording: clipping percentage must be in [0, 100], got {}", clip_pct);
+        assert!(
+            (0.0..=100.0).contains(&clip_pct),
+            "dimmy_stop_recording: clipping percentage must be in [0, 100], got {}",
+            clip_pct
+        );
         if clip_pct > 5.0 {
             log(&format!("[StopRec] WARNING: {:.1}% of samples clipped — audio may be distorted. Lower mic volume or set input_gain < 1.0", clip_pct));
-            emit_event("error", r#"{"message":"Microphone input is clipping — lower mic volume in Settings"}"#);
+            emit_event(
+                "error",
+                r#"{"message":"Microphone input is clipping — lower mic volume in Settings"}"#,
+            );
         }
     }
 
@@ -379,21 +406,29 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
     if let Some(ref dir) = debug_dir {
         if let Ok(raw_wav) = raw.to_wav() {
             crate::save_debug_wav(dir, "raw.wav", &raw_wav);
-            log(&format!("[Debug] Saved raw.wav ({} bytes) to {:?}", raw_wav.len(), dir));
+            log(&format!(
+                "[Debug] Saved raw.wav ({} bytes) to {:?}",
+                raw_wav.len(),
+                dir
+            ));
         }
     }
 
     let processed = raw.preprocess(preprocessing);
     log(&format!(
         "[StopRec] after preprocess: {} samples (preprocessing={})",
-        processed.samples.len(), preprocessing
+        processed.samples.len(),
+        preprocessing
     ));
 
     // Save processed audio
     if let Some(ref dir) = debug_dir {
         if let Ok(proc_wav) = processed.to_wav() {
             crate::save_debug_wav(dir, "processed.wav", &proc_wav);
-            log(&format!("[Debug] Saved processed.wav ({} bytes)", proc_wav.len()));
+            log(&format!(
+                "[Debug] Saved processed.wav ({} bytes)",
+                proc_wav.len()
+            ));
         }
     }
 
@@ -435,10 +470,22 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
     };
 
     if let Some(ref dir) = debug_dir {
-        let device_name = st.selected_device.lock().ok()
-            .and_then(|d| d.clone()).unwrap_or_default();
-        let llm_style = st.llm_style.lock().map(|s| s.as_str().to_string()).unwrap_or_default();
-        let llm_tone = st.llm_tone.lock().map(|t| t.as_str().to_string()).unwrap_or_default();
+        let device_name = st
+            .selected_device
+            .lock()
+            .ok()
+            .and_then(|d| d.clone())
+            .unwrap_or_default();
+        let llm_style = st
+            .llm_style
+            .lock()
+            .map(|s| s.as_str().to_string())
+            .unwrap_or_default();
+        let llm_tone = st
+            .llm_tone
+            .lock()
+            .map(|t| t.as_str().to_string())
+            .unwrap_or_default();
         let input_gain = f32::from_bits(st.input_gain.load(std::sync::atomic::Ordering::Relaxed));
 
         let metadata = serde_json::json!({
@@ -470,8 +517,14 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
                     Some((idx, _)) => &text[..idx],
                     None => &text,
                 }
-            } else { &text };
-            log(&format!("[StopRec] Whisper raw transcript ({} chars): {:?}", text.len(), preview));
+            } else {
+                &text
+            };
+            log(&format!(
+                "[StopRec] Whisper raw transcript ({} chars): {:?}",
+                text.len(),
+                preview
+            ));
 
             // Update stats: word count from transcript, duration from audio samples
             let speaking_secs = buf_len_samples as f64 / sample_rate as f64;
@@ -731,7 +784,8 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
     }
     if let Some(g) = v["input_gain"].as_f64() {
         let gain = (g as f32).clamp(0.0, 2.0);
-        st.input_gain.store(gain.to_bits(), std::sync::atomic::Ordering::Relaxed);
+        st.input_gain
+            .store(gain.to_bits(), std::sync::atomic::Ordering::Relaxed);
         log(&format!("[Config] input_gain set to {:.2}", gain));
     }
 
@@ -838,7 +892,9 @@ pub extern "C" fn dimmy_check_audio_health(out_buf: *mut c_char, buf_len: c_int)
                 let result = dev.build_input_stream(
                     &config.into(),
                     |_data: &[f32], _: &cpal::InputCallbackInfo| {},
-                    |err| { let _ = err; },
+                    |err| {
+                        let _ = err;
+                    },
                     None,
                 );
                 match result {
@@ -882,8 +938,11 @@ pub extern "C" fn dimmy_check_audio_health(out_buf: *mut c_char, buf_len: c_int)
     );
 
     // Postcondition: JSON must be valid
-    assert!(serde_json::from_str::<serde_json::Value>(&json).is_ok(),
-        "dimmy_check_audio_health: produced invalid JSON: {}", json);
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&json).is_ok(),
+        "dimmy_check_audio_health: produced invalid JSON: {}",
+        json
+    );
 
     log(&format!("[AudioHealth] {}", json));
     write_to_buf(&json, out_buf, buf_len)
@@ -997,19 +1056,39 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
         return write_to_buf(text, out_buf, buf_len);
     }
 
-    let style = st.llm_style.lock().map(|s| *s).unwrap_or(crate::llm::LlmStyle::Off);
+    let style = st
+        .llm_style
+        .lock()
+        .map(|s| *s)
+        .unwrap_or(crate::llm::LlmStyle::Off);
     if style == crate::llm::LlmStyle::Off {
         return write_to_buf(text, out_buf, buf_len);
     }
 
-    let tone = st.llm_tone.lock().map(|t| *t).unwrap_or(crate::llm::LlmTone::None);
-    let custom_prompt = st.llm_custom_prompt.lock().map(|p| p.clone()).unwrap_or_default();
-    let translate_to = st.llm_translate_to.lock().map(|t| t.clone()).unwrap_or_default();
+    let tone = st
+        .llm_tone
+        .lock()
+        .map(|t| *t)
+        .unwrap_or(crate::llm::LlmTone::None);
+    let custom_prompt = st
+        .llm_custom_prompt
+        .lock()
+        .map(|p| p.clone())
+        .unwrap_or_default();
+    let translate_to = st
+        .llm_translate_to
+        .lock()
+        .map(|t| t.clone())
+        .unwrap_or_default();
 
     // Resolve LLM API URL and key (may use same as STT)
     let use_same_key = st.llm_use_same_key.lock().map(|k| *k).unwrap_or(true);
     let llm_url = st.llm_api_url.lock().map(|u| u.clone()).unwrap_or_default();
-    let llm_model = st.llm_api_model.lock().map(|m| m.clone()).unwrap_or_default();
+    let llm_model = st
+        .llm_api_model
+        .lock()
+        .map(|m| m.clone())
+        .unwrap_or_default();
 
     let api_key = if use_same_key {
         st.api_key.lock().ok().and_then(|k| k.clone())
@@ -1045,7 +1124,10 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
-            log(&format!("ERROR: dimmy_process_with_llm: failed to create runtime: {}", e));
+            log(&format!(
+                "ERROR: dimmy_process_with_llm: failed to create runtime: {}",
+                e
+            ));
             return write_to_buf(text, out_buf, buf_len);
         }
     };
@@ -1729,9 +1811,7 @@ mod tests {
     fn process_with_llm_rejects_null_buffer() {
         ensure_test_state();
         let text = CString::new("hello world").unwrap();
-        let result = unsafe {
-            dimmy_process_with_llm(text.as_ptr(), std::ptr::null_mut(), 1024)
-        };
+        let result = unsafe { dimmy_process_with_llm(text.as_ptr(), std::ptr::null_mut(), 1024) };
         assert_eq!(result, -1, "null out_buf must return -1");
     }
 
@@ -1740,13 +1820,8 @@ mod tests {
         ensure_test_state();
         let text = CString::new("hello world").unwrap();
         let mut buf = vec![0u8; 64];
-        let result = unsafe {
-            dimmy_process_with_llm(
-                text.as_ptr(),
-                buf.as_mut_ptr() as *mut c_char,
-                0,
-            )
-        };
+        let result =
+            unsafe { dimmy_process_with_llm(text.as_ptr(), buf.as_mut_ptr() as *mut c_char, 0) };
         assert_eq!(result, -1, "zero buf_len must return -1");
     }
 
@@ -1889,7 +1964,11 @@ mod tests {
         ensure_test_state();
         let mut buf = vec![0u8; 4096];
         let result = dimmy_check_audio_health(buf.as_mut_ptr() as *mut c_char, buf.len() as c_int);
-        assert!(result >= 0, "should return non-negative length, got {}", result);
+        assert!(
+            result >= 0,
+            "should return non-negative length, got {}",
+            result
+        );
         if result > 0 {
             let output = unsafe {
                 CStr::from_ptr(buf.as_ptr() as *const c_char)
@@ -1898,9 +1977,18 @@ mod tests {
             };
             let parsed: serde_json::Value = serde_json::from_str(output)
                 .expect("dimmy_check_audio_health must return valid JSON");
-            assert!(parsed["has_devices"].is_boolean(), "JSON must have has_devices boolean");
-            assert!(parsed["device_count"].is_number(), "JSON must have device_count number");
-            assert!(parsed["can_open_stream"].is_boolean(), "JSON must have can_open_stream boolean");
+            assert!(
+                parsed["has_devices"].is_boolean(),
+                "JSON must have has_devices boolean"
+            );
+            assert!(
+                parsed["device_count"].is_number(),
+                "JSON must have device_count number"
+            );
+            assert!(
+                parsed["can_open_stream"].is_boolean(),
+                "JSON must have can_open_stream boolean"
+            );
         }
     }
 
