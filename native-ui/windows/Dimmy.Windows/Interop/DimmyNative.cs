@@ -76,6 +76,9 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_is_recording();
 
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_get_version(byte[] outBuf, int bufLen);
+
     // ── Managed helpers ──────────────────────────────────────────────
 
     /// <summary>Read a buffer-returning FFI call into a C# string.</summary>
