@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="Dimmy.Windows.Views.PillWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:Dimmy.Windows.Views.Controls">
+
+    <!-- Background must be Transparent so the backdrop shows through -->
+    <Grid Background="Transparent">
+    <Grid x:Name="RootGrid"
+          HorizontalAlignment="Center" VerticalAlignment="Center">
+
+        <!-- Colored border: Padding=2 creates the visible border ring -->
+        <Border x:Name="ColorBorder" CornerRadius="50" Padding="2"
+                HorizontalAlignment="Center" VerticalAlignment="Center"
+                PointerPressed="Pill_PointerPressed"
+                PointerMoved="Pill_PointerMoved"
+                PointerReleased="Pill_PointerReleased"
+                PointerEntered="Pill_PointerEntered"
+                PointerExited="Pill_PointerExited"
+                RightTapped="Pill_RightTapped">
+
+            <!-- Dark inner body — fully opaque so rainbow NEVER shows through -->
+            <Border x:Name="PillInner" CornerRadius="50"
+                    Background="#FF1a1a1a">
+
+                <Grid x:Name="ContentGrid" VerticalAlignment="Center"
+                      HorizontalAlignment="Center">
+
+                    <!-- Idle: just the dot -->
+                    <Grid x:Name="IdlePanel" Visibility="Visible">
+                        <StackPanel x:Name="IdleContent" Orientation="Horizontal" Spacing="8"
+                                    HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <Ellipse x:Name="StyleDot" Width="8" Height="8"
+                                     PointerWheelChanged="StyleDot_PointerWheelChanged" />
+                            <TextBlock x:Name="LanguageLabel" FontSize="11" FontWeight="SemiBold"
+                                       Foreground="#AAFFFFFF" VerticalAlignment="Center"
+                                       Visibility="Collapsed"
+                                       PointerWheelChanged="LanguageLabel_PointerWheelChanged" />
+                            <TextBlock x:Name="ShortcutLabel" FontSize="11" FontFamily="Consolas"
+                                       Foreground="#77FFFFFF" VerticalAlignment="Center"
+                                       Visibility="Collapsed" />
+                            <Button x:Name="GearButton" Background="Transparent" Padding="2"
+                                    BorderThickness="0" Click="Settings_Click" MinWidth="0" MinHeight="0"
+                                    VerticalAlignment="Center" Visibility="Collapsed">
+                                <FontIcon Glyph="&#xE713;" FontSize="11" Foreground="#77FFFFFF" />
+                            </Button>
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- Recording -->
+                    <StackPanel x:Name="RecordingPanel" Orientation="Horizontal" Spacing="8"
+                                VerticalAlignment="Center" Margin="14,0" Visibility="Collapsed">
+                        <controls:WaveformControl x:Name="Waveform" Width="40" Height="18"
+                                                  VerticalAlignment="Center" />
+                        <TextBlock x:Name="TimerText" FontSize="13" Foreground="#EEFFFFFF"
+                                   VerticalAlignment="Center" Text="00:00" FontWeight="SemiBold" />
+                        <Button x:Name="StopButton" Background="Transparent" Padding="2"
+                                BorderThickness="0" Visibility="Collapsed" Click="Stop_Click"
+                                MinWidth="0" MinHeight="0" VerticalAlignment="Center">
+                            <Border Width="10" Height="10" Background="#EEFFFFFF" CornerRadius="2" />
+                        </Button>
+                    </StackPanel>
+
+                    <!-- Transcribing -->
+                    <StackPanel x:Name="TranscribingPanel" Orientation="Horizontal" Spacing="8"
+                                VerticalAlignment="Center" Margin="14,0" Visibility="Collapsed">
+                        <ProgressRing IsActive="True" Width="14" Height="14" />
+                        <TextBlock Text="Transcribing..." FontSize="12" Foreground="#EEFFFFFF" />
+                        <TextBlock x:Name="ChunkText" FontSize="10" Foreground="#77FFFFFF" />
+                    </StackPanel>
+
+                    <!-- Processing -->
+                    <StackPanel x:Name="ProcessingPanel" Orientation="Horizontal" Spacing="8"
+                                VerticalAlignment="Center" Margin="14,0" Visibility="Collapsed">
+                        <ProgressRing IsActive="True" Width="14" Height="14" />
+                        <TextBlock Text="Processing..." FontSize="12" Foreground="#EEFFFFFF" />
+                    </StackPanel>
+
+                    <!-- Completing: checkmark -->
+                    <Grid x:Name="CompletingPanel" Visibility="Collapsed"
+                          HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <FontIcon x:Name="CheckIcon" Glyph="&#xE73E;" FontSize="16"
+                                  Foreground="#4ade80" />
+                    </Grid>
+
+                    <!-- Error -->
+                    <StackPanel x:Name="ErrorPanel" Orientation="Horizontal" Spacing="6"
+                                VerticalAlignment="Center" Margin="10,0" Visibility="Collapsed">
+                        <FontIcon Glyph="&#xE783;" FontSize="12" Foreground="#ef4444" />
+                        <TextBlock x:Name="ErrorText" FontSize="11" Foreground="#ef4444"
+                                   MaxWidth="160" TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </Border>
+    </Grid>
+    </Grid>
+</Window>

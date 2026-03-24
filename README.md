@@ -28,11 +28,11 @@ Dimmy sits as a tiny always-on-top pill on your screen. Press a keyboard shortcu
 - **AI enhancement** — post-process with LLM (correct, summarize, elaborate, 13 styles total)
 - **Multiple providers** — Groq, OpenAI, Deepgram, Gemini, Anthropic, or any custom endpoint
 - **Anti-hallucination guard** — skips audio chunks with less than 0.5s of speech
-- **Per-provider API keys** — securely stored in OS keyring, switch without re-entering
+- **Per-provider API keys** — encrypted locally by default, optional OS keyring, switch without re-entering
 - **Audio preprocessing** — noise filtering + normalization for cleaner input
 - **Configurable shortcut** — toggle or hold mode, any 2-modifier combo
 - **Multilingual** — auto-detect or select from 12+ languages
-- **Privacy-first** — no telemetry, all data local, keys in OS secure storage
+- **Privacy-first** — no telemetry, all data local, keys encrypted on device
 - **Auto-update** — built-in update checker with one-click install
 
 ## Screenshots
@@ -87,7 +87,7 @@ Dimmy needs an API key for speech-to-text transcription. Choose a provider:
 | **Anthropic** | LLM only | Claude Haiku 4.5, Claude Sonnet 4 | No | [console.anthropic.com/keys](https://console.anthropic.com/settings/keys) |
 | **OpenRouter** | LLM only | Llama 3.3 70B, DeepSeek R1 | Yes (free models) | [openrouter.ai/keys](https://openrouter.ai/keys) |
 
-Paste your key in Settings → **API Key**. Keys are stored securely in your OS keyring (Windows Credential Manager, macOS Keychain, Linux Secret Service) — never in plain text. You can also use any **custom endpoint** compatible with the OpenAI API format.
+Paste your key in Settings → **API Key**. Keys are encrypted locally on your device by default (AES-256) — no OS permission popups required. For extra security, enable **OS secure storage** (Keychain / Credential Manager) in Settings → Appearance. You can also use any **custom endpoint** compatible with the OpenAI API format.
 
 ### Transcription Settings
 
@@ -139,6 +139,42 @@ Enable in Settings to send transcriptions through an LLM for cleanup or transfor
 | Acronyms | Replace phrases with abbreviations |
 | Imbruttito | Milanese grumpy rewrite |
 | Custom | Your own system prompt |
+
+<details>
+<summary><strong>STT Provider Benchmarks</strong></summary>
+
+Benchmarked on real audio files (LibriVox, public domain). Match% = word overlap vs reference transcript. All files are 16kHz mono WAV.
+
+#### Short audio (5s - 90s)
+
+| Sample | Duration | Groq turbo | Groq v3 | OpenAI whisper-1 | OpenAI 4o-transcribe | OpenAI 4o-mini | Deepgram Nova-3 | Gemini Flash |
+|--------|----------|-----------|---------|-----------------|---------------------|---------------|----------------|-------------|
+| JFK "Ask not" | 11s | **815ms** 100% | 832ms 100% | 1834ms 100% | 1173ms 100% | 1188ms 100% | 2227ms 100% | 1569ms 100% |
+| Micro Machines (fast) | 29s | **838ms** 100% | 1088ms 100% | 3545ms 73% | 5161ms 100% | 2211ms 100% | 3304ms 93% | 2689ms 93% |
+| Gettysburg Address | 10s | **823ms** 100% | 716ms 100% | 1875ms 100% | 1563ms 100% | 1245ms 100% | 4008ms 100% | 1669ms 89% |
+| Harvard (female, 8kHz) | 33s | **902ms** 100% | 943ms 100% | 1849ms 100% | 2349ms 100% | 1781ms 100% | 4390ms 100% | 2087ms 100% |
+
+#### Medium audio (5 - 11 min)
+
+| Sample | Duration | Groq turbo | Groq v3 | OpenAI whisper-1 | OpenAI 4o-mini | Deepgram Nova-3 | Gemini Flash |
+|--------|----------|-----------|---------|-----------------|---------------|----------------|-------------|
+| Pinocchio Ch.1 (EN) | 4:53 | **1.5s** 100% | 1.5s 100% | 15.1s 100% | 10.4s 100% | 19.1s 100% | 11.0s 100% |
+| Tale of Two Cities | 6:49 | **1.7s** 100% | 2.1s 100% | 22.4s 100% | 14.6s 100% | 26.4s 100% | 10.0s 100% |
+| Pride & Prejudice | 10:38 | **4.6s** 100% | 3.3s 100% | 34.1s 100% | 25.3s 100% | 66.0s 77% | 15.3s 100% |
+| Pinocchio Cap.1 (IT) | 5:35 | **1.7s** 100% | 2.1s 100% | 16.5s 100% | 14.1s 100% | 40.5s 100% | 8.3s 100% |
+| Divina Commedia (IT) | 42:00 | >25MB | >25MB | >25MB | >25MB | 249.2s | >20MB |
+
+#### Key takeaways
+
+- **Groq is 10-20x faster** than all other providers with equal or better accuracy
+- **Deepgram** handles large files natively (2GB limit) but is slower on shorter audio
+- **Gemini Flash** offers a good balance of speed and quality, especially for medium-length audio
+- **OpenAI whisper-1** has good accuracy but is consistently the slowest
+- Files over 25MB require chunking for Groq/OpenAI (Dimmy handles this automatically)
+
+*Benchmark date: 2026-03-13. Run `./tests/test_benchmark.sh quick` to reproduce.*
+
+</details>
 
 ## Auto-Update
 
@@ -208,7 +244,7 @@ cargo clippy -- -D warnings
 | Frontend | Vanilla HTML/JS/CSS |
 | Audio | cpal |
 | Noise filter | nnnoiseless + biquad |
-| Secure storage | keyring (OS-native) |
+| Secure storage | AES-256 local (default) + keyring (opt-in) |
 | HTTP | reqwest |
 
 ## Support

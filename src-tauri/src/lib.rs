@@ -1,11 +1,12 @@
 pub mod audio;
 pub mod error;
+pub mod ffi;
 mod hotkey;
 pub mod keystore;
 pub mod llm;
 pub mod preprocess;
 pub mod provider;
-mod transcribe;
+pub mod transcribe;
 
 use audio::AudioCommand;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,8 +19,8 @@ const DEFAULT_MODEL: &str = "whisper-large-v3-turbo";
 /// Default prompt guides Whisper to produce punctuated, well-formatted output.
 /// Whisper mimics the style of this text — punctuation, capitalization, etc.
 const DEFAULT_PROMPT: &str = "Hello, how are you? Fine, thanks! Today we'll discuss an interesting topic. Ciao, come stai? Bene, grazie! Oggi parliamo di un argomento interessante.";
-const DEFAULT_LLM_URL: &str = "https://api.groq.com/openai/v1/chat/completions";
-const DEFAULT_LLM_MODEL: &str = "llama-3.3-70b-versatile";
+pub(crate) const DEFAULT_LLM_URL: &str = "https://api.groq.com/openai/v1/chat/completions";
+pub(crate) const DEFAULT_LLM_MODEL: &str = "llama-3.3-70b-versatile";
 const MAX_RECORDING_SECS: usize = 30 * 60; // 30 minutes hard cap
 const MAX_LOG_BYTES: u64 = 1_048_576; // 1 MB log rotation threshold
 /// Tail buffer: keep recording for this long after the user releases the hotkey.
@@ -41,7 +42,7 @@ fn default_shortcut() -> &'static str {
     }
 }
 
-fn config_dir_path() -> Option<std::path::PathBuf> {
+pub(crate) fn config_dir_path() -> Option<std::path::PathBuf> {
     dirs::config_dir().map(|p| p.join("dimmy"))
 }
 
@@ -88,7 +89,7 @@ fn config_path() -> Option<std::path::PathBuf> {
     config_dir_path().map(|p| p.join("config.json"))
 }
 
-fn log_path() -> Option<std::path::PathBuf> {
+pub(crate) fn log_path() -> Option<std::path::PathBuf> {
     config_dir_path().map(|p| p.join("dimmy.log"))
 }
 
@@ -101,7 +102,7 @@ fn audio_debug_dir() -> Option<std::path::PathBuf> {
 }
 
 /// Create a session directory for audio debug dumps and return its path.
-fn create_audio_debug_session() -> Option<std::path::PathBuf> {
+pub(crate) fn create_debug_session_dir() -> Option<std::path::PathBuf> {
     let base = audio_debug_dir()?;
     let ts = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
     let session_dir = base.join(&ts);
@@ -110,7 +111,7 @@ fn create_audio_debug_session() -> Option<std::path::PathBuf> {
 }
 
 /// Save WAV bytes to a file inside a debug session directory (fire-and-forget).
-fn save_debug_wav(dir: &std::path::Path, filename: &str, wav_data: &[u8]) {
+pub(crate) fn save_debug_wav(dir: &std::path::Path, filename: &str, wav_data: &[u8]) {
     let path = dir.join(filename);
     let _ = std::fs::write(&path, wav_data);
 }
@@ -204,7 +205,7 @@ pub(crate) fn log(msg: &str) {
 }
 
 /// Non-sensitive config persisted to disk.
-struct AppConfig {
+pub(crate) struct AppConfig {
     api_url: String,
     api_model: String,
     selected_device: Option<String>,
@@ -226,6 +227,13 @@ struct AppConfig {
     preprocessing_enabled: bool,
     audio_debug_enabled: bool,
     use_keyring: bool,
+    // UI appearance fields (used by native frontends, opaque to Rust core)
+    border_style: String,
+    waveform_style: String,
+    overlay_position: String,
+    keep_in_clipboard: bool,
+    /// Input gain (0.0-2.0, default 1.0). Attenuate hot mics (e.g. BT headsets).
+    input_gain: f32,
     // Window position — bottom-right anchor in logical pixels
     window_anchor_right: Option<f64>,
     window_anchor_bottom: Option<f64>,
@@ -262,6 +270,11 @@ impl Default for AppConfig {
             preprocessing_enabled: true,
             audio_debug_enabled: false,
             use_keyring: false,
+            border_style: "Rainbow".to_string(),
+            waveform_style: "Bars".to_string(),
+            overlay_position: "Bottom Right".to_string(),
+            keep_in_clipboard: false,
+            input_gain: 1.0,
             window_anchor_right: None,
             window_anchor_bottom: None,
             stats_total_words: 0,
@@ -271,7 +284,19 @@ impl Default for AppConfig {
 }
 
 /// Save non-sensitive config to file (NO api_key — that goes to keyring ONLY)
-fn save_config_file(cfg: &AppConfig) {
+pub(crate) fn save_config_file(cfg: &AppConfig) {
+    // Preconditions: validate new config fields
+    assert!(cfg.input_gain >= 0.0 && cfg.input_gain <= 2.0,
+        "save_config_file: input_gain must be in [0.0, 2.0], got {}", cfg.input_gain);
+    assert!(cfg.input_gain.is_finite(),
+        "save_config_file: input_gain must be finite, got {}", cfg.input_gain);
+    assert!(!cfg.border_style.is_empty(),
+        "save_config_file: border_style must be non-empty");
+    assert!(!cfg.waveform_style.is_empty(),
+        "save_config_file: waveform_style must be non-empty");
+    assert!(!cfg.overlay_position.is_empty(),
+        "save_config_file: overlay_position must be non-empty");
+
     if let Some(path) = config_path() {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -296,6 +321,11 @@ fn save_config_file(cfg: &AppConfig) {
             "preprocessing_enabled": cfg.preprocessing_enabled,
             "audio_debug_enabled": cfg.audio_debug_enabled,
             "use_keyring": cfg.use_keyring,
+            "border_style": cfg.border_style,
+            "waveform_style": cfg.waveform_style,
+            "overlay_position": cfg.overlay_position,
+            "keep_in_clipboard": cfg.keep_in_clipboard,
+            "input_gain": cfg.input_gain,
             "stats_total_words": cfg.stats_total_words,
             "stats_total_speaking_secs": cfg.stats_total_speaking_secs,
         });
@@ -316,14 +346,14 @@ fn save_config_file(cfg: &AppConfig) {
 }
 
 /// Load non-sensitive config from file. Missing LLM fields use defaults (backward compatible).
-fn load_config_file() -> AppConfig {
+pub(crate) fn load_config_file() -> AppConfig {
     let defaults = AppConfig::default();
     if let Some(path) = config_path() {
         if let Ok(data) = std::fs::read_to_string(&path) {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
                 return AppConfig {
-                    api_url: v["api_url"].as_str().unwrap_or(DEFAULT_API_URL).to_string(),
-                    api_model: v["api_model"].as_str().unwrap_or(DEFAULT_MODEL).to_string(),
+                    api_url: v["api_url"].as_str().filter(|s| !s.is_empty()).unwrap_or(DEFAULT_API_URL).to_string(),
+                    api_model: v["api_model"].as_str().filter(|s| !s.is_empty()).unwrap_or(DEFAULT_MODEL).to_string(),
                     selected_device: v["selected_device"].as_str().map(|s| s.to_string()),
                     language: v["language"].as_str().unwrap_or("").to_string(),
                     shortcut_mode: v["shortcut_mode"].as_str().unwrap_or("toggle").to_string(),
@@ -371,6 +401,11 @@ fn load_config_file() -> AppConfig {
                         .as_bool()
                         .unwrap_or(defaults.audio_debug_enabled),
                     use_keyring: v["use_keyring"].as_bool().unwrap_or(defaults.use_keyring),
+                    border_style: v["border_style"].as_str().unwrap_or("Rainbow").to_string(),
+                    waveform_style: v["waveform_style"].as_str().unwrap_or("Bars").to_string(),
+                    overlay_position: v["overlay_position"].as_str().unwrap_or("Bottom Right").to_string(),
+                    keep_in_clipboard: v["keep_in_clipboard"].as_bool().unwrap_or(false),
+                    input_gain: v["input_gain"].as_f64().unwrap_or(1.0) as f32,
                     window_anchor_right: v["window_anchor_right"].as_f64(),
                     window_anchor_bottom: v["window_anchor_bottom"].as_f64(),
                     stats_total_words: v["stats_total_words"].as_u64().unwrap_or(0),
@@ -452,7 +487,7 @@ fn migrate_from_pai_voice() {
 }
 
 /// Migrate: if old config.json has api_key in plain text, move to secure storage and REMOVE from file
-fn migrate_plaintext_key(store: &keystore::KeyStore, use_keyring: bool) {
+pub(crate) fn migrate_plaintext_key(store: &keystore::KeyStore, use_keyring: bool) {
     if let Some(path) = config_path() {
         if let Ok(data) = std::fs::read_to_string(&path) {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
@@ -492,7 +527,7 @@ use provider::{KeyringScope, Provider};
 
 /// Convenience wrappers that read use_keyring from AppState.
 /// These maintain the same call signatures used throughout lib.rs.
-fn save_key_with_store(
+pub(crate) fn save_key_with_store(
     store: &keystore::KeyStore,
     scope: KeyringScope,
     key: &str,
@@ -501,7 +536,7 @@ fn save_key_with_store(
     store.save_key(scope, key, use_keyring)
 }
 
-fn load_key_with_store(
+pub(crate) fn load_key_with_store(
     store: &keystore::KeyStore,
     scope: KeyringScope,
     use_keyring: bool,
@@ -511,7 +546,7 @@ fn load_key_with_store(
 
 /// Migrate old single "api-key" and "llm-api-key" keyring entries to per-provider entries.
 /// This handles the legacy format from before per-provider key storage.
-fn migrate_keyring_to_per_provider(
+pub(crate) fn migrate_keyring_to_per_provider(
     store: &keystore::KeyStore,
     api_url: &str,
     llm_api_url: &str,
@@ -570,6 +605,13 @@ pub struct AppState {
     pub preprocessing_enabled: Mutex<bool>,
     pub audio_debug_enabled: Mutex<bool>,
     pub use_keyring: Mutex<bool>,
+    // UI appearance (opaque to Rust, round-tripped for native frontends)
+    pub border_style: Mutex<String>,
+    pub waveform_style: Mutex<String>,
+    pub overlay_position: Mutex<String>,
+    pub keep_in_clipboard: Mutex<bool>,
+    /// Input gain as AtomicU32 (f32 bits) — shared with audio capture thread
+    pub input_gain: Arc<std::sync::atomic::AtomicU32>,
     pub key_store: keystore::KeyStore,
     /// Path to current audio debug session directory (set during recording, cleared on stop)
     pub audio_debug_session_dir: Mutex<Option<std::path::PathBuf>>,
@@ -645,7 +687,7 @@ fn start_recording(
 
     // Create debug session directory before spawning async task
     let debug_session_dir = if audio_debug_on {
-        create_audio_debug_session()
+        create_debug_session_dir()
     } else {
         None
     };
@@ -1253,6 +1295,11 @@ fn set_config(
         preprocessing_enabled: cur_preprocessing_enabled,
         audio_debug_enabled: cur_audio_debug_enabled,
         use_keyring: *state.use_keyring.lock().map_err(|e| e.to_string())?,
+        border_style: state.border_style.lock().map_err(|e| e.to_string())?.clone(),
+        waveform_style: state.waveform_style.lock().map_err(|e| e.to_string())?.clone(),
+        overlay_position: state.overlay_position.lock().map_err(|e| e.to_string())?.clone(),
+        keep_in_clipboard: *state.keep_in_clipboard.lock().map_err(|e| e.to_string())?,
+        input_gain: f32::from_bits(state.input_gain.load(std::sync::atomic::Ordering::Relaxed)),
         window_anchor_right: cur_anchor.map(|(r, _)| r),
         window_anchor_bottom: cur_anchor.map(|(_, b)| b),
         stats_total_words: *state.stats_total_words.lock().map_err(|e| e.to_string())?,
@@ -1664,7 +1711,7 @@ fn cycle_llm_tone(
 }
 
 /// Build AppConfig by acquiring each mutex individually (one at a time, no overlapping locks).
-fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
+pub(crate) fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
     let api_url = state.api_url.lock().map_err(|e| e.to_string())?.clone();
     let api_model = state.api_model.lock().map_err(|e| e.to_string())?.clone();
     let selected_device = state
@@ -1736,6 +1783,11 @@ fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         preprocessing_enabled,
         audio_debug_enabled,
         use_keyring: *state.use_keyring.lock().map_err(|e| e.to_string())?,
+        border_style: state.border_style.lock().map_err(|e| e.to_string())?.clone(),
+        waveform_style: state.waveform_style.lock().map_err(|e| e.to_string())?.clone(),
+        overlay_position: state.overlay_position.lock().map_err(|e| e.to_string())?.clone(),
+        keep_in_clipboard: *state.keep_in_clipboard.lock().map_err(|e| e.to_string())?,
+        input_gain: f32::from_bits(state.input_gain.load(std::sync::atomic::Ordering::Relaxed)),
         window_anchor_right: anchor.map(|(r, _)| r),
         window_anchor_bottom: anchor.map(|(_, b)| b),
         stats_total_words: *state.stats_total_words.lock().map_err(|e| e.to_string())?,
@@ -2358,7 +2410,8 @@ pub fn run() {
     let shortcut_preset = file_cfg.shortcut.clone();
 
     let audio_buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
-    let audio_tx = audio::spawn_audio_thread(audio_buffer.clone());
+    let input_gain_atomic = Arc::new(std::sync::atomic::AtomicU32::new(file_cfg.input_gain.to_bits()));
+    let audio_tx = audio::spawn_audio_thread(audio_buffer.clone(), input_gain_atomic.clone());
 
     tauri::Builder::default()
         // Single-instance MUST be registered first
@@ -2402,6 +2455,11 @@ pub fn run() {
             preprocessing_enabled: Mutex::new(file_cfg.preprocessing_enabled),
             audio_debug_enabled: Mutex::new(file_cfg.audio_debug_enabled),
             use_keyring: Mutex::new(file_cfg.use_keyring),
+            border_style: Mutex::new(file_cfg.border_style),
+            waveform_style: Mutex::new(file_cfg.waveform_style),
+            overlay_position: Mutex::new(file_cfg.overlay_position),
+            keep_in_clipboard: Mutex::new(file_cfg.keep_in_clipboard),
+            input_gain: Arc::new(std::sync::atomic::AtomicU32::new(file_cfg.input_gain.to_bits())),
             key_store,
             audio_debug_session_dir: Mutex::new(None),
             window_anchor: Mutex::new(
@@ -3192,5 +3250,108 @@ mod tests {
         assert!(r1.is_ok());
         assert!(r2.is_ok());
         assert!(onboarding_completed());
+    }
+
+    // ── input_gain / UI field tests ──────────────────────────────────
+
+    #[test]
+    fn default_config_input_gain_is_one() {
+        let cfg = AppConfig::default();
+        assert!((cfg.input_gain - 1.0).abs() < f32::EPSILON,
+            "Default input_gain should be 1.0, got {}", cfg.input_gain);
+    }
+
+    #[test]
+    fn default_config_ui_fields_non_empty() {
+        let cfg = AppConfig::default();
+        assert!(!cfg.border_style.is_empty(), "border_style must not be empty");
+        assert!(!cfg.waveform_style.is_empty(), "waveform_style must not be empty");
+        assert!(!cfg.overlay_position.is_empty(), "overlay_position must not be empty");
+    }
+
+    #[test]
+    fn load_config_defaults_input_gain_when_missing() {
+        // Write a config file without input_gain field
+        let tmp = std::env::temp_dir().join("dimmy-test-gain-missing");
+        let _ = std::fs::create_dir_all(&tmp);
+        let path = tmp.join("config.json");
+        let cfg_json = serde_json::json!({
+            "api_url": DEFAULT_API_URL,
+            "api_model": DEFAULT_MODEL,
+            "language": "en",
+        });
+        std::fs::write(&path, serde_json::to_string_pretty(&cfg_json).unwrap()).unwrap();
+
+        // Parse manually the same way load_config_file does
+        let data = std::fs::read_to_string(&path).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&data).unwrap();
+        let gain = v["input_gain"].as_f64().unwrap_or(1.0) as f32;
+        assert!((gain - 1.0).abs() < f32::EPSILON,
+            "Missing input_gain should default to 1.0, got {}", gain);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn load_config_reads_input_gain() {
+        let tmp = std::env::temp_dir().join("dimmy-test-gain-present");
+        let _ = std::fs::create_dir_all(&tmp);
+        let path = tmp.join("config.json");
+        let cfg_json = serde_json::json!({
+            "api_url": DEFAULT_API_URL,
+            "api_model": DEFAULT_MODEL,
+            "language": "en",
+            "input_gain": 0.75,
+        });
+        std::fs::write(&path, serde_json::to_string_pretty(&cfg_json).unwrap()).unwrap();
+
+        let data = std::fs::read_to_string(&path).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&data).unwrap();
+        let gain = v["input_gain"].as_f64().unwrap_or(1.0) as f32;
+        assert!((gain - 0.75).abs() < 0.001,
+            "input_gain should be 0.75, got {}", gain);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn save_load_roundtrip_preserves_new_fields() {
+        // Save a config with custom input_gain and UI fields, then load and verify
+        // Combined into one test to avoid race conditions with parallel tests
+        // sharing the same config file
+        let mut cfg = AppConfig::default();
+        cfg.input_gain = 0.42;
+        cfg.border_style = "Solid".to_string();
+        cfg.waveform_style = "Line".to_string();
+        cfg.overlay_position = "Top Left".to_string();
+        cfg.keep_in_clipboard = true;
+        save_config_file(&cfg);
+
+        let loaded = load_config_file();
+        assert!((loaded.input_gain - 0.42).abs() < 0.001,
+            "Roundtrip input_gain should be 0.42, got {}", loaded.input_gain);
+        assert_eq!(loaded.border_style, "Solid");
+        assert_eq!(loaded.waveform_style, "Line");
+        assert_eq!(loaded.overlay_position, "Top Left");
+        assert!(loaded.keep_in_clipboard);
+
+        // Restore default
+        save_config_file(&AppConfig::default());
+    }
+
+    #[test]
+    #[should_panic(expected = "input_gain must be in [0.0, 2.0]")]
+    fn save_config_rejects_input_gain_above_max() {
+        let mut cfg = AppConfig::default();
+        cfg.input_gain = 3.0;
+        save_config_file(&cfg);
+    }
+
+    #[test]
+    #[should_panic(expected = "input_gain must be in [0.0, 2.0]")]
+    fn save_config_rejects_negative_input_gain() {
+        let mut cfg = AppConfig::default();
+        cfg.input_gain = -0.5;
+        save_config_file(&cfg);
     }
 }

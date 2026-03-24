@@ -21,7 +21,11 @@ pub fn list_input_devices() -> Vec<String> {
 /// Spawn a dedicated audio capture thread.
 /// Returns a sender to control the thread.
 /// Captured samples are written to the shared buffer.
-pub fn spawn_audio_thread(buffer: Arc<Mutex<Vec<f32>>>) -> mpsc::Sender<AudioCommand> {
+/// `input_gain` is shared so it can be updated at runtime (0.0-2.0, default 1.0).
+pub fn spawn_audio_thread(
+    buffer: Arc<Mutex<Vec<f32>>>,
+    input_gain: Arc<std::sync::atomic::AtomicU32>,
+) -> mpsc::Sender<AudioCommand> {
     let (tx, rx) = mpsc::channel::<AudioCommand>();
 
     thread::spawn(
@@ -35,30 +39,44 @@ pub fn spawn_audio_thread(buffer: Arc<Mutex<Vec<f32>>>) -> mpsc::Sender<AudioCom
             for cmd in rx {
                 match cmd {
                     AudioCommand::Start(device_name) => {
+                        crate::log(&format!("[Audio] Start command received, device_name={:?}", device_name));
+
                         // Find the requested device, or fall back to default
                         let device = if let Some(ref name) = device_name {
-                            host.input_devices()
+                            let found = host.input_devices()
                                 .ok()
                                 .and_then(|mut devs| {
                                     devs.find(|d| d.name().ok().as_deref() == Some(name.as_str()))
-                                })
-                                .or_else(|| host.default_input_device())
+                                });
+                            if found.is_some() {
+                                crate::log(&format!("[Audio] Found device by name: {}", name));
+                            } else {
+                                crate::log(&format!("[Audio] Device '{}' not found, falling back to default", name));
+                            }
+                            found.or_else(|| host.default_input_device())
                         } else {
                             host.default_input_device()
                         };
 
                         let device = match device {
-                            Some(d) => d,
+                            Some(d) => {
+                                crate::log(&format!("[Audio] Using device: {:?}", d.name().unwrap_or_default()));
+                                d
+                            }
                             None => {
-                                eprintln!("No input device available");
+                                crate::log("[Audio] ERROR: No input device available");
                                 continue;
                             }
                         };
 
                         let config = match device.default_input_config() {
-                            Ok(c) => c,
+                            Ok(c) => {
+                                crate::log(&format!("[Audio] Config: sr={}, ch={}, fmt={:?}",
+                                    c.sample_rate().0, c.channels(), c.sample_format()));
+                                c
+                            }
                             Err(e) => {
-                                eprintln!("Failed to get input config: {}", e);
+                                crate::log(&format!("[Audio] ERROR: Failed to get input config: {}", e));
                                 continue;
                             }
                         };
@@ -71,47 +89,68 @@ pub fn spawn_audio_thread(buffer: Arc<Mutex<Vec<f32>>>) -> mpsc::Sender<AudioCom
                         }
 
                         let buf = buffer.clone();
+                        let gain_ref = input_gain.clone();
+                        let sample_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                        let sc1 = sample_count.clone();
                         let s = match config.sample_format() {
                             cpal::SampleFormat::F32 => device.build_input_stream(
                                 &config.clone().into(),
                                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                                    let prev = sc1.fetch_add(data.len(), std::sync::atomic::Ordering::Relaxed);
+                                    if prev == 0 {
+                                        crate::log(&format!("[Audio] First F32 callback: {} samples", data.len()));
+                                    }
+                                    let gain = f32::from_bits(gain_ref.load(std::sync::atomic::Ordering::Relaxed));
+                                    assert!(gain.is_finite(), "audio callback F32: gain must be finite, got {}", gain);
+                                    assert!(gain >= 0.0 && gain <= 2.0, "audio callback F32: gain must be in [0.0, 2.0], got {}", gain);
                                     if let Ok(mut b) = buf.lock() {
                                         if channels > 1 {
                                             for chunk in data.chunks(channels) {
                                                 let mono =
-                                                    chunk.iter().sum::<f32>() / channels as f32;
+                                                    chunk.iter().sum::<f32>() / channels as f32 * gain;
                                                 b.push(mono);
                                             }
-                                        } else {
+                                        } else if (gain - 1.0).abs() < 0.001 {
                                             b.extend_from_slice(data);
+                                        } else {
+                                            b.extend(data.iter().map(|&s| s * gain));
                                         }
                                     }
                                 },
-                                |err| eprintln!("Audio error: {}", err),
+                                |err| crate::log(&format!("[Audio] Stream error (F32): {}", err)),
                                 None,
                             ),
                             cpal::SampleFormat::I16 => {
                                 let buf2 = buffer.clone();
+                                let gain_ref2 = input_gain.clone();
+                                let sc2 = sample_count.clone();
                                 device.build_input_stream(
                                     &config.clone().into(),
                                     move |data: &[i16], _: &cpal::InputCallbackInfo| {
+                                        let prev = sc2.fetch_add(data.len(), std::sync::atomic::Ordering::Relaxed);
+                                        if prev == 0 {
+                                            crate::log(&format!("[Audio] First I16 callback: {} samples", data.len()));
+                                        }
+                                        let gain = f32::from_bits(gain_ref2.load(std::sync::atomic::Ordering::Relaxed));
+                                        assert!(gain.is_finite(), "audio callback I16: gain must be finite, got {}", gain);
+                                        assert!(gain >= 0.0 && gain <= 2.0, "audio callback I16: gain must be in [0.0, 2.0], got {}", gain);
                                         if let Ok(mut b) = buf2.lock() {
                                             for chunk in data.chunks(channels) {
                                                 let mono: f32 = chunk
                                                     .iter()
                                                     .map(|&s| s as f32 / 32768.0)
                                                     .sum::<f32>()
-                                                    / channels as f32;
+                                                    / channels as f32 * gain;
                                                 b.push(mono);
                                             }
                                         }
                                     },
-                                    |err| eprintln!("Audio error: {}", err),
+                                    |err| crate::log(&format!("[Audio] Stream error (I16): {}", err)),
                                     None,
                                 )
                             }
                             _ => {
-                                eprintln!("Unsupported sample format");
+                                crate::log(&format!("[Audio] ERROR: Unsupported sample format: {:?}", config.sample_format()));
                                 continue;
                             }
                         };
@@ -120,8 +159,9 @@ pub fn spawn_audio_thread(buffer: Arc<Mutex<Vec<f32>>>) -> mpsc::Sender<AudioCom
                             Ok(s) => {
                                 let _ = s.play();
                                 stream = Some(s);
+                                crate::log("[Audio] Stream built and playing");
                             }
-                            Err(e) => eprintln!("Failed to build stream: {}", e),
+                            Err(e) => crate::log(&format!("[Audio] ERROR: Failed to build stream: {}", e)),
                         }
                     }
                     AudioCommand::Stop => {
@@ -522,10 +562,31 @@ mod tests {
     #[test]
     fn spawn_audio_thread_responds_to_stop() {
         let buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
-        let tx = spawn_audio_thread(buffer.clone());
+        let gain = Arc::new(std::sync::atomic::AtomicU32::new(1.0f32.to_bits()));
+        let tx = spawn_audio_thread(buffer.clone(), gain);
         // Sending Stop should not panic even with no prior Start
         let _ = tx.send(AudioCommand::Stop);
         // Drop sender — thread should exit cleanly
+        drop(tx);
+    }
+
+    #[test]
+    fn spawn_audio_thread_with_half_gain_stop() {
+        // gain=0.5 should not panic on Stop
+        let buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
+        let gain = Arc::new(std::sync::atomic::AtomicU32::new(0.5f32.to_bits()));
+        let tx = spawn_audio_thread(buffer.clone(), gain);
+        let _ = tx.send(AudioCommand::Stop);
+        drop(tx);
+    }
+
+    #[test]
+    fn spawn_audio_thread_with_zero_gain_stop() {
+        // gain=0.0 should not panic on Stop
+        let buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
+        let gain = Arc::new(std::sync::atomic::AtomicU32::new(0.0f32.to_bits()));
+        let tx = spawn_audio_thread(buffer.clone(), gain);
+        let _ = tx.send(AudioCommand::Stop);
         drop(tx);
     }
 

@@ -206,7 +206,6 @@ fn gethostname_fallback() -> String {
 /// AES-256 key schedule + CTR mode encryption.
 /// This is a minimal implementation for encrypting short API keys (< 256 bytes).
 /// NOT suitable for bulk data encryption.
-
 fn aes256_ctr_encrypt(key: &[u8; 32], nonce: &[u8; 12], plaintext: &[u8]) -> Vec<u8> {
     let round_keys = aes256_key_schedule(key);
     let mut ciphertext = Vec::with_capacity(plaintext.len());
@@ -429,6 +428,7 @@ fn aes256_encrypt_block(round_keys: &[[u8; 16]; 15], block: &[u8; 16]) -> [u8; 1
     xor_block(&mut state, &round_keys[0]);
 
     // Rounds 1..14 (AES-256 has 14 rounds)
+    #[allow(clippy::needless_range_loop)]
     for r in 1..=14 {
         sub_bytes(&mut state);
         shift_rows(&mut state);
@@ -573,6 +573,12 @@ pub struct KeyStore {
     local_cache: Mutex<HashMap<String, String>>,
 }
 
+impl Default for KeyStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl KeyStore {
     pub fn new() -> Self {
         let machine_key = derive_machine_key();
@@ -624,15 +630,11 @@ impl KeyStore {
         let name = scope.entry_name();
         if use_keyring {
             // Try keyring first, fall back to local
-            match keyring::Entry::new("dimmy", &name) {
-                Ok(entry) => match entry.get_password() {
-                    Ok(key) => {
-                        crate::log(&format!("Key loaded from OS keyring: {}", name));
-                        return Some(key);
-                    }
-                    Err(_) => {}
-                },
-                Err(_) => {}
+            if let Ok(entry) = keyring::Entry::new("dimmy", &name) {
+                if let Ok(key) = entry.get_password() {
+                    crate::log(&format!("Key loaded from OS keyring: {}", name));
+                    return Some(key);
+                }
             }
             // Fallback: try local store
             if let Ok(cache) = self.local_cache.lock() {
@@ -654,18 +656,14 @@ impl KeyStore {
                 }
             }
             // Fallback: try keyring (migrating from old version)
-            match keyring::Entry::new("dimmy", &name) {
-                Ok(entry) => match entry.get_password() {
-                    Ok(key) => {
-                        crate::log(&format!(
-                            "Key loaded from OS keyring (local fallback): {}",
-                            name
-                        ));
-                        return Some(key);
-                    }
-                    Err(_) => {}
-                },
-                Err(_) => {}
+            if let Ok(entry) = keyring::Entry::new("dimmy", &name) {
+                if let Ok(key) = entry.get_password() {
+                    crate::log(&format!(
+                        "Key loaded from OS keyring (local fallback): {}",
+                        name
+                    ));
+                    return Some(key);
+                }
             }
             None
         }
