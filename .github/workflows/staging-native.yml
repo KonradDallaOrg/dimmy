@@ -1,4 +1,4 @@
-name: Staging Native Build
+name: Staging Release
 
 on:
   push:
@@ -95,7 +95,7 @@ jobs:
 
       - name: Delete previous native staging release
         continue-on-error: true
-        run: gh release delete staging-native --yes --cleanup-tag
+        run: gh release delete staging-latest --yes --cleanup-tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -103,7 +103,7 @@ jobs:
         id: create
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: staging-native
+          tag_name: staging-latest
           name: "Dimmy ${{ steps.version.outputs.version }} (Native Staging)"
           body_path: changelog.md
           draft: true
@@ -178,7 +178,7 @@ jobs:
       - name: Upload DMG to release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: staging-native
+          tag_name: staging-latest
           files: native-ui/macos/build/Dimmy-native-macos-arm64.dmg
 
   # ── Windows Native Build ───────────────────────────────────────────
@@ -232,7 +232,7 @@ jobs:
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: staging-native
+          tag_name: staging-latest
           files: native-ui/windows/Dimmy-native-windows-x64.zip
 
   # ── Publish ────────────────────────────────────────────────────────
