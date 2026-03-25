@@ -45,13 +45,13 @@ public sealed partial class PillWindow : Window
     private POINT _dragStartScreen;
     private global::Windows.Graphics.PointInt32 _windowStartPos;
 
-    // Circle size for idle/completing states (Width = Height = perfect circle)
-    private const double CircleSize = 36;
+    // Circle size for idle/completing states — matched to macOS (36pt)
+    private const double CircleSize = 30;
     // Capsule height for recording/transcribing states
-    private const double CapsuleHeight = 40;
+    private const double CapsuleHeight = 34;
 
-    private const int WindowWidth = 270;
-    private const int WindowHeight = 74;
+    private const int WindowWidth = 260;
+    private const int WindowHeight = 68;
 
     public PillWindow(AppViewModel vm)
     {
@@ -588,15 +588,46 @@ public sealed partial class PillWindow : Window
     private static readonly string[] LlmStyles = ViewModels.SettingsViewModel.LlmStyles;
     private static readonly System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<string, string>> LangList = ViewModels.SettingsViewModel.Languages;
 
+    private DateTime _lastScrollTime; // debounce for touchpad rapid-fire scroll
+    private DispatcherTimer? _tooltipTimer;
+
+    private void ShowScrollTooltip(string text)
+    {
+        ScrollTooltipText.Text = text;
+        ScrollTooltip.Background = new SolidColorBrush(IsGlass
+            ? global::Windows.UI.Color.FromArgb(230, 240, 240, 245)
+            : global::Windows.UI.Color.FromArgb(230, 32, 32, 32));
+        ScrollTooltipText.Foreground = new SolidColorBrush(IsGlass
+            ? global::Windows.UI.Color.FromArgb(238, 30, 30, 30)
+            : global::Windows.UI.Color.FromArgb(238, 255, 255, 255));
+        ScrollTooltip.Visibility = Visibility.Visible;
+
+        if (_tooltipTimer is null)
+        {
+            _tooltipTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1200) };
+            _tooltipTimer.Tick += (_, _) =>
+            {
+                _tooltipTimer.Stop();
+                ScrollTooltip.Visibility = Visibility.Collapsed;
+            };
+        }
+        _tooltipTimer.Stop();
+        _tooltipTimer.Start();
+    }
+
     private void StyleDot_PointerWheelChanged(object sender, PointerRoutedEventArgs e)
     {
         var delta = e.GetCurrentPoint(null).Properties.MouseWheelDelta;
         if (delta == 0) return;
+        var now = DateTime.UtcNow;
+        if ((now - _lastScrollTime).TotalMilliseconds < 250) { e.Handled = true; return; }
+        _lastScrollTime = now;
         int idx = Array.IndexOf(LlmStyles, _vm.LlmStyle);
         if (idx < 0) idx = 0;
         idx = (idx + (delta > 0 ? -1 : 1) + LlmStyles.Length) % LlmStyles.Length;
         _vm.LlmStyle = LlmStyles[idx];
         StyleDot.Fill = new SolidColorBrush(ParseColor(_vm.LlmStyleColor));
+        ShowScrollTooltip(_vm.LlmStyle == "off" ? "Off" : _vm.LlmStyle);
         // Single writer: only FFI, Rust saves to disk
         DimmyNative.dimmy_set_config_json(System.Text.Json.JsonSerializer.Serialize(
             new System.Collections.Generic.Dictionary<string, object>
@@ -611,11 +642,15 @@ public sealed partial class PillWindow : Window
     {
         var delta = e.GetCurrentPoint(null).Properties.MouseWheelDelta;
         if (delta == 0) return;
+        var now = DateTime.UtcNow;
+        if ((now - _lastScrollTime).TotalMilliseconds < 250) { e.Handled = true; return; }
+        _lastScrollTime = now;
         int idx = LangList.FindIndex(kv => kv.Key == _vm.Language);
         if (idx < 0) idx = 0;
         idx = (idx + (delta > 0 ? -1 : 1) + LangList.Count) % LangList.Count;
         _vm.Language = LangList[idx].Key;
         LanguageLabel.Text = _vm.Language.ToUpperInvariant();
+        ShowScrollTooltip(LangList[idx].Value); // full language name (e.g. "Italiano")
         // Single writer: only FFI, Rust saves to disk
         DimmyNative.dimmy_set_config_json(System.Text.Json.JsonSerializer.Serialize(
             new System.Collections.Generic.Dictionary<string, string> { ["language"] = _vm.Language }));
