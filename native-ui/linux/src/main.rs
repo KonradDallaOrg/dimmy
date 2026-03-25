@@ -1,8 +1,10 @@
 //! Dimmy Linux native UI — GTK4 + libadwaita entry point.
 
 mod hotkey;
+mod pill_window;
 mod state;
 mod text_injector;
+mod waveform;
 
 use dimmy_lib::log;
 use libadwaita as adw;
@@ -54,27 +56,39 @@ fn main() {
             })
         };
 
-        // Placeholder window to prove the stack works
-        let window = adw::ApplicationWindow::builder()
-            .application(app)
-            .title("Dimmy")
-            .default_width(400)
-            .default_height(300)
-            .build();
+        // Create pill overlay
+        let (pill, update_pill_state) =
+            pill_window::create_pill_window(app, &state_clone);
 
-        let label = gtk4::Label::new(Some(&format!(
-            "Dimmy Linux — GTK4 + libadwaita\nAppState loaded: api_url={}",
-            state_clone.api_url.lock().unwrap_or_else(|e| e.into_inner())
-        )));
-        window.set_content(Some(&label));
-
-        // Attach event receiver to GTK main loop
+        // Connect AppEvent receiver to pill state
+        let update_fn = update_pill_state.clone();
         receiver.attach(None, move |event| {
             log(&format!("AppEvent: {:?}", event));
+            match event {
+                state::AppEvent::RecordingStarted => {
+                    update_fn(pill_window::PillState::Recording)
+                }
+                state::AppEvent::RecordingStopped => {
+                    update_fn(pill_window::PillState::Transcribing)
+                }
+                state::AppEvent::TranscriptionComplete(_) => {
+                    update_fn(pill_window::PillState::Completing)
+                }
+                state::AppEvent::LlmComplete(_) => {
+                    update_fn(pill_window::PillState::Completing)
+                }
+                state::AppEvent::Error(_) => {
+                    update_fn(pill_window::PillState::Error)
+                }
+                state::AppEvent::TranscriptionProgress { .. } => {} // chunk counter
+                state::AppEvent::AmplitudeUpdate(_) => {} // waveform handled by timer
+                state::AppEvent::StyleChanged(_) => {}
+                state::AppEvent::ToneChanged(_) => {}
+            }
             gtk4::glib::ControlFlow::Continue
         });
 
-        window.present();
+        pill.present();
     });
 
     // Don't pass command-line args to GTK (they're for us, not GTK)
