@@ -625,20 +625,60 @@ public sealed partial class PillWindow : Window
     // ── Actions ─────────────────────────────────────────────────────
     private void Pill_RightTapped(object sender, RightTappedRoutedEventArgs e)
     {
+        ShowContextMenu((FrameworkElement)sender, e.GetPosition((UIElement)sender));
+        e.Handled = true;
+    }
+
+    /// <summary>Show a modern WinUI 3 context menu. Called from pill right-click and tray icon.</summary>
+    public void ShowContextMenu(FrameworkElement? anchor = null, global::Windows.Foundation.Point? position = null)
+    {
         var menu = new MenuFlyout();
 
-        var settingsItem = new Microsoft.UI.Xaml.Controls.MenuFlyoutItem { Text = "Settings..." };
+        // Status
+        var statusText = _vm.IsRecording ? "● Recording..." : "● Ready";
+        var statusItem = new MenuFlyoutItem
+        {
+            Text = statusText,
+            IsEnabled = false,
+            Icon = new FontIcon
+            {
+                Glyph = "\uEA3B", // StatusCircleInner
+                Foreground = new SolidColorBrush(_vm.IsRecording
+                    ? global::Windows.UI.Color.FromArgb(255, 239, 68, 68)   // red
+                    : global::Windows.UI.Color.FromArgb(255, 74, 222, 128)) // green
+            }
+        };
+        menu.Items.Add(statusItem);
+        menu.Items.Add(new MenuFlyoutSeparator());
+
+        // Info lines (read-only)
+        var lang = string.IsNullOrEmpty(_vm.Language) ? "(auto)" : _vm.Language;
+        menu.Items.Add(new MenuFlyoutItem { Text = $"Language: {lang}", IsEnabled = false });
+        var style = _vm.LlmStyle == "off" ? "off" : _vm.LlmStyle;
+        menu.Items.Add(new MenuFlyoutItem { Text = $"Style: {style}", IsEnabled = false });
+        menu.Items.Add(new MenuFlyoutItem { Text = $"Shortcut: {_vm.Shortcut}", IsEnabled = false });
+        menu.Items.Add(new MenuFlyoutSeparator());
+
+        // Actions
+        var toggleItem = new MenuFlyoutItem { Text = "Show/Hide Pill" };
+        toggleItem.Click += (_, _) => App.Instance?.TogglePill();
+        menu.Items.Add(toggleItem);
+
+        var settingsItem = new MenuFlyoutItem { Text = "Settings..." };
         settingsItem.Click += (_, _) => App.Instance?.OpenSettingsWindow();
         menu.Items.Add(settingsItem);
 
-        menu.Items.Add(new Microsoft.UI.Xaml.Controls.MenuFlyoutSeparator());
+        menu.Items.Add(new MenuFlyoutSeparator());
 
-        var hideItem = new Microsoft.UI.Xaml.Controls.MenuFlyoutItem { Text = "Hide" };
-        hideItem.Click += (_, _) => App.Instance?.HidePill();
-        menu.Items.Add(hideItem);
+        var quitItem = new MenuFlyoutItem { Text = "Quit Dimmy" };
+        quitItem.Click += (_, _) => App.Instance?.QuitApp();
+        menu.Items.Add(quitItem);
 
-        menu.ShowAt((FrameworkElement)sender, e.GetPosition((UIElement)sender));
-        e.Handled = true;
+        // Show at anchor or at center of pill
+        var target = anchor ?? ColorBorder;
+        var pos = position ?? new global::Windows.Foundation.Point(
+            target.ActualWidth / 2, target.ActualHeight / 2);
+        menu.ShowAt(target, pos);
     }
 
     private async void Stop_Click(object sender, RoutedEventArgs e)

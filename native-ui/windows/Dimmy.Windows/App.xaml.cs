@@ -181,6 +181,11 @@ public partial class App : Application
         {
             var hwnd = WindowHelper.GetHwnd(_pillWindow);
             _trayService.Initialize(hwnd);
+
+            // Wire WinUI 3 context menu from pill window
+            var pill = _pillWindow as Views.PillWindow;
+            _trayService.SetMenuCallback(() =>
+                _dispatcherQueue?.TryEnqueue(() => pill?.ShowContextMenu()));
         }
     }
 
@@ -391,7 +396,7 @@ public partial class App : Application
         return appWindow?.IsVisible ?? false;
     }
 
-    private void TogglePill()
+    public void TogglePill()
     {
         if (IsPillVisible()) HidePill();
         else ShowPill();

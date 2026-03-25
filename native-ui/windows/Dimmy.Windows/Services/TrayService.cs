@@ -34,13 +34,17 @@ public class TrayService : IDisposable
     private const uint MF_SEPARATOR = 0x0800;
     private const uint MF_GRAYED = 0x01;
     private const uint MF_DISABLED = 0x02;
+    private const uint MF_OWNERDRAW = 0x0100;
     private const uint TPM_BOTTOMALIGN = 0x0020;
     private const uint TPM_LEFTALIGN = 0x0000;
     private const uint TPM_RETURNCMD = 0x0100;
+    private const uint WM_MEASUREITEM = 0x002C;
+    private const uint WM_DRAWITEM = 0x002B;
 
     private const int IDM_TOGGLE = 1;
     private const int IDM_SETTINGS = 2;
     private const int IDM_QUIT = 3;
+    private const int IDM_STATUS = 99; // owner-drawn status item
 
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
     private static extern bool Shell_NotifyIcon(int dwMessage, ref NOTIFYICONDATA lpData);
@@ -73,6 +77,69 @@ public class TrayService : IDisposable
 
     [StructLayout(LayoutKind.Sequential)]
     private struct POINT { public int X, Y; }
+
+    // GDI for owner-drawn menu items
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr CreateSolidBrush(uint crColor);
+
+    [DllImport("gdi32.dll")]
+    private static extern bool DeleteObject(IntPtr hObject);
+
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr SelectObject(IntPtr hdc, IntPtr h);
+
+    [DllImport("user32.dll")]
+    private static extern int FillRect(IntPtr hDC, ref RECT lprc, IntPtr hbr);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int DrawText(IntPtr hDC, string lpchText, int cchText, ref RECT lprc, uint format);
+
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr CreateFont(int nHeight, int nWidth, int nEscapement, int nOrientation,
+        int fnWeight, uint fdwItalic, uint fdwUnderline, uint fdwStrikeOut, uint fdwCharSet,
+        uint fdwOutputPrecision, uint fdwClipPrecision, uint fdwQuality, uint fdwPitchAndFamily,
+        string? lpszFace);
+
+    [DllImport("gdi32.dll")]
+    private static extern uint SetTextColor(IntPtr hdc, uint color);
+
+    [DllImport("gdi32.dll")]
+    private static extern uint SetBkMode(IntPtr hdc, int mode);
+
+    [DllImport("gdi32.dll")]
+    private static extern bool Ellipse(IntPtr hdc, int left, int top, int right, int bottom);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT { public int Left, Top, Right, Bottom; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MEASUREITEMSTRUCT
+    {
+        public uint CtlType;
+        public uint CtlID;
+        public uint itemID;
+        public uint itemWidth;
+        public uint itemHeight;
+        public IntPtr itemData;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DRAWITEMSTRUCT
+    {
+        public uint CtlType;
+        public uint CtlID;
+        public uint itemID;
+        public uint itemAction;
+        public uint itemState;
+        public IntPtr hwndItem;
+        public IntPtr hDC;
+        public RECT rcItem;
+        public IntPtr itemData;
+    }
+
+    private const int TRANSPARENT = 1;
+    private string _statusText = "Ready";
+    private uint _statusDotColor = 0x0040C040; // green (BGR)
 
     private const uint IMAGE_ICON = 1;
     private const uint LR_LOADFROMFILE = 0x0010;
@@ -118,6 +185,8 @@ public class TrayService : IDisposable
     private WndProcDelegate? _wndProcDelegate;
     private IntPtr _hIcon;
 
+    private Action? _onShowMenu;
+
     public TrayService(AppViewModel vm, Action onTogglePill, Action onSettingsClick, Action onQuitClick)
     {
         _vm = vm;
@@ -125,6 +194,9 @@ public class TrayService : IDisposable
         _onSettingsClick = onSettingsClick;
         _onQuitClick = onQuitClick;
     }
+
+    /// <summary>Set the callback for showing the WinUI 3 context menu from the pill window.</summary>
+    public void SetMenuCallback(Action onShowMenu) => _onShowMenu = onShowMenu;
 
     public void Initialize(IntPtr hwnd)
     {
@@ -189,45 +261,14 @@ public class TrayService : IDisposable
             }
             return IntPtr.Zero;
         }
+
         return DefSubclassProc(hWnd, msg, wParam, lParam);
     }
 
     private void ShowContextMenu()
     {
-        var hMenu = CreatePopupMenu();
-
-        // Status — readable but non-interactive (ID 0 → no action on click)
-        var status = _vm.IsRecording ? "● Recording..." : "● Ready";
-        AppendMenu(hMenu, MF_STRING | MF_DISABLED, 0, status);
-        AppendMenu(hMenu, MF_SEPARATOR, 0, null);
-
-        // Info lines — readable but non-interactive
-        var lang = string.IsNullOrEmpty(_vm.Language) ? "(auto)" : _vm.Language;
-        AppendMenu(hMenu, MF_STRING | MF_DISABLED, 0, $"Language: {lang}");
-        var style = _vm.LlmStyle == "off" ? "off" : _vm.LlmStyle;
-        AppendMenu(hMenu, MF_STRING | MF_DISABLED, 0, $"Style: {style}");
-        AppendMenu(hMenu, MF_STRING | MF_DISABLED, 0, $"Shortcut: {_vm.Shortcut}");
-        AppendMenu(hMenu, MF_SEPARATOR, 0, null);
-
-        // Actions
-        AppendMenu(hMenu, MF_STRING, IDM_TOGGLE, "Show/Hide Pill");
-        AppendMenu(hMenu, MF_STRING, IDM_SETTINGS, "Settings...");
-        AppendMenu(hMenu, MF_SEPARATOR, 0, null);
-        AppendMenu(hMenu, MF_STRING, IDM_QUIT, "Quit Dimmy");
-
-        // Show menu
-        SetForegroundWindow(_hwnd);
-        GetCursorPos(out var pt);
-        int cmd = TrackPopupMenu(hMenu, TPM_BOTTOMALIGN | TPM_LEFTALIGN | TPM_RETURNCMD,
-            pt.X, pt.Y, 0, _hwnd, IntPtr.Zero);
-        DestroyMenu(hMenu);
-
-        switch (cmd)
-        {
-            case IDM_TOGGLE: _onTogglePill(); break;
-            case IDM_SETTINGS: _onSettingsClick(); break;
-            case IDM_QUIT: _onQuitClick(); break;
-        }
+        // Delegate to PillWindow's WinUI 3 MenuFlyout for modern look
+        _onShowMenu?.Invoke();
     }
 
     private IntPtr LoadTrayIcon()
