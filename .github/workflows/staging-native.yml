@@ -3,13 +3,13 @@ name: Staging Release
 on:
   push:
     branches: [staging]
-  workflow_dispatch:  # manual trigger for testing
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  # ── Rust core lint + test ──────────────────────────────────────────
+  # ── Rust core lint + test (runs in parallel with builds) ────────────
   rust-check:
     name: Rust Lint & Test
     runs-on: ubuntu-22.04
@@ -29,13 +29,7 @@ jobs:
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            libasound2-dev \
-            libxdo-dev
+          sudo apt-get install -y libasound2-dev libxdo-dev
 
       - name: Format
         working-directory: src-tauri
@@ -49,10 +43,9 @@ jobs:
         working-directory: src-tauri
         run: cargo test --lib
 
-  # ── Staging release placeholder ────────────────────────────────────
+  # ── Create release placeholder (no dependency on rust-check) ────────
   create-release:
     name: Create Staging Release
-    needs: rust-check
     runs-on: ubuntu-latest
     outputs:
       release_id: ${{ steps.create.outputs.id }}
@@ -92,6 +85,10 @@ jobs:
             echo "| macOS (Apple Silicon) | \`Dimmy-native-macos-arm64.dmg\` |"
             echo "| Windows | \`Dimmy-native-windows-x64.zip\` |"
             echo ""
+            echo "## Windows Requirements"
+            echo ""
+            echo "Requires .NET 8 Desktop Runtime. Download: https://dotnet.microsoft.com/download/dotnet/8.0"
+            echo ""
             echo "## macOS Installation"
             echo ""
             echo "This build is not notarized by Apple. After copying Dimmy.app to Applications:"
@@ -119,7 +116,7 @@ jobs:
           draft: true
           prerelease: true
 
-  # ── macOS Native Build ─────────────────────────────────────────────
+  # ── macOS Native Build (parallel with Windows + rust-check) ─────────
   build-macos:
     name: Build macOS Native
     needs: create-release
@@ -145,7 +142,6 @@ jobs:
         run: |
           ls -lh src-tauri/target/aarch64-apple-darwin/release/libdimmy_lib.a
           file src-tauri/target/aarch64-apple-darwin/release/libdimmy_lib.a
-          # Remove dylib so Xcode links the static .a (not the dynamic .dylib)
           rm -f src-tauri/target/aarch64-apple-darwin/release/libdimmy_lib.dylib
           rm -f src-tauri/target/aarch64-apple-darwin/release/deps/libdimmy_lib.dylib
 
@@ -176,7 +172,7 @@ jobs:
           tag_name: staging-latest
           files: native-ui/macos/build/Dimmy-native-macos-arm64.dmg
 
-  # ── Windows Native Build ───────────────────────────────────────────
+  # ── Windows Native Build (parallel with macOS + rust-check) ─────────
   build-windows:
     name: Build Windows Native
     needs: create-release
@@ -203,14 +199,20 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: ${{ runner.os }}-nuget-
+
       - name: Restore NuGet packages
         working-directory: native-ui/windows/Dimmy.Windows
         run: dotnet restore
 
       - name: Build Windows app
         working-directory: native-ui/windows/Dimmy.Windows
-        run: |
-          dotnet publish -c Release -r win-x64 --self-contained -o publish
+        run: dotnet publish -c Release -r win-x64 --no-self-contained -o publish
 
       - name: Run Windows tests
         working-directory: native-ui/windows/Dimmy.Windows.Tests
@@ -222,7 +224,6 @@ jobs:
         working-directory: native-ui/windows/Dimmy.Windows
         shell: pwsh
         run: |
-          # Create a simple zip for now (NSIS/WiX can be added later)
           Compress-Archive -Path publish\* -DestinationPath ..\Dimmy-native-windows-x64.zip
 
       - name: Upload to release
@@ -231,10 +232,10 @@ jobs:
           tag_name: staging-latest
           files: native-ui/windows/Dimmy-native-windows-x64.zip
 
-  # ── Publish ────────────────────────────────────────────────────────
+  # ── Publish (waits for all jobs including rust-check) ───────────────
   publish:
     name: Publish Staging Release
-    needs: [create-release, build-macos, build-windows]
+    needs: [rust-check, create-release, build-macos, build-windows]
     runs-on: ubuntu-latest
     steps:
       - name: Publish release

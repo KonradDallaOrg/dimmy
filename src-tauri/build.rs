@@ -1,3 +1,3 @@
 fn main() {
-    tauri_build::build()
+    // No build script needed for native UI builds (Tauri removed).
 }
