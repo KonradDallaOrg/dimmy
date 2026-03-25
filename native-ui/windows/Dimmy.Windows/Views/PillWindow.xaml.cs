@@ -47,8 +47,8 @@ public sealed partial class PillWindow : Window
     // Capsule height for recording/transcribing states
     private const double CapsuleHeight = 40;
 
-    private const int WindowWidth = 240;
-    private const int WindowHeight = 60;
+    private const int WindowWidth = 270;
+    private const int WindowHeight = 74;
 
     public PillWindow(AppViewModel vm)
     {
@@ -59,6 +59,7 @@ public sealed partial class PillWindow : Window
         SetupWindow();
         _vm.PropertyChanged += Vm_PropertyChanged;
         Waveform.StyleMode = _vm.WaveformStyle;
+        ColorBorder.SizeChanged += ColorBorder_SizeChanged;
         UpdateVisualState();
     }
 
@@ -87,7 +88,8 @@ public sealed partial class PillWindow : Window
 
     private void Vm_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(AppViewModel.CurrentState) || e.PropertyName == nameof(AppViewModel.BorderStyle))
+        if (e.PropertyName == nameof(AppViewModel.CurrentState) || e.PropertyName == nameof(AppViewModel.BorderStyle)
+            || e.PropertyName == nameof(AppViewModel.Theme))
             DispatcherQueue.TryEnqueue(UpdateVisualState);
         if (e.PropertyName == nameof(AppViewModel.LlmStyle))
             DispatcherQueue.TryEnqueue(() => StyleDot.Fill = new SolidColorBrush(ParseColor(_vm.LlmStyleColor)));
@@ -138,7 +140,8 @@ public sealed partial class PillWindow : Window
     private static readonly global::Windows.UI.Color BorderOrange =
         global::Windows.UI.Color.FromArgb(255, 251, 146, 39);
 
-    private Brush GetIdleBorderBrush()
+    /// <summary>Border brush for active states (recording and beyond). Shows the user's chosen border color.</summary>
+    private Brush GetActiveBorderBrush()
     {
         return _vm.BorderStyle switch
         {
@@ -149,6 +152,111 @@ public sealed partial class PillWindow : Window
             "None" => new SolidColorBrush(global::Windows.UI.Color.FromArgb(255, 60, 60, 60)),
             _ => _rainbowBrush!, // Rainbow default
         };
+    }
+
+    // ── Glass / Glow ─────────────────────────────────────────────
+    private bool IsGlass => _vm.Theme == "Light";
+
+    // Dark: fully opaque dark  |  Glass: white-ish
+    private static readonly global::Windows.UI.Color BgDark =
+        global::Windows.UI.Color.FromArgb(255, 26, 26, 26);       // #FF1a1a1a
+    private static readonly global::Windows.UI.Color BgGlassActive =
+        global::Windows.UI.Color.FromArgb(255, 200, 200, 210);    // #FFC8C8D2 — fully opaque, border stays border
+    private static readonly global::Windows.UI.Color BgGlassIdle =
+        global::Windows.UI.Color.FromArgb(140, 200, 200, 210);    // #8CC8C8D2 — idle, more transparent
+
+    private SolidColorBrush GetPillBackground(bool idle = false) =>
+        new(IsGlass ? (idle ? BgGlassIdle : BgGlassActive) : BgDark);
+
+    /// <summary>Swap text/icon foreground colors for dark vs glass (light) theme.</summary>
+    private void ApplyThemeColors()
+    {
+        var textPrimary = IsGlass
+            ? new SolidColorBrush(global::Windows.UI.Color.FromArgb(238, 30, 30, 30))   // dark text
+            : new SolidColorBrush(global::Windows.UI.Color.FromArgb(238, 255, 255, 255)); // white text
+        var textSecondary = IsGlass
+            ? new SolidColorBrush(global::Windows.UI.Color.FromArgb(140, 30, 30, 30))
+            : new SolidColorBrush(global::Windows.UI.Color.FromArgb(119, 255, 255, 255));
+
+        // Idle
+        LanguageLabel.Foreground = IsGlass
+            ? new SolidColorBrush(global::Windows.UI.Color.FromArgb(170, 30, 30, 30))
+            : new SolidColorBrush(global::Windows.UI.Color.FromArgb(170, 255, 255, 255));
+        ShortcutLabel.Foreground = textSecondary;
+
+        // Recording
+        TimerText.Foreground = textPrimary;
+
+        // Note: Recording/Transcribing/Processing text + waveform stay white —
+        // they're inside the colored border area where white reads well on any theme.
+    }
+
+    private global::Windows.UI.Color? _glowColor; // null = glow hidden
+    private bool _glowSubtle; // true = idle/hover low-intensity glow
+
+    /// <summary>
+    /// Glow follows the exact shape of ColorBorder — same corner radius,
+    /// size derived from ColorBorder's actual rendered size + offset.
+    /// Called on state change AND on ColorBorder.SizeChanged.
+    /// </summary>
+    // Glow layer specs: [pad multiplier, opacity active, opacity subtle]
+    private static readonly (double pad, double opActive, double opSubtle)[] GlowLayers =
+    [
+        (5,  0.03, 0.015),  // Glow5 — outermost, barely visible
+        (4,  0.05, 0.025),  // Glow4
+        (3,  0.08, 0.04),   // Glow3
+        (2,  0.12, 0.06),   // Glow2
+        (1,  0.18, 0.09),   // Glow1 — innermost, brightest
+    ];
+
+    private void ApplyGlow()
+    {
+        var layers = new[] { Glow5, Glow4, Glow3, Glow2, Glow1 };
+
+        if (_glowColor is not { } color)
+        {
+            foreach (var l in layers) l.Opacity = 0;
+            return;
+        }
+
+        var w = ColorBorder.ActualWidth;
+        var h = ColorBorder.ActualHeight;
+        if (w <= 0 || h <= 0) return; // not rendered yet, SizeChanged will call us back
+
+        var cr = ColorBorder.CornerRadius.TopLeft;
+        var brush = new SolidColorBrush(color);
+        const double step = 3.0; // px per layer
+
+        for (int i = 0; i < layers.Length; i++)
+        {
+            var (_, opActive, opSubtle) = GlowLayers[i];
+            double pad = step * (layers.Length - i); // outermost layer = largest pad
+            layers[i].Width = w + pad * 2;
+            layers[i].Height = h + pad * 2;
+            layers[i].CornerRadius = new CornerRadius(cr + pad);
+            layers[i].Background = brush;
+            layers[i].Opacity = _glowSubtle ? opSubtle : opActive;
+        }
+    }
+
+    private void UpdateGlow(global::Windows.UI.Color color, bool subtle = false)
+    {
+        _glowColor = color;
+        _glowSubtle = subtle;
+        ApplyGlow();
+    }
+
+    private void HideGlow()
+    {
+        _glowColor = null;
+        Glow1.Opacity = 0; Glow2.Opacity = 0; Glow3.Opacity = 0;
+        Glow4.Opacity = 0; Glow5.Opacity = 0;
+    }
+
+    private void ColorBorder_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        // Re-apply glow whenever the pill changes size (circle↔capsule, auto-width text)
+        if (_glowColor != null) ApplyGlow();
     }
 
     private void UpdateVisualState()
@@ -166,7 +274,9 @@ public sealed partial class PillWindow : Window
 
         LanguageLabel.Visibility = Visibility.Collapsed;
         ShortcutLabel.Visibility = Visibility.Collapsed;
-        GearButton.Visibility = Visibility.Collapsed;
+
+        // Apply text colors for theme
+        ApplyThemeColors();
 
         switch (_vm.CurrentState)
         {
@@ -175,53 +285,71 @@ public sealed partial class PillWindow : Window
                 StyleDot.Fill = new SolidColorBrush(ParseColor(_vm.LlmStyleColor));
                 RootGrid.Opacity = 1.0;
                 SetCircleShape();
-                ColorBorder.Background = GetIdleBorderBrush();
-                if (_vm.BorderStyle == "Rainbow") StartRainbowAnimation();
-                else _rainbowTimer?.Stop();
+                PillInner.Background = GetPillBackground(idle: true);
+                // No colored border in idle — transparent in glass, dark in dark
+                ColorBorder.Background = IsGlass
+                    ? new SolidColorBrush(global::Windows.UI.Color.FromArgb(0, 0, 0, 0))
+                    : new SolidColorBrush(BgDark);
+                _rainbowTimer?.Stop();
+                // Subtle glow in idle — uses LLM style color at low intensity
+                UpdateGlow(ParseColor(_vm.LlmStyleColor), subtle: true);
                 break;
 
             case AppState.Recording:
                 RecordingPanel.Visibility = Visibility.Visible;
                 RootGrid.Opacity = 1.0;
+                PillInner.Background = GetPillBackground();
                 StopButton.Visibility = Visibility.Visible;
                 SetCapsuleShape();
-                ColorBorder.Background = GetIdleBorderBrush();
+                ColorBorder.Background = GetActiveBorderBrush();
                 StartAmplitudePolling();
                 _recordingStartTime = DateTime.Now;
                 StartRecordingTimer();
                 Waveform.IsActive = true;
                 if (_vm.BorderStyle == "Rainbow") StartRainbowAnimation();
                 else _rainbowTimer?.Stop();
+                // Glow in recording: use the border color (first solid stop or blue)
+                UpdateGlow(_vm.BorderStyle switch
+                {
+                    "Blue" => BorderBlue, "Green" => BorderGreen,
+                    "Purple" => BorderPurple, "Orange" => BorderOrange,
+                    _ => BorderBlue // rainbow → default blue glow
+                });
                 break;
 
             case AppState.Transcribing:
                 TranscribingPanel.Visibility = Visibility.Visible;
+                PillInner.Background = GetPillBackground();
                 RootGrid.Opacity = 1.0;
                 Waveform.IsActive = false;
                 ChunkText.Text = _vm.ChunkTotal > 1 ? $"{_vm.ChunkCurrent}/{_vm.ChunkTotal}" : "";
                 SetCapsuleShape();
                 _rainbowTimer?.Stop();
                 ColorBorder.Background = new SolidColorBrush(ColorTranscribing);
+                UpdateGlow(ColorTranscribing);
                 break;
 
             case AppState.Processing:
                 ProcessingPanel.Visibility = Visibility.Visible;
+                PillInner.Background = GetPillBackground();
                 RootGrid.Opacity = 1.0;
                 SetCapsuleShape();
                 _rainbowTimer?.Stop();
-                // Use LLM style color so user sees which enhancement is active
                 ColorBorder.Background = new SolidColorBrush(ParseColor(_vm.LlmStyleColor));
+                UpdateGlow(ParseColor(_vm.LlmStyleColor));
                 break;
 
             case AppState.Completing:
                 CompletingPanel.Visibility = Visibility.Visible;
+                PillInner.Background = GetPillBackground();
                 RootGrid.Opacity = 1.0;
                 SetCircleShape();
                 _rainbowTimer?.Stop();
-                // Green checkmark, but border shows LLM style color if enhancement was used
-                ColorBorder.Background = _vm.LlmStyle != "off"
-                    ? new SolidColorBrush(ParseColor(_vm.LlmStyleColor))
-                    : new SolidColorBrush(ColorCompleting);
+                var completingColor = _vm.LlmStyle != "off"
+                    ? ParseColor(_vm.LlmStyleColor)
+                    : ColorCompleting;
+                ColorBorder.Background = new SolidColorBrush(completingColor);
+                UpdateGlow(completingColor);
                 if (_completingTimer is null)
                     _completingTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1200) };
                 if (!_completingHandlerAttached)
@@ -235,10 +363,12 @@ public sealed partial class PillWindow : Window
             case AppState.Error:
                 ErrorPanel.Visibility = Visibility.Visible;
                 ErrorText.Text = _vm.ErrorMessage;
+                PillInner.Background = GetPillBackground();
                 RootGrid.Opacity = 1.0;
                 SetCapsuleShape();
                 _rainbowTimer?.Stop();
                 ColorBorder.Background = new SolidColorBrush(ColorError);
+                UpdateGlow(ColorError);
                 if (_errorTimer is null)
                     _errorTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
                 if (!_errorHandlerAttached)
@@ -359,16 +489,15 @@ public sealed partial class PillWindow : Window
         if (_vm.CurrentState == AppState.Idle)
         {
             RootGrid.Opacity = 0.95;
-            // Expand to capsule to show info
             SetCapsuleShape();
             LanguageLabel.Text = string.IsNullOrEmpty(_vm.Language) ? "" : _vm.Language.ToUpperInvariant();
             ShortcutLabel.Text = _vm.Shortcut;
             if (!string.IsNullOrEmpty(LanguageLabel.Text))
                 LanguageLabel.Visibility = Visibility.Visible;
             ShortcutLabel.Visibility = Visibility.Visible;
-            GearButton.Visibility = Visibility.Visible;
-
-            IdleContent.Margin = new Thickness(14, 0, 14, 0);
+            IdleContent.Margin = new Thickness(10, 0, 10, 0);
+            // Hover glow — slightly brighter than idle
+            UpdateGlow(ParseColor(_vm.LlmStyleColor), subtle: true);
         }
     }
 
@@ -377,13 +506,12 @@ public sealed partial class PillWindow : Window
         if (_vm.CurrentState == AppState.Idle)
         {
             RootGrid.Opacity = 1.0;
-            // Shrink back to circle
             SetCircleShape();
             LanguageLabel.Visibility = Visibility.Collapsed;
             ShortcutLabel.Visibility = Visibility.Collapsed;
-            GearButton.Visibility = Visibility.Collapsed;
-
             IdleContent.Margin = new Thickness(0);
+            // Back to subtle idle glow
+            UpdateGlow(ParseColor(_vm.LlmStyleColor), subtle: true);
         }
     }
 
@@ -426,14 +554,13 @@ public sealed partial class PillWindow : Window
         idx = (idx + (delta > 0 ? -1 : 1) + LlmStyles.Length) % LlmStyles.Length;
         _vm.LlmStyle = LlmStyles[idx];
         StyleDot.Fill = new SolidColorBrush(ParseColor(_vm.LlmStyleColor));
-        SaveFieldToConfig("llm_style", _vm.LlmStyle);
-        SaveFieldToConfig("llm_enabled", _vm.LlmStyle != "off" ? "true" : "false");
-        var dict = new System.Collections.Generic.Dictionary<string, object>
-        {
-            ["llm_style"] = _vm.LlmStyle,
-            ["llm_enabled"] = _vm.LlmStyle != "off"
-        };
-        DimmyNative.dimmy_set_config_json(System.Text.Json.JsonSerializer.Serialize(dict));
+        // Single writer: only FFI, Rust saves to disk
+        DimmyNative.dimmy_set_config_json(System.Text.Json.JsonSerializer.Serialize(
+            new System.Collections.Generic.Dictionary<string, object>
+            {
+                ["llm_style"] = _vm.LlmStyle,
+                ["llm_enabled"] = _vm.LlmStyle != "off"
+            }));
         e.Handled = true;
     }
 
@@ -446,50 +573,13 @@ public sealed partial class PillWindow : Window
         idx = (idx + (delta > 0 ? -1 : 1) + LangList.Count) % LangList.Count;
         _vm.Language = LangList[idx].Key;
         LanguageLabel.Text = _vm.Language.ToUpperInvariant();
-        SaveFieldToConfig("language", _vm.Language);
-        DimmyNative.dimmy_set_config_json(
-            System.Text.Json.JsonSerializer.Serialize(
-                new System.Collections.Generic.Dictionary<string, string> { ["language"] = _vm.Language }));
+        // Single writer: only FFI, Rust saves to disk
+        DimmyNative.dimmy_set_config_json(System.Text.Json.JsonSerializer.Serialize(
+            new System.Collections.Generic.Dictionary<string, string> { ["language"] = _vm.Language }));
         e.Handled = true;
     }
 
-    /// <summary>Save a single field to config.json (UI-side merge).</summary>
-    private static void SaveFieldToConfig(string key, object value)
-    {
-        try
-        {
-            var configDir = System.Environment.GetFolderPath(System.Environment.SpecialFolder.ApplicationData);
-            var path = System.IO.Path.Combine(configDir, "dimmy", "config.json");
-            var dict = new System.Collections.Generic.Dictionary<string, object?>();
-            if (System.IO.File.Exists(path))
-            {
-                using var doc = System.Text.Json.JsonDocument.Parse(System.IO.File.ReadAllText(path));
-                foreach (var prop in doc.RootElement.EnumerateObject())
-                {
-                    dict[prop.Name] = prop.Value.ValueKind switch
-                    {
-                        System.Text.Json.JsonValueKind.String => prop.Value.GetString(),
-                        System.Text.Json.JsonValueKind.Number => prop.Value.GetDouble(),
-                        System.Text.Json.JsonValueKind.True => true,
-                        System.Text.Json.JsonValueKind.False => false,
-                        _ => null
-                    };
-                }
-            }
-            dict[key] = value;
-            var json = System.Text.Json.JsonSerializer.Serialize(dict,
-                new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
-            System.IO.File.WriteAllText(path, json);
-        }
-        catch { }
-    }
-
     // ── Actions ─────────────────────────────────────────────────────
-    private void Settings_Click(object sender, RoutedEventArgs e)
-    {
-        App.Instance?.OpenSettingsWindow();
-    }
-
     private void Pill_RightTapped(object sender, RightTappedRoutedEventArgs e)
     {
         var menu = new MenuFlyout();

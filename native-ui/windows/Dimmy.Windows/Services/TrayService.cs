@@ -33,6 +33,7 @@ public class TrayService : IDisposable
     private const uint MF_STRING = 0x00;
     private const uint MF_SEPARATOR = 0x0800;
     private const uint MF_GRAYED = 0x01;
+    private const uint MF_DISABLED = 0x02;
     private const uint TPM_BOTTOMALIGN = 0x0020;
     private const uint TPM_LEFTALIGN = 0x0000;
     private const uint TPM_RETURNCMD = 0x0100;
@@ -195,17 +196,17 @@ public class TrayService : IDisposable
     {
         var hMenu = CreatePopupMenu();
 
-        // Status
-        var status = _vm.IsRecording ? "Recording..." : "Ready";
-        AppendMenu(hMenu, MF_STRING | MF_GRAYED, 0, $"● {status}");
+        // Status — readable but non-interactive (ID 0 → no action on click)
+        var status = _vm.IsRecording ? "● Recording..." : "● Ready";
+        AppendMenu(hMenu, MF_STRING | MF_DISABLED, 0, status);
         AppendMenu(hMenu, MF_SEPARATOR, 0, null);
 
-        // Info lines
+        // Info lines — readable but non-interactive
         var lang = string.IsNullOrEmpty(_vm.Language) ? "(auto)" : _vm.Language;
-        AppendMenu(hMenu, MF_STRING | MF_GRAYED, 0, $"Language: {lang}");
+        AppendMenu(hMenu, MF_STRING | MF_DISABLED, 0, $"Language: {lang}");
         var style = _vm.LlmStyle == "off" ? "off" : _vm.LlmStyle;
-        AppendMenu(hMenu, MF_STRING | MF_GRAYED, 0, $"Style: {style}");
-        AppendMenu(hMenu, MF_STRING | MF_GRAYED, 0, $"Shortcut: {_vm.Shortcut}");
+        AppendMenu(hMenu, MF_STRING | MF_DISABLED, 0, $"Style: {style}");
+        AppendMenu(hMenu, MF_STRING | MF_DISABLED, 0, $"Shortcut: {_vm.Shortcut}");
         AppendMenu(hMenu, MF_SEPARATOR, 0, null);
 
         // Actions

@@ -10,6 +10,18 @@
     <Grid x:Name="RootGrid"
           HorizontalAlignment="Center" VerticalAlignment="Center">
 
+        <!-- Glow: 5 graduated layers for smooth falloff -->
+        <Border x:Name="Glow5" CornerRadius="50" Opacity="0" IsHitTestVisible="False"
+                HorizontalAlignment="Center" VerticalAlignment="Center" />
+        <Border x:Name="Glow4" CornerRadius="50" Opacity="0" IsHitTestVisible="False"
+                HorizontalAlignment="Center" VerticalAlignment="Center" />
+        <Border x:Name="Glow3" CornerRadius="50" Opacity="0" IsHitTestVisible="False"
+                HorizontalAlignment="Center" VerticalAlignment="Center" />
+        <Border x:Name="Glow2" CornerRadius="50" Opacity="0" IsHitTestVisible="False"
+                HorizontalAlignment="Center" VerticalAlignment="Center" />
+        <Border x:Name="Glow1" CornerRadius="50" Opacity="0" IsHitTestVisible="False"
+                HorizontalAlignment="Center" VerticalAlignment="Center" />
+
         <!-- Colored border: Padding=2 creates the visible border ring -->
         <Border x:Name="ColorBorder" CornerRadius="50" Padding="2"
                 HorizontalAlignment="Center" VerticalAlignment="Center"
@@ -40,17 +52,12 @@
                             <TextBlock x:Name="ShortcutLabel" FontSize="11" FontFamily="Consolas"
                                        Foreground="#77FFFFFF" VerticalAlignment="Center"
                                        Visibility="Collapsed" />
-                            <Button x:Name="GearButton" Background="Transparent" Padding="2"
-                                    BorderThickness="0" Click="Settings_Click" MinWidth="0" MinHeight="0"
-                                    VerticalAlignment="Center" Visibility="Collapsed">
-                                <FontIcon Glyph="&#xE713;" FontSize="11" Foreground="#77FFFFFF" />
-                            </Button>
                         </StackPanel>
                     </Grid>
 
                     <!-- Recording -->
                     <StackPanel x:Name="RecordingPanel" Orientation="Horizontal" Spacing="8"
-                                VerticalAlignment="Center" Margin="14,0" Visibility="Collapsed">
+                                VerticalAlignment="Center" Margin="10,0" Visibility="Collapsed">
                         <controls:WaveformControl x:Name="Waveform" Width="40" Height="18"
                                                   VerticalAlignment="Center" />
                         <TextBlock x:Name="TimerText" FontSize="13" Foreground="#EEFFFFFF"
@@ -64,7 +71,7 @@
 
                     <!-- Transcribing -->
                     <StackPanel x:Name="TranscribingPanel" Orientation="Horizontal" Spacing="8"
-                                VerticalAlignment="Center" Margin="14,0" Visibility="Collapsed">
+                                VerticalAlignment="Center" Margin="10,0" Visibility="Collapsed">
                         <ProgressRing IsActive="True" Width="14" Height="14" />
                         <TextBlock Text="Transcribing..." FontSize="12" Foreground="#EEFFFFFF" />
                         <TextBlock x:Name="ChunkText" FontSize="10" Foreground="#77FFFFFF" />
@@ -72,7 +79,7 @@
 
                     <!-- Processing -->
                     <StackPanel x:Name="ProcessingPanel" Orientation="Horizontal" Spacing="8"
-                                VerticalAlignment="Center" Margin="14,0" Visibility="Collapsed">
+                                VerticalAlignment="Center" Margin="10,0" Visibility="Collapsed">
                         <ProgressRing IsActive="True" Width="14" Height="14" />
                         <TextBlock Text="Processing..." FontSize="12" Foreground="#EEFFFFFF" />
                     </StackPanel>

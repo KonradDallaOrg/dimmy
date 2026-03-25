@@ -52,8 +52,8 @@
             <StackPanel x:Name="GeneralPanel" Spacing="16" Visibility="Visible">
               <!-- Theme -->
               <TextBlock Text="Theme" FontWeight="SemiBold" FontSize="14" />
-              <StackPanel Orientation="Horizontal" Spacing="12">
-                <RadioButton Content="Auto" GroupName="Theme" Tag="Default" Checked="Theme_Checked" IsChecked="True" />
+              <StackPanel x:Name="ThemeRadioPanel" Orientation="Horizontal" Spacing="12">
+                <RadioButton Content="Auto" GroupName="Theme" Tag="Default" Checked="Theme_Checked" />
                 <RadioButton Content="Light" GroupName="Theme" Tag="Light" Checked="Theme_Checked" />
                 <RadioButton Content="Dark" GroupName="Theme" Tag="Dark" Checked="Theme_Checked" />
               </StackPanel>
