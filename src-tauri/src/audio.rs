@@ -39,19 +39,23 @@ pub fn spawn_audio_thread(
             for cmd in rx {
                 match cmd {
                     AudioCommand::Start(device_name) => {
-                        crate::log(&format!("[Audio] Start command received, device_name={:?}", device_name));
+                        crate::log(&format!(
+                            "[Audio] Start command received, device_name={:?}",
+                            device_name
+                        ));
 
                         // Find the requested device, or fall back to default
                         let device = if let Some(ref name) = device_name {
-                            let found = host.input_devices()
-                                .ok()
-                                .and_then(|mut devs| {
-                                    devs.find(|d| d.name().ok().as_deref() == Some(name.as_str()))
-                                });
+                            let found = host.input_devices().ok().and_then(|mut devs| {
+                                devs.find(|d| d.name().ok().as_deref() == Some(name.as_str()))
+                            });
                             if found.is_some() {
                                 crate::log(&format!("[Audio] Found device by name: {}", name));
                             } else {
-                                crate::log(&format!("[Audio] Device '{}' not found, falling back to default", name));
+                                crate::log(&format!(
+                                    "[Audio] Device '{}' not found, falling back to default",
+                                    name
+                                ));
                             }
                             found.or_else(|| host.default_input_device())
                         } else {
@@ -60,7 +64,10 @@ pub fn spawn_audio_thread(
 
                         let device = match device {
                             Some(d) => {
-                                crate::log(&format!("[Audio] Using device: {:?}", d.name().unwrap_or_default()));
+                                crate::log(&format!(
+                                    "[Audio] Using device: {:?}",
+                                    d.name().unwrap_or_default()
+                                ));
                                 d
                             }
                             None => {
@@ -71,12 +78,19 @@ pub fn spawn_audio_thread(
 
                         let config = match device.default_input_config() {
                             Ok(c) => {
-                                crate::log(&format!("[Audio] Config: sr={}, ch={}, fmt={:?}",
-                                    c.sample_rate().0, c.channels(), c.sample_format()));
+                                crate::log(&format!(
+                                    "[Audio] Config: sr={}, ch={}, fmt={:?}",
+                                    c.sample_rate().0,
+                                    c.channels(),
+                                    c.sample_format()
+                                ));
                                 c
                             }
                             Err(e) => {
-                                crate::log(&format!("[Audio] ERROR: Failed to get input config: {}", e));
+                                crate::log(&format!(
+                                    "[Audio] ERROR: Failed to get input config: {}",
+                                    e
+                                ));
                                 continue;
                             }
                         };
@@ -90,24 +104,42 @@ pub fn spawn_audio_thread(
 
                         let buf = buffer.clone();
                         let gain_ref = input_gain.clone();
-                        let sample_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                        let sample_count =
+                            std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
                         let sc1 = sample_count.clone();
                         let s = match config.sample_format() {
                             cpal::SampleFormat::F32 => device.build_input_stream(
                                 &config.clone().into(),
                                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                                    let prev = sc1.fetch_add(data.len(), std::sync::atomic::Ordering::Relaxed);
+                                    let prev = sc1.fetch_add(
+                                        data.len(),
+                                        std::sync::atomic::Ordering::Relaxed,
+                                    );
                                     if prev == 0 {
-                                        crate::log(&format!("[Audio] First F32 callback: {} samples", data.len()));
+                                        crate::log(&format!(
+                                            "[Audio] First F32 callback: {} samples",
+                                            data.len()
+                                        ));
                                     }
-                                    let gain = f32::from_bits(gain_ref.load(std::sync::atomic::Ordering::Relaxed));
-                                    assert!(gain.is_finite(), "audio callback F32: gain must be finite, got {}", gain);
-                                    assert!(gain >= 0.0 && gain <= 2.0, "audio callback F32: gain must be in [0.0, 2.0], got {}", gain);
+                                    let gain = f32::from_bits(
+                                        gain_ref.load(std::sync::atomic::Ordering::Relaxed),
+                                    );
+                                    assert!(
+                                        gain.is_finite(),
+                                        "audio callback F32: gain must be finite, got {}",
+                                        gain
+                                    );
+                                    assert!(
+                                        (0.0..=2.0).contains(&gain),
+                                        "audio callback F32: gain must be in [0.0, 2.0], got {}",
+                                        gain
+                                    );
                                     if let Ok(mut b) = buf.lock() {
                                         if channels > 1 {
                                             for chunk in data.chunks(channels) {
-                                                let mono =
-                                                    chunk.iter().sum::<f32>() / channels as f32 * gain;
+                                                let mono = chunk.iter().sum::<f32>()
+                                                    / channels as f32
+                                                    * gain;
                                                 b.push(mono);
                                             }
                                         } else if (gain - 1.0).abs() < 0.001 {
@@ -133,7 +165,7 @@ pub fn spawn_audio_thread(
                                         }
                                         let gain = f32::from_bits(gain_ref2.load(std::sync::atomic::Ordering::Relaxed));
                                         assert!(gain.is_finite(), "audio callback I16: gain must be finite, got {}", gain);
-                                        assert!(gain >= 0.0 && gain <= 2.0, "audio callback I16: gain must be in [0.0, 2.0], got {}", gain);
+                                        assert!((0.0..=2.0).contains(&gain), "audio callback I16: gain must be in [0.0, 2.0], got {}", gain);
                                         if let Ok(mut b) = buf2.lock() {
                                             for chunk in data.chunks(channels) {
                                                 let mono: f32 = chunk
@@ -150,7 +182,10 @@ pub fn spawn_audio_thread(
                                 )
                             }
                             _ => {
-                                crate::log(&format!("[Audio] ERROR: Unsupported sample format: {:?}", config.sample_format()));
+                                crate::log(&format!(
+                                    "[Audio] ERROR: Unsupported sample format: {:?}",
+                                    config.sample_format()
+                                ));
                                 continue;
                             }
                         };
@@ -161,7 +196,9 @@ pub fn spawn_audio_thread(
                                 stream = Some(s);
                                 crate::log("[Audio] Stream built and playing");
                             }
-                            Err(e) => crate::log(&format!("[Audio] ERROR: Failed to build stream: {}", e)),
+                            Err(e) => {
+                                crate::log(&format!("[Audio] ERROR: Failed to build stream: {}", e))
+                            }
                         }
                     }
                     AudioCommand::Stop => {

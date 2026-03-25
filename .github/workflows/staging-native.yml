@@ -1,4 +1,4 @@
-name: Staging Native Build
+name: Staging Release
 
 on:
   push:
@@ -89,13 +89,23 @@ jobs:
             echo ""
             echo "| Platform | File |"
             echo "|----------|------|"
-            echo "| macOS (Apple Silicon) | \`Dimmy-native.dmg\` |"
-            echo "| Windows | \`Dimmy-native-setup.exe\` |"
+            echo "| macOS (Apple Silicon) | \`Dimmy-native-macos-arm64.dmg\` |"
+            echo "| Windows | \`Dimmy-native-windows-x64.zip\` |"
+            echo ""
+            echo "## macOS Installation"
+            echo ""
+            echo "This build is not notarized by Apple. After copying Dimmy.app to Applications:"
+            echo ""
+            echo "\`\`\`bash"
+            echo "xattr -d com.apple.quarantine /Applications/Dimmy.app"
+            echo "\`\`\`"
+            echo ""
+            echo "Or: right-click the app → Open → Open in the dialog."
           } > changelog.md
 
       - name: Delete previous native staging release
         continue-on-error: true
-        run: gh release delete staging-native --yes --cleanup-tag
+        run: gh release delete staging-latest --yes --cleanup-tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -103,7 +113,7 @@ jobs:
         id: create
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: staging-native
+          tag_name: staging-latest
           name: "Dimmy ${{ steps.version.outputs.version }} (Native Staging)"
           body_path: changelog.md
           draft: true
@@ -131,10 +141,13 @@ jobs:
         working-directory: src-tauri
         run: cargo build --lib --release --target aarch64-apple-darwin
 
-      - name: Verify static library
+      - name: Verify static library and remove dylib
         run: |
           ls -lh src-tauri/target/aarch64-apple-darwin/release/libdimmy_lib.a
           file src-tauri/target/aarch64-apple-darwin/release/libdimmy_lib.a
+          # Remove dylib so Xcode links the static .a (not the dynamic .dylib)
+          rm -f src-tauri/target/aarch64-apple-darwin/release/libdimmy_lib.dylib
+          rm -f src-tauri/target/aarch64-apple-darwin/release/deps/libdimmy_lib.dylib
 
       - name: Build Xcode project
         working-directory: native-ui/macos
@@ -142,29 +155,14 @@ jobs:
           xcodebuild -project Dimmy.xcodeproj \
             -scheme Dimmy \
             -configuration Release \
-            -archivePath build/Dimmy.xcarchive \
-            archive \
-            CODE_SIGN_IDENTITY="-" \
-            CODE_SIGNING_ALLOWED=NO
+            -derivedDataPath build/derived \
+            build \
+            CODE_SIGN_IDENTITY="-"
 
       - name: Create DMG
         working-directory: native-ui/macos
         run: |
-          # Export from archive
-          APP_PATH="build/Dimmy.xcarchive/Products/Applications/Dimmy.app"
-          if [ ! -d "$APP_PATH" ]; then
-            # Fallback: build directly
-            xcodebuild -project Dimmy.xcodeproj \
-              -scheme Dimmy \
-              -configuration Release \
-              -derivedDataPath build/derived \
-              build \
-              CODE_SIGN_IDENTITY="-" \
-              CODE_SIGNING_ALLOWED=NO
-            APP_PATH="build/derived/Build/Products/Release/Dimmy.app"
-          fi
-
-          # Create DMG
+          APP_PATH="build/derived/Build/Products/Release/Dimmy.app"
           mkdir -p build/dmg
           cp -R "$APP_PATH" build/dmg/
           hdiutil create -volname "Dimmy" \
@@ -175,7 +173,7 @@ jobs:
       - name: Upload DMG to release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: staging-native
+          tag_name: staging-latest
           files: native-ui/macos/build/Dimmy-native-macos-arm64.dmg
 
   # ── Windows Native Build ───────────────────────────────────────────
@@ -230,7 +228,7 @@ jobs:
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: staging-native
+          tag_name: staging-latest
           files: native-ui/windows/Dimmy-native-windows-x64.zip
 
   # ── Publish ────────────────────────────────────────────────────────
