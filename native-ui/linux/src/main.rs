@@ -1,6 +1,8 @@
 //! Dimmy Linux native UI — GTK4 + libadwaita entry point.
 
+mod hotkey;
 mod state;
+mod text_injector;
 
 use dimmy_lib::log;
 use libadwaita as adw;
@@ -22,6 +24,14 @@ fn main() {
     // Initialize AppState from config + keyring
     let app_state = dimmy_lib::AppState::new_standalone();
     log("AppState initialized");
+
+    let display = text_injector::detect_display_server();
+    let paste_method = text_injector::detect_paste_method(display);
+    log(&format!(
+        "Display server: {:?}, Paste method: {:?}",
+        display, paste_method
+    ));
+    let _hotkey_backend = hotkey::detect_hotkey_backend();
 
     // Create GTK application
     let app = adw::Application::builder()
