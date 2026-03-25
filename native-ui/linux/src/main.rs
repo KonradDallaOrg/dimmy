@@ -1,10 +1,12 @@
 //! Dimmy Linux native UI — GTK4 + libadwaita entry point.
 
 mod hotkey;
+mod onboarding;
 mod pill_window;
 mod settings;
 mod state;
 mod text_injector;
+mod tray;
 mod waveform;
 
 use dimmy_lib::log;
@@ -45,6 +47,12 @@ fn main() {
     let state_clone = app_state.clone();
 
     app.connect_activate(move |app| {
+        // Before creating pill, check onboarding
+        if !dimmy_lib::onboarding_completed() {
+            onboarding::show_onboarding(app, &state_clone);
+            return; // Don't show pill until onboarding done
+        }
+
         let (_sender, receiver) = state::create_event_channel();
 
         // Spawn tokio runtime in background thread
@@ -90,6 +98,9 @@ fn main() {
         });
 
         pill.present();
+
+        // Start system tray (StatusNotifierItem via D-Bus)
+        let _tray_handle = tray::start_tray(&state_clone);
     });
 
     // Don't pass command-line args to GTK (they're for us, not GTK)
