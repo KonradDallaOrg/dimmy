@@ -88,6 +88,7 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _borderStyle = "Rainbow";
     [ObservableProperty] private string _waveformStyle = "Bars";
     [ObservableProperty] private string _overlayPosition = "Bottom Right";
+    [ObservableProperty] private string _theme = "Default";
     [ObservableProperty] private bool _keepInClipboard;
     [ObservableProperty] private int _inputGainPercent = 100;
     [ObservableProperty] private bool _showInTaskbar;
@@ -133,6 +134,7 @@ public partial class SettingsViewModel : ObservableObject
             BorderStyle = r.TryGetProperty("border_style", out var bs) ? bs.GetString() ?? "Rainbow" : "Rainbow";
             WaveformStyle = r.TryGetProperty("waveform_style", out var ws) ? ws.GetString() ?? "Bars" : "Bars";
             OverlayPosition = r.TryGetProperty("overlay_position", out var op) ? op.GetString() ?? "Bottom Right" : "Bottom Right";
+            Theme = r.TryGetProperty("theme", out var pt) ? pt.GetString() ?? "Default" : "Default";
             KeepInClipboard = r.TryGetProperty("keep_in_clipboard", out var kc) && kc.GetBoolean();
             InputGainPercent = r.TryGetProperty("input_gain", out var ig) ? (int)(ig.GetDouble() * 100) : 100;
             StatsTotalWords = r.TryGetProperty("stats_total_words", out var stw) ? stw.GetInt64() : 0;
@@ -178,6 +180,7 @@ public partial class SettingsViewModel : ObservableObject
             ["border_style"] = BorderStyle,
             ["waveform_style"] = WaveformStyle,
             ["overlay_position"] = OverlayPosition,
+            ["theme"] = Theme,
             ["keep_in_clipboard"] = KeepInClipboard,
             ["input_gain"] = InputGainPercent / 100.0,
         };

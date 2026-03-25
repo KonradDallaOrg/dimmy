@@ -1,0 +1,11 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "pattern": "git push",
+        "command": "cd src-tauri && cargo fmt --check && cargo clippy -- -D warnings"
+      }
+    ]
+  }
+}

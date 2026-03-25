@@ -1,13 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
-    <UseWinUI>true</UseWinUI>
+    <TargetFramework>net8.0</TargetFramework>
     <IsPackable>false</IsPackable>
     <Nullable>enable</Nullable>
-    <Platforms>x86;x64;ARM64</Platforms>
-    <AppxPackage>false</AppxPackage>
-    <EnableMsixTooling>false</EnableMsixTooling>
-    <MrtCoreGenPriFileEnabled>false</MrtCoreGenPriFileEnabled>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="8.0.1">
@@ -18,8 +13,14 @@
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
     <PackageReference Include="NSubstitute" Version="5.3.0" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
   </ItemGroup>
+  <!-- Source files linked directly (no WinUI project reference) -->
   <ItemGroup>
-    <ProjectReference Include="..\Dimmy.Windows\Dimmy.Windows.csproj" />
+    <Compile Include="..\Dimmy.Windows\ViewModels\AppViewModel.cs" Link="ViewModels\AppViewModel.cs" />
+    <Compile Include="..\Dimmy.Windows\ViewModels\SettingsViewModel.cs" Link="ViewModels\SettingsViewModel.cs" />
+    <Compile Include="..\Dimmy.Windows\ViewModels\OnboardingViewModel.cs" Link="ViewModels\OnboardingViewModel.cs" />
+    <Compile Include="..\Dimmy.Windows\Services\TranscriptionService.cs" Link="Services\TranscriptionService.cs" />
+    <Compile Include="..\Dimmy.Windows\Interop\DimmyNative.cs" Link="Interop\DimmyNative.cs" />
   </ItemGroup>
 </Project>

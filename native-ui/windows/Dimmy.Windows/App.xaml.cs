@@ -63,6 +63,7 @@ public partial class App : Application
     {
         _appViewModel.BorderStyle = settings.BorderStyle;
         _appViewModel.WaveformStyle = settings.WaveformStyle;
+        _appViewModel.Theme = settings.Theme;
         _appViewModel.Language = settings.Language;
         _appViewModel.LlmStyle = settings.LlmStyle;
         _appViewModel.KeepInClipboard = settings.KeepInClipboard;
@@ -180,6 +181,11 @@ public partial class App : Application
         {
             var hwnd = WindowHelper.GetHwnd(_pillWindow);
             _trayService.Initialize(hwnd);
+
+            // Wire WinUI 3 context menu from pill window
+            var pill = _pillWindow as Views.PillWindow;
+            _trayService.SetMenuCallback(() =>
+                _dispatcherQueue?.TryEnqueue(() => pill?.ShowContextMenu()));
         }
     }
 
@@ -246,6 +252,8 @@ public partial class App : Application
                 _appViewModel.OverlayPosition = op.GetString() ?? "Bottom Right";
             if (r.TryGetProperty("keep_in_clipboard", out var kc))
                 _appViewModel.KeepInClipboard = kc.GetBoolean();
+            if (r.TryGetProperty("theme", out var pt))
+                _appViewModel.Theme = pt.GetString() ?? "Default";
         }
         catch { }
     }
@@ -388,7 +396,7 @@ public partial class App : Application
         return appWindow?.IsVisible ?? false;
     }
 
-    private void TogglePill()
+    public void TogglePill()
     {
         if (IsPillVisible()) HidePill();
         else ShowPill();

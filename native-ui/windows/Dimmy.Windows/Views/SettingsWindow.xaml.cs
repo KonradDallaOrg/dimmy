@@ -46,6 +46,7 @@ public sealed partial class SettingsWindow : Window
         SyncProviderComboBox();
         SyncLlmProviderComboBox();
         SyncLanguageComboBox();
+        SyncThemeRadioButtons();
         PopulateStats();
         PopulateVersion();
         _loaded = true;
@@ -189,6 +190,26 @@ public sealed partial class SettingsWindow : Window
         }
     }
 
+    private void SyncThemeRadioButtons()
+    {
+        foreach (var child in ThemeRadioPanel.Children)
+        {
+            if (child is RadioButton rb && rb.Tag is string tag && tag == ViewModel.Theme)
+            {
+                rb.IsChecked = true;
+                // Also apply to settings window appearance
+                if (Content is FrameworkElement root)
+                    root.RequestedTheme = tag switch
+                    {
+                        "Light" => ElementTheme.Light,
+                        "Dark" => ElementTheme.Dark,
+                        _ => ElementTheme.Default,
+                    };
+                return;
+            }
+        }
+    }
+
     private void Language_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (LanguageComboBox.SelectedItem is System.Collections.Generic.KeyValuePair<string, string> kvp)
@@ -276,6 +297,9 @@ public sealed partial class SettingsWindow : Window
                 "Dark" => ElementTheme.Dark,
                 _ => ElementTheme.Default,
             };
+            // Save theme choice and apply to pill (Light → glass, Dark/Default → dark)
+            ViewModel.Theme = tag;
+            if (_loaded) App.Instance?.ApplySettings(ViewModel);
         }
     }
 

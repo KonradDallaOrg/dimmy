@@ -46,6 +46,7 @@ public partial class AppViewModel : ObservableObject
     [ObservableProperty] private string _borderStyle = "Rainbow";
     [ObservableProperty] private string _waveformStyle = "Bars";
     [ObservableProperty] private string _overlayPosition = "Bottom Right";
+    [ObservableProperty] private string _theme = "Default";
     [ObservableProperty] private bool _keepInClipboard;
     [ObservableProperty] private bool _showInTaskbar;
 

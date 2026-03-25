@@ -1,6 +1,6 @@
-// Prevents additional console window on Windows in release
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-
+// Native UI builds don't use a Rust binary entry point.
+// The library (dimmy_lib) is consumed as a DLL (Windows) or static lib (macOS).
 fn main() {
-    dimmy_lib::run();
+    eprintln!("This binary is not used. Use the native UI app instead.");
+    std::process::exit(1);
 }
