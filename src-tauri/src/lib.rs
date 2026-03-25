@@ -13,13 +13,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
-const DEFAULT_API_URL: &str = "https://api.groq.com/openai/v1/audio/transcriptions";
-const DEFAULT_MODEL: &str = "whisper-large-v3-turbo";
+pub const DEFAULT_API_URL: &str = "https://api.groq.com/openai/v1/audio/transcriptions";
+pub const DEFAULT_MODEL: &str = "whisper-large-v3-turbo";
 /// Default prompt guides Whisper to produce punctuated, well-formatted output.
 /// Whisper mimics the style of this text — punctuation, capitalization, etc.
-const DEFAULT_PROMPT: &str = "Hello, how are you? Fine, thanks! Today we'll discuss an interesting topic. Ciao, come stai? Bene, grazie! Oggi parliamo di un argomento interessante.";
-pub(crate) const DEFAULT_LLM_URL: &str = "https://api.groq.com/openai/v1/chat/completions";
-pub(crate) const DEFAULT_LLM_MODEL: &str = "llama-3.3-70b-versatile";
+pub const DEFAULT_PROMPT: &str = "Hello, how are you? Fine, thanks! Today we'll discuss an interesting topic. Ciao, come stai? Bene, grazie! Oggi parliamo di un argomento interessante.";
+pub const DEFAULT_LLM_URL: &str = "https://api.groq.com/openai/v1/chat/completions";
+pub const DEFAULT_LLM_MODEL: &str = "llama-3.3-70b-versatile";
 #[allow(dead_code)] // Used by native UI via FFI recording logic
 const MAX_RECORDING_SECS: usize = 30 * 60; // 30 minutes hard cap
 const MAX_LOG_BYTES: u64 = 1_048_576; // 1 MB log rotation threshold
@@ -43,14 +43,13 @@ fn default_shortcut() -> &'static str {
     }
 }
 
-pub(crate) fn config_dir_path() -> Option<std::path::PathBuf> {
+pub fn config_dir_path() -> Option<std::path::PathBuf> {
     dirs::config_dir().map(|p| p.join("dimmy"))
 }
 
 /// Marker file path for onboarding completion.
 /// Separate from config.json so deleting/resetting config doesn't re-trigger onboarding.
-#[allow(dead_code)] // Used by tests
-fn onboarding_marker_path() -> Option<std::path::PathBuf> {
+pub fn onboarding_marker_path() -> Option<std::path::PathBuf> {
     config_dir_path().map(|p| p.join(".onboarding_done"))
 }
 
@@ -58,8 +57,7 @@ fn onboarding_marker_path() -> Option<std::path::PathBuf> {
 /// Returns true if: marker file exists, OR config.json exists (existing user upgrading).
 /// This prevents the onboarding from appearing for existing users who upgrade to a
 /// version that introduces onboarding — they already have a working config.
-#[allow(dead_code)]
-fn onboarding_completed() -> bool {
+pub fn onboarding_completed() -> bool {
     // If marker exists, done
     if onboarding_marker_path().map(|p| p.exists()).unwrap_or(true) {
         return true;
@@ -74,8 +72,7 @@ fn onboarding_completed() -> bool {
 }
 
 /// Mark onboarding as completed by creating the marker file.
-#[allow(dead_code)]
-fn mark_onboarding_done() -> Result<(), String> {
+pub fn mark_onboarding_done() -> Result<(), String> {
     let path = onboarding_marker_path().ok_or("Cannot determine config directory")?;
     // Ensure config dir exists
     if let Some(parent) = path.parent() {
@@ -89,11 +86,11 @@ fn mark_onboarding_done() -> Result<(), String> {
     Ok(())
 }
 
-fn config_path() -> Option<std::path::PathBuf> {
+pub fn config_path() -> Option<std::path::PathBuf> {
     config_dir_path().map(|p| p.join("config.json"))
 }
 
-pub(crate) fn log_path() -> Option<std::path::PathBuf> {
+pub fn log_path() -> Option<std::path::PathBuf> {
     config_dir_path().map(|p| p.join("dimmy.log"))
 }
 
@@ -107,7 +104,7 @@ fn audio_debug_dir() -> Option<std::path::PathBuf> {
 }
 
 /// Create a session directory for audio debug dumps and return its path.
-pub(crate) fn create_debug_session_dir() -> Option<std::path::PathBuf> {
+pub fn create_debug_session_dir() -> Option<std::path::PathBuf> {
     let base = audio_debug_dir()?;
     let ts = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
     let session_dir = base.join(&ts);
@@ -116,7 +113,7 @@ pub(crate) fn create_debug_session_dir() -> Option<std::path::PathBuf> {
 }
 
 /// Save WAV bytes to a file inside a debug session directory (fire-and-forget).
-pub(crate) fn save_debug_wav(dir: &std::path::Path, filename: &str, wav_data: &[u8]) {
+pub fn save_debug_wav(dir: &std::path::Path, filename: &str, wav_data: &[u8]) {
     let path = dir.join(filename);
     let _ = std::fs::write(&path, wav_data);
 }
@@ -179,7 +176,7 @@ fn debug_transcription(msg: &str) {
 }
 
 /// Write a log line to %APPDATA%/dimmy/dimmy.log (visible on Windows GUI apps)
-pub(crate) fn log(msg: &str) {
+pub fn log(msg: &str) {
     use std::io::Write;
     eprintln!("{}", msg); // also stderr for dev/terminal use
     if let Some(path) = log_path() {
@@ -212,41 +209,41 @@ pub(crate) fn log(msg: &str) {
 }
 
 /// Non-sensitive config persisted to disk.
-pub(crate) struct AppConfig {
-    api_url: String,
-    api_model: String,
-    selected_device: Option<String>,
-    language: String,
-    shortcut_mode: String,
-    shortcut: String,
-    prompt: String,
+pub struct AppConfig {
+    pub api_url: String,
+    pub api_model: String,
+    pub selected_device: Option<String>,
+    pub language: String,
+    pub shortcut_mode: String,
+    pub shortcut: String,
+    pub prompt: String,
     // LLM post-processing fields
-    llm_enabled: bool,
-    llm_style: llm::LlmStyle,
-    llm_tone: llm::LlmTone,
-    llm_custom_prompt: String,
-    llm_translate_to: String,
-    llm_api_url: String,
-    llm_api_model: String,
-    llm_use_same_key: bool,
-    llm_log_enabled: bool,
-    chunk_streaming_enabled: bool,
-    preprocessing_enabled: bool,
-    audio_debug_enabled: bool,
-    use_keyring: bool,
+    pub llm_enabled: bool,
+    pub llm_style: llm::LlmStyle,
+    pub llm_tone: llm::LlmTone,
+    pub llm_custom_prompt: String,
+    pub llm_translate_to: String,
+    pub llm_api_url: String,
+    pub llm_api_model: String,
+    pub llm_use_same_key: bool,
+    pub llm_log_enabled: bool,
+    pub chunk_streaming_enabled: bool,
+    pub preprocessing_enabled: bool,
+    pub audio_debug_enabled: bool,
+    pub use_keyring: bool,
     // UI appearance fields (used by native frontends, opaque to Rust core)
-    border_style: String,
-    waveform_style: String,
-    overlay_position: String,
-    keep_in_clipboard: bool,
+    pub border_style: String,
+    pub waveform_style: String,
+    pub overlay_position: String,
+    pub keep_in_clipboard: bool,
     /// Input gain (0.0-2.0, default 1.0). Attenuate hot mics (e.g. BT headsets).
-    input_gain: f32,
+    pub input_gain: f32,
     // Window position — bottom-right anchor in logical pixels
-    window_anchor_right: Option<f64>,
-    window_anchor_bottom: Option<f64>,
+    pub window_anchor_right: Option<f64>,
+    pub window_anchor_bottom: Option<f64>,
     // KPI stats — cumulative across sessions
-    stats_total_words: u64,
-    stats_total_speaking_secs: f64,
+    pub stats_total_words: u64,
+    pub stats_total_speaking_secs: f64,
 }
 
 impl Default for AppConfig {
@@ -291,7 +288,7 @@ impl Default for AppConfig {
 }
 
 /// Save non-sensitive config to file (NO api_key — that goes to keyring ONLY)
-pub(crate) fn save_config_file(cfg: &AppConfig) {
+pub fn save_config_file(cfg: &AppConfig) {
     // Preconditions: validate new config fields
     assert!(
         cfg.input_gain >= 0.0 && cfg.input_gain <= 2.0,
@@ -365,7 +362,7 @@ pub(crate) fn save_config_file(cfg: &AppConfig) {
 }
 
 /// Load non-sensitive config from file. Missing LLM fields use defaults (backward compatible).
-pub(crate) fn load_config_file() -> AppConfig {
+pub fn load_config_file() -> AppConfig {
     let defaults = AppConfig::default();
     if let Some(path) = config_path() {
         if let Ok(data) = std::fs::read_to_string(&path) {
@@ -450,8 +447,7 @@ pub(crate) fn load_config_file() -> AppConfig {
 }
 
 /// Migrate from old "pai-voice" config/keyring to "dimmy" for existing users.
-#[allow(dead_code)]
-fn migrate_from_pai_voice() {
+pub fn migrate_from_pai_voice() {
     let dimmy_dir = match config_dir_path() {
         Some(d) => d,
         None => return,
@@ -518,7 +514,7 @@ fn migrate_from_pai_voice() {
 }
 
 /// Migrate: if old config.json has api_key in plain text, move to secure storage and REMOVE from file
-pub(crate) fn migrate_plaintext_key(store: &keystore::KeyStore, use_keyring: bool) {
+pub fn migrate_plaintext_key(store: &keystore::KeyStore, use_keyring: bool) {
     if let Some(path) = config_path() {
         if let Ok(data) = std::fs::read_to_string(&path) {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
@@ -558,7 +554,7 @@ use provider::{KeyringScope, Provider};
 
 /// Convenience wrappers that read use_keyring from AppState.
 /// These maintain the same call signatures used throughout lib.rs.
-pub(crate) fn save_key_with_store(
+pub fn save_key_with_store(
     store: &keystore::KeyStore,
     scope: KeyringScope,
     key: &str,
@@ -567,7 +563,7 @@ pub(crate) fn save_key_with_store(
     store.save_key(scope, key, use_keyring)
 }
 
-pub(crate) fn load_key_with_store(
+pub fn load_key_with_store(
     store: &keystore::KeyStore,
     scope: KeyringScope,
     use_keyring: bool,
@@ -577,7 +573,7 @@ pub(crate) fn load_key_with_store(
 
 /// Migrate old single "api-key" and "llm-api-key" keyring entries to per-provider entries.
 /// This handles the legacy format from before per-provider key storage.
-pub(crate) fn migrate_keyring_to_per_provider(
+pub fn migrate_keyring_to_per_provider(
     store: &keystore::KeyStore,
     api_url: &str,
     llm_api_url: &str,
@@ -653,9 +649,110 @@ pub struct AppState {
     pub stats_total_speaking_secs: Mutex<f64>,
 }
 
+impl AppState {
+    /// Create AppState from config file + keyring, without any UI framework.
+    /// Used by native Linux UI and tests.
+    pub fn new_standalone() -> Self {
+        migrate_from_pai_voice();
+
+        let file_cfg = load_config_file();
+        let use_kr = file_cfg.use_keyring;
+        let key_store = keystore::KeyStore::new();
+
+        migrate_plaintext_key(&key_store, use_kr);
+        migrate_keyring_to_per_provider(
+            &key_store,
+            &file_cfg.api_url,
+            &file_cfg.llm_api_url,
+            use_kr,
+        );
+
+        let transcription_provider = provider::Provider::from_url(&file_cfg.api_url);
+        let llm_provider = provider::Provider::from_url(&file_cfg.llm_api_url);
+        let stored_key = load_key_with_store(
+            &key_store,
+            provider::KeyringScope::Stt(transcription_provider),
+            use_kr,
+        );
+        let stored_llm_key =
+            load_key_with_store(&key_store, provider::KeyringScope::Llm(llm_provider), use_kr);
+
+        log(&format!(
+            "Config loaded: url={}, model={}, device={:?}, provider={}, has_key={}, llm_provider={}, llm_enabled={}, llm_style={}",
+            file_cfg.api_url, file_cfg.api_model, file_cfg.selected_device, transcription_provider,
+            stored_key.is_some(), llm_provider, file_cfg.llm_enabled, file_cfg.llm_style.as_str()
+        ));
+
+        let audio_buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
+        let input_gain_atomic = Arc::new(std::sync::atomic::AtomicU32::new(
+            file_cfg.input_gain.to_bits(),
+        ));
+        let audio_tx =
+            audio::spawn_audio_thread(audio_buffer.clone(), input_gain_atomic.clone());
+
+        let state = AppState {
+            recording: Mutex::new(false),
+            api_key: Mutex::new(stored_key),
+            api_url: Mutex::new(file_cfg.api_url),
+            api_model: Mutex::new(file_cfg.api_model),
+            language: Mutex::new(file_cfg.language),
+            prompt: Mutex::new(file_cfg.prompt),
+            shortcut_mode: Mutex::new(file_cfg.shortcut_mode),
+            shortcut: Mutex::new(file_cfg.shortcut),
+            selected_device: Mutex::new(file_cfg.selected_device.clone()),
+            audio_sample_rate: Mutex::new(audio::device_sample_rate(&file_cfg.selected_device)),
+            transcript: Mutex::new(String::new()),
+            audio_buffer,
+            audio_tx: Mutex::new(audio_tx),
+            streaming_active: Arc::new(AtomicBool::new(false)),
+            llm_enabled: Mutex::new(file_cfg.llm_enabled),
+            llm_style: Mutex::new(file_cfg.llm_style),
+            llm_tone: Mutex::new(file_cfg.llm_tone),
+            llm_custom_prompt: Mutex::new(file_cfg.llm_custom_prompt),
+            llm_translate_to: Mutex::new(file_cfg.llm_translate_to),
+            llm_api_url: Mutex::new(file_cfg.llm_api_url),
+            llm_api_model: Mutex::new(file_cfg.llm_api_model),
+            llm_use_same_key: Mutex::new(file_cfg.llm_use_same_key),
+            llm_api_key: Mutex::new(stored_llm_key),
+            llm_log_enabled: Mutex::new(file_cfg.llm_log_enabled),
+            chunk_streaming_enabled: Mutex::new(file_cfg.chunk_streaming_enabled),
+            preprocessing_enabled: Mutex::new(file_cfg.preprocessing_enabled),
+            audio_debug_enabled: Mutex::new(file_cfg.audio_debug_enabled),
+            use_keyring: Mutex::new(file_cfg.use_keyring),
+            border_style: Mutex::new(file_cfg.border_style),
+            waveform_style: Mutex::new(file_cfg.waveform_style),
+            overlay_position: Mutex::new(file_cfg.overlay_position),
+            keep_in_clipboard: Mutex::new(file_cfg.keep_in_clipboard),
+            input_gain: input_gain_atomic,
+            key_store,
+            audio_debug_session_dir: Mutex::new(None),
+            window_anchor: Mutex::new(
+                match (file_cfg.window_anchor_right, file_cfg.window_anchor_bottom) {
+                    (Some(r), Some(b)) => Some((r, b)),
+                    _ => None,
+                },
+            ),
+            stats_total_words: Mutex::new(file_cfg.stats_total_words),
+            stats_total_speaking_secs: Mutex::new(file_cfg.stats_total_speaking_secs),
+        };
+
+        // Postconditions
+        assert!(
+            !state.api_url.lock().unwrap().is_empty(),
+            "api_url must not be empty after init"
+        );
+        assert!(
+            !state.api_model.lock().unwrap().is_empty(),
+            "api_model must not be empty after init"
+        );
+
+        state
+    }
+}
+
 /// Build AppConfig by acquiring each mutex individually (one at a time, no overlapping locks).
 /// Shared by both Tauri commands and FFI layer.
-pub(crate) fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
+pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
     let api_url = state.api_url.lock().map_err(|e| e.to_string())?.clone();
     let api_model = state.api_model.lock().map_err(|e| e.to_string())?.clone();
     let selected_device = state
@@ -1187,5 +1284,21 @@ mod tests {
         let mut cfg = AppConfig::default();
         cfg.input_gain = -0.5;
         save_config_file(&cfg);
+    }
+
+    #[test]
+    fn new_standalone_creates_valid_state() {
+        let state = AppState::new_standalone();
+        assert!(!*state.recording.lock().unwrap());
+        assert!(!state.api_url.lock().unwrap().is_empty());
+        assert!(!state.api_model.lock().unwrap().is_empty());
+        let gain_bits = state.input_gain.load(std::sync::atomic::Ordering::Relaxed);
+        let gain = f32::from_bits(gain_bits);
+        assert!(
+            gain >= 0.0 && gain <= 2.0,
+            "gain must be in [0.0, 2.0], got {}",
+            gain
+        );
+        assert!(gain.is_finite(), "gain must be finite, got {}", gain);
     }
 }
