@@ -12,7 +12,7 @@
       <RowDefinition Height="Auto" />
     </Grid.RowDefinitions>
 
-    <NavigationView x:Name="NavView" PaneDisplayMode="Left"
+    <NavigationView x:Name="NavView" PaneDisplayMode="Left" OpenPaneLength="160"
                     IsBackButtonVisible="Collapsed"
                     IsSettingsVisible="False" SelectionChanged="Nav_SelectionChanged">
       <NavigationView.MenuItems>
@@ -40,17 +40,17 @@
         </NavigationViewItem>
       </NavigationView.MenuItems>
 
-      <ScrollViewer Padding="24,16,24,16">
-        <StackPanel Spacing="12" MaxWidth="480">
-          <!-- Advanced toggle — top-right -->
-          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,0,4">
-            <ToggleSwitch Header="Advanced" IsOn="{Binding IsAdvanced, Mode=TwoWay}" />
-          </StackPanel>
+      <ScrollViewer Padding="24,20,24,20">
+        <Grid>
+          <!-- Advanced toggle — top-right, fixed position across all tabs -->
+          <ToggleSwitch Header="Advanced" IsOn="{Binding IsAdvanced, Mode=TwoWay}"
+                        HorizontalAlignment="Right" VerticalAlignment="Top" />
 
-          <Grid>
-            <!-- ═══ General Tab ═══ -->
+          <!-- All panels share this container: left-aligned, consistent max width -->
+          <StackPanel MaxWidth="480" HorizontalAlignment="Left" Margin="0,0,120,0">
+
+            <!-- ═══ General ═══ -->
             <StackPanel x:Name="GeneralPanel" Spacing="16" Visibility="Visible">
-              <!-- Theme -->
               <TextBlock Text="Theme" FontWeight="SemiBold" FontSize="14" />
               <StackPanel x:Name="ThemeRadioPanel" Orientation="Horizontal" Spacing="12">
                 <RadioButton Content="Auto" GroupName="Theme" Tag="Default" Checked="Theme_Checked" />
@@ -58,17 +58,19 @@
                 <RadioButton Content="Dark" GroupName="Theme" Tag="Dark" Checked="Theme_Checked" />
               </StackPanel>
 
-              <!-- Language -->
               <ComboBox x:Name="LanguageComboBox" Header="Language" Width="240"
                         DisplayMemberPath="Value"
                         ItemsSource="{Binding LanguageItems}"
                         SelectionChanged="Language_SelectionChanged" />
 
-              <!-- API Key -->
-              <PasswordBox x:Name="ApiKeyBox" Header="STT API Key" Width="320" HorizontalAlignment="Left"
-                           PlaceholderText="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <PasswordBox x:Name="ApiKeyBox" Header="STT API Key" Width="320"
+                             PlaceholderText="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}" />
+                <FontIcon Glyph="&#xE73E;" FontSize="16" Foreground="#4ade80"
+                          VerticalAlignment="Bottom" Margin="0,0,0,8"
+                          Visibility="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
+              </StackPanel>
 
-              <!-- Startup -->
               <ToggleSwitch Header="Launch at login" IsEnabled="False" />
 
               <!-- Advanced: STT Provider -->
@@ -93,7 +95,7 @@
                          Text="{Binding ApiUrl, Mode=TwoWay}" Visibility="Collapsed" />
                 <TextBox x:Name="CustomModelBox" Header="Custom model" Width="240"
                          Text="{Binding ApiModel, Mode=TwoWay}" Visibility="Collapsed" />
-                <TextBox Header="Prompt / Vocabulary" Width="400" HorizontalAlignment="Left"
+                <TextBox Header="Prompt / Vocabulary" Width="400"
                          AcceptsReturn="True" TextWrapping="Wrap" Height="80"
                          Text="{Binding Prompt, Mode=TwoWay}" />
                 <ComboBox Header="Audio input device" Width="320"
@@ -101,8 +103,7 @@
                           ItemsSource="{Binding Devices}" />
                 <Slider x:Name="InputGainSlider" Header="Microphone volume" Width="320"
                         Minimum="10" Maximum="100" StepFrequency="5"
-                        Value="{Binding InputGainPercent, Mode=TwoWay}"
-                        HorizontalAlignment="Left" />
+                        Value="{Binding InputGainPercent, Mode=TwoWay}" />
                 <ToggleSwitch Header="Preprocessing"
                               IsOn="{Binding PreprocessingEnabled, Mode=TwoWay}" />
                 <ToggleSwitch Header="Chunk streaming"
@@ -112,7 +113,7 @@
               </StackPanel>
             </StackPanel>
 
-            <!-- ═══ Shortcut Tab ═══ -->
+            <!-- ═══ Shortcut ═══ -->
             <StackPanel x:Name="ShortcutPanel" Spacing="16" Visibility="Collapsed">
               <TextBlock Text="Hotkey" FontWeight="SemiBold" FontSize="14" />
               <controls:ShortcutRecorder Shortcut="{Binding Shortcut, Mode=TwoWay}" />
@@ -125,15 +126,13 @@
               </StackPanel>
             </StackPanel>
 
-            <!-- ═══ Output Tab ═══ -->
+            <!-- ═══ Output ═══ -->
             <StackPanel x:Name="OutputPanel" Spacing="16" Visibility="Collapsed">
-              <!-- LLM Style -->
               <TextBlock Text="LLM Enhancement" FontWeight="SemiBold" FontSize="14" />
               <ComboBox Header="Style" Width="240"
                         SelectedItem="{Binding LlmStyle, Mode=TwoWay}"
                         ItemsSource="{Binding LlmStyleItems}" />
 
-              <!-- LLM Provider -->
               <TextBlock Text="LLM Provider" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
               <ComboBox x:Name="LlmProviderComboBox" Header="Provider" Width="320"
                         SelectionChanged="LlmProvider_SelectionChanged">
@@ -147,25 +146,26 @@
                 <ComboBoxItem Content="Custom endpoint" Tag="custom" />
               </ComboBox>
               <TextBox x:Name="LlmCustomUrlBox" Header="Custom LLM endpoint" Width="320"
-                       HorizontalAlignment="Left" Visibility="Collapsed"
-                       Text="{Binding LlmApiUrl, Mode=TwoWay}" />
+                       Visibility="Collapsed" Text="{Binding LlmApiUrl, Mode=TwoWay}" />
               <TextBox x:Name="LlmCustomModelBox" Header="Custom LLM model" Width="240"
-                       HorizontalAlignment="Left" Visibility="Collapsed"
-                       Text="{Binding LlmApiModel, Mode=TwoWay}" />
+                       Visibility="Collapsed" Text="{Binding LlmApiModel, Mode=TwoWay}" />
 
-              <!-- LLM API Key -->
               <ToggleSwitch Header="Use same API key as STT"
                             IsOn="{Binding LlmUseSameKey, Mode=TwoWay}" />
-              <PasswordBox x:Name="LlmApiKeyBox" Header="LLM API Key" Width="320" HorizontalAlignment="Left"
-                           PlaceholderText="{Binding HasLlmKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}"
-                           Visibility="{Binding LlmUseSameKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Invert}" />
+              <StackPanel Orientation="Horizontal" Spacing="8"
+                          Visibility="{Binding LlmUseSameKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Invert}">
+                <PasswordBox x:Name="LlmApiKeyBox" Header="LLM API Key" Width="320"
+                             PlaceholderText="{Binding HasLlmKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}" />
+                <FontIcon Glyph="&#xE73E;" FontSize="16" Foreground="#4ade80"
+                          VerticalAlignment="Bottom" Margin="0,0,0,8"
+                          Visibility="{Binding HasLlmKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
+              </StackPanel>
 
-              <!-- Clipboard -->
               <TextBlock Text="Clipboard" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
               <ToggleSwitch Header="Keep in clipboard"
                             IsOn="{Binding KeepInClipboard, Mode=TwoWay}" />
 
-              <!-- Advanced: Tone, Translate, Custom prompt -->
+              <!-- Advanced -->
               <StackPanel Spacing="12"
                           Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
                 <TextBlock Text="Advanced LLM" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
@@ -181,13 +181,13 @@
                   <x:String>FR</x:String>
                   <x:String>ES</x:String>
                 </ComboBox>
-                <TextBox Header="Custom prompt" Width="400" HorizontalAlignment="Left"
+                <TextBox Header="Custom prompt" Width="400"
                          AcceptsReturn="True" TextWrapping="Wrap" Height="80"
                          Text="{Binding LlmCustomPrompt, Mode=TwoWay}" />
               </StackPanel>
             </StackPanel>
 
-            <!-- ═══ Overlay Tab ═══ -->
+            <!-- ═══ Overlay ═══ -->
             <StackPanel x:Name="OverlayPanel" Spacing="16" Visibility="Collapsed">
               <TextBlock Text="Position" FontWeight="SemiBold" FontSize="14" />
               <ComboBox Header="Default position" Width="240"
@@ -225,28 +225,23 @@
               </ComboBox>
             </StackPanel>
 
-            <!-- ═══ About Tab ═══ -->
-            <StackPanel x:Name="AboutPanel" Spacing="8" Visibility="Collapsed"
-                        HorizontalAlignment="Center" VerticalAlignment="Center">
+            <!-- ═══ About ═══ -->
+            <StackPanel x:Name="AboutPanel" Spacing="8" Visibility="Collapsed">
               <Ellipse Width="48" Height="48" Fill="{ThemeResource AccentFillColorDefaultBrush}"
-                       HorizontalAlignment="Center" />
-              <TextBlock Text="Dimmy" FontSize="20" FontWeight="Bold" HorizontalAlignment="Center" />
+                       HorizontalAlignment="Left" Margin="0,16,0,0" />
+              <TextBlock Text="Dimmy" FontSize="20" FontWeight="Bold" />
               <TextBlock x:Name="VersionText" FontSize="12"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         HorizontalAlignment="Center" />
+                         Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
               <TextBlock Text="Voice dictation that stays out of your way" FontSize="12"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         HorizontalAlignment="Center" />
-              <HyperlinkButton x:Name="UpdateLink" Content="" Visibility="Collapsed"
-                               HorizontalAlignment="Center" />
+                         Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+              <HyperlinkButton x:Name="UpdateLink" Content="" Visibility="Collapsed" />
               <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}"
-                      Margin="0,8" Width="200" />
+                      Margin="0,8" Width="200" HorizontalAlignment="Left" />
               <TextBlock Text="Made with irony" FontSize="11"
-                         Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                         HorizontalAlignment="Center" />
+                         Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
             </StackPanel>
 
-            <!-- ═══ Stats Tab (Advanced only) ═══ -->
+            <!-- ═══ Stats ═══ -->
             <StackPanel x:Name="StatsPanel" Spacing="12" Visibility="Collapsed">
               <TextBlock Text="Total words dictated" FontSize="14" />
               <TextBlock Text="{Binding StatsTotalWords, Mode=OneWay}" FontSize="28" FontWeight="Bold" />
@@ -256,19 +251,20 @@
               <TextBlock x:Name="TimeSavedText" FontSize="28" FontWeight="Bold" />
             </StackPanel>
 
-            <!-- ═══ Debug Tab (Advanced only) ═══ -->
+            <!-- ═══ Debug ═══ -->
             <StackPanel x:Name="DebugPanel" Spacing="12" Visibility="Collapsed">
               <ToggleSwitch Header="LLM log enabled"
                             IsOn="{Binding LlmLogEnabled, Mode=TwoWay}" />
               <ToggleSwitch Header="Audio debug"
                             IsOn="{Binding AudioDebugEnabled, Mode=TwoWay}" />
             </StackPanel>
-          </Grid>
-        </StackPanel>
+
+          </StackPanel>
+        </Grid>
       </ScrollViewer>
     </NavigationView>
 
-    <!-- Footer: Save / Cancel -->
+    <!-- Footer -->
     <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right"
                 Spacing="8" Margin="16">
       <Button Content="Cancel" Click="Cancel_Click" />

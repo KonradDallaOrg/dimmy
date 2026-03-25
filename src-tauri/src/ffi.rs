@@ -688,6 +688,17 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
         }
     }
 
+    // If api_url changed but no new key was provided, reload key from keystore
+    if v["api_url"].as_str().is_some() && v["api_key"].as_str().is_none() {
+        let url = st.api_url.lock().map(|u| u.clone()).unwrap_or_default();
+        let provider = Provider::from_url(&url);
+        let reloaded =
+            crate::load_key_with_store(&st.key_store, KeyringScope::Stt(provider), use_kr);
+        if let Ok(mut k) = st.api_key.lock() {
+            *k = reloaded;
+        }
+    }
+
     // LLM fields
     if let Some(b) = v["llm_enabled"].as_bool() {
         if let Ok(mut e) = st.llm_enabled.lock() {
@@ -737,6 +748,17 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
             if let Ok(mut k) = st.llm_api_key.lock() {
                 *k = Some(key.to_string());
             }
+        }
+    }
+    // If llm_api_url changed but no new key was provided, reload key from keystore
+    // for the new provider (fixes key loss when switching LLM providers)
+    if v["llm_api_url"].as_str().is_some() && v["llm_api_key"].as_str().is_none() {
+        let url = st.llm_api_url.lock().map(|u| u.clone()).unwrap_or_default();
+        let provider = Provider::from_url(&url);
+        let reloaded =
+            crate::load_key_with_store(&st.key_store, KeyringScope::Llm(provider), use_kr);
+        if let Ok(mut k) = st.llm_api_key.lock() {
+            *k = reloaded;
         }
     }
     if let Some(b) = v["llm_log_enabled"].as_bool() {
