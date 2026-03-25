@@ -217,8 +217,6 @@ jobs:
       - name: Run Windows tests
         working-directory: native-ui/windows/Dimmy.Windows.Tests
         run: dotnet test -c Release --logger "console;verbosity=normal"
-        timeout-minutes: 5
-        continue-on-error: true
 
       - name: Package installer
         working-directory: native-ui/windows/Dimmy.Windows
