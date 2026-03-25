@@ -84,6 +84,7 @@ jobs:
             echo "|----------|------|"
             echo "| macOS (Apple Silicon) | \`Dimmy-native-macos-arm64.dmg\` |"
             echo "| Windows | \`Dimmy-native-windows-x64.zip\` |"
+            echo "| Linux (GTK4) | \`dimmy-linux\` (artifact) |"
             echo ""
             echo "## Windows Requirements"
             echo ""
@@ -230,10 +231,56 @@ jobs:
           tag_name: staging-latest
           files: native-ui/windows/Dimmy-native-windows-x64.zip
 
+  # ── Linux Native Build (parallel with macOS + Windows + rust-check) ──
+  build-linux:
+    name: Build Linux (GTK4)
+    needs: create-release
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            native-ui/linux/target
+          key: linux-cargo-${{ hashFiles('native-ui/linux/Cargo.lock') }}
+          restore-keys: linux-cargo-
+
+      - name: Install GTK4 + libadwaita dev packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libdbus-1-dev pkg-config
+
+      - name: Clippy
+        working-directory: native-ui/linux
+        run: cargo clippy -- -D warnings
+
+      - name: Test
+        working-directory: native-ui/linux
+        run: cargo test
+
+      - name: Build release
+        working-directory: native-ui/linux
+        run: cargo build --release
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: dimmy-linux
+          path: native-ui/linux/target/release/dimmy-linux
+
   # ── Publish (waits for all jobs including rust-check) ───────────────
   publish:
     name: Publish Staging Release
-    needs: [rust-check, create-release, build-macos, build-windows]
+    needs: [rust-check, create-release, build-macos, build-windows, build-linux]
     runs-on: ubuntu-latest
     steps:
       - name: Publish release
