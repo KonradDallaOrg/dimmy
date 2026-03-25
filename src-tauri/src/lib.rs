@@ -20,12 +20,14 @@ const DEFAULT_MODEL: &str = "whisper-large-v3-turbo";
 const DEFAULT_PROMPT: &str = "Hello, how are you? Fine, thanks! Today we'll discuss an interesting topic. Ciao, come stai? Bene, grazie! Oggi parliamo di un argomento interessante.";
 pub(crate) const DEFAULT_LLM_URL: &str = "https://api.groq.com/openai/v1/chat/completions";
 pub(crate) const DEFAULT_LLM_MODEL: &str = "llama-3.3-70b-versatile";
+#[allow(dead_code)] // Used by native UI via FFI recording logic
 const MAX_RECORDING_SECS: usize = 30 * 60; // 30 minutes hard cap
 const MAX_LOG_BYTES: u64 = 1_048_576; // 1 MB log rotation threshold
 /// Tail buffer: keep recording for this long after the user releases the hotkey.
 /// Catches trailing audio when the user's finger lifts slightly before finishing
 /// the last syllable. Same approach used by Discord (~200ms), TeamSpeak, Mumble.
 /// 300ms is generous enough for dictation without feeling laggy.
+#[allow(dead_code)] // Used by native UI via FFI stop logic
 const STOP_TAIL_MS: u64 = 300;
 
 /// Default shortcut: Cmd+Opt+D on macOS (2 modifiers alone triggers too easily),
@@ -47,6 +49,7 @@ pub(crate) fn config_dir_path() -> Option<std::path::PathBuf> {
 
 /// Marker file path for onboarding completion.
 /// Separate from config.json so deleting/resetting config doesn't re-trigger onboarding.
+#[allow(dead_code)] // Used by tests
 fn onboarding_marker_path() -> Option<std::path::PathBuf> {
     config_dir_path().map(|p| p.join(".onboarding_done"))
 }
@@ -55,6 +58,7 @@ fn onboarding_marker_path() -> Option<std::path::PathBuf> {
 /// Returns true if: marker file exists, OR config.json exists (existing user upgrading).
 /// This prevents the onboarding from appearing for existing users who upgrade to a
 /// version that introduces onboarding — they already have a working config.
+#[allow(dead_code)]
 fn onboarding_completed() -> bool {
     // If marker exists, done
     if onboarding_marker_path().map(|p| p.exists()).unwrap_or(true) {
@@ -70,6 +74,7 @@ fn onboarding_completed() -> bool {
 }
 
 /// Mark onboarding as completed by creating the marker file.
+#[allow(dead_code)]
 fn mark_onboarding_done() -> Result<(), String> {
     let path = onboarding_marker_path().ok_or("Cannot determine config directory")?;
     // Ensure config dir exists
@@ -92,6 +97,7 @@ pub(crate) fn log_path() -> Option<std::path::PathBuf> {
     config_dir_path().map(|p| p.join("dimmy.log"))
 }
 
+#[allow(dead_code)]
 fn transcription_debug_log_path() -> Option<std::path::PathBuf> {
     config_dir_path().map(|p| p.join("transcription_debug.log"))
 }
@@ -116,6 +122,7 @@ pub(crate) fn save_debug_wav(dir: &std::path::Path, filename: &str, wav_data: &[
 }
 
 /// Save session metadata JSON to the debug directory.
+#[allow(dead_code)]
 fn save_debug_metadata(
     dir: &std::path::Path,
     sample_rate: u32,
@@ -140,6 +147,7 @@ fn save_debug_metadata(
 }
 
 /// Append a line to the transcription debug log for chunk vs final comparison.
+#[allow(dead_code)]
 fn debug_transcription(msg: &str) {
     use std::io::Write;
     if let Some(path) = transcription_debug_log_path() {
@@ -442,6 +450,7 @@ pub(crate) fn load_config_file() -> AppConfig {
 }
 
 /// Migrate from old "pai-voice" config/keyring to "dimmy" for existing users.
+#[allow(dead_code)]
 fn migrate_from_pai_voice() {
     let dimmy_dir = match config_dir_path() {
         Some(d) => d,
@@ -649,44 +658,101 @@ pub struct AppState {
 pub(crate) fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
     let api_url = state.api_url.lock().map_err(|e| e.to_string())?.clone();
     let api_model = state.api_model.lock().map_err(|e| e.to_string())?.clone();
-    let selected_device = state.selected_device.lock().map_err(|e| e.to_string())?.clone();
+    let selected_device = state
+        .selected_device
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     let language = state.language.lock().map_err(|e| e.to_string())?.clone();
-    let shortcut_mode = state.shortcut_mode.lock().map_err(|e| e.to_string())?.clone();
+    let shortcut_mode = state
+        .shortcut_mode
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     let shortcut = state.shortcut.lock().map_err(|e| e.to_string())?.clone();
     let prompt = state.prompt.lock().map_err(|e| e.to_string())?.clone();
     let llm_enabled = *state.llm_enabled.lock().map_err(|e| e.to_string())?;
     let llm_style = *state.llm_style.lock().map_err(|e| e.to_string())?;
     let llm_tone = *state.llm_tone.lock().map_err(|e| e.to_string())?;
-    let llm_custom_prompt = state.llm_custom_prompt.lock().map_err(|e| e.to_string())?.clone();
-    let llm_translate_to = state.llm_translate_to.lock().map_err(|e| e.to_string())?.clone();
+    let llm_custom_prompt = state
+        .llm_custom_prompt
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
+    let llm_translate_to = state
+        .llm_translate_to
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     let llm_api_url = state.llm_api_url.lock().map_err(|e| e.to_string())?.clone();
-    let llm_api_model = state.llm_api_model.lock().map_err(|e| e.to_string())?.clone();
+    let llm_api_model = state
+        .llm_api_model
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     let llm_use_same_key = *state.llm_use_same_key.lock().map_err(|e| e.to_string())?;
     let llm_log_enabled = *state.llm_log_enabled.lock().map_err(|e| e.to_string())?;
-    let chunk_streaming_enabled = *state.chunk_streaming_enabled.lock().map_err(|e| e.to_string())?;
-    let preprocessing_enabled = *state.preprocessing_enabled.lock().map_err(|e| e.to_string())?;
-    let audio_debug_enabled = *state.audio_debug_enabled.lock().map_err(|e| e.to_string())?;
+    let chunk_streaming_enabled = *state
+        .chunk_streaming_enabled
+        .lock()
+        .map_err(|e| e.to_string())?;
+    let preprocessing_enabled = *state
+        .preprocessing_enabled
+        .lock()
+        .map_err(|e| e.to_string())?;
+    let audio_debug_enabled = *state
+        .audio_debug_enabled
+        .lock()
+        .map_err(|e| e.to_string())?;
     let anchor = *state.window_anchor.lock().map_err(|e| e.to_string())?;
 
     Ok(AppConfig {
-        api_url, api_model, selected_device, language, shortcut_mode, shortcut, prompt,
-        llm_enabled, llm_style, llm_tone, llm_custom_prompt, llm_translate_to,
-        llm_api_url, llm_api_model, llm_use_same_key, llm_log_enabled,
-        chunk_streaming_enabled, preprocessing_enabled, audio_debug_enabled,
+        api_url,
+        api_model,
+        selected_device,
+        language,
+        shortcut_mode,
+        shortcut,
+        prompt,
+        llm_enabled,
+        llm_style,
+        llm_tone,
+        llm_custom_prompt,
+        llm_translate_to,
+        llm_api_url,
+        llm_api_model,
+        llm_use_same_key,
+        llm_log_enabled,
+        chunk_streaming_enabled,
+        preprocessing_enabled,
+        audio_debug_enabled,
         use_keyring: *state.use_keyring.lock().map_err(|e| e.to_string())?,
-        border_style: state.border_style.lock().map_err(|e| e.to_string())?.clone(),
-        waveform_style: state.waveform_style.lock().map_err(|e| e.to_string())?.clone(),
-        overlay_position: state.overlay_position.lock().map_err(|e| e.to_string())?.clone(),
+        border_style: state
+            .border_style
+            .lock()
+            .map_err(|e| e.to_string())?
+            .clone(),
+        waveform_style: state
+            .waveform_style
+            .lock()
+            .map_err(|e| e.to_string())?
+            .clone(),
+        overlay_position: state
+            .overlay_position
+            .lock()
+            .map_err(|e| e.to_string())?
+            .clone(),
         keep_in_clipboard: *state.keep_in_clipboard.lock().map_err(|e| e.to_string())?,
         input_gain: f32::from_bits(state.input_gain.load(Ordering::Relaxed)),
         window_anchor_right: anchor.map(|(r, _)| r),
         window_anchor_bottom: anchor.map(|(_, b)| b),
         stats_total_words: *state.stats_total_words.lock().map_err(|e| e.to_string())?,
-        stats_total_speaking_secs: *state.stats_total_speaking_secs.lock().map_err(|e| e.to_string())?,
+        stats_total_speaking_secs: *state
+            .stats_total_speaking_secs
+            .lock()
+            .map_err(|e| e.to_string())?,
     })
 }
-
-
 
 #[cfg(test)]
 mod tests {
