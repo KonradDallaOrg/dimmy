@@ -89,8 +89,18 @@ jobs:
             echo ""
             echo "| Platform | File |"
             echo "|----------|------|"
-            echo "| macOS (Apple Silicon) | \`Dimmy-native.dmg\` |"
-            echo "| Windows | \`Dimmy-native-setup.exe\` |"
+            echo "| macOS (Apple Silicon) | \`Dimmy-native-macos-arm64.dmg\` |"
+            echo "| Windows | \`Dimmy-native-windows-x64.zip\` |"
+            echo ""
+            echo "## macOS Installation"
+            echo ""
+            echo "This build is not notarized by Apple. After copying Dimmy.app to Applications:"
+            echo ""
+            echo "\`\`\`bash"
+            echo "xattr -d com.apple.quarantine /Applications/Dimmy.app"
+            echo "\`\`\`"
+            echo ""
+            echo "Or: right-click the app → Open → Open in the dialog."
           } > changelog.md
 
       - name: Delete previous native staging release
@@ -145,29 +155,14 @@ jobs:
           xcodebuild -project Dimmy.xcodeproj \
             -scheme Dimmy \
             -configuration Release \
-            -archivePath build/Dimmy.xcarchive \
-            archive \
-            CODE_SIGN_IDENTITY="-" \
-            CODE_SIGNING_ALLOWED=NO
+            -derivedDataPath build/derived \
+            build \
+            CODE_SIGN_IDENTITY="-"
 
       - name: Create DMG
         working-directory: native-ui/macos
         run: |
-          # Export from archive
-          APP_PATH="build/Dimmy.xcarchive/Products/Applications/Dimmy.app"
-          if [ ! -d "$APP_PATH" ]; then
-            # Fallback: build directly
-            xcodebuild -project Dimmy.xcodeproj \
-              -scheme Dimmy \
-              -configuration Release \
-              -derivedDataPath build/derived \
-              build \
-              CODE_SIGN_IDENTITY="-" \
-              CODE_SIGNING_ALLOWED=NO
-            APP_PATH="build/derived/Build/Products/Release/Dimmy.app"
-          fi
-
-          # Create DMG
+          APP_PATH="build/derived/Build/Products/Release/Dimmy.app"
           mkdir -p build/dmg
           cp -R "$APP_PATH" build/dmg/
           hdiutil create -volname "Dimmy" \
