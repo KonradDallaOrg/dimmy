@@ -29,7 +29,7 @@ jobs:
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libxdo-dev
+          sudo apt-get install -y libasound2-dev libxdo-dev libdbus-1-dev libssl-dev
 
       - name: Format
         working-directory: src-tauri
