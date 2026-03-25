@@ -103,24 +103,20 @@ public sealed partial class PillWindow : Window
     // ── Shape helpers ───────────────────────────────────────────────
     private void SetCircleShape()
     {
-        // Force Width = Height → perfect circle
         ColorBorder.Width = CircleSize;
         ColorBorder.Height = CircleSize;
-        // CornerRadius = half the size → perfect round
         var r = CircleSize / 2;
         ColorBorder.CornerRadius = new CornerRadius(r);
-        PillInner.CornerRadius = new CornerRadius(r - 2); // minus border padding
+        PillInner.CornerRadius = new CornerRadius(r);
     }
 
     private void SetCapsuleShape()
     {
-        // Fixed height, auto width → capsule/stadium
         ColorBorder.Width = double.NaN; // auto
         ColorBorder.Height = CapsuleHeight;
-        // CornerRadius = exactly half the height → perfect stadium ends
         var r = CapsuleHeight / 2;
         ColorBorder.CornerRadius = new CornerRadius(r);
-        PillInner.CornerRadius = new CornerRadius(r - 2);
+        PillInner.CornerRadius = new CornerRadius(r);
     }
 
     // ── State colors ────────────────────────────────────────────────
@@ -164,7 +160,7 @@ public sealed partial class PillWindow : Window
     private static readonly global::Windows.UI.Color BgDark =
         global::Windows.UI.Color.FromArgb(255, 26, 26, 26);       // #FF1a1a1a
     private static readonly global::Windows.UI.Color BgGlassActive =
-        global::Windows.UI.Color.FromArgb(255, 200, 200, 210);    // #FFC8C8D2 — fully opaque, border stays border
+        global::Windows.UI.Color.FromArgb(160, 210, 210, 218);    // #A0D2D2DA — more transparent, lighter glass
     private static readonly global::Windows.UI.Color BgGlassIdle =
         global::Windows.UI.Color.FromArgb(140, 200, 200, 210);    // #8CC8C8D2 — idle, more transparent
 
@@ -187,19 +183,27 @@ public sealed partial class PillWindow : Window
             : new SolidColorBrush(global::Windows.UI.Color.FromArgb(170, 255, 255, 255));
         ShortcutLabel.Foreground = textSecondary;
 
-        // Recording
-        TimerText.Foreground = textPrimary;
-
-        // Note: Recording/Transcribing/Processing text + waveform stay white —
-        // they're inside the colored border area where white reads well on any theme.
+        // Recording / Transcribing / Processing — always white to match waveform bars
+        var activeFg = new SolidColorBrush(
+            global::Windows.UI.Color.FromArgb(230, 255, 255, 255));
+        var activeSecondary = new SolidColorBrush(
+            global::Windows.UI.Color.FromArgb(119, 255, 255, 255));
+        TimerText.Foreground = activeFg;
+        StopIcon.Background = activeFg;
+        TranscribingText.Foreground = activeFg;
+        ChunkText.Foreground = activeSecondary;
+        ProcessingText.Foreground = activeFg;
     }
 
     // ── Composition DropShadow glow ────────────────────────────
     private SpriteVisual? _glowVisual;
     private DropShadow? _glowShadow;
     private CompositionRoundedRectangleGeometry? _glowGeometry;
+    private CompositionSpriteShape? _glowShape;
+    private ShapeVisual? _glowMaskShapeVisual;
     private global::Windows.UI.Color? _glowColor;
     private bool _glowSubtle;
+    private const float GlowPad = 50; // extra space for blur spread
 
     private void EnsureGlowVisual()
     {
@@ -207,68 +211,77 @@ public sealed partial class PillWindow : Window
 
         var compositor = ElementCompositionPreview.GetElementVisual(GlowHost).Compositor;
 
-        // Rounded rect geometry for shadow mask
+        // Ring shape (stroke only, no fill) — glow radiates outward from border,
+        // interior stays clean. Thick stroke gives the shadow enough body.
         _glowGeometry = compositor.CreateRoundedRectangleGeometry();
-        var shape = compositor.CreateSpriteShape(_glowGeometry);
-        shape.FillBrush = compositor.CreateColorBrush(
+        _glowShape = compositor.CreateSpriteShape(_glowGeometry);
+        _glowShape.FillBrush = null;
+        _glowShape.StrokeBrush = compositor.CreateColorBrush(
             global::Windows.UI.Color.FromArgb(255, 255, 255, 255));
+        _glowShape.StrokeThickness = 8;
 
-        // ShapeVisual renders the rounded rect → used as mask source
-        var maskVisual = compositor.CreateShapeVisual();
-        maskVisual.Shapes.Add(shape);
+        _glowMaskShapeVisual = compositor.CreateShapeVisual();
+        _glowMaskShapeVisual.Shapes.Add(_glowShape);
 
-        // Render the shape to a surface for the shadow mask
         var surface = compositor.CreateVisualSurface();
-        surface.SourceVisual = maskVisual;
-        surface.SourceSize = new Vector2(1, 1); // updated in ApplyGlow
+        surface.SourceVisual = _glowMaskShapeVisual;
+        surface.SourceSize = new Vector2(1, 1);
 
         _glowShadow = compositor.CreateDropShadow();
         _glowShadow.Offset = Vector3.Zero;
-        _glowShadow.BlurRadius = 16;
+        _glowShadow.BlurRadius = 20;
         _glowShadow.Opacity = 0;
         _glowShadow.Mask = compositor.CreateSurfaceBrush(surface);
 
-        // SpriteVisual hosts the shadow
         _glowVisual = compositor.CreateSpriteVisual();
         _glowVisual.Shadow = _glowShadow;
 
         ElementCompositionPreview.SetElementChildVisual(GlowHost, _glowVisual);
     }
 
-    private CompositionVisualSurface? _glowSurface;
-    private ShapeVisual? _glowMaskVisual;
-
     private void ApplyGlow()
     {
         if (_glowColor is not { } color || _glowShadow == null ||
-            _glowVisual == null || _glowGeometry == null) return;
+            _glowVisual == null || _glowGeometry == null || _glowMaskShapeVisual == null) return;
 
         var w = ColorBorder.ActualWidth;
         var h = ColorBorder.ActualHeight;
         if (w <= 0 || h <= 0) return;
 
         var cr = (float)ColorBorder.CornerRadius.TopLeft;
-        var size = new Vector2((float)w, (float)h);
 
-        _glowVisual.Size = size;
-        _glowGeometry.Size = size;
+        // The visual is padded so the blur has room to spread without clipping
+        var totalW = (float)w + GlowPad * 2;
+        var totalH = (float)h + GlowPad * 2;
+        var totalSize = new Vector2(totalW, totalH);
+        var pillSize = new Vector2((float)w, (float)h);
+
+        _glowVisual.Size = totalSize;
+        // Offset the visual so the pill shape is centered within the padded area
+        _glowVisual.Offset = new Vector3(-GlowPad, -GlowPad, 0);
+
+        // Geometry is pill-sized, offset to center within the padded visual
+        _glowGeometry.Size = pillSize;
+        _glowGeometry.Offset = new Vector2(GlowPad, GlowPad);
         _glowGeometry.CornerRadius = new Vector2(cr, cr);
+
+        _glowMaskShapeVisual.Size = totalSize;
+
+        // GlowHost matches pill size (positioned behind it)
         GlowHost.Width = w;
         GlowHost.Height = h;
 
-        // Update mask surface size to match
+        // Update mask surface
         if (_glowShadow.Mask is CompositionSurfaceBrush surfBrush &&
             surfBrush.Surface is CompositionVisualSurface surf)
         {
-            surf.SourceSize = size;
-            // Also update the mask shape visual size
-            if (surf.SourceVisual is ShapeVisual sv)
-                sv.Size = size;
+            surf.SourceSize = totalSize;
         }
 
         _glowShadow.Color = color;
-        _glowShadow.BlurRadius = _glowSubtle ? 12 : 22;
-        _glowShadow.Opacity = _glowSubtle ? 0.5f : 0.8f;
+        // Same blur for all states; opacity controls intensity
+        _glowShadow.BlurRadius = 10;
+        _glowShadow.Opacity = _glowSubtle ? 0.15f : 0.5f;
     }
 
     private void UpdateGlow(global::Windows.UI.Color color, bool subtle = false)
@@ -317,10 +330,9 @@ public sealed partial class PillWindow : Window
                 RootGrid.Opacity = 1.0;
                 SetCircleShape();
                 PillInner.Background = GetPillBackground(idle: true);
-                // No colored border in idle — transparent in glass, dark in dark
-                ColorBorder.Background = IsGlass
-                    ? new SolidColorBrush(global::Windows.UI.Color.FromArgb(0, 0, 0, 0))
-                    : new SolidColorBrush(BgDark);
+                // No colored border in idle — transparent so glow doesn't create artifacts
+                ColorBorder.BorderBrush = new SolidColorBrush(
+                    global::Windows.UI.Color.FromArgb(0, 0, 0, 0));
                 _rainbowTimer?.Stop();
                 // Subtle glow in idle — uses LLM style color at low intensity
                 UpdateGlow(ParseColor(_vm.LlmStyleColor), subtle: true);
@@ -332,7 +344,7 @@ public sealed partial class PillWindow : Window
                 PillInner.Background = GetPillBackground();
                 StopButton.Visibility = Visibility.Visible;
                 SetCapsuleShape();
-                ColorBorder.Background = GetActiveBorderBrush();
+                ColorBorder.BorderBrush = GetActiveBorderBrush();
                 StartAmplitudePolling();
                 _recordingStartTime = DateTime.Now;
                 StartRecordingTimer();
@@ -356,7 +368,7 @@ public sealed partial class PillWindow : Window
                 ChunkText.Text = _vm.ChunkTotal > 1 ? $"{_vm.ChunkCurrent}/{_vm.ChunkTotal}" : "";
                 SetCapsuleShape();
                 _rainbowTimer?.Stop();
-                ColorBorder.Background = new SolidColorBrush(ColorTranscribing);
+                ColorBorder.BorderBrush = new SolidColorBrush(ColorTranscribing);
                 UpdateGlow(ColorTranscribing);
                 break;
 
@@ -366,7 +378,7 @@ public sealed partial class PillWindow : Window
                 RootGrid.Opacity = 1.0;
                 SetCapsuleShape();
                 _rainbowTimer?.Stop();
-                ColorBorder.Background = new SolidColorBrush(ParseColor(_vm.LlmStyleColor));
+                ColorBorder.BorderBrush = new SolidColorBrush(ParseColor(_vm.LlmStyleColor));
                 UpdateGlow(ParseColor(_vm.LlmStyleColor));
                 break;
 
@@ -379,7 +391,7 @@ public sealed partial class PillWindow : Window
                 var completingColor = _vm.LlmStyle != "off"
                     ? ParseColor(_vm.LlmStyleColor)
                     : ColorCompleting;
-                ColorBorder.Background = new SolidColorBrush(completingColor);
+                ColorBorder.BorderBrush = new SolidColorBrush(completingColor);
                 UpdateGlow(completingColor);
                 if (_completingTimer is null)
                     _completingTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1200) };
@@ -398,7 +410,7 @@ public sealed partial class PillWindow : Window
                 RootGrid.Opacity = 1.0;
                 SetCapsuleShape();
                 _rainbowTimer?.Stop();
-                ColorBorder.Background = new SolidColorBrush(ColorError);
+                ColorBorder.BorderBrush = new SolidColorBrush(ColorError);
                 UpdateGlow(ColorError);
                 if (_errorTimer is null)
                     _errorTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
