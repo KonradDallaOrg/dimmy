@@ -10,16 +10,8 @@
     <Grid x:Name="RootGrid"
           HorizontalAlignment="Center" VerticalAlignment="Center">
 
-        <!-- Glow: 5 graduated layers for smooth falloff -->
-        <Border x:Name="Glow5" CornerRadius="50" Opacity="0" IsHitTestVisible="False"
-                HorizontalAlignment="Center" VerticalAlignment="Center" />
-        <Border x:Name="Glow4" CornerRadius="50" Opacity="0" IsHitTestVisible="False"
-                HorizontalAlignment="Center" VerticalAlignment="Center" />
-        <Border x:Name="Glow3" CornerRadius="50" Opacity="0" IsHitTestVisible="False"
-                HorizontalAlignment="Center" VerticalAlignment="Center" />
-        <Border x:Name="Glow2" CornerRadius="50" Opacity="0" IsHitTestVisible="False"
-                HorizontalAlignment="Center" VerticalAlignment="Center" />
-        <Border x:Name="Glow1" CornerRadius="50" Opacity="0" IsHitTestVisible="False"
+        <!-- Glow host: Composition DropShadow is inserted here as a child visual -->
+        <Border x:Name="GlowHost" IsHitTestVisible="False"
                 HorizontalAlignment="Center" VerticalAlignment="Center" />
 
         <!-- Colored border: Padding=2 creates the visible border ring -->

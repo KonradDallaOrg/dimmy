@@ -1,10 +1,13 @@
 using System;
+using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
+using Microsoft.UI.Composition;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Dimmy.Windows.Helpers;
@@ -191,56 +194,86 @@ public sealed partial class PillWindow : Window
         // they're inside the colored border area where white reads well on any theme.
     }
 
-    private global::Windows.UI.Color? _glowColor; // null = glow hidden
-    private bool _glowSubtle; // true = idle/hover low-intensity glow
+    // ── Composition DropShadow glow ────────────────────────────
+    private SpriteVisual? _glowVisual;
+    private DropShadow? _glowShadow;
+    private CompositionRoundedRectangleGeometry? _glowGeometry;
+    private global::Windows.UI.Color? _glowColor;
+    private bool _glowSubtle;
 
-    /// <summary>
-    /// Glow follows the exact shape of ColorBorder — same corner radius,
-    /// size derived from ColorBorder's actual rendered size + offset.
-    /// Called on state change AND on ColorBorder.SizeChanged.
-    /// </summary>
-    // Glow layer specs: [pad multiplier, opacity active, opacity subtle]
-    private static readonly (double pad, double opActive, double opSubtle)[] GlowLayers =
-    [
-        (5,  0.03, 0.015),  // Glow5 — outermost, barely visible
-        (4,  0.05, 0.025),  // Glow4
-        (3,  0.08, 0.04),   // Glow3
-        (2,  0.12, 0.06),   // Glow2
-        (1,  0.18, 0.09),   // Glow1 — innermost, brightest
-    ];
+    private void EnsureGlowVisual()
+    {
+        if (_glowVisual != null) return;
+
+        var compositor = ElementCompositionPreview.GetElementVisual(GlowHost).Compositor;
+
+        // Rounded rect geometry for shadow mask
+        _glowGeometry = compositor.CreateRoundedRectangleGeometry();
+        var shape = compositor.CreateSpriteShape(_glowGeometry);
+        shape.FillBrush = compositor.CreateColorBrush(
+            global::Windows.UI.Color.FromArgb(255, 255, 255, 255));
+
+        // ShapeVisual renders the rounded rect → used as mask source
+        var maskVisual = compositor.CreateShapeVisual();
+        maskVisual.Shapes.Add(shape);
+
+        // Render the shape to a surface for the shadow mask
+        var surface = compositor.CreateVisualSurface();
+        surface.SourceVisual = maskVisual;
+        surface.SourceSize = new Vector2(1, 1); // updated in ApplyGlow
+
+        _glowShadow = compositor.CreateDropShadow();
+        _glowShadow.Offset = Vector3.Zero;
+        _glowShadow.BlurRadius = 16;
+        _glowShadow.Opacity = 0;
+        _glowShadow.Mask = compositor.CreateSurfaceBrush(surface);
+
+        // SpriteVisual hosts the shadow
+        _glowVisual = compositor.CreateSpriteVisual();
+        _glowVisual.Shadow = _glowShadow;
+
+        ElementCompositionPreview.SetElementChildVisual(GlowHost, _glowVisual);
+    }
+
+    private CompositionVisualSurface? _glowSurface;
+    private ShapeVisual? _glowMaskVisual;
 
     private void ApplyGlow()
     {
-        var layers = new[] { Glow5, Glow4, Glow3, Glow2, Glow1 };
-
-        if (_glowColor is not { } color)
-        {
-            foreach (var l in layers) l.Opacity = 0;
-            return;
-        }
+        if (_glowColor is not { } color || _glowShadow == null ||
+            _glowVisual == null || _glowGeometry == null) return;
 
         var w = ColorBorder.ActualWidth;
         var h = ColorBorder.ActualHeight;
-        if (w <= 0 || h <= 0) return; // not rendered yet, SizeChanged will call us back
+        if (w <= 0 || h <= 0) return;
 
-        var cr = ColorBorder.CornerRadius.TopLeft;
-        var brush = new SolidColorBrush(color);
-        const double step = 3.0; // px per layer
+        var cr = (float)ColorBorder.CornerRadius.TopLeft;
+        var size = new Vector2((float)w, (float)h);
 
-        for (int i = 0; i < layers.Length; i++)
+        _glowVisual.Size = size;
+        _glowGeometry.Size = size;
+        _glowGeometry.CornerRadius = new Vector2(cr, cr);
+        GlowHost.Width = w;
+        GlowHost.Height = h;
+
+        // Update mask surface size to match
+        if (_glowShadow.Mask is CompositionSurfaceBrush surfBrush &&
+            surfBrush.Surface is CompositionVisualSurface surf)
         {
-            var (_, opActive, opSubtle) = GlowLayers[i];
-            double pad = step * (layers.Length - i); // outermost layer = largest pad
-            layers[i].Width = w + pad * 2;
-            layers[i].Height = h + pad * 2;
-            layers[i].CornerRadius = new CornerRadius(cr + pad);
-            layers[i].Background = brush;
-            layers[i].Opacity = _glowSubtle ? opSubtle : opActive;
+            surf.SourceSize = size;
+            // Also update the mask shape visual size
+            if (surf.SourceVisual is ShapeVisual sv)
+                sv.Size = size;
         }
+
+        _glowShadow.Color = color;
+        _glowShadow.BlurRadius = _glowSubtle ? 12 : 22;
+        _glowShadow.Opacity = _glowSubtle ? 0.5f : 0.8f;
     }
 
     private void UpdateGlow(global::Windows.UI.Color color, bool subtle = false)
     {
+        EnsureGlowVisual();
         _glowColor = color;
         _glowSubtle = subtle;
         ApplyGlow();
@@ -249,13 +282,11 @@ public sealed partial class PillWindow : Window
     private void HideGlow()
     {
         _glowColor = null;
-        Glow1.Opacity = 0; Glow2.Opacity = 0; Glow3.Opacity = 0;
-        Glow4.Opacity = 0; Glow5.Opacity = 0;
+        if (_glowShadow != null) _glowShadow.Opacity = 0;
     }
 
     private void ColorBorder_SizeChanged(object sender, SizeChangedEventArgs e)
     {
-        // Re-apply glow whenever the pill changes size (circle↔capsule, auto-width text)
         if (_glowColor != null) ApplyGlow();
     }
 
