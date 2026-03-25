@@ -2,6 +2,7 @@
 
 mod hotkey;
 mod pill_window;
+mod settings;
 mod state;
 mod text_injector;
 mod waveform;
