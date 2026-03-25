@@ -1,4 +1,5 @@
 src-tauri/target/
+native-ui/linux/target/
 src-tauri/gen/
 node_modules/
 dist/
