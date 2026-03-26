@@ -35,8 +35,10 @@
                     <Grid x:Name="IdlePanel" Visibility="Visible">
                         <StackPanel x:Name="IdleContent" Orientation="Horizontal" Spacing="8"
                                     HorizontalAlignment="Center" VerticalAlignment="Center">
-                            <Ellipse x:Name="StyleDot" Width="6" Height="6"
-                                     PointerWheelChanged="StyleDot_PointerWheelChanged" />
+                            <Border Background="Transparent" Padding="6,4"
+                                    PointerWheelChanged="StyleDot_PointerWheelChanged">
+                                <Ellipse x:Name="StyleDot" Width="6" Height="6" />
+                            </Border>
                             <TextBlock x:Name="LanguageLabel" FontSize="11" FontWeight="SemiBold"
                                        Foreground="#AAFFFFFF" VerticalAlignment="Center"
                                        Visibility="Collapsed"
