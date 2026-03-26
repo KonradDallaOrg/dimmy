@@ -266,7 +266,7 @@ pub fn create_page(app_state: &Arc<AppState>, _show_advanced: &Rc<Cell<bool>>) -
     let state_gain = app_state.clone();
     gain_scale.connect_value_changed(move |scale| {
         let pct = scale.value() as f32;
-        assert!(pct >= 10.0 && pct <= 100.0, "Gain out of range: {}", pct);
+        assert!((10.0..=100.0).contains(&pct), "Gain out of range: {}", pct);
         let gain = pct / 100.0;
         assert!(gain.is_finite(), "Gain must be finite, got: {}", gain);
         state_gain.input_gain.store(

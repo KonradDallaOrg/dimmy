@@ -34,7 +34,7 @@ pub fn create_page(_app_state: &Arc<AppState>, _show_advanced: &Rc<Cell<bool>>) 
         .build();
 
     let version_label = gtk4::Label::builder()
-        .label(&format!("Version {}", env!("CARGO_PKG_VERSION")))
+        .label(format!("Version {}", env!("CARGO_PKG_VERSION")))
         .css_classes(vec!["dim-label".to_string()])
         .halign(gtk4::Align::Center)
         .build();

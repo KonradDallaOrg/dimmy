@@ -94,7 +94,7 @@ pub fn create_page(app_state: &Arc<AppState>, _show_advanced: &Rc<Cell<bool>>) -
     // ── Text Injection group ─────────────────────────────────────────
     let inject_group = adw::PreferencesGroup::builder()
         .title("Text Injection Tools")
-        .description(&format!("Display server: {}", detect_display_server()))
+        .description(format!("Display server: {}", detect_display_server()))
         .build();
 
     let display = detect_display_server();
