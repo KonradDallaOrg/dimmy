@@ -3,29 +3,29 @@ using Xunit;
 
 namespace Dimmy.Windows.Tests.Services;
 
-public class HotkeyServiceTests
+public class HotkeyParserTests
 {
     [Fact]
     public void ParseShortcut_WinAlt_ReturnsModifiers()
     {
-        var (modifiers, vk) = HotkeyService.ParseShortcut("Win+Alt");
-        Assert.True((modifiers & HotkeyService.MOD_WIN) != 0);
-        Assert.True((modifiers & HotkeyService.MOD_ALT) != 0);
+        var (modifiers, vk) = HotkeyParser.ParseShortcut("Win+Alt");
+        Assert.True((modifiers & HotkeyParser.MOD_WIN) != 0);
+        Assert.True((modifiers & HotkeyParser.MOD_ALT) != 0);
     }
 
     [Fact]
     public void ParseShortcut_CtrlShiftA_ReturnsCorrectValues()
     {
-        var (modifiers, vk) = HotkeyService.ParseShortcut("Ctrl+Shift+A");
-        Assert.True((modifiers & HotkeyService.MOD_CONTROL) != 0);
-        Assert.True((modifiers & HotkeyService.MOD_SHIFT) != 0);
+        var (modifiers, vk) = HotkeyParser.ParseShortcut("Ctrl+Shift+A");
+        Assert.True((modifiers & HotkeyParser.MOD_CONTROL) != 0);
+        Assert.True((modifiers & HotkeyParser.MOD_SHIFT) != 0);
         Assert.Equal(0x41u, vk); // VK_A
     }
 
     [Fact]
     public void ParseShortcut_EmptyString_ReturnsZero()
     {
-        var (modifiers, vk) = HotkeyService.ParseShortcut("");
+        var (modifiers, vk) = HotkeyParser.ParseShortcut("");
         Assert.Equal(0u, modifiers);
         Assert.Equal(0u, vk);
     }
@@ -33,8 +33,8 @@ public class HotkeyServiceTests
     [Fact]
     public void ParseShortcut_CaseInsensitive()
     {
-        var (mod1, _) = HotkeyService.ParseShortcut("win+alt");
-        var (mod2, _) = HotkeyService.ParseShortcut("Win+Alt");
+        var (mod1, _) = HotkeyParser.ParseShortcut("win+alt");
+        var (mod2, _) = HotkeyParser.ParseShortcut("Win+Alt");
         Assert.Equal(mod1, mod2);
     }
 
@@ -43,54 +43,54 @@ public class HotkeyServiceTests
     [Fact]
     public void ParseShortcut_FKey_ReturnsCorrectVK()
     {
-        var (_, vk) = HotkeyService.ParseShortcut("F5");
+        var (_, vk) = HotkeyParser.ParseShortcut("F5");
         Assert.Equal(0x74u, vk); // VK_F5 = 0x70 + 4
     }
 
     [Fact]
     public void ParseShortcut_AltC_ReturnsAltAndC()
     {
-        var (modifiers, vk) = HotkeyService.ParseShortcut("Alt+C");
-        Assert.True((modifiers & HotkeyService.MOD_ALT) != 0);
+        var (modifiers, vk) = HotkeyParser.ParseShortcut("Alt+C");
+        Assert.True((modifiers & HotkeyParser.MOD_ALT) != 0);
         Assert.Equal(0x43u, vk); // VK_C
     }
 
     [Fact]
     public void ParseShortcut_AllModifiers()
     {
-        var (modifiers, vk) = HotkeyService.ParseShortcut("Win+Ctrl+Alt+Shift+X");
-        Assert.True((modifiers & HotkeyService.MOD_WIN) != 0);
-        Assert.True((modifiers & HotkeyService.MOD_CONTROL) != 0);
-        Assert.True((modifiers & HotkeyService.MOD_ALT) != 0);
-        Assert.True((modifiers & HotkeyService.MOD_SHIFT) != 0);
+        var (modifiers, vk) = HotkeyParser.ParseShortcut("Win+Ctrl+Alt+Shift+X");
+        Assert.True((modifiers & HotkeyParser.MOD_WIN) != 0);
+        Assert.True((modifiers & HotkeyParser.MOD_CONTROL) != 0);
+        Assert.True((modifiers & HotkeyParser.MOD_ALT) != 0);
+        Assert.True((modifiers & HotkeyParser.MOD_SHIFT) != 0);
         Assert.Equal(0x58u, vk); // VK_X
     }
 
     [Fact]
     public void ParseShortcut_NumberKey()
     {
-        var (_, vk) = HotkeyService.ParseShortcut("Ctrl+5");
+        var (_, vk) = HotkeyParser.ParseShortcut("Ctrl+5");
         Assert.Equal(0x35u, vk); // VK_5 = '5'
     }
 
     [Fact]
     public void ParseShortcut_NamedKey_Space()
     {
-        var (_, vk) = HotkeyService.ParseShortcut("Ctrl+Space");
+        var (_, vk) = HotkeyParser.ParseShortcut("Ctrl+Space");
         Assert.Equal(0x20u, vk);
     }
 
     [Fact]
     public void ParseShortcut_NamedKey_Escape()
     {
-        var (_, vk) = HotkeyService.ParseShortcut("Escape");
+        var (_, vk) = HotkeyParser.ParseShortcut("Escape");
         Assert.Equal(0x1Bu, vk);
     }
 
     [Fact]
     public void ParseShortcut_OnlyModifiers_NoVK()
     {
-        var (modifiers, vk) = HotkeyService.ParseShortcut("Win+Alt");
+        var (modifiers, vk) = HotkeyParser.ParseShortcut("Win+Alt");
         Assert.True(modifiers != 0);
         Assert.Equal(0u, vk); // no VK, only modifiers
     }
@@ -98,7 +98,7 @@ public class HotkeyServiceTests
     [Fact]
     public void ParseShortcut_NullString_ReturnsZero()
     {
-        var (modifiers, vk) = HotkeyService.ParseShortcut(null!);
+        var (modifiers, vk) = HotkeyParser.ParseShortcut(null!);
         Assert.Equal(0u, modifiers);
         Assert.Equal(0u, vk);
     }
@@ -111,7 +111,7 @@ public class HotkeyServiceTests
     [InlineData("F24", 0x87u)]
     public void ParseShortcut_FKeys_CorrectVK(string key, uint expectedVk)
     {
-        var (_, vk) = HotkeyService.ParseShortcut(key);
+        var (_, vk) = HotkeyParser.ParseShortcut(key);
         Assert.Equal(expectedVk, vk);
     }
 
@@ -123,7 +123,7 @@ public class HotkeyServiceTests
     [InlineData("a", 0x41u)] // case insensitive
     public void ParseShortcut_LetterKeys(string key, uint expectedVk)
     {
-        var (_, vk) = HotkeyService.ParseShortcut(key);
+        var (_, vk) = HotkeyParser.ParseShortcut(key);
         Assert.Equal(expectedVk, vk);
     }
 
@@ -145,7 +145,7 @@ public class HotkeyServiceTests
     [InlineData("Right", 0x27u)]
     public void ParseShortcut_NamedKeys(string key, uint expectedVk)
     {
-        var (_, vk) = HotkeyService.ParseShortcut($"Ctrl+{key}");
+        var (_, vk) = HotkeyParser.ParseShortcut($"Ctrl+{key}");
         Assert.Equal(expectedVk, vk);
     }
 
@@ -158,8 +158,8 @@ public class HotkeyServiceTests
     [InlineData("LeftWindows")]
     public void ParseShortcut_WinAliases(string alias)
     {
-        var (modifiers, _) = HotkeyService.ParseShortcut(alias);
-        Assert.True((modifiers & HotkeyService.MOD_WIN) != 0);
+        var (modifiers, _) = HotkeyParser.ParseShortcut(alias);
+        Assert.True((modifiers & HotkeyParser.MOD_WIN) != 0);
     }
 
     [Theory]
@@ -168,8 +168,8 @@ public class HotkeyServiceTests
     [InlineData("Menu")]
     public void ParseShortcut_AltAliases(string alias)
     {
-        var (modifiers, _) = HotkeyService.ParseShortcut(alias);
-        Assert.True((modifiers & HotkeyService.MOD_ALT) != 0);
+        var (modifiers, _) = HotkeyParser.ParseShortcut(alias);
+        Assert.True((modifiers & HotkeyParser.MOD_ALT) != 0);
     }
 
     // ── Whitespace handling ──
@@ -177,9 +177,9 @@ public class HotkeyServiceTests
     [Fact]
     public void ParseShortcut_ExtraWhitespace_Trims()
     {
-        var (modifiers, vk) = HotkeyService.ParseShortcut("  Ctrl + Alt + A  ");
-        Assert.True((modifiers & HotkeyService.MOD_CONTROL) != 0);
-        Assert.True((modifiers & HotkeyService.MOD_ALT) != 0);
+        var (modifiers, vk) = HotkeyParser.ParseShortcut("  Ctrl + Alt + A  ");
+        Assert.True((modifiers & HotkeyParser.MOD_CONTROL) != 0);
+        Assert.True((modifiers & HotkeyParser.MOD_ALT) != 0);
         Assert.Equal(0x41u, vk);
     }
 
@@ -188,8 +188,8 @@ public class HotkeyServiceTests
     [Fact]
     public void ParseShortcut_UnknownKey_IgnoredGracefully()
     {
-        var (modifiers, vk) = HotkeyService.ParseShortcut("Ctrl+FooBar");
-        Assert.True((modifiers & HotkeyService.MOD_CONTROL) != 0);
+        var (modifiers, vk) = HotkeyParser.ParseShortcut("Ctrl+FooBar");
+        Assert.True((modifiers & HotkeyParser.MOD_CONTROL) != 0);
         Assert.Equal(0u, vk); // FooBar not recognized → no VK
     }
 
@@ -200,7 +200,7 @@ public class HotkeyServiceTests
     [InlineData("9", 0x39u)]
     public void ParseShortcut_NumberKeys(string key, uint expectedVk)
     {
-        var (_, vk) = HotkeyService.ParseShortcut(key);
+        var (_, vk) = HotkeyParser.ParseShortcut(key);
         Assert.Equal(expectedVk, vk);
     }
 
@@ -209,7 +209,7 @@ public class HotkeyServiceTests
     [Fact]
     public void ParseShortcut_WhitespaceOnly_ReturnsZero()
     {
-        var (modifiers, vk) = HotkeyService.ParseShortcut("   ");
+        var (modifiers, vk) = HotkeyParser.ParseShortcut("   ");
         Assert.Equal(0u, modifiers);
         Assert.Equal(0u, vk);
     }
@@ -218,7 +218,7 @@ public class HotkeyServiceTests
     public void ParseShortcut_ModifiersOnly_VkIsZero()
     {
         // Postcondition: modifiers without VK is valid but VK=0
-        var (modifiers, vk) = HotkeyService.ParseShortcut("Ctrl+Alt+Shift");
+        var (modifiers, vk) = HotkeyParser.ParseShortcut("Ctrl+Alt+Shift");
         Assert.True(modifiers != 0, "Should have modifier flags");
         Assert.Equal(0u, vk);
     }
@@ -227,7 +227,7 @@ public class HotkeyServiceTests
     public void ParseShortcut_VkOnly_ModifiersZero()
     {
         // Just a key without modifiers
-        var (modifiers, vk) = HotkeyService.ParseShortcut("X");
+        var (modifiers, vk) = HotkeyParser.ParseShortcut("X");
         Assert.Equal(0u, modifiers);
         Assert.Equal(0x58u, vk);
     }

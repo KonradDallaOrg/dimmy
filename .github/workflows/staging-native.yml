@@ -213,7 +213,19 @@ jobs:
 
       - name: Build Windows app
         working-directory: native-ui/windows/Dimmy.Windows
-        run: dotnet publish -c Release -r win-x64 --no-self-contained -o publish
+        run: dotnet build Dimmy.Windows.csproj -c Release
+
+      - name: Prepare distribution
+        shell: pwsh
+        run: |
+          $binDir = "native-ui/windows/Dimmy.Windows/bin/Release/net8.0-windows10.0.19041.0"
+          # Copy Rust DLL into bin output
+          Copy-Item "src-tauri/target/x86_64-pc-windows-msvc/release/dimmy_lib.dll" "$binDir/"
+          # Remove PDB files to reduce zip size
+          Get-ChildItem "$binDir" -Filter "*.pdb" -Recurse | Remove-Item -ErrorAction SilentlyContinue
+          # Create publish alias for packaging step
+          New-Item -ItemType Directory -Force -Path "native-ui/windows/Dimmy.Windows/publish"
+          Copy-Item "$binDir/*" "native-ui/windows/Dimmy.Windows/publish/" -Recurse
 
       - name: Run Windows tests
         working-directory: native-ui/windows/Dimmy.Windows.Tests

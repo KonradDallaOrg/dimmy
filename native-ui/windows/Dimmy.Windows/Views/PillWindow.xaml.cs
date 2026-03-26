@@ -45,13 +45,13 @@ public sealed partial class PillWindow : Window
     private POINT _dragStartScreen;
     private global::Windows.Graphics.PointInt32 _windowStartPos;
 
-    // Circle size for idle/completing states (Width = Height = perfect circle)
-    private const double CircleSize = 36;
+    // Circle size for idle/completing states — matched to macOS (36pt)
+    private const double CircleSize = 26;
     // Capsule height for recording/transcribing states
-    private const double CapsuleHeight = 40;
+    private const double CapsuleHeight = 30;
 
-    private const int WindowWidth = 270;
-    private const int WindowHeight = 74;
+    private const int WindowWidth = 240;
+    private const int WindowHeight = 56;
 
     public PillWindow(AppViewModel vm)
     {
@@ -105,6 +105,8 @@ public sealed partial class PillWindow : Window
     {
         ColorBorder.Width = CircleSize;
         ColorBorder.Height = CircleSize;
+        PillBodyHost.Width = CircleSize;
+        PillBodyHost.Height = CircleSize;
         var r = CircleSize / 2;
         ColorBorder.CornerRadius = new CornerRadius(r);
         PillInner.CornerRadius = new CornerRadius(r);
@@ -114,6 +116,8 @@ public sealed partial class PillWindow : Window
     {
         ColorBorder.Width = double.NaN; // auto
         ColorBorder.Height = CapsuleHeight;
+        PillBodyHost.Height = CapsuleHeight;
+        // PillBodyHost width is set by SizeChanged (follows ColorBorder auto-width)
         var r = CapsuleHeight / 2;
         ColorBorder.CornerRadius = new CornerRadius(r);
         PillInner.CornerRadius = new CornerRadius(r);
@@ -195,6 +199,64 @@ public sealed partial class PillWindow : Window
         ProcessingText.Foreground = activeFg;
     }
 
+    // ── Composition pill body (anti-aliased rounded rect) ──────
+    private ShapeVisual? _pillBodyVisual;
+    private CompositionRoundedRectangleGeometry? _pillBodyGeometry;
+    private CompositionColorBrush? _pillBodyBrush;
+
+    private void EnsurePillBodyVisual()
+    {
+        if (_pillBodyVisual != null) return;
+
+        var compositor = ElementCompositionPreview.GetElementVisual(PillBodyHost).Compositor;
+
+        _pillBodyGeometry = compositor.CreateRoundedRectangleGeometry();
+        _pillBodyBrush = compositor.CreateColorBrush(
+            global::Windows.UI.Color.FromArgb(255, 26, 26, 26));
+
+        var shape = compositor.CreateSpriteShape(_pillBodyGeometry);
+        shape.FillBrush = _pillBodyBrush;
+
+        _pillBodyVisual = compositor.CreateShapeVisual();
+        _pillBodyVisual.Shapes.Add(shape);
+
+        ElementCompositionPreview.SetElementChildVisual(PillBodyHost, _pillBodyVisual);
+    }
+
+    private void UpdatePillBody()
+    {
+        if (_pillBodyVisual == null || _pillBodyGeometry == null || _pillBodyBrush == null) return;
+
+        var w = ColorBorder.ActualWidth;
+        var h = ColorBorder.ActualHeight;
+        if (w <= 0 || h <= 0) return;
+
+        // Inset by border thickness so the body sits inside the border ring
+        const float inset = 2f; // matches BorderThickness
+        var innerW = (float)w - inset * 2;
+        var innerH = (float)h - inset * 2;
+        var cr = Math.Max(0f, (float)ColorBorder.CornerRadius.TopLeft - inset);
+
+        _pillBodyVisual.Size = new Vector2(innerW, innerH);
+        _pillBodyVisual.Offset = new Vector3(inset, inset, 0);
+        _pillBodyGeometry.Size = new Vector2(innerW, innerH);
+        _pillBodyGeometry.CornerRadius = new Vector2(cr, cr);
+        PillBodyHost.Width = w;
+        PillBodyHost.Height = h;
+    }
+
+    private void SetPillBodyColor(global::Windows.UI.Color color)
+    {
+        EnsurePillBodyVisual();
+        _pillBodyBrush?.Dispose();
+        var compositor = _pillBodyVisual!.Compositor;
+        _pillBodyBrush = compositor.CreateColorBrush(color);
+        if (_pillBodyVisual.Shapes.Count > 0 &&
+            _pillBodyVisual.Shapes[0] is CompositionSpriteShape shape)
+            shape.FillBrush = _pillBodyBrush;
+        UpdatePillBody();
+    }
+
     // ── Composition DropShadow glow ────────────────────────────
     private SpriteVisual? _glowVisual;
     private DropShadow? _glowShadow;
@@ -203,7 +265,7 @@ public sealed partial class PillWindow : Window
     private ShapeVisual? _glowMaskShapeVisual;
     private global::Windows.UI.Color? _glowColor;
     private bool _glowSubtle;
-    private const float GlowPad = 50; // extra space for blur spread
+    private const float GlowPad = 30; // extra space for blur spread
 
     private void EnsureGlowVisual()
     {
@@ -301,6 +363,7 @@ public sealed partial class PillWindow : Window
     private void ColorBorder_SizeChanged(object sender, SizeChangedEventArgs e)
     {
         if (_glowColor != null) ApplyGlow();
+        UpdatePillBody();
     }
 
     private void UpdateVisualState()
@@ -329,7 +392,7 @@ public sealed partial class PillWindow : Window
                 StyleDot.Fill = new SolidColorBrush(ParseColor(_vm.LlmStyleColor));
                 RootGrid.Opacity = 1.0;
                 SetCircleShape();
-                PillInner.Background = GetPillBackground(idle: true);
+                SetPillBodyColor(IsGlass ? BgGlassIdle : BgDark);
                 // No colored border in idle — transparent so glow doesn't create artifacts
                 ColorBorder.BorderBrush = new SolidColorBrush(
                     global::Windows.UI.Color.FromArgb(0, 0, 0, 0));
@@ -341,7 +404,7 @@ public sealed partial class PillWindow : Window
             case AppState.Recording:
                 RecordingPanel.Visibility = Visibility.Visible;
                 RootGrid.Opacity = 1.0;
-                PillInner.Background = GetPillBackground();
+                SetPillBodyColor(IsGlass ? BgGlassActive : BgDark);
                 StopButton.Visibility = Visibility.Visible;
                 SetCapsuleShape();
                 ColorBorder.BorderBrush = GetActiveBorderBrush();
@@ -362,7 +425,7 @@ public sealed partial class PillWindow : Window
 
             case AppState.Transcribing:
                 TranscribingPanel.Visibility = Visibility.Visible;
-                PillInner.Background = GetPillBackground();
+                SetPillBodyColor(IsGlass ? BgGlassActive : BgDark);
                 RootGrid.Opacity = 1.0;
                 Waveform.IsActive = false;
                 ChunkText.Text = _vm.ChunkTotal > 1 ? $"{_vm.ChunkCurrent}/{_vm.ChunkTotal}" : "";
@@ -374,7 +437,7 @@ public sealed partial class PillWindow : Window
 
             case AppState.Processing:
                 ProcessingPanel.Visibility = Visibility.Visible;
-                PillInner.Background = GetPillBackground();
+                SetPillBodyColor(IsGlass ? BgGlassActive : BgDark);
                 RootGrid.Opacity = 1.0;
                 SetCapsuleShape();
                 _rainbowTimer?.Stop();
@@ -384,7 +447,7 @@ public sealed partial class PillWindow : Window
 
             case AppState.Completing:
                 CompletingPanel.Visibility = Visibility.Visible;
-                PillInner.Background = GetPillBackground();
+                SetPillBodyColor(IsGlass ? BgGlassActive : BgDark);
                 RootGrid.Opacity = 1.0;
                 SetCircleShape();
                 _rainbowTimer?.Stop();
@@ -406,7 +469,7 @@ public sealed partial class PillWindow : Window
             case AppState.Error:
                 ErrorPanel.Visibility = Visibility.Visible;
                 ErrorText.Text = _vm.ErrorMessage;
-                PillInner.Background = GetPillBackground();
+                SetPillBodyColor(IsGlass ? BgGlassActive : BgDark);
                 RootGrid.Opacity = 1.0;
                 SetCapsuleShape();
                 _rainbowTimer?.Stop();
@@ -588,15 +651,46 @@ public sealed partial class PillWindow : Window
     private static readonly string[] LlmStyles = ViewModels.SettingsViewModel.LlmStyles;
     private static readonly System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<string, string>> LangList = ViewModels.SettingsViewModel.Languages;
 
+    private DateTime _lastScrollTime; // debounce for touchpad rapid-fire scroll
+    private DispatcherTimer? _tooltipTimer;
+
+    private void ShowScrollTooltip(string text)
+    {
+        ScrollTooltipText.Text = text;
+        ScrollTooltip.Background = new SolidColorBrush(IsGlass
+            ? global::Windows.UI.Color.FromArgb(230, 240, 240, 245)
+            : global::Windows.UI.Color.FromArgb(230, 32, 32, 32));
+        ScrollTooltipText.Foreground = new SolidColorBrush(IsGlass
+            ? global::Windows.UI.Color.FromArgb(238, 30, 30, 30)
+            : global::Windows.UI.Color.FromArgb(238, 255, 255, 255));
+        ScrollTooltip.Visibility = Visibility.Visible;
+
+        if (_tooltipTimer is null)
+        {
+            _tooltipTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1200) };
+            _tooltipTimer.Tick += (_, _) =>
+            {
+                _tooltipTimer.Stop();
+                ScrollTooltip.Visibility = Visibility.Collapsed;
+            };
+        }
+        _tooltipTimer.Stop();
+        _tooltipTimer.Start();
+    }
+
     private void StyleDot_PointerWheelChanged(object sender, PointerRoutedEventArgs e)
     {
         var delta = e.GetCurrentPoint(null).Properties.MouseWheelDelta;
         if (delta == 0) return;
+        var now = DateTime.UtcNow;
+        if ((now - _lastScrollTime).TotalMilliseconds < 250) { e.Handled = true; return; }
+        _lastScrollTime = now;
         int idx = Array.IndexOf(LlmStyles, _vm.LlmStyle);
         if (idx < 0) idx = 0;
         idx = (idx + (delta > 0 ? -1 : 1) + LlmStyles.Length) % LlmStyles.Length;
         _vm.LlmStyle = LlmStyles[idx];
         StyleDot.Fill = new SolidColorBrush(ParseColor(_vm.LlmStyleColor));
+        ShowScrollTooltip(_vm.LlmStyle == "off" ? "Off" : _vm.LlmStyle);
         // Single writer: only FFI, Rust saves to disk
         DimmyNative.dimmy_set_config_json(System.Text.Json.JsonSerializer.Serialize(
             new System.Collections.Generic.Dictionary<string, object>
@@ -611,11 +705,15 @@ public sealed partial class PillWindow : Window
     {
         var delta = e.GetCurrentPoint(null).Properties.MouseWheelDelta;
         if (delta == 0) return;
+        var now = DateTime.UtcNow;
+        if ((now - _lastScrollTime).TotalMilliseconds < 250) { e.Handled = true; return; }
+        _lastScrollTime = now;
         int idx = LangList.FindIndex(kv => kv.Key == _vm.Language);
         if (idx < 0) idx = 0;
         idx = (idx + (delta > 0 ? -1 : 1) + LangList.Count) % LangList.Count;
         _vm.Language = LangList[idx].Key;
         LanguageLabel.Text = _vm.Language.ToUpperInvariant();
+        ShowScrollTooltip(LangList[idx].Value); // full language name (e.g. "Italiano")
         // Single writer: only FFI, Rust saves to disk
         DimmyNative.dimmy_set_config_json(System.Text.Json.JsonSerializer.Serialize(
             new System.Collections.Generic.Dictionary<string, string> { ["language"] = _vm.Language }));

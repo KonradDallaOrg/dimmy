@@ -14,7 +14,11 @@
         <Border x:Name="GlowHost" IsHitTestVisible="False"
                 HorizontalAlignment="Center" VerticalAlignment="Center" />
 
-        <!-- Colored border: BorderThickness creates the visible border ring -->
+        <!-- Composition pill body: anti-aliased rounded rect drawn by GPU -->
+        <Border x:Name="PillBodyHost" IsHitTestVisible="False"
+                HorizontalAlignment="Center" VerticalAlignment="Center" />
+
+        <!-- Colored border + interaction layer -->
         <Border x:Name="ColorBorder" CornerRadius="50" BorderThickness="2"
                 HorizontalAlignment="Center" VerticalAlignment="Center"
                 PointerPressed="Pill_PointerPressed"
@@ -24,9 +28,9 @@
                 PointerExited="Pill_PointerExited"
                 RightTapped="Pill_RightTapped">
 
-            <!-- Dark inner body — fully opaque so rainbow NEVER shows through -->
+            <!-- Inner container — transparent, content only (body drawn by composition) -->
             <Border x:Name="PillInner" CornerRadius="50"
-                    Background="#FF1a1a1a">
+                    Background="Transparent">
 
                 <Grid x:Name="ContentGrid" VerticalAlignment="Center"
                       HorizontalAlignment="Center">
@@ -35,8 +39,10 @@
                     <Grid x:Name="IdlePanel" Visibility="Visible">
                         <StackPanel x:Name="IdleContent" Orientation="Horizontal" Spacing="8"
                                     HorizontalAlignment="Center" VerticalAlignment="Center">
-                            <Ellipse x:Name="StyleDot" Width="8" Height="8"
-                                     PointerWheelChanged="StyleDot_PointerWheelChanged" />
+                            <Border Background="Transparent" Padding="6,4"
+                                    PointerWheelChanged="StyleDot_PointerWheelChanged">
+                                <Ellipse x:Name="StyleDot" Width="6" Height="6" />
+                            </Border>
                             <TextBlock x:Name="LanguageLabel" FontSize="11" FontWeight="SemiBold"
                                        Foreground="#AAFFFFFF" VerticalAlignment="Center"
                                        Visibility="Collapsed"
@@ -94,5 +100,13 @@
             </Border>
         </Border>
     </Grid>
+
+    <!-- Scroll tooltip: shows LLM style or language name briefly -->
+    <Border x:Name="ScrollTooltip" Visibility="Collapsed" IsHitTestVisible="False"
+            Background="#E6202020" CornerRadius="6" Padding="10,5"
+            HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,2,0,0">
+        <TextBlock x:Name="ScrollTooltipText" FontSize="11" FontWeight="SemiBold"
+                   Foreground="#EEFFFFFF" />
+    </Border>
     </Grid>
 </Window>

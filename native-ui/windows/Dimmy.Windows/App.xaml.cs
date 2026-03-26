@@ -371,7 +371,7 @@ public partial class App : Application
     public void RepositionPill()
     {
         if (_pillWindow == null) return;
-        WindowHelper.PositionByPreset(_pillWindow, _appViewModel.OverlayPosition, 240, 60);
+        WindowHelper.PositionByPreset(_pillWindow, _appViewModel.OverlayPosition, 240, 56);
     }
 
     public void HidePill()
