@@ -1,5 +1,7 @@
 # Audio Pipeline — Detailed Reference
 
+This audio pipeline is shared across all native UI platforms (Windows WinUI3, macOS SwiftUI, Linux GTK4). The Rust core modules are identical; only the integration layer differs per platform.
+
 ## Pipeline Overview
 
 ```

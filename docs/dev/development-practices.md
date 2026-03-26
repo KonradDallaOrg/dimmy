@@ -90,3 +90,11 @@ cargo test --lib
 ```
 
 CI treats ALL clippy warnings as errors. Always run this before pushing.
+
+### Native UI Tests (platform-specific)
+
+Native UI builds are platform-specific; CI handles cross-platform builds automatically. To run tests locally on your platform:
+
+- **Windows**: `dotnet test` in `native-ui/windows/`
+- **macOS**: `xcodebuild test` in `native-ui/macos/`
+- **Linux**: `cargo test` in `native-ui/linux/`
