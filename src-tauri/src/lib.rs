@@ -674,8 +674,11 @@ impl AppState {
             provider::KeyringScope::Stt(transcription_provider),
             use_kr,
         );
-        let stored_llm_key =
-            load_key_with_store(&key_store, provider::KeyringScope::Llm(llm_provider), use_kr);
+        let stored_llm_key = load_key_with_store(
+            &key_store,
+            provider::KeyringScope::Llm(llm_provider),
+            use_kr,
+        );
 
         log(&format!(
             "Config loaded: url={}, model={}, device={:?}, provider={}, has_key={}, llm_provider={}, llm_enabled={}, llm_style={}",
@@ -687,8 +690,7 @@ impl AppState {
         let input_gain_atomic = Arc::new(std::sync::atomic::AtomicU32::new(
             file_cfg.input_gain.to_bits(),
         ));
-        let audio_tx =
-            audio::spawn_audio_thread(audio_buffer.clone(), input_gain_atomic.clone());
+        let audio_tx = audio::spawn_audio_thread(audio_buffer.clone(), input_gain_atomic.clone());
 
         let state = AppState {
             recording: Mutex::new(false),
