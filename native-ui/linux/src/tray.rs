@@ -207,22 +207,14 @@ pub fn start_tray(app_state: &Arc<dimmy_lib::AppState>) -> Option<TrayHandle> {
         shortcut,
     };
 
-    match ksni::TrayService::new(tray).spawn() {
-        Ok(handle) => {
-            dimmy_lib::log("System tray started (StatusNotifierItem)");
-            Some(TrayHandle {
-                _handle: handle,
-                state: tray_state,
-            })
-        }
-        Err(e) => {
-            dimmy_lib::log(&format!(
-                "Failed to start system tray: {} \u{2014} running without tray",
-                e
-            ));
-            None
-        }
-    }
+    let service = ksni::TrayService::new(tray);
+    let handle = service.handle();
+    service.spawn();
+    dimmy_lib::log("System tray started (StatusNotifierItem)");
+    Some(TrayHandle {
+        _handle: handle,
+        state: tray_state,
+    })
 }
 
 #[cfg(test)]

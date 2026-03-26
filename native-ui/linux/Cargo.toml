@@ -22,6 +22,7 @@ ashpd = "0.10"
 arboard = "3"
 gtk4-layer-shell = { version = "0.4", optional = true }
 ksni = "0.2"
+async-channel = "2"
 
 [features]
 default = ["x11-fallback"]

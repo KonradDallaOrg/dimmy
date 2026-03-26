@@ -1,7 +1,7 @@
 //! Bridge between Rust AppState and GTK main loop.
 //!
 //! AppEvent enum carries typed events from background threads (tokio)
-//! to the GTK main loop via glib::Sender.
+//! to the GTK main loop via async_channel.
 
 /// Events sent from background threads to the GTK main loop.
 #[derive(Debug, Clone)]
@@ -17,12 +17,12 @@ pub enum AppEvent {
     ToneChanged(String),
 }
 
-/// Create a glib channel pair for AppEvents.
+/// Create an async_channel pair for AppEvents.
 pub fn create_event_channel() -> (
-    gtk4::glib::Sender<AppEvent>,
-    gtk4::glib::Receiver<AppEvent>,
+    async_channel::Sender<AppEvent>,
+    async_channel::Receiver<AppEvent>,
 ) {
-    gtk4::glib::MainContext::channel(gtk4::glib::Priority::DEFAULT)
+    async_channel::bounded(64)
 }
 
 #[cfg(test)]

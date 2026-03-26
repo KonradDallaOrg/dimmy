@@ -69,32 +69,33 @@ fn main() {
         let (pill, update_pill_state) =
             pill_window::create_pill_window(app, &state_clone);
 
-        // Connect AppEvent receiver to pill state
+        // Connect AppEvent receiver to pill state via glib main loop
         let update_fn = update_pill_state.clone();
-        receiver.attach(None, move |event| {
-            log(&format!("AppEvent: {:?}", event));
-            match event {
-                state::AppEvent::RecordingStarted => {
-                    update_fn(pill_window::PillState::Recording)
+        gtk4::glib::spawn_future_local(async move {
+            while let Ok(event) = receiver.recv().await {
+                log(&format!("AppEvent: {:?}", event));
+                match event {
+                    state::AppEvent::RecordingStarted => {
+                        update_fn(pill_window::PillState::Recording)
+                    }
+                    state::AppEvent::RecordingStopped => {
+                        update_fn(pill_window::PillState::Transcribing)
+                    }
+                    state::AppEvent::TranscriptionComplete(_) => {
+                        update_fn(pill_window::PillState::Completing)
+                    }
+                    state::AppEvent::LlmComplete(_) => {
+                        update_fn(pill_window::PillState::Completing)
+                    }
+                    state::AppEvent::Error(_) => {
+                        update_fn(pill_window::PillState::Error)
+                    }
+                    state::AppEvent::TranscriptionProgress { .. } => {} // chunk counter
+                    state::AppEvent::AmplitudeUpdate(_) => {} // waveform handled by timer
+                    state::AppEvent::StyleChanged(_) => {}
+                    state::AppEvent::ToneChanged(_) => {}
                 }
-                state::AppEvent::RecordingStopped => {
-                    update_fn(pill_window::PillState::Transcribing)
-                }
-                state::AppEvent::TranscriptionComplete(_) => {
-                    update_fn(pill_window::PillState::Completing)
-                }
-                state::AppEvent::LlmComplete(_) => {
-                    update_fn(pill_window::PillState::Completing)
-                }
-                state::AppEvent::Error(_) => {
-                    update_fn(pill_window::PillState::Error)
-                }
-                state::AppEvent::TranscriptionProgress { .. } => {} // chunk counter
-                state::AppEvent::AmplitudeUpdate(_) => {} // waveform handled by timer
-                state::AppEvent::StyleChanged(_) => {}
-                state::AppEvent::ToneChanged(_) => {}
             }
-            gtk4::glib::ControlFlow::Continue
         });
 
         pill.present();

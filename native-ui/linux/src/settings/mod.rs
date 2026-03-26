@@ -34,9 +34,9 @@ pub fn show_settings_window(app: &adw::Application, app_state: &Arc<AppState>) {
         .search_enabled(true)
         .build();
 
-    if let Some(gtk_app) = app.downcast_ref::<gtk4::Application>() {
-        window.set_application(Some(gtk_app));
-    }
+    // adw::Application is a subclass of gtk4::Application, so upcast
+    // to set the application on the window.
+    window.set_application(Some(app));
 
     // ── Tab pages ────────────────────────────────────────────────────
     let general_page = general::create_page(app_state, &show_advanced);

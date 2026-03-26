@@ -25,14 +25,14 @@ pub fn detect_hotkey_backend() -> &'static str {
     }
 }
 
-/// Register a global hotkey. Events are sent via the glib Sender.
+/// Register a global hotkey. Events are sent via the async_channel Sender.
 /// Returns Ok(()) if registration succeeds, Err with message if not.
 ///
 /// NOTE: This is a stub. Full implementation requires a Linux desktop
 /// environment for testing portal/X11 interaction.
 pub fn register_hotkey(
     _shortcut: &str,
-    _sender: gtk4::glib::Sender<HotkeyEvent>,
+    _sender: async_channel::Sender<HotkeyEvent>,
 ) -> Result<(), String> {
     let backend = detect_hotkey_backend();
     log(&format!(

@@ -113,7 +113,7 @@ pub fn create_pill_window(
 
     // Make transparent
     let css = gtk4::CssProvider::new();
-    css.load_from_string("window { background: transparent; }");
+    css.load_from_data("window { background: transparent; }");
     gtk4::style_context_add_provider_for_display(
         &gtk4::gdk::Display::default().expect("No display"),
         &css,
