@@ -601,7 +601,7 @@ public sealed partial class PillWindow : Window
             if (!string.IsNullOrEmpty(LanguageLabel.Text))
                 LanguageLabel.Visibility = Visibility.Visible;
             ShortcutLabel.Visibility = Visibility.Visible;
-            IdleContent.Margin = new Thickness(10, 0, 10, 0);
+            IdleContent.Margin = new Thickness(7, 0, 7, 0);
             // Hover glow — slightly brighter than idle
             UpdateGlow(ParseColor(_vm.LlmStyleColor), subtle: true);
         }
