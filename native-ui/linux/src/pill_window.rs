@@ -102,8 +102,14 @@ pub fn create_pill_window(
         .resizable(false)
         .build();
 
-    // Try layer-shell for Wayland
+    // Try layer-shell for Wayland (if compiled with feature)
+    #[cfg(feature = "layer-shell")]
     setup_layer_shell(&window);
+    #[cfg(not(feature = "layer-shell"))]
+    {
+        dimmy_lib::log("Layer shell not compiled in — using X11 window hints");
+        window.set_deletable(false);
+    }
 
     // Make transparent
     let css = gtk4::CssProvider::new();
@@ -338,20 +344,19 @@ pub fn create_pill_window(
 
 // ── Layer shell setup ──────────────────────────────────────
 
+#[cfg(feature = "layer-shell")]
 fn setup_layer_shell(window: &gtk4::Window) {
     if !gtk4_layer_shell::is_supported() {
         dimmy_lib::log("Layer shell not supported — using X11 window hints");
-        // X11 fallback: always on top, skip taskbar
         window.set_deletable(false);
         return;
     }
 
     gtk4_layer_shell::init_for_window(window);
     gtk4_layer_shell::set_layer(window, gtk4_layer_shell::Layer::Overlay);
-    gtk4_layer_shell::set_exclusive_zone(window, -1); // no space reservation
+    gtk4_layer_shell::set_exclusive_zone(window, -1);
     gtk4_layer_shell::set_keyboard_mode(window, gtk4_layer_shell::KeyboardMode::None);
 
-    // Default position: bottom right with margin
     gtk4_layer_shell::set_anchor(window, gtk4_layer_shell::Edge::Bottom, true);
     gtk4_layer_shell::set_anchor(window, gtk4_layer_shell::Edge::Right, true);
     gtk4_layer_shell::set_margin(window, gtk4_layer_shell::Edge::Bottom, 40);

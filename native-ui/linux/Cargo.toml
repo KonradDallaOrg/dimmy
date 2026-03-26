@@ -20,9 +20,10 @@ log = "0.4"
 env_logger = "0.11"
 ashpd = "0.10"
 arboard = "3"
-gtk4-layer-shell = "0.4"
+gtk4-layer-shell = { version = "0.4", optional = true }
 ksni = "0.2"
 
 [features]
 default = ["x11-fallback"]
 x11-fallback = []
+layer-shell = ["gtk4-layer-shell"]
