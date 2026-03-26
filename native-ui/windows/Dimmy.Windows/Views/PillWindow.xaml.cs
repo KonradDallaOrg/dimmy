@@ -46,12 +46,12 @@ public sealed partial class PillWindow : Window
     private global::Windows.Graphics.PointInt32 _windowStartPos;
 
     // Circle size for idle/completing states — matched to macOS (36pt)
-    private const double CircleSize = 30;
+    private const double CircleSize = 26;
     // Capsule height for recording/transcribing states
-    private const double CapsuleHeight = 34;
+    private const double CapsuleHeight = 30;
 
-    private const int WindowWidth = 260;
-    private const int WindowHeight = 68;
+    private const int WindowWidth = 240;
+    private const int WindowHeight = 56;
 
     public PillWindow(AppViewModel vm)
     {
@@ -105,6 +105,8 @@ public sealed partial class PillWindow : Window
     {
         ColorBorder.Width = CircleSize;
         ColorBorder.Height = CircleSize;
+        PillBodyHost.Width = CircleSize;
+        PillBodyHost.Height = CircleSize;
         var r = CircleSize / 2;
         ColorBorder.CornerRadius = new CornerRadius(r);
         PillInner.CornerRadius = new CornerRadius(r);
@@ -114,6 +116,8 @@ public sealed partial class PillWindow : Window
     {
         ColorBorder.Width = double.NaN; // auto
         ColorBorder.Height = CapsuleHeight;
+        PillBodyHost.Height = CapsuleHeight;
+        // PillBodyHost width is set by SizeChanged (follows ColorBorder auto-width)
         var r = CapsuleHeight / 2;
         ColorBorder.CornerRadius = new CornerRadius(r);
         PillInner.CornerRadius = new CornerRadius(r);
@@ -195,6 +199,64 @@ public sealed partial class PillWindow : Window
         ProcessingText.Foreground = activeFg;
     }
 
+    // ── Composition pill body (anti-aliased rounded rect) ──────
+    private ShapeVisual? _pillBodyVisual;
+    private CompositionRoundedRectangleGeometry? _pillBodyGeometry;
+    private CompositionColorBrush? _pillBodyBrush;
+
+    private void EnsurePillBodyVisual()
+    {
+        if (_pillBodyVisual != null) return;
+
+        var compositor = ElementCompositionPreview.GetElementVisual(PillBodyHost).Compositor;
+
+        _pillBodyGeometry = compositor.CreateRoundedRectangleGeometry();
+        _pillBodyBrush = compositor.CreateColorBrush(
+            global::Windows.UI.Color.FromArgb(255, 26, 26, 26));
+
+        var shape = compositor.CreateSpriteShape(_pillBodyGeometry);
+        shape.FillBrush = _pillBodyBrush;
+
+        _pillBodyVisual = compositor.CreateShapeVisual();
+        _pillBodyVisual.Shapes.Add(shape);
+
+        ElementCompositionPreview.SetElementChildVisual(PillBodyHost, _pillBodyVisual);
+    }
+
+    private void UpdatePillBody()
+    {
+        if (_pillBodyVisual == null || _pillBodyGeometry == null || _pillBodyBrush == null) return;
+
+        var w = ColorBorder.ActualWidth;
+        var h = ColorBorder.ActualHeight;
+        if (w <= 0 || h <= 0) return;
+
+        // Inset by border thickness so the body sits inside the border ring
+        const float inset = 2f; // matches BorderThickness
+        var innerW = (float)w - inset * 2;
+        var innerH = (float)h - inset * 2;
+        var cr = Math.Max(0f, (float)ColorBorder.CornerRadius.TopLeft - inset);
+
+        _pillBodyVisual.Size = new Vector2(innerW, innerH);
+        _pillBodyVisual.Offset = new Vector3(inset, inset, 0);
+        _pillBodyGeometry.Size = new Vector2(innerW, innerH);
+        _pillBodyGeometry.CornerRadius = new Vector2(cr, cr);
+        PillBodyHost.Width = w;
+        PillBodyHost.Height = h;
+    }
+
+    private void SetPillBodyColor(global::Windows.UI.Color color)
+    {
+        EnsurePillBodyVisual();
+        _pillBodyBrush?.Dispose();
+        var compositor = _pillBodyVisual!.Compositor;
+        _pillBodyBrush = compositor.CreateColorBrush(color);
+        if (_pillBodyVisual.Shapes.Count > 0 &&
+            _pillBodyVisual.Shapes[0] is CompositionSpriteShape shape)
+            shape.FillBrush = _pillBodyBrush;
+        UpdatePillBody();
+    }
+
     // ── Composition DropShadow glow ────────────────────────────
     private SpriteVisual? _glowVisual;
     private DropShadow? _glowShadow;
@@ -203,7 +265,7 @@ public sealed partial class PillWindow : Window
     private ShapeVisual? _glowMaskShapeVisual;
     private global::Windows.UI.Color? _glowColor;
     private bool _glowSubtle;
-    private const float GlowPad = 50; // extra space for blur spread
+    private const float GlowPad = 30; // extra space for blur spread
 
     private void EnsureGlowVisual()
     {
@@ -301,6 +363,7 @@ public sealed partial class PillWindow : Window
     private void ColorBorder_SizeChanged(object sender, SizeChangedEventArgs e)
     {
         if (_glowColor != null) ApplyGlow();
+        UpdatePillBody();
     }
 
     private void UpdateVisualState()
@@ -329,7 +392,7 @@ public sealed partial class PillWindow : Window
                 StyleDot.Fill = new SolidColorBrush(ParseColor(_vm.LlmStyleColor));
                 RootGrid.Opacity = 1.0;
                 SetCircleShape();
-                PillInner.Background = GetPillBackground(idle: true);
+                SetPillBodyColor(IsGlass ? BgGlassIdle : BgDark);
                 // No colored border in idle — transparent so glow doesn't create artifacts
                 ColorBorder.BorderBrush = new SolidColorBrush(
                     global::Windows.UI.Color.FromArgb(0, 0, 0, 0));
@@ -341,7 +404,7 @@ public sealed partial class PillWindow : Window
             case AppState.Recording:
                 RecordingPanel.Visibility = Visibility.Visible;
                 RootGrid.Opacity = 1.0;
-                PillInner.Background = GetPillBackground();
+                SetPillBodyColor(IsGlass ? BgGlassActive : BgDark);
                 StopButton.Visibility = Visibility.Visible;
                 SetCapsuleShape();
                 ColorBorder.BorderBrush = GetActiveBorderBrush();
@@ -362,7 +425,7 @@ public sealed partial class PillWindow : Window
 
             case AppState.Transcribing:
                 TranscribingPanel.Visibility = Visibility.Visible;
-                PillInner.Background = GetPillBackground();
+                SetPillBodyColor(IsGlass ? BgGlassActive : BgDark);
                 RootGrid.Opacity = 1.0;
                 Waveform.IsActive = false;
                 ChunkText.Text = _vm.ChunkTotal > 1 ? $"{_vm.ChunkCurrent}/{_vm.ChunkTotal}" : "";
@@ -374,7 +437,7 @@ public sealed partial class PillWindow : Window
 
             case AppState.Processing:
                 ProcessingPanel.Visibility = Visibility.Visible;
-                PillInner.Background = GetPillBackground();
+                SetPillBodyColor(IsGlass ? BgGlassActive : BgDark);
                 RootGrid.Opacity = 1.0;
                 SetCapsuleShape();
                 _rainbowTimer?.Stop();
@@ -384,7 +447,7 @@ public sealed partial class PillWindow : Window
 
             case AppState.Completing:
                 CompletingPanel.Visibility = Visibility.Visible;
-                PillInner.Background = GetPillBackground();
+                SetPillBodyColor(IsGlass ? BgGlassActive : BgDark);
                 RootGrid.Opacity = 1.0;
                 SetCircleShape();
                 _rainbowTimer?.Stop();
@@ -406,7 +469,7 @@ public sealed partial class PillWindow : Window
             case AppState.Error:
                 ErrorPanel.Visibility = Visibility.Visible;
                 ErrorText.Text = _vm.ErrorMessage;
-                PillInner.Background = GetPillBackground();
+                SetPillBodyColor(IsGlass ? BgGlassActive : BgDark);
                 RootGrid.Opacity = 1.0;
                 SetCapsuleShape();
                 _rainbowTimer?.Stop();

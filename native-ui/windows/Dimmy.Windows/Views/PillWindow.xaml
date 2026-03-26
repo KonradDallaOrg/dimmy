@@ -14,7 +14,11 @@
         <Border x:Name="GlowHost" IsHitTestVisible="False"
                 HorizontalAlignment="Center" VerticalAlignment="Center" />
 
-        <!-- Colored border: BorderThickness creates the visible border ring -->
+        <!-- Composition pill body: anti-aliased rounded rect drawn by GPU -->
+        <Border x:Name="PillBodyHost" IsHitTestVisible="False"
+                HorizontalAlignment="Center" VerticalAlignment="Center" />
+
+        <!-- Colored border + interaction layer -->
         <Border x:Name="ColorBorder" CornerRadius="50" BorderThickness="2"
                 HorizontalAlignment="Center" VerticalAlignment="Center"
                 PointerPressed="Pill_PointerPressed"
@@ -24,9 +28,9 @@
                 PointerExited="Pill_PointerExited"
                 RightTapped="Pill_RightTapped">
 
-            <!-- Dark inner body — fully opaque so rainbow NEVER shows through -->
+            <!-- Inner container — transparent, content only (body drawn by composition) -->
             <Border x:Name="PillInner" CornerRadius="50"
-                    Background="#FF1a1a1a">
+                    Background="Transparent">
 
                 <Grid x:Name="ContentGrid" VerticalAlignment="Center"
                       HorizontalAlignment="Center">
