@@ -84,7 +84,7 @@ jobs:
             echo "|----------|------|"
             echo "| macOS (Apple Silicon) | \`Dimmy-native-macos-arm64.dmg\` |"
             echo "| Windows | \`Dimmy-native-windows-x64.zip\` |"
-            echo "| Linux (GTK4) | \`dimmy-linux\` (artifact) |"
+            echo "| Linux (GTK4) | \`Dimmy-native-linux-x86_64.AppImage\` |"
             echo ""
             echo "## Windows Requirements"
             echo ""
@@ -257,7 +257,8 @@ jobs:
       - name: Install GTK4 + libadwaita dev packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libdbus-1-dev pkg-config
+          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libdbus-1-dev pkg-config \
+            libasound2-dev libxdo-dev libfuse2
 
       - name: Clippy
         working-directory: native-ui/linux
@@ -271,7 +272,38 @@ jobs:
         working-directory: native-ui/linux
         run: cargo build --release
 
-      - name: Upload binary
+      - name: Package AppImage
+        run: |
+          # Download linuxdeploy + GTK plugin
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget -q https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh
+          chmod +x linuxdeploy-x86_64.AppImage linuxdeploy-plugin-gtk.sh
+
+          # Build AppDir structure
+          mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/scalable/apps
+          cp native-ui/linux/target/release/dimmy-linux AppDir/usr/bin/
+          cp native-ui/linux/assets/com.dimmy.app.desktop AppDir/usr/share/applications/
+          cp native-ui/linux/assets/com.dimmy.app.svg AppDir/usr/share/icons/hicolor/scalable/apps/
+
+          # Create AppImage with GTK plugin (bundles libgtk-4, libadwaita, etc.)
+          export DEPLOY_GTK_VERSION=4
+          ./linuxdeploy-x86_64.AppImage \
+            --appdir AppDir \
+            --plugin gtk \
+            --desktop-file native-ui/linux/assets/com.dimmy.app.desktop \
+            --icon-file native-ui/linux/assets/com.dimmy.app.svg \
+            --output appimage
+
+          # Rename to consistent name
+          mv Dimmy*.AppImage Dimmy-native-linux-x86_64.AppImage
+
+      - name: Upload AppImage to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: staging-latest
+          files: Dimmy-native-linux-x86_64.AppImage
+
+      - name: Upload raw binary (artifact)
         uses: actions/upload-artifact@v4
         with:
           name: dimmy-linux
