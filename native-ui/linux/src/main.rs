@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Dimmy Linux native UI — GTK4 + libadwaita entry point.
 
 mod hotkey;
