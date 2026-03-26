@@ -55,7 +55,7 @@
 
                     <!-- Recording -->
                     <StackPanel x:Name="RecordingPanel" Orientation="Horizontal" Spacing="8"
-                                VerticalAlignment="Center" Margin="7,0" Visibility="Collapsed">
+                                VerticalAlignment="Center" Margin="12,0" Visibility="Collapsed">
                         <controls:WaveformControl x:Name="Waveform" Width="34" Height="14"
                                                   VerticalAlignment="Center" />
                         <TextBlock x:Name="TimerText" FontSize="11" Foreground="#EEFFFFFF"
