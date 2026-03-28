@@ -101,7 +101,7 @@ public sealed partial class PillWindow : Window
     }
 
     // ── Shape helpers ───────────────────────────────────────────────
-    private const double AnimationDurationMs = 250;
+    private const double AnimationDurationMs = 150;
     private const double AnimationFps = 60;
     private DispatcherTimer? _shapeAnimTimer;
     private double _animStartW, _animStartH, _animTargetW, _animTargetH;
@@ -111,6 +111,9 @@ public sealed partial class PillWindow : Window
     // Track which panel is the NEW content (fades in) and which is OLD (fades out)
     private FrameworkElement? _animNewPanel;
     private FrameworkElement? _animOldPanel;
+    // Last known rendered size — fallback when ActualWidth is stale after Width=NaN
+    private double _lastKnownW;
+    private double _lastKnownH;
 
     private void SetCircleShape()
     {
@@ -121,6 +124,8 @@ public sealed partial class PillWindow : Window
         var r = CircleSize / 2;
         ColorBorder.CornerRadius = new CornerRadius(r);
         PillInner.CornerRadius = new CornerRadius(r);
+        _lastKnownW = CircleSize;
+        _lastKnownH = CircleSize;
     }
 
     private void SetCapsuleShape()
@@ -146,8 +151,21 @@ public sealed partial class PillWindow : Window
     {
         _shapeAnimTimer?.Stop();
 
-        _animStartW = ColorBorder.ActualWidth > 0 ? ColorBorder.ActualWidth : CircleSize;
-        _animStartH = ColorBorder.ActualHeight > 0 ? ColorBorder.ActualHeight : CircleSize;
+        // Force layout so ActualWidth/Height are fresh after Width=NaN
+        ContentGrid.UpdateLayout();
+
+        // Prefer explicit Width if set by a prior animation tick; fall back to ActualWidth;
+        // last resort: _lastKnownW which is always updated by every tick and shape setter.
+        _animStartW = (!double.IsNaN(ColorBorder.Width) && ColorBorder.Width > 0)
+            ? ColorBorder.Width
+            : ColorBorder.ActualWidth > 0
+                ? ColorBorder.ActualWidth
+                : _lastKnownW > 0 ? _lastKnownW : CircleSize;
+        _animStartH = (!double.IsNaN(ColorBorder.Height) && ColorBorder.Height > 0)
+            ? ColorBorder.Height
+            : ColorBorder.ActualHeight > 0
+                ? ColorBorder.ActualHeight
+                : _lastKnownH > 0 ? _lastKnownH : CircleSize;
         _animTargetW = targetW;
         _animTargetH = targetH;
         _animSkipBorderColor = skipBorderColor;
@@ -196,6 +214,8 @@ public sealed partial class PillWindow : Window
         PillBodyHost.Height = h;
         ColorBorder.CornerRadius = new CornerRadius(r);
         PillInner.CornerRadius = new CornerRadius(r);
+        _lastKnownW = w;
+        _lastKnownH = h;
 
         // Border color interpolation (skip when rainbow/gradient manages the border)
         if (!_animSkipBorderColor)
@@ -257,9 +277,11 @@ public sealed partial class PillWindow : Window
         ContentGrid.UpdateLayout();
         var measuredW = ColorBorder.ActualWidth;
 
-        // Restore — animation will start from current actual size
-        ColorBorder.Width = double.IsNaN(prevW) || prevW <= 0 ? _animStartW : prevW;
-        ColorBorder.Height = double.IsNaN(prevH) || prevH <= 0 ? _animStartH : prevH;
+        // Restore — animation will start from current rendered size
+        ColorBorder.Width = double.IsNaN(prevW) || prevW <= 0
+            ? (_lastKnownW > 0 ? _lastKnownW : CircleSize) : prevW;
+        ColorBorder.Height = double.IsNaN(prevH) || prevH <= 0
+            ? (_lastKnownH > 0 ? _lastKnownH : CircleSize) : prevH;
 
         if (measuredW <= 0) measuredW = 120; // fallback
 

@@ -346,9 +346,10 @@ public partial class App : Application
             PttLog($"StopAndProcess: IsSuccess={result.IsSuccess}, IsEmpty={result.IsEmpty}, IsTimeout={result.IsTimeout}, Text={result.Text?.Length ?? 0} chars, Error={result.Error}");
             if (result.IsSuccess)
             {
-                _appViewModel.SetState(AppState.Idle);
                 PttLog($"StopAndProcess: pasting text ({result.Text!.Length} chars)");
                 await TextInjectionService.PasteText(result.Text!, _appViewModel.KeepInClipboard);
+                // Show completing state (checkmark) AFTER paste — PillWindow timer returns to Idle
+                _appViewModel.SetState(AppState.Completing);
             }
             else if (result.IsTimeout)
             {
