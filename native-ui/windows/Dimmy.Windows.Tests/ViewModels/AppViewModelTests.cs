@@ -132,11 +132,63 @@ public class AppViewModelTests
     }
 
     [Fact]
-    public void HandleEvent_TranscriptReady_SetsCompleting()
+    public void HandleEvent_TranscriptReady_DoesNotSetCompleting()
+    {
+        // transcript_ready no longer sets Completing here — App.xaml.cs handles it
+        // after paste to avoid double Completing→Idle→Completing→Idle race
+        var vm = new AppViewModel();
+        vm.SetState(AppState.Processing);
+        vm.HandleEvent("{\"event\":\"transcript_ready\",\"payload\":{\"text\":\"hello\"}}");
+        Assert.Equal(AppState.Processing, vm.CurrentState);
+    }
+
+    // ── IsBusy guard ──
+
+    [Fact]
+    public void IsBusy_TrueWhenRecording()
     {
         var vm = new AppViewModel();
-        vm.HandleEvent("{\"event\":\"transcript_ready\",\"payload\":{\"text\":\"hello\"}}");
-        Assert.Equal(AppState.Completing, vm.CurrentState);
+        vm.SetState(AppState.Recording);
+        Assert.True(vm.IsBusy);
+    }
+
+    [Fact]
+    public void IsBusy_TrueWhenTranscribing()
+    {
+        var vm = new AppViewModel();
+        vm.SetState(AppState.Transcribing);
+        Assert.True(vm.IsBusy);
+    }
+
+    [Fact]
+    public void IsBusy_TrueWhenProcessing()
+    {
+        var vm = new AppViewModel();
+        vm.SetState(AppState.Processing);
+        Assert.True(vm.IsBusy);
+    }
+
+    [Fact]
+    public void IsBusy_FalseWhenIdle()
+    {
+        var vm = new AppViewModel();
+        Assert.False(vm.IsBusy);
+    }
+
+    [Fact]
+    public void IsBusy_FalseWhenCompleting()
+    {
+        var vm = new AppViewModel();
+        vm.SetState(AppState.Completing);
+        Assert.False(vm.IsBusy);
+    }
+
+    [Fact]
+    public void IsBusy_FalseWhenError()
+    {
+        var vm = new AppViewModel();
+        vm.SetError("fail");
+        Assert.False(vm.IsBusy);
     }
 
     // ── State transitions ──

@@ -35,6 +35,7 @@ public partial class App : Application
     private volatile bool _pttStarted;
     // PTT: set by release handler if it fires before/during recording start
     private volatile bool _pendingStop;
+    private volatile bool _stopInProgress;
 
     private static readonly string PttLogPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "dimmy", "ptt.log");
@@ -269,7 +270,7 @@ public partial class App : Application
             if (_appViewModel.ShortcutMode == "hold")
             {
                 // PTT: press starts recording
-                if (!_appViewModel.IsRecording && !_pttStarted)
+                if (!_appViewModel.IsBusy && !_pttStarted)
                 {
                     _pendingStop = false; // clear before starting
                     _pttStarted = true;
@@ -302,9 +303,9 @@ public partial class App : Application
             else
             {
                 // Toggle mode: press toggles recording on/off
-                if (_appViewModel.IsRecording)
+                if (_appViewModel.IsRecording && !_stopInProgress)
                     await StopAndProcess();
-                else
+                else if (!_appViewModel.IsBusy && !_stopInProgress)
                 {
                     _appViewModel.SuppressRecordingStarted = false; // ensure Rust event is accepted
                     var result = DimmyNative.dimmy_start_recording();
@@ -339,6 +340,12 @@ public partial class App : Application
 
     private async Task StopAndProcess()
     {
+        if (_stopInProgress)
+        {
+            PttLog("StopAndProcess: already in progress, ignoring");
+            return;
+        }
+        _stopInProgress = true;
         try
         {
             PttLog("StopAndProcess: calling dimmy_stop_recording...");
@@ -366,6 +373,10 @@ public partial class App : Application
         {
             PttLog($"StopAndProcess: EXCEPTION {ex.GetType().Name}: {ex.Message}");
             _appViewModel.SetError(ex.Message);
+        }
+        finally
+        {
+            _stopInProgress = false;
         }
     }
 
