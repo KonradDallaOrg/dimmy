@@ -53,6 +53,9 @@ public partial class AppViewModel : ObservableObject
     public string LlmStyleColor =>
         StyleColors.TryGetValue(LlmStyle, out var color) ? color : "#41B0B1";
 
+    /// <summary>True when the app is doing something (recording, transcribing, processing) and should not start a new recording.</summary>
+    public bool IsBusy => CurrentState is AppState.Recording or AppState.Transcribing or AppState.Processing;
+
     public void SetState(AppState state)
     {
         CurrentState = state;
@@ -116,7 +119,9 @@ public partial class AppViewModel : ObservableObject
                         payload.GetProperty("total").GetInt32());
                     break;
                 case "transcript_ready":
-                    SetState(AppState.Completing);
+                    // Completing state is set by App.xaml.cs StopAndProcess AFTER paste.
+                    // Do NOT set it here — it would race with StopAndProcess and cause
+                    // double Completing (Completing→Idle→Completing→Idle).
                     break;
                 case "error":
                     var msg = payload.GetProperty("message").GetString() ?? "Unknown error";

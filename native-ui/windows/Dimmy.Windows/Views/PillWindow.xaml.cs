@@ -46,9 +46,9 @@ public sealed partial class PillWindow : Window
     private global::Windows.Graphics.PointInt32 _windowStartPos;
 
     // Circle size for idle/completing states — matched to macOS (36pt)
-    private const double CircleSize = 26;
+    private const double CircleSize = 32;
     // Capsule height for recording/transcribing states
-    private const double CapsuleHeight = 30;
+    private const double CapsuleHeight = 36;
 
     private const int WindowWidth = 240;
     private const int WindowHeight = 56;
@@ -101,6 +101,20 @@ public sealed partial class PillWindow : Window
     }
 
     // ── Shape helpers ───────────────────────────────────────────────
+    private const double AnimationDurationMs = 150;
+    private const double AnimationFps = 60;
+    private DispatcherTimer? _shapeAnimTimer;
+    private double _animStartW, _animStartH, _animTargetW, _animTargetH;
+    private global::Windows.UI.Color _animStartColor, _animTargetColor;
+    private DateTime _animStartTime;
+    private Action? _animOnComplete;
+    // Track which panel is the NEW content (fades in) and which is OLD (fades out)
+    private FrameworkElement? _animNewPanel;
+    private FrameworkElement? _animOldPanel;
+    // Last known rendered size — fallback when ActualWidth is stale after Width=NaN
+    private double _lastKnownW;
+    private double _lastKnownH;
+
     private void SetCircleShape()
     {
         ColorBorder.Width = CircleSize;
@@ -110,6 +124,8 @@ public sealed partial class PillWindow : Window
         var r = CircleSize / 2;
         ColorBorder.CornerRadius = new CornerRadius(r);
         PillInner.CornerRadius = new CornerRadius(r);
+        _lastKnownW = CircleSize;
+        _lastKnownH = CircleSize;
     }
 
     private void SetCapsuleShape()
@@ -117,10 +133,164 @@ public sealed partial class PillWindow : Window
         ColorBorder.Width = double.NaN; // auto
         ColorBorder.Height = CapsuleHeight;
         PillBodyHost.Height = CapsuleHeight;
-        // PillBodyHost width is set by SizeChanged (follows ColorBorder auto-width)
         var r = CapsuleHeight / 2;
         ColorBorder.CornerRadius = new CornerRadius(r);
         PillInner.CornerRadius = new CornerRadius(r);
+    }
+
+    private bool _animSkipBorderColor;
+
+    /// <summary>
+    /// Unified animation: smoothly interpolates size, border color, and content opacity.
+    /// Pass skipBorderColor=true when rainbow or gradient brush manages the border externally.
+    /// </summary>
+    private void AnimateTransition(double targetW, double targetH,
+        global::Windows.UI.Color targetBorderColor,
+        FrameworkElement? newPanel = null, FrameworkElement? oldPanel = null,
+        Action? onComplete = null, bool skipBorderColor = false)
+    {
+        _shapeAnimTimer?.Stop();
+
+        // Force layout so ActualWidth/Height are fresh after Width=NaN
+        ContentGrid.UpdateLayout();
+
+        // Prefer explicit Width if set by a prior animation tick; fall back to ActualWidth;
+        // last resort: _lastKnownW which is always updated by every tick and shape setter.
+        _animStartW = (!double.IsNaN(ColorBorder.Width) && ColorBorder.Width > 0)
+            ? ColorBorder.Width
+            : ColorBorder.ActualWidth > 0
+                ? ColorBorder.ActualWidth
+                : _lastKnownW > 0 ? _lastKnownW : CircleSize;
+        _animStartH = (!double.IsNaN(ColorBorder.Height) && ColorBorder.Height > 0)
+            ? ColorBorder.Height
+            : ColorBorder.ActualHeight > 0
+                ? ColorBorder.ActualHeight
+                : _lastKnownH > 0 ? _lastKnownH : CircleSize;
+        _animTargetW = targetW;
+        _animTargetH = targetH;
+        _animSkipBorderColor = skipBorderColor;
+
+        // Capture current border color
+        _animStartColor = ColorBorder.BorderBrush is SolidColorBrush scb
+            ? scb.Color
+            : global::Windows.UI.Color.FromArgb(0, 0, 0, 0);
+        _animTargetColor = targetBorderColor;
+
+        _animNewPanel = newPanel;
+        _animOldPanel = oldPanel;
+        _animOnComplete = onComplete;
+        _animStartTime = DateTime.Now;
+
+        // Start new panel at 0 opacity, old panel at full
+        if (_animNewPanel != null) _animNewPanel.Opacity = 0;
+        if (_animOldPanel != null) _animOldPanel.Opacity = 1;
+
+        if (_shapeAnimTimer == null)
+        {
+            _shapeAnimTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(1000.0 / AnimationFps)
+            };
+            _shapeAnimTimer.Tick += ShapeAnimTick;
+        }
+        _shapeAnimTimer.Start();
+    }
+
+    private void ShapeAnimTick(object? sender, object e)
+    {
+        var elapsed = (DateTime.Now - _animStartTime).TotalMilliseconds;
+        var t = Math.Min(1.0, elapsed / AnimationDurationMs);
+        // Ease-out cubic
+        var ease = 1.0 - Math.Pow(1.0 - t, 3);
+
+        // Size
+        var w = _animStartW + (_animTargetW - _animStartW) * ease;
+        var h = _animStartH + (_animTargetH - _animStartH) * ease;
+        var r = h / 2;
+
+        ColorBorder.Width = w;
+        ColorBorder.Height = h;
+        PillBodyHost.Width = w;
+        PillBodyHost.Height = h;
+        ColorBorder.CornerRadius = new CornerRadius(r);
+        PillInner.CornerRadius = new CornerRadius(r);
+        _lastKnownW = w;
+        _lastKnownH = h;
+
+        // Border color interpolation (skip when rainbow/gradient manages the border)
+        if (!_animSkipBorderColor)
+        {
+            var cA = (byte)Math.Clamp(_animStartColor.A + (int)((_animTargetColor.A - _animStartColor.A) * ease), 0, 255);
+            var cR = (byte)Math.Clamp(_animStartColor.R + (int)((_animTargetColor.R - _animStartColor.R) * ease), 0, 255);
+            var cG = (byte)Math.Clamp(_animStartColor.G + (int)((_animTargetColor.G - _animStartColor.G) * ease), 0, 255);
+            var cB = (byte)Math.Clamp(_animStartColor.B + (int)((_animTargetColor.B - _animStartColor.B) * ease), 0, 255);
+            ColorBorder.BorderBrush = new SolidColorBrush(
+                global::Windows.UI.Color.FromArgb(cA, cR, cG, cB));
+        }
+
+        // Content crossfade
+        if (_animNewPanel != null) _animNewPanel.Opacity = ease;
+        if (_animOldPanel != null) _animOldPanel.Opacity = 1.0 - ease;
+
+        if (t >= 1.0)
+        {
+            _shapeAnimTimer!.Stop();
+            // Ensure final opacity
+            if (_animNewPanel != null) _animNewPanel.Opacity = 1;
+            if (_animOldPanel != null)
+            {
+                _animOldPanel.Opacity = 1; // reset
+                _animOldPanel.Visibility = Visibility.Collapsed;
+            }
+            _animNewPanel = null;
+            _animOldPanel = null;
+            _animOnComplete?.Invoke();
+            _animOnComplete = null;
+        }
+    }
+
+    /// <summary>
+    /// Animate to circle shape (idle/completing).
+    /// </summary>
+    private void AnimateToCircle(global::Windows.UI.Color borderColor,
+        FrameworkElement? newPanel = null, FrameworkElement? oldPanel = null,
+        bool skipBorderColor = false)
+    {
+        AnimateTransition(CircleSize, CircleSize, borderColor, newPanel, oldPanel,
+            skipBorderColor: skipBorderColor);
+    }
+
+    /// <summary>
+    /// Animate to capsule shape. Measures content to determine target width.
+    /// </summary>
+    private void AnimateToCapsule(global::Windows.UI.Color borderColor,
+        FrameworkElement? newPanel = null, FrameworkElement? oldPanel = null,
+        bool skipBorderColor = false)
+    {
+        // Measure desired capsule width
+        var prevW = ColorBorder.Width;
+        var prevH = ColorBorder.Height;
+
+        // Temporarily set auto to measure
+        ColorBorder.Width = double.NaN;
+        ColorBorder.Height = CapsuleHeight;
+        ContentGrid.UpdateLayout();
+        var measuredW = ColorBorder.ActualWidth;
+
+        // Restore — animation will start from current rendered size
+        ColorBorder.Width = double.IsNaN(prevW) || prevW <= 0
+            ? (_lastKnownW > 0 ? _lastKnownW : CircleSize) : prevW;
+        ColorBorder.Height = double.IsNaN(prevH) || prevH <= 0
+            ? (_lastKnownH > 0 ? _lastKnownH : CircleSize) : prevH;
+
+        if (measuredW <= 0) measuredW = 120; // fallback
+
+        AnimateTransition(measuredW, CapsuleHeight, borderColor, newPanel, oldPanel, () =>
+        {
+            // After animation: switch to auto width for responsive content
+            ColorBorder.Width = double.NaN;
+            PillBodyHost.Height = CapsuleHeight;
+        }, skipBorderColor);
     }
 
     // ── State colors ────────────────────────────────────────────────
@@ -366,15 +536,37 @@ public sealed partial class PillWindow : Window
         UpdatePillBody();
     }
 
+    private FrameworkElement? _currentVisiblePanel;
+
+    /// <summary>Get the panel for the current state (before switching).</summary>
+    private FrameworkElement? GetPanelForState(AppState state) => state switch
+    {
+        AppState.Idle => IdlePanel,
+        AppState.Recording => RecordingPanel,
+        AppState.Transcribing => TranscribingPanel,
+        AppState.Processing => ProcessingPanel,
+        AppState.Completing => CompletingPanel,
+        AppState.Error => ErrorPanel,
+        _ => null,
+    };
+
+    private global::Windows.UI.Color GetBorderColorForRecording() => _vm.BorderStyle switch
+    {
+        "Blue" => BorderBlue, "Green" => BorderGreen,
+        "Purple" => BorderPurple, "Orange" => BorderOrange,
+        _ => BorderBlue,
+    };
+
     private void UpdateVisualState()
     {
-        // Hide all panels
-        IdlePanel.Visibility = Visibility.Collapsed;
-        RecordingPanel.Visibility = Visibility.Collapsed;
-        TranscribingPanel.Visibility = Visibility.Collapsed;
-        ProcessingPanel.Visibility = Visibility.Collapsed;
-        CompletingPanel.Visibility = Visibility.Collapsed;
-        ErrorPanel.Visibility = Visibility.Collapsed;
+        var oldPanel = _currentVisiblePanel;
+
+        // Hide all panels EXCEPT the old one (it will fade out)
+        foreach (var p in new FrameworkElement[] { IdlePanel, RecordingPanel, TranscribingPanel,
+                                                    ProcessingPanel, CompletingPanel, ErrorPanel })
+        {
+            if (p != oldPanel) p.Visibility = Visibility.Collapsed;
+        }
 
         _amplitudeTimer?.Stop();
         _recordingTimer?.Stop();
@@ -385,76 +577,77 @@ public sealed partial class PillWindow : Window
         // Apply text colors for theme
         ApplyThemeColors();
 
+        FrameworkElement? newPanel = GetPanelForState(_vm.CurrentState);
+
+        // Make new panel visible (animation will fade it in from 0)
+        if (newPanel != null && newPanel != oldPanel)
+            newPanel.Visibility = Visibility.Visible;
+
+        // If same panel (e.g. capsule→capsule), don't crossfade
+        if (newPanel == oldPanel) oldPanel = null;
+
+        _currentVisiblePanel = newPanel;
+
         switch (_vm.CurrentState)
         {
             case AppState.Idle:
-                IdlePanel.Visibility = Visibility.Visible;
                 StyleDot.Fill = new SolidColorBrush(ParseColor(_vm.LlmStyleColor));
                 RootGrid.Opacity = 1.0;
-                SetCircleShape();
                 SetPillBodyColor(IsGlass ? BgGlassIdle : BgDark);
-                // No colored border in idle — transparent so glow doesn't create artifacts
-                ColorBorder.BorderBrush = new SolidColorBrush(
-                    global::Windows.UI.Color.FromArgb(0, 0, 0, 0));
                 _rainbowTimer?.Stop();
-                // Subtle glow in idle — uses LLM style color at low intensity
+                AnimateToCircle(global::Windows.UI.Color.FromArgb(0, 0, 0, 0), newPanel, oldPanel);
                 UpdateGlow(ParseColor(_vm.LlmStyleColor), subtle: true);
                 break;
 
             case AppState.Recording:
-                RecordingPanel.Visibility = Visibility.Visible;
                 RootGrid.Opacity = 1.0;
                 SetPillBodyColor(IsGlass ? BgGlassActive : BgDark);
                 StopButton.Visibility = Visibility.Visible;
-                SetCapsuleShape();
-                ColorBorder.BorderBrush = GetActiveBorderBrush();
                 StartAmplitudePolling();
                 _recordingStartTime = DateTime.Now;
                 StartRecordingTimer();
                 Waveform.IsActive = true;
-                if (_vm.BorderStyle == "Rainbow") StartRainbowAnimation();
-                else _rainbowTimer?.Stop();
-                // Glow in recording: use the border color (first solid stop or blue)
-                UpdateGlow(_vm.BorderStyle switch
+                if (_vm.BorderStyle == "Rainbow")
                 {
-                    "Blue" => BorderBlue, "Green" => BorderGreen,
-                    "Purple" => BorderPurple, "Orange" => BorderOrange,
-                    _ => BorderBlue // rainbow → default blue glow
-                });
+                    // Set rainbow brush first, then animate size only (skip border color)
+                    ColorBorder.BorderBrush = _rainbowBrush;
+                    StartRainbowAnimation();
+                    AnimateToCapsule(BorderBlue, newPanel, oldPanel, skipBorderColor: true);
+                }
+                else
+                {
+                    _rainbowTimer?.Stop();
+                    AnimateToCapsule(GetBorderColorForRecording(), newPanel, oldPanel);
+                }
+                UpdateGlow(GetBorderColorForRecording());
                 break;
 
             case AppState.Transcribing:
-                TranscribingPanel.Visibility = Visibility.Visible;
                 SetPillBodyColor(IsGlass ? BgGlassActive : BgDark);
                 RootGrid.Opacity = 1.0;
                 Waveform.IsActive = false;
                 ChunkText.Text = _vm.ChunkTotal > 1 ? $"{_vm.ChunkCurrent}/{_vm.ChunkTotal}" : "";
-                SetCapsuleShape();
                 _rainbowTimer?.Stop();
-                ColorBorder.BorderBrush = new SolidColorBrush(ColorTranscribing);
+                AnimateToCapsule(ColorTranscribing, newPanel, oldPanel);
                 UpdateGlow(ColorTranscribing);
                 break;
 
             case AppState.Processing:
-                ProcessingPanel.Visibility = Visibility.Visible;
                 SetPillBodyColor(IsGlass ? BgGlassActive : BgDark);
                 RootGrid.Opacity = 1.0;
-                SetCapsuleShape();
                 _rainbowTimer?.Stop();
-                ColorBorder.BorderBrush = new SolidColorBrush(ParseColor(_vm.LlmStyleColor));
+                AnimateToCapsule(ParseColor(_vm.LlmStyleColor), newPanel, oldPanel);
                 UpdateGlow(ParseColor(_vm.LlmStyleColor));
                 break;
 
             case AppState.Completing:
-                CompletingPanel.Visibility = Visibility.Visible;
                 SetPillBodyColor(IsGlass ? BgGlassActive : BgDark);
                 RootGrid.Opacity = 1.0;
-                SetCircleShape();
                 _rainbowTimer?.Stop();
                 var completingColor = _vm.LlmStyle != "off"
                     ? ParseColor(_vm.LlmStyleColor)
                     : ColorCompleting;
-                ColorBorder.BorderBrush = new SolidColorBrush(completingColor);
+                AnimateToCircle(completingColor, newPanel, oldPanel);
                 UpdateGlow(completingColor);
                 if (_completingTimer is null)
                     _completingTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1200) };
@@ -467,13 +660,11 @@ public sealed partial class PillWindow : Window
                 break;
 
             case AppState.Error:
-                ErrorPanel.Visibility = Visibility.Visible;
                 ErrorText.Text = _vm.ErrorMessage;
                 SetPillBodyColor(IsGlass ? BgGlassActive : BgDark);
                 RootGrid.Opacity = 1.0;
-                SetCapsuleShape();
                 _rainbowTimer?.Stop();
-                ColorBorder.BorderBrush = new SolidColorBrush(ColorError);
+                AnimateToCapsule(ColorError, newPanel, oldPanel);
                 UpdateGlow(ColorError);
                 if (_errorTimer is null)
                     _errorTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
@@ -595,14 +786,14 @@ public sealed partial class PillWindow : Window
         if (_vm.CurrentState == AppState.Idle)
         {
             RootGrid.Opacity = 0.95;
-            SetCapsuleShape();
             LanguageLabel.Text = string.IsNullOrEmpty(_vm.Language) ? "" : _vm.Language.ToUpperInvariant();
             ShortcutLabel.Text = _vm.Shortcut;
             if (!string.IsNullOrEmpty(LanguageLabel.Text))
                 LanguageLabel.Visibility = Visibility.Visible;
             ShortcutLabel.Visibility = Visibility.Visible;
-            IdleContent.Margin = new Thickness(10, 0, 10, 0);
-            // Hover glow — slightly brighter than idle
+            IdleContent.Margin = new Thickness(7, 0, 7, 0);
+            // Hover keeps same transparent border — just animate size
+            AnimateToCapsule(global::Windows.UI.Color.FromArgb(0, 0, 0, 0));
             UpdateGlow(ParseColor(_vm.LlmStyleColor), subtle: true);
         }
     }
@@ -612,11 +803,10 @@ public sealed partial class PillWindow : Window
         if (_vm.CurrentState == AppState.Idle)
         {
             RootGrid.Opacity = 1.0;
-            SetCircleShape();
             LanguageLabel.Visibility = Visibility.Collapsed;
             ShortcutLabel.Visibility = Visibility.Collapsed;
             IdleContent.Margin = new Thickness(0);
-            // Back to subtle idle glow
+            AnimateToCircle(global::Windows.UI.Color.FromArgb(0, 0, 0, 0));
             UpdateGlow(ParseColor(_vm.LlmStyleColor), subtle: true);
         }
     }
