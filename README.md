@@ -5,7 +5,7 @@
 <h1 align="center">Dimmy</h1>
 
 <p align="center">
-  Cross-platform voice transcription overlay. Hold a shortcut, speak, release — your words appear wherever you're typing.
+  Voice dictation that stays out of your way. Hold a shortcut, speak, release — text appears wherever you're typing.
 </p>
 
 <p align="center">
@@ -15,58 +15,68 @@
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-6366f1" alt="Platform">
 </p>
 
+<p align="center">
+  <a href="https://dimmy.app">dimmy.app</a>
+</p>
+
 ---
 
-## How It Works
+## What is Dimmy?
 
-Dimmy runs as a small overlay on your screen. Press a keyboard shortcut to start recording, speak naturally, then press again (or release, in hold mode) to stop. Your audio is sent to a speech-to-text provider, optionally enhanced by an LLM, and the result is pasted into whatever application has focus.
+The name is pronounced like "Dimi" — short for *dimmi*, Italian for "tell me".
 
-## Features
+Dimmy is a cross-platform desktop app that turns your voice into text — instantly, in any application. It runs as a tiny overlay on your screen. Press a hotkey, speak, and your words are transcribed and pasted into whatever has focus: editors, browsers, chat apps, terminals.
+
+Built with **native UIs** for each platform — no Electron, no WebView. A shared Rust core handles all the heavy lifting (audio capture, transcription, AI post-processing), while each platform gets its own native frontend that feels right at home.
+
+### Key Features
 
 - **Universal dictation** — works with any application via clipboard paste
-- **Always-on-top overlay** — minimal pill UI with waveform visualization
-- **Streaming transcription** — real-time chunks via OpenAI-compatible APIs
-- **Realtime preview** — optionally send chunks while recording, or wait for final result
-- **AI enhancement** — post-process with LLM (correct, summarize, elaborate, 13 styles total)
-- **Multiple providers** — Groq, OpenAI, Deepgram, Gemini, Anthropic, or any custom endpoint
-- **Anti-hallucination guard** — skips audio chunks with less than 0.5s of speech
-- **Per-provider API keys** — encrypted locally by default, optional OS keyring, switch without re-entering
-- **Audio preprocessing** — noise filtering + normalization for cleaner input
-- **Configurable shortcut** — toggle or hold mode, any 2-modifier combo
+- **Native on every platform** — WinUI 3 on Windows, SwiftUI on macOS, GTK4 on Linux
+- **Always-on-top pill overlay** — compact UI with live waveform visualization
+- **Multiple STT providers** — Groq (fastest), OpenAI, Deepgram, Gemini, or any custom endpoint
+- **AI enhancement** — 13 post-processing styles: correct grammar, summarize, rewrite professionally, and more
+- **Privacy-first** — no telemetry, no cloud accounts, all data local, API keys encrypted on device (AES-256)
 - **Multilingual** — auto-detect or select from 12+ languages
-- **Privacy-first** — no telemetry, all data local, keys encrypted on device
-- **Auto-update** — built-in update checker with one-click install
+- **Configurable shortcut** — toggle or hold-to-record mode, any modifier combo
+- **Update notifications** — checks GitHub for new releases from Settings > About
 
-## Platforms
+## Download
 
-| Platform | UI Framework | Status |
-|----------|-------------|--------|
-| Windows | WinUI 3 (C#) | Native |
-| macOS | SwiftUI | Native |
-| Linux | GTK4 + libadwaita (Rust) | Native |
+**[Get the latest release](https://github.com/KonradDallaOrg/dimmy/releases/latest)**
 
-Each platform has its own native UI that looks and feels right for the OS, while sharing the same Rust core for audio capture, transcription, and post-processing.
+| Platform | File | Requirements |
+|----------|------|--------------|
+| Windows | `Dimmy-windows-x64.zip` | [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) |
+| macOS | `Dimmy-macos-arm64.dmg` | macOS 12+, Apple Silicon |
+| Linux | `Dimmy-linux-x86_64.AppImage` | None (GTK4 bundled) |
 
-## Architecture
+<details>
+<summary><strong>Installation notes</strong></summary>
 
-```
-+-------------------+   +-------------------+   +-------------------+
-|  Windows (WinUI3) |   |  macOS (SwiftUI)  |   | Linux (GTK4/Rust) |
-|       C# UI       |   |     Swift UI      |   |   Rust + GTK4     |
-+--------+----------+   +--------+----------+   +--------+----------+
-         |  C FFI               |  C FFI               |  Rust lib
-         v                      v                      v
-+---------------------------------------------------------------+
-|                     Shared Rust Core                           |
-|  audio.rs  preprocess.rs  transcribe.rs  llm.rs  provider.rs  |
-|  ffi.rs (20+ exported C functions)   keystore   hotkey        |
-+---------------------------------------------------------------+
-         |                      |                      |
-         v                      v                      v
-   STT Providers          LLM Providers          OS Audio (cpal)
+**Windows:** Extract the zip, run `Dimmy.Windows.exe`. Install .NET 8 Desktop Runtime if prompted.
+
+**macOS:** Open the DMG, drag Dimmy to Applications. First launch requires right-click > Open, or:
+```bash
+xattr -d com.apple.quarantine /Applications/Dimmy.app
 ```
 
-The shared core (`src-tauri/src/`) handles all business logic. Windows and macOS call it through C FFI (`ffi.rs`). Linux links directly as a Rust library.
+**Linux:** Make the AppImage executable and run:
+```bash
+chmod +x Dimmy-linux-x86_64.AppImage
+./Dimmy-linux-x86_64.AppImage
+```
+
+</details>
+
+## Quick Start
+
+1. Launch Dimmy — a small pill appears on your screen
+2. Right-click the pill or tray icon to open Settings
+3. Enter an API key for transcription (see [STT Providers](#stt-providers))
+4. Press **Win+Alt** (default) to start recording
+5. Speak naturally, then press again to stop
+6. Text is transcribed and pasted into the active app
 
 ## Screenshots
 
@@ -90,24 +100,9 @@ The shared core (`src-tauri/src/`) handles all business logic. Windows and macOS
 
 </details>
 
-## Download
-
-Get the latest release for your platform:
-
-**[Download Dimmy](https://github.com/KonradDallaOrg/dimmy/releases/latest)** — Windows (.exe), macOS (.dmg), Linux (.AppImage, .deb)
-
-## Quick Start
-
-1. Launch Dimmy — a small green dot appears in the corner of your screen
-2. Open Settings (click the gear icon or right-click the pill)
-3. Enter an API key for transcription (see [STT Providers](#stt-providers) below)
-4. Press **Win+Alt** (default) to start recording
-5. Speak naturally
-6. Press **Win+Alt** again to stop — text is transcribed and pasted into the active app
-
 ## STT Providers
 
-Dimmy needs an API key for speech-to-text transcription. Choose a provider:
+Dimmy needs an API key for speech-to-text. Choose a provider:
 
 | Provider | Type | Models | Free Tier | Get Key |
 |----------|------|--------|-----------|---------|
@@ -118,7 +113,7 @@ Dimmy needs an API key for speech-to-text transcription. Choose a provider:
 | **Anthropic** | LLM only | Claude Haiku 4.5, Claude Sonnet 4 | No | [console.anthropic.com/keys](https://console.anthropic.com/settings/keys) |
 | **OpenRouter** | LLM only | Llama 3.3 70B, DeepSeek R1 | Yes (free models) | [openrouter.ai/keys](https://openrouter.ai/keys) |
 
-Paste your key in Settings. Keys are encrypted locally on your device (AES-256). For extra security, enable **OS secure storage** (Keychain / Credential Manager) in Settings. You can also use any **custom endpoint** compatible with the OpenAI API format.
+Keys are encrypted locally on your device (AES-256). For extra security, enable **OS secure storage** (Keychain / Credential Manager) in Settings. You can also use any **custom endpoint** compatible with the OpenAI API format.
 
 <details>
 <summary><strong>STT Provider Benchmarks</strong></summary>
@@ -178,90 +173,192 @@ Enable in Settings to send transcriptions through an LLM for cleanup or transfor
 
 Scroll wheel on the pill to cycle styles. Ctrl+scroll to cycle tone.
 
-## Build from Source
+## Architecture
+
+```
++-------------------+   +-------------------+   +-------------------+
+|  Windows (WinUI3) |   |  macOS (SwiftUI)  |   | Linux (GTK4/Rust) |
+|       C# UI       |   |     Swift UI      |   |   Rust + GTK4     |
++--------+----------+   +--------+----------+   +--------+----------+
+         |  P/Invoke             |  C FFI               |  Rust crate
+         v                      v                      v
++---------------------------------------------------------------+
+|                     Shared Rust Core                           |
+|  audio.rs  preprocess.rs  transcribe.rs  llm.rs  provider.rs  |
+|  ffi.rs (20+ exported C functions)   keystore   hotkey        |
++---------------------------------------------------------------+
+         |                      |                      |
+         v                      v                      v
+   STT Providers          LLM Providers          OS Audio (cpal)
+```
+
+The shared core (`src-tauri/src/`) handles all business logic: audio capture, preprocessing (noise filter + AGC), transcription via multiple STT APIs, optional LLM post-processing, and secure key storage. Windows and macOS call it through C FFI exports. Linux links directly as a Rust crate.
+
+**Test coverage:** 206 Rust core tests + 38 Linux UI tests + 91 C# Windows tests = **335 total tests**.
+
+## Contributing
 
 ### Prerequisites
 
+All platforms need:
 - [Rust](https://rustup.rs/) (latest stable)
+- [Git](https://git-scm.com/)
+
+### Clone & verify
+
+```bash
+git clone https://github.com/KonradDallaOrg/dimmy.git
+cd dimmy
+
+# Verify the Rust core builds and passes tests
+cd src-tauri
+cargo test --lib
+cargo clippy -- -D warnings
+cd ..
+```
 
 ### Windows
 
-Requires [Visual Studio 2022+](https://visualstudio.microsoft.com/) with the following workloads:
-- .NET Desktop Development
-- Windows App SDK (WinUI 3)
-- Desktop Development with C++
+**Additional requirements:**
+- [Visual Studio 2022+](https://visualstudio.microsoft.com/) with:
+  - .NET Desktop Development workload
+  - Windows App SDK / WinUI 3
+- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
 
 ```bash
-# Build the shared library
+# 1. Build the Rust DLL
 cd src-tauri
-cargo build --release --lib
+cargo build --release --lib --target x86_64-pc-windows-msvc
+cd ..
 
-# Open the Windows UI project in Visual Studio
-# Located at: src-windows/Dimmy.sln
+# 2. Build the Windows app
+cd native-ui/windows/Dimmy.Windows
+dotnet restore
+dotnet build -c Release
+cd ..
+
+# 3. Copy Rust DLL to output
+copy ..\..\src-tauri\target\x86_64-pc-windows-msvc\release\dimmy_lib.dll Dimmy.Windows\bin\Release\net8.0-windows10.0.19041.0\
+
+# 4. Run tests
+cd Dimmy.Windows.Tests
+dotnet test -c Release
 ```
+
+Or use the build script: `powershell -File build-windows.ps1`
 
 ### macOS
 
-Requires Xcode + Command Line Tools.
+**Additional requirements:**
+- Xcode 15+ with Command Line Tools
 
 ```bash
+# 1. Install Xcode CLI tools
 xcode-select --install
 
-# Build the shared library
+# 2. Build the Rust static library (Apple Silicon)
 cd src-tauri
-cargo build --release --lib --target universal-apple-darwin
+cargo build --release --lib --target aarch64-apple-darwin
+cd ..
 
-# Open the SwiftUI project in Xcode
-# Located at: src-macos/Dimmy.xcodeproj
+# 3. Remove dylib so Xcode links statically
+rm -f src-tauri/target/aarch64-apple-darwin/release/libdimmy_lib.dylib
+
+# 4. Open and build in Xcode
+open native-ui/macos/Dimmy.xcodeproj
+# Build with Cmd+B, Run with Cmd+R
 ```
 
 ### Linux
 
-Requires GTK4 and libadwaita development libraries.
+**Additional requirements:**
+- GTK4 and libadwaita development libraries
+- pkg-config
 
 ```bash
-# Ubuntu/Debian
-sudo apt install libgtk-4-dev libadwaita-1-dev libasound2-dev libxdo-dev
+# Ubuntu/Debian 24.04+
+sudo apt install libgtk-4-dev libadwaita-1-dev libasound2-dev libxdo-dev \
+  libdbus-1-dev pkg-config
 
-# Build the full application
-cd src-tauri
+# Fedora
+sudo dnf install gtk4-devel libadwaita-devel alsa-lib-devel libxdo-devel \
+  dbus-devel
+
+# Arch
+sudo pacman -S gtk4 libadwaita alsa-lib xdotool dbus
+
+# Build and run
+cd native-ui/linux
 cargo build --release
+./target/release/dimmy-linux
 ```
 
-## Development
+### Development Workflow
 
 ```bash
 cd src-tauri
 
-# Run tests
-cargo test
+# Run Rust core tests
+cargo test --lib
 
 # Format
 cargo fmt
 
 # Lint (CI enforces zero warnings)
 cargo clippy -- -D warnings
+
+# Lint the Linux UI (requires GTK4 dev libs)
+cd ../native-ui/linux
+cargo clippy -- -D warnings
+cargo test
 ```
 
-### Pre-Push Checklist
+### Pre-push checklist
 
-- `cargo fmt --check` — clean
-- `cargo clippy -- -D warnings` — zero warnings
-- `cargo test --lib` — all pass
-- Version matches in `Cargo.toml` and `tauri.conf.json`
+- `cargo fmt --check` in `src-tauri/` — clean
+- `cargo clippy -- -D warnings` in `src-tauri/` — zero warnings
+- `cargo test --lib` in `src-tauri/` — all pass
+- Version matches in `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`
+
+### CI/CD
+
+| Workflow | Trigger | What it does |
+|----------|---------|-------------|
+| `ci.yml` | Push/PR to main or staging | Lint + test Rust core, lint Linux GTK4 crate |
+| `staging-native.yml` | Push to staging | Build all 3 platforms, create pre-release |
+| `release.yml` | Tag push (`v*`) | Build all 3 platforms, publish GitHub Release |
+
+### Project Structure
+
+```
+src-tauri/src/          Shared Rust core (audio, STT, LLM, FFI, keystore)
+native-ui/windows/      WinUI 3 / C# (.NET 8) — P/Invoke to dimmy_lib.dll
+native-ui/macos/        SwiftUI — FFI bridge via DimmyFFI.h to libdimmy_lib.a
+native-ui/linux/        GTK4 + libadwaita (Rust) — direct crate dependency
+docs/dev/               Development docs (audio pipeline, known bugs, practices)
+.github/workflows/      CI/CD pipeline definitions
+```
+
+## Development Philosophy
+
+Dimmy follows **Negative Space Programming**: every function asserts its preconditions and postconditions in production code. Assertions run in release builds — the absence of a crash is the proof of correctness. Combined with TDD (write failing tests before implementation) and strict defensive coding (clamp audio, check for NaN, truncate errors, validate URLs), this keeps the app stable for daily use.
+
+Full development guidelines are in the project's `CLAUDE.md`, which also serves as the AI-assisted development playbook for contributors using Claude Code or similar tools.
 
 ## Tech Stack
 
 | Layer | Technology |
 |-------|-----------|
-| Core | Rust |
-| Windows UI | WinUI 3 / C# |
+| Core | Rust (stable) |
+| Windows UI | WinUI 3 / C# / .NET 8 |
 | macOS UI | SwiftUI |
 | Linux UI | GTK4 + libadwaita / Rust |
 | Audio capture | cpal |
-| Noise filter | nnnoiseless + biquad |
+| Noise filter | nnnoiseless + biquad highpass |
+| AGC | dagc (with NaN safety guards) |
 | Secure storage | AES-256 local (default) + OS keyring (opt-in) |
 | HTTP | reqwest |
+| CI/CD | GitHub Actions |
 
 ## Support
 

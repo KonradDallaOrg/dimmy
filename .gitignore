@@ -16,5 +16,7 @@ docs/superpowers/
 tests/test_audio.wav
 tests/audio/
 tests/results/
+tests/*.enc
+**/TestResults/
 demo/
 mockup/

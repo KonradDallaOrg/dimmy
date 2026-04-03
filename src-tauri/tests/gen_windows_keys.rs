@@ -298,10 +298,10 @@ fn load_env() -> HashMap<String, String> {
 fn generate_windows_keys_enc() {
     let env = load_env();
 
-    // Windows machine identity
-    let win_username = "konradd";
-    let win_hostname = "PC-KDALLA";
-    let master_key = derive_key_for(win_username, win_hostname);
+    // Windows machine identity — set WIN_USER and WIN_HOST env vars, or edit defaults
+    let win_username = std::env::var("WIN_USER").unwrap_or_else(|_| "your-username".to_string());
+    let win_hostname = std::env::var("WIN_HOST").unwrap_or_else(|_| "YOUR-PC".to_string());
+    let master_key = derive_key_for(&win_username, &win_hostname);
 
     println!(
         "\n=== Generating keys.enc for Windows ({} @ {}) ===\n",
@@ -340,5 +340,8 @@ fn generate_windows_keys_enc() {
     std::fs::write(&out_path, &json).unwrap();
     println!("\n  Written to: {}", out_path.display());
     println!("  Size: {} bytes", json.len());
-    println!("\n  Copy to: C:\\Users\\konradd\\AppData\\Roaming\\dimmy\\keys.enc\n");
+    println!(
+        "\n  Copy to: C:\\Users\\{}\\AppData\\Roaming\\dimmy\\keys.enc\n",
+        win_username
+    );
 }
