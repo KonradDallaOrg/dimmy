@@ -83,15 +83,19 @@ chmod +x Dimmy-linux-x86_64.AppImage
 Dimmy lives as a tiny overlay on your screen — the "pill". It changes shape and color to show what's happening:
 
 <p align="center">
+  <video src="https://github.com/KonradDallaOrg/dimmy/raw/main/docs/screenshots/pill-lifecycle.mp4" width="560" autoplay loop muted playsinline>
+    Your browser does not support the video tag.
+  </video>
+</p>
+
+<details>
+<summary><strong>Pill states</strong></summary>
+
+<p align="center">
   <img src="docs/screenshots/pill-lifecycle-flow.png" alt="Pill lifecycle: idle → recording → transcribing → processing → done" width="680">
 </p>
 
-<p align="center">
-  <img src="docs/screenshots/pill-idle.png" alt="Idle" width="220">
-  <img src="docs/screenshots/pill-recording.png" alt="Recording" width="220">
-  <img src="docs/screenshots/pill-transcribing.png" alt="Transcribing" width="220">
-  <img src="docs/screenshots/pill-completing.png" alt="Done" width="220">
-</p>
+</details>
 
 ## Settings
 
