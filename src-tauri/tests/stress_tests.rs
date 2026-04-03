@@ -583,7 +583,7 @@ fn pipeline_no_preprocessing() {
 // SECTION 5: CHUNK SPLITTING SIMULATION
 // ══════════════════════════════════════════════════════════════════════
 
-/// Simulate the chunk splitting algorithm from lib.rs without Tauri dependencies
+/// Simulate the chunk splitting algorithm from lib.rs
 fn simulate_chunk_splitting(audio: &[f32], sample_rate: usize) -> Vec<(usize, usize)> {
     let min_chunk = sample_rate * 5;
     let max_chunk = sample_rate * 12;
@@ -1083,7 +1083,7 @@ fn error_display_all_variants() {
         let display = err.to_string();
         assert!(!display.is_empty(), "Empty display for {:?}", err);
 
-        // Serialize for Tauri IPC
+        // Serialize for JSON error payloads
         let json = serde_json::to_string(err).unwrap();
         assert!(!json.is_empty());
     }

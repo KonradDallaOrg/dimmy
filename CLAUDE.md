@@ -4,7 +4,7 @@
 
 Cross-platform voice transcription overlay. Records audio via global hotkey, transcribes via STT providers (Groq, OpenAI, Deepgram, Gemini), optionally post-processes with LLM, pastes result into active app. Built as a shared Rust core library with native UIs per platform (WinUI3/C# on Windows, SwiftUI on macOS, GTK4/Rust on Linux).
 
-Current version: 0.3.64
+Current version: 0.3.65
 
 ## Development Philosophy (MANDATORY)
 
@@ -47,28 +47,23 @@ Every feature, fix, or change MUST work identically on Windows, macOS, Linux.
 
 ## Version Bumping (MANDATORY)
 
-ALWAYS update BOTH files in the same commit:
-- `src-tauri/Cargo.toml` → `version = "x.y.z"`
-- `src-tauri/tauri.conf.json` → `"version": "x.y.z"`
-
-CI enforces consistency — mismatch fails Lint.
+Update version in `src-tauri/Cargo.toml` → `version = "x.y.z"`.
 
 After commit: `git tag v0.3.X && git push origin v0.3.X` to trigger Release.
 
 ## CI/CD Pipeline
 
 ### Workflows
-- **ci.yml** — Runs on push/PR to main/staging: `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test --lib`, version match check
-- **staging-release.yml** — Runs on push to staging: lint + test + build all platforms, creates pre-release `staging-latest`
+- **ci.yml** — Runs on push/PR to main/staging: `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test --lib`, Linux GTK4 lint
 - **staging-native.yml** — Builds all 3 native UIs in parallel:
   - Windows: .NET build + C# tests + zip artifact
   - macOS: Rust static lib + Xcode build + DMG
   - Linux: cargo build + clippy + AppImage
-- **release.yml** — Runs on tag push (`v*`): builds all platforms. Publishes GitHub Release with auto-updater JSON.
+- **release.yml** — Runs on tag push (`v*`): builds all 3 native platforms. Publishes GitHub Release.
 
 ### Release Process
 1. Commit changes to `main` (or merge feature branch)
-2. Bump version in BOTH files, commit
+2. Bump version in `src-tauri/Cargo.toml`, commit
 3. Push to origin
 4. `git tag v0.3.X && git push origin v0.3.X`
 5. Wait for release workflow to complete (~15 min)
@@ -78,7 +73,7 @@ After commit: `git tag v0.3.X && git push origin v0.3.X` to trigger Release.
 - `cargo fmt --check` — clean
 - `cargo clippy -- -D warnings` — zero warnings (CI treats warnings as errors!)
 - `cargo test --lib` — all pass
-- Version matches in Cargo.toml and tauri.conf.json
+- Version updated in `src-tauri/Cargo.toml`
 - Feature branch merged (if applicable)
 - Native UI builds are CI-only (platform-specific) — no local pre-push requirement
 

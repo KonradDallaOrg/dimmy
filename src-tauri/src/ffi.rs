@@ -1,7 +1,7 @@
 //! C-compatible FFI layer for native UI frontends.
 //!
 //! Exposes the Dimmy Rust core as a shared library (cdylib) that can be called
-//! from Swift (macOS), C# (Windows), or C/Vala (Linux) without Tauri.
+//! from Swift (macOS), C# (Windows), or Rust/GTK4 (Linux).
 //!
 //! All functions use C-compatible types: `*const c_char`, `*mut c_char`, `c_int`, `c_float`.
 //! JSON strings are used for complex data exchange (config, device lists, events).
@@ -570,7 +570,7 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
     let st = state();
     let use_kr = st.use_keyring.lock().map(|k| *k).unwrap_or(false);
 
-    // Build config JSON (same structure as get_config Tauri command)
+    // Build config JSON for native UI consumers
     let has_stt_key = st.api_key.lock().map(|k| k.is_some()).unwrap_or(false);
     let has_llm_key = st.llm_api_key.lock().map(|k| k.is_some()).unwrap_or(false);
 

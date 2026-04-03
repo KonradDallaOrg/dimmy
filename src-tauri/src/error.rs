@@ -1,11 +1,11 @@
 //! Typed error hierarchy for Dimmy.
 //!
 //! Replaces String-based errors with structured types that can be matched,
-//! composed with `?`, and automatically serialized for Tauri IPC.
+//! composed with `?`, and automatically serialized for FFI consumers.
 
 use serde::Serialize;
 
-/// Top-level error type for all Tauri commands.
+/// Top-level error type for all Dimmy operations.
 #[derive(Debug)]
 pub enum DimmyError {
     Audio(AudioError),
@@ -115,7 +115,7 @@ impl From<LlmError> for DimmyError {
     }
 }
 
-// ── Tauri requires Serialize for command error types ────────────────
+// ── Serialize needed for JSON error payloads over FFI ───────────────
 
 impl Serialize for DimmyError {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
@@ -215,7 +215,7 @@ mod tests {
     }
 
     #[test]
-    fn serialize_for_tauri() {
+    fn serialize_for_ffi() {
         let e = DimmyError::InvalidState("not recording".into());
         let json = serde_json::to_string(&e).unwrap();
         assert_eq!(json, "\"invalid state: not recording\"");

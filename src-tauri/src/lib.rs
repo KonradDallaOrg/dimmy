@@ -753,7 +753,7 @@ impl AppState {
 }
 
 /// Build AppConfig by acquiring each mutex individually (one at a time, no overlapping locks).
-/// Shared by both Tauri commands and FFI layer.
+/// Shared by all native UI consumers via FFI.
 pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
     let api_url = state.api_url.lock().map_err(|e| e.to_string())?.clone();
     let api_model = state.api_model.lock().map_err(|e| e.to_string())?.clone();

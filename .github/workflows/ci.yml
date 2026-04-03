@@ -28,18 +28,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libasound2-dev libxdo-dev libdbus-1-dev libssl-dev
 
-      - name: Version consistency
-        working-directory: src-tauri
-        run: |
-          CARGO_VER=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
-          TAURI_VER=$(grep '"version"' tauri.conf.json | head -1 | sed 's/.*"\([0-9][^"]*\)".*/\1/')
-          echo "Cargo.toml: $CARGO_VER"
-          echo "tauri.conf.json: $TAURI_VER"
-          if [ "$CARGO_VER" != "$TAURI_VER" ]; then
-            echo "::error::Version mismatch: Cargo.toml=$CARGO_VER vs tauri.conf.json=$TAURI_VER"
-            exit 1
-          fi
-
       - name: Format
         working-directory: src-tauri
         run: cargo fmt --check

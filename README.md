@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="src-tauri/icons/icon.png" width="128" alt="Dimmy">
+  <img src="docs/screenshots/icon.png" width="128" alt="Dimmy">
 </p>
 
 <h1 align="center">Dimmy</h1>
 
 <p align="center">
-  Voice dictation that stays out of your way. Hold a shortcut, speak, release — text appears wherever you're typing.
+  Speak instead of typing — up to 3x faster. Native voice dictation for Windows, macOS, and Linux.
 </p>
 
 <p align="center">
@@ -78,27 +78,33 @@ chmod +x Dimmy-linux-x86_64.AppImage
 5. Speak naturally, then press again to stop
 6. Text is transcribed and pasted into the active app
 
-## Screenshots
+## The Pill
+
+Dimmy lives as a tiny overlay on your screen — the "pill". It changes shape and color to show what's happening:
 
 <p align="center">
-  <img src="docs/screenshots/dimmy-pill-states.png" alt="Dimmy pill states" width="560">
+  <img src="docs/screenshots/pill-lifecycle-flow.png" alt="Pill lifecycle: idle → recording → transcribing → processing → done" width="680">
 </p>
-
-<details>
-<summary><strong>Settings panel</strong></summary>
 
 <p align="center">
-  <img src="docs/screenshots/dimmy-settings-transcription.png" alt="Transcription" width="220">
-  <img src="docs/screenshots/dimmy-settings-ai.png" alt="AI Enhancement" width="220">
-  <img src="docs/screenshots/dimmy-settings-activation.png" alt="Activation" width="220">
-</p>
-<p align="center">
-  <img src="docs/screenshots/dimmy-settings-audio.png" alt="Audio" width="220">
-  <img src="docs/screenshots/dimmy-settings-appearance.png" alt="Appearance" width="220">
-  <img src="docs/screenshots/dimmy-settings-stats.png" alt="Stats" width="220">
+  <img src="docs/screenshots/pill-idle.png" alt="Idle" width="220">
+  <img src="docs/screenshots/pill-recording.png" alt="Recording" width="220">
+  <img src="docs/screenshots/pill-transcribing.png" alt="Transcribing" width="220">
+  <img src="docs/screenshots/pill-completing.png" alt="Done" width="220">
 </p>
 
-</details>
+## Settings
+
+Right-click the pill or tray icon to open Settings. Each platform has its own native settings window with tabs for:
+
+- **General** — language, shortcut mode (toggle/hold), startup behavior
+- **Transcription** — STT provider, model, API key
+- **AI Enhancement** — LLM provider, post-processing style, custom prompts
+- **Audio** — input device, noise filter, gain, clipping detection
+- **Overlay** — pill position, size, waveform style, border colors
+- **Shortcut** — record hotkey configuration
+- **Stats** — transcription count, time saved, audio processed
+- **About** — version, update check, links
 
 ## STT Providers
 
