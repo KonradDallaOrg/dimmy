@@ -100,8 +100,6 @@ pub fn create_page(
                 glib::idle_add_local_once(move || {
                     match result {
                         Ok(Some((version, url))) => {
-                            assert!(!version.is_empty(), "remote version must not be empty");
-                            assert!(!url.is_empty(), "release url must not be empty");
                             let subtitle = format!(
                                 "Update available: v{} — <a href=\"{}\">Download</a>",
                                 version, url
@@ -205,11 +203,13 @@ fn check_github_release() -> Result<Option<(String, String)>, String> {
     let output = std::process::Command::new("curl")
         .args([
             "--silent",
-            "--fail",
+            "--fail-with-body",
             "--max-time",
             "15",
             "--user-agent",
             "dimmy-linux-updater",
+            "-H",
+            "Accept: application/vnd.github+json",
             API_URL,
         ])
         .output()
@@ -227,10 +227,9 @@ fn check_github_release() -> Result<Option<(String, String)>, String> {
     let body = std::str::from_utf8(&output.stdout)
         .map_err(|_| "Response is not valid UTF-8".to_string())?;
 
-    assert!(
-        !body.is_empty(),
-        "GitHub API response body must not be empty"
-    );
+    if body.is_empty() {
+        return Err("Empty response from GitHub API".to_string());
+    }
 
     let json: serde_json::Value = serde_json::from_str(body).map_err(|e| {
         let msg = e.to_string();
