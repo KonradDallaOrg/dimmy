@@ -2,6 +2,15 @@
 
 Replacing the Tauri WebView frontend with native UIs per platform.
 
+## Status Summary
+
+| Phase | Platform | Status | Files | Tests |
+|-------|----------|--------|-------|-------|
+| 0 | Rust FFI (`ffi.rs`) | COMPLETE | 1 | 40+ |
+| 1 | Windows (WinUI3/C#) | IMPLEMENTED | 34 | 41 |
+| 2 | macOS (SwiftUI) | IMPLEMENTED | — | — |
+| 3 | Linux (GTK4+libadwaita) | IMPLEMENTED | — | — |
+
 ## Architecture
 
 ```
@@ -18,10 +27,10 @@ Direct FFI — compile Rust core as `cdylib`, expose C API, call from Swift/C#/G
 
 ## Phase Order
 
-1. **Phase 0** — Rust C FFI layer (`ffi.rs`) — COMPLETED (40 tests, assertions, NaN safety)
-2. **Phase 1** — Windows native (WinUI3/C#) — IN PROGRESS
-3. **Phase 2** — macOS native (SwiftUI)
-4. **Phase 3** — Linux native (GTK4)
+1. **Phase 0** — Rust C FFI layer (`ffi.rs`) — COMPLETE (40+ tests, assertions, NaN safety)
+2. **Phase 1** — Windows native (WinUI3/C#) — IMPLEMENTED (41 C# tests, builds & runs in VS2026)
+3. **Phase 2** — macOS native (SwiftUI) — IMPLEMENTED (builds & runs)
+4. **Phase 3** — Linux native (GTK4+libadwaita) — IMPLEMENTED (builds on CI, AppImage available)
 
 ## SwiftUI Mockup (in `mockup/dimmy-new/`)
 

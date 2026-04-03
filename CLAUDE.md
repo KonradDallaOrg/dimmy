@@ -2,9 +2,9 @@
 
 ## What Dimmy Does
 
-Cross-platform voice transcription overlay. Records audio via global hotkey, transcribes via STT providers (Groq, OpenAI, Deepgram, Gemini), optionally post-processes with LLM, pastes result into active app. Built with Tauri 2 (Rust backend, vanilla HTML/CSS/JS frontend).
+Cross-platform voice transcription overlay. Records audio via global hotkey, transcribes via STT providers (Groq, OpenAI, Deepgram, Gemini), optionally post-processes with LLM, pastes result into active app. Built as a shared Rust core library with native UIs per platform (WinUI3/C# on Windows, SwiftUI on macOS, GTK4/Rust on Linux).
 
-Current version: check `src-tauri/Cargo.toml`.
+Current version: 0.3.64
 
 ## Development Philosophy (MANDATORY)
 
@@ -41,8 +41,8 @@ Test hierarchy:
 
 Every feature, fix, or change MUST work identically on Windows, macOS, Linux.
 
-- Use Tauri abstractions, not OS-specific hacks
-- If `#[cfg(target_os = ...)]` is unavoidable, ALL platforms must have equivalent impl
+- Each platform has its own native UI — ensure feature parity across all three
+- If `#[cfg(target_os = ...)]` is unavoidable in the Rust core, ALL platforms must have equivalent impl
 - Never ship a feature that works on one OS but silently fails on another
 
 ## Version Bumping (MANDATORY)
@@ -60,7 +60,11 @@ After commit: `git tag v0.3.X && git push origin v0.3.X` to trigger Release.
 ### Workflows
 - **ci.yml** — Runs on push/PR to main/staging: `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test --lib`, version match check
 - **staging-release.yml** — Runs on push to staging: lint + test + build all platforms, creates pre-release `staging-latest`
-- **release.yml** — Runs on tag push (`v*`): builds Windows (NSIS+MSI), macOS (DMG, universal), Linux (AppImage+deb). Publishes GitHub Release with auto-updater JSON.
+- **staging-native.yml** — Builds all 3 native UIs in parallel:
+  - Windows: .NET build + C# tests + zip artifact
+  - macOS: Rust static lib + Xcode build + DMG
+  - Linux: cargo build + clippy + AppImage
+- **release.yml** — Runs on tag push (`v*`): builds all platforms. Publishes GitHub Release with auto-updater JSON.
 
 ### Release Process
 1. Commit changes to `main` (or merge feature branch)
@@ -76,39 +80,32 @@ After commit: `git tag v0.3.X && git push origin v0.3.X` to trigger Release.
 - `cargo test --lib` — all pass
 - Version matches in Cargo.toml and tauri.conf.json
 - Feature branch merged (if applicable)
+- Native UI builds are CI-only (platform-specific) — no local pre-push requirement
 
-## Native UI Migration (in progress)
+## Native UI Architecture
 
-Branch `feat/native-ui`: replacing WebView with native UIs per platform.
+Shared Rust core with platform-native UIs connected via C FFI.
 
-### Phase order
-1. **Phase 0** — Rust C FFI layer (`ffi.rs`) — COMPILES but NOT TESTED (TDD violation!)
-2. **Phase 1** — Windows native (WinUI3/C#) — settings avanzati behind "Advanced" checkbox
-3. **Phase 2** — macOS native (SwiftUI from mockup in `mockup/dimmy-new/`)
-4. **Phase 3** — Linux native (GTK4)
+### Phase status
+1. **Phase 0** — Rust C FFI layer (`ffi.rs`) — **COMPLETE** (40+ tests, assertions, NaN safety)
+2. **Phase 1** — Windows WinUI3/C# — **IMPLEMENTED** (41 C# tests, builds, runs)
+3. **Phase 2** — macOS SwiftUI — **IMPLEMENTED** (builds, runs, 1 test file)
+4. **Phase 3** — Linux GTK4/Rust — **IMPLEMENTED** (builds on CI, AppImage available, needs runtime testing)
 
-### FFI layer status
-- `ffi.rs` exports 20 C functions, uses global `OnceLock<AppState>`
-- **MUST add tests + assertions before proceeding to Phase 1**
+### FFI layer
+- `ffi.rs` exports 20+ C functions, uses global `OnceLock<AppState>`
 - See memory file `phase0_ffi_status.md` for full checklist
-- Gap analysis between WebView and SwiftUI mockup in memory `native_ui_plan.md`
+- Gap analysis between platforms in memory `native_ui_plan.md`
 
 ## Architecture Quick Reference
 
 ```
-Native UIs (future)       → SwiftUI (macOS) / WinUI3 (Win) / GTK4 (Linux)
-                          ↕ C FFI (ffi.rs)
-Frontend (src/)           → index.html + main.js + styles.css (vanilla JS, Tauri WebView — current)
-                          ↕ Tauri IPC (invoke/listen)
-Backend (src-tauri/src/)  → lib.rs (state + commands)
-                            ffi.rs (C API for native UIs — 20 exported functions)
-                            audio.rs (cpal capture, RawAudio → ProcessedAudio → WavPayload)
-                            preprocess.rs (highpass → VAD → AGC → downsample)
-                            transcribe.rs (multi-provider STT + chunked transcription)
-                            llm.rs (multi-provider LLM post-processing)
-                            provider.rs (Provider enum, URL detection, file limits, security)
-                            error.rs (TranscribeError enum)
-                            hotkey.rs (global keyboard hook per-platform)
+Rust Core (src-tauri/src/)      → lib.rs, audio.rs, preprocess.rs, transcribe.rs, llm.rs,
+                                  provider.rs, keystore.rs, error.rs, hotkey.rs
+                                ↕ C FFI (ffi.rs — 20+ exported functions)
+Windows UI (native-ui/windows/) → WinUI 3 / C# (.NET 8), P/Invoke to dimmy_lib.dll
+macOS UI (native-ui/macos/)     → SwiftUI, FFI bridge via DimmyFFI.h to libdimmy_lib.a
+Linux UI (native-ui/linux/)     → GTK4 + libadwaita (Rust), direct crate dependency on dimmy_lib
 ```
 
 ## Audio Pipeline — CRITICAL
@@ -120,34 +117,12 @@ See memory file `audio_pipeline.md` for full details. Key rules:
 - All audio output must be checked for NaN/Inf and clamped.
 - `process_buffer()` calls `process()` ONCE with all samples — this means the entire recording goes through a single VAD→AGC pass.
 
-## Window Transparency — CRITICAL (tao#1171 workaround)
-
-`transparent: true` is **disabled** in `tauri.conf.json` to work around a crash on macOS 26 (Tahoe). The tao library panics in `did_finish_launching` when transparent windows are requested on macOS 26+ (see [tao#1171](https://github.com/tauri-apps/tao/issues/1171)).
-
-**How transparency works now:**
-- `tauri.conf.json`: `transparent: false`, `visible: false`
-- All transparency is configured manually in `.setup()` callback:
-  - `window.set_background_color(Color(0,0,0,0))` — makes WebView transparent (all platforms)
-  - macOS: Objective-C FFI sets `setOpaque:NO`, `setBackgroundColor:clearColor`, `setDrawsBackground:NO`, `setTitlebarAppearsTransparent:YES`
-  - Windows: `DwmEnableBlurBehindWindow` (replaces what tao did), `WS_POPUP`, `WS_EX_LAYERED`, DWM no-round-corners, DWM no-border
-- After transparency setup + positioning, `window.show()` reveals the window
-
-**DO NOT re-enable `transparent: true`** until tao fixes the macOS 26 crash upstream.
-
-**macOS build notes:**
-- Builds require Xcode + Command Line Tools
-- `Info.plist` provides `NSMicrophoneUsageDescription` for mic permission
-- `Entitlements.plist` provides `com.apple.security.device.audio-input` + JIT entitlements
-- Build: `cargo tauri build --target universal-apple-darwin` (universal binary for Intel+ARM)
-- Dev: `cargo tauri dev`
-- The GitHub Actions release workflow (`release.yml`) builds macOS DMG as universal binary
-
 ## Known Bugs & Lessons Learned
 
 See memory file `known_bugs.md` for the full registry. Check it before touching:
 - Audio preprocessing (preprocess.rs)
-- macOS FFI (hotkey.rs, lib.rs window setup)
-- Windows transparency (lib.rs window setup)
+- macOS FFI (hotkey.rs)
+- Platform-specific native UI code
 
 ## Provider System
 
