@@ -5,7 +5,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use adw::prelude::*;
-use dimmy_lib::{log, AppState};
+use dimmy_lib::AppState;
 use gtk4::glib;
 use gtk4::prelude::*;
 use libadwaita as adw;
@@ -94,10 +94,15 @@ pub fn create_page(
             let row = update_row_clone.clone();
             let btn = update_btn_clone.clone();
 
+            // Use async_channel to avoid moving non-Send GTK widgets into std::thread
+            let (sender, receiver) = async_channel::bounded(1);
             std::thread::spawn(move || {
                 let result = check_github_release();
+                let _ = sender.send_blocking(result);
+            });
 
-                glib::idle_add_local_once(move || {
+            glib::spawn_future_local(async move {
+                if let Ok(result) = receiver.recv().await {
                     match result {
                         Ok(Some((version, url))) => {
                             let subtitle = format!(
@@ -117,7 +122,7 @@ pub fn create_page(
                         }
                     }
                     btn.set_sensitive(true);
-                });
+                }
             });
         });
     }
