@@ -9,6 +9,41 @@ permissions:
   contents: write
 
 jobs:
+  # ── Rust core lint + test ──────────────────────────────────────────
+  rust-check:
+    name: Rust Lint & Test
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libxdo-dev libdbus-1-dev libssl-dev
+
+      - name: Format
+        working-directory: src-tauri
+        run: cargo fmt --check
+
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy -- -D warnings
+
+      - name: Test
+        working-directory: src-tauri
+        run: cargo test --lib
+
+  # ── Create release placeholder ─────────────────────────────────────
   create-release:
     name: Create Release
     runs-on: ubuntu-latest
@@ -25,17 +60,13 @@ jobs:
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       - name: Generate changelog
-        id: changelog
         run: |
-          # Find the previous tag
           PREV_TAG=$(git tag --sort=-creatordate | head -n 2 | tail -n 1)
           if [ -z "$PREV_TAG" ] || [ "$PREV_TAG" = "$GITHUB_REF_NAME" ]; then
-            # First release — use all commits
             COMMITS=$(git log --pretty=format:"- %s" HEAD)
           else
             COMMITS=$(git log --pretty=format:"- %s" "${PREV_TAG}..HEAD")
           fi
-          # Write to file for multi-line output
           {
             echo "## What's Changed"
             echo ""
@@ -43,16 +74,25 @@ jobs:
             echo ""
             echo "## Downloads"
             echo ""
-            echo "| Platform | File |"
-            echo "|----------|------|"
-            echo "| Windows | \`.msi\` |"
-            echo "| macOS (Apple Silicon) | \`.dmg\` (aarch64) |"
-            echo "| macOS (Intel) | \`.dmg\` (x64) |"
-            echo "| Linux (Debian/Ubuntu) | \`.deb\` |"
-            echo "| Linux (AppImage) | \`.AppImage\` |"
+            echo "| Platform | File | Requirements |"
+            echo "|----------|------|--------------|"
+            echo "| Windows | \`Dimmy-windows-x64.zip\` | [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) |"
+            echo "| macOS (Apple Silicon) | \`Dimmy-macos-arm64.dmg\` | macOS 12+ |"
+            echo "| Linux | \`Dimmy-linux-x86_64.AppImage\` | None (GTK4 bundled) |"
+            echo ""
+            echo "## Installation Notes"
+            echo ""
+            echo "**Windows:** Extract the zip, install .NET 8 Desktop Runtime if needed, run \`Dimmy.Windows.exe\`."
+            echo ""
+            echo "**macOS:** Open the DMG, drag to Applications. First launch: right-click -> Open, or run:"
+            echo "\`\`\`"
+            echo "xattr -d com.apple.quarantine /Applications/Dimmy.app"
+            echo "\`\`\`"
+            echo ""
+            echo "**Linux:** Make AppImage executable (\`chmod +x\`) and run."
             echo ""
             echo "---"
-            echo "*Auto-update: existing Dimmy installations will be notified of this release.*"
+            echo "*Check for updates in Dimmy Settings > About.*"
           } > changelog.md
           cat changelog.md
 
@@ -66,64 +106,201 @@ jobs:
           draft: true
           prerelease: false
 
-  build:
-    name: Build (${{ matrix.target }})
+  # ── macOS Native Build ─────────────────────────────────────────────
+  build-macos:
+    name: Build macOS Native
     needs: create-release
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-22.04
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-          - target: aarch64-apple-darwin
-            os: macos-latest
-          - target: x86_64-apple-darwin
-            os: macos-latest
-
-    runs-on: ${{ matrix.os }}
-
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: aarch64-apple-darwin
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
 
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
+      - name: Build Rust static library
+        working-directory: src-tauri
+        run: cargo build --lib --release --target aarch64-apple-darwin
+
+      - name: Verify static library and remove dylib
+        run: |
+          ls -lh src-tauri/target/aarch64-apple-darwin/release/libdimmy_lib.a
+          file src-tauri/target/aarch64-apple-darwin/release/libdimmy_lib.a
+          rm -f src-tauri/target/aarch64-apple-darwin/release/libdimmy_lib.dylib
+          rm -f src-tauri/target/aarch64-apple-darwin/release/deps/libdimmy_lib.dylib
+
+      - name: Build Xcode project
+        working-directory: native-ui/macos
+        run: |
+          xcodebuild -project Dimmy.xcodeproj \
+            -scheme Dimmy \
+            -configuration Release \
+            -derivedDataPath build/derived \
+            build \
+            CODE_SIGN_IDENTITY="-"
+
+      - name: Create DMG
+        working-directory: native-ui/macos
+        run: |
+          APP_PATH="build/derived/Build/Products/Release/Dimmy.app"
+          mkdir -p build/dmg
+          cp -R "$APP_PATH" build/dmg/
+          hdiutil create -volname "Dimmy" \
+            -srcfolder build/dmg \
+            -ov -format UDZO \
+            "build/Dimmy-macos-arm64.dmg"
+
+      - name: Upload DMG to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: native-ui/macos/build/Dimmy-macos-arm64.dmg
+
+  # ── Windows Native Build ───────────────────────────────────────────
+  build-windows:
+    name: Build Windows Native
+    needs: create-release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Build Rust DLL
+        working-directory: src-tauri
+        run: cargo build --lib --release --target x86_64-pc-windows-msvc
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: ${{ runner.os }}-nuget-
+
+      - name: Restore NuGet packages
+        working-directory: native-ui/windows/Dimmy.Windows
+        run: dotnet restore
+
+      - name: Build Windows app
+        working-directory: native-ui/windows/Dimmy.Windows
+        run: dotnet build Dimmy.Windows.csproj -c Release
+
+      - name: Prepare distribution
+        shell: pwsh
+        run: |
+          $binDir = "native-ui/windows/Dimmy.Windows/bin/Release/net8.0-windows10.0.19041.0"
+          Copy-Item "src-tauri/target/x86_64-pc-windows-msvc/release/dimmy_lib.dll" "$binDir/"
+          Get-ChildItem "$binDir" -Filter "*.pdb" -Recurse | Remove-Item -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path "native-ui/windows/Dimmy.Windows/publish"
+          Copy-Item "$binDir/*" "native-ui/windows/Dimmy.Windows/publish/" -Recurse
+
+      - name: Run Windows tests
+        working-directory: native-ui/windows/Dimmy.Windows.Tests
+        run: dotnet test -c Release --logger "console;verbosity=normal"
+
+      - name: Package
+        working-directory: native-ui/windows/Dimmy.Windows
+        shell: pwsh
+        run: |
+          Compress-Archive -Path publish\* -DestinationPath ..\Dimmy-windows-x64.zip
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: native-ui/windows/Dimmy-windows-x64.zip
+
+  # ── Linux Native Build ─────────────────────────────────────────────
+  build-linux:
+    name: Build Linux (GTK4)
+    needs: create-release
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            native-ui/linux/target
+          key: linux-cargo-${{ hashFiles('native-ui/linux/Cargo.lock') }}
+          restore-keys: linux-cargo-
+
+      - name: Install GTK4 + libadwaita dev packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            libasound2-dev \
-            libxdo-dev
+          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libdbus-1-dev pkg-config \
+            libasound2-dev libxdo-dev libfuse2
 
-      - name: Build and upload release
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      - name: Clippy
+        working-directory: native-ui/linux
+        run: cargo clippy -- -D warnings
+
+      - name: Test
+        working-directory: native-ui/linux
+        run: cargo test
+
+      - name: Build release
+        working-directory: native-ui/linux
+        run: cargo build --release
+
+      - name: Package AppImage
+        run: |
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget -q https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh
+          chmod +x linuxdeploy-x86_64.AppImage linuxdeploy-plugin-gtk.sh
+
+          mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/scalable/apps
+          cp native-ui/linux/target/release/dimmy-linux AppDir/usr/bin/
+          cp native-ui/linux/assets/com.dimmy.app.desktop AppDir/usr/share/applications/
+          cp native-ui/linux/assets/com.dimmy.app.svg AppDir/usr/share/icons/hicolor/scalable/apps/
+
+          export DEPLOY_GTK_VERSION=4
+          ./linuxdeploy-x86_64.AppImage \
+            --appdir AppDir \
+            --plugin gtk \
+            --desktop-file native-ui/linux/assets/com.dimmy.app.desktop \
+            --icon-file native-ui/linux/assets/com.dimmy.app.svg \
+            --output appimage
+
+          mv Dimmy*.AppImage Dimmy-linux-x86_64.AppImage
+
+      - name: Upload AppImage to release
+        uses: softprops/action-gh-release@v2
         with:
-          releaseId: ${{ needs.create-release.outputs.release_id }}
-          updaterJsonPreferNsis: true
-          args: --target ${{ matrix.target }}
-          projectPath: src-tauri
+          tag_name: ${{ github.ref_name }}
+          files: Dimmy-linux-x86_64.AppImage
 
+  # ── Publish (waits for all jobs) ───────────────────────────────────
   publish-release:
     name: Publish Release
-    needs: [create-release, build]
+    needs: [rust-check, create-release, build-macos, build-windows, build-linux]
     runs-on: ubuntu-latest
     steps:
       - name: Publish release
