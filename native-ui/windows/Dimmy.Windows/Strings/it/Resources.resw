@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+    <xsd:element name="root" msdata:IsDataSet="true" />
+  </xsd:schema>
+  <resheader name="resmimetype"><value>text/microsoft-resx</value></resheader>
+  <resheader name="version"><value>2.0</value></resheader>
+  <resheader name="reader"><value>System.Resources.ResXResourceReader</value></resheader>
+  <resheader name="writer"><value>System.Resources.ResXResourceWriter</value></resheader>
+
+  <!-- App -->
+  <data name="AppName" xml:space="preserve"><value>Dimmy</value></data>
+  <data name="AppTagline" xml:space="preserve"><value>Dettatura vocale che non ti disturba</value></data>
+
+  <!-- Onboarding -->
+  <data name="OnboardingGetStarted" xml:space="preserve"><value>Inizia</value></data>
+  <data name="OnboardingHoldInstruction" xml:space="preserve"><value>Tieni premuto una scorciatoia, parla, rilascia.
+Le tue parole appaiono dove stai scrivendo.</value></data>
+  <data name="OnboardingYourShortcut" xml:space="preserve"><value>La tua scorciatoia</value></data>
+  <data name="OnboardingHoldToDictate" xml:space="preserve"><value>Tieni premuto per dettare, rilascia per incollare</value></data>
+  <data name="OnboardingClickToChange" xml:space="preserve"><value>Clicca per cambiare</value></data>
+  <data name="OnboardingTryIt" xml:space="preserve"><value>Provalo!</value></data>
+  <data name="OnboardingAllSet" xml:space="preserve"><value>Tutto pronto!</value></data>
+  <data name="OnboardingStartUsing" xml:space="preserve"><value>Inizia a usare Dimmy</value></data>
+  <data name="OnboardingTrayHint" xml:space="preserve"><value>Dimmy vive nella barra di sistema.
+Tieni premuto {0} ovunque per dettare.</value></data>
+  <data name="OnboardingWaitingVoice" xml:space="preserve"><value>In attesa della tua voce...</value></data>
+  <data name="OnboardingLookAtPill" xml:space="preserve"><value>Guarda la pillola — si animerà mentre parli</value></data>
+
+  <!-- Modes -->
+  <data name="ModePushToTalk" xml:space="preserve"><value>Premi e parla</value></data>
+  <data name="ModeToggle" xml:space="preserve"><value>Attiva/Disattiva</value></data>
+  <data name="ModePushDesc" xml:space="preserve"><value>tieni premuto, rilascia per incollare</value></data>
+  <data name="ModeToggleDesc" xml:space="preserve"><value>doppio tap per iniziare, tap per fermare</value></data>
+
+  <!-- Settings -->
+  <data name="SettingsGeneral" xml:space="preserve"><value>Generale</value></data>
+  <data name="SettingsShortcut" xml:space="preserve"><value>Scorciatoia</value></data>
+  <data name="SettingsOutput" xml:space="preserve"><value>Output</value></data>
+  <data name="SettingsOverlay" xml:space="preserve"><value>Overlay</value></data>
+  <data name="SettingsAbout" xml:space="preserve"><value>Info</value></data>
+  <data name="SettingsStats" xml:space="preserve"><value>Statistiche</value></data>
+  <data name="SettingsDebug" xml:space="preserve"><value>Debug</value></data>
+  <data name="SettingsAdvanced" xml:space="preserve"><value>Avanzate</value></data>
+  <data name="SettingsSave" xml:space="preserve"><value>Salva</value></data>
+  <data name="SettingsCancel" xml:space="preserve"><value>Annulla</value></data>
+  <data name="SettingsLanguage" xml:space="preserve"><value>Lingua</value></data>
+  <data name="SettingsStyle" xml:space="preserve"><value>Stile</value></data>
+  <data name="SettingsTheme" xml:space="preserve"><value>Tema</value></data>
+  <data name="SettingsApiKey" xml:space="preserve"><value>Chiave API</value></data>
+  <data name="SettingsLaunchAtLogin" xml:space="preserve"><value>Avvia all'accesso</value></data>
+
+  <!-- Pill -->
+  <data name="PillTranscribing" xml:space="preserve"><value>Trascrizione...</value></data>
+  <data name="PillProcessing" xml:space="preserve"><value>Elaborazione...</value></data>
+
+  <!-- Tray -->
+  <data name="TrayReady" xml:space="preserve"><value>Dimmy — Pronto</value></data>
+  <data name="TrayRecording" xml:space="preserve"><value>Dimmy — Registrazione...</value></data>
+  <data name="TrayDone" xml:space="preserve"><value>Dimmy — Fatto!</value></data>
+  <data name="TraySettings" xml:space="preserve"><value>Impostazioni...</value></data>
+  <data name="TrayQuit" xml:space="preserve"><value>Esci da Dimmy</value></data>
+
+  <!-- About -->
+  <data name="AboutMadeWith" xml:space="preserve"><value>Fatto con ironia</value></data>
+</root>

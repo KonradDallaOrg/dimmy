@@ -18,8 +18,10 @@ pub enum Provider {
 impl Provider {
     /// Detect provider from an API URL.
     pub fn from_url(url: &str) -> Self {
-        // URL must not be empty — caller should validate before reaching here
-        assert!(!url.is_empty(), "from_url called with empty URL");
+        // Default to Groq if URL is empty (e.g. first-launch with no config)
+        if url.is_empty() {
+            return Self::Groq;
+        }
         if url.contains("groq.com") {
             Self::Groq
         } else if url.contains("openai.com") {

@@ -1,0 +1,36 @@
+<Project>
+  <!--
+    Override all MrtCore.PriGen targets that depend on VS AppxPackage build tools
+    (Microsoft.Build.AppxPackage.dll / Microsoft.Build.Packaging.Pri.Tasks.dll)
+    which are not available when building from dotnet CLI without full VS workload.
+  -->
+  <Target Name="_GeneratePrisForPortableLibraries" />
+  <Target Name="_GenerateProjectPriFile" />
+  <Target Name="_GenerateProjectPriConfigurationFiles" />
+  <Target Name="_GenerateProjectPriFileCore" />
+  <Target Name="_ExpandProjectPriFile" />
+  <Target Name="_ExpandPriFiles" />
+  <Target Name="_GetPriFilesFromPayload" />
+  <Target Name="_ComputeInputPriFiles" />
+  <Target Name="_CalculateInputsForGenerateProjectPriFileCore" />
+  <Target Name="_CreateProjectPriFileItem" />
+  <Target Name="_AddFileReadsAndFileWritesForProjectPri" />
+  <Target Name="AddPriPayloadFilesToCopyToOutputDirectoryItems" />
+  <Target Name="_GetSdkToolPaths" />
+  <Target Name="_GetSdkToolsPathsFromSdk" />
+  <Target Name="_GetSdkToolsPathsFromPackage" />
+  <Target Name="_GetPackageArchitecture" />
+  <Target Name="_GetDefaultResourceLanguage" />
+  <Target Name="_GetProjectArchitecture" />
+  <Target Name="_GetRecursiveProjectArchitecture" />
+  <Target Name="GetMrtPackagingOutputs" Returns="@(PackagingOutputs)" />
+  <Target Name="GetOptionalProjectOutputs" Returns="@(OptionalProjectOutput)" />
+  <Target Name="CopyLocalFilesOutputGroup" Returns="@(CopyLocalFilesOutputGroupOutput)">
+    <ItemGroup>
+      <CopyLocalFilesOutputGroupOutput Include="@(ReferenceCopyLocalPaths)"
+        Condition="'%(ReferenceCopyLocalPaths.Extension)' != '.xml'">
+        <TargetPath>%(ReferenceCopyLocalPaths.DestinationSubDirectory)%(ReferenceCopyLocalPaths.Filename)%(ReferenceCopyLocalPaths.Extension)</TargetPath>
+      </CopyLocalFilesOutputGroupOutput>
+    </ItemGroup>
+  </Target>
+</Project>

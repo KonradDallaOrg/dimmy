@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="Dimmy.Windows.Views.Controls.ShortcutRecorder"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    PointerPressed="OnPointerPressed"
+    KeyDown="OnKeyDown"
+    KeyUp="OnKeyUp"
+    IsTabStop="True">
+
+    <Border x:Name="RecorderBorder"
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1" CornerRadius="8" Padding="24,16"
+            MinWidth="200" HorizontalAlignment="Center">
+        <TextBlock x:Name="DisplayText" FontSize="24" FontWeight="SemiBold"
+                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+    </Border>
+</UserControl>

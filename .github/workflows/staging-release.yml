@@ -1,8 +1,10 @@
-name: Staging Release
+name: Staging Release (Tauri WebView - DEPRECATED)
 
 on:
-  push:
-    branches: [staging]
+  # Disabled: replaced by staging-native.yml for native UI builds
+  # push:
+  #   branches: [staging]
+  workflow_dispatch:  # manual only, in case we ever need it
 
 permissions:
   contents: write

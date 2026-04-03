@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="Dimmy.Windows.Views.PillWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:Dimmy.Windows.Views.Controls">
+
+    <!-- Background must be Transparent so the backdrop shows through -->
+    <Grid Background="Transparent">
+    <Grid x:Name="RootGrid"
+          HorizontalAlignment="Center" VerticalAlignment="Center">
+
+        <!-- Glow host: Composition DropShadow is inserted here as a child visual -->
+        <Border x:Name="GlowHost" IsHitTestVisible="False"
+                HorizontalAlignment="Center" VerticalAlignment="Center" />
+
+        <!-- Composition pill body: anti-aliased rounded rect drawn by GPU -->
+        <Border x:Name="PillBodyHost" IsHitTestVisible="False"
+                HorizontalAlignment="Center" VerticalAlignment="Center" />
+
+        <!-- Colored border + interaction layer -->
+        <Border x:Name="ColorBorder" CornerRadius="50" BorderThickness="2"
+                HorizontalAlignment="Center" VerticalAlignment="Center"
+                PointerPressed="Pill_PointerPressed"
+                PointerMoved="Pill_PointerMoved"
+                PointerReleased="Pill_PointerReleased"
+                PointerEntered="Pill_PointerEntered"
+                PointerExited="Pill_PointerExited"
+                RightTapped="Pill_RightTapped">
+
+            <!-- Inner container — transparent, content only (body drawn by composition) -->
+            <Border x:Name="PillInner" CornerRadius="50"
+                    Background="Transparent">
+
+                <Grid x:Name="ContentGrid" VerticalAlignment="Center"
+                      HorizontalAlignment="Center">
+
+                    <!-- Idle: just the dot -->
+                    <Grid x:Name="IdlePanel" Visibility="Visible">
+                        <StackPanel x:Name="IdleContent" Orientation="Horizontal" Spacing="5"
+                                    HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <Border Background="Transparent" Padding="4,3"
+                                    PointerWheelChanged="StyleDot_PointerWheelChanged">
+                                <Ellipse x:Name="StyleDot" Width="5" Height="5" />
+                            </Border>
+                            <TextBlock x:Name="LanguageLabel" FontSize="10" FontWeight="SemiBold"
+                                       Foreground="#AAFFFFFF" VerticalAlignment="Center"
+                                       Visibility="Collapsed"
+                                       PointerWheelChanged="LanguageLabel_PointerWheelChanged" />
+                            <TextBlock x:Name="ShortcutLabel" FontSize="9" FontFamily="Consolas"
+                                       Foreground="#77FFFFFF" VerticalAlignment="Center"
+                                       Visibility="Collapsed" />
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- Recording -->
+                    <StackPanel x:Name="RecordingPanel" Orientation="Horizontal" Spacing="8"
+                                VerticalAlignment="Center" Margin="12,0" Visibility="Collapsed">
+                        <controls:WaveformControl x:Name="Waveform" Width="34" Height="14"
+                                                  VerticalAlignment="Center" />
+                        <TextBlock x:Name="TimerText" FontSize="11" Foreground="#EEFFFFFF"
+                                   VerticalAlignment="Center" Text="00:00" FontWeight="SemiBold" />
+                        <Button x:Name="StopButton" Background="Transparent" Padding="2"
+                                BorderThickness="0" Visibility="Collapsed" Click="Stop_Click"
+                                MinWidth="0" MinHeight="0" VerticalAlignment="Center">
+                            <Border x:Name="StopIcon" Width="8" Height="8" Background="#EEFFFFFF" CornerRadius="1" />
+                        </Button>
+                    </StackPanel>
+
+                    <!-- Transcribing -->
+                    <StackPanel x:Name="TranscribingPanel" Orientation="Horizontal" Spacing="8"
+                                VerticalAlignment="Center" Margin="7,0" Visibility="Collapsed">
+                        <ProgressRing IsActive="True" Width="14" Height="14" />
+                        <TextBlock x:Name="TranscribingText" Text="Transcribing..." FontSize="10" Foreground="#EEFFFFFF" />
+                        <TextBlock x:Name="ChunkText" FontSize="9" Foreground="#77FFFFFF" />
+                    </StackPanel>
+
+                    <!-- Processing -->
+                    <StackPanel x:Name="ProcessingPanel" Orientation="Horizontal" Spacing="8"
+                                VerticalAlignment="Center" Margin="7,0" Visibility="Collapsed">
+                        <ProgressRing IsActive="True" Width="14" Height="14" />
+                        <TextBlock x:Name="ProcessingText" Text="Processing..." FontSize="10" Foreground="#EEFFFFFF" />
+                    </StackPanel>
+
+                    <!-- Completing: checkmark -->
+                    <Grid x:Name="CompletingPanel" Visibility="Collapsed"
+                          HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <FontIcon x:Name="CheckIcon" Glyph="&#xE73E;" FontSize="13"
+                                  Foreground="#4ade80" />
+                    </Grid>
+
+                    <!-- Error -->
+                    <StackPanel x:Name="ErrorPanel" Orientation="Horizontal" Spacing="6"
+                                VerticalAlignment="Center" Margin="7,0" Visibility="Collapsed">
+                        <FontIcon Glyph="&#xE783;" FontSize="10" Foreground="#ef4444" />
+                        <TextBlock x:Name="ErrorText" FontSize="10" Foreground="#ef4444"
+                                   MaxWidth="160" TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </Border>
+    </Grid>
+
+    <!-- Scroll tooltip: shows LLM style or language name briefly -->
+    <Border x:Name="ScrollTooltip" Visibility="Collapsed" IsHitTestVisible="False"
+            Background="#E6202020" CornerRadius="6" Padding="10,5"
+            HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,2,0,0">
+        <TextBlock x:Name="ScrollTooltipText" FontSize="11" FontWeight="SemiBold"
+                   Foreground="#EEFFFFFF" />
+    </Border>
+    </Grid>
+</Window>

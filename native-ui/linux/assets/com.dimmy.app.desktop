@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Dimmy
+Comment=Voice dictation that stays out of your way
+Exec=dimmy-linux
+Icon=com.dimmy.app
+Terminal=false
+Type=Application
+Categories=Utility;Accessibility;Audio;
+Keywords=voice;dictation;transcription;speech;
+StartupNotify=false

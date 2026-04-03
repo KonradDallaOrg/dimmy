@@ -386,7 +386,7 @@ mod platform {
     const WM_SYSKEYUP: usize = 0x0105;
     const WH_KEYBOARD_LL: i32 = 13;
 
-    #[allow(non_snake_case)]
+    #[allow(non_snake_case, clippy::upper_case_acronyms)]
     #[repr(C)]
     struct KBDLLHOOKSTRUCT {
         vkCode: u32,
@@ -398,6 +398,7 @@ mod platform {
 
     #[repr(C)]
     #[derive(Default)]
+    #[allow(clippy::upper_case_acronyms)]
     struct MSG {
         hwnd: isize,
         message: u32,

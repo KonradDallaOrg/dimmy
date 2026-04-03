@@ -1,4 +1,5 @@
 src-tauri/target/
+native-ui/linux/target/
 src-tauri/gen/
 node_modules/
 dist/
@@ -8,7 +9,6 @@ dist/
 *.dmg
 *.AppImage
 *.deb
-CLAUDE.md
 NEGATIVE-SPACE-PLAN.md
 docs/superpowers/
 .cargo/
@@ -17,3 +17,4 @@ tests/test_audio.wav
 tests/audio/
 tests/results/
 demo/
+mockup/

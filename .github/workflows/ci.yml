@@ -8,7 +8,7 @@ on:
 
 jobs:
   lint:
-    name: Lint
+    name: Lint (Rust Core)
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -26,13 +26,7 @@ jobs:
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            libasound2-dev \
-            libxdo-dev
+          sudo apt-get install -y libasound2-dev libxdo-dev libdbus-1-dev libssl-dev
 
       - name: Version consistency
         working-directory: src-tauri
@@ -55,7 +49,7 @@ jobs:
         run: cargo clippy -- -D warnings
 
   test:
-    name: Test
+    name: Test (Rust Core)
     runs-on: ubuntu-22.04
     needs: lint
     steps:
@@ -72,14 +66,43 @@ jobs:
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            libasound2-dev \
-            libxdo-dev
+          sudo apt-get install -y libasound2-dev libxdo-dev libdbus-1-dev libssl-dev
 
       - name: Run tests
         working-directory: src-tauri
+        run: cargo test --lib
+
+  lint-linux:
+    name: Lint (Linux GTK4)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            native-ui/linux/target
+          key: linux-gtk4-cargo-${{ hashFiles('native-ui/linux/Cargo.lock') }}
+          restore-keys: linux-gtk4-cargo-
+
+      - name: Install GTK4 + libadwaita dev packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libdbus-1-dev pkg-config \
+            libasound2-dev libxdo-dev
+
+      - name: Clippy
+        working-directory: native-ui/linux
+        run: cargo clippy -- -D warnings
+
+      - name: Test
+        working-directory: native-ui/linux
         run: cargo test

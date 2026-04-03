@@ -1,6 +1,6 @@
 [package]
 name = "dimmy"
-version = "0.3.63"
+version = "0.3.65"
 edition = "2021"
 description = "Dimmy — Cross-platform voice transcription overlay"
 license = "AGPL-3.0-only"
@@ -10,12 +10,7 @@ repository = "https://github.com/KonradDallaOrg/dimmy"
 name = "dimmy_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
-[build-dependencies]
-tauri-build = { version = "2", features = [] }
-
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "devtools"] }
-tauri-plugin-clipboard-manager = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", features = ["multipart", "json"] }
@@ -32,5 +27,3 @@ base64 = "0.22"
 nnnoiseless = "0.5"
 biquad = "0.4"
 dagc = "0.1"
-tauri-plugin-updater = "2"
-tauri-plugin-single-instance = "2"
