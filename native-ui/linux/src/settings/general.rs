@@ -305,19 +305,8 @@ pub fn create_page(app_state: &Arc<AppState>, _show_advanced: &Rc<Cell<bool>>) -
     });
     advanced_group.add(&chunk_row);
 
-    // Use keyring
-    let keyring_row = adw::SwitchRow::builder()
-        .title("Use Keyring")
-        .subtitle("Store API keys in system keyring")
-        .build();
-    keyring_row.set_active(*app_state.use_keyring.lock().unwrap_or_else(|e| e.into_inner()));
-
-    let state_kr = app_state.clone();
-    keyring_row.connect_active_notify(move |row| {
-        *state_kr.use_keyring.lock().unwrap_or_else(|e| e.into_inner()) = row.is_active();
-        log(&format!("Use keyring: {}", row.is_active()));
-    });
-    advanced_group.add(&keyring_row);
+    // API keys always stored in local encrypted file (keys.enc).
+    // No OS keyring popups, no admin needed.
 
     // Advanced group hidden by default — toggled by show_advanced in mod.rs
     advanced_group.set_visible(false);

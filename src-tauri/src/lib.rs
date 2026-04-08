@@ -437,7 +437,9 @@ pub fn load_config_file() -> AppConfig {
                     audio_debug_enabled: v["audio_debug_enabled"]
                         .as_bool()
                         .unwrap_or(defaults.audio_debug_enabled),
-                    use_keyring: v["use_keyring"].as_bool().unwrap_or(defaults.use_keyring),
+                    // Force use_keyring to false — local encrypted storage is the default.
+                    // OS keyring is kept as read-only fallback for backward compatibility.
+                    use_keyring: false,
                     stt_mode: v["stt_mode"]
                         .as_str()
                         .unwrap_or(&defaults.stt_mode)

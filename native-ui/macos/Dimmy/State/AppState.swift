@@ -382,7 +382,7 @@ final class AppState: ObservableObject {
     // MARK: - UI State
 
     @Published var showAdvanced: Bool = false
-    @Published var useKeyring: Bool = true
+    @Published var useKeyring: Bool = false
 
     // MARK: - Appearance Config
 
@@ -490,8 +490,8 @@ final class AppState: ObservableObject {
         else if let tw = config["stats_total_words"] as? Int { statsTotalWords = UInt64(tw) }
         if let ts = config["stats_total_speaking_secs"] as? Double { statsTotalSpeakingSecs = ts }
 
-        // Keyring
-        if let kr = config["use_keyring"] as? Bool { useKeyring = kr }
+        // Keyring — always local encrypted file, ignore stored value
+        useKeyring = false
 
         // Per-provider key flags
         if let v = config["has_groq_key"] as? Bool { hasGroqKey = v }
@@ -529,7 +529,7 @@ final class AppState: ObservableObject {
             "waveform_style": waveformStyle,
             "overlay_position": overlayPosition,
             "keep_in_clipboard": keepInClipboard,
-            "use_keyring": useKeyring,
+            "use_keyring": false,  // Always local encrypted file
         ]
         if let dev = selectedDevice {
             config["selected_device"] = dev

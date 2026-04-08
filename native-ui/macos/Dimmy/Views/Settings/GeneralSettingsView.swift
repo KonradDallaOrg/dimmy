@@ -111,20 +111,8 @@ struct GeneralSettingsView: View {
                         .onChange(of: appState.chunkStreamingEnabled) { _, _ in syncConfigToRust() }
                 }
 
-                Section("Security") {
-                    Toggle("Use macOS Keychain for API keys", isOn: $appState.useKeyring)
-                        .onChange(of: appState.useKeyring) { _, _ in syncConfigToRust() }
-
-                    if appState.useKeyring {
-                        Text("Store API keys in macOS Keychain (more secure). When enabled, macOS may ask for your login password to save the key securely.")
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
-                    } else {
-                        Text("API keys are stored in an encrypted local config file.")
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
-                    }
-                }
+                // API keys are always stored in the local encrypted file (keys.enc).
+                // No OS keychain popups, no admin needed.
             }
         }
         .formStyle(.grouped)

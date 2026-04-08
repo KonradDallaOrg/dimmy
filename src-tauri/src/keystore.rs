@@ -1,13 +1,11 @@
-//! Dual-backend API key storage: encrypted local file (default) or OS keyring (opt-in).
+//! API key storage using local AES-256-CTR + HMAC-SHA256 encrypted file.
 ///
-/// The local backend encrypts keys with AES-256-GCM using a machine-derived key
-/// (SHA-256 of username + hostname + salt). Not as secure as the OS keyring
-/// (an attacker with filesystem access could reconstruct the key), but vastly
-/// better than plaintext and — crucially — requires zero OS permission popups.
+/// Keys are encrypted with a machine-derived key (SHA-256 of username + hostname + salt)
+/// and stored in `keys.enc`. No OS permission popups, no admin needed on any platform.
 ///
-/// The keyring backend uses the OS credential store (macOS Keychain, Windows
-/// Credential Manager, Linux Secret Service) and is more secure but may
-/// trigger authorization dialogs that scare new users.
+/// The OS keyring (macOS Keychain, Windows Credential Manager, Linux Secret Service) is
+/// kept as a read-only fallback: keys stored there by older versions are automatically
+/// migrated to the local encrypted file on first load.
 use crate::provider::KeyringScope;
 use base64::Engine;
 use std::collections::HashMap;
@@ -589,84 +587,46 @@ impl KeyStore {
         }
     }
 
-    /// Save a key. Routes to local file or keyring based on `use_keyring`.
+    /// Save a key. Always uses local encrypted file (no OS popups, no admin needed).
+    /// The `_use_keyring` parameter is kept for API compatibility but ignored.
     pub fn save_key(
         &self,
         scope: KeyringScope,
         key: &str,
-        use_keyring: bool,
+        _use_keyring: bool,
     ) -> Result<(), String> {
         let name = scope.entry_name();
-        if use_keyring {
-            // OS keyring
-            let entry = keyring::Entry::new("dimmy", &name).map_err(|e| {
-                crate::log(&format!(
-                    "ERROR: keyring Entry::new({}) failed: {}",
-                    name, e
-                ));
-                format!("Credential store error: {}", e)
-            })?;
-            entry.set_password(key).map_err(|e| {
-                crate::log(&format!(
-                    "ERROR: keyring set_password({}) failed: {}",
-                    name, e
-                ));
-                format!("Failed to save key: {}", e)
-            })?;
-            crate::log(&format!("Key saved to OS keyring: {}", name));
-        } else {
-            // Local encrypted file
-            let mut cache = self.local_cache.lock().map_err(|e| e.to_string())?;
-            cache.insert(name.clone(), key.to_string());
-            save_local_store(&self.machine_key, &cache)?;
-            crate::log(&format!("Key saved to local encrypted store: {}", name));
-        }
+        // Always save to local encrypted file
+        let mut cache = self.local_cache.lock().map_err(|e| e.to_string())?;
+        cache.insert(name.clone(), key.to_string());
+        save_local_store(&self.machine_key, &cache)?;
+        crate::log(&format!("Key saved to local encrypted store: {}", name));
         Ok(())
     }
 
-    /// Load a key. Tries the active backend first, falls back to the other.
-    /// This ensures keys are found during migration between backends.
-    pub fn load_key(&self, scope: KeyringScope, use_keyring: bool) -> Option<String> {
+    /// Load a key. Always tries local first (primary), then OS keyring (read-only migration).
+    /// The `_use_keyring` parameter is kept for API compatibility but ignored.
+    pub fn load_key(&self, scope: KeyringScope, _use_keyring: bool) -> Option<String> {
         let name = scope.entry_name();
-        if use_keyring {
-            // Try keyring first, fall back to local
-            if let Ok(entry) = keyring::Entry::new("dimmy", &name) {
-                if let Ok(key) = entry.get_password() {
-                    crate::log(&format!("Key loaded from OS keyring: {}", name));
-                    return Some(key);
-                }
+        // Try local first (primary backend)
+        if let Ok(cache) = self.local_cache.lock() {
+            if let Some(key) = cache.get(&name) {
+                return Some(key.clone());
             }
-            // Fallback: try local store
-            if let Ok(cache) = self.local_cache.lock() {
-                if let Some(key) = cache.get(&name) {
-                    crate::log(&format!(
-                        "Key loaded from local store (keyring fallback): {}",
-                        name
-                    ));
-                    return Some(key.clone());
-                }
-            }
-            None
-        } else {
-            // Try local first, fall back to keyring
-            if let Ok(cache) = self.local_cache.lock() {
-                if let Some(key) = cache.get(&name) {
-                    crate::log(&format!("Key loaded from local encrypted store: {}", name));
-                    return Some(key.clone());
-                }
-            }
-            // Fallback: try keyring (migrating from old version)
-            if let Ok(entry) = keyring::Entry::new("dimmy", &name) {
-                if let Ok(key) = entry.get_password() {
-                    crate::log(&format!(
-                        "Key loaded from OS keyring (local fallback): {}",
-                        name
-                    ));
-                    return Some(key);
-                }
-            }
-            None
         }
+        // Fallback: try OS keyring (read-only, for migration from older versions)
+        if let Ok(entry) = keyring::Entry::new("dimmy", &name) {
+            if let Ok(key) = entry.get_password() {
+                crate::log(&format!("Key migrated from OS keyring: {}", name));
+                // Auto-migrate: save to local so next load is faster
+                if let Ok(mut cache) = self.local_cache.lock() {
+                    cache.insert(name.clone(), key.clone());
+                    let _ = save_local_store(&self.machine_key, &cache);
+                }
+                return Some(key);
+            }
+        }
+        None
     }
 
     /// Check if a key exists in either backend.

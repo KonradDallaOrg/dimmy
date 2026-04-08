@@ -142,8 +142,7 @@
                               IsOn="{Binding PreprocessingEnabled, Mode=TwoWay}" />
                 <ToggleSwitch Header="Chunk streaming"
                               IsOn="{Binding ChunkStreamingEnabled, Mode=TwoWay}" />
-                <ToggleSwitch Header="Use keyring"
-                              IsOn="{Binding UseKeyring, Mode=TwoWay}" />
+                <!-- API keys always stored in local encrypted file (keys.enc) -->
               </StackPanel>
             </StackPanel>
 

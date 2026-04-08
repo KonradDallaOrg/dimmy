@@ -74,7 +74,7 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private List<string> _devices = [];
     [ObservableProperty] private bool _preprocessingEnabled = true;
     [ObservableProperty] private bool _chunkStreamingEnabled;
-    [ObservableProperty] private bool _useKeyring = true;
+    [ObservableProperty] private bool _useKeyring = false;
     [ObservableProperty] private bool _llmEnabled;
     [ObservableProperty] private string _llmApiUrl = "";
     [ObservableProperty] private string _llmApiModel = "";
@@ -124,7 +124,7 @@ public partial class SettingsViewModel : ObservableObject
             SelectedDevice = r.TryGetProperty("selected_device", out var dev) ? dev.GetString() : null;
             PreprocessingEnabled = !r.TryGetProperty("preprocessing_enabled", out var pe) || pe.GetBoolean();
             ChunkStreamingEnabled = r.TryGetProperty("chunk_streaming_enabled", out var cs) && cs.GetBoolean();
-            UseKeyring = !r.TryGetProperty("use_keyring", out var uk) || uk.GetBoolean();
+            UseKeyring = false;  // Always local encrypted file, ignore stored value
             LlmEnabled = r.TryGetProperty("llm_enabled", out var le) && le.GetBoolean();
             LlmApiUrl = r.TryGetProperty("llm_api_url", out var lu) ? lu.GetString() ?? "" : "";
             LlmApiModel = r.TryGetProperty("llm_api_model", out var lm) ? lm.GetString() ?? "" : "";
@@ -174,7 +174,7 @@ public partial class SettingsViewModel : ObservableObject
             ["selected_device"] = SelectedDevice,
             ["preprocessing_enabled"] = PreprocessingEnabled,
             ["chunk_streaming_enabled"] = ChunkStreamingEnabled,
-            ["use_keyring"] = UseKeyring,
+            ["use_keyring"] = false,  // Always local encrypted file
             ["llm_enabled"] = LlmStyle != "off",
             ["llm_api_url"] = LlmApiUrl,
             ["llm_api_model"] = LlmApiModel,
