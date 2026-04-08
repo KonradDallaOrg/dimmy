@@ -223,7 +223,7 @@ graph TD
     KEY --> FFI
 ```
 
-The shared core (`src-tauri/src/`) handles all business logic: audio capture, preprocessing (VAD + AGC), local or cloud transcription, filler removal, optional LLM post-processing, history storage, and secure key management. Windows and macOS call it through C FFI exports. Linux links directly as a Rust crate.
+The shared core (`core/src/`) handles all business logic: audio capture, preprocessing (VAD + AGC), local or cloud transcription, filler removal, optional LLM post-processing, history storage, and secure key management. Windows and macOS call it through C FFI exports. Linux links directly as a Rust crate.
 
 **Test coverage:** 246 Rust core tests + 41 C# Windows tests = **287+ total tests**.
 
@@ -243,7 +243,7 @@ git clone https://github.com/KonradDallaOrg/dimmy.git
 cd dimmy
 
 # Verify the Rust core builds and passes tests
-cd src-tauri
+cd core
 cargo test --lib --features local-stt
 cargo clippy --features local-stt -- -D warnings
 cd ..
@@ -259,18 +259,18 @@ cd ..
 
 ```bash
 # 1. Build the Rust DLL
-cd src-tauri
+cd core
 cargo build --release --lib --target x86_64-pc-windows-msvc
 cd ..
 
 # 2. Build the Windows app
-cd native-ui/windows/Dimmy.Windows
+cd platforms/windows/Dimmy.Windows
 dotnet restore
 dotnet build -c Release
 cd ..
 
 # 3. Copy Rust DLL to output
-copy ..\..\src-tauri\target\x86_64-pc-windows-msvc\release\dimmy_lib.dll Dimmy.Windows\bin\Release\net8.0-windows10.0.19041.0\
+copy ..\..\core\target\x86_64-pc-windows-msvc\release\dimmy_lib.dll Dimmy.Windows\bin\Release\net8.0-windows10.0.19041.0\
 
 # 4. Run tests
 cd Dimmy.Windows.Tests
@@ -289,15 +289,15 @@ Or use the build script: `powershell -File build-windows.ps1`
 xcode-select --install
 
 # 2. Build the Rust static library (Apple Silicon)
-cd src-tauri
+cd core
 cargo build --release --lib --target aarch64-apple-darwin
 cd ..
 
 # 3. Remove dylib so Xcode links statically
-rm -f src-tauri/target/aarch64-apple-darwin/release/libdimmy_lib.dylib
+rm -f core/target/aarch64-apple-darwin/release/libdimmy_lib.dylib
 
 # 4. Open and build in Xcode
-open native-ui/macos/Dimmy.xcodeproj
+open platforms/macos/Dimmy.xcodeproj
 # Build with Cmd+B, Run with Cmd+R
 ```
 
@@ -320,7 +320,7 @@ sudo dnf install gtk4-devel libadwaita-devel alsa-lib-devel libxdo-devel \
 sudo pacman -S gtk4 libadwaita alsa-lib xdotool dbus
 
 # Build and run
-cd native-ui/linux
+cd platforms/linux
 cargo build --release
 ./target/release/dimmy-linux
 ```
@@ -328,7 +328,7 @@ cargo build --release
 ### Development Workflow
 
 ```bash
-cd src-tauri
+cd core
 
 # Run Rust core tests
 cargo test --lib
@@ -340,17 +340,17 @@ cargo fmt
 cargo clippy -- -D warnings
 
 # Lint the Linux UI (requires GTK4 dev libs)
-cd ../native-ui/linux
+cd ../platforms/linux
 cargo clippy -- -D warnings
 cargo test
 ```
 
 ### Pre-push checklist
 
-- `cargo fmt --check` in `src-tauri/` — clean
-- `cargo clippy -- -D warnings` in `src-tauri/` — zero warnings
-- `cargo test --lib` in `src-tauri/` — all pass
-- Version updated in `src-tauri/Cargo.toml`
+- `cargo fmt --check` in `core/` — clean
+- `cargo clippy -- -D warnings` in `core/` — zero warnings
+- `cargo test --lib` in `core/` — all pass
+- Version updated in `core/Cargo.toml`
 
 ### CI/CD
 
@@ -363,7 +363,7 @@ cargo test
 ### Project Structure
 
 ```
-src-tauri/src/          Shared Rust core
+core/src/               Shared Rust core
 ├── audio.rs            Audio capture via cpal
 ├── preprocess.rs       VAD, AGC, noise filter, downsampling
 ├── transcribe.rs       Cloud STT routing + local STT bridge
@@ -378,9 +378,9 @@ src-tauri/src/          Shared Rust core
 ├── error.rs            Typed error hierarchy
 └── lib.rs              Config, state, module exports
 
-native-ui/windows/      WinUI 3 / C# (.NET 8) — P/Invoke to dimmy_lib.dll
-native-ui/macos/        SwiftUI — FFI bridge via DimmyFFI.h to libdimmy_lib.a
-native-ui/linux/        GTK4 + libadwaita (Rust) — direct crate dependency
+platforms/windows/      WinUI 3 / C# (.NET 8) — P/Invoke to dimmy_lib.dll
+platforms/macos/        SwiftUI — FFI bridge via DimmyFFI.h to libdimmy_lib.a
+platforms/linux/        GTK4 + libadwaita (Rust) — direct crate dependency
 docs/dev/               Development docs (audio pipeline, known bugs, practices)
 .github/workflows/      CI/CD pipeline definitions
 CHANGELOG.md            Release changelog (Keep a Changelog format)

@@ -21,7 +21,7 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: core
 
       - name: Install Linux dependencies
         run: |
@@ -29,11 +29,11 @@ jobs:
           sudo apt-get install -y libasound2-dev libxdo-dev libdbus-1-dev libssl-dev cmake
 
       - name: Format
-        working-directory: src-tauri
+        working-directory: core
         run: cargo fmt --check
 
       - name: Clippy
-        working-directory: src-tauri
+        working-directory: core
         run: cargo clippy --features local-stt -- -D warnings
 
   test:
@@ -49,7 +49,7 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: core
 
       - name: Install Linux dependencies
         run: |
@@ -57,7 +57,7 @@ jobs:
           sudo apt-get install -y libasound2-dev libxdo-dev libdbus-1-dev libssl-dev cmake
 
       - name: Run tests
-        working-directory: src-tauri
+        working-directory: core
         run: cargo test --lib --features local-stt
 
   lint-linux:
@@ -77,8 +77,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            native-ui/linux/target
-          key: linux-gtk4-cargo-${{ hashFiles('native-ui/linux/Cargo.lock') }}
+            platforms/linux/target
+          key: linux-gtk4-cargo-${{ hashFiles('platforms/linux/Cargo.lock') }}
           restore-keys: linux-gtk4-cargo-
 
       - name: Install GTK4 + libadwaita dev packages
@@ -88,9 +88,9 @@ jobs:
             libasound2-dev libxdo-dev cmake
 
       - name: Clippy
-        working-directory: native-ui/linux
+        working-directory: platforms/linux
         run: cargo clippy -- -D warnings
 
       - name: Test
-        working-directory: native-ui/linux
+        working-directory: platforms/linux
         run: cargo test

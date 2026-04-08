@@ -4,26 +4,26 @@
 
 **Goal:** Build a native GTK4+libadwaita Linux UI for Dimmy with full feature parity with Windows/macOS native UIs.
 
-**Architecture:** Separate Rust crate (`native-ui/linux/`) that depends on `dimmy_lib` with Tauri feature-gated out. Calls business logic (audio, transcribe, LLM) directly as Rust. Uses glib channels to bridge tokio async → GTK main loop.
+**Architecture:** Separate Rust crate (`platforms/linux/`) that depends on `dimmy_lib` with Tauri feature-gated out. Calls business logic (audio, transcribe, LLM) directly as Rust. Uses glib channels to bridge tokio async → GTK main loop.
 
 **Tech Stack:** gtk4-rs, libadwaita-rs, gtk4-layer-shell, ashpd (xdg-desktop-portal), ksni (tray), tokio
 
-**Spec:** `docs/superpowers/specs/2026-03-25-linux-native-ui-design.md`
+**Spec:** `docs/superpowers/specs/2026-03-25-linux-platforms-design.md`
 
 ---
 
 ## File Structure
 
-### Files to modify in src-tauri/
+### Files to modify in core/
 
-- `src-tauri/Cargo.toml` — Add feature flags for `tauri-runtime`
-- `src-tauri/build.rs` — Feature-gate `tauri_build::build()`
-- `src-tauri/src/lib.rs` — Feature-gate Tauri imports/commands/run(), make AppState+helpers `pub`, add `new_standalone()`
+- `core/Cargo.toml` — Add feature flags for `tauri-runtime`
+- `core/build.rs` — Feature-gate `tauri_build::build()`
+- `core/src/lib.rs` — Feature-gate Tauri imports/commands/run(), make AppState+helpers `pub`, add `new_standalone()`
 
-### Files to create in native-ui/linux/
+### Files to create in platforms/linux/
 
 ```
-native-ui/linux/
+platforms/linux/
 ├── Cargo.toml
 ├── src/
 │   ├── main.rs             # Entry point: tokio + GTK init
@@ -53,16 +53,16 @@ native-ui/linux/
 
 ---
 
-## Task 1: Feature-gate Tauri in src-tauri
+## Task 1: Feature-gate Tauri in core
 
 **Files:**
-- Modify: `src-tauri/Cargo.toml`
-- Modify: `src-tauri/build.rs`
-- Modify: `src-tauri/src/lib.rs` (lines 1-18, 601-646, 648-2407, 2409-end)
+- Modify: `core/Cargo.toml`
+- Modify: `core/build.rs`
+- Modify: `core/src/lib.rs` (lines 1-18, 601-646, 648-2407, 2409-end)
 
 This task makes the dimmy_lib crate compilable WITHOUT Tauri, so the Linux crate can depend on it.
 
-- [ ] **Step 1: Modify `src-tauri/Cargo.toml` — add feature flags**
+- [ ] **Step 1: Modify `core/Cargo.toml` — add feature flags**
 
 ```toml
 [features]
@@ -109,7 +109,7 @@ use tauri::{Emitter, LogicalPosition, LogicalSize, Manager};
 
 Run this grep to find every Tauri reference:
 ```bash
-grep -n 'tauri::' src-tauri/src/lib.rs
+grep -n 'tauri::' core/src/lib.rs
 ```
 
 EVERY function that uses `tauri::State`, `tauri::AppHandle`, `tauri::Emitter`, `tauri::Manager`, or `#[tauri::command]` MUST be wrapped in `#[cfg(feature = "tauri-runtime")]`. This includes but is not limited to:
@@ -122,9 +122,9 @@ Use a single `#[cfg(feature = "tauri-runtime")]` block wrapping related groups w
 
 - [ ] **Step 4b: Verify `hotkey.rs` module compiles on Linux without Tauri**
 
-The existing `src-tauri/src/hotkey.rs` uses Windows-specific APIs. Check if it has `#[cfg(target_os)]` guards:
+The existing `core/src/hotkey.rs` uses Windows-specific APIs. Check if it has `#[cfg(target_os)]` guards:
 ```bash
-grep -c 'cfg(target_os' src-tauri/src/hotkey.rs
+grep -c 'cfg(target_os' core/src/hotkey.rs
 ```
 If it has unconditional Windows imports, gate the module declaration in `lib.rs`:
 ```rust
@@ -138,7 +138,7 @@ pub use hotkey::*;
 
 `ffi.rs` is `pub mod ffi;` in `lib.rs` and does NOT use Tauri types. It should compile without Tauri. Verify:
 ```bash
-cd src-tauri && cargo check --no-default-features 2>&1 | grep -i error | head -20
+cd core && cargo check --no-default-features 2>&1 | grep -i error | head -20
 ```
 If `ffi.rs` fails, either fix the issues or gate `pub mod ffi;` behind a feature.
 
@@ -338,7 +338,7 @@ This deduplicates the AppState construction between `run()` and `new_standalone(
 - [ ] **Step 8: Verify `cargo build` with default features (Tauri)**
 
 ```bash
-cd src-tauri && cargo build 2>&1 | tail -5
+cd core && cargo build 2>&1 | tail -5
 ```
 
 Expected: Compiles successfully. All existing functionality preserved.
@@ -346,7 +346,7 @@ Expected: Compiles successfully. All existing functionality preserved.
 - [ ] **Step 9: Verify `cargo build --no-default-features` (no Tauri)**
 
 ```bash
-cd src-tauri && cargo build --no-default-features 2>&1 | tail -20
+cd core && cargo build --no-default-features 2>&1 | tail -20
 ```
 
 Expected: Compiles successfully without Tauri. May have warnings about unused items — those are OK for now.
@@ -354,7 +354,7 @@ Expected: Compiles successfully without Tauri. May have warnings about unused it
 - [ ] **Step 10: Run existing tests**
 
 ```bash
-cd src-tauri && cargo test --lib 2>&1 | tail -10
+cd core && cargo test --lib 2>&1 | tail -10
 ```
 
 Expected: All existing tests pass (186+ Rust tests).
@@ -362,7 +362,7 @@ Expected: All existing tests pass (186+ Rust tests).
 - [ ] **Step 11: Commit**
 
 ```bash
-git add src-tauri/Cargo.toml src-tauri/build.rs src-tauri/src/lib.rs
+git add core/Cargo.toml core/build.rs core/src/lib.rs
 git commit -m "feat: feature-gate Tauri, add AppState::new_standalone()
 
 Allow dimmy_lib to compile without Tauri (--no-default-features).
@@ -374,11 +374,11 @@ Business logic modules unchanged. Enables Linux native UI crate."
 ## Task 2: Scaffold Linux crate
 
 **Files:**
-- Create: `native-ui/linux/Cargo.toml`
-- Create: `native-ui/linux/src/main.rs`
-- Create: `native-ui/linux/src/state.rs`
+- Create: `platforms/linux/Cargo.toml`
+- Create: `platforms/linux/src/main.rs`
+- Create: `platforms/linux/src/state.rs`
 
-- [ ] **Step 1: Create `native-ui/linux/Cargo.toml`**
+- [ ] **Step 1: Create `platforms/linux/Cargo.toml`**
 
 ```toml
 [package]
@@ -393,7 +393,7 @@ name = "dimmy-linux"
 path = "src/main.rs"
 
 [dependencies]
-dimmy_lib = { path = "../../src-tauri", default-features = false }
+dimmy_lib = { path = "../../core", default-features = false }
 gtk4 = "0.9"
 libadwaita = { version = "0.7", features = ["v1_4"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
@@ -405,7 +405,7 @@ env_logger = "0.11"
 
 Note: Start with minimal deps. Add gtk4-layer-shell, ashpd, ksni in later tasks when needed.
 
-- [ ] **Step 2: Create `native-ui/linux/src/state.rs`**
+- [ ] **Step 2: Create `platforms/linux/src/state.rs`**
 
 ```rust
 //! Bridge between Rust AppState and GTK main loop.
@@ -468,7 +468,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Create `native-ui/linux/src/main.rs`**
+- [ ] **Step 3: Create `platforms/linux/src/main.rs`**
 
 ```rust
 //! Dimmy Linux native UI — GTK4 + libadwaita entry point.
@@ -550,7 +550,7 @@ fn main() {
 - [ ] **Step 4: Verify Linux crate compiles**
 
 ```bash
-cd native-ui/linux && cargo build 2>&1 | tail -10
+cd platforms/linux && cargo build 2>&1 | tail -10
 ```
 
 Expected: Compiles successfully. GTK4 + libadwaita link properly.
@@ -563,7 +563,7 @@ sudo apt install libgtk-4-dev libadwaita-1-dev
 - [ ] **Step 5: Run Linux crate tests**
 
 ```bash
-cd native-ui/linux && cargo test 2>&1 | tail -10
+cd platforms/linux && cargo test 2>&1 | tail -10
 ```
 
 Expected: 3 tests pass (state module tests).
@@ -571,7 +571,7 @@ Expected: 3 tests pass (state module tests).
 - [ ] **Step 6: Verify Tauri build is not broken**
 
 ```bash
-cd src-tauri && cargo build 2>&1 | tail -5
+cd core && cargo build 2>&1 | tail -5
 ```
 
 Expected: Compiles successfully with default features (Tauri included).
@@ -579,7 +579,7 @@ Expected: Compiles successfully with default features (Tauri included).
 - [ ] **Step 7: Commit**
 
 ```bash
-git add native-ui/linux/
+git add platforms/linux/
 git commit -m "feat: scaffold Linux native UI crate (GTK4 + libadwaita)
 
 Minimal crate that depends on dimmy_lib (no Tauri), initializes
@@ -592,10 +592,10 @@ Includes AppEvent channel bridge for async → GTK communication."
 ## Task 3: Hotkey + recording pipeline (Wayland + X11)
 
 **Files:**
-- Create: `native-ui/linux/src/hotkey.rs`
-- Create: `native-ui/linux/src/text_injector.rs`
-- Modify: `native-ui/linux/Cargo.toml` (add ashpd, x11rb deps)
-- Modify: `native-ui/linux/src/main.rs` (wire up hotkey → record → paste pipeline)
+- Create: `platforms/linux/src/hotkey.rs`
+- Create: `platforms/linux/src/text_injector.rs`
+- Modify: `platforms/linux/Cargo.toml` (add ashpd, x11rb deps)
+- Modify: `platforms/linux/src/main.rs` (wire up hotkey → record → paste pipeline)
 
 - [ ] **Step 1: Add dependencies to Cargo.toml**
 
@@ -850,7 +850,7 @@ let _hotkey_backend = hotkey::detect_hotkey_backend();
 - [ ] **Step 5: Run tests**
 
 ```bash
-cd native-ui/linux && cargo test 2>&1 | tail -15
+cd platforms/linux && cargo test 2>&1 | tail -15
 ```
 
 Expected: All tests pass (state + text_injector + hotkey tests).
@@ -858,7 +858,7 @@ Expected: All tests pass (state + text_injector + hotkey tests).
 - [ ] **Step 6: Commit**
 
 ```bash
-git add native-ui/linux/
+git add platforms/linux/
 git commit -m "feat(linux): add hotkey detection and text injection
 
 Detect Wayland vs X11, choose paste method (wtype/ydotool/xdotool/clipboard).
@@ -871,10 +871,10 @@ implementation requires Linux desktop testing."
 ## Task 4: Pill overlay window
 
 **Files:**
-- Create: `native-ui/linux/src/pill_window.rs`
-- Create: `native-ui/linux/src/waveform.rs`
-- Modify: `native-ui/linux/Cargo.toml` (add gtk4-layer-shell)
-- Modify: `native-ui/linux/src/main.rs`
+- Create: `platforms/linux/src/pill_window.rs`
+- Create: `platforms/linux/src/waveform.rs`
+- Modify: `platforms/linux/Cargo.toml` (add gtk4-layer-shell)
+- Modify: `platforms/linux/src/main.rs`
 
 - [ ] **Step 1: Add gtk4-layer-shell to Cargo.toml**
 
@@ -919,13 +919,13 @@ Replace the placeholder window with the pill overlay. Connect AppEvent receiver 
 - [ ] **Step 5: Compile and verify**
 
 ```bash
-cd native-ui/linux && cargo build 2>&1 | tail -10
+cd platforms/linux && cargo build 2>&1 | tail -10
 ```
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add native-ui/linux/
+git add platforms/linux/
 git commit -m "feat(linux): pill overlay window with waveform and state machine
 
 Transparent floating overlay via gtk4-layer-shell (Wayland) with X11
@@ -938,15 +938,15 @@ scroll-to-cycle, context menu."
 ## Task 5: Settings window (8 tabs)
 
 **Files:**
-- Create: `native-ui/linux/src/settings/mod.rs`
-- Create: `native-ui/linux/src/settings/general.rs`
-- Create: `native-ui/linux/src/settings/shortcut.rs`
-- Create: `native-ui/linux/src/settings/output.rs`
-- Create: `native-ui/linux/src/settings/overlay.rs`
-- Create: `native-ui/linux/src/settings/permissions.rs`
-- Create: `native-ui/linux/src/settings/stats.rs`
-- Create: `native-ui/linux/src/settings/debug.rs`
-- Create: `native-ui/linux/src/settings/about.rs`
+- Create: `platforms/linux/src/settings/mod.rs`
+- Create: `platforms/linux/src/settings/general.rs`
+- Create: `platforms/linux/src/settings/shortcut.rs`
+- Create: `platforms/linux/src/settings/output.rs`
+- Create: `platforms/linux/src/settings/overlay.rs`
+- Create: `platforms/linux/src/settings/permissions.rs`
+- Create: `platforms/linux/src/settings/stats.rs`
+- Create: `platforms/linux/src/settings/debug.rs`
+- Create: `platforms/linux/src/settings/about.rs`
 
 Each tab is a separate file returning an `adw::PreferencesPage`. The container (`mod.rs`) creates the `adw::PreferencesWindow`, adds all pages, and manages the Advanced toggle visibility.
 
@@ -983,11 +983,11 @@ Debug+Stats tabs and advanced sections. Direct AppState read/write."
 ## Task 6: Onboarding wizard
 
 **Files:**
-- Create: `native-ui/linux/src/onboarding/mod.rs`
-- Create: `native-ui/linux/src/onboarding/welcome.rs`
-- Create: `native-ui/linux/src/onboarding/shortcut.rs`
-- Create: `native-ui/linux/src/onboarding/tryit.rs`
-- Modify: `native-ui/linux/src/main.rs`
+- Create: `platforms/linux/src/onboarding/mod.rs`
+- Create: `platforms/linux/src/onboarding/welcome.rs`
+- Create: `platforms/linux/src/onboarding/shortcut.rs`
+- Create: `platforms/linux/src/onboarding/tryit.rs`
+- Modify: `platforms/linux/src/main.rs`
 
 3-step AdwCarousel wizard:
 1. Welcome: icon + title + tagline + "Get Started"
@@ -1012,9 +1012,9 @@ dots. Saves config and starts normal mode on completion."
 ## Task 7: System tray
 
 **Files:**
-- Create: `native-ui/linux/src/tray.rs`
-- Modify: `native-ui/linux/Cargo.toml` (add ksni)
-- Modify: `native-ui/linux/src/main.rs`
+- Create: `platforms/linux/src/tray.rs`
+- Modify: `platforms/linux/Cargo.toml` (add ksni)
+- Modify: `platforms/linux/src/main.rs`
 
 StatusNotifierItem via ksni crate:
 - Icon changes per state
@@ -1035,9 +1035,9 @@ shortcut, show/hide pill, settings, quit). Icon changes per state."
 ## Task 8: Polish + packaging
 
 **Files:**
-- Modify: `native-ui/linux/src/waveform.rs` (remaining styles)
-- Modify: `native-ui/linux/src/pill_window.rs` (hover, scroll, animations)
-- Create: `native-ui/linux/assets/` (icons, .desktop file)
+- Modify: `platforms/linux/src/waveform.rs` (remaining styles)
+- Modify: `platforms/linux/src/pill_window.rs` (hover, scroll, animations)
+- Create: `platforms/linux/assets/` (icons, .desktop file)
 - Modify: `.github/workflows/staging-native.yml` (add Linux job)
 - Modify: `.github/workflows/release.yml` (add Linux build)
 
@@ -1053,7 +1053,7 @@ CI steps:
   run: sudo apt-get install -y libgtk-4-dev libadwaita-1-dev
 
 - name: Build Linux UI
-  run: cd native-ui/linux && cargo build --release
+  run: cd platforms/linux && cargo build --release
 ```
 
 - [ ] **Step 6: AppImage packaging script**
@@ -1073,12 +1073,12 @@ All 5 waveform styles, hover/scroll interactions, SVG icons,
 
 After all tasks are complete, verify:
 
-- [ ] `cd src-tauri && cargo build` — Tauri build still works
-- [ ] `cd src-tauri && cargo build --no-default-features` — builds without Tauri
-- [ ] `cd src-tauri && cargo test --lib` — all 186+ tests pass
-- [ ] `cd native-ui/linux && cargo build --release` — Linux UI builds
-- [ ] `cd native-ui/linux && cargo test` — all Linux tests pass
-- [ ] `cd native-ui/linux && cargo clippy -- -D warnings` — zero warnings
+- [ ] `cd core && cargo build` — Tauri build still works
+- [ ] `cd core && cargo build --no-default-features` — builds without Tauri
+- [ ] `cd core && cargo test --lib` — all 186+ tests pass
+- [ ] `cd platforms/linux && cargo build --release` — Linux UI builds
+- [ ] `cd platforms/linux && cargo test` — all Linux tests pass
+- [ ] `cd platforms/linux && cargo clippy -- -D warnings` — zero warnings
 - [ ] Run `dimmy-linux` on Ubuntu 24.04 Wayland — pill appears, settings open
 - [ ] Run `dimmy-linux` on Ubuntu 24.04 X11 — same functionality
 - [ ] Hotkey → record → transcribe → paste works end-to-end

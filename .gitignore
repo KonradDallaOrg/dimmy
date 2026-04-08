@@ -1,6 +1,6 @@
-src-tauri/target/
-native-ui/linux/target/
-src-tauri/gen/
+core/target/
+platforms/linux/target/
+core/gen/
 node_modules/
 dist/
 .DS_Store

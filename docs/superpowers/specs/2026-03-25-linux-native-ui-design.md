@@ -11,18 +11,18 @@ Build a native Linux UI for Dimmy using GTK4 + libadwaita in Rust (gtk4-rs). Ful
 Unlike Windows/macOS which call the C FFI layer (`ffi.rs`), the Linux UI is written in Rust and calls business logic directly:
 
 ```
-native-ui/linux/ (gtk4-rs)
+platforms/linux/ (gtk4-rs)
     ↓ direct Rust calls
-src-tauri/src/ → AppState, audio.rs, transcribe.rs, llm.rs, preprocess.rs
+core/src/ → AppState, audio.rs, transcribe.rs, llm.rs, preprocess.rs
 ```
 
 No JSON serialization, no C string conversion, no buffer management. Full access to `Result<T, E>`, `String`, `Arc<Mutex<T>>`.
 
 ### Tauri dependency isolation (CRITICAL)
 
-`src-tauri/Cargo.toml` has `tauri` as a hard dependency. The Linux crate must NOT pull in Tauri transitively.
+`core/Cargo.toml` has `tauri` as a hard dependency. The Linux crate must NOT pull in Tauri transitively.
 
-**Solution: feature-gate Tauri in `src-tauri/Cargo.toml`**
+**Solution: feature-gate Tauri in `core/Cargo.toml`**
 
 ```toml
 [features]
@@ -38,7 +38,7 @@ All `#[tauri::command]` functions and the `run()` entry point in `lib.rs` go beh
 
 The Linux crate depends on:
 ```toml
-dimmy_lib = { path = "../../src-tauri", default-features = false }
+dimmy_lib = { path = "../../core", default-features = false }
 ```
 
 This gives access to all business logic without Tauri, GTK, or WebKit.
@@ -83,7 +83,7 @@ This replaces the FFI's `dimmy_set_event_callback`. No C function pointers — t
 ### Crate structure
 
 ```
-native-ui/linux/
+platforms/linux/
 ├── Cargo.toml              # depends on dimmy_lib (default-features = false)
 ├── src/
 │   ├── main.rs             # entry: init tokio + gtk4, create AppState, launch app
@@ -122,7 +122,7 @@ native-ui/linux/
 ### Build
 
 ```bash
-cd native-ui/linux
+cd platforms/linux
 cargo build --release
 # Output: target/release/dimmy-linux
 ```
@@ -130,7 +130,7 @@ cargo build --release
 Cargo.toml dependency:
 ```toml
 [dependencies]
-dimmy_lib = { path = "../../src-tauri", default-features = false }
+dimmy_lib = { path = "../../core", default-features = false }
 gtk4 = "0.9"
 libadwaita = "0.7"
 gtk4-layer-shell = "0.4"
@@ -476,10 +476,10 @@ If `keep_in_clipboard` is true: skip paste simulation, just copy.
 ## Implementation Order
 
 ### Step 1: Scaffold + Tauri feature-gate
-- Feature-gate Tauri in `src-tauri/Cargo.toml` (tauri-runtime feature)
+- Feature-gate Tauri in `core/Cargo.toml` (tauri-runtime feature)
 - Add `#[cfg(feature = "tauri-runtime")]` to Tauri-specific code in `lib.rs`
 - Create `AppState::new_standalone()` public constructor
-- Create `native-ui/linux/` crate with `dimmy_lib` (default-features = false)
+- Create `platforms/linux/` crate with `dimmy_lib` (default-features = false)
 - Verify `cargo build` compiles without Tauri
 - Verify existing `cargo tauri build` still works (regression check)
 - CI: add Linux build job

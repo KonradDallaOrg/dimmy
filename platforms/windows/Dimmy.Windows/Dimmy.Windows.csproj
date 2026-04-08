@@ -36,11 +36,11 @@
   <!-- Copy dimmy_lib.dll from Rust build output to bin dir -->
   <Target Name="CopyDimmyDll" AfterTargets="Build">
     <PropertyGroup>
-      <DimmyDllSource>$(MSBuildThisFileDirectory)..\..\..\src-tauri\target\release\dimmy_lib.dll</DimmyDllSource>
+      <DimmyDllSource>$(MSBuildThisFileDirectory)..\..\..\core\target\release\dimmy_lib.dll</DimmyDllSource>
     </PropertyGroup>
     <Copy SourceFiles="$(DimmyDllSource)" DestinationFolder="$(OutputPath)"
           Condition="Exists('$(DimmyDllSource)')" SkipUnchangedFiles="true" />
-    <Warning Text="dimmy_lib.dll not found at $(DimmyDllSource). Run 'cargo build --release --lib' in src-tauri first."
+    <Warning Text="dimmy_lib.dll not found at $(DimmyDllSource). Run 'cargo build --release --lib' in core first."
              Condition="!Exists('$(DimmyDllSource)')" />
   </Target>
 </Project>

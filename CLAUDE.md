@@ -47,7 +47,7 @@ Every feature, fix, or change MUST work identically on Windows, macOS, Linux.
 
 ## Version Bumping (MANDATORY)
 
-Update version in `src-tauri/Cargo.toml` → `version = "x.y.z"`.
+Update version in `core/Cargo.toml` → `version = "x.y.z"`.
 
 After commit: `git tag v0.3.X && git push origin v0.3.X` to trigger Release.
 
@@ -69,7 +69,7 @@ After commit: `git tag v0.3.X && git push origin v0.3.X` to trigger Release.
 
 ### Release Process
 1. Commit changes to `main` (or merge feature branch)
-2. Bump version in `src-tauri/Cargo.toml`, commit
+2. Bump version in `core/Cargo.toml`, commit
 3. Update `CHANGELOG.md` — move [Unreleased] to new version
 4. Push to origin
 5. `git tag v0.4.X && git push origin v0.4.X`
@@ -80,7 +80,7 @@ After commit: `git tag v0.3.X && git push origin v0.3.X` to trigger Release.
 - `cargo fmt --check` — clean
 - `cargo clippy --features local-stt -- -D warnings` — zero warnings (CI treats warnings as errors!)
 - `cargo test --lib --features local-stt` — all pass
-- Version updated in `src-tauri/Cargo.toml`
+- Version updated in `core/Cargo.toml`
 - `CHANGELOG.md` updated if releasing
 - Feature branch merged (if applicable)
 - Native UI builds are CI-only (platform-specific) — no local pre-push requirement
@@ -98,18 +98,18 @@ Shared Rust core with platform-native UIs connected via C FFI.
 ### FFI layer
 - `ffi.rs` exports 30+ C functions, uses global `OnceLock<AppState>`
 - Original 18 functions + 10 new (model management + history)
-- See `docs/dev/native-ui-plan.md` for gap analysis between platforms
+- See `docs/dev/native-ui-plan.md` for gap analysis between platform UIs
 
 ## Architecture Quick Reference
 
 ```
-Rust Core (src-tauri/src/)      → lib.rs, audio.rs, preprocess.rs, transcribe.rs, llm.rs,
+Rust Core (core/src/)            → lib.rs, audio.rs, preprocess.rs, transcribe.rs, llm.rs,
                                   provider.rs, keystore.rs, error.rs, hotkey.rs,
                                   local_stt.rs, history.rs, filler.rs
                                 ↕ C FFI (ffi.rs — 30+ exported functions)
-Windows UI (native-ui/windows/) → WinUI 3 / C# (.NET 8), P/Invoke to dimmy_lib.dll
-macOS UI (native-ui/macos/)     → SwiftUI, FFI bridge via DimmyFFI.h to libdimmy_lib.a
-Linux UI (native-ui/linux/)     → GTK4 + libadwaita (Rust), direct crate dependency on dimmy_lib
+Windows UI (platforms/windows/) → WinUI 3 / C# (.NET 8), P/Invoke to dimmy_lib.dll
+macOS UI (platforms/macos/)     → SwiftUI, FFI bridge via DimmyFFI.h to libdimmy_lib.a
+Linux UI (platforms/linux/)     → GTK4 + libadwaita (Rust), direct crate dependency on dimmy_lib
 ```
 
 ### Cargo Feature Flags

@@ -12,9 +12,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$ProjectDir = "$PSScriptRoot\native-ui\windows\Dimmy.Windows"
+$ProjectDir = "$PSScriptRoot\platforms\windows\Dimmy.Windows"
 $SolutionFile = "$ProjectDir\Dimmy.Windows.sln"
-$TestProject = "$PSScriptRoot\native-ui\windows\Dimmy.Windows.Tests\Dimmy.Windows.Tests.csproj"
+$TestProject = "$PSScriptRoot\platforms\windows\Dimmy.Windows.Tests\Dimmy.Windows.Tests.csproj"
 
 Write-Host "=== Dimmy Windows Build ===" -ForegroundColor Cyan
 Write-Host "Configuration: $Configuration | Platform: $Platform"
@@ -47,7 +47,7 @@ if (-not $BuildOnly) {
 # Step 4: Check Rust tests still pass
 if (-not $BuildOnly -and -not $TestOnly) {
     Write-Host "[4/4] Verifying Rust tests..." -ForegroundColor Yellow
-    Push-Location "$PSScriptRoot\src-tauri"
+    Push-Location "$PSScriptRoot\core"
     cargo test --lib 2>&1
     if ($LASTEXITCODE -ne 0) { Write-Error "Rust tests failed"; Pop-Location; exit 1 }
     Pop-Location

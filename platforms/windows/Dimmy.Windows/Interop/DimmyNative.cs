@@ -5,7 +5,7 @@ namespace Dimmy.Windows.Interop;
 
 /// <summary>
 /// P/Invoke declarations for all 15 FFI functions exported by dimmy.dll (Rust cdylib).
-/// See src-tauri/src/ffi.rs for the Rust side.
+/// See core/src/ffi.rs for the Rust side.
 /// </summary>
 public static class DimmyNative
 {

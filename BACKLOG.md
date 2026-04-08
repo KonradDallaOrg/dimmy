@@ -98,7 +98,7 @@
 ## Could Have (v2.0+)
 
 ### Architecture
-- [ ] Monorepo restructure: `src-tauri/` -> `crates/dimmy-core/`, `native-ui/` -> `platforms/`
+- [x] Monorepo restructure: `src-tauri/` -> `core/`, `native-ui/` -> `platforms/`
 - [ ] Root Cargo.toml workspace manifest
 - [ ] ADRs in `docs/adr/`
 - [ ] UniFFI codegen to replace hand-written FFI

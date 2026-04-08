@@ -87,7 +87,7 @@
 		AB000044 /* ModelSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelSettingsView.swift; sourceTree = "<group>"; };
 		AB000045 /* ModelDownloadStepView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelDownloadStepView.swift; sourceTree = "<group>"; };
 		AB000030 /* DimmyCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DimmyCore.swift; sourceTree = "<group>"; };
-		AB000031 /* libdimmy_lib.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libdimmy_lib.a; path = "$(PROJECT_DIR)/../../src-tauri/target/aarch64-apple-darwin/release/libdimmy_lib.a"; sourceTree = "<absolute>"; };
+		AB000031 /* libdimmy_lib.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libdimmy_lib.a; path = "$(PROJECT_DIR)/../../core/target/aarch64-apple-darwin/release/libdimmy_lib.a"; sourceTree = "<absolute>"; };
 		AB000032 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
 		AB000033 /* CoreAudio.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreAudio.framework; path = System/Library/Frameworks/CoreAudio.framework; sourceTree = SDKROOT; };
 		AB000034 /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = System/Library/Frameworks/AudioToolbox.framework; sourceTree = SDKROOT; };
@@ -494,7 +494,7 @@
 				);
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
-					"$(PROJECT_DIR)/../../src-tauri/target/aarch64-apple-darwin/release",
+					"$(PROJECT_DIR)/../../core/target/aarch64-apple-darwin/release",
 				);
 				MARKETING_VERSION = 0.1.0;
 				OTHER_LDFLAGS = (
@@ -539,7 +539,7 @@
 				);
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
-					"$(PROJECT_DIR)/../../src-tauri/target/aarch64-apple-darwin/release",
+					"$(PROJECT_DIR)/../../core/target/aarch64-apple-darwin/release",
 				);
 				MARKETING_VERSION = 0.1.0;
 				OTHER_LDFLAGS = (
