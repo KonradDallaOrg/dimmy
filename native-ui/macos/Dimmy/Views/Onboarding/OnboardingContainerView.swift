@@ -8,7 +8,7 @@ struct OnboardingContainerView: View {
         VStack(spacing: 0) {
             // Progress dots
             HStack(spacing: 8) {
-                ForEach(0..<4, id: \.self) { index in
+                ForEach(0..<5, id: \.self) { index in
                     Circle()
                         .fill(index <= currentStep ? Color.accentColor : Color.secondary.opacity(0.3))
                         .frame(width: 8, height: 8)
@@ -28,12 +28,16 @@ struct OnboardingContainerView: View {
                         withAnimation { currentStep = 2 }
                     }
                 case 2:
-                    ShortcutStepView(appState: appState) {
-                        // Show pill with glow before Try It step
-                        appState.showPillIntro = true
+                    ModelDownloadStepView(appState: appState) {
                         withAnimation { currentStep = 3 }
                     }
                 case 3:
+                    ShortcutStepView(appState: appState) {
+                        // Show pill with glow before Try It step
+                        appState.showPillIntro = true
+                        withAnimation { currentStep = 4 }
+                    }
+                case 4:
                     TryItStepView(appState: appState) {
                         appState.isOnboardingComplete = true
                     }

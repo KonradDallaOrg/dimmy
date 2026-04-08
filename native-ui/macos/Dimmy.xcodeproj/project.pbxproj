@@ -40,6 +40,7 @@
 		AA000042 /* RecordingSimulator.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000042; };
 		AA000043 /* HistorySettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000043; };
 		AA000044 /* ModelSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000044; };
+		AA000045 /* ModelDownloadStepView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000045; };
 		AA000031 /* libdimmy_lib.a in Frameworks */ = {isa = PBXBuildFile; fileRef = AB000031; };
 		AA000032 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AB000032; };
 		AA000033 /* CoreAudio.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AB000033; };
@@ -84,6 +85,7 @@
 		AB000042 /* RecordingSimulator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingSimulator.swift; sourceTree = "<group>"; };
 		AB000043 /* HistorySettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistorySettingsView.swift; sourceTree = "<group>"; };
 		AB000044 /* ModelSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelSettingsView.swift; sourceTree = "<group>"; };
+		AB000045 /* ModelDownloadStepView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelDownloadStepView.swift; sourceTree = "<group>"; };
 		AB000030 /* DimmyCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DimmyCore.swift; sourceTree = "<group>"; };
 		AB000031 /* libdimmy_lib.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libdimmy_lib.a; path = "$(PROJECT_DIR)/../../src-tauri/target/aarch64-apple-darwin/release/libdimmy_lib.a"; sourceTree = "<absolute>"; };
 		AB000032 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
@@ -185,6 +187,7 @@
 				AB000013 /* OnboardingContainerView.swift */,
 				AB000014 /* WelcomeStepView.swift */,
 				AB000015 /* PermissionsStepView.swift */,
+				AB000045 /* ModelDownloadStepView.swift */,
 				AB000016 /* ShortcutStepView.swift */,
 				AB000017 /* TryItStepView.swift */,
 			);
@@ -328,6 +331,7 @@
 				AA000015 /* PermissionsStepView.swift in Sources */,
 				AA000016 /* ShortcutStepView.swift in Sources */,
 				AA000017 /* TryItStepView.swift in Sources */,
+				AA000045 /* ModelDownloadStepView.swift in Sources */,
 				AA000018 /* GeneralSettingsView.swift in Sources */,
 				AA000019 /* ShortcutSettingsView.swift in Sources */,
 				AA000020 /* AboutSettingsView.swift in Sources */,
