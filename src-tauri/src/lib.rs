@@ -281,7 +281,7 @@ impl Default for AppConfig {
             preprocessing_enabled: true,
             audio_debug_enabled: false,
             use_keyring: false,
-            stt_mode: "local".to_string(),
+            stt_mode: "cloud".to_string(),
             local_model: "ggml-base-q8_0.bin".to_string(),
             filler_removal_enabled: true,
             border_style: "Rainbow".to_string(),

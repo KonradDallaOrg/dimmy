@@ -92,7 +92,7 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _keepInClipboard;
     [ObservableProperty] private int _inputGainPercent = 100;
     [ObservableProperty] private bool _showInTaskbar;
-    [ObservableProperty] private string _sttMode = "local";
+    [ObservableProperty] private string _sttMode = "cloud";
     [ObservableProperty] private string _localModel = "ggml-base-q8_0.bin";
     [ObservableProperty] private bool _fillerRemovalEnabled = true;
     [ObservableProperty] private long _statsTotalWords;
@@ -134,7 +134,7 @@ public partial class SettingsViewModel : ObservableObject
             LlmTranslateTo = r.TryGetProperty("llm_translate_to", out var lt) ? lt.GetString() ?? "" : "";
             LlmLogEnabled = r.TryGetProperty("llm_log_enabled", out var lle) && lle.GetBoolean();
             AudioDebugEnabled = r.TryGetProperty("audio_debug_enabled", out var ade) && ade.GetBoolean();
-            SttMode = r.TryGetProperty("stt_mode", out var sm2) ? sm2.GetString() ?? "local" : "local";
+            SttMode = r.TryGetProperty("stt_mode", out var sm2) ? sm2.GetString() ?? "cloud" : "cloud";
             LocalModel = r.TryGetProperty("local_model", out var lmod) ? lmod.GetString() ?? "ggml-base-q8_0.bin" : "ggml-base-q8_0.bin";
             FillerRemovalEnabled = !r.TryGetProperty("filler_removal_enabled", out var fre) || fre.GetBoolean();
             BorderStyle = r.TryGetProperty("border_style", out var bs) ? bs.GetString() ?? "Rainbow" : "Rainbow";
