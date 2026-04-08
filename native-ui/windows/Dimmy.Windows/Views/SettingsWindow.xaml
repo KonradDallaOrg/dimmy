@@ -73,6 +73,40 @@
 
               <ToggleSwitch Header="Launch at login" IsEnabled="False" />
 
+              <!-- STT Mode: Local vs Cloud -->
+              <TextBlock Text="Speech-to-Text Mode" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
+              <StackPanel Orientation="Horizontal" Spacing="16">
+                <RadioButton x:Name="SttModeLocal" Content="Local (Offline)" GroupName="SttMode"
+                             Checked="SttMode_Checked" Tag="local" />
+                <RadioButton x:Name="SttModeCloud" Content="Cloud" GroupName="SttMode"
+                             Checked="SttMode_Checked" Tag="cloud" />
+              </StackPanel>
+
+              <!-- Local STT info panel (visible when local mode is selected) -->
+              <StackPanel x:Name="LocalSttPanel" Spacing="8">
+                <TextBlock x:Name="LocalModelLabel" Text="Model: ggml-base-q8_0.bin"
+                           FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <TextBlock x:Name="LocalModelStatus" Text="Checking..."
+                           FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                <Button x:Name="DownloadModelBtn" Content="Download Model"
+                        Click="DownloadModel_Click" Visibility="Collapsed" />
+                <ProgressBar x:Name="DownloadProgress" IsIndeterminate="True"
+                             Visibility="Collapsed" Width="320" HorizontalAlignment="Left" />
+                <ToggleSwitch Header="Remove filler words (um, uh, etc.)"
+                              IsOn="{Binding FillerRemovalEnabled, Mode=TwoWay}" />
+              </StackPanel>
+
+              <!-- Cloud STT panel (visible when cloud mode is selected) -->
+              <StackPanel x:Name="CloudSttPanel" Spacing="8" Visibility="Collapsed">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <PasswordBox x:Name="CloudApiKeyBox" Header="STT API Key" Width="320"
+                               PlaceholderText="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}" />
+                  <FontIcon Glyph="&#xE73E;" FontSize="16" Foreground="#4ade80"
+                            VerticalAlignment="Bottom" Margin="0,0,0,8"
+                            Visibility="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
+                </StackPanel>
+              </StackPanel>
+
               <!-- Advanced: STT Provider -->
               <StackPanel Spacing="12"
                           Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">

@@ -47,6 +47,7 @@ public sealed partial class SettingsWindow : Window
         SyncLlmProviderComboBox();
         SyncLanguageComboBox();
         SyncThemeRadioButtons();
+        SyncSttMode();
         PopulateStats();
         PopulateVersion();
         _loaded = true;
@@ -210,6 +211,96 @@ public sealed partial class SettingsWindow : Window
         }
     }
 
+    private void SyncSttMode()
+    {
+        bool isLocal = ViewModel.SttMode == "local";
+        SttModeLocal.IsChecked = isLocal;
+        SttModeCloud.IsChecked = !isLocal;
+        LocalSttPanel.Visibility = isLocal ? Visibility.Visible : Visibility.Collapsed;
+        CloudSttPanel.Visibility = isLocal ? Visibility.Collapsed : Visibility.Visible;
+
+        if (isLocal)
+        {
+            LocalModelLabel.Text = $"Model: {ViewModel.LocalModel}";
+            CheckModelStatus();
+        }
+    }
+
+    private void SttMode_Checked(object sender, RoutedEventArgs e)
+    {
+        if (!_loaded) return;
+        if (sender is RadioButton rb && rb.Tag is string tag)
+        {
+            ViewModel.SttMode = tag;
+            bool isLocal = tag == "local";
+            LocalSttPanel.Visibility = isLocal ? Visibility.Visible : Visibility.Collapsed;
+            CloudSttPanel.Visibility = isLocal ? Visibility.Collapsed : Visibility.Visible;
+
+            if (isLocal)
+            {
+                LocalModelLabel.Text = $"Model: {ViewModel.LocalModel}";
+                CheckModelStatus();
+            }
+        }
+    }
+
+    private void CheckModelStatus()
+    {
+        try
+        {
+            int exists = DimmyNative.dimmy_model_exists(ViewModel.LocalModel);
+            if (exists == 1)
+            {
+                LocalModelStatus.Text = "Ready";
+                DownloadModelBtn.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                LocalModelStatus.Text = "Not downloaded";
+                DownloadModelBtn.Visibility = Visibility.Visible;
+            }
+        }
+        catch
+        {
+            LocalModelStatus.Text = "Unable to check";
+            DownloadModelBtn.Visibility = Visibility.Visible;
+        }
+    }
+
+    private async void DownloadModel_Click(object sender, RoutedEventArgs e)
+    {
+        DownloadModelBtn.IsEnabled = false;
+        DownloadModelBtn.Content = "Downloading...";
+        DownloadProgress.Visibility = Visibility.Visible;
+        LocalModelStatus.Text = "Downloading...";
+
+        try
+        {
+            int result = await Task.Run(() => DimmyNative.dimmy_download_model(ViewModel.LocalModel));
+            if (result == 0)
+            {
+                LocalModelStatus.Text = "Ready";
+                DownloadModelBtn.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                LocalModelStatus.Text = "Download failed";
+                DownloadModelBtn.Content = "Retry Download";
+                DownloadModelBtn.IsEnabled = true;
+            }
+        }
+        catch
+        {
+            LocalModelStatus.Text = "Download failed";
+            DownloadModelBtn.Content = "Retry Download";
+            DownloadModelBtn.IsEnabled = true;
+        }
+        finally
+        {
+            DownloadProgress.Visibility = Visibility.Collapsed;
+        }
+    }
+
     private void Language_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (LanguageComboBox.SelectedItem is System.Collections.Generic.KeyValuePair<string, string> kvp)
@@ -273,6 +364,8 @@ public sealed partial class SettingsWindow : Window
         // Pull password values from PasswordBoxes into ViewModel before serializing
         if (!string.IsNullOrEmpty(ApiKeyBox.Password))
             ViewModel.ApiKey = ApiKeyBox.Password;
+        if (!string.IsNullOrEmpty(CloudApiKeyBox.Password))
+            ViewModel.ApiKey = CloudApiKeyBox.Password;
         if (!string.IsNullOrEmpty(LlmApiKeyBox.Password))
             ViewModel.LlmApiKey = LlmApiKeyBox.Password;
 

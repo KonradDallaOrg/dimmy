@@ -69,6 +69,39 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_update_stats(int words, double speakingSecs);
 
+    // ── Local STT model management ──────────────────────────────
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_list_local_models(byte[] buf, int len);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_download_model(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string filename);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_model_exists(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string filename);
+
+    // ── History ──────────────────────────────────────────────────
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_history_save(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string text,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string language,
+        double duration);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_history_recent(int limit, byte[] buf, int len);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_history_search(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string query,
+        int limit, byte[] buf, int len);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_history_delete(int id);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_history_stats(byte[] buf, int len);
+
     // ── Utility ──────────────────────────────────────────────────────
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_has_api_key();
@@ -96,4 +129,16 @@ public static class DimmyNative
         if (jsonPtr == IntPtr.Zero) return null;
         return Marshal.PtrToStringUTF8(jsonPtr);
     }
+
+    // ── Local STT helpers ────────────────────────────────────────
+    public static string? ListLocalModels() => ReadBuffer(dimmy_list_local_models);
+
+    // ── History helpers ──────────────────────────────────────────
+    public static string? HistoryRecent(int limit) =>
+        ReadBuffer((buf, len) => dimmy_history_recent(limit, buf, len));
+
+    public static string? HistorySearch(string query, int limit) =>
+        ReadBuffer((buf, len) => dimmy_history_search(query, limit, buf, len));
+
+    public static string? HistoryStats() => ReadBuffer(dimmy_history_stats);
 }

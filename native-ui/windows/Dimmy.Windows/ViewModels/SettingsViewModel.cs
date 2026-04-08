@@ -92,6 +92,9 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _keepInClipboard;
     [ObservableProperty] private int _inputGainPercent = 100;
     [ObservableProperty] private bool _showInTaskbar;
+    [ObservableProperty] private string _sttMode = "local";
+    [ObservableProperty] private string _localModel = "ggml-base-q8_0.bin";
+    [ObservableProperty] private bool _fillerRemovalEnabled = true;
     [ObservableProperty] private long _statsTotalWords;
     [ObservableProperty] private double _statsTotalSpeakingSecs;
 
@@ -131,6 +134,9 @@ public partial class SettingsViewModel : ObservableObject
             LlmTranslateTo = r.TryGetProperty("llm_translate_to", out var lt) ? lt.GetString() ?? "" : "";
             LlmLogEnabled = r.TryGetProperty("llm_log_enabled", out var lle) && lle.GetBoolean();
             AudioDebugEnabled = r.TryGetProperty("audio_debug_enabled", out var ade) && ade.GetBoolean();
+            SttMode = r.TryGetProperty("stt_mode", out var sm2) ? sm2.GetString() ?? "local" : "local";
+            LocalModel = r.TryGetProperty("local_model", out var lmod) ? lmod.GetString() ?? "ggml-base-q8_0.bin" : "ggml-base-q8_0.bin";
+            FillerRemovalEnabled = !r.TryGetProperty("filler_removal_enabled", out var fre) || fre.GetBoolean();
             BorderStyle = r.TryGetProperty("border_style", out var bs) ? bs.GetString() ?? "Rainbow" : "Rainbow";
             WaveformStyle = r.TryGetProperty("waveform_style", out var ws) ? ws.GetString() ?? "Bars" : "Bars";
             OverlayPosition = r.TryGetProperty("overlay_position", out var op) ? op.GetString() ?? "Bottom Right" : "Bottom Right";
@@ -177,6 +183,9 @@ public partial class SettingsViewModel : ObservableObject
             ["llm_translate_to"] = LlmTranslateTo,
             ["llm_log_enabled"] = LlmLogEnabled,
             ["audio_debug_enabled"] = AudioDebugEnabled,
+            ["stt_mode"] = SttMode,
+            ["local_model"] = LocalModel,
+            ["filler_removal_enabled"] = FillerRemovalEnabled,
             ["border_style"] = BorderStyle,
             ["waveform_style"] = WaveformStyle,
             ["overlay_position"] = OverlayPosition,
