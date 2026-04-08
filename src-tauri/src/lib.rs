@@ -1,6 +1,8 @@
 pub mod audio;
 pub mod error;
 pub mod ffi;
+pub mod filler;
+pub mod history;
 mod hotkey;
 pub mod keystore;
 pub mod llm;
