@@ -9,8 +9,6 @@ dist/
 *.dmg
 *.AppImage
 *.deb
-NEGATIVE-SPACE-PLAN.md
-docs/superpowers/
 .cargo/
 .env
 tests/test_audio.wav
@@ -19,4 +17,6 @@ tests/results/
 tests/*.enc
 **/TestResults/
 demo/
-mockup/
+mockup/build/
+*.swp
+*.swo

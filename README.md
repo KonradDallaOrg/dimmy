@@ -317,7 +317,7 @@ cargo test
 - `cargo fmt --check` in `src-tauri/` — clean
 - `cargo clippy -- -D warnings` in `src-tauri/` — zero warnings
 - `cargo test --lib` in `src-tauri/` — all pass
-- Version matches in `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`
+- Version updated in `src-tauri/Cargo.toml`
 
 ### CI/CD
 
