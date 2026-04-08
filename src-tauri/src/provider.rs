@@ -13,6 +13,7 @@ pub enum Provider {
     Deepgram,
     Anthropic,
     Custom,
+    Local,
 }
 
 impl Provider {
@@ -50,6 +51,7 @@ impl Provider {
             Self::Deepgram => "deepgram",
             Self::Anthropic => "anthropic",
             Self::Custom => "custom",
+            Self::Local => "local",
         }
     }
 
@@ -60,6 +62,7 @@ impl Provider {
         let limit = match self {
             Self::Deepgram => 2 * 1024 * 1024 * 1024, // 2 GB
             Self::Gemini => 20 * 1024 * 1024,         // 20 MB (inline_data limit)
+            Self::Local => usize::MAX,                // In-memory, no upload limit
             _ => 25 * 1024 * 1024,                    // 25 MB (Groq, OpenAI, OpenRouter, etc.)
         };
         // Limit must be positive — a zero limit would prevent all uploads
@@ -462,5 +465,14 @@ mod tests {
             Provider::Deepgram.max_file_bytes() > Provider::Groq.max_file_bytes() * 10,
             "Deepgram limit should be >> Groq limit"
         );
+    }
+
+    #[test]
+    fn local_provider_basics() {
+        assert_eq!(Provider::Local.as_str(), "local");
+        // Local provider has no URL — from_url should never return Local
+        assert_ne!(Provider::from_url("http://localhost:8080"), Provider::Local);
+        // Local provider has no max file size limit (processed in-memory)
+        assert_eq!(Provider::Local.max_file_bytes(), usize::MAX);
     }
 }

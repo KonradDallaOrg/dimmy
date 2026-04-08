@@ -31,6 +31,7 @@ pub enum TranscribeError {
     Empty,
     Network(String),
     InsecureUrl(String),
+    LocalModel(String),
 }
 
 #[derive(Debug)]
@@ -76,6 +77,7 @@ impl std::fmt::Display for TranscribeError {
             Self::InsecureUrl(url) => {
                 write!(f, "refusing HTTP (HTTPS required): {}", url)
             }
+            Self::LocalModel(msg) => write!(f, "local model: {}", msg),
         }
     }
 }
