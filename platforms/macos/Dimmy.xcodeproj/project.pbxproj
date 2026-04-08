@@ -42,6 +42,8 @@
 		AA000044 /* ModelSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000044; };
 		AA000045 /* ModelDownloadStepView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000045; };
 		AA000031 /* libdimmy_lib.a in Frameworks */ = {isa = PBXBuildFile; fileRef = AB000031; };
+		AA000038 /* Accelerate.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AB000038; };
+		AA000039 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AB000039; };
 		AA000032 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AB000032; };
 		AA000033 /* CoreAudio.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AB000033; };
 		AA000034 /* AudioToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AB000034; };
@@ -94,6 +96,8 @@
 		AB000035 /* SystemConfiguration.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SystemConfiguration.framework; path = System/Library/Frameworks/SystemConfiguration.framework; sourceTree = SDKROOT; };
 		AB000036 /* IOKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOKit.framework; path = System/Library/Frameworks/IOKit.framework; sourceTree = SDKROOT; };
 		AB000037 /* CoreFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreFoundation.framework; path = System/Library/Frameworks/CoreFoundation.framework; sourceTree = SDKROOT; };
+		AB000038 /* Accelerate.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Accelerate.framework; path = System/Library/Frameworks/Accelerate.framework; sourceTree = SDKROOT; };
+		AB000039 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		AB000099 /* Dimmy.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Dimmy.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -109,6 +113,8 @@
 				AA000035 /* SystemConfiguration.framework in Frameworks */,
 				AA000036 /* IOKit.framework in Frameworks */,
 				AA000037 /* CoreFoundation.framework in Frameworks */,
+				AA000038 /* Accelerate.framework in Frameworks */,
+				AA000039 /* Metal.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -233,6 +239,8 @@
 				AB000035 /* SystemConfiguration.framework */,
 				AB000036 /* IOKit.framework */,
 				AB000037 /* CoreFoundation.framework */,
+				AB000038 /* Accelerate.framework */,
+				AB000039 /* Metal.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
