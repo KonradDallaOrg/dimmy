@@ -162,6 +162,9 @@ pub extern "C" fn dimmy_init() -> c_int {
         preprocessing_enabled: Mutex::new(file_cfg.preprocessing_enabled),
         audio_debug_enabled: Mutex::new(file_cfg.audio_debug_enabled),
         use_keyring: Mutex::new(file_cfg.use_keyring),
+        stt_mode: Mutex::new(file_cfg.stt_mode),
+        local_model: Mutex::new(file_cfg.local_model),
+        filler_removal_enabled: Mutex::new(file_cfg.filler_removal_enabled),
         border_style: Mutex::new(file_cfg.border_style),
         waveform_style: Mutex::new(file_cfg.waveform_style),
         overlay_position: Mutex::new(file_cfg.overlay_position),
@@ -242,10 +245,17 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
         return -2;
     }
 
-    // Fail fast: no API key
-    let has_key = st.api_key.lock().map(|k| k.is_some()).unwrap_or(false);
-    if !has_key {
-        return -1;
+    // Fail fast: no API key (only required for cloud STT mode)
+    let is_local = st
+        .stt_mode
+        .lock()
+        .map(|m| m.as_str() == "local")
+        .unwrap_or(false);
+    if !is_local {
+        let has_key = st.api_key.lock().map(|k| k.is_some()).unwrap_or(false);
+        if !has_key {
+            return -1;
+        }
     }
 
     *recording = true;
@@ -379,12 +389,23 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
 
     // Process audio and transcribe (blocking)
     let sample_rate = st.audio_sample_rate.lock().map(|s| *s).unwrap_or(16000);
+    let stt_mode = st
+        .stt_mode
+        .lock()
+        .map(|m| m.clone())
+        .unwrap_or_else(|_| "cloud".to_string());
+    let local_model_filename = st
+        .local_model
+        .lock()
+        .map(|m| m.clone())
+        .unwrap_or_else(|_| "ggml-base-q8_0.bin".to_string());
     let api_url = st.api_url.lock().map(|u| u.clone()).unwrap_or_default();
     let api_model = st.api_model.lock().map(|m| m.clone()).unwrap_or_default();
-    let api_key = match st.api_key.lock().ok().and_then(|k| k.clone()) {
-        Some(k) => k,
-        None => return write_to_buf("", out_buf, buf_len),
-    };
+    // API key is only required for cloud mode
+    let api_key = st.api_key.lock().ok().and_then(|k| k.clone());
+    if stt_mode == "cloud" && api_key.is_none() {
+        return write_to_buf("", out_buf, buf_len);
+    }
     let language = st.language.lock().map(|l| l.clone()).unwrap_or_default();
     let prompt = st.prompt.lock().map(|p| p.clone()).unwrap_or_default();
     let preprocessing = st.preprocessing_enabled.lock().map(|p| *p).unwrap_or(true);
@@ -438,30 +459,39 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         return write_to_buf("", out_buf, buf_len);
     }
 
-    // Determine provider file size limit for chunking
-    let provider = Provider::from_url(&api_url);
-    let max_bytes = provider.max_file_bytes();
+    // Route transcription based on stt_mode: "local" or "cloud"
+    let transcript = if stt_mode == "local" {
+        log(&format!(
+            "[StopRec] Local STT mode — model: {}",
+            local_model_filename
+        ));
+        crate::transcribe::transcribe_audio_local(&processed, &language, &local_model_filename)
+    } else {
+        // Cloud mode: existing flow — WAV encode + chunked cloud API
+        let cloud_key = api_key.unwrap_or_default();
+        let provider = Provider::from_url(&api_url);
+        let max_bytes = provider.max_file_bytes();
 
-    // Transcribe (using the runtime)
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let transcript = rt.block_on(async {
-        crate::transcribe::transcribe_chunked(
-            &api_url,
-            &api_model,
-            &api_key,
-            processed,
-            &language,
-            &prompt,
-            max_bytes,
-            Some(&|current, total| {
-                emit_event(
-                    "chunk_progress",
-                    &format!(r#"{{"current":{},"total":{}}}"#, current, total),
-                );
-            }),
-        )
-        .await
-    });
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            crate::transcribe::transcribe_chunked(
+                &api_url,
+                &api_model,
+                &cloud_key,
+                processed,
+                &language,
+                &prompt,
+                max_bytes,
+                Some(&|current, total| {
+                    emit_event(
+                        "chunk_progress",
+                        &format!(r#"{{"current":{},"total":{}}}"#, current, total),
+                    );
+                }),
+            )
+            .await
+        })
+    };
 
     // Save debug metadata + transcript
     let (transcript_text, transcript_err) = match &transcript {
@@ -496,8 +526,9 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
             "peak_amplitude": peak,
             "preprocessing": preprocessing,
             "input_gain": input_gain,
-            "provider": api_url,
-            "model": api_model,
+            "stt_mode": stt_mode,
+            "provider": if stt_mode == "local" { &local_model_filename } else { &api_url },
+            "model": if stt_mode == "local" { &local_model_filename } else { &api_model },
             "language": language,
             "llm_style": llm_style,
             "llm_tone": llm_tone,
@@ -512,6 +543,26 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
 
     match transcript {
         Ok(text) => {
+            // Apply filler removal if enabled
+            let filler_enabled = st
+                .filler_removal_enabled
+                .lock()
+                .map(|f| *f)
+                .unwrap_or(false);
+            let text = if filler_enabled {
+                let cleaned = crate::filler::remove_fillers(&text, &language);
+                if cleaned != text {
+                    log(&format!(
+                        "[StopRec] Filler removal: {} chars → {} chars",
+                        text.len(),
+                        cleaned.len()
+                    ));
+                }
+                cleaned
+            } else {
+                text
+            };
+
             let preview: &str = if text.len() > 200 {
                 match text.char_indices().nth(200) {
                     Some((idx, _)) => &text[..idx],
@@ -521,8 +572,9 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
                 &text
             };
             log(&format!(
-                "[StopRec] Whisper raw transcript ({} chars): {:?}",
+                "[StopRec] Final transcript ({} chars, mode={}): {:?}",
                 text.len(),
+                stt_mode,
                 preview
             ));
 
@@ -598,6 +650,9 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "preprocessing_enabled": *st.preprocessing_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "audio_debug_enabled": *st.audio_debug_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "use_keyring": use_kr,
+        "stt_mode": *st.stt_mode.lock().unwrap_or_else(|e| e.into_inner()),
+        "local_model": *st.local_model.lock().unwrap_or_else(|e| e.into_inner()),
+        "filler_removal_enabled": *st.filler_removal_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "border_style": *st.border_style.lock().unwrap_or_else(|e| e.into_inner()),
         "waveform_style": *st.waveform_style.lock().unwrap_or_else(|e| e.into_inner()),
         "overlay_position": *st.overlay_position.lock().unwrap_or_else(|e| e.into_inner()),
@@ -781,6 +836,22 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
     if let Some(b) = v["audio_debug_enabled"].as_bool() {
         if let Ok(mut a) = st.audio_debug_enabled.lock() {
             *a = b;
+        }
+    }
+    // Local STT fields
+    if let Some(s) = v["stt_mode"].as_str() {
+        if let Ok(mut m) = st.stt_mode.lock() {
+            *m = s.to_string();
+        }
+    }
+    if let Some(s) = v["local_model"].as_str() {
+        if let Ok(mut m) = st.local_model.lock() {
+            *m = s.to_string();
+        }
+    }
+    if let Some(b) = v["filler_removal_enabled"].as_bool() {
+        if let Ok(mut f) = st.filler_removal_enabled.lock() {
+            *f = b;
         }
     }
     // UI appearance fields (round-tripped for native frontends)
@@ -1429,6 +1500,9 @@ mod tests {
                 preprocessing_enabled: Mutex::new(true),
                 audio_debug_enabled: Mutex::new(false),
                 use_keyring: Mutex::new(false),
+                stt_mode: Mutex::new("local".to_string()),
+                local_model: Mutex::new("ggml-base-q8_0.bin".to_string()),
+                filler_removal_enabled: Mutex::new(true),
                 border_style: Mutex::new("Rainbow".to_string()),
                 waveform_style: Mutex::new("Bars".to_string()),
                 overlay_position: Mutex::new("Bottom Right".to_string()),
@@ -1531,17 +1605,21 @@ mod tests {
     }
 
     #[test]
-    fn start_recording_returns_neg1_if_no_key() {
+    fn start_recording_returns_neg1_if_no_key_cloud_mode() {
         ensure_test_state();
+        // Set cloud mode — API key is required
+        let old_mode = state().stt_mode.lock().unwrap().clone();
+        *state().stt_mode.lock().unwrap() = "cloud".to_string();
         // Temporarily remove key
         let old_key = state().api_key.lock().unwrap().take();
         if let Ok(mut r) = state().recording.lock() {
             *r = false;
         }
         let result = dimmy_start_recording();
-        // Restore key
+        // Restore key and mode
         *state().api_key.lock().unwrap() = old_key;
-        assert_eq!(result, -1, "no API key should return -1");
+        *state().stt_mode.lock().unwrap() = old_mode;
+        assert_eq!(result, -1, "no API key in cloud mode should return -1");
     }
 
     // ── dimmy_cancel_recording tests ────────────────────────────────

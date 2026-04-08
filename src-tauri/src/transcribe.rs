@@ -212,6 +212,46 @@ async fn transcribe_audio_gemini(
     Ok(text)
 }
 
+/// Transcribe ProcessedAudio locally using whisper.cpp via the `local_stt` module.
+///
+/// Downsamples audio to 16kHz (Whisper's native rate), then runs local inference.
+/// No network calls — all processing happens on-device.
+pub fn transcribe_audio_local(
+    audio: &crate::audio::ProcessedAudio,
+    language: &str,
+    model_filename: &str,
+) -> Result<String, crate::error::TranscribeError> {
+    // Preconditions
+    assert!(
+        !audio.samples.is_empty(),
+        "transcribe_audio_local: audio samples must not be empty"
+    );
+    assert!(
+        audio.samples.iter().all(|s| s.is_finite()),
+        "transcribe_audio_local: all audio samples must be finite (no NaN/Inf)"
+    );
+    assert!(
+        !model_filename.is_empty(),
+        "transcribe_audio_local: model_filename must not be empty"
+    );
+    assert!(
+        audio.sample_rate > 0,
+        "transcribe_audio_local: sample_rate must be positive"
+    );
+
+    // Downsample to 16kHz for Whisper
+    let samples_16k = crate::preprocess::downsample_to_16k(&audio.samples, audio.sample_rate);
+
+    // Postcondition: downsampled samples must be non-empty and finite
+    assert!(
+        !samples_16k.is_empty(),
+        "transcribe_audio_local: downsampled samples must not be empty"
+    );
+
+    let model_path = crate::local_stt::model_path(model_filename);
+    crate::local_stt::transcribe_local(&model_path, &samples_16k, language)
+}
+
 /// Transcribe ProcessedAudio, automatically chunking if it exceeds the provider's
 /// file size limit. Chunk size = 80% of `max_wav_bytes` (safety margin).
 ///

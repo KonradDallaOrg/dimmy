@@ -234,6 +234,10 @@ pub struct AppConfig {
     pub preprocessing_enabled: bool,
     pub audio_debug_enabled: bool,
     pub use_keyring: bool,
+    // Local STT fields
+    pub stt_mode: String,    // "cloud" or "local"
+    pub local_model: String, // e.g. "ggml-base-q8_0.bin"
+    pub filler_removal_enabled: bool,
     // UI appearance fields (used by native frontends, opaque to Rust core)
     pub border_style: String,
     pub waveform_style: String,
@@ -277,6 +281,9 @@ impl Default for AppConfig {
             preprocessing_enabled: true,
             audio_debug_enabled: false,
             use_keyring: false,
+            stt_mode: "local".to_string(),
+            local_model: "ggml-base-q8_0.bin".to_string(),
+            filler_removal_enabled: true,
             border_style: "Rainbow".to_string(),
             waveform_style: "Bars".to_string(),
             overlay_position: "Bottom Right".to_string(),
@@ -340,6 +347,9 @@ pub fn save_config_file(cfg: &AppConfig) {
             "preprocessing_enabled": cfg.preprocessing_enabled,
             "audio_debug_enabled": cfg.audio_debug_enabled,
             "use_keyring": cfg.use_keyring,
+            "stt_mode": cfg.stt_mode,
+            "local_model": cfg.local_model,
+            "filler_removal_enabled": cfg.filler_removal_enabled,
             "border_style": cfg.border_style,
             "waveform_style": cfg.waveform_style,
             "overlay_position": cfg.overlay_position,
@@ -428,6 +438,17 @@ pub fn load_config_file() -> AppConfig {
                         .as_bool()
                         .unwrap_or(defaults.audio_debug_enabled),
                     use_keyring: v["use_keyring"].as_bool().unwrap_or(defaults.use_keyring),
+                    stt_mode: v["stt_mode"]
+                        .as_str()
+                        .unwrap_or(&defaults.stt_mode)
+                        .to_string(),
+                    local_model: v["local_model"]
+                        .as_str()
+                        .unwrap_or(&defaults.local_model)
+                        .to_string(),
+                    filler_removal_enabled: v["filler_removal_enabled"]
+                        .as_bool()
+                        .unwrap_or(defaults.filler_removal_enabled),
                     border_style: v["border_style"].as_str().unwrap_or("Rainbow").to_string(),
                     waveform_style: v["waveform_style"].as_str().unwrap_or("Bars").to_string(),
                     overlay_position: v["overlay_position"]
@@ -635,6 +656,10 @@ pub struct AppState {
     pub preprocessing_enabled: Mutex<bool>,
     pub audio_debug_enabled: Mutex<bool>,
     pub use_keyring: Mutex<bool>,
+    // Local STT state
+    pub stt_mode: Mutex<String>,
+    pub local_model: Mutex<String>,
+    pub filler_removal_enabled: Mutex<bool>,
     // UI appearance (opaque to Rust, round-tripped for native frontends)
     pub border_style: Mutex<String>,
     pub waveform_style: Mutex<String>,
@@ -724,6 +749,9 @@ impl AppState {
             preprocessing_enabled: Mutex::new(file_cfg.preprocessing_enabled),
             audio_debug_enabled: Mutex::new(file_cfg.audio_debug_enabled),
             use_keyring: Mutex::new(file_cfg.use_keyring),
+            stt_mode: Mutex::new(file_cfg.stt_mode),
+            local_model: Mutex::new(file_cfg.local_model),
+            filler_removal_enabled: Mutex::new(file_cfg.filler_removal_enabled),
             border_style: Mutex::new(file_cfg.border_style),
             waveform_style: Mutex::new(file_cfg.waveform_style),
             overlay_position: Mutex::new(file_cfg.overlay_position),
@@ -806,6 +834,12 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         .audio_debug_enabled
         .lock()
         .map_err(|e| e.to_string())?;
+    let stt_mode = state.stt_mode.lock().map_err(|e| e.to_string())?.clone();
+    let local_model = state.local_model.lock().map_err(|e| e.to_string())?.clone();
+    let filler_removal_enabled = *state
+        .filler_removal_enabled
+        .lock()
+        .map_err(|e| e.to_string())?;
     let anchor = *state.window_anchor.lock().map_err(|e| e.to_string())?;
 
     Ok(AppConfig {
@@ -829,6 +863,9 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         preprocessing_enabled,
         audio_debug_enabled,
         use_keyring: *state.use_keyring.lock().map_err(|e| e.to_string())?,
+        stt_mode,
+        local_model,
+        filler_removal_enabled,
         border_style: state
             .border_style
             .lock()
