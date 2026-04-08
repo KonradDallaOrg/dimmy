@@ -29,9 +29,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - CHANGELOG.md (this file)
 
 ### Changed
-- Default STT mode is now "local" (offline) — cloud providers available on-demand
+- Default STT mode is "cloud" for safe upgrades (local mode requires model download first)
 - `dimmy_start_recording` skips API key check when in local mode
 - Filler removal applied to both local and cloud transcriptions
+- **API key storage simplified**: always uses local AES-256 encrypted file (no OS popups, no admin needed). OS keyring kept as read-only fallback for migrating existing keys.
+- Removed "Use System Keychain" toggle from macOS, Windows, and Linux settings
 
 ### Removed
 - `enigo` dependency (unused — native UIs handle text injection)
@@ -40,6 +42,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 - README.md referenced non-existent `tauri.conf.json` in pre-push checklist
 - `.gitignore` contradicted itself on `docs/superpowers/` directory
+- Default `stt_mode` changed from "local" to "cloud" to prevent broken first recording on upgrade (model not yet downloaded)
 
 ## [0.3.65] - 2026-04-08
 
