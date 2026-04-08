@@ -175,6 +175,12 @@ pub extern "C" fn dimmy_init() -> c_int {
         window_anchor: Mutex::new(None),
         stats_total_words: Mutex::new(file_cfg.stats_total_words),
         stats_total_speaking_secs: Mutex::new(file_cfg.stats_total_speaking_secs),
+        history_store: Mutex::new({
+            let history_db = crate::config_dir_path()
+                .map(|p| p.join("history.db"))
+                .unwrap_or_else(|| std::path::PathBuf::from("history.db"));
+            crate::history::HistoryStore::new(&history_db).ok()
+        }),
     };
 
     match GLOBAL_STATE.set(app_state) {
@@ -582,6 +588,21 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
             let speaking_secs = buf_len_samples as f64 / sample_rate as f64;
             let words = text.split_whitespace().count() as c_int;
             dimmy_update_stats(words, speaking_secs);
+
+            // Auto-save to history
+            if !text.trim().is_empty() {
+                if let Ok(guard) = st.history_store.lock() {
+                    if let Some(ref store) = *guard {
+                        let lang = st.language.lock().map(|l| l.clone()).unwrap_or_default();
+                        let lang = if lang.is_empty() {
+                            "en".to_string()
+                        } else {
+                            lang
+                        };
+                        let _ = store.save(&text, &lang, speaking_secs);
+                    }
+                }
+            }
 
             emit_event(
                 "transcript_ready",
@@ -1316,6 +1337,256 @@ pub extern "C" fn dimmy_is_recording() -> c_int {
     st.recording.lock().map(|r| *r as c_int).unwrap_or(0)
 }
 
+// ── Local model management ──────────────────────────────────────────
+
+/// Get JSON array of available local models with download status.
+/// Returns bytes written or -1.
+#[no_mangle]
+pub extern "C" fn dimmy_list_local_models(buf: *mut c_char, buf_len: c_int) -> c_int {
+    let models: Vec<serde_json::Value> = crate::local_stt::AVAILABLE_MODELS
+        .iter()
+        .map(|m| {
+            serde_json::json!({
+                "name": m.name,
+                "filename": m.filename,
+                "size_mb": m.size_mb,
+                "description": m.description,
+                "downloaded": crate::local_stt::model_exists(m.filename),
+            })
+        })
+        .collect();
+    let json = serde_json::to_string(&models).unwrap_or_default();
+    write_to_buf(&json, buf, buf_len)
+}
+
+/// Download a model. BLOCKING — run on background thread from native UI.
+/// Emits "model_download_progress" events with {"filename":"...","downloaded":N,"total":N}.
+/// Returns 0 on success, -1 on error.
+///
+/// # Safety
+/// `filename_ptr` must be a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_download_model(filename_ptr: *const c_char) -> c_int {
+    let filename = {
+        if filename_ptr.is_null() {
+            return -1;
+        }
+        match CStr::from_ptr(filename_ptr).to_str() {
+            Ok(s) => s.to_string(),
+            Err(_) => return -1,
+        }
+    };
+
+    let fname_clone = filename.clone();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let result = rt.block_on(crate::local_stt::download_model(
+        &filename,
+        move |downloaded, total| {
+            let payload = format!(
+                r#"{{"filename":"{}","downloaded":{},"total":{}}}"#,
+                fname_clone, downloaded, total
+            );
+            emit_event("model_download_progress", &payload);
+        },
+    ));
+
+    match result {
+        Ok(_) => 0,
+        Err(e) => {
+            let msg: String = format!("{}", e).chars().take(200).collect();
+            emit_event("error", &format!(r#"{{"message":"{}"}}"#, msg));
+            -1
+        }
+    }
+}
+
+/// Check if a specific model is downloaded. Returns 1 if yes, 0 if no.
+///
+/// # Safety
+/// `filename_ptr` must be a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_model_exists(filename_ptr: *const c_char) -> c_int {
+    let filename = {
+        if filename_ptr.is_null() {
+            return 0;
+        }
+        match CStr::from_ptr(filename_ptr).to_str() {
+            Ok(s) => s,
+            Err(_) => return 0,
+        }
+    };
+    if crate::local_stt::model_exists(filename) {
+        1
+    } else {
+        0
+    }
+}
+
+// ── History ─────────────────────────────────────────────────────────
+
+/// Helper: serialize a slice of Transcripts to a JSON array string.
+fn transcripts_to_json(transcripts: &[crate::history::Transcript]) -> String {
+    let arr: Vec<serde_json::Value> = transcripts
+        .iter()
+        .map(|t| {
+            serde_json::json!({
+                "id": t.id,
+                "text": t.text,
+                "language": t.language,
+                "timestamp": t.timestamp,
+                "duration": t.duration,
+                "word_count": t.word_count,
+            })
+        })
+        .collect();
+    serde_json::to_string(&arr).unwrap_or_default()
+}
+
+/// Save a transcript to history. Returns transcript ID or -1 on error.
+///
+/// # Safety
+/// `text_ptr` and `language_ptr` must be valid null-terminated UTF-8 C strings
+/// (language_ptr may be null, defaults to "en").
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_history_save(
+    text_ptr: *const c_char,
+    language_ptr: *const c_char,
+    duration: f64,
+) -> c_int {
+    let text = {
+        if text_ptr.is_null() {
+            return -1;
+        }
+        match CStr::from_ptr(text_ptr).to_str() {
+            Ok(s) => s,
+            Err(_) => return -1,
+        }
+    };
+    let language = {
+        if language_ptr.is_null() {
+            "en"
+        } else {
+            CStr::from_ptr(language_ptr).to_str().unwrap_or("en")
+        }
+    };
+
+    let st = state();
+    if let Ok(guard) = st.history_store.lock() {
+        if let Some(ref store) = *guard {
+            match store.save(text, language, duration) {
+                Ok(id) => id as c_int,
+                Err(_) => -1,
+            }
+        } else {
+            -1
+        }
+    } else {
+        -1
+    }
+}
+
+/// Get recent transcripts as JSON array. Returns bytes written or -1.
+#[no_mangle]
+pub extern "C" fn dimmy_history_recent(limit: c_int, buf: *mut c_char, buf_len: c_int) -> c_int {
+    let st = state();
+    if let Ok(guard) = st.history_store.lock() {
+        if let Some(ref store) = *guard {
+            match store.recent(limit) {
+                Ok(transcripts) => {
+                    let json = transcripts_to_json(&transcripts);
+                    write_to_buf(&json, buf, buf_len)
+                }
+                Err(_) => -1,
+            }
+        } else {
+            -1
+        }
+    } else {
+        -1
+    }
+}
+
+/// Search transcripts via FTS5. Returns JSON array or -1.
+///
+/// # Safety
+/// `query_ptr` must be a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_history_search(
+    query_ptr: *const c_char,
+    limit: c_int,
+    buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    let query = {
+        if query_ptr.is_null() {
+            return -1;
+        }
+        match CStr::from_ptr(query_ptr).to_str() {
+            Ok(s) => s,
+            Err(_) => return -1,
+        }
+    };
+    let st = state();
+    if let Ok(guard) = st.history_store.lock() {
+        if let Some(ref store) = *guard {
+            match store.search(query, limit) {
+                Ok(transcripts) => {
+                    let json = transcripts_to_json(&transcripts);
+                    write_to_buf(&json, buf, buf_len)
+                }
+                Err(_) => -1,
+            }
+        } else {
+            -1
+        }
+    } else {
+        -1
+    }
+}
+
+/// Delete a transcript by ID. Returns 0 on success, -1 on error.
+#[no_mangle]
+pub extern "C" fn dimmy_history_delete(id: c_int) -> c_int {
+    let st = state();
+    if let Ok(guard) = st.history_store.lock() {
+        if let Some(ref store) = *guard {
+            match store.delete(id as i64) {
+                Ok(_) => 0,
+                Err(_) => -1,
+            }
+        } else {
+            -1
+        }
+    } else {
+        -1
+    }
+}
+
+/// Get history stats as JSON. Returns bytes written or -1.
+#[no_mangle]
+pub extern "C" fn dimmy_history_stats(buf: *mut c_char, buf_len: c_int) -> c_int {
+    let st = state();
+    if let Ok(guard) = st.history_store.lock() {
+        if let Some(ref store) = *guard {
+            match store.stats() {
+                Ok(stats) => {
+                    let json = serde_json::json!({
+                        "total_words": stats.total_words,
+                        "total_sessions": stats.total_sessions,
+                        "total_duration": stats.total_duration,
+                    });
+                    write_to_buf(&json.to_string(), buf, buf_len)
+                }
+                Err(_) => -1,
+            }
+        } else {
+            -1
+        }
+    } else {
+        -1
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1513,6 +1784,9 @@ mod tests {
                 window_anchor: Mutex::new(None),
                 stats_total_words: Mutex::new(100),
                 stats_total_speaking_secs: Mutex::new(60.0),
+                history_store: Mutex::new(
+                    crate::history::HistoryStore::new(std::path::Path::new(":memory:")).ok(),
+                ),
             };
             let _ = GLOBAL_STATE.set(test_state);
         });

@@ -675,6 +675,8 @@ pub struct AppState {
     // KPI stats
     pub stats_total_words: Mutex<u64>,
     pub stats_total_speaking_secs: Mutex<f64>,
+    // Transcription history (SQLite-backed)
+    pub history_store: Mutex<Option<crate::history::HistoryStore>>,
 }
 
 impl AppState {
@@ -767,6 +769,12 @@ impl AppState {
             ),
             stats_total_words: Mutex::new(file_cfg.stats_total_words),
             stats_total_speaking_secs: Mutex::new(file_cfg.stats_total_speaking_secs),
+            history_store: Mutex::new({
+                let history_db = crate::config_dir_path()
+                    .map(|p| p.join("history.db"))
+                    .unwrap_or_else(|| std::path::PathBuf::from("history.db"));
+                crate::history::HistoryStore::new(&history_db).ok()
+            }),
         };
 
         // Postconditions
