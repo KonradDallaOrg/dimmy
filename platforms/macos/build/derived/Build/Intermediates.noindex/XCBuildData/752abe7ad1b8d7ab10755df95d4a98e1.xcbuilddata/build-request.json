@@ -1,0 +1,64 @@
+{
+  "buildCommand" : {
+    "command" : "build",
+    "skipDependencies" : false,
+    "style" : "buildOnly"
+  },
+  "configuredTargets" : [
+    {
+      "guid" : "48cecd659092fe6b1f393c424906bc319cfbd4c909b66a211c35a05b058f97b4"
+    }
+  ],
+  "containerPath" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy.xcodeproj",
+  "continueBuildingAfterErrors" : false,
+  "dependencyScope" : "workspace",
+  "enableIndexBuildArena" : false,
+  "hideShellScriptEnvironment" : false,
+  "parameters" : {
+    "action" : "build",
+    "activeArchitecture" : "arm64",
+    "activeRunDestination" : {
+      "disableOnlyActiveArch" : false,
+      "platform" : "macosx",
+      "sdk" : "macosx26.2",
+      "sdkVariant" : "macos",
+      "supportedArchitectures" : [
+        "arm64e",
+        "arm64",
+        "x86_64"
+      ],
+      "targetArchitecture" : "arm64"
+    },
+    "arenaInfo" : {
+      "buildIntermediatesPath" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex",
+      "buildProductsPath" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Products",
+      "derivedDataPath" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived",
+      "indexDataStoreFolderPath" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Index.noindex/DataStore",
+      "indexEnableDataStore" : true,
+      "indexPCHPath" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Index.noindex/PrecompiledHeaders",
+      "pchPath" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/PrecompiledHeaders"
+    },
+    "configurationName" : "Release",
+    "overrides" : {
+      "commandLine" : {
+        "table" : {
+          "CODE_SIGN_IDENTITY" : "-"
+        }
+      },
+      "synthesized" : {
+        "table" : {
+          "ACTION" : "build",
+          "ENABLE_PREVIEWS" : "NO",
+          "ENABLE_XOJIT_PREVIEWS" : "YES",
+          "ONLY_ACTIVE_ARCH" : "YES"
+        }
+      }
+    }
+  },
+  "schemeCommand" : "launch",
+  "showNonLoggedProgress" : true,
+  "useDryRun" : false,
+  "useImplicitDependencies" : true,
+  "useLegacyBuildLocations" : false,
+  "useParallelTargets" : true
+}

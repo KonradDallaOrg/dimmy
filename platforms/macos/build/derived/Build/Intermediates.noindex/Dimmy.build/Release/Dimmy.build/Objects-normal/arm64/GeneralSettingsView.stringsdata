@@ -1,0 +1,216 @@
+{
+  "source": "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Views/Settings/GeneralSettingsView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "Transcription Mode",
+        "location": {
+          "startingColumn": 21,
+          "startingLine": 12
+        }
+      },
+      {
+        "comment": "",
+        "key": "Transcription",
+        "location": {
+          "startingColumn": 21,
+          "startingLine": 26
+        }
+      },
+      {
+        "comment": "",
+        "key": "API Key",
+        "location": {
+          "startingColumn": 25,
+          "startingLine": 41
+        }
+      },
+      {
+        "comment": "",
+        "key": "Appearance",
+        "location": {
+          "startingColumn": 21,
+          "startingLine": 46
+        }
+      },
+      {
+        "comment": "",
+        "key": "STT Provider",
+        "location": {
+          "startingColumn": 29,
+          "startingLine": 61
+        }
+      },
+      {
+        "comment": "",
+        "key": "Audio Input",
+        "location": {
+          "startingColumn": 25,
+          "startingLine": 83
+        }
+      },
+      {
+        "comment": "",
+        "key": "Mode",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 13
+        }
+      },
+      {
+        "comment": "",
+        "key": "Local (Offline)",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 14
+        }
+      },
+      {
+        "comment": "",
+        "key": "Cloud",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 15
+        }
+      },
+      {
+        "comment": "",
+        "key": "Language",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 27
+        }
+      },
+      {
+        "comment": "",
+        "key": "Remove filler words (um, uh, etc.)",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 35
+        }
+      },
+      {
+        "comment": "",
+        "key": "Theme",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 47
+        }
+      },
+      {
+        "comment": "",
+        "key": "Provider + Model",
+        "location": {
+          "startingColumn": 32,
+          "startingLine": 62
+        }
+      },
+      {
+        "comment": "",
+        "key": "API URL",
+        "location": {
+          "startingColumn": 39,
+          "startingLine": 72
+        }
+      },
+      {
+        "comment": "",
+        "key": "Model",
+        "location": {
+          "startingColumn": 39,
+          "startingLine": 76
+        }
+      },
+      {
+        "comment": "",
+        "key": "No audio devices found",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 85
+        }
+      },
+      {
+        "comment": "",
+        "key": "Microphone",
+        "location": {
+          "startingColumn": 32,
+          "startingLine": 88
+        }
+      },
+      {
+        "comment": "",
+        "key": "Audio Preprocessing (VAD + noise reduction)",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 107
+        }
+      },
+      {
+        "comment": "",
+        "key": "Chunk Streaming",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 110
+        }
+      },
+      {
+        "comment": "",
+        "key": "Input Gain",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 99
+        }
+      },
+      {
+        "comment": "",
+        "key": "API key configured",
+        "location": {
+          "startingColumn": 40,
+          "startingLine": 163
+        }
+      },
+      {
+        "comment": "",
+        "key": "No API key",
+        "location": {
+          "startingColumn": 63,
+          "startingLine": 163
+        }
+      },
+      {
+        "comment": "",
+        "key": "Change",
+        "location": {
+          "startingColumn": 42,
+          "startingLine": 166
+        }
+      },
+      {
+        "comment": "",
+        "key": "Add Key",
+        "location": {
+          "startingColumn": 53,
+          "startingLine": 166
+        }
+      },
+      {
+        "comment": "",
+        "key": "Paste API key...",
+        "location": {
+          "startingColumn": 33,
+          "startingLine": 175
+        }
+      },
+      {
+        "comment": "",
+        "key": "Save",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 177
+        }
+      }
+    ]
+  },
+  "version": 1
+}

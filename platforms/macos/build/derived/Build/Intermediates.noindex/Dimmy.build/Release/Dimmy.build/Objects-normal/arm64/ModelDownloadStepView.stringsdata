@@ -1,0 +1,88 @@
+{
+  "source": "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Views/Onboarding/ModelDownloadStepView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "Local Speech Recognition",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 24
+        }
+      },
+      {
+        "comment": "",
+        "key": "Dimmy transcribes your voice locally on this Mac.\nNo internet required. Your audio never leaves this device.",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 27
+        }
+      },
+      {
+        "comment": "",
+        "key": "You can download the model later in Settings.",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 69
+        }
+      },
+      {
+        "comment": "",
+        "key": "Download Model",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 47
+        }
+      },
+      {
+        "comment": "",
+        "key": "Whisper Base Model",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 35
+        }
+      },
+      {
+        "comment": "",
+        "key": "78 MB download • Good accuracy",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 37
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld%%",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 55
+        }
+      },
+      {
+        "comment": "",
+        "key": "Model ready!",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 64
+        }
+      },
+      {
+        "comment": "",
+        "key": "Skip for now",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 79
+        }
+      },
+      {
+        "comment": "",
+        "key": "Continue",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 89
+        }
+      }
+    ]
+  },
+  "version": 1
+}

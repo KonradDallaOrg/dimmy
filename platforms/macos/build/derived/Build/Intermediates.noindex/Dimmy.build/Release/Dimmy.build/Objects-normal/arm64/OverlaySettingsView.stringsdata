@@ -1,0 +1,64 @@
+{
+  "source": "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Views/Settings/OverlaySettingsView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "Pill Overlay",
+        "location": {
+          "startingColumn": 21,
+          "startingLine": 14
+        }
+      },
+      {
+        "comment": "",
+        "key": "Recording Animation",
+        "location": {
+          "startingColumn": 21,
+          "startingLine": 33
+        }
+      },
+      {
+        "comment": "",
+        "key": "You can always drag the pill to reposition it",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 28
+        }
+      },
+      {
+        "comment": "",
+        "key": "Default position",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 15
+        }
+      },
+      {
+        "comment": "",
+        "key": "Reset Position",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 22
+        }
+      },
+      {
+        "comment": "",
+        "key": "Border style",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 34
+        }
+      },
+      {
+        "comment": "",
+        "key": "Waveform style",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 41
+        }
+      }
+    ]
+  },
+  "version": 1
+}

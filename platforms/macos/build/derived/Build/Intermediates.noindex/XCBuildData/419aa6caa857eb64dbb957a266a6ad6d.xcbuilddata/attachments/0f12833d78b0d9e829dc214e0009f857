@@ -1,0 +1,181 @@
+{
+  "" : {
+    "const-values" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/Dimmy-primary.swiftconstvalues",
+    "dependencies" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/Dimmy-primary.d",
+    "diagnostics" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/Dimmy-primary.dia",
+    "emit-module-dependencies" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/Dimmy-primary-emit-module.d",
+    "emit-module-diagnostics" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/Dimmy-primary-emit-module.dia",
+    "pch" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/Dimmy-primary-Bridging-header.pch",
+    "swift-dependencies" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/Dimmy-primary.swiftdeps"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/AppDelegate.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/AppDelegate.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/AppDelegate.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/AppDelegate.o"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Controllers/PillWindowController.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/PillWindowController.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/PillWindowController.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/PillWindowController.o"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Controllers/StatusBarController.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/StatusBarController.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/StatusBarController.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/StatusBarController.o"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/DimmyApp.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/DimmyApp.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/DimmyApp.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/DimmyApp.o"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Managers/AudioSimulator.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/AudioSimulator.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/AudioSimulator.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/AudioSimulator.o"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Managers/DimmyCore.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/DimmyCore.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/DimmyCore.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/DimmyCore.o"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Managers/HotkeyManager.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/HotkeyManager.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/HotkeyManager.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/HotkeyManager.o"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Managers/TextInjector.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/TextInjector.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/TextInjector.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/TextInjector.o"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/State/AppState.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/AppState.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/AppState.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/AppState.o"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Utilities/AppStyle.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/AppStyle.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/AppStyle.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/AppStyle.o"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Utilities/FunnyTexts.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/FunnyTexts.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/FunnyTexts.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/FunnyTexts.o"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Utilities/RecordingSimulator.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/RecordingSimulator.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/RecordingSimulator.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/RecordingSimulator.o"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Utilities/SelfTests.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/SelfTests.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/SelfTests.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/SelfTests.o"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Views/MenuBarPopover.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/MenuBarPopover.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/MenuBarPopover.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/MenuBarPopover.o"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Views/Onboarding/ModelDownloadStepView.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/ModelDownloadStepView.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/ModelDownloadStepView.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/ModelDownloadStepView.o"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Views/Onboarding/OnboardingContainerView.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/OnboardingContainerView.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/OnboardingContainerView.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/OnboardingContainerView.o"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Views/Onboarding/PermissionsStepView.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/PermissionsStepView.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/PermissionsStepView.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/PermissionsStepView.o"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Views/Onboarding/ShortcutStepView.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/ShortcutStepView.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/ShortcutStepView.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/ShortcutStepView.o"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Views/Onboarding/TryItStepView.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/TryItStepView.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/TryItStepView.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/TryItStepView.o"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Views/Onboarding/WelcomeStepView.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/WelcomeStepView.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/WelcomeStepView.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/WelcomeStepView.o"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Views/PillView.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/PillView.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/PillView.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/PillView.o"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Views/Settings/AboutSettingsView.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/AboutSettingsView.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/AboutSettingsView.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/AboutSettingsView.o"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Views/Settings/DebugSettingsView.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/DebugSettingsView.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/DebugSettingsView.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/DebugSettingsView.o"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Views/Settings/GeneralSettingsView.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/GeneralSettingsView.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/GeneralSettingsView.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/GeneralSettingsView.o"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Views/Settings/HistorySettingsView.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/HistorySettingsView.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/HistorySettingsView.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/HistorySettingsView.o"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Views/Settings/ModelSettingsView.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/ModelSettingsView.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/ModelSettingsView.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/ModelSettingsView.o"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Views/Settings/OutputSettingsView.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/OutputSettingsView.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/OutputSettingsView.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/OutputSettingsView.o"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Views/Settings/OverlaySettingsView.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/OverlaySettingsView.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/OverlaySettingsView.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/OverlaySettingsView.o"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Views/Settings/PermissionsSettingsView.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/PermissionsSettingsView.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/PermissionsSettingsView.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/PermissionsSettingsView.o"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Views/Settings/SettingsContainerView.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/SettingsContainerView.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/SettingsContainerView.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/SettingsContainerView.o"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Views/Settings/ShortcutSettingsView.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/ShortcutSettingsView.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/ShortcutSettingsView.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/ShortcutSettingsView.o"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Views/Settings/StatsSettingsView.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/StatsSettingsView.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/StatsSettingsView.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/StatsSettingsView.o"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Views/WaveformView.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/WaveformView.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/WaveformView.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/WaveformView.o"
+  },
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/DerivedSources/GeneratedAssetSymbols.swift" : {
+    "index-unit-output-path" : "/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/GeneratedAssetSymbols.o",
+    "llvm-bc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/GeneratedAssetSymbols.bc",
+    "object" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/GeneratedAssetSymbols.o"
+  }
+}

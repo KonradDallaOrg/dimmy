@@ -1,0 +1,24 @@
+{
+  "source": "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Views/Settings/SettingsContainerView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "Advanced",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 60
+        }
+      },
+      {
+        "comment": "",
+        "key": "Speech Recognition Models",
+        "location": {
+          "startingColumn": 25,
+          "startingLine": 83
+        }
+      }
+    ]
+  },
+  "version": 1
+}

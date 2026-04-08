@@ -260,7 +260,7 @@ impl Default for AppConfig {
             api_model: DEFAULT_MODEL.to_string(),
             selected_device: None,
             language: String::new(),
-            shortcut_mode: "toggle".to_string(),
+            shortcut_mode: "hold".to_string(),
             shortcut: if cfg!(target_os = "macos") {
                 "cmd+option"
             } else {

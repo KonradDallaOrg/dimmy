@@ -1,0 +1,24 @@
+{
+  "source": "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Views/Settings/StatsSettingsView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "Usage Statistics",
+        "location": {
+          "startingColumn": 21,
+          "startingLine": 14
+        }
+      },
+      {
+        "comment": "",
+        "key": "Based on average typing speed (~40 WPM) vs dictation (~150 WPM)",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 33
+        }
+      }
+    ]
+  },
+  "version": 1
+}

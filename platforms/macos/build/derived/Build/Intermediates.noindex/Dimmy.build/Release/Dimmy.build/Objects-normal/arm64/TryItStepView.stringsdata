@@ -1,0 +1,80 @@
+{
+  "source": "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Views/Onboarding/TryItStepView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "Try it!",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 40
+        }
+      },
+      {
+        "comment": "",
+        "key": "Hold %@ and say something",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 43
+        }
+      },
+      {
+        "comment": "",
+        "key": "Look at the pill overlay — it will animate while you speak",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 47
+        }
+      },
+      {
+        "comment": "",
+        "key": "Your dictation will appear here:",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 53
+        }
+      },
+      {
+        "comment": "",
+        "key": "Waiting for your voice...",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 63
+        }
+      },
+      {
+        "comment": "",
+        "key": "Skip for now",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 84
+        }
+      },
+      {
+        "comment": "",
+        "key": "You're all set!",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 99
+        }
+      },
+      {
+        "comment": "",
+        "key": "Dimmy lives in your menu bar.\nHold %@ anywhere to dictate.",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 102
+        }
+      },
+      {
+        "comment": "",
+        "key": "Start Using Dimmy",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 112
+        }
+      }
+    ]
+  },
+  "version": 1
+}

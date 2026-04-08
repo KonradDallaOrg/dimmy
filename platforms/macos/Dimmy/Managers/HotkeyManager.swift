@@ -71,42 +71,36 @@ final class HotkeyManager {
     private func handlePress() {
         guard let appState else { return }
 
-        let now = Date()
-
-        // If in toggle recording, stop it
+        // If already recording in toggle mode, stop it
         if case .recording(.toggle) = appState.recordingState {
             stopRecordingIfNeeded()
             lastReleaseTime = nil
             return
         }
 
-        // Check for double-tap: if last release was recent, this is a toggle activation
-        if let lastRelease = lastReleaseTime, now.timeIntervalSince(lastRelease) < doubleTapInterval {
-            lastReleaseTime = nil
+        // Use the user's preferred mode
+        if appState.preferredMode == .toggle {
+            // Toggle mode: press starts, press again stops
             startRecording(mode: .toggle)
-            return
+        } else {
+            // Push-to-talk: press starts, release stops
+            startRecording(mode: .pushToTalk)
         }
-
-        // Start push-to-talk
-        startRecording(mode: .pushToTalk)
     }
 
     private func handleRelease() {
         guard let appState else { return }
 
-        // Only stop push-to-talk on release (toggle stays active)
+        // Only stop push-to-talk on release (toggle stays active until next press)
         if case .recording(.pushToTalk) = appState.recordingState {
             // Check minimum hold duration to avoid accidental triggers
             if let pressTime = lastPressTime, Date().timeIntervalSince(pressTime) < minimumHoldDuration {
-                // Too short — treat as potential double-tap, don't paste yet
+                // Too short — cancel, don't transcribe
                 cancelRecording()
-                lastReleaseTime = Date()
                 return
             }
             stopRecordingIfNeeded()
         }
-
-        lastReleaseTime = Date()
     }
 
     // MARK: - Recording via Rust FFI

@@ -1,0 +1,12 @@
+{
+  "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/DimmyApp.swift" : {
+    "abi-baseline-json" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/Dimmy.abi.json",
+    "const-values" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/Dimmy-primary.swiftconstvalues",
+    "dependencies" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/Dimmy-primary.d",
+    "diagnostics" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/Dimmy-primary.dia",
+    "objc-header" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/Dimmy-Swift.h",
+    "swiftdoc" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/Dimmy.swiftdoc",
+    "swiftmodule" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/Dimmy.swiftmodule",
+    "swiftsourceinfo" : "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/build/derived/Build/Intermediates.noindex/Dimmy.build/Release/Dimmy.build/Objects-normal/arm64/Dimmy.swiftsourceinfo"
+  }
+}

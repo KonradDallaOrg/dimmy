@@ -1,0 +1,248 @@
+{
+  "source": "/Users/vassi/Code/personal/dimmy/.claude/worktrees/feat+local-stt-mvp/platforms/macos/Dimmy/Views/Settings/OutputSettingsView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "LLM Enhancement",
+        "location": {
+          "startingColumn": 21,
+          "startingLine": 12
+        }
+      },
+      {
+        "comment": "",
+        "key": "LLM Provider",
+        "location": {
+          "startingColumn": 25,
+          "startingLine": 33
+        }
+      },
+      {
+        "comment": "",
+        "key": "Clipboard",
+        "location": {
+          "startingColumn": 21,
+          "startingLine": 57
+        }
+      },
+      {
+        "comment": "",
+        "key": "LLM Options",
+        "location": {
+          "startingColumn": 29,
+          "startingLine": 76
+        }
+      },
+      {
+        "comment": "",
+        "key": "Enable LLM post-processing",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 13
+        }
+      },
+      {
+        "comment": "",
+        "key": "Style",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 17
+        }
+      },
+      {
+        "comment": "",
+        "key": "Provider + Model",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 34
+        }
+      },
+      {
+        "comment": "",
+        "key": "API URL",
+        "location": {
+          "startingColumn": 35,
+          "startingLine": 44
+        }
+      },
+      {
+        "comment": "",
+        "key": "Model",
+        "location": {
+          "startingColumn": 35,
+          "startingLine": 48
+        }
+      },
+      {
+        "comment": "",
+        "key": "Text is pasted via ⌘V and clipboard is restored after",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 62
+        }
+      },
+      {
+        "comment": "",
+        "key": "Text is copied to clipboard but NOT auto-pasted",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 66
+        }
+      },
+      {
+        "comment": "",
+        "key": "Keep text in clipboard (don't auto-paste)",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 58
+        }
+      },
+      {
+        "comment": "",
+        "key": "Tone",
+        "location": {
+          "startingColumn": 32,
+          "startingLine": 77
+        }
+      },
+      {
+        "comment": "",
+        "key": "Translate to",
+        "location": {
+          "startingColumn": 32,
+          "startingLine": 84
+        }
+      },
+      {
+        "comment": "",
+        "key": "Log LLM requests",
+        "location": {
+          "startingColumn": 32,
+          "startingLine": 106
+        }
+      },
+      {
+        "comment": "",
+        "key": "Use same API key as STT",
+        "location": {
+          "startingColumn": 32,
+          "startingLine": 109
+        }
+      },
+      {
+        "comment": "",
+        "key": "None",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 85
+        }
+      },
+      {
+        "comment": "",
+        "key": "Custom Prompt",
+        "location": {
+          "startingColumn": 38,
+          "startingLine": 96
+        }
+      },
+      {
+        "comment": "",
+        "key": "API key configured",
+        "location": {
+          "startingColumn": 40,
+          "startingLine": 147
+        }
+      },
+      {
+        "comment": "",
+        "key": "No API key",
+        "location": {
+          "startingColumn": 63,
+          "startingLine": 147
+        }
+      },
+      {
+        "comment": "",
+        "key": "Change",
+        "location": {
+          "startingColumn": 42,
+          "startingLine": 150
+        }
+      },
+      {
+        "comment": "",
+        "key": "Add Key",
+        "location": {
+          "startingColumn": 53,
+          "startingLine": 150
+        }
+      },
+      {
+        "comment": "",
+        "key": "Paste API key...",
+        "location": {
+          "startingColumn": 33,
+          "startingLine": 159
+        }
+      },
+      {
+        "comment": "",
+        "key": "Save",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 161
+        }
+      },
+      {
+        "comment": "",
+        "key": "Separate LLM key configured",
+        "location": {
+          "startingColumn": 43,
+          "startingLine": 189
+        }
+      },
+      {
+        "comment": "",
+        "key": "No separate LLM key",
+        "location": {
+          "startingColumn": 75,
+          "startingLine": 189
+        }
+      },
+      {
+        "comment": "",
+        "key": "Change",
+        "location": {
+          "startingColumn": 45,
+          "startingLine": 192
+        }
+      },
+      {
+        "comment": "",
+        "key": "Add Key",
+        "location": {
+          "startingColumn": 56,
+          "startingLine": 192
+        }
+      },
+      {
+        "comment": "",
+        "key": "Paste LLM API key...",
+        "location": {
+          "startingColumn": 33,
+          "startingLine": 201
+        }
+      },
+      {
+        "comment": "",
+        "key": "Save",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 203
+        }
+      }
+    ]
+  },
+  "version": 1
+}
