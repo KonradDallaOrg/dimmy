@@ -62,6 +62,11 @@
 - [ ] Simplified settings (fewer tabs)
 - [ ] @MainActor strict concurrency adoption
 
+### Release Process
+- [ ] Update CHANGELOG.md with every release (follow [Keep a Changelog](https://keepachangelog.com/) format)
+- [ ] Move [Unreleased] section to new version header on tag push
+- [ ] Automate changelog validation in CI (optional: use `git-cliff` or `changelog-enforcer` action)
+
 ### Documentation & Context Engineering
 - [ ] Review and update CLAUDE.md to reflect local STT architecture, new modules (filler, history, local_stt), updated config fields
 - [ ] Fix CLAUDE.md memory file path references (audio_pipeline.md → docs/dev/audio-pipeline.md, etc.)
