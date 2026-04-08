@@ -4,7 +4,7 @@ All notable changes to Dimmy are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] - 2026-04-08
 
 ### Added
 - **Local offline transcription** via whisper.cpp (whisper-rs) — no API keys required
@@ -52,6 +52,6 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 - Documentation rewrite + security fixes
 
-[Unreleased]: https://github.com/KonradDallaOrg/dimmy/compare/v0.3.65...HEAD
+[0.4.0]: https://github.com/KonradDallaOrg/dimmy/compare/v0.3.65...v0.4.0
 [0.3.65]: https://github.com/KonradDallaOrg/dimmy/compare/v0.3.64...v0.3.65
 [0.3.64]: https://github.com/KonradDallaOrg/dimmy/releases/tag/v0.3.64
