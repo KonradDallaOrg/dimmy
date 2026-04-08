@@ -2,9 +2,9 @@
 
 ## What Dimmy Does
 
-Cross-platform voice transcription overlay. Records audio via global hotkey, transcribes via STT providers (Groq, OpenAI, Deepgram, Gemini), optionally post-processes with LLM, pastes result into active app. Built as a shared Rust core library with native UIs per platform (WinUI3/C# on Windows, SwiftUI on macOS, GTK4/Rust on Linux).
+Cross-platform voice transcription overlay. Records audio via global hotkey, transcribes locally via whisper.cpp (default) or cloud STT providers (Groq, OpenAI, Deepgram, Gemini), optionally post-processes with LLM, removes filler words, saves to history, and pastes result into active app. Built as a shared Rust core library with native UIs per platform (WinUI3/C# on Windows, SwiftUI on macOS, GTK4/Rust on Linux).
 
-Current version: 0.3.65
+Current version: 0.4.0
 
 ## Development Philosophy (MANDATORY)
 
@@ -54,26 +54,34 @@ After commit: `git tag v0.3.X && git push origin v0.3.X` to trigger Release.
 ## CI/CD Pipeline
 
 ### Workflows
-- **ci.yml** — Runs on push/PR to main/staging: `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test --lib`, Linux GTK4 lint
+- **ci.yml** — Runs on push/PR to main/staging: `cargo fmt --check`, `cargo clippy --features local-stt -- -D warnings`, `cargo test --lib --features local-stt`, Linux GTK4 lint
 - **staging-native.yml** — Builds all 3 native UIs in parallel:
-  - Windows: .NET build + C# tests + zip artifact
-  - macOS: Rust static lib + Xcode build + DMG
-  - Linux: cargo build + clippy + AppImage
+  - Windows: Rust DLL (`--features local-stt-vulkan`) + .NET build + C# tests + zip
+  - macOS: Rust static lib (`--features local-stt-metal`) + Xcode build + DMG
+  - Linux: cargo build + clippy + AppImage (default feature `local-stt` = CPU)
 - **release.yml** — Runs on tag push (`v*`): builds all 3 native platforms. Publishes GitHub Release.
+
+### Build Requirements
+- **CMake** required on all platforms (whisper-rs compiles whisper.cpp from source)
+- macOS: `brew install cmake` or Xcode CLI tools
+- Windows: `choco install cmake` or via get-cmake GitHub Action
+- Linux CI: `sudo apt-get install cmake`
 
 ### Release Process
 1. Commit changes to `main` (or merge feature branch)
 2. Bump version in `src-tauri/Cargo.toml`, commit
-3. Push to origin
-4. `git tag v0.3.X && git push origin v0.3.X`
-5. Wait for release workflow to complete (~15 min)
-6. Users get auto-update notification
+3. Update `CHANGELOG.md` — move [Unreleased] to new version
+4. Push to origin
+5. `git tag v0.4.X && git push origin v0.4.X`
+6. Wait for release workflow to complete (~15 min)
+7. Users get auto-update notification
 
 ### Pre-Push Checklist (MANDATORY — run ALL before every push)
 - `cargo fmt --check` — clean
-- `cargo clippy -- -D warnings` — zero warnings (CI treats warnings as errors!)
-- `cargo test --lib` — all pass
+- `cargo clippy --features local-stt -- -D warnings` — zero warnings (CI treats warnings as errors!)
+- `cargo test --lib --features local-stt` — all pass
 - Version updated in `src-tauri/Cargo.toml`
+- `CHANGELOG.md` updated if releasing
 - Feature branch merged (if applicable)
 - Native UI builds are CI-only (platform-specific) — no local pre-push requirement
 
@@ -82,30 +90,37 @@ After commit: `git tag v0.3.X && git push origin v0.3.X` to trigger Release.
 Shared Rust core with platform-native UIs connected via C FFI.
 
 ### Phase status
-1. **Phase 0** — Rust C FFI layer (`ffi.rs`) — **COMPLETE** (40+ tests, assertions, NaN safety)
-2. **Phase 1** — Windows WinUI3/C# — **IMPLEMENTED** (41 C# tests, builds, runs)
-3. **Phase 2** — macOS SwiftUI — **IMPLEMENTED** (builds, runs, 1 test file)
-4. **Phase 3** — Linux GTK4/Rust — **IMPLEMENTED** (builds on CI, AppImage available, needs runtime testing)
+1. **Phase 0** — Rust C FFI layer (`ffi.rs`) — **COMPLETE** (30+ functions, 246 tests)
+2. **Phase 1** — Windows WinUI3/C# — **IMPLEMENTED** (41 C# tests, local STT toggle, model download)
+3. **Phase 2** — macOS SwiftUI — **IMPLEMENTED** (STT settings, model download, history view, onboarding)
+4. **Phase 3** — Linux GTK4/Rust — **IMPLEMENTED** (builds on CI, AppImage available)
 
 ### FFI layer
-- `ffi.rs` exports 20+ C functions, uses global `OnceLock<AppState>`
-- See memory file `phase0_ffi_status.md` for full checklist
-- Gap analysis between platforms in memory `native_ui_plan.md`
+- `ffi.rs` exports 30+ C functions, uses global `OnceLock<AppState>`
+- Original 18 functions + 10 new (model management + history)
+- See `docs/dev/native-ui-plan.md` for gap analysis between platforms
 
 ## Architecture Quick Reference
 
 ```
 Rust Core (src-tauri/src/)      → lib.rs, audio.rs, preprocess.rs, transcribe.rs, llm.rs,
-                                  provider.rs, keystore.rs, error.rs, hotkey.rs
-                                ↕ C FFI (ffi.rs — 20+ exported functions)
+                                  provider.rs, keystore.rs, error.rs, hotkey.rs,
+                                  local_stt.rs, history.rs, filler.rs
+                                ↕ C FFI (ffi.rs — 30+ exported functions)
 Windows UI (native-ui/windows/) → WinUI 3 / C# (.NET 8), P/Invoke to dimmy_lib.dll
 macOS UI (native-ui/macos/)     → SwiftUI, FFI bridge via DimmyFFI.h to libdimmy_lib.a
 Linux UI (native-ui/linux/)     → GTK4 + libadwaita (Rust), direct crate dependency on dimmy_lib
 ```
 
+### Cargo Feature Flags
+- `local-stt` (default) — enables whisper-rs for local offline transcription
+- `local-stt-metal` — macOS GPU acceleration (Apple Silicon Neural Engine)
+- `local-stt-vulkan` — Windows/Linux cross-vendor GPU acceleration
+- `local-stt-cuda` — NVIDIA GPU acceleration
+
 ## Audio Pipeline — CRITICAL
 
-See memory file `audio_pipeline.md` for full details. Key rules:
+See `docs/dev/audio-pipeline.md` for full details. Key rules:
 
 - **NEVER feed zero-amplitude samples to dagc (AGC)**. It produces ALL NaN permanently.
 - VAD grace period must NOT emit silence frames — only delay `in_speech→false` transition.
@@ -114,18 +129,51 @@ See memory file `audio_pipeline.md` for full details. Key rules:
 
 ## Known Bugs & Lessons Learned
 
-See memory file `known_bugs.md` for the full registry. Check it before touching:
+See `docs/dev/known-bugs.md` for the full registry. Check it before touching:
 - Audio preprocessing (preprocess.rs)
 - macOS FFI (hotkey.rs)
 - Platform-specific native UI code
 
 ## Provider System
 
-- Provider enum in `provider.rs`: Groq, OpenAI, OpenRouter, Gemini, Deepgram, Anthropic, Custom
-- Auto-detected from URL (`from_url()`)
-- Each provider has `max_file_bytes()` for chunking decisions
-- STT routing in `transcribe.rs`: OpenAI-compatible (multipart), Deepgram (raw body), Gemini (base64 JSON)
+- Provider enum in `provider.rs`: Groq, OpenAI, OpenRouter, Gemini, Deepgram, Anthropic, Custom, **Local**
+- Cloud providers auto-detected from URL (`from_url()`); Local is set explicitly via `stt_mode` config
+- Each provider has `max_file_bytes()` for chunking decisions (Local = `usize::MAX`)
+- STT routing in `transcribe.rs`: OpenAI-compatible (multipart), Deepgram (raw body), Gemini (base64 JSON), **Local (whisper-rs direct)**
 - LLM routing in `llm.rs`: OpenAI-compatible (chat completions), Anthropic (Messages API)
+- `stt_mode` config field: `"cloud"` (default for upgrades) or `"local"` (offline, no API key needed)
+
+## Local STT (whisper-rs)
+
+- Offline transcription via whisper.cpp, gated behind `local-stt` Cargo feature
+- Models: GGML format, downloaded on demand from HuggingFace to `dirs::data_dir()/dimmy/models/`
+- Default model: `ggml-base-q8_0.bin` (78 MB)
+- Available: Tiny (42 MB), Base (78 MB), Small (181 MB), Medium (514 MB)
+- GPU acceleration: Metal on macOS (Apple Silicon), Vulkan on Windows (all GPUs)
+- Input: f32 16kHz mono samples from existing audio pipeline (ProcessedAudio → downsample → whisper)
+- FFI functions: `dimmy_list_local_models`, `dimmy_download_model`, `dimmy_model_exists`
+
+## Transcription History
+
+- SQLite database with FTS5 full-text search (`history.rs`)
+- DB file: `~/.config/dimmy/history.db` (macOS/Linux) or `%APPDATA%\dimmy\history.db` (Windows)
+- Auto-saves after each successful transcription
+- FFI functions: `dimmy_history_save`, `dimmy_history_recent`, `dimmy_history_search`, `dimmy_history_delete`, `dimmy_history_stats`
+
+## Filler Removal
+
+- Post-transcription cleanup of speech disfluencies (`filler.rs`)
+- 6 languages: Italian, English, Spanish, French, German, Portuguese
+- Regex-based with word boundary matching, case insensitive
+- Applied to both local and cloud transcriptions when `filler_removal_enabled: true`
+
+## API Key Storage
+
+- **Always uses local AES-256 encrypted file** (`~/.config/dimmy/keys.enc`)
+- Key derived from SHA-256(username + hostname + salt), machine-specific
+- No OS popups, no admin needed on any platform
+- OS keyring (macOS Keychain, Windows Credential Manager) kept as read-only fallback for migration
+- The `use_keyring` config field is forced to `false` — toggle removed from all platform UIs
 
 ## Conventions
 

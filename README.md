@@ -31,11 +31,14 @@ Built with **native UIs** for each platform — no Electron, no WebView. A share
 
 ### Key Features
 
+- **Local offline transcription** — powered by whisper.cpp, runs entirely on your device. No API keys, no internet, no data leaving your Mac/PC
 - **Universal dictation** — works with any application via clipboard paste
 - **Native on every platform** — WinUI 3 on Windows, SwiftUI on macOS, GTK4 on Linux
 - **Always-on-top pill overlay** — compact UI with live waveform visualization
-- **Multiple STT providers** — Groq (fastest), OpenAI, Deepgram, Gemini, or any custom endpoint
+- **Cloud STT providers** — Groq (fastest), OpenAI, Deepgram, Gemini, or any custom endpoint (optional)
 - **AI enhancement** — 13 post-processing styles: correct grammar, summarize, rewrite professionally, and more
+- **Filler word removal** — automatically removes "um", "basically", "cioè", etc. in 6 languages
+- **Transcription history** — searchable archive of all your transcriptions with full-text search
 - **Privacy-first** — no telemetry, no cloud accounts, all data local, API keys encrypted on device (AES-256)
 - **Multilingual** — auto-detect or select from 12+ languages
 - **Configurable shortcut** — toggle or hold-to-record mode, any modifier combo
@@ -72,11 +75,12 @@ chmod +x Dimmy-linux-x86_64.AppImage
 ## Quick Start
 
 1. Launch Dimmy — a small pill appears on your screen
-2. Right-click the pill or tray icon to open Settings
-3. Enter an API key for transcription (see [STT Providers](#stt-providers))
-4. Press **Win+Alt** (default) to start recording
-5. Speak naturally, then press again to stop
-6. Text is transcribed and pasted into the active app
+2. The onboarding wizard guides you through permissions and model download (~78 MB)
+3. Press **Win+Alt** (default) to start recording
+4. Speak naturally, then press again to stop
+5. Text is transcribed locally and pasted into the active app
+
+> **No API key needed for local mode.** For cloud providers (faster, more accurate on long audio), add an API key in Settings → General → Cloud mode. See [STT Providers](#stt-providers).
 
 ## The Pill
 
@@ -90,18 +94,19 @@ Dimmy lives as a tiny overlay on your screen — the "pill". It changes shape an
 
 Right-click the pill or tray icon to open Settings. Each platform has its own native settings window with tabs for:
 
-- **General** — language, shortcut mode (toggle/hold), startup behavior
-- **Transcription** — STT provider, model, API key
-- **AI Enhancement** — LLM provider, post-processing style, custom prompts
-- **Audio** — input device, noise filter, gain, clipping detection
-- **Overlay** — pill position, size, waveform style, border colors
-- **Shortcut** — record hotkey configuration
-- **Stats** — transcription count, time saved, audio processed
+- **General** — STT mode (Local/Cloud), language, filler removal toggle
+- **Models** — download and select Whisper models for local transcription
+- **Shortcut** — record hotkey configuration, toggle/hold mode
+- **Output** — LLM post-processing style, tone, translation, custom prompts
+- **Overlay** — pill position, waveform style, border colors
+- **History** — searchable transcript archive with stats
+- **Permissions** — microphone and accessibility status (macOS)
+- **Stats** — transcription count, time saved, words dictated
 - **About** — version, update check, links
 
 ## STT Providers
 
-Dimmy needs an API key for speech-to-text. Choose a provider:
+**By default, Dimmy transcribes locally** using whisper.cpp — no API key needed, no internet required. For cloud providers (optional, can be faster on long audio):
 
 | Provider | Type | Models | Free Tier | Get Key |
 |----------|------|--------|-----------|---------|
@@ -112,7 +117,7 @@ Dimmy needs an API key for speech-to-text. Choose a provider:
 | **Anthropic** | LLM only | Claude Haiku 4.5, Claude Sonnet 4 | No | [console.anthropic.com/keys](https://console.anthropic.com/settings/keys) |
 | **OpenRouter** | LLM only | Llama 3.3 70B, DeepSeek R1 | Yes (free models) | [openrouter.ai/keys](https://openrouter.ai/keys) |
 
-Keys are encrypted locally on your device (AES-256). For extra security, enable **OS secure storage** (Keychain / Credential Manager) in Settings. You can also use any **custom endpoint** compatible with the OpenAI API format.
+Keys are encrypted locally on your device (AES-256) — no OS popups or admin access required. You can also use any **custom endpoint** compatible with the OpenAI API format.
 
 <details>
 <summary><strong>STT Provider Benchmarks</strong></summary>
@@ -174,26 +179,53 @@ Scroll wheel on the pill to cycle styles. Ctrl+scroll to cycle tone.
 
 ## Architecture
 
-```
-+-------------------+   +-------------------+   +-------------------+
-|  Windows (WinUI3) |   |  macOS (SwiftUI)  |   | Linux (GTK4/Rust) |
-|       C# UI       |   |     Swift UI      |   |   Rust + GTK4     |
-+--------+----------+   +--------+----------+   +--------+----------+
-         |  P/Invoke             |  C FFI               |  Rust crate
-         v                      v                      v
-+---------------------------------------------------------------+
-|                     Shared Rust Core                           |
-|  audio.rs  preprocess.rs  transcribe.rs  llm.rs  provider.rs  |
-|  ffi.rs (20+ exported C functions)   keystore   hotkey        |
-+---------------------------------------------------------------+
-         |                      |                      |
-         v                      v                      v
-   STT Providers          LLM Providers          OS Audio (cpal)
+```mermaid
+graph TD
+    subgraph Native UIs
+        WIN["Windows (WinUI3/C#)"]
+        MAC["macOS (SwiftUI)"]
+        LIN["Linux (GTK4/Rust)"]
+    end
+
+    subgraph Rust Core
+        FFI["ffi.rs — 30+ C functions"]
+        AUDIO["audio.rs → preprocess.rs"]
+        LOCAL["local_stt.rs<br/>whisper.cpp via whisper-rs"]
+        CLOUD["transcribe.rs<br/>Cloud STT APIs"]
+        FILLER["filler.rs<br/>6-language cleanup"]
+        LLM["llm.rs<br/>Post-processing"]
+        HIST["history.rs<br/>SQLite + FTS5"]
+        KEY["keystore.rs<br/>AES-256 encrypted"]
+    end
+
+    subgraph External
+        MIC["OS Audio (cpal)"]
+        WHISPER["Whisper GGML Models"]
+        PROVIDERS["Cloud: Groq / OpenAI /<br/>Deepgram / Gemini"]
+    end
+
+    WIN -->|P/Invoke| FFI
+    MAC -->|C FFI| FFI
+    LIN -->|Rust crate| FFI
+
+    FFI --> AUDIO
+    AUDIO -->|"stt_mode=local"| LOCAL
+    AUDIO -->|"stt_mode=cloud"| CLOUD
+    LOCAL --> FILLER
+    CLOUD --> FILLER
+    FILLER --> LLM
+    LLM --> HIST
+    HIST -->|auto-save| FFI
+
+    MIC --> AUDIO
+    WHISPER --> LOCAL
+    PROVIDERS --> CLOUD
+    KEY --> FFI
 ```
 
-The shared core (`src-tauri/src/`) handles all business logic: audio capture, preprocessing (noise filter + AGC), transcription via multiple STT APIs, optional LLM post-processing, and secure key storage. Windows and macOS call it through C FFI exports. Linux links directly as a Rust crate.
+The shared core (`src-tauri/src/`) handles all business logic: audio capture, preprocessing (VAD + AGC), local or cloud transcription, filler removal, optional LLM post-processing, history storage, and secure key management. Windows and macOS call it through C FFI exports. Linux links directly as a Rust crate.
 
-**Test coverage:** 206 Rust core tests + 38 Linux UI tests + 91 C# Windows tests = **335 total tests**.
+**Test coverage:** 246 Rust core tests + 41 C# Windows tests = **287+ total tests**.
 
 ## Contributing
 
@@ -202,6 +234,7 @@ The shared core (`src-tauri/src/`) handles all business logic: audio capture, pr
 All platforms need:
 - [Rust](https://rustup.rs/) (latest stable)
 - [Git](https://git-scm.com/)
+- [CMake](https://cmake.org/) (required by whisper-rs to compile whisper.cpp)
 
 ### Clone & verify
 
@@ -211,8 +244,8 @@ cd dimmy
 
 # Verify the Rust core builds and passes tests
 cd src-tauri
-cargo test --lib
-cargo clippy -- -D warnings
+cargo test --lib --features local-stt
+cargo clippy --features local-stt -- -D warnings
 cd ..
 ```
 
@@ -330,12 +363,28 @@ cargo test
 ### Project Structure
 
 ```
-src-tauri/src/          Shared Rust core (audio, STT, LLM, FFI, keystore)
+src-tauri/src/          Shared Rust core
+├── audio.rs            Audio capture via cpal
+├── preprocess.rs       VAD, AGC, noise filter, downsampling
+├── transcribe.rs       Cloud STT routing + local STT bridge
+├── local_stt.rs        whisper-rs integration + model download
+├── history.rs          SQLite + FTS5 transcript history
+├── filler.rs           Filler word removal (6 languages)
+├── llm.rs              LLM post-processing (13 styles, 5 tones)
+├── provider.rs         Provider enum + URL validation
+├── keystore.rs         AES-256 encrypted key storage
+├── ffi.rs              C FFI layer (30+ exported functions)
+├── hotkey.rs           Platform-specific global hotkey
+├── error.rs            Typed error hierarchy
+└── lib.rs              Config, state, module exports
+
 native-ui/windows/      WinUI 3 / C# (.NET 8) — P/Invoke to dimmy_lib.dll
 native-ui/macos/        SwiftUI — FFI bridge via DimmyFFI.h to libdimmy_lib.a
 native-ui/linux/        GTK4 + libadwaita (Rust) — direct crate dependency
 docs/dev/               Development docs (audio pipeline, known bugs, practices)
 .github/workflows/      CI/CD pipeline definitions
+CHANGELOG.md            Release changelog (Keep a Changelog format)
+BACKLOG.md              Feature backlog (MoSCoW prioritization)
 ```
 
 ## Development Philosophy
