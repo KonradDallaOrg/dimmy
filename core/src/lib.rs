@@ -33,12 +33,12 @@ const MAX_LOG_BYTES: u64 = 1_048_576; // 1 MB log rotation threshold
 #[allow(dead_code)] // Used by native UI via FFI stop logic
 const STOP_TAIL_MS: u64 = 300;
 
-/// Default shortcut: Cmd+Opt+D on macOS (2 modifiers alone triggers too easily),
+/// Default shortcut: fn on macOS (simple, doesn't conflict),
 /// Win+Alt on Windows/Linux (safe because Win+Alt isn't commonly used).
 fn default_shortcut() -> &'static str {
     #[cfg(target_os = "macos")]
     {
-        "win+alt+d"
+        "fn"
     }
     #[cfg(not(target_os = "macos"))]
     {

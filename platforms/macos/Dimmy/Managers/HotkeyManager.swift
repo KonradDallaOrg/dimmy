@@ -211,16 +211,19 @@ final class HotkeyManager {
     private func updateWaveformLevels() {
         guard let appState, appState.isRecording else { return }
 
-        let amplitude = DimmyCore.shared.getAmplitude()
+        let rawAmplitude = DimmyCore.shared.getAmplitude()
+        // Boost: raw mic amplitude is typically 0.02-0.3 peak.
+        // Scale up so normal speech fills 40-80% of the bars.
+        let amplitude = min(CGFloat(rawAmplitude) * 5.0, 1.0)
 
-        // Generate 7 waveform bars from single amplitude value
-        // Add slight variation per bar for visual interest (same approach as AudioSimulator)
+        // Generate 7 waveform bars from amplitude value
+        // Add slight variation per bar for visual interest
         var levels: [CGFloat] = []
         for i in 0..<7 {
             let variation = CGFloat.random(in: 0.7...1.3)
             let centerBias: CGFloat = 1.0 - abs(CGFloat(i) - 3.0) / 5.0 // center bars taller
-            let level = CGFloat(amplitude) * variation * centerBias
-            levels.append(max(0.15, min(1.0, level)))
+            let level = amplitude * variation * centerBias
+            levels.append(max(0.08, min(1.0, level)))
         }
 
         appState.waveformLevels = levels

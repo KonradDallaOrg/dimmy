@@ -21,8 +21,10 @@ final class StatusBarController: NSObject {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         guard let button = statusItem?.button else { return }
-        button.image = NSImage(systemSymbolName: "waveform.circle", accessibilityDescription: "Dimmy")
-        button.image?.size = NSSize(width: 18, height: 18)
+        let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
+        button.image = NSImage(systemSymbolName: "waveform.circle", accessibilityDescription: "Dimmy")?
+            .withSymbolConfiguration(config)
+        button.image?.isTemplate = true
         button.action = #selector(togglePopover)
         button.target = self
     }
@@ -48,40 +50,34 @@ final class StatusBarController: NSObject {
 
     private func updateIcon(for state: RecordingState) {
         guard let button = statusItem?.button else { return }
+        let size = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
+
         switch state {
         case .idle:
-            button.image = NSImage(systemSymbolName: "waveform.circle", accessibilityDescription: "Dimmy - Ready")
+            button.image = NSImage(systemSymbolName: "waveform.circle", accessibilityDescription: "Dimmy - Ready")?
+                .withSymbolConfiguration(size)
             button.image?.isTemplate = true
         case .recording:
-            button.image = NSImage(systemSymbolName: "waveform.circle.fill", accessibilityDescription: "Dimmy - Recording")
+            let config = size.applying(NSImage.SymbolConfiguration(paletteColors: [.systemRed]))
+            button.image = NSImage(systemSymbolName: "waveform.circle.fill", accessibilityDescription: "Dimmy - Recording")?
+                .withSymbolConfiguration(config)
             button.image?.isTemplate = false
-            if let image = button.image {
-                let config = NSImage.SymbolConfiguration(paletteColors: [.systemRed])
-                button.image = image.withSymbolConfiguration(config)
-            }
         case .transcribing:
-            button.image = NSImage(systemSymbolName: "ellipsis.circle.fill", accessibilityDescription: "Dimmy - Transcribing")
+            let config = size.applying(NSImage.SymbolConfiguration(paletteColors: [.systemBlue]))
+            button.image = NSImage(systemSymbolName: "ellipsis.circle.fill", accessibilityDescription: "Dimmy - Transcribing")?
+                .withSymbolConfiguration(config)
             button.image?.isTemplate = false
-            if let image = button.image {
-                let config = NSImage.SymbolConfiguration(paletteColors: [.systemBlue])
-                button.image = image.withSymbolConfiguration(config)
-            }
         case .processing:
-            button.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "Dimmy - Processing")
+            let config = size.applying(NSImage.SymbolConfiguration(paletteColors: [.systemPurple]))
+            button.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "Dimmy - Processing")?
+                .withSymbolConfiguration(config)
             button.image?.isTemplate = false
-            if let image = button.image {
-                let config = NSImage.SymbolConfiguration(paletteColors: [.systemPurple])
-                button.image = image.withSymbolConfiguration(config)
-            }
         case .completing:
-            button.image = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: "Dimmy - Done")
+            let config = size.applying(NSImage.SymbolConfiguration(paletteColors: [.systemGreen]))
+            button.image = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: "Dimmy - Done")?
+                .withSymbolConfiguration(config)
             button.image?.isTemplate = false
-            if let image = button.image {
-                let config = NSImage.SymbolConfiguration(paletteColors: [.systemGreen])
-                button.image = image.withSymbolConfiguration(config)
-            }
         }
-        button.image?.size = NSSize(width: 18, height: 18)
     }
 
     @objc private func togglePopover() {
