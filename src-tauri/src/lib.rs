@@ -6,6 +6,7 @@ pub mod history;
 mod hotkey;
 pub mod keystore;
 pub mod llm;
+pub mod local_stt;
 pub mod preprocess;
 pub mod provider;
 pub mod transcribe;
