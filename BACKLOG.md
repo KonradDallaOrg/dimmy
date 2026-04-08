@@ -39,10 +39,11 @@
 - [ ] Cloud features (API keys, provider selection) visible only when cloud mode selected
 
 ### Windows UI Updates
-- [ ] Settings: Local STT toggle + model download
-- [ ] History view
-- [ ] Keep ALL existing features unchanged
-- [ ] Local STT as additional option (cloud remains default for now)
+- [x] Settings: Local STT toggle + model download
+- [ ] **History view tab** (P/Invoke declarations exist, UI not yet built — parity gap with macOS)
+- [ ] **Models tab** (model browsing UI — macOS has it, Windows only has inline download button)
+- [x] Keep ALL existing features unchanged
+- [x] Local STT as additional option (cloud remains default for now)
 
 ### CI/CD Updates
 - [ ] macOS: build with `--features local-stt-metal`
