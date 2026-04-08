@@ -2,9 +2,11 @@ import SwiftUI
 
 enum SettingsTab: String, CaseIterable, Identifiable {
     case general = "General"
+    case models = "Models"
     case shortcut = "Shortcut"
     case output = "Output"
     case pill = "Overlay"
+    case history = "History"
     case permissions = "Permissions"
     case stats = "Stats"
     case debug = "Debug"
@@ -15,9 +17,11 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .general: return "gear"
+        case .models: return "cpu"
         case .shortcut: return "command.square"
         case .output: return "doc.text"
         case .pill: return "capsule"
+        case .history: return "clock.arrow.circlepath"
         case .permissions: return "lock.shield"
         case .stats: return "chart.bar"
         case .debug: return "ant"
@@ -74,12 +78,16 @@ struct SettingsContainerView: View {
         switch selectedTab {
         case .general:
             GeneralSettingsView(appState: appState)
+        case .models:
+            ModelSettingsView(appState: appState)
         case .shortcut:
             ShortcutSettingsView(appState: appState)
         case .output:
             OutputSettingsView(appState: appState)
         case .pill:
             OverlaySettingsView(appState: appState)
+        case .history:
+            HistorySettingsView(appState: appState)
         case .permissions:
             PermissionsSettingsView(appState: appState)
         case .stats:

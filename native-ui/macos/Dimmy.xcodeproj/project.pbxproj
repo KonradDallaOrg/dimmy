@@ -38,6 +38,8 @@
 		AA000030 /* DimmyCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000030; };
 		AA000041 /* SelfTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000041; };
 		AA000042 /* RecordingSimulator.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000042; };
+		AA000043 /* HistorySettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000043; };
+		AA000044 /* ModelSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000044; };
 		AA000031 /* libdimmy_lib.a in Frameworks */ = {isa = PBXBuildFile; fileRef = AB000031; };
 		AA000032 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AB000032; };
 		AA000033 /* CoreAudio.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AB000033; };
@@ -80,6 +82,8 @@
 		AB000040 /* DebugSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugSettingsView.swift; sourceTree = "<group>"; };
 		AB000041 /* SelfTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelfTests.swift; sourceTree = "<group>"; };
 		AB000042 /* RecordingSimulator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingSimulator.swift; sourceTree = "<group>"; };
+		AB000043 /* HistorySettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistorySettingsView.swift; sourceTree = "<group>"; };
+		AB000044 /* ModelSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelSettingsView.swift; sourceTree = "<group>"; };
 		AB000030 /* DimmyCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DimmyCore.swift; sourceTree = "<group>"; };
 		AB000031 /* libdimmy_lib.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libdimmy_lib.a; path = "$(PROJECT_DIR)/../../src-tauri/target/aarch64-apple-darwin/release/libdimmy_lib.a"; sourceTree = "<absolute>"; };
 		AB000032 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
@@ -197,6 +201,8 @@
 				AB000026 /* OverlaySettingsView.swift */,
 				AB000027 /* PermissionsSettingsView.swift */,
 				AB000020 /* AboutSettingsView.swift */,
+				AB000043 /* HistorySettingsView.swift */,
+				AB000044 /* ModelSettingsView.swift */,
 				AB000028 /* StatsSettingsView.swift */,
 				AB000040 /* DebugSettingsView.swift */,
 			);
@@ -332,6 +338,8 @@
 				AA000027 /* PermissionsSettingsView.swift in Sources */,
 				AA000028 /* StatsSettingsView.swift in Sources */,
 				AA000029 /* DebugSettingsView.swift in Sources */,
+				AA000043 /* HistorySettingsView.swift in Sources */,
+				AA000044 /* ModelSettingsView.swift in Sources */,
 				AA000030 /* DimmyCore.swift in Sources */,
 				AA000041 /* SelfTests.swift in Sources */,
 				AA000042 /* RecordingSimulator.swift in Sources */,
