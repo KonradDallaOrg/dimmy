@@ -20,3 +20,4 @@ demo/
 mockup/build/
 *.swp
 *.swo
+platforms/macos/build/
