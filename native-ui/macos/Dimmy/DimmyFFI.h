@@ -82,4 +82,43 @@ int32_t dimmy_has_api_key(void);
 /// Check if recording is active. Returns 1=yes, 0=no.
 int32_t dimmy_is_recording(void);
 
+// ── Local STT ──────────────────────────────────────────────────────
+
+/// Get JSON array of available local models with download status.
+/// Returns bytes written, or -1 on error.
+int32_t dimmy_list_local_models(char * _Nonnull out_buf, int32_t buf_len);
+
+/// Download a model file. BLOCKING — call from a background thread.
+/// Emits "model_download_progress" events via the event callback.
+/// Returns 0 on success, -1 on error.
+int32_t dimmy_download_model(const char * _Nonnull filename);
+
+/// Check if a specific model file exists locally.
+/// Returns 1=yes, 0=no.
+int32_t dimmy_model_exists(const char * _Nonnull filename);
+
+// ── Transcription History ──────────────────────────────────────────
+
+/// Save a transcript to history. Returns transcript ID, or -1 on error.
+int32_t dimmy_history_save(const char * _Nonnull text,
+                           const char * _Nullable language,
+                           double duration);
+
+/// Get recent transcripts as JSON array. Returns bytes written, or -1 on error.
+int32_t dimmy_history_recent(int32_t limit,
+                             char * _Nonnull out_buf,
+                             int32_t buf_len);
+
+/// Search transcripts via full-text search. Returns bytes written, or -1 on error.
+int32_t dimmy_history_search(const char * _Nonnull query,
+                             int32_t limit,
+                             char * _Nonnull out_buf,
+                             int32_t buf_len);
+
+/// Delete a transcript by ID. Returns 0=OK, -1=error.
+int32_t dimmy_history_delete(int32_t id);
+
+/// Get history stats as JSON. Returns bytes written, or -1 on error.
+int32_t dimmy_history_stats(char * _Nonnull out_buf, int32_t buf_len);
+
 #endif /* DimmyFFI_h */

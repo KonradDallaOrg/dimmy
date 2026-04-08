@@ -8,6 +8,20 @@ struct GeneralSettingsView: View {
 
     var body: some View {
         Form {
+            // MARK: - Transcription Mode
+            Section("Transcription Mode") {
+                Picker("Mode", selection: $appState.sttMode) {
+                    Text("Local (Offline)").tag("local")
+                    Text("Cloud").tag("cloud")
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: appState.sttMode) { _, _ in syncConfigToRust() }
+
+                if appState.sttMode == "local" {
+                    ModelSettingsView()
+                }
+            }
+
             // MARK: - Default section: Language, API key, Theme
             Section("Transcription") {
                 Picker("Language", selection: $appState.selectedLanguage) {
@@ -16,10 +30,17 @@ struct GeneralSettingsView: View {
                     }
                 }
                 .onChange(of: appState.selectedLanguage) { _, _ in syncConfigToRust() }
+
+                if appState.sttMode == "local" {
+                    Toggle("Remove filler words (um, uh, etc.)", isOn: $appState.fillerRemovalEnabled)
+                        .onChange(of: appState.fillerRemovalEnabled) { _, _ in syncConfigToRust() }
+                }
             }
 
-            Section("API Key") {
-                apiKeyRow
+            if appState.sttMode == "cloud" {
+                Section("API Key") {
+                    apiKeyRow
+                }
             }
 
             Section("Appearance") {
@@ -36,24 +57,26 @@ struct GeneralSettingsView: View {
 
             // MARK: - Advanced sections
             if appState.showAdvanced {
-                Section("STT Provider") {
-                    Picker("Provider + Model", selection: $selectedSttPreset) {
-                        ForEach(SttPreset.presets) { preset in
-                            Text(preset.displayName).tag(preset.id)
+                if appState.sttMode == "cloud" {
+                    Section("STT Provider") {
+                        Picker("Provider + Model", selection: $selectedSttPreset) {
+                            ForEach(SttPreset.presets) { preset in
+                                Text(preset.displayName).tag(preset.id)
+                            }
                         }
-                    }
-                    .onChange(of: selectedSttPreset) { _, newId in
-                        applySttPreset(newId)
-                    }
+                        .onChange(of: selectedSttPreset) { _, newId in
+                            applySttPreset(newId)
+                        }
 
-                    if selectedSttPreset == "custom" {
-                        TextField("API URL", text: $appState.apiUrl)
-                            .textFieldStyle(.roundedBorder)
-                            .onSubmit { syncConfigToRust() }
+                        if selectedSttPreset == "custom" {
+                            TextField("API URL", text: $appState.apiUrl)
+                                .textFieldStyle(.roundedBorder)
+                                .onSubmit { syncConfigToRust() }
 
-                        TextField("Model", text: $appState.apiModel)
-                            .textFieldStyle(.roundedBorder)
-                            .onSubmit { syncConfigToRust() }
+                            TextField("Model", text: $appState.apiModel)
+                                .textFieldStyle(.roundedBorder)
+                                .onSubmit { syncConfigToRust() }
+                        }
                     }
                 }
 

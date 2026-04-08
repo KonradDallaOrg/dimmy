@@ -334,6 +334,14 @@ final class AppState: ObservableObject {
     @Published var micPermissionGranted: Bool = false
     @Published var accessibilityPermissionGranted: Bool = false
 
+    // MARK: - STT Mode (local vs cloud)
+
+    @Published var sttMode: String = "cloud"  // "local" or "cloud"
+    @Published var localModel: String = "ggml-base-q8_0.bin"
+    @Published var modelDownloadProgress: Double = 0.0
+    @Published var isDownloadingModel: Bool = false
+    @Published var fillerRemovalEnabled: Bool = true
+
     // MARK: - STT Config (synced with Rust via FFI)
 
     @Published var sttProvider: SttProvider = .groq
@@ -443,6 +451,11 @@ final class AppState: ObservableObject {
         if let dev = config["selected_device"] as? String { selectedDevice = dev }
         if let devs = config["devices"] as? [String] { devices = devs }
 
+        // Local STT
+        if let v = config["stt_mode"] as? String { sttMode = v }
+        if let v = config["local_model"] as? String { localModel = v }
+        if let v = config["filler_removal_enabled"] as? Bool { fillerRemovalEnabled = v }
+
         // Shortcut
         if let mode = config["shortcut_mode"] as? String {
             preferredMode = mode == "hold" ? .pushToTalk : .toggle
@@ -505,6 +518,9 @@ final class AppState: ObservableObject {
             "llm_api_model": llmApiModel,
             "llm_use_same_key": llmUseSameKey,
             "llm_log_enabled": llmLogEnabled,
+            "stt_mode": sttMode,
+            "local_model": localModel,
+            "filler_removal_enabled": fillerRemovalEnabled,
             "preprocessing_enabled": preprocessingEnabled,
             "chunk_streaming_enabled": chunkStreamingEnabled,
             "audio_debug_enabled": audioDebugEnabled,

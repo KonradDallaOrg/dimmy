@@ -79,7 +79,12 @@ struct SettingsContainerView: View {
         case .general:
             GeneralSettingsView(appState: appState)
         case .models:
-            ModelSettingsView(appState: appState)
+            Form {
+                Section("Speech Recognition Models") {
+                    ModelSettingsView(appState: appState)
+                }
+            }
+            .formStyle(.grouped)
         case .shortcut:
             ShortcutSettingsView(appState: appState)
         case .output:

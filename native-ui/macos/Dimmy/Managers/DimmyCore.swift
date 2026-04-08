@@ -204,6 +204,119 @@ final class DimmyCore {
     var isRecording: Bool {
         dimmy_is_recording() == 1
     }
+
+    // MARK: - Local STT Models
+
+    /// Get available local models with download status. Returns JSON array of dicts.
+    func listLocalModels() -> [[String: Any]]? {
+        let bufLen = Self.bufferSize
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+
+        let written = dimmy_list_local_models(buffer, bufLen)
+        guard written > 0 else { return nil }
+
+        let jsonStr = String(cString: buffer)
+        guard let data = jsonStr.data(using: .utf8),
+              let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        else { return nil }
+
+        return arr
+    }
+
+    /// Download a model file. BLOCKING — call from a background thread.
+    /// Returns true on success.
+    func downloadModel(_ filename: String) -> Bool {
+        let result = filename.withCString { ptr in
+            dimmy_download_model(ptr)
+        }
+        if result != 0 {
+            print("[DimmyCore] ERROR: downloadModel(\(filename)) failed with code \(result)")
+        }
+        return result == 0
+    }
+
+    /// Check if a model file exists locally.
+    func modelExists(_ filename: String) -> Bool {
+        filename.withCString { ptr in
+            dimmy_model_exists(ptr) == 1
+        }
+    }
+
+    // MARK: - Transcription History
+
+    /// Save a transcript to history. Returns the transcript ID, or -1 on error.
+    @discardableResult
+    func historySave(text: String, language: String, duration: Double) -> Int32 {
+        text.withCString { textPtr in
+            language.withCString { langPtr in
+                dimmy_history_save(textPtr, langPtr, duration)
+            }
+        }
+    }
+
+    /// Get recent transcripts as JSON array.
+    func historyRecent(limit: Int32) -> [[String: Any]]? {
+        let bufLen = Self.bufferSize
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+
+        let written = dimmy_history_recent(limit, buffer, bufLen)
+        guard written > 0 else { return nil }
+
+        let jsonStr = String(cString: buffer)
+        guard let data = jsonStr.data(using: .utf8),
+              let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        else { return nil }
+
+        return arr
+    }
+
+    /// Search transcripts via full-text search. Returns JSON array.
+    func historySearch(query: String, limit: Int32) -> [[String: Any]]? {
+        let bufLen = Self.bufferSize
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+
+        let written = query.withCString { qPtr in
+            dimmy_history_search(qPtr, limit, buffer, bufLen)
+        }
+        guard written > 0 else { return nil }
+
+        let jsonStr = String(cString: buffer)
+        guard let data = jsonStr.data(using: .utf8),
+              let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        else { return nil }
+
+        return arr
+    }
+
+    /// Delete a transcript by ID. Returns true on success.
+    @discardableResult
+    func historyDelete(id: Int32) -> Bool {
+        dimmy_history_delete(id) == 0
+    }
+
+    /// Get history stats as JSON dictionary.
+    func historyStats() -> [String: Any]? {
+        let bufLen = Self.bufferSize
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+
+        let written = dimmy_history_stats(buffer, bufLen)
+        guard written > 0 else { return nil }
+
+        let jsonStr = String(cString: buffer)
+        guard let data = jsonStr.data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+
+        return dict
+    }
 }
 
 // MARK: - Event Callback (C function, called from Rust)
@@ -278,6 +391,13 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
 
     case "recording_cancelled":
         appState.recordingState = .idle
+
+    case "model_download_progress":
+        if let downloaded = payload["downloaded"] as? Int,
+           let total = payload["total"] as? Int,
+           total > 0 {
+            appState.modelDownloadProgress = Double(downloaded) / Double(total)
+        }
 
     default:
         print("[DimmyCore] unhandled event: \(event)")
