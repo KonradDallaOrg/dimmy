@@ -43,6 +43,9 @@ Section "Install"
   ; Kill running instance
   nsExec::ExecToLog 'taskkill /f /im ${APP_EXE}'
 
+  ; Clean previous installation to avoid stale DLL conflicts
+  RMDir /r "$INSTDIR"
+
   SetOutPath "$INSTDIR"
 
   ; Copy all files from the publish directory
