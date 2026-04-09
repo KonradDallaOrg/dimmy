@@ -223,37 +223,65 @@ fn matches_key_group(vk: u32, packed: u32) -> bool {
     vk == left || (right != 0 && vk == right)
 }
 
-/// Set the shortcut combo from a string like "win+alt" or "ctrl+shift+space".
+/// Set the shortcut combo from a string like "Win+Alt", "Alt+X", or "Ctrl+Shift+Space".
+///
+/// Supported formats (case insensitive):
+/// - 2 modifiers: "Win+Alt", "Ctrl+Shift"
+/// - 1 modifier + 1 key: "Alt+X", "Ctrl+Space"
+/// - 2 modifiers + 1 key: "Ctrl+Shift+X", "Win+Alt+N"
 pub fn set_shortcut(combo: &str) {
-    let parts: Vec<&str> = combo.split('+').collect();
-    if parts.len() == 2 {
-        let g1 = name_to_group(parts[0]);
-        let g2 = name_to_group(parts[1]);
-        if g1 != 0 && g2 != 0 {
-            KEY1_CODES.store(group_to_packed(g1), Ordering::SeqCst);
-            KEY2_CODES.store(group_to_packed(g2), Ordering::SeqCst);
-            KEY3_CODE.store(0, Ordering::SeqCst);
-            KEY3_DOWN.store(false, Ordering::SeqCst);
-            return;
-        }
-    } else if parts.len() == 3 {
-        let g1 = name_to_group(parts[0]);
-        let g2 = name_to_group(parts[1]);
-        let vk = name_to_vk(parts[2]);
-        if g1 != 0 && g2 != 0 && vk != 0 {
-            KEY1_CODES.store(group_to_packed(g1), Ordering::SeqCst);
-            KEY2_CODES.store(group_to_packed(g2), Ordering::SeqCst);
-            KEY3_CODE.store(vk, Ordering::SeqCst);
-            KEY3_DOWN.store(false, Ordering::SeqCst);
-            return;
+    assert!(!combo.is_empty(), "shortcut combo must not be empty");
+    assert!(
+        combo.contains('+'),
+        "shortcut must contain '+' separator: {}",
+        combo
+    );
+
+    // Normalize to lowercase for matching
+    let lower = combo.to_ascii_lowercase();
+    let parts: Vec<&str> = lower.split('+').map(|s| s.trim()).collect();
+
+    // Classify each part as modifier group or VK key
+    let mut groups: Vec<u8> = Vec::new();
+    let mut vk: u32 = 0;
+    for part in &parts {
+        let g = name_to_group(part);
+        if g != 0 {
+            groups.push(g);
+        } else {
+            let k = name_to_vk(part);
+            if k != 0 {
+                vk = k;
+            }
         }
     }
+
+    if groups.len() == 2 {
+        // 2 modifiers (+ optional key)
+        KEY1_CODES.store(group_to_packed(groups[0]), Ordering::SeqCst);
+        KEY2_CODES.store(group_to_packed(groups[1]), Ordering::SeqCst);
+        KEY3_CODE.store(vk, Ordering::SeqCst);
+        KEY3_DOWN.store(false, Ordering::SeqCst);
+        return;
+    }
+
+    if groups.len() == 1 && vk != 0 {
+        // 1 modifier + 1 key: use the modifier as both KEY1 and KEY2
+        // so the hook fires when this single modifier + key are both down.
+        // We store the modifier in KEY1, VK=0 in KEY2 (unused), and the key in KEY3.
+        KEY1_CODES.store(group_to_packed(groups[0]), Ordering::SeqCst);
+        KEY2_CODES.store(0, Ordering::SeqCst);
+        KEY3_CODE.store(vk, Ordering::SeqCst);
+        KEY3_DOWN.store(false, Ordering::SeqCst);
+        return;
+    }
+
     // Fallback: cmd+option+D on macOS, win+alt on Windows/Linux
     KEY1_CODES.store(group_to_packed(GROUP_WIN), Ordering::SeqCst);
     KEY2_CODES.store(group_to_packed(GROUP_ALT), Ordering::SeqCst);
     #[cfg(target_os = "macos")]
     {
-        KEY3_CODE.store(name_to_vk("d"), Ordering::SeqCst); // D key
+        KEY3_CODE.store(name_to_vk("d"), Ordering::SeqCst);
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -580,7 +608,7 @@ mod platform {
 
                     if changed {
                         let all = KEY1_DOWN.load(Ordering::SeqCst)
-                            && KEY2_DOWN.load(Ordering::SeqCst)
+                            && (k2 == 0 || KEY2_DOWN.load(Ordering::SeqCst))
                             && KEY3_DOWN.load(Ordering::SeqCst);
                         if all && !COMBO_ACTIVE.swap(true, Ordering::SeqCst) {
                             HOTKEY_EVENT.store(EVENT_PRESSED, Ordering::SeqCst);
@@ -943,7 +971,7 @@ mod platform {
 
                 if changed {
                     let all = KEY1_DOWN.load(Ordering::SeqCst)
-                        && KEY2_DOWN.load(Ordering::SeqCst)
+                        && (k2 == 0 || KEY2_DOWN.load(Ordering::SeqCst))
                         && KEY3_DOWN.load(Ordering::SeqCst);
                     if all && !COMBO_ACTIVE.swap(true, Ordering::SeqCst) {
                         HOTKEY_EVENT.store(EVENT_PRESSED, Ordering::SeqCst);
@@ -1048,4 +1076,146 @@ mod platform {
 mod platform {
     pub fn install_hook(_log_fn: fn(&str)) {}
     pub fn poll_async_key_state() {}
+}
+
+// ── Tests ─────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Helper: read back the stored key config after set_shortcut.
+    fn stored_keys() -> (u32, u32, u32) {
+        (
+            KEY1_CODES.load(Ordering::SeqCst),
+            KEY2_CODES.load(Ordering::SeqCst),
+            KEY3_CODE.load(Ordering::SeqCst),
+        )
+    }
+
+    #[test]
+    fn set_shortcut_two_modifiers_lowercase() {
+        set_shortcut("win+alt");
+        let (k1, k2, k3) = stored_keys();
+        assert_eq!(k1, group_to_packed(GROUP_WIN));
+        assert_eq!(k2, group_to_packed(GROUP_ALT));
+        assert_eq!(k3, 0, "2-mod combo should have no VK key");
+    }
+
+    #[test]
+    fn set_shortcut_two_modifiers_mixed_case() {
+        set_shortcut("Win+Alt");
+        let (k1, k2, k3) = stored_keys();
+        assert_eq!(k1, group_to_packed(GROUP_WIN));
+        assert_eq!(k2, group_to_packed(GROUP_ALT));
+        assert_eq!(k3, 0);
+    }
+
+    #[test]
+    fn set_shortcut_two_modifiers_uppercase() {
+        set_shortcut("CTRL+SHIFT");
+        let (k1, k2, k3) = stored_keys();
+        assert_eq!(k1, group_to_packed(GROUP_CTRL));
+        assert_eq!(k2, group_to_packed(GROUP_SHIFT));
+        assert_eq!(k3, 0);
+    }
+
+    #[test]
+    fn set_shortcut_one_mod_one_key() {
+        set_shortcut("Alt+X");
+        let (k1, k2, k3) = stored_keys();
+        assert_eq!(k1, group_to_packed(GROUP_ALT), "modifier should be Alt");
+        assert_eq!(k2, 0, "no second modifier");
+        assert_eq!(k3, 0x58, "VK for X = 0x58");
+    }
+
+    #[test]
+    fn set_shortcut_one_mod_one_key_lowercase() {
+        set_shortcut("ctrl+z");
+        let (k1, k2, k3) = stored_keys();
+        assert_eq!(k1, group_to_packed(GROUP_CTRL));
+        assert_eq!(k2, 0);
+        assert_eq!(k3, 0x5A, "VK for Z = 0x5A");
+    }
+
+    #[test]
+    fn set_shortcut_two_mods_one_key() {
+        set_shortcut("Ctrl+Shift+Space");
+        let (k1, k2, k3) = stored_keys();
+        assert_eq!(k1, group_to_packed(GROUP_CTRL));
+        assert_eq!(k2, group_to_packed(GROUP_SHIFT));
+        assert_eq!(k3, 0x20, "VK for Space = 0x20");
+    }
+
+    #[test]
+    fn set_shortcut_two_mods_fkey() {
+        set_shortcut("win+alt+f1");
+        let (k1, k2, k3) = stored_keys();
+        assert_eq!(k1, group_to_packed(GROUP_WIN));
+        assert_eq!(k2, group_to_packed(GROUP_ALT));
+        assert_eq!(k3, 0x70, "VK for F1 = 0x70");
+    }
+
+    #[test]
+    fn set_shortcut_invalid_falls_back() {
+        set_shortcut("garbage+nonsense");
+        let (k1, k2, _k3) = stored_keys();
+        // Fallback is Win+Alt
+        assert_eq!(k1, group_to_packed(GROUP_WIN), "fallback should be Win");
+        assert_eq!(k2, group_to_packed(GROUP_ALT), "fallback should be Alt");
+    }
+
+    #[test]
+    #[should_panic(expected = "shortcut combo must not be empty")]
+    fn set_shortcut_empty_panics() {
+        set_shortcut("");
+    }
+
+    #[test]
+    #[should_panic(expected = "shortcut must contain '+' separator")]
+    fn set_shortcut_no_separator_panics() {
+        set_shortcut("winalt");
+    }
+
+    #[test]
+    fn name_to_group_case_insensitive() {
+        // name_to_group works on already-lowercased input (set_shortcut lowercases)
+        assert_eq!(name_to_group("win"), GROUP_WIN);
+        assert_eq!(name_to_group("alt"), GROUP_ALT);
+        assert_eq!(name_to_group("ctrl"), GROUP_CTRL);
+        assert_eq!(name_to_group("shift"), GROUP_SHIFT);
+        assert_eq!(name_to_group("cmd"), GROUP_WIN);
+        assert_eq!(name_to_group("option"), GROUP_ALT);
+    }
+
+    #[test]
+    fn name_to_vk_letters_and_fkeys() {
+        assert_eq!(name_to_vk("a"), 0x41);
+        assert_eq!(name_to_vk("z"), 0x5A);
+        assert_eq!(name_to_vk("0"), 0x30);
+        assert_eq!(name_to_vk("9"), 0x39);
+        assert_eq!(name_to_vk("f1"), 0x70);
+        assert_eq!(name_to_vk("f12"), 0x7B);
+        assert_eq!(name_to_vk("space"), 0x20);
+        assert_eq!(name_to_vk("enter"), 0x0D);
+        assert_eq!(name_to_vk("tab"), 0x09);
+    }
+
+    #[test]
+    fn take_event_returns_none_by_default() {
+        // Clear any pending event
+        take_event();
+        assert_eq!(take_event(), EVENT_NONE);
+    }
+
+    #[test]
+    fn current_label_reflects_set_shortcut() {
+        set_shortcut("Ctrl+Shift+X");
+        let label = current_label();
+        assert!(
+            label.contains("Ctrl") || label.contains("ctrl"),
+            "label should contain Ctrl: {}",
+            label
+        );
+    }
 }

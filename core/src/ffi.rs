@@ -1562,6 +1562,70 @@ pub extern "C" fn dimmy_history_delete(id: c_int) -> c_int {
     }
 }
 
+// ── Hotkey (low-level keyboard hook) ─────────────────────────────
+
+/// Install the global keyboard hook. Call once at startup.
+/// The hook runs on a background thread with its own message pump.
+#[no_mangle]
+pub extern "C" fn dimmy_hotkey_install() {
+    crate::hotkey::install(|msg| crate::log(&format!("[Hotkey] {}", msg)));
+}
+
+/// Set the shortcut combo, e.g. "Win+Alt", "Ctrl+Shift+X".
+///
+/// # Safety
+/// `combo_ptr` must be a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_hotkey_set(combo_ptr: *const c_char) {
+    if combo_ptr.is_null() {
+        return;
+    }
+    if let Ok(combo) = CStr::from_ptr(combo_ptr).to_str() {
+        crate::hotkey::set_shortcut(combo);
+        crate::log(&format!("[Hotkey] set_shortcut(\"{}\")", combo));
+    }
+}
+
+/// Poll for hotkey events. Returns:
+/// - 0 = no event
+/// - 1 = pressed (all keys in combo are down)
+/// - 2 = released (any key in combo released after press)
+#[no_mangle]
+pub extern "C" fn dimmy_hotkey_take_event() -> c_int {
+    crate::hotkey::take_event() as c_int
+}
+
+/// Start recording mode for shortcut capture.
+#[no_mangle]
+pub extern "C" fn dimmy_hotkey_start_recording() {
+    crate::hotkey::start_recording();
+}
+
+/// Poll recording: scans for pressed key combo via GetAsyncKeyState.
+/// Call this every ~100ms while recording a new shortcut.
+#[no_mangle]
+pub extern "C" fn dimmy_hotkey_poll_recording() {
+    crate::hotkey::poll_recording_keys();
+}
+
+/// Take the recorded shortcut. Returns bytes written to buf, or 0 if not ready.
+/// Format: JSON `{"label":"Ctrl+Shift+X","combo":"Ctrl+Shift+X"}`.
+#[no_mangle]
+pub extern "C" fn dimmy_hotkey_take_recorded(buf: *mut c_char, buf_len: c_int) -> c_int {
+    if let Some((label, combo)) = crate::hotkey::take_recorded() {
+        let json = serde_json::json!({"label": label, "combo": combo});
+        write_to_buf(&json.to_string(), buf, buf_len)
+    } else {
+        0
+    }
+}
+
+/// Stop recording mode.
+#[no_mangle]
+pub extern "C" fn dimmy_hotkey_stop_recording() {
+    crate::hotkey::stop_recording();
+}
+
 /// Get history stats as JSON. Returns bytes written or -1.
 #[no_mangle]
 pub extern "C" fn dimmy_history_stats(buf: *mut c_char, buf_len: c_int) -> c_int {
