@@ -189,13 +189,14 @@ jobs:
       - name: Install CMake & Ninja
         uses: lukka/get-cmake@latest
 
-      - name: Install build dependencies (Vulkan SDK + LLVM)
+      - name: Install Vulkan SDK
         shell: pwsh
         run: |
-          choco install vulkan-sdk llvm -y --no-progress
-          # Verify installations
-          Write-Host "Vulkan SDK: $env:VULKAN_SDK"
-          Write-Host "LLVM: $(& 'C:\Program Files\LLVM\bin\llvm-config' --version 2>$null || 'installed')"
+          choco install vulkan-sdk -y --no-progress
+          # Set VULKAN_SDK for this job (choco sets it for new shells only)
+          $sdkPath = "C:\VulkanSDK\1.4.341.0"
+          echo "VULKAN_SDK=$sdkPath" >> $env:GITHUB_ENV
+          echo "$sdkPath\Bin" >> $env:GITHUB_PATH
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
