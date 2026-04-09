@@ -230,6 +230,141 @@ where
     Ok(dest)
 }
 
+// ── WhisperContext cache ─────────────────────────────────────────
+//
+// Loading a whisper model into VRAM takes 2-5 seconds for large models.
+// We cache the WhisperContext globally and reuse it across transcriptions.
+// The cache is invalidated when the model changes.
+
+#[cfg(feature = "local-stt")]
+mod whisper_cache {
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+    use whisper_rs::{WhisperContext, WhisperContextParameters};
+
+    struct CachedModel {
+        ctx: WhisperContext,
+        model_path: PathBuf,
+    }
+
+    // WhisperContext is Send (C pointer with proper cleanup) but not Sync by default.
+    // We protect access with a Mutex, so only one thread uses it at a time.
+    unsafe impl Send for CachedModel {}
+
+    static CACHE: Mutex<Option<CachedModel>> = Mutex::new(None);
+
+    /// Load model if needed, run inference, return text. All under one lock.
+    pub fn transcribe(
+        model_path: &std::path::Path,
+        samples: &[f32],
+        language: &str,
+    ) -> Result<String, crate::error::TranscribeError> {
+        use std::ffi::c_int;
+        use whisper_rs::{FullParams, SamplingStrategy};
+
+        let mut guard = CACHE.lock().map_err(|e| {
+            crate::error::TranscribeError::LocalModel(format!("cache lock poisoned: {}", e))
+        })?;
+
+        // ── Load or reuse cached model ──────────────────────────
+        let needs_reload = match &*guard {
+            Some(cached) => cached.model_path != model_path,
+            None => true,
+        };
+
+        if needs_reload {
+            crate::log(&format!(
+                "[LocalSTT] Loading model into cache: {}",
+                model_path.display()
+            ));
+            let ctx_params = WhisperContextParameters::default();
+            let ctx = WhisperContext::new_with_params(model_path, ctx_params).map_err(|e| {
+                crate::error::TranscribeError::LocalModel(format!("failed to load model: {}", e))
+            })?;
+            *guard = Some(CachedModel {
+                ctx,
+                model_path: model_path.to_path_buf(),
+            });
+            crate::log("[LocalSTT] Model cached successfully");
+        } else {
+            crate::log("[LocalSTT] Using cached model (skip VRAM reload)");
+        }
+
+        let cached = guard.as_ref().expect("cache must be populated after load");
+
+        // ── Create state + run inference ─────────────────────────
+        let mut state = cached.ctx.create_state().map_err(|e| {
+            crate::error::TranscribeError::LocalModel(format!("failed to create state: {}", e))
+        })?;
+
+        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+
+        if !language.is_empty() {
+            params.set_language(Some(language));
+        } else {
+            params.set_detect_language(true);
+        }
+
+        let n_threads: c_int = std::thread::available_parallelism()
+            .map(|n| n.get().min(4) as c_int)
+            .unwrap_or(2);
+        params.set_n_threads(n_threads);
+
+        params.set_print_special(false);
+        params.set_print_progress(false);
+        params.set_print_realtime(false);
+        params.set_print_timestamps(false);
+
+        const SAMPLES_30S: usize = 30 * 16_000;
+        if samples.len() < SAMPLES_30S {
+            params.set_single_segment(true);
+        }
+
+        state.full(params, samples).map_err(|e| {
+            crate::error::TranscribeError::LocalModel(format!("whisper inference failed: {}", e))
+        })?;
+
+        let n_segments = state.full_n_segments();
+        let mut text = String::new();
+        for i in 0..n_segments {
+            let segment = state.get_segment(i).ok_or_else(|| {
+                crate::error::TranscribeError::LocalModel(format!("segment {} out of bounds", i))
+            })?;
+            let seg_text = segment.to_str().map_err(|e| {
+                crate::error::TranscribeError::LocalModel(format!(
+                    "failed to read segment {}: {}",
+                    i, e
+                ))
+            })?;
+            if !text.is_empty() {
+                text.push(' ');
+            }
+            text.push_str(seg_text.trim());
+        }
+
+        Ok(text.trim().to_string())
+    }
+
+    /// Clear the cached model (e.g. on shutdown or model change).
+    pub fn clear() {
+        if let Ok(mut guard) = CACHE.lock() {
+            if guard.is_some() {
+                crate::log("[LocalSTT] Clearing model cache");
+            }
+            *guard = None;
+        }
+    }
+}
+
+/// Clear the whisper model cache (call on shutdown or model change).
+#[cfg(feature = "local-stt")]
+pub fn clear_model_cache() {
+    whisper_cache::clear();
+}
+
+#[cfg(not(feature = "local-stt"))]
+pub fn clear_model_cache() {}
+
 // ── Local transcription (feature-gated) ───────────────────────────
 
 #[cfg(feature = "local-stt")]
@@ -238,9 +373,6 @@ pub fn transcribe_local(
     samples: &[f32], // 16 kHz mono
     language: &str,
 ) -> Result<String, TranscribeError> {
-    use std::ffi::c_int;
-    use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
-
     // ── Precondition assertions ──────────────────────────────────
     assert!(!samples.is_empty(), "samples must not be empty");
     assert!(
@@ -255,66 +387,8 @@ pub fn transcribe_local(
         )));
     }
 
-    // ── Create whisper context ───────────────────────────────────
-    let ctx_params = WhisperContextParameters::default();
-    let ctx = WhisperContext::new_with_params(model_file, ctx_params)
-        .map_err(|e| TranscribeError::LocalModel(format!("failed to load model: {}", e)))?;
-
-    let mut state = ctx
-        .create_state()
-        .map_err(|e| TranscribeError::LocalModel(format!("failed to create state: {}", e)))?;
-
-    // ── Configure parameters ─────────────────────────────────────
-    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-
-    // Language
-    if !language.is_empty() {
-        params.set_language(Some(language));
-    } else {
-        params.set_detect_language(true);
-    }
-
-    // Threading: min(4, available_parallelism)
-    let n_threads: c_int = std::thread::available_parallelism()
-        .map(|n| n.get().min(4) as c_int)
-        .unwrap_or(2);
-    params.set_n_threads(n_threads);
-
-    // Suppress all print output
-    params.set_print_special(false);
-    params.set_print_progress(false);
-    params.set_print_realtime(false);
-    params.set_print_timestamps(false);
-
-    // Short audio optimization: single segment for < 30s
-    const SAMPLES_30S: usize = 30 * 16_000;
-    if samples.len() < SAMPLES_30S {
-        params.set_single_segment(true);
-    }
-
-    // ── Run inference ────────────────────────────────────────────
-    state
-        .full(params, samples)
-        .map_err(|e| TranscribeError::LocalModel(format!("whisper inference failed: {}", e)))?;
-
-    // ── Collect segment texts ────────────────────────────────────
-    let n_segments = state.full_n_segments();
-
-    let mut text = String::new();
-    for i in 0..n_segments {
-        let segment = state
-            .get_segment(i)
-            .ok_or_else(|| TranscribeError::LocalModel(format!("segment {} out of bounds", i)))?;
-        let seg_text = segment.to_str().map_err(|e| {
-            TranscribeError::LocalModel(format!("failed to read segment {}: {}", i, e))
-        })?;
-        if !text.is_empty() {
-            text.push(' ');
-        }
-        text.push_str(seg_text.trim());
-    }
-
-    let result = text.trim().to_string();
+    // ── Transcribe with cached WhisperContext ────────────────────
+    let result = whisper_cache::transcribe(model_file, samples, language)?;
 
     // ── Postcondition ────────────────────────────────────────────
     if result.is_empty() {
@@ -458,5 +532,21 @@ mod tests {
         } else {
             panic!("Expected LocalModel error from stub");
         }
+    }
+
+    #[test]
+    fn clear_model_cache_does_not_panic() {
+        // Should be safe to call even when no model is cached
+        clear_model_cache();
+        clear_model_cache(); // idempotent
+    }
+
+    #[cfg(feature = "local-stt")]
+    #[test]
+    fn cache_rejects_missing_model() {
+        // Trying to cache a non-existent model should fail gracefully
+        clear_model_cache();
+        let result = transcribe_local(Path::new("/nonexistent/model.bin"), &[0.1f32; 16000], "en");
+        assert!(result.is_err());
     }
 }

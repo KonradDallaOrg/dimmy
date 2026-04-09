@@ -219,6 +219,9 @@ pub extern "C" fn dimmy_shutdown() {
         // Small delay to let cpal release the device
         std::thread::sleep(std::time::Duration::from_millis(50));
 
+        // Release whisper model from VRAM
+        crate::local_stt::clear_model_cache();
+
         if let Ok(cfg) = crate::snapshot_config(st) {
             save_config_file(&cfg);
             log("Config saved on shutdown");
@@ -867,6 +870,13 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
     }
     if let Some(s) = v["local_model"].as_str() {
         if let Ok(mut m) = st.local_model.lock() {
+            if *m != s {
+                log(&format!(
+                    "[LocalSTT] Model changed: {} → {}, clearing cache",
+                    *m, s
+                ));
+                crate::local_stt::clear_model_cache();
+            }
             *m = s.to_string();
         }
     }
