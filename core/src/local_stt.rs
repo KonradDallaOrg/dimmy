@@ -17,32 +17,77 @@ pub struct LocalModel {
     pub filename: &'static str,
     pub size_mb: u32,
     pub description: &'static str,
+    /// Custom download URL. When `None`, uses `MODEL_BASE_URL/filename`.
+    pub url: Option<&'static str>,
 }
 
 pub const AVAILABLE_MODELS: &[LocalModel] = &[
+    // ── Standard Whisper (multilingual) ──────────────────────────
     LocalModel {
         name: "Tiny",
         filename: "ggml-tiny-q8_0.bin",
         size_mb: 42,
         description: "Fastest, lower accuracy",
+        url: None,
     },
     LocalModel {
         name: "Base",
         filename: "ggml-base-q8_0.bin",
         size_mb: 78,
         description: "Good balance of speed and accuracy",
+        url: None,
     },
     LocalModel {
         name: "Small",
         filename: "ggml-small-q5_1.bin",
         size_mb: 181,
         description: "High accuracy, slower",
+        url: None,
     },
     LocalModel {
         name: "Medium",
         filename: "ggml-medium-q5_0.bin",
         size_mb: 514,
         description: "Very high accuracy, requires 2GB+ RAM",
+        url: None,
+    },
+    // ── Large-v3-Turbo (multilingual, optimized) ─────────────────
+    LocalModel {
+        name: "Large-v3-Turbo Q5",
+        filename: "ggml-large-v3-turbo-q5_0.bin",
+        size_mb: 574,
+        description: "Fast + high accuracy, all languages",
+        url: None,
+    },
+    LocalModel {
+        name: "Large-v3-Turbo Q8",
+        filename: "ggml-large-v3-turbo-q8_0.bin",
+        size_mb: 874,
+        description: "Best turbo quality, all languages",
+        url: None,
+    },
+    // ── Large-v3 (multilingual, max accuracy) ────────────────────
+    LocalModel {
+        name: "Large-v3 Q5",
+        filename: "ggml-large-v3-q5_0.bin",
+        size_mb: 1104,
+        description: "Maximum accuracy, all languages, slow",
+        url: None,
+    },
+    // ── Distil-Whisper (English only, fastest large-class) ───────
+    LocalModel {
+        name: "Distil-Large-v3.5 Q8 (EN)",
+        filename: "ggml-distil-large-v3.5-q8_0.bin",
+        size_mb: 818,
+        description: "6x faster than Large-v3, English only",
+        url: Some("https://huggingface.co/Pomni/distil-large-v3.5-ggml-allquants/resolve/main/ggml-distil-large-v3.5-q8_0.bin"),
+    },
+    LocalModel {
+        name: "Distil-Large-v3.5 Q5 (EN)",
+        filename: "ggml-distil-large-v3.5-q5_0.bin",
+        size_mb: 538,
+        description: "6x faster than Large-v3, English only, compact",
+        url: Some("https://huggingface.co/Pomni/distil-large-v3.5-ggml-allquants/resolve/main/ggml-distil-large-v3.5-q5_0.bin"),
     },
 ];
 
@@ -102,7 +147,13 @@ where
         ))
     })?;
 
-    let url = format!("{}/{}", MODEL_BASE_URL, filename);
+    // Use per-model custom URL if available, otherwise default base URL.
+    let url = AVAILABLE_MODELS
+        .iter()
+        .find(|m| m.filename == filename)
+        .and_then(|m| m.url)
+        .map(|u| u.to_string())
+        .unwrap_or_else(|| format!("{}/{}", MODEL_BASE_URL, filename));
     crate::log(&format!("[LocalSTT] Downloading {} ...", url));
 
     let client = reqwest::Client::builder()
@@ -322,6 +373,32 @@ mod tests {
                 !model.description.is_empty(),
                 "model description must not be empty: {}",
                 model.name
+            );
+            if let Some(url) = model.url {
+                assert!(
+                    url.starts_with("https://"),
+                    "custom URL must be HTTPS: {} ({})",
+                    url,
+                    model.name
+                );
+                assert!(
+                    url.contains(model.filename),
+                    "custom URL must contain filename: {} ({})",
+                    url,
+                    model.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn no_duplicate_filenames() {
+        let mut seen = std::collections::HashSet::new();
+        for model in AVAILABLE_MODELS {
+            assert!(
+                seen.insert(model.filename),
+                "duplicate filename in AVAILABLE_MODELS: {}",
+                model.filename
             );
         }
     }

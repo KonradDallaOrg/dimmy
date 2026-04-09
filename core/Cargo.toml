@@ -10,6 +10,11 @@ repository = "https://github.com/KonradDallaOrg/dimmy"
 name = "dimmy_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[[bin]]
+name = "bench_local"
+path = "src/bin/bench_local.rs"
+required-features = ["local-stt"]
+
 [features]
 default = ["local-stt"]
 local-stt = ["dep:whisper-rs"]
