@@ -24,24 +24,24 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: core
 
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libxdo-dev libdbus-1-dev libssl-dev
+          sudo apt-get install -y libasound2-dev libxdo-dev libdbus-1-dev libssl-dev cmake
 
       - name: Format
-        working-directory: src-tauri
+        working-directory: core
         run: cargo fmt --check
 
       - name: Clippy
-        working-directory: src-tauri
-        run: cargo clippy -- -D warnings
+        working-directory: core
+        run: cargo clippy --features local-stt -- -D warnings
 
       - name: Test
-        working-directory: src-tauri
-        run: cargo test --lib
+        working-directory: core
+        run: cargo test --lib --features local-stt
 
   # ── Create release placeholder (no dependency on rust-check) ────────
   create-release:
@@ -58,7 +58,7 @@ jobs:
       - name: Get version
         id: version
         run: |
-          VER=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          VER=$(grep '^version' core/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
           SHA=$(git rev-parse --short HEAD)
           echo "version=${VER}-native.${SHA}" >> "$GITHUB_OUTPUT"
 
@@ -133,21 +133,21 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: core
 
       - name: Build Rust static library
-        working-directory: src-tauri
-        run: cargo build --lib --release --target aarch64-apple-darwin
+        working-directory: core
+        run: cargo build --lib --release --target aarch64-apple-darwin --features local-stt-metal
 
       - name: Verify static library and remove dylib
         run: |
-          ls -lh src-tauri/target/aarch64-apple-darwin/release/libdimmy_lib.a
-          file src-tauri/target/aarch64-apple-darwin/release/libdimmy_lib.a
-          rm -f src-tauri/target/aarch64-apple-darwin/release/libdimmy_lib.dylib
-          rm -f src-tauri/target/aarch64-apple-darwin/release/deps/libdimmy_lib.dylib
+          ls -lh core/target/aarch64-apple-darwin/release/libdimmy_lib.a
+          file core/target/aarch64-apple-darwin/release/libdimmy_lib.a
+          rm -f core/target/aarch64-apple-darwin/release/libdimmy_lib.dylib
+          rm -f core/target/aarch64-apple-darwin/release/deps/libdimmy_lib.dylib
 
       - name: Build Xcode project
-        working-directory: native-ui/macos
+        working-directory: platforms/macos
         run: |
           xcodebuild -project Dimmy.xcodeproj \
             -scheme Dimmy \
@@ -157,7 +157,7 @@ jobs:
             CODE_SIGN_IDENTITY="-"
 
       - name: Create DMG
-        working-directory: native-ui/macos
+        working-directory: platforms/macos
         run: |
           APP_PATH="build/derived/Build/Products/Release/Dimmy.app"
           mkdir -p build/dmg
@@ -171,7 +171,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: staging-latest
-          files: native-ui/macos/build/Dimmy-native-macos-arm64.dmg
+          files: platforms/macos/build/Dimmy-native-macos-arm64.dmg
 
   # ── Windows Native Build (parallel with macOS + rust-check) ─────────
   build-windows:
@@ -186,14 +186,17 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
+      - name: Install CMake
+        uses: lukka/get-cmake@latest
+
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: core
 
       - name: Build Rust DLL
-        working-directory: src-tauri
-        run: cargo build --lib --release --target x86_64-pc-windows-msvc
+        working-directory: core
+        run: cargo build --lib --release --target x86_64-pc-windows-msvc --features local-stt-vulkan
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -208,31 +211,31 @@ jobs:
           restore-keys: ${{ runner.os }}-nuget-
 
       - name: Restore NuGet packages
-        working-directory: native-ui/windows/Dimmy.Windows
+        working-directory: platforms/windows/Dimmy.Windows
         run: dotnet restore
 
       - name: Build Windows app
-        working-directory: native-ui/windows/Dimmy.Windows
+        working-directory: platforms/windows/Dimmy.Windows
         run: dotnet build Dimmy.Windows.csproj -c Release
 
       - name: Prepare distribution
         shell: pwsh
         run: |
-          $binDir = "native-ui/windows/Dimmy.Windows/bin/Release/net8.0-windows10.0.19041.0"
+          $binDir = "platforms/windows/Dimmy.Windows/bin/Release/net8.0-windows10.0.19041.0"
           # Copy Rust DLL into bin output
-          Copy-Item "src-tauri/target/x86_64-pc-windows-msvc/release/dimmy_lib.dll" "$binDir/"
+          Copy-Item "core/target/x86_64-pc-windows-msvc/release/dimmy_lib.dll" "$binDir/"
           # Remove PDB files to reduce zip size
           Get-ChildItem "$binDir" -Filter "*.pdb" -Recurse | Remove-Item -ErrorAction SilentlyContinue
           # Create publish alias for packaging step
-          New-Item -ItemType Directory -Force -Path "native-ui/windows/Dimmy.Windows/publish"
-          Copy-Item "$binDir/*" "native-ui/windows/Dimmy.Windows/publish/" -Recurse
+          New-Item -ItemType Directory -Force -Path "platforms/windows/Dimmy.Windows/publish"
+          Copy-Item "$binDir/*" "platforms/windows/Dimmy.Windows/publish/" -Recurse
 
       - name: Run Windows tests
-        working-directory: native-ui/windows/Dimmy.Windows.Tests
+        working-directory: platforms/windows/Dimmy.Windows.Tests
         run: dotnet test -c Release --logger "console;verbosity=normal"
 
       - name: Package installer
-        working-directory: native-ui/windows/Dimmy.Windows
+        working-directory: platforms/windows/Dimmy.Windows
         shell: pwsh
         run: |
           Compress-Archive -Path publish\* -DestinationPath ..\Dimmy-native-windows-x64.zip
@@ -241,7 +244,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: staging-latest
-          files: native-ui/windows/Dimmy-native-windows-x64.zip
+          files: platforms/windows/Dimmy-native-windows-x64.zip
 
   # ── Linux Native Build (parallel with macOS + Windows + rust-check) ──
   build-linux:
@@ -262,26 +265,26 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            native-ui/linux/target
-          key: linux-cargo-${{ hashFiles('native-ui/linux/Cargo.lock') }}
+            platforms/linux/target
+          key: linux-cargo-${{ hashFiles('platforms/linux/Cargo.lock') }}
           restore-keys: linux-cargo-
 
       - name: Install GTK4 + libadwaita dev packages
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libdbus-1-dev pkg-config \
-            libasound2-dev libxdo-dev libfuse2
+            libasound2-dev libxdo-dev libfuse2 cmake
 
       - name: Clippy
-        working-directory: native-ui/linux
+        working-directory: platforms/linux
         run: cargo clippy -- -D warnings
 
       - name: Test
-        working-directory: native-ui/linux
+        working-directory: platforms/linux
         run: cargo test
 
       - name: Build release
-        working-directory: native-ui/linux
+        working-directory: platforms/linux
         run: cargo build --release
 
       - name: Package AppImage
@@ -293,17 +296,17 @@ jobs:
 
           # Build AppDir structure
           mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/scalable/apps
-          cp native-ui/linux/target/release/dimmy-linux AppDir/usr/bin/
-          cp native-ui/linux/assets/com.dimmy.app.desktop AppDir/usr/share/applications/
-          cp native-ui/linux/assets/com.dimmy.app.svg AppDir/usr/share/icons/hicolor/scalable/apps/
+          cp platforms/linux/target/release/dimmy-linux AppDir/usr/bin/
+          cp platforms/linux/assets/com.dimmy.app.desktop AppDir/usr/share/applications/
+          cp platforms/linux/assets/com.dimmy.app.svg AppDir/usr/share/icons/hicolor/scalable/apps/
 
           # Create AppImage with GTK plugin (bundles libgtk-4, libadwaita, etc.)
           export DEPLOY_GTK_VERSION=4
           ./linuxdeploy-x86_64.AppImage \
             --appdir AppDir \
             --plugin gtk \
-            --desktop-file native-ui/linux/assets/com.dimmy.app.desktop \
-            --icon-file native-ui/linux/assets/com.dimmy.app.svg \
+            --desktop-file platforms/linux/assets/com.dimmy.app.desktop \
+            --icon-file platforms/linux/assets/com.dimmy.app.svg \
             --output appimage
 
           # Rename to consistent name
@@ -319,7 +322,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dimmy-linux
-          path: native-ui/linux/target/release/dimmy-linux
+          path: platforms/linux/target/release/dimmy-linux
 
   # ── Publish (waits for all jobs including rust-check) ───────────────
   publish:

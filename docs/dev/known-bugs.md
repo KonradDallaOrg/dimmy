@@ -52,3 +52,6 @@ Check this file before touching audio preprocessing, macOS FFI, or Windows trans
 - **Root cause**: base64 data passed as shell argument to `jq -n --arg data "$WAV_DATA"` exceeds ARG_MAX
 - **Fix**: Pipe base64 via stdin: `base64 -w0 file | jq -Rs ...` and `curl -d @"$body_file"`
 - **Files**: `tests/test_benchmark.sh`
+
+## Native UI Era
+No platform-specific bugs filed yet. Report issues at https://github.com/KonradDallaOrg/dimmy/issues

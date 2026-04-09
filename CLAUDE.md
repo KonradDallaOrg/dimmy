@@ -2,9 +2,9 @@
 
 ## What Dimmy Does
 
-Cross-platform voice transcription overlay. Records audio via global hotkey, transcribes via STT providers (Groq, OpenAI, Deepgram, Gemini), optionally post-processes with LLM, pastes result into active app. Built with Tauri 2 (Rust backend, vanilla HTML/CSS/JS frontend).
+Cross-platform voice transcription overlay. Records audio via global hotkey, transcribes locally via whisper.cpp (default) or cloud STT providers (Groq, OpenAI, Deepgram, Gemini), optionally post-processes with LLM, removes filler words, saves to history, and pastes result into active app. Built as a shared Rust core library with native UIs per platform (WinUI3/C# on Windows, SwiftUI on macOS, GTK4/Rust on Linux).
 
-Current version: check `src-tauri/Cargo.toml`.
+Current version: 0.4.0
 
 ## Development Philosophy (MANDATORY)
 
@@ -41,121 +41,139 @@ Test hierarchy:
 
 Every feature, fix, or change MUST work identically on Windows, macOS, Linux.
 
-- Use Tauri abstractions, not OS-specific hacks
-- If `#[cfg(target_os = ...)]` is unavoidable, ALL platforms must have equivalent impl
+- Each platform has its own native UI — ensure feature parity across all three
+- If `#[cfg(target_os = ...)]` is unavoidable in the Rust core, ALL platforms must have equivalent impl
 - Never ship a feature that works on one OS but silently fails on another
 
 ## Version Bumping (MANDATORY)
 
-ALWAYS update BOTH files in the same commit:
-- `src-tauri/Cargo.toml` → `version = "x.y.z"`
-- `src-tauri/tauri.conf.json` → `"version": "x.y.z"`
-
-CI enforces consistency — mismatch fails Lint.
+Update version in `core/Cargo.toml` → `version = "x.y.z"`.
 
 After commit: `git tag v0.3.X && git push origin v0.3.X` to trigger Release.
 
 ## CI/CD Pipeline
 
 ### Workflows
-- **ci.yml** — Runs on push/PR to main/staging: `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test --lib`, version match check
-- **staging-release.yml** — Runs on push to staging: lint + test + build all platforms, creates pre-release `staging-latest`
-- **release.yml** — Runs on tag push (`v*`): builds Windows (NSIS+MSI), macOS (DMG, universal), Linux (AppImage+deb). Publishes GitHub Release with auto-updater JSON.
+- **ci.yml** — Runs on push/PR to main/staging: `cargo fmt --check`, `cargo clippy --features local-stt -- -D warnings`, `cargo test --lib --features local-stt`, Linux GTK4 lint
+- **staging-native.yml** — Builds all 3 native UIs in parallel:
+  - Windows: Rust DLL (`--features local-stt-vulkan`) + .NET build + C# tests + zip
+  - macOS: Rust static lib (`--features local-stt-metal`) + Xcode build + DMG
+  - Linux: cargo build + clippy + AppImage (default feature `local-stt` = CPU)
+- **release.yml** — Runs on tag push (`v*`): builds all 3 native platforms. Publishes GitHub Release.
+
+### Build Requirements
+- **CMake** required on all platforms (whisper-rs compiles whisper.cpp from source)
+- macOS: `brew install cmake` or Xcode CLI tools
+- Windows: `choco install cmake` or via get-cmake GitHub Action
+- Linux CI: `sudo apt-get install cmake`
 
 ### Release Process
 1. Commit changes to `main` (or merge feature branch)
-2. Bump version in BOTH files, commit
-3. Push to origin
-4. `git tag v0.3.X && git push origin v0.3.X`
-5. Wait for release workflow to complete (~15 min)
-6. Users get auto-update notification
+2. Bump version in `core/Cargo.toml`, commit
+3. Update `CHANGELOG.md` — move [Unreleased] to new version
+4. Push to origin
+5. `git tag v0.4.X && git push origin v0.4.X`
+6. Wait for release workflow to complete (~15 min)
+7. Users get auto-update notification
 
 ### Pre-Push Checklist (MANDATORY — run ALL before every push)
 - `cargo fmt --check` — clean
-- `cargo clippy -- -D warnings` — zero warnings (CI treats warnings as errors!)
-- `cargo test --lib` — all pass
-- Version matches in Cargo.toml and tauri.conf.json
+- `cargo clippy --features local-stt -- -D warnings` — zero warnings (CI treats warnings as errors!)
+- `cargo test --lib --features local-stt` — all pass
+- Version updated in `core/Cargo.toml`
+- `CHANGELOG.md` updated if releasing
 - Feature branch merged (if applicable)
+- Native UI builds are CI-only (platform-specific) — no local pre-push requirement
 
-## Native UI Migration (in progress)
+## Native UI Architecture
 
-Branch `feat/native-ui`: replacing WebView with native UIs per platform.
+Shared Rust core with platform-native UIs connected via C FFI.
 
-### Phase order
-1. **Phase 0** — Rust C FFI layer (`ffi.rs`) — COMPILES but NOT TESTED (TDD violation!)
-2. **Phase 1** — Windows native (WinUI3/C#) — settings avanzati behind "Advanced" checkbox
-3. **Phase 2** — macOS native (SwiftUI from mockup in `mockup/dimmy-new/`)
-4. **Phase 3** — Linux native (GTK4)
+### Phase status
+1. **Phase 0** — Rust C FFI layer (`ffi.rs`) — **COMPLETE** (30+ functions, 246 tests)
+2. **Phase 1** — Windows WinUI3/C# — **IMPLEMENTED** (41 C# tests, local STT toggle, model download)
+3. **Phase 2** — macOS SwiftUI — **IMPLEMENTED** (STT settings, model download, history view, onboarding)
+4. **Phase 3** — Linux GTK4/Rust — **IMPLEMENTED** (builds on CI, AppImage available)
 
-### FFI layer status
-- `ffi.rs` exports 20 C functions, uses global `OnceLock<AppState>`
-- **MUST add tests + assertions before proceeding to Phase 1**
-- See memory file `phase0_ffi_status.md` for full checklist
-- Gap analysis between WebView and SwiftUI mockup in memory `native_ui_plan.md`
+### FFI layer
+- `ffi.rs` exports 30+ C functions, uses global `OnceLock<AppState>`
+- Original 18 functions + 10 new (model management + history)
+- See `docs/dev/native-ui-plan.md` for gap analysis between platform UIs
 
 ## Architecture Quick Reference
 
 ```
-Native UIs (future)       → SwiftUI (macOS) / WinUI3 (Win) / GTK4 (Linux)
-                          ↕ C FFI (ffi.rs)
-Frontend (src/)           → index.html + main.js + styles.css (vanilla JS, Tauri WebView — current)
-                          ↕ Tauri IPC (invoke/listen)
-Backend (src-tauri/src/)  → lib.rs (state + commands)
-                            ffi.rs (C API for native UIs — 20 exported functions)
-                            audio.rs (cpal capture, RawAudio → ProcessedAudio → WavPayload)
-                            preprocess.rs (highpass → VAD → AGC → downsample)
-                            transcribe.rs (multi-provider STT + chunked transcription)
-                            llm.rs (multi-provider LLM post-processing)
-                            provider.rs (Provider enum, URL detection, file limits, security)
-                            error.rs (TranscribeError enum)
-                            hotkey.rs (global keyboard hook per-platform)
+Rust Core (core/src/)            → lib.rs, audio.rs, preprocess.rs, transcribe.rs, llm.rs,
+                                  provider.rs, keystore.rs, error.rs, hotkey.rs,
+                                  local_stt.rs, history.rs, filler.rs
+                                ↕ C FFI (ffi.rs — 30+ exported functions)
+Windows UI (platforms/windows/) → WinUI 3 / C# (.NET 8), P/Invoke to dimmy_lib.dll
+macOS UI (platforms/macos/)     → SwiftUI, FFI bridge via DimmyFFI.h to libdimmy_lib.a
+Linux UI (platforms/linux/)     → GTK4 + libadwaita (Rust), direct crate dependency on dimmy_lib
 ```
+
+### Cargo Feature Flags
+- `local-stt` (default) — enables whisper-rs for local offline transcription
+- `local-stt-metal` — macOS GPU acceleration (Apple Silicon Neural Engine)
+- `local-stt-vulkan` — Windows/Linux cross-vendor GPU acceleration
+- `local-stt-cuda` — NVIDIA GPU acceleration
 
 ## Audio Pipeline — CRITICAL
 
-See memory file `audio_pipeline.md` for full details. Key rules:
+See `docs/dev/audio-pipeline.md` for full details. Key rules:
 
 - **NEVER feed zero-amplitude samples to dagc (AGC)**. It produces ALL NaN permanently.
 - VAD grace period must NOT emit silence frames — only delay `in_speech→false` transition.
 - All audio output must be checked for NaN/Inf and clamped.
 - `process_buffer()` calls `process()` ONCE with all samples — this means the entire recording goes through a single VAD→AGC pass.
 
-## Window Transparency — CRITICAL (tao#1171 workaround)
-
-`transparent: true` is **disabled** in `tauri.conf.json` to work around a crash on macOS 26 (Tahoe). The tao library panics in `did_finish_launching` when transparent windows are requested on macOS 26+ (see [tao#1171](https://github.com/tauri-apps/tao/issues/1171)).
-
-**How transparency works now:**
-- `tauri.conf.json`: `transparent: false`, `visible: false`
-- All transparency is configured manually in `.setup()` callback:
-  - `window.set_background_color(Color(0,0,0,0))` — makes WebView transparent (all platforms)
-  - macOS: Objective-C FFI sets `setOpaque:NO`, `setBackgroundColor:clearColor`, `setDrawsBackground:NO`, `setTitlebarAppearsTransparent:YES`
-  - Windows: `DwmEnableBlurBehindWindow` (replaces what tao did), `WS_POPUP`, `WS_EX_LAYERED`, DWM no-round-corners, DWM no-border
-- After transparency setup + positioning, `window.show()` reveals the window
-
-**DO NOT re-enable `transparent: true`** until tao fixes the macOS 26 crash upstream.
-
-**macOS build notes:**
-- Builds require Xcode + Command Line Tools
-- `Info.plist` provides `NSMicrophoneUsageDescription` for mic permission
-- `Entitlements.plist` provides `com.apple.security.device.audio-input` + JIT entitlements
-- Build: `cargo tauri build --target universal-apple-darwin` (universal binary for Intel+ARM)
-- Dev: `cargo tauri dev`
-- The GitHub Actions release workflow (`release.yml`) builds macOS DMG as universal binary
-
 ## Known Bugs & Lessons Learned
 
-See memory file `known_bugs.md` for the full registry. Check it before touching:
+See `docs/dev/known-bugs.md` for the full registry. Check it before touching:
 - Audio preprocessing (preprocess.rs)
-- macOS FFI (hotkey.rs, lib.rs window setup)
-- Windows transparency (lib.rs window setup)
+- macOS FFI (hotkey.rs)
+- Platform-specific native UI code
 
 ## Provider System
 
-- Provider enum in `provider.rs`: Groq, OpenAI, OpenRouter, Gemini, Deepgram, Anthropic, Custom
-- Auto-detected from URL (`from_url()`)
-- Each provider has `max_file_bytes()` for chunking decisions
-- STT routing in `transcribe.rs`: OpenAI-compatible (multipart), Deepgram (raw body), Gemini (base64 JSON)
+- Provider enum in `provider.rs`: Groq, OpenAI, OpenRouter, Gemini, Deepgram, Anthropic, Custom, **Local**
+- Cloud providers auto-detected from URL (`from_url()`); Local is set explicitly via `stt_mode` config
+- Each provider has `max_file_bytes()` for chunking decisions (Local = `usize::MAX`)
+- STT routing in `transcribe.rs`: OpenAI-compatible (multipart), Deepgram (raw body), Gemini (base64 JSON), **Local (whisper-rs direct)**
 - LLM routing in `llm.rs`: OpenAI-compatible (chat completions), Anthropic (Messages API)
+- `stt_mode` config field: `"cloud"` (default for upgrades) or `"local"` (offline, no API key needed)
+
+## Local STT (whisper-rs)
+
+- Offline transcription via whisper.cpp, gated behind `local-stt` Cargo feature
+- Models: GGML format, downloaded on demand from HuggingFace to `dirs::data_dir()/dimmy/models/`
+- Default model: `ggml-base-q8_0.bin` (78 MB)
+- Available: Tiny (42 MB), Base (78 MB), Small (181 MB), Medium (514 MB)
+- GPU acceleration: Metal on macOS (Apple Silicon), Vulkan on Windows (all GPUs)
+- Input: f32 16kHz mono samples from existing audio pipeline (ProcessedAudio → downsample → whisper)
+- FFI functions: `dimmy_list_local_models`, `dimmy_download_model`, `dimmy_model_exists`
+
+## Transcription History
+
+- SQLite database with FTS5 full-text search (`history.rs`)
+- DB file: `~/.config/dimmy/history.db` (macOS/Linux) or `%APPDATA%\dimmy\history.db` (Windows)
+- Auto-saves after each successful transcription
+- FFI functions: `dimmy_history_save`, `dimmy_history_recent`, `dimmy_history_search`, `dimmy_history_delete`, `dimmy_history_stats`
+
+## Filler Removal
+
+- Post-transcription cleanup of speech disfluencies (`filler.rs`)
+- 6 languages: Italian, English, Spanish, French, German, Portuguese
+- Regex-based with word boundary matching, case insensitive
+- Applied to both local and cloud transcriptions when `filler_removal_enabled: true`
+
+## API Key Storage
+
+- **Always uses local AES-256 encrypted file** (`~/.config/dimmy/keys.enc`)
+- Key derived from SHA-256(username + hostname + salt), machine-specific
+- No OS popups, no admin needed on any platform
+- OS keyring (macOS Keychain, Windows Credential Manager) kept as read-only fallback for migration
+- The `use_keyring` config field is forced to `false` — toggle removed from all platform UIs
 
 ## Conventions
 

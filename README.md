@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="src-tauri/icons/icon.png" width="128" alt="Dimmy">
+  <img src="docs/screenshots/icon.png" width="128" alt="Dimmy">
 </p>
 
 <h1 align="center">Dimmy</h1>
 
 <p align="center">
-  Cross-platform voice transcription overlay. Speak anywhere, text appears everywhere.
+  Speak instead of typing — up to 3x faster. Native voice dictation for Windows, macOS, and Linux.
 </p>
 
 <p align="center">
@@ -15,68 +15,98 @@
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-6366f1" alt="Platform">
 </p>
 
+<p align="center">
+  <a href="https://dimmy.app">dimmy.app</a>
+</p>
+
 ---
 
-Dimmy sits as a tiny always-on-top pill on your screen. Press a keyboard shortcut, speak, and the transcribed text is automatically pasted into whatever app has focus. Optionally enhance with AI post-processing (grammar correction, summarization, tone adjustment).
+## What is Dimmy?
 
-## Features
+The name is pronounced like "Dimi" — short for *dimmi*, Italian for "tell me".
 
+Dimmy is a cross-platform desktop app that turns your voice into text — instantly, in any application. It runs as a tiny overlay on your screen. Press a hotkey, speak, and your words are transcribed and pasted into whatever has focus: editors, browsers, chat apps, terminals.
+
+Built with **native UIs** for each platform — no Electron, no WebView. A shared Rust core handles all the heavy lifting (audio capture, transcription, AI post-processing), while each platform gets its own native frontend that feels right at home.
+
+### Key Features
+
+- **Local offline transcription** — powered by whisper.cpp, runs entirely on your device. No API keys, no internet, no data leaving your Mac/PC
 - **Universal dictation** — works with any application via clipboard paste
-- **Always-on-top overlay** — minimal pill UI with waveform visualization
-- **Streaming transcription** — real-time chunks via OpenAI-compatible APIs
-- **Realtime preview** — optionally send chunks while recording, or wait for final result
-- **AI enhancement** — post-process with LLM (correct, summarize, elaborate, 13 styles total)
-- **Multiple providers** — Groq, OpenAI, Deepgram, Gemini, Anthropic, or any custom endpoint
-- **Anti-hallucination guard** — skips audio chunks with less than 0.5s of speech
-- **Per-provider API keys** — encrypted locally by default, optional OS keyring, switch without re-entering
-- **Audio preprocessing** — noise filtering + normalization for cleaner input
-- **Configurable shortcut** — toggle or hold mode, any 2-modifier combo
+- **Native on every platform** — WinUI 3 on Windows, SwiftUI on macOS, GTK4 on Linux
+- **Always-on-top pill overlay** — compact UI with live waveform visualization
+- **Cloud STT providers** — Groq (fastest), OpenAI, Deepgram, Gemini, or any custom endpoint (optional)
+- **AI enhancement** — 13 post-processing styles: correct grammar, summarize, rewrite professionally, and more
+- **Filler word removal** — automatically removes "um", "basically", "cioè", etc. in 6 languages
+- **Transcription history** — searchable archive of all your transcriptions with full-text search
+- **Privacy-first** — no telemetry, no cloud accounts, all data local, API keys encrypted on device (AES-256)
 - **Multilingual** — auto-detect or select from 12+ languages
-- **Privacy-first** — no telemetry, all data local, keys encrypted on device
-- **Auto-update** — built-in update checker with one-click install
-
-## Screenshots
-
-<p align="center">
-  <img src="docs/screenshots/dimmy-pill-states.png" alt="Dimmy pill states" width="560">
-</p>
-
-<details>
-<summary><strong>Settings panel</strong></summary>
-
-<p align="center">
-  <img src="docs/screenshots/dimmy-settings-transcription.png" alt="Transcription" width="220">
-  <img src="docs/screenshots/dimmy-settings-ai.png" alt="AI Enhancement" width="220">
-  <img src="docs/screenshots/dimmy-settings-activation.png" alt="Activation" width="220">
-</p>
-<p align="center">
-  <img src="docs/screenshots/dimmy-settings-audio.png" alt="Audio" width="220">
-  <img src="docs/screenshots/dimmy-settings-appearance.png" alt="Appearance" width="220">
-  <img src="docs/screenshots/dimmy-settings-stats.png" alt="Stats" width="220">
-</p>
-
-</details>
+- **Configurable shortcut** — toggle or hold-to-record mode, any modifier combo
+- **Update notifications** — checks GitHub for new releases from Settings > About
 
 ## Download
 
-Get the latest release for your platform:
+**[Get the latest release](https://github.com/KonradDallaOrg/dimmy/releases/latest)**
 
-**[Download Dimmy](https://github.com/KonradDallaOrg/dimmy/releases/latest)** — Windows (.msi), macOS (.dmg), Linux (.deb, .AppImage)
+| Platform | File | Requirements |
+|----------|------|--------------|
+| Windows | `Dimmy-windows-x64.zip` | [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) |
+| macOS | `Dimmy-macos-arm64.dmg` | macOS 12+, Apple Silicon |
+| Linux | `Dimmy-linux-x86_64.AppImage` | None (GTK4 bundled) |
+
+<details>
+<summary><strong>Installation notes</strong></summary>
+
+**Windows:** Extract the zip, run `Dimmy.Windows.exe`. Install .NET 8 Desktop Runtime if prompted.
+
+**macOS:** Open the DMG, drag Dimmy to Applications. First launch requires right-click > Open, or:
+```bash
+xattr -d com.apple.quarantine /Applications/Dimmy.app
+```
+
+**Linux:** Make the AppImage executable and run:
+```bash
+chmod +x Dimmy-linux-x86_64.AppImage
+./Dimmy-linux-x86_64.AppImage
+```
+
+</details>
 
 ## Quick Start
 
-1. Launch Dimmy — a small green dot appears in the corner of your screen
-2. Open Settings (click the gear icon or right-click the pill)
-3. Enter an API key for transcription (see [Get an API Key](#get-an-api-key) below)
-4. Press **Win+Alt** (default) to start recording
-5. Speak naturally
-6. Press **Win+Alt** again to stop — text is transcribed and pasted into the active app
+1. Launch Dimmy — a small pill appears on your screen
+2. The onboarding wizard guides you through permissions and model download (~78 MB)
+3. Press **Win+Alt** (default) to start recording
+4. Speak naturally, then press again to stop
+5. Text is transcribed locally and pasted into the active app
 
-## Settings Guide
+> **No API key needed for local mode.** For cloud providers (faster, more accurate on long audio), add an API key in Settings → General → Cloud mode. See [STT Providers](#stt-providers).
 
-### Get an API Key
+## The Pill
 
-Dimmy needs an API key for speech-to-text transcription. Choose a provider:
+Dimmy lives as a tiny overlay on your screen — the "pill". It changes shape and color to show what's happening:
+
+<p align="center">
+  <img src="docs/screenshots/pill-states.png" alt="Dimmy pill — all states, waveform styles, border colors, LLM style indicators" width="560">
+</p>
+
+## Settings
+
+Right-click the pill or tray icon to open Settings. Each platform has its own native settings window with tabs for:
+
+- **General** — STT mode (Local/Cloud), language, filler removal toggle
+- **Models** — download and select Whisper models for local transcription
+- **Shortcut** — record hotkey configuration, toggle/hold mode
+- **Output** — LLM post-processing style, tone, translation, custom prompts
+- **Overlay** — pill position, waveform style, border colors
+- **History** — searchable transcript archive with stats
+- **Permissions** — microphone and accessibility status (macOS)
+- **Stats** — transcription count, time saved, words dictated
+- **About** — version, update check, links
+
+## STT Providers
+
+**By default, Dimmy transcribes locally** using whisper.cpp — no API key needed, no internet required. For cloud providers (optional, can be faster on long audio):
 
 | Provider | Type | Models | Free Tier | Get Key |
 |----------|------|--------|-----------|---------|
@@ -87,58 +117,7 @@ Dimmy needs an API key for speech-to-text transcription. Choose a provider:
 | **Anthropic** | LLM only | Claude Haiku 4.5, Claude Sonnet 4 | No | [console.anthropic.com/keys](https://console.anthropic.com/settings/keys) |
 | **OpenRouter** | LLM only | Llama 3.3 70B, DeepSeek R1 | Yes (free models) | [openrouter.ai/keys](https://openrouter.ai/keys) |
 
-Paste your key in Settings → **API Key**. Keys are encrypted locally on your device by default (AES-256) — no OS permission popups required. For extra security, enable **OS secure storage** (Keychain / Credential Manager) in Settings → Appearance. You can also use any **custom endpoint** compatible with the OpenAI API format.
-
-### Transcription Settings
-
-| Setting | Description |
-|---------|-------------|
-| **API URL** | Provider endpoint. Pre-filled for Groq/OpenAI, or enter a custom URL |
-| **Model** | Whisper model to use (e.g. `whisper-large-v3-turbo` for Groq) |
-| **Language** | Select a language or leave on "Auto-detect" for multilingual use (Deepgram auto-detects natively) |
-| **Audio Device** | Choose which microphone to use |
-| **Prompt** | Whisper prompt for vocabulary hints (e.g. proper nouns, acronyms) |
-| **Preprocessing** | Toggle noise filtering and voice activity detection (recommended on) |
-| **Realtime Preview** | Send audio chunks while recording for live preview, or wait for final result |
-
-### Shortcut Settings
-
-| Setting | Description |
-|---------|-------------|
-| **Mode: Toggle** (default) | Press once to start, press again to stop |
-| **Mode: Hold** | Hold to record, release to stop |
-| **Custom shortcut** | Click "Record new shortcut" and press any 2-modifier combo (e.g. Ctrl+Shift, Win+Alt) optionally with a regular key |
-
-### AI Enhancement (LLM Post-Processing)
-
-Enable in Settings to send transcriptions through an LLM for cleanup or transformation. Requires a separate LLM API key (or check "Use same key" if your transcription provider also offers chat completions).
-
-| Setting | Description |
-|---------|-------------|
-| **LLM API URL** | Endpoint for chat completions (Groq, OpenAI, Gemini, Anthropic, or custom) |
-| **LLM API Key** | Separate key for the LLM provider, or "Use same key as transcription" |
-| **LLM Model** | Chat model to use (e.g. `llama-3.3-70b-versatile` for Groq) |
-| **Style** | What the LLM does — scroll wheel on the pill to cycle |
-| **Tone** | How it writes — Ctrl+scroll to cycle |
-| **LLM Logging** | Save LLM input/output to `~/.dimmy/llm-log/` for debugging |
-
-**Styles:**
-
-| Style | Effect |
-|-------|--------|
-| Off | No LLM processing |
-| Correct | Fix grammar and filler words |
-| Summarize | Condense key points |
-| Elaborate | Expand with detail |
-| Comprehensible | Rewrite clearly |
-| Professional | Business tone |
-| Prompt | Reshape as LLM prompt |
-| Gen-Z | Gen-Z slang rewrite |
-| Boomer | Old-school formal rewrite |
-| Emoji | Heavy emoji insertion |
-| Acronyms | Replace phrases with abbreviations |
-| Imbruttito | Milanese grumpy rewrite |
-| Custom | Your own system prompt |
+Keys are encrypted locally on your device (AES-256) — no OS popups or admin access required. You can also use any **custom endpoint** compatible with the OpenAI API format.
 
 <details>
 <summary><strong>STT Provider Benchmarks</strong></summary>
@@ -176,76 +155,258 @@ Benchmarked on real audio files (LibriVox, public domain). Match% = word overlap
 
 </details>
 
-## Auto-Update
+## LLM Post-Processing
 
-Dimmy checks for updates automatically when you open Settings. The version number and update status appear at the bottom of the settings panel:
+Enable in Settings to send transcriptions through an LLM for cleanup or transformation. Requires a separate LLM API key (or check "Use same key" if your provider also offers chat completions).
 
-- **"Up to date"** — you're on the latest version
-- **"Update vX.Y.Z available"** — click to download and install, then restart the app
+| Style | Effect |
+|-------|--------|
+| Off | No LLM processing |
+| Correct | Fix grammar and filler words |
+| Summarize | Condense key points |
+| Elaborate | Expand with detail |
+| Comprehensible | Rewrite clearly |
+| Professional | Business tone |
+| Prompt | Reshape as LLM prompt |
+| Gen-Z | Gen-Z slang rewrite |
+| Boomer | Old-school formal rewrite |
+| Emoji | Heavy emoji insertion |
+| Acronyms | Replace phrases with abbreviations |
+| Imbruttito | Milanese grumpy rewrite |
+| Custom | Your own system prompt |
 
-## Build from Source
+Scroll wheel on the pill to cycle styles. Ctrl+scroll to cycle tone.
+
+## Architecture
+
+```mermaid
+graph TD
+    subgraph Native UIs
+        WIN["Windows (WinUI3/C#)"]
+        MAC["macOS (SwiftUI)"]
+        LIN["Linux (GTK4/Rust)"]
+    end
+
+    subgraph Rust Core
+        FFI["ffi.rs — 30+ C functions"]
+        AUDIO["audio.rs → preprocess.rs"]
+        LOCAL["local_stt.rs<br/>whisper.cpp via whisper-rs"]
+        CLOUD["transcribe.rs<br/>Cloud STT APIs"]
+        FILLER["filler.rs<br/>6-language cleanup"]
+        LLM["llm.rs<br/>Post-processing"]
+        HIST["history.rs<br/>SQLite + FTS5"]
+        KEY["keystore.rs<br/>AES-256 encrypted"]
+    end
+
+    subgraph External
+        MIC["OS Audio (cpal)"]
+        WHISPER["Whisper GGML Models"]
+        PROVIDERS["Cloud: Groq / OpenAI /<br/>Deepgram / Gemini"]
+    end
+
+    WIN -->|P/Invoke| FFI
+    MAC -->|C FFI| FFI
+    LIN -->|Rust crate| FFI
+
+    FFI --> AUDIO
+    AUDIO -->|"stt_mode=local"| LOCAL
+    AUDIO -->|"stt_mode=cloud"| CLOUD
+    LOCAL --> FILLER
+    CLOUD --> FILLER
+    FILLER --> LLM
+    LLM --> HIST
+    HIST -->|auto-save| FFI
+
+    MIC --> AUDIO
+    WHISPER --> LOCAL
+    PROVIDERS --> CLOUD
+    KEY --> FFI
+```
+
+The shared core (`core/src/`) handles all business logic: audio capture, preprocessing (VAD + AGC), local or cloud transcription, filler removal, optional LLM post-processing, history storage, and secure key management. Windows and macOS call it through C FFI exports. Linux links directly as a Rust crate.
+
+**Test coverage:** 246 Rust core tests + 41 C# Windows tests = **287+ total tests**.
+
+## Contributing
 
 ### Prerequisites
 
+All platforms need:
 - [Rust](https://rustup.rs/) (latest stable)
-- [Tauri CLI](https://tauri.app/): `cargo install tauri-cli --version '^2'`
+- [Git](https://git-scm.com/)
+- [CMake](https://cmake.org/) (required by whisper-rs to compile whisper.cpp)
 
-**Linux:**
+### Clone & verify
+
 ```bash
-sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libxdo-dev
+git clone https://github.com/KonradDallaOrg/dimmy.git
+cd dimmy
+
+# Verify the Rust core builds and passes tests
+cd core
+cargo test --lib --features local-stt
+cargo clippy --features local-stt -- -D warnings
+cd ..
 ```
 
-**macOS:**
+### Windows
+
+**Additional requirements:**
+- [Visual Studio 2022+](https://visualstudio.microsoft.com/) with:
+  - .NET Desktop Development workload
+  - Windows App SDK / WinUI 3
+- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+
 ```bash
+# 1. Build the Rust DLL
+cd core
+cargo build --release --lib --target x86_64-pc-windows-msvc
+cd ..
+
+# 2. Build the Windows app
+cd platforms/windows/Dimmy.Windows
+dotnet restore
+dotnet build -c Release
+cd ..
+
+# 3. Copy Rust DLL to output
+copy ..\..\core\target\x86_64-pc-windows-msvc\release\dimmy_lib.dll Dimmy.Windows\bin\Release\net8.0-windows10.0.19041.0\
+
+# 4. Run tests
+cd Dimmy.Windows.Tests
+dotnet test -c Release
+```
+
+Or use the build script: `powershell -File build-windows.ps1`
+
+### macOS
+
+**Additional requirements:**
+- Xcode 15+ with Command Line Tools
+
+```bash
+# 1. Install Xcode CLI tools
 xcode-select --install
+
+# 2. Build the Rust static library (Apple Silicon)
+cd core
+cargo build --release --lib --target aarch64-apple-darwin
+cd ..
+
+# 3. Remove dylib so Xcode links statically
+rm -f core/target/aarch64-apple-darwin/release/libdimmy_lib.dylib
+
+# 4. Open and build in Xcode
+open platforms/macos/Dimmy.xcodeproj
+# Build with Cmd+B, Run with Cmd+R
 ```
 
-**Windows:** Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the C++ workload.
+### Linux
 
-### Build
+**Additional requirements:**
+- GTK4 and libadwaita development libraries
+- pkg-config
 
 ```bash
-cd src-tauri
-cargo tauri build
+# Ubuntu/Debian 24.04+
+sudo apt install libgtk-4-dev libadwaita-1-dev libasound2-dev libxdo-dev \
+  libdbus-1-dev pkg-config
+
+# Fedora
+sudo dnf install gtk4-devel libadwaita-devel alsa-lib-devel libxdo-devel \
+  dbus-devel
+
+# Arch
+sudo pacman -S gtk4 libadwaita alsa-lib xdotool dbus
+
+# Build and run
+cd platforms/linux
+cargo build --release
+./target/release/dimmy-linux
 ```
 
-> **Note:** `cargo tauri build` requires a signing key for the auto-updater. If you get an error about `TAURI_SIGNING_PRIVATE_KEY`, generate a local key:
-> ```bash
-> cargo tauri signer generate -w ~/.tauri/dimmy.key
-> export TAURI_SIGNING_PRIVATE_KEY=$(cat ~/.tauri/dimmy.key)
-> cargo tauri build
-> ```
-> This is only needed for release builds. For development, use `cargo tauri dev` instead (no key required).
-
-## Development
+### Development Workflow
 
 ```bash
-cd src-tauri
+cd core
 
-# Run in dev mode
-cargo tauri dev
-
-# Run tests
-cargo test
+# Run Rust core tests
+cargo test --lib
 
 # Format
 cargo fmt
 
-# Lint
+# Lint (CI enforces zero warnings)
 cargo clippy -- -D warnings
+
+# Lint the Linux UI (requires GTK4 dev libs)
+cd ../platforms/linux
+cargo clippy -- -D warnings
+cargo test
 ```
+
+### Pre-push checklist
+
+- `cargo fmt --check` in `core/` — clean
+- `cargo clippy -- -D warnings` in `core/` — zero warnings
+- `cargo test --lib` in `core/` — all pass
+- Version updated in `core/Cargo.toml`
+
+### CI/CD
+
+| Workflow | Trigger | What it does |
+|----------|---------|-------------|
+| `ci.yml` | Push/PR to main or staging | Lint + test Rust core, lint Linux GTK4 crate |
+| `staging-native.yml` | Push to staging | Build all 3 platforms, create pre-release |
+| `release.yml` | Tag push (`v*`) | Build all 3 platforms, publish GitHub Release |
+
+### Project Structure
+
+```
+core/src/               Shared Rust core
+├── audio.rs            Audio capture via cpal
+├── preprocess.rs       VAD, AGC, noise filter, downsampling
+├── transcribe.rs       Cloud STT routing + local STT bridge
+├── local_stt.rs        whisper-rs integration + model download
+├── history.rs          SQLite + FTS5 transcript history
+├── filler.rs           Filler word removal (6 languages)
+├── llm.rs              LLM post-processing (13 styles, 5 tones)
+├── provider.rs         Provider enum + URL validation
+├── keystore.rs         AES-256 encrypted key storage
+├── ffi.rs              C FFI layer (30+ exported functions)
+├── hotkey.rs           Platform-specific global hotkey
+├── error.rs            Typed error hierarchy
+└── lib.rs              Config, state, module exports
+
+platforms/windows/      WinUI 3 / C# (.NET 8) — P/Invoke to dimmy_lib.dll
+platforms/macos/        SwiftUI — FFI bridge via DimmyFFI.h to libdimmy_lib.a
+platforms/linux/        GTK4 + libadwaita (Rust) — direct crate dependency
+docs/dev/               Development docs (audio pipeline, known bugs, practices)
+.github/workflows/      CI/CD pipeline definitions
+CHANGELOG.md            Release changelog (Keep a Changelog format)
+BACKLOG.md              Feature backlog (MoSCoW prioritization)
+```
+
+## Development Philosophy
+
+Dimmy follows **Negative Space Programming**: every function asserts its preconditions and postconditions in production code. Assertions run in release builds — the absence of a crash is the proof of correctness. Combined with TDD (write failing tests before implementation) and strict defensive coding (clamp audio, check for NaN, truncate errors, validate URLs), this keeps the app stable for daily use.
+
+Full development guidelines are in the project's `CLAUDE.md`, which also serves as the AI-assisted development playbook for contributors using Claude Code or similar tools.
 
 ## Tech Stack
 
 | Layer | Technology |
 |-------|-----------|
-| Framework | Tauri v2 |
-| Backend | Rust |
-| Frontend | Vanilla HTML/JS/CSS |
-| Audio | cpal |
-| Noise filter | nnnoiseless + biquad |
-| Secure storage | AES-256 local (default) + keyring (opt-in) |
+| Core | Rust (stable) |
+| Windows UI | WinUI 3 / C# / .NET 8 |
+| macOS UI | SwiftUI |
+| Linux UI | GTK4 + libadwaita / Rust |
+| Audio capture | cpal |
+| Noise filter | nnnoiseless + biquad highpass |
+| AGC | dagc (with NaN safety guards) |
+| Secure storage | AES-256 local (default) + OS keyring (opt-in) |
 | HTTP | reqwest |
+| CI/CD | GitHub Actions |
 
 ## Support
 

@@ -83,10 +83,18 @@ The principle: prove correctness by the ABSENCE of crashes. Every function asser
 ## Pre-Push Checklist
 
 ```bash
-cd src-tauri
+cd core
 cargo fmt --check
 cargo clippy -- -D warnings
 cargo test --lib
 ```
 
 CI treats ALL clippy warnings as errors. Always run this before pushing.
+
+### Native UI Tests (platform-specific)
+
+Native UI builds are platform-specific; CI handles cross-platform builds automatically. To run tests locally on your platform:
+
+- **Windows**: `dotnet test` in `platforms/windows/`
+- **macOS**: `xcodebuild test` in `platforms/macos/`
+- **Linux**: `cargo test` in `platforms/linux/`

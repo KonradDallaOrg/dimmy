@@ -2,13 +2,13 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, staging]
   pull_request:
     branches: [main, staging]
 
 jobs:
   lint:
-    name: Lint
+    name: Lint (Rust Core)
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -21,41 +21,23 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: core
 
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            libasound2-dev \
-            libxdo-dev
-
-      - name: Version consistency
-        working-directory: src-tauri
-        run: |
-          CARGO_VER=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
-          TAURI_VER=$(grep '"version"' tauri.conf.json | head -1 | sed 's/.*"\([0-9][^"]*\)".*/\1/')
-          echo "Cargo.toml: $CARGO_VER"
-          echo "tauri.conf.json: $TAURI_VER"
-          if [ "$CARGO_VER" != "$TAURI_VER" ]; then
-            echo "::error::Version mismatch: Cargo.toml=$CARGO_VER vs tauri.conf.json=$TAURI_VER"
-            exit 1
-          fi
+          sudo apt-get install -y libasound2-dev libxdo-dev libdbus-1-dev libssl-dev cmake
 
       - name: Format
-        working-directory: src-tauri
+        working-directory: core
         run: cargo fmt --check
 
       - name: Clippy
-        working-directory: src-tauri
-        run: cargo clippy -- -D warnings
+        working-directory: core
+        run: cargo clippy --features local-stt -- -D warnings
 
   test:
-    name: Test
+    name: Test (Rust Core)
     runs-on: ubuntu-22.04
     needs: lint
     steps:
@@ -67,19 +49,48 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: core
 
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            libasound2-dev \
-            libxdo-dev
+          sudo apt-get install -y libasound2-dev libxdo-dev libdbus-1-dev libssl-dev cmake
 
       - name: Run tests
-        working-directory: src-tauri
+        working-directory: core
+        run: cargo test --lib --features local-stt
+
+  lint-linux:
+    name: Lint (Linux GTK4)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            platforms/linux/target
+          key: linux-gtk4-cargo-${{ hashFiles('platforms/linux/Cargo.lock') }}
+          restore-keys: linux-gtk4-cargo-
+
+      - name: Install GTK4 + libadwaita dev packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libdbus-1-dev pkg-config \
+            libasound2-dev libxdo-dev cmake
+
+      - name: Clippy
+        working-directory: platforms/linux
+        run: cargo clippy -- -D warnings
+
+      - name: Test
+        working-directory: platforms/linux
         run: cargo test

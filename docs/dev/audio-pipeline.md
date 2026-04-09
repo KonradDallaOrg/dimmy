@@ -1,5 +1,7 @@
 # Audio Pipeline — Detailed Reference
 
+This audio pipeline is shared across all native UI platforms (Windows WinUI3, macOS SwiftUI, Linux GTK4). The Rust core modules are identical; only the integration layer differs per platform.
+
 ## Pipeline Overview
 
 ```
@@ -8,12 +10,23 @@ Mic (cpal, 48kHz mono) → Raw samples buffer
 RawAudio { samples, sample_rate }
     ↓ preprocess(enabled)
 ProcessedAudio { samples, sample_rate }
-    ↓ estimate_wav_size() → chunking decision
-    ↓ to_wav_payload() or split_at_silence() + to_wav_payload()
-WavPayload { data: Vec<u8> }
-    ↓ transcribe_audio() or transcribe_chunked()
-String (transcript)
+    │
+    ├── stt_mode == "local":
+    │       ↓ downsample_to_16k()
+    │       f32 16kHz mono samples
+    │       ↓ whisper-rs transcribe_local()
+    │       String (transcript)
+    │
+    └── stt_mode == "cloud":
+            ↓ estimate_wav_size() → chunking decision
+            ↓ to_wav_payload() or split_at_silence() + to_wav_payload()
+            WavPayload { data: Vec<u8> }
+            ↓ transcribe_audio() or transcribe_chunked()
+            String (transcript)
+    │
+    ↓ filler::remove_fillers() (if enabled)
     ↓ optional LLM post-processing
+    ↓ history::save() (auto-save)
 String (final text) → paste
 ```
 
