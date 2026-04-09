@@ -102,6 +102,29 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_history_stats(byte[] buf, int len);
 
+    // ── Hotkey (low-level keyboard hook via Rust) ─────────────────
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void dimmy_hotkey_install();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void dimmy_hotkey_set(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string combo);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_hotkey_take_event();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void dimmy_hotkey_start_recording();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void dimmy_hotkey_poll_recording();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_hotkey_take_recorded(byte[] buf, int len);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void dimmy_hotkey_stop_recording();
+
     // ── Utility ──────────────────────────────────────────────────────
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_has_api_key();

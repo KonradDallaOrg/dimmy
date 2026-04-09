@@ -84,8 +84,8 @@
 
               <!-- Local STT info panel (visible when local mode is selected) -->
               <StackPanel x:Name="LocalSttPanel" Spacing="8">
-                <TextBlock x:Name="LocalModelLabel" Text="Model: ggml-base-q8_0.bin"
-                           FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <ComboBox x:Name="LocalModelComboBox" Header="Model" Width="360"
+                          SelectionChanged="LocalModel_SelectionChanged" />
                 <TextBlock x:Name="LocalModelStatus" Text="Checking..."
                            FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                 <Button x:Name="DownloadModelBtn" Content="Download Model"

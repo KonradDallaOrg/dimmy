@@ -36,6 +36,8 @@ public partial class App : Application
     // PTT: set by release handler if it fires before/during recording start
     private volatile bool _pendingStop;
     private volatile bool _stopInProgress;
+    // Toggle debounce: ignore presses within 300ms of last action
+    private long _lastToggleMs;
 
     private static readonly string PttLogPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "dimmy", "ptt.log");
@@ -73,12 +75,10 @@ public partial class App : Application
         if (_hotkeyService != null)
             _hotkeyService.PttMode = settings.ShortcutMode == "hold";
 
-        // Re-register hotkey if shortcut key changed
-        if (_appViewModel.Shortcut != settings.Shortcut)
-        {
-            _appViewModel.Shortcut = settings.Shortcut;
-            _hotkeyService?.Register(_appViewModel.Shortcut);
-        }
+        // Always re-register hotkey — ReloadConfig() may have already updated
+        // _appViewModel.Shortcut, so comparing would miss the change.
+        _appViewModel.Shortcut = settings.Shortcut;
+        _hotkeyService?.Register(_appViewModel.Shortcut);
 
         if (_appViewModel.OverlayPosition != settings.OverlayPosition)
         {
@@ -217,19 +217,21 @@ public partial class App : Application
         {
             var configDir = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
             var path = Path.Combine(configDir, "dimmy", "config.json");
+            PttLog($"LoadConfig: looking for {path}, exists={File.Exists(path)}");
             if (File.Exists(path))
                 json = File.ReadAllText(path);
         }
-        catch { }
+        catch (Exception ex) { PttLog($"LoadConfig: file read error: {ex.Message}"); }
 
         // Fallback to FFI if file not found
         if (string.IsNullOrEmpty(json))
         {
+            PttLog("LoadConfig: file empty/missing, falling back to FFI");
             try { json = DimmyNative.ReadBuffer(DimmyNative.dimmy_get_config_json, 16384); }
-            catch { }
+            catch (Exception ex) { PttLog($"LoadConfig: FFI error: {ex.Message}"); }
         }
 
-        if (json == null) return;
+        if (json == null) { PttLog("LoadConfig: no config available"); return; }
 
         try
         {
@@ -255,8 +257,9 @@ public partial class App : Application
                 _appViewModel.KeepInClipboard = kc.GetBoolean();
             if (r.TryGetProperty("theme", out var pt))
                 _appViewModel.Theme = pt.GetString() ?? "Default";
+            PttLog($"LoadConfig: shortcut={_appViewModel.Shortcut}, mode={_appViewModel.ShortcutMode}");
         }
-        catch { }
+        catch (Exception ex) { PttLog($"LoadConfig: parse error: {ex.Message}"); }
     }
 
     private void OnHotkeyPressed()
@@ -303,6 +306,14 @@ public partial class App : Application
             else
             {
                 // Toggle mode: press toggles recording on/off
+                var now = Environment.TickCount64;
+                if (now - _lastToggleMs < 300)
+                {
+                    PttLog($"Toggle debounce: {now - _lastToggleMs}ms < 300ms, ignoring");
+                    return;
+                }
+                _lastToggleMs = now;
+
                 if (_appViewModel.IsRecording && !_stopInProgress)
                     await StopAndProcess();
                 else if (!_appViewModel.IsBusy && !_stopInProgress)

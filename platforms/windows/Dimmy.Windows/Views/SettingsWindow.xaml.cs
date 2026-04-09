@@ -47,6 +47,7 @@ public sealed partial class SettingsWindow : Window
         SyncLlmProviderComboBox();
         SyncLanguageComboBox();
         SyncThemeRadioButtons();
+        PopulateLocalModels();
         SyncSttMode();
         PopulateStats();
         PopulateVersion();
@@ -211,6 +212,63 @@ public sealed partial class SettingsWindow : Window
         }
     }
 
+    /// <summary>Model info parsed from FFI JSON.</summary>
+    private record LocalModelInfo(string Name, string Filename, int SizeMb, string Description, bool Downloaded);
+
+    private System.Collections.Generic.List<LocalModelInfo> _localModels = new();
+
+    private void PopulateLocalModels()
+    {
+        try
+        {
+            var json = DimmyNative.ListLocalModels();
+            if (string.IsNullOrEmpty(json)) return;
+
+            using var doc = JsonDocument.Parse(json);
+            _localModels.Clear();
+            LocalModelComboBox.Items.Clear();
+
+            int selectedIdx = 0;
+            int idx = 0;
+            foreach (var el in doc.RootElement.EnumerateArray())
+            {
+                var name = el.GetProperty("name").GetString() ?? "";
+                var filename = el.GetProperty("filename").GetString() ?? "";
+                var sizeMb = el.GetProperty("size_mb").GetInt32();
+                var desc = el.GetProperty("description").GetString() ?? "";
+                var downloaded = el.GetProperty("downloaded").GetBoolean();
+
+                _localModels.Add(new LocalModelInfo(name, filename, sizeMb, desc, downloaded));
+
+                var status = downloaded ? "Ready" : $"{sizeMb}MB";
+                var item = new ComboBoxItem
+                {
+                    Content = $"{name} — {desc} ({status})",
+                    Tag = filename
+                };
+                LocalModelComboBox.Items.Add(item);
+
+                if (filename == ViewModel.LocalModel)
+                    selectedIdx = idx;
+                idx++;
+            }
+
+            if (LocalModelComboBox.Items.Count > 0)
+                LocalModelComboBox.SelectedIndex = selectedIdx;
+        }
+        catch { }
+    }
+
+    private void LocalModel_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_loaded) return;
+        if (LocalModelComboBox.SelectedItem is ComboBoxItem item && item.Tag is string filename)
+        {
+            ViewModel.LocalModel = filename;
+            CheckModelStatus();
+        }
+    }
+
     private void SyncSttMode()
     {
         bool isLocal = ViewModel.SttMode == "local";
@@ -220,10 +278,7 @@ public sealed partial class SettingsWindow : Window
         CloudSttPanel.Visibility = isLocal ? Visibility.Collapsed : Visibility.Visible;
 
         if (isLocal)
-        {
-            LocalModelLabel.Text = $"Model: {ViewModel.LocalModel}";
             CheckModelStatus();
-        }
     }
 
     private void SttMode_Checked(object sender, RoutedEventArgs e)
@@ -237,10 +292,7 @@ public sealed partial class SettingsWindow : Window
             CloudSttPanel.Visibility = isLocal ? Visibility.Collapsed : Visibility.Visible;
 
             if (isLocal)
-            {
-                LocalModelLabel.Text = $"Model: {ViewModel.LocalModel}";
                 CheckModelStatus();
-            }
         }
     }
 
@@ -256,7 +308,10 @@ public sealed partial class SettingsWindow : Window
             }
             else
             {
-                LocalModelStatus.Text = "Not downloaded";
+                var model = _localModels.Find(m => m.Filename == ViewModel.LocalModel);
+                var sizeInfo = model != null ? $" ({model.SizeMb}MB)" : "";
+                LocalModelStatus.Text = $"Not downloaded{sizeInfo}";
+                DownloadModelBtn.Content = $"Download{sizeInfo}";
                 DownloadModelBtn.Visibility = Visibility.Visible;
             }
         }
@@ -281,6 +336,8 @@ public sealed partial class SettingsWindow : Window
             {
                 LocalModelStatus.Text = "Ready";
                 DownloadModelBtn.Visibility = Visibility.Collapsed;
+                // Refresh the ComboBox to show updated download status
+                PopulateLocalModels();
             }
             else
             {
