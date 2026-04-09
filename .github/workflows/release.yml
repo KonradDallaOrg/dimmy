@@ -122,6 +122,9 @@ jobs:
         with:
           targets: aarch64-apple-darwin
 
+      - name: Install CMake
+        run: brew install cmake
+
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
@@ -178,8 +181,19 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
-      - name: Install CMake
+      - name: Install CMake & Ninja
         uses: lukka/get-cmake@latest
+
+      - name: Install Vulkan SDK
+        uses: humbletim/setup-vulkan-sdk@v1.2.0
+        with:
+          vulkan-query-version: 1.3.290.0
+          vulkan-components: Vulkan-Headers, Vulkan-Loader
+          vulkan-use-cache: true
+
+      - name: Install LLVM (for bindgen/libclang)
+        run: choco install llvm -y --no-progress
+        shell: pwsh
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -188,6 +202,10 @@ jobs:
 
       - name: Build Rust DLL
         working-directory: core
+        shell: pwsh
+        env:
+          LIBCLANG_PATH: "C:\\Program Files\\LLVM\\bin"
+          CMAKE_GENERATOR: Ninja
         run: cargo build --lib --release --target x86_64-pc-windows-msvc --features local-stt-vulkan
 
       - name: Setup .NET
