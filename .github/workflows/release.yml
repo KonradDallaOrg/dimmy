@@ -210,6 +210,8 @@ jobs:
         env:
           LIBCLANG_PATH: "C:\\Program Files\\LLVM\\bin"
           CMAKE_GENERATOR: Ninja
+          CFLAGS: "/FS"
+          CXXFLAGS: "/FS"
         run: cargo build --lib --release --target x86_64-pc-windows-msvc --features local-stt-vulkan
 
       - name: Setup .NET
