@@ -189,13 +189,17 @@ jobs:
       - name: Install CMake & Ninja
         uses: lukka/get-cmake@latest
 
-      - name: Install build dependencies (Vulkan SDK + LLVM)
+      - name: Setup MSVC dev environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Vulkan SDK
         shell: pwsh
         run: |
-          choco install vulkan-sdk llvm -y --no-progress
-          # Verify installations
-          Write-Host "Vulkan SDK: $env:VULKAN_SDK"
-          Write-Host "LLVM: $(& 'C:\Program Files\LLVM\bin\llvm-config' --version 2>$null || 'installed')"
+          choco install vulkan-sdk -y --no-progress
+          $sdkDir = Get-ChildItem "C:\VulkanSDK" -Directory | Select-Object -First 1
+          echo "VULKAN_SDK=$($sdkDir.FullName)" >> $env:GITHUB_ENV
+          echo "$($sdkDir.FullName)\Bin" >> $env:GITHUB_PATH
+          Write-Host "Vulkan SDK: $($sdkDir.FullName)"
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -208,6 +212,7 @@ jobs:
         env:
           LIBCLANG_PATH: "C:\\Program Files\\LLVM\\bin"
           CMAKE_GENERATOR: Ninja
+          CARGO_TARGET_DIR: "D:\\t"
         run: cargo build --lib --release --target x86_64-pc-windows-msvc --features local-stt-vulkan
 
       - name: Setup .NET
@@ -233,8 +238,11 @@ jobs:
       - name: Prepare distribution
         shell: pwsh
         run: |
-          $binDir = "platforms/windows/Dimmy.Windows/bin/Release/net8.0-windows10.0.19041.0"
-          Copy-Item "core/target/x86_64-pc-windows-msvc/release/dimmy_lib.dll" "$binDir/"
+          # dotnet builds to bin\x64\Release on CI
+          $binDir = (Get-ChildItem -Path "platforms/windows/Dimmy.Windows/bin" -Recurse -Filter "Dimmy.Windows.dll" | Select-Object -First 1).DirectoryName
+          Write-Host "Found bin dir: $binDir"
+          # DLL is in short target dir (CARGO_TARGET_DIR=D:\t) to avoid path-too-long
+          Copy-Item "D:\t\x86_64-pc-windows-msvc\release\dimmy_lib.dll" "$binDir/"
           Get-ChildItem "$binDir" -Filter "*.pdb" -Recurse | Remove-Item -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path "platforms/windows/Dimmy.Windows/publish"
           Copy-Item "$binDir/*" "platforms/windows/Dimmy.Windows/publish/" -Recurse

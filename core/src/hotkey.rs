@@ -821,6 +821,7 @@ mod platform {
         user_info: *mut std::ffi::c_void,
     ) -> CGEventRef;
 
+    #[link(name = "CoreGraphics", kind = "framework")]
     extern "C" {
         fn CGEventTapCreate(
             tap: CGEventTapLocation,
@@ -831,6 +832,15 @@ mod platform {
             user_info: *mut std::ffi::c_void,
         ) -> CFMachPortRef;
 
+        fn CGEventGetIntegerValueField(event: CGEventRef, field: CGEventField) -> i64;
+
+        fn CGEventSourceFlagsState(state_id: CGEventSourceStateID) -> CGEventFlags;
+
+        fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
         fn CFMachPortCreateRunLoopSource(
             allocator: CFAllocatorRef,
             port: CFMachPortRef,
@@ -842,12 +852,6 @@ mod platform {
         fn CFRunLoopAddSource(rl: CFRunLoopRef, source: CFRunLoopSourceRef, mode: CFRunLoopMode);
 
         fn CFRunLoopRun();
-
-        fn CGEventGetIntegerValueField(event: CGEventRef, field: CGEventField) -> i64;
-
-        fn CGEventSourceFlagsState(state_id: CGEventSourceStateID) -> CGEventFlags;
-
-        fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
 
         static kCFRunLoopCommonModes: CFRunLoopMode;
     }
