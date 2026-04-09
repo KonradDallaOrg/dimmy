@@ -76,13 +76,16 @@ jobs:
             echo ""
             echo "| Platform | File | Requirements |"
             echo "|----------|------|--------------|"
-            echo "| Windows | \`Dimmy-windows-x64.zip\` | [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) |"
+            echo "| Windows (installer) | \`Dimmy-setup-x64.exe\` | [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) |"
+            echo "| Windows (portable) | \`Dimmy-windows-x64.zip\` | [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) |"
             echo "| macOS (Apple Silicon) | \`Dimmy-macos-arm64.dmg\` | macOS 12+ |"
             echo "| Linux | \`Dimmy-linux-x86_64.AppImage\` | None (GTK4 bundled) |"
             echo ""
             echo "## Installation Notes"
             echo ""
-            echo "**Windows:** Extract the zip, install .NET 8 Desktop Runtime if needed, run \`Dimmy.Windows.exe\`."
+            echo "**Windows:** Download \`Dimmy-setup-x64.exe\` and run. Or extract the portable zip. .NET 8 Desktop Runtime required."
+            echo ""
+            echo "Verify downloads with \`checksums-windows.txt\` (SHA256)."
             echo ""
             echo "**macOS:** Open the DMG, drag to Applications. First launch: right-click -> Open, or run:"
             echo "\`\`\`"
@@ -220,17 +223,42 @@ jobs:
         working-directory: platforms/windows/Dimmy.Windows.Tests
         run: dotnet test -c Release --logger "console;verbosity=normal"
 
-      - name: Package
+      - name: Package ZIP
         working-directory: platforms/windows/Dimmy.Windows
         shell: pwsh
         run: |
           Compress-Archive -Path publish\* -DestinationPath ..\Dimmy-windows-x64.zip
 
+      - name: Build NSIS installer
+        working-directory: platforms/windows
+        shell: pwsh
+        run: |
+          $version = "${{ needs.create-release.outputs.version }}"
+          choco install nsis -y --no-progress
+          & "C:\Program Files (x86)\NSIS\makensis.exe" /DAPP_VERSION=$version installer.nsi
+          Get-ChildItem Dimmy-setup-*.exe | ForEach-Object { Write-Host "Installer: $($_.Name) ($([math]::Round($_.Length/1MB, 1)) MB)" }
+
+      - name: Generate checksums
+        working-directory: platforms/windows
+        shell: pwsh
+        run: |
+          $files = @("Dimmy-windows-x64.zip") + (Get-ChildItem "Dimmy-setup-*.exe" | ForEach-Object { $_.Name })
+          $checksums = @()
+          foreach ($f in $files) {
+            $hash = (Get-FileHash $f -Algorithm SHA256).Hash.ToLower()
+            $checksums += "$hash  $f"
+            Write-Host "$hash  $f"
+          }
+          $checksums | Out-File -Encoding utf8 "checksums-windows.txt"
+
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          files: platforms/windows/Dimmy-windows-x64.zip
+          files: |
+            platforms/windows/Dimmy-windows-x64.zip
+            platforms/windows/Dimmy-setup-*-x64.exe
+            platforms/windows/checksums-windows.txt
 
   # ── Linux Native Build ─────────────────────────────────────────────
   build-linux:
