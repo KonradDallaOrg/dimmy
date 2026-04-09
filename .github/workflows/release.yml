@@ -231,19 +231,25 @@ jobs:
         working-directory: platforms/windows/Dimmy.Windows
         run: dotnet restore
 
-      - name: Publish Windows app (self-contained WinUI)
+      - name: Build Windows app
         working-directory: platforms/windows/Dimmy.Windows
-        run: dotnet publish Dimmy.Windows.csproj -c Release -r win-x64 --self-contained false -o publish
+        run: dotnet build Dimmy.Windows.csproj -c Release
 
       - name: Prepare distribution
         shell: pwsh
         run: |
-          $pubDir = "platforms/windows/Dimmy.Windows/publish"
-          Write-Host "Publish dir: $pubDir"
-          Write-Host "Files: $((Get-ChildItem $pubDir | Measure-Object).Count)"
+          # Find the dotnet build output (bin\x64\Release or bin\Release)
+          $binDir = (Get-ChildItem -Path "platforms/windows/Dimmy.Windows/bin" -Recurse -Filter "Dimmy.Windows.exe" | Select-Object -First 1).DirectoryName
+          Write-Host "Build dir: $binDir"
+          Write-Host "Files: $((Get-ChildItem $binDir | Measure-Object).Count)"
           # Copy Rust DLL (built in short target dir to avoid path-too-long)
-          Copy-Item "D:\t\x86_64-pc-windows-msvc\release\dimmy_lib.dll" "$pubDir/"
-          Get-ChildItem "$pubDir" -Filter "*.pdb" -Recurse | Remove-Item -ErrorAction SilentlyContinue
+          Copy-Item "D:\t\x86_64-pc-windows-msvc\release\dimmy_lib.dll" "$binDir/"
+          Get-ChildItem "$binDir" -Filter "*.pdb" -Recurse | Remove-Item -ErrorAction SilentlyContinue
+          # Create publish dir for packaging
+          $destDir = "platforms/windows/Dimmy.Windows/publish"
+          if (Test-Path $destDir) { Remove-Item $destDir -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $destDir | Out-Null
+          Copy-Item "$binDir/*" "$destDir/" -Recurse
 
       - name: Run Windows tests
         working-directory: platforms/windows/Dimmy.Windows.Tests

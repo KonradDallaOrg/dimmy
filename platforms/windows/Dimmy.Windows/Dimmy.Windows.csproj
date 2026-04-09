@@ -8,12 +8,9 @@
     <Platforms>x86;x64;ARM64</Platforms>
     <RuntimeIdentifiers>win-x86;win-x64;win-arm64</RuntimeIdentifiers>
     <UseWinUI>true</UseWinUI>
-    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>
     <WindowsPackageType>None</WindowsPackageType>
     <Nullable>enable</Nullable>
-    <!-- Required for WinUI self-contained: .NET 10 SDK adds this automatically,
-         but .NET 8 SDK (used in CI) does not. Without it, XAML init crashes with 0xc000027b. -->
-    <CsWinRTUseWindowsUIXamlProjections>false</CsWinRTUseWindowsUIXamlProjections>
     <!-- Disable PRI/MSIX — unpackaged app, .resw processing not available without full VS workload -->
     <AppxPackage>false</AppxPackage>
     <EnableMsixTooling>false</EnableMsixTooling>
