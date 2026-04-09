@@ -238,7 +238,9 @@ jobs:
       - name: Prepare distribution
         shell: pwsh
         run: |
-          $binDir = "platforms/windows/Dimmy.Windows/bin/Release/net8.0-windows10.0.19041.0"
+          # dotnet builds to bin\x64\Release on CI
+          $binDir = (Get-ChildItem -Path "platforms/windows/Dimmy.Windows/bin" -Recurse -Filter "Dimmy.Windows.dll" | Select-Object -First 1).DirectoryName
+          Write-Host "Found bin dir: $binDir"
           # DLL is in short target dir (CARGO_TARGET_DIR=D:\t) to avoid path-too-long
           Copy-Item "D:\t\x86_64-pc-windows-msvc\release\dimmy_lib.dll" "$binDir/"
           Get-ChildItem "$binDir" -Filter "*.pdb" -Recurse | Remove-Item -ErrorAction SilentlyContinue
