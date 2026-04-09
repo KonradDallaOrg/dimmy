@@ -21,20 +21,20 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: core
 
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libxdo-dev libdbus-1-dev libssl-dev
+          sudo apt-get install -y libasound2-dev libxdo-dev libdbus-1-dev libssl-dev cmake
 
       - name: Format
-        working-directory: src-tauri
+        working-directory: core
         run: cargo fmt --check
 
       - name: Clippy
-        working-directory: src-tauri
-        run: cargo clippy -- -D warnings
+        working-directory: core
+        run: cargo clippy --features local-stt -- -D warnings
 
   test:
     name: Test (Rust Core)
@@ -49,16 +49,16 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: core
 
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libxdo-dev libdbus-1-dev libssl-dev
+          sudo apt-get install -y libasound2-dev libxdo-dev libdbus-1-dev libssl-dev cmake
 
       - name: Run tests
-        working-directory: src-tauri
-        run: cargo test --lib
+        working-directory: core
+        run: cargo test --lib --features local-stt
 
   lint-linux:
     name: Lint (Linux GTK4)
@@ -77,20 +77,20 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            native-ui/linux/target
-          key: linux-gtk4-cargo-${{ hashFiles('native-ui/linux/Cargo.lock') }}
+            platforms/linux/target
+          key: linux-gtk4-cargo-${{ hashFiles('platforms/linux/Cargo.lock') }}
           restore-keys: linux-gtk4-cargo-
 
       - name: Install GTK4 + libadwaita dev packages
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libdbus-1-dev pkg-config \
-            libasound2-dev libxdo-dev
+            libasound2-dev libxdo-dev cmake
 
       - name: Clippy
-        working-directory: native-ui/linux
+        working-directory: platforms/linux
         run: cargo clippy -- -D warnings
 
       - name: Test
-        working-directory: native-ui/linux
+        working-directory: platforms/linux
         run: cargo test

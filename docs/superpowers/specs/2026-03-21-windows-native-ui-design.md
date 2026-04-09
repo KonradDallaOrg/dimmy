@@ -1,7 +1,7 @@
 # Dimmy Windows Native UI — Design Spec
 
 **Date:** 2026-03-21
-**Branch:** `feat/native-ui`
+**Branch:** `feat/platforms`
 **Framework:** WinUI 3 + .NET 8 + Windows App SDK
 **Reference:** macOS SwiftUI mockup (`mockup/dimmy-new/`)
 **FFI:** Rust `dimmy.dll` (cdylib) via P/Invoke
@@ -11,7 +11,7 @@
 ## 1. Architecture
 
 ```
-native-ui/windows/Dimmy.Windows/
+platforms/windows/Dimmy.Windows/
 ├── Dimmy.Windows.csproj
 ├── App.xaml / App.xaml.cs           ← Lifecycle, single instance, startup routing
 ├── Assets/
@@ -45,7 +45,7 @@ native-ui/windows/Dimmy.Windows/
 ### Build flow
 
 1. `cargo build --release --lib` → produces `dimmy.dll` (cdylib)
-2. `dotnet build` in `native-ui/windows/` → produces `Dimmy.Windows.exe`
+2. `dotnet build` in `platforms/windows/` → produces `Dimmy.Windows.exe`
 3. `dimmy.dll` is copied to output dir via `.csproj` post-build step
 
 ### Dependencies

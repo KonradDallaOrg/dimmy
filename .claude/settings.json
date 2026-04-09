@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cd src-tauri && cargo fmt --check && cargo clippy -- -D warnings"
+            "command": "cd core && cargo fmt --check && cargo clippy --features local-stt -- -D warnings"
           }
         ]
       }

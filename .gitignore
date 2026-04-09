@@ -1,6 +1,6 @@
-src-tauri/target/
-native-ui/linux/target/
-src-tauri/gen/
+core/target/
+platforms/linux/target/
+core/gen/
 node_modules/
 dist/
 .DS_Store
@@ -9,8 +9,6 @@ dist/
 *.dmg
 *.AppImage
 *.deb
-NEGATIVE-SPACE-PLAN.md
-docs/superpowers/
 .cargo/
 .env
 tests/test_audio.wav
@@ -19,4 +17,7 @@ tests/results/
 tests/*.enc
 **/TestResults/
 demo/
-mockup/
+mockup/build/
+*.swp
+*.swo
+platforms/macos/build/
