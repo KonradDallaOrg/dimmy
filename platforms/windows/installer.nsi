@@ -38,8 +38,41 @@ ShowInstDetails show
 !insertmacro MUI_LANGUAGE "English"
 !insertmacro MUI_LANGUAGE "Italian"
 
+; ── .NET 8 Desktop Runtime check ─────────────────────────────────
+; URL for .NET 8 Desktop Runtime x64 installer
+!define DOTNET_URL "https://download.visualstudio.microsoft.com/download/pr/27bcdd70-ce64-4049-ba24-2b14e81d3a62/3dde1f825d2cce14a76e21b00d0aefc6/windowsdesktop-runtime-8.0.16-win-x64.exe"
+!define DOTNET_INSTALLER "dotnet-runtime-8-desktop-x64.exe"
+
+Function CheckDotNet
+  ; Check if .NET 8 Desktop Runtime is installed by looking for the directory
+  IfFileExists "$PROGRAMFILES64\dotnet\shared\Microsoft.WindowsDesktop.App\8.*" dotnet_found
+  IfFileExists "$PROGRAMFILES\dotnet\shared\Microsoft.WindowsDesktop.App\8.*" dotnet_found
+
+  ; Not found — download and install
+  DetailPrint "Downloading .NET 8 Desktop Runtime..."
+  NSISdl::download "${DOTNET_URL}" "$TEMP\${DOTNET_INSTALLER}"
+  Pop $0
+  StrCmp $0 "success" +3
+    MessageBox MB_OK|MB_ICONEXCLAMATION "Failed to download .NET 8 Runtime. Please install it manually from dotnet.microsoft.com"
+    Goto dotnet_done
+
+  DetailPrint "Installing .NET 8 Desktop Runtime (this may take a minute)..."
+  nsExec::ExecToLog '"$TEMP\${DOTNET_INSTALLER}" /install /quiet /norestart'
+  Delete "$TEMP\${DOTNET_INSTALLER}"
+  DetailPrint ".NET 8 Desktop Runtime installed."
+  Goto dotnet_done
+
+  dotnet_found:
+    DetailPrint ".NET 8 Desktop Runtime already installed."
+
+  dotnet_done:
+FunctionEnd
+
 ; ── Install section ──────────────────────────────────────────────
 Section "Install"
+  ; Check and install .NET 8 Desktop Runtime if missing
+  Call CheckDotNet
+
   ; Kill running instance
   nsExec::ExecToLog 'taskkill /f /im ${APP_EXE}'
 
