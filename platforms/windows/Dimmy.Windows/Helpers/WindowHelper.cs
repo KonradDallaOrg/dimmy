@@ -27,6 +27,10 @@ public static class WindowHelper
     private static extern int GetSystemMetrics(int nIndex);
 
     [DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    private const int SW_SHOWNOACTIVATE = 4;
+
+    [DllImport("user32.dll")]
     private static extern nint GetWindowLongPtr(IntPtr hWnd, int nIndex);
 
     [DllImport("user32.dll")]
@@ -52,6 +56,7 @@ public static class WindowHelper
     private const nint WS_EX_APPWINDOW = 0x00040000;
     private const nint WS_EX_NOREDIRECTIONBITMAP = 0x00200000;
     private const nint WS_EX_LAYERED = 0x00080000;
+    private const nint WS_EX_NOACTIVATE = 0x08000000;
 
     [DllImport("user32.dll")]
     private static extern bool SetLayeredWindowAttributes(IntPtr hwnd, uint crKey, byte bAlpha, uint dwFlags);
@@ -99,6 +104,13 @@ public static class WindowHelper
         }
     }
 
+    /// <summary>Show a window without stealing focus from the active app.</summary>
+    public static void ShowWithoutActivating(Window window)
+    {
+        var hwnd = GetHwnd(window);
+        ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    }
+
     public static void SetTaskbarVisibility(IntPtr hwnd, bool showInTaskbar)
     {
         var exStyle = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
@@ -137,11 +149,12 @@ public static class WindowHelper
         style |= WS_POPUP;
         SetWindowLongPtr(hwnd, GWL_STYLE, style);
 
-        // 2. Tool window (no taskbar), no redirection bitmap, layered window
+        // 2. Tool window (no taskbar), no redirection bitmap, layered, no-activate
         var exStyle = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
         exStyle |= WS_EX_TOOLWINDOW;
         exStyle |= WS_EX_NOREDIRECTIONBITMAP;
         exStyle |= WS_EX_LAYERED;           // layered → DWM skips shadow
+        exStyle |= WS_EX_NOACTIVATE;        // never steal focus from active app
         exStyle &= ~WS_EX_APPWINDOW;
         SetWindowLongPtr(hwnd, GWL_EXSTYLE, exStyle);
 

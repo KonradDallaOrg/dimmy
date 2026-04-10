@@ -132,15 +132,27 @@ public partial class App : Application
         // 4. Check onboarding
         bool onboardingDone = IsOnboardingComplete();
 
-        if (!onboardingDone)
+        try
         {
-            _onboardingWindow = new OnboardingWindow();
-            _onboardingWindow.Closed += OnboardingWindow_Closed;
-            _onboardingWindow.Activate();
+            if (!onboardingDone)
+            {
+                _onboardingWindow = new OnboardingWindow();
+                _onboardingWindow.Closed += OnboardingWindow_Closed;
+                _onboardingWindow.Activate();
+            }
+            else
+            {
+                StartNormalMode();
+            }
         }
-        else
+        catch (Exception ex)
         {
-            StartNormalMode();
+            var msg = $"FATAL UI: {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}";
+            PttLog(msg);
+            System.Diagnostics.Debug.WriteLine(msg);
+            try { System.IO.File.WriteAllText(
+                System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "dimmy", "crash.log"), msg); } catch { }
         }
     }
 
@@ -408,7 +420,7 @@ public partial class App : Application
     public void ShowPill()
     {
         if (_pillWindow == null) return;
-        _pillWindow.Activate();
+        WindowHelper.ShowWithoutActivating(_pillWindow);
         _trayService?.UpdateState("Dimmy — Ready", "");
     }
 
