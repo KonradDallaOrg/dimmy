@@ -38,17 +38,16 @@ ShowInstDetails show
 !insertmacro MUI_LANGUAGE "English"
 !insertmacro MUI_LANGUAGE "Italian"
 
-; ── .NET 8 Desktop Runtime check ─────────────────────────────────
-; URL for .NET 8 Desktop Runtime x64 installer
+; ── Prerequisites: .NET 8 Desktop Runtime + Windows App Runtime ──
 !define DOTNET_URL "https://download.visualstudio.microsoft.com/download/pr/27bcdd70-ce64-4049-ba24-2b14e81d3a62/3dde1f825d2cce14a76e21b00d0aefc6/windowsdesktop-runtime-8.0.16-win-x64.exe"
 !define DOTNET_INSTALLER "dotnet-runtime-8-desktop-x64.exe"
+!define WINAPPRT_URL "https://aka.ms/windowsappsdk/1.6/1.6.241114003/windowsappruntimeinstall-x64.exe"
+!define WINAPPRT_INSTALLER "windowsappruntimeinstall-x64.exe"
 
 Function CheckDotNet
-  ; Check if .NET 8 Desktop Runtime is installed by looking for the directory
   IfFileExists "$PROGRAMFILES64\dotnet\shared\Microsoft.WindowsDesktop.App\8.*" dotnet_found
   IfFileExists "$PROGRAMFILES\dotnet\shared\Microsoft.WindowsDesktop.App\8.*" dotnet_found
 
-  ; Not found — download and install
   DetailPrint "Downloading .NET 8 Desktop Runtime..."
   NSISdl::download "${DOTNET_URL}" "$TEMP\${DOTNET_INSTALLER}"
   Pop $0
@@ -56,22 +55,49 @@ Function CheckDotNet
     MessageBox MB_OK|MB_ICONEXCLAMATION "Failed to download .NET 8 Runtime. Please install it manually from dotnet.microsoft.com"
     Goto dotnet_done
 
-  DetailPrint "Installing .NET 8 Desktop Runtime (this may take a minute)..."
+  DetailPrint "Installing .NET 8 Desktop Runtime..."
   nsExec::ExecToLog '"$TEMP\${DOTNET_INSTALLER}" /install /quiet /norestart'
   Delete "$TEMP\${DOTNET_INSTALLER}"
   DetailPrint ".NET 8 Desktop Runtime installed."
   Goto dotnet_done
 
   dotnet_found:
-    DetailPrint ".NET 8 Desktop Runtime already installed."
-
+    DetailPrint ".NET 8 Desktop Runtime: OK"
   dotnet_done:
+FunctionEnd
+
+Function CheckWinAppRuntime
+  ; Check if Windows App Runtime 1.6 is registered
+  EnumRegKey $0 HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall" 0
+  ReadRegStr $0 HKLM "SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\{6BB3A607-B400-4513-9E7E-8E74A68E7F2B}" "DisplayName"
+  StrCmp $0 "" 0 winapprt_found
+
+  ; Also check via the DLL existence (more reliable)
+  IfFileExists "$PROGRAMFILES\WindowsApps\Microsoft.WindowsAppRuntime.1.6*\Microsoft.WindowsAppRuntime.dll" winapprt_found
+
+  DetailPrint "Downloading Windows App Runtime..."
+  NSISdl::download "${WINAPPRT_URL}" "$TEMP\${WINAPPRT_INSTALLER}"
+  Pop $0
+  StrCmp $0 "success" +3
+    MessageBox MB_OK|MB_ICONEXCLAMATION "Failed to download Windows App Runtime. The app will prompt you to install it on first launch."
+    Goto winapprt_done
+
+  DetailPrint "Installing Windows App Runtime..."
+  nsExec::ExecToLog '"$TEMP\${WINAPPRT_INSTALLER}" --quiet'
+  Delete "$TEMP\${WINAPPRT_INSTALLER}"
+  DetailPrint "Windows App Runtime installed."
+  Goto winapprt_done
+
+  winapprt_found:
+    DetailPrint "Windows App Runtime: OK"
+  winapprt_done:
 FunctionEnd
 
 ; ── Install section ──────────────────────────────────────────────
 Section "Install"
-  ; Check and install .NET 8 Desktop Runtime if missing
+  ; Install prerequisites silently if missing
   Call CheckDotNet
+  Call CheckWinAppRuntime
 
   ; Kill running instance
   nsExec::ExecToLog 'taskkill /f /im ${APP_EXE}'
