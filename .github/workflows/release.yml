@@ -187,9 +187,6 @@ jobs:
       - name: Install CMake & Ninja
         uses: lukka/get-cmake@latest
 
-      - name: Setup MSVC dev environment
-        uses: ilammy/msvc-dev-cmd@v1
-
       - name: Install Vulkan SDK
         shell: pwsh
         run: |
@@ -203,6 +200,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: core
+          shared-key: windows-release
 
       - name: Build Rust DLL
         working-directory: core
@@ -211,7 +209,10 @@ jobs:
           LIBCLANG_PATH: "C:\\Program Files\\LLVM\\bin"
           CMAKE_GENERATOR: Ninja
           CARGO_TARGET_DIR: "D:\\t"
-        run: cargo build --lib --release --features local-stt-vulkan
+        run: |
+          # Clean to avoid stale cached artifacts
+          cargo clean --release 2>$null
+          cargo build --lib --release --features local-stt-vulkan
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
