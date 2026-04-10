@@ -11,6 +11,7 @@
     <WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>
     <WindowsPackageType>None</WindowsPackageType>
     <Nullable>enable</Nullable>
+    <DefineConstants>DISABLE_XAML_GENERATED_MAIN</DefineConstants>
     <!-- Disable PRI/MSIX — unpackaged app, .resw processing not available without full VS workload -->
     <AppxPackage>false</AppxPackage>
     <EnableMsixTooling>false</EnableMsixTooling>
@@ -25,6 +26,7 @@
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.1742" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
     <PackageReference Include="H.NotifyIcon.WinUI" Version="2.2.0" />
+    <PackageReference Include="Velopack" Version="0.0.1298" />
   </ItemGroup>
 
   <ItemGroup>
@@ -38,9 +40,7 @@
     <PropertyGroup>
       <DimmyDllSource>$(MSBuildThisFileDirectory)..\..\..\core\target\release\dimmy_lib.dll</DimmyDllSource>
     </PropertyGroup>
-    <Copy SourceFiles="$(DimmyDllSource)" DestinationFolder="$(OutputPath)"
-          Condition="Exists('$(DimmyDllSource)')" SkipUnchangedFiles="true" />
-    <Warning Text="dimmy_lib.dll not found at $(DimmyDllSource). Run 'cargo build --release --lib' in core first."
-             Condition="!Exists('$(DimmyDllSource)')" />
+    <Copy SourceFiles="$(DimmyDllSource)" DestinationFolder="$(OutputPath)" Condition="Exists('$(DimmyDllSource)')" SkipUnchangedFiles="true" />
+    <Warning Text="dimmy_lib.dll not found at $(DimmyDllSource). Run 'cargo build --release --lib' in core first." Condition="!Exists('$(DimmyDllSource)')" />
   </Target>
 </Project>
