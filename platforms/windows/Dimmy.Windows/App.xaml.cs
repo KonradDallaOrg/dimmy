@@ -420,7 +420,7 @@ public partial class App : Application
     public void ShowPill()
     {
         if (_pillWindow == null) return;
-        _pillWindow.Activate();
+        WindowHelper.ShowWithoutActivating(_pillWindow);
         _trayService?.UpdateState("Dimmy — Ready", "");
     }
 
