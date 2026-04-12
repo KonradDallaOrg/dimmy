@@ -239,8 +239,8 @@ where
 
 /// Returns the Vulkan device index to use for GPU inference.
 /// Priority: GGML_VK_DEVICE env var > first discrete GPU > 0.
-#[cfg(feature = "local-stt")]
-fn preferred_gpu_device() -> std::ffi::c_int {
+#[cfg(any(feature = "local-stt", feature = "local-llm"))]
+pub(crate) fn preferred_gpu_device() -> std::ffi::c_int {
     // 1. Env var override — power users / CI can force a specific device
     if let Ok(val) = std::env::var("GGML_VK_DEVICE") {
         if let Ok(d) = val.parse::<std::ffi::c_int>() {
@@ -271,7 +271,7 @@ fn preferred_gpu_device() -> std::ffi::c_int {
 /// Enumerate Vulkan physical devices via raw FFI to vulkan-1.dll.
 /// Returns the index of the first discrete GPU, or None.
 /// Zero new dependencies — vulkan-1.dll is already loaded by ggml_vulkan.
-#[cfg(feature = "local-stt")]
+#[cfg(any(feature = "local-stt", feature = "local-llm"))]
 fn detect_discrete_gpu() -> Option<std::ffi::c_int> {
     use std::ffi::c_int;
 

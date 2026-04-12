@@ -81,6 +81,18 @@ public static class DimmyNative
     public static extern int dimmy_model_exists(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string filename);
 
+    // ── Local LLM model management ────────────────────────────────
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_list_llm_models(byte[] buf, int len);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_download_llm_model(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string filename);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_llm_model_exists(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string filename);
+
     // ── History ──────────────────────────────────────────────────
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_history_save(
@@ -155,6 +167,9 @@ public static class DimmyNative
 
     // ── Local STT helpers ────────────────────────────────────────
     public static string? ListLocalModels() => ReadBuffer(dimmy_list_local_models);
+
+    // ── Local LLM helpers ───────────────────────────────────────
+    public static string? ListLocalLlmModels() => ReadBuffer(dimmy_list_llm_models);
 
     // ── History helpers ──────────────────────────────────────────
     public static string? HistoryRecent(int limit) =>

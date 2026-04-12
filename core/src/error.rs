@@ -39,6 +39,7 @@ pub enum LlmError {
     Api { status: u16, body: String },
     Network(String),
     NoApiKey(String),
+    LocalModel(String),
 }
 
 // ── Display implementations ────────────────────────────────────────
@@ -88,6 +89,7 @@ impl std::fmt::Display for LlmError {
             Self::Api { status, body } => write!(f, "HTTP {}: {}", status, body),
             Self::Network(msg) => write!(f, "request failed: {}", msg),
             Self::NoApiKey(provider) => write!(f, "no API key for LLM provider {}", provider),
+            Self::LocalModel(msg) => write!(f, "local LLM model: {}", msg),
         }
     }
 }
@@ -208,6 +210,16 @@ mod tests {
     fn llm_error_display() {
         let e = LlmError::NoApiKey("groq".into());
         assert_eq!(e.to_string(), "no API key for LLM provider groq");
+    }
+
+    #[test]
+    fn llm_local_model_error_display() {
+        let e = LlmError::LocalModel("model not found".into());
+        assert!(
+            e.to_string().contains("local LLM model"),
+            "LlmError::LocalModel display must contain 'local LLM model': {}",
+            e
+        );
     }
 
     #[test]

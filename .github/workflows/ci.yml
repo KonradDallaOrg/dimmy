@@ -34,7 +34,7 @@ jobs:
 
       - name: Clippy
         working-directory: core
-        run: cargo clippy --features local-stt -- -D warnings
+        run: cargo clippy --features local-stt,local-llm -- -D warnings
 
   test:
     name: Test (Rust Core)
@@ -58,7 +58,7 @@ jobs:
 
       - name: Run tests
         working-directory: core
-        run: cargo test --lib --features local-stt
+        run: cargo test --lib --features local-stt,local-llm
 
   lint-linux:
     name: Lint (Linux GTK4)

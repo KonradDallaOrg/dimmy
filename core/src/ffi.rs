@@ -165,6 +165,8 @@ pub extern "C" fn dimmy_init() -> c_int {
         stt_mode: Mutex::new(file_cfg.stt_mode),
         local_model: Mutex::new(file_cfg.local_model),
         filler_removal_enabled: Mutex::new(file_cfg.filler_removal_enabled),
+        llm_mode: Mutex::new(file_cfg.llm_mode),
+        local_llm_model: Mutex::new(file_cfg.local_llm_model),
         border_style: Mutex::new(file_cfg.border_style),
         waveform_style: Mutex::new(file_cfg.waveform_style),
         overlay_position: Mutex::new(file_cfg.overlay_position),
@@ -219,8 +221,9 @@ pub extern "C" fn dimmy_shutdown() {
         // Small delay to let cpal release the device
         std::thread::sleep(std::time::Duration::from_millis(50));
 
-        // Release whisper model from VRAM
+        // Release whisper and LLM models from VRAM
         crate::local_stt::clear_model_cache();
+        crate::local_llm::clear_llm_cache();
 
         if let Ok(cfg) = crate::snapshot_config(st) {
             save_config_file(&cfg);
@@ -677,6 +680,8 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "stt_mode": *st.stt_mode.lock().unwrap_or_else(|e| e.into_inner()),
         "local_model": *st.local_model.lock().unwrap_or_else(|e| e.into_inner()),
         "filler_removal_enabled": *st.filler_removal_enabled.lock().unwrap_or_else(|e| e.into_inner()),
+        "llm_mode": *st.llm_mode.lock().unwrap_or_else(|e| e.into_inner()),
+        "local_llm_model": *st.local_llm_model.lock().unwrap_or_else(|e| e.into_inner()),
         "border_style": *st.border_style.lock().unwrap_or_else(|e| e.into_inner()),
         "waveform_style": *st.waveform_style.lock().unwrap_or_else(|e| e.into_inner()),
         "overlay_position": *st.overlay_position.lock().unwrap_or_else(|e| e.into_inner()),
@@ -883,6 +888,24 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
     if let Some(b) = v["filler_removal_enabled"].as_bool() {
         if let Ok(mut f) = st.filler_removal_enabled.lock() {
             *f = b;
+        }
+    }
+    // Local LLM fields
+    if let Some(s) = v["llm_mode"].as_str() {
+        if let Ok(mut m) = st.llm_mode.lock() {
+            *m = s.to_string();
+        }
+    }
+    if let Some(s) = v["local_llm_model"].as_str() {
+        if let Ok(mut m) = st.local_llm_model.lock() {
+            if *m != s {
+                log(&format!(
+                    "[LocalLLM] Model changed: {} → {}, clearing cache",
+                    *m, s
+                ));
+                crate::local_llm::clear_llm_cache();
+            }
+            *m = s.to_string();
         }
     }
     // UI appearance fields (round-tripped for native frontends)
@@ -1205,7 +1228,61 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
         .map(|t| t.clone())
         .unwrap_or_default();
 
-    // Resolve LLM API URL and key (may use same as STT)
+    // ── Local LLM mode: bypass cloud entirely ─────────────────────
+    let llm_mode = st
+        .llm_mode
+        .lock()
+        .map(|m| m.clone())
+        .unwrap_or_else(|_| "cloud".to_string());
+
+    if llm_mode == "local" {
+        let local_model_filename = st
+            .local_llm_model
+            .lock()
+            .map(|m| m.clone())
+            .unwrap_or_else(|_| crate::local_llm::DEFAULT_LLM_MODEL.to_string());
+        let model_path = crate::local_llm::model_path(&local_model_filename);
+
+        emit_event("status", r#"{"state":"processing"}"#);
+
+        match crate::local_llm::process_text_local(
+            &model_path,
+            text,
+            style,
+            tone,
+            &custom_prompt,
+            &translate_to,
+        ) {
+            Ok(enhanced) => {
+                let preview = if enhanced.len() > 120 {
+                    format!("{}...", &enhanced[..120])
+                } else {
+                    enhanced.clone()
+                };
+                log(&format!(
+                    "Local LLM complete: {} chars → {} chars: {:?}",
+                    text.len(),
+                    enhanced.len(),
+                    preview
+                ));
+                return write_to_buf(&enhanced, out_buf, buf_len);
+            }
+            Err(e) => {
+                let err_msg = format!("{}", e);
+                log(&format!("ERROR: Local LLM failed: {}", err_msg));
+                emit_event(
+                    "error",
+                    &format!(
+                        r#"{{"message":"Local LLM: {}"}}"#,
+                        err_msg.replace('"', "\\\"")
+                    ),
+                );
+                return write_to_buf(text, out_buf, buf_len); // graceful degradation
+            }
+        }
+    }
+
+    // ── Cloud LLM mode ──────────────────────────────────────────
     let use_same_key = st.llm_use_same_key.lock().map(|k| *k).unwrap_or(true);
     let llm_url = st.llm_api_url.lock().map(|u| u.clone()).unwrap_or_default();
     let llm_model = st
@@ -1426,6 +1503,93 @@ pub unsafe extern "C" fn dimmy_model_exists(filename_ptr: *const c_char) -> c_in
         }
     };
     if crate::local_stt::model_exists(filename) {
+        1
+    } else {
+        0
+    }
+}
+
+// ── Local LLM model management ─────────────────────────────────────
+
+/// List available local LLM models as JSON array.
+#[no_mangle]
+pub extern "C" fn dimmy_list_llm_models(buf: *mut c_char, buf_len: c_int) -> c_int {
+    if buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let models: Vec<serde_json::Value> = crate::local_llm::AVAILABLE_LLM_MODELS
+        .iter()
+        .map(|m| {
+            serde_json::json!({
+                "name": m.name,
+                "filename": m.filename,
+                "size_mb": m.size_mb,
+                "description": m.description,
+                "downloaded": crate::local_llm::model_exists(m.filename),
+            })
+        })
+        .collect();
+    let json = serde_json::to_string(&models).unwrap_or_default();
+    write_to_buf(&json, buf, buf_len)
+}
+
+/// Download an LLM model. BLOCKING — run on background thread from native UI.
+/// Emits "llm_model_download_progress" events.
+/// Returns 0 on success, -1 on error.
+///
+/// # Safety
+/// `filename_ptr` must be a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_download_llm_model(filename_ptr: *const c_char) -> c_int {
+    let filename = {
+        if filename_ptr.is_null() {
+            return -1;
+        }
+        match CStr::from_ptr(filename_ptr).to_str() {
+            Ok(s) => s.to_string(),
+            Err(_) => return -1,
+        }
+    };
+
+    let fname_clone = filename.clone();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let result = rt.block_on(crate::local_llm::download_model(
+        &filename,
+        move |downloaded, total| {
+            let payload = format!(
+                r#"{{"filename":"{}","downloaded":{},"total":{}}}"#,
+                fname_clone, downloaded, total
+            );
+            emit_event("llm_model_download_progress", &payload);
+        },
+    ));
+
+    match result {
+        Ok(_) => 0,
+        Err(e) => {
+            let msg: String = format!("{}", e).chars().take(200).collect();
+            emit_event("error", &format!(r#"{{"message":"{}"}}"#, msg));
+            -1
+        }
+    }
+}
+
+/// Check if a specific LLM model is downloaded. Returns 1 if yes, 0 if no.
+///
+/// # Safety
+/// `filename_ptr` must be a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_llm_model_exists(filename_ptr: *const c_char) -> c_int {
+    let filename = {
+        if filename_ptr.is_null() {
+            return 0;
+        }
+        match CStr::from_ptr(filename_ptr).to_str() {
+            Ok(s) => s,
+            Err(_) => return 0,
+        }
+    };
+    if crate::local_llm::model_exists(filename) {
         1
     } else {
         0
@@ -1848,6 +2012,8 @@ mod tests {
                 stt_mode: Mutex::new("local".to_string()),
                 local_model: Mutex::new("ggml-base-q8_0.bin".to_string()),
                 filler_removal_enabled: Mutex::new(true),
+                llm_mode: Mutex::new("cloud".to_string()),
+                local_llm_model: Mutex::new(crate::local_llm::DEFAULT_LLM_MODEL.to_string()),
                 border_style: Mutex::new("Rainbow".to_string()),
                 waveform_style: Mutex::new("Bars".to_string()),
                 overlay_position: Mutex::new("Bottom Right".to_string()),

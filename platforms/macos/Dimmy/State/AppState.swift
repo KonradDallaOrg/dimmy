@@ -342,6 +342,13 @@ final class AppState: ObservableObject {
     @Published var isDownloadingModel: Bool = false
     @Published var fillerRemovalEnabled: Bool = true
 
+    // MARK: - LLM Mode (local vs cloud)
+
+    @Published var llmMode: String = "cloud"  // "local" or "cloud"
+    @Published var localLlmModel: String = "gemma-4-E2B-it-Q4_K_M.gguf"
+    @Published var llmModelDownloadProgress: Double = 0.0
+    @Published var isDownloadingLlmModel: Bool = false
+
     // MARK: - STT Config (synced with Rust via FFI)
 
     @Published var sttProvider: SttProvider = .groq
@@ -456,6 +463,10 @@ final class AppState: ObservableObject {
         if let v = config["local_model"] as? String { localModel = v }
         if let v = config["filler_removal_enabled"] as? Bool { fillerRemovalEnabled = v }
 
+        // Local LLM
+        if let v = config["llm_mode"] as? String { llmMode = v }
+        if let v = config["local_llm_model"] as? String { localLlmModel = v }
+
         // Shortcut
         if let mode = config["shortcut_mode"] as? String {
             preferredMode = mode == "hold" ? .pushToTalk : .toggle
@@ -521,6 +532,8 @@ final class AppState: ObservableObject {
             "stt_mode": sttMode,
             "local_model": localModel,
             "filler_removal_enabled": fillerRemovalEnabled,
+            "llm_mode": llmMode,
+            "local_llm_model": localLlmModel,
             "preprocessing_enabled": preprocessingEnabled,
             "chunk_streaming_enabled": chunkStreamingEnabled,
             "audio_debug_enabled": audioDebugEnabled,

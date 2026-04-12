@@ -6,6 +6,7 @@ pub mod history;
 mod hotkey;
 pub mod keystore;
 pub mod llm;
+pub mod local_llm;
 pub mod local_stt;
 pub mod preprocess;
 pub mod provider;
@@ -238,6 +239,9 @@ pub struct AppConfig {
     pub stt_mode: String,    // "cloud" or "local"
     pub local_model: String, // e.g. "ggml-base-q8_0.bin"
     pub filler_removal_enabled: bool,
+    // Local LLM fields
+    pub llm_mode: String,        // "cloud" or "local"
+    pub local_llm_model: String, // e.g. "gemma-4-E2B-it-Q4_K_M.gguf"
     // UI appearance fields (used by native frontends, opaque to Rust core)
     pub border_style: String,
     pub waveform_style: String,
@@ -284,6 +288,8 @@ impl Default for AppConfig {
             stt_mode: "cloud".to_string(),
             local_model: "ggml-base-q8_0.bin".to_string(),
             filler_removal_enabled: true,
+            llm_mode: "cloud".to_string(),
+            local_llm_model: local_llm::DEFAULT_LLM_MODEL.to_string(),
             border_style: "Rainbow".to_string(),
             waveform_style: "Bars".to_string(),
             overlay_position: "Bottom Right".to_string(),
@@ -350,6 +356,8 @@ pub fn save_config_file(cfg: &AppConfig) {
             "stt_mode": cfg.stt_mode,
             "local_model": cfg.local_model,
             "filler_removal_enabled": cfg.filler_removal_enabled,
+            "llm_mode": cfg.llm_mode,
+            "local_llm_model": cfg.local_llm_model,
             "border_style": cfg.border_style,
             "waveform_style": cfg.waveform_style,
             "overlay_position": cfg.overlay_position,
@@ -451,6 +459,14 @@ pub fn load_config_file() -> AppConfig {
                     filler_removal_enabled: v["filler_removal_enabled"]
                         .as_bool()
                         .unwrap_or(defaults.filler_removal_enabled),
+                    llm_mode: v["llm_mode"]
+                        .as_str()
+                        .unwrap_or(&defaults.llm_mode)
+                        .to_string(),
+                    local_llm_model: v["local_llm_model"]
+                        .as_str()
+                        .unwrap_or(&defaults.local_llm_model)
+                        .to_string(),
                     border_style: v["border_style"].as_str().unwrap_or("Rainbow").to_string(),
                     waveform_style: v["waveform_style"].as_str().unwrap_or("Bars").to_string(),
                     overlay_position: v["overlay_position"]
@@ -662,6 +678,9 @@ pub struct AppState {
     pub stt_mode: Mutex<String>,
     pub local_model: Mutex<String>,
     pub filler_removal_enabled: Mutex<bool>,
+    // Local LLM state
+    pub llm_mode: Mutex<String>,
+    pub local_llm_model: Mutex<String>,
     // UI appearance (opaque to Rust, round-tripped for native frontends)
     pub border_style: Mutex<String>,
     pub waveform_style: Mutex<String>,
@@ -756,6 +775,8 @@ impl AppState {
             stt_mode: Mutex::new(file_cfg.stt_mode),
             local_model: Mutex::new(file_cfg.local_model),
             filler_removal_enabled: Mutex::new(file_cfg.filler_removal_enabled),
+            llm_mode: Mutex::new(file_cfg.llm_mode),
+            local_llm_model: Mutex::new(file_cfg.local_llm_model),
             border_style: Mutex::new(file_cfg.border_style),
             waveform_style: Mutex::new(file_cfg.waveform_style),
             overlay_position: Mutex::new(file_cfg.overlay_position),
@@ -876,6 +897,12 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         stt_mode,
         local_model,
         filler_removal_enabled,
+        llm_mode: state.llm_mode.lock().map_err(|e| e.to_string())?.clone(),
+        local_llm_model: state
+            .local_llm_model
+            .lock()
+            .map_err(|e| e.to_string())?
+            .clone(),
         border_style: state
             .border_style
             .lock()

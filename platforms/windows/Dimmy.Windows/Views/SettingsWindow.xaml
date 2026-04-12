@@ -166,6 +166,28 @@
                         SelectedItem="{Binding LlmStyle, Mode=TwoWay}"
                         ItemsSource="{Binding LlmStyleItems}" />
 
+              <TextBlock Text="LLM Mode" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
+              <StackPanel Orientation="Horizontal" Spacing="16">
+                <RadioButton x:Name="LlmModeLocal" Content="Local (Offline)" GroupName="LlmMode"
+                             Checked="LlmMode_Checked" Tag="local" />
+                <RadioButton x:Name="LlmModeCloud" Content="Cloud" GroupName="LlmMode"
+                             Checked="LlmMode_Checked" Tag="cloud" />
+              </StackPanel>
+
+              <!-- Local LLM panel -->
+              <StackPanel x:Name="LocalLlmPanel" Spacing="8" Visibility="Collapsed">
+                <ComboBox x:Name="LocalLlmModelComboBox" Header="Model" Width="360"
+                          SelectionChanged="LocalLlmModel_SelectionChanged" />
+                <TextBlock x:Name="LocalLlmModelStatus" Text="Checking..."
+                           FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                <Button x:Name="DownloadLlmModelBtn" Content="Download Model"
+                        Click="DownloadLlmModel_Click" Visibility="Collapsed" />
+                <ProgressBar x:Name="DownloadLlmProgress" IsIndeterminate="True"
+                             Visibility="Collapsed" Width="320" HorizontalAlignment="Left" />
+              </StackPanel>
+
+              <!-- Cloud LLM panel -->
+              <StackPanel x:Name="CloudLlmPanel" Spacing="8">
               <TextBlock Text="LLM Provider" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
               <ComboBox x:Name="LlmProviderComboBox" Header="Provider" Width="320"
                         SelectionChanged="LlmProvider_SelectionChanged">
@@ -192,6 +214,7 @@
                 <FontIcon Glyph="&#xE73E;" FontSize="16" Foreground="#4ade80"
                           VerticalAlignment="Bottom" Margin="0,0,0,8"
                           Visibility="{Binding HasLlmKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
+              </StackPanel>
               </StackPanel>
 
               <TextBlock Text="Clipboard" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
