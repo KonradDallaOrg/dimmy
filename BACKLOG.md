@@ -88,8 +88,22 @@
 - [ ] Streaming partial results via segment callbacks
 - [ ] Model integrity verification (SHA checksum)
 
-### LLM Enhancements
-- [ ] Local LLM option (llama.cpp / MLX)
+### Local LLM Enhancement (offline, on-device)
+> **Feasibility study:** `docs/dev/local-llm-feasibility.md` (2026-04-12)
+> **Tested:** Gemma 4 E2B Q4_K_M on T600 4GB — works, 3-4s per enhancement, good quality Italian
+- [ ] Add `llama-cpp-2` crate behind `local-llm` feature flag (+metal/vulkan/cuda variants)
+- [ ] `local_llm.rs`: model catalogue, download (GGUF from HuggingFace), WhisperContext-style cache
+- [ ] `llm.rs`: routing branch `if llm_mode == "local"` → call `local_llm::generate()`
+- [ ] Disable thinking mode in inference params (critical for Gemma 4 — avoids 20s hidden reasoning)
+- [ ] Reinforce "keep same language" in PREAMBLE for small models
+- [ ] FFI: `dimmy_list_llm_models`, `dimmy_download_llm_model`, `dimmy_llm_model_exists`
+- [ ] Config fields: `llm_mode` (cloud/local), `local_llm_model`
+- [ ] Reuse `preferred_gpu_device()` for GPU selection
+- [ ] Default model: Gemma 4 E2B Q4_K_M (7.2 GB, Apache 2.0, 140+ languages)
+- [ ] Platform UIs: LLM model dropdown in settings (Windows, macOS, Linux)
+- [ ] CI: add `local-llm-vulkan` (Windows), `local-llm-metal` (macOS) to build matrix
+
+### Other LLM Improvements
 - [ ] Custom system prompt templates
 - [ ] Translation improvements (auto-detect source language)
 

@@ -331,232 +331,246 @@ fn detect_discrete_gpu() -> Option<std::ffi::c_int> {
     type FnGetPhysicalDeviceProperties =
         unsafe extern "system" fn(VkPhysicalDevice, *mut VkPhysicalDeviceProperties);
 
-    // Load vulkan-1.dll
-    #[cfg(target_os = "windows")]
-    let lib_name = b"vulkan-1.dll\0";
-    #[cfg(target_os = "linux")]
-    let lib_name = b"libvulkan.so.1\0";
+    // macOS uses Metal, not Vulkan — no device enumeration needed
     #[cfg(target_os = "macos")]
-    return None; // macOS uses Metal, not Vulkan
+    {
+        return None;
+    }
 
-    let result = std::panic::catch_unwind(|| unsafe {
+    #[cfg(not(target_os = "macos"))]
+    {
         #[cfg(target_os = "windows")]
-        {
-            extern "system" {
-                fn LoadLibraryA(name: *const u8) -> *mut std::ffi::c_void;
-                fn GetProcAddress(
-                    module: *mut std::ffi::c_void,
-                    name: *const u8,
-                ) -> *mut std::ffi::c_void;
-                fn FreeLibrary(module: *mut std::ffi::c_void) -> i32;
-            }
-
-            let module = LoadLibraryA(lib_name.as_ptr());
-            if module.is_null() {
-                return None;
-            }
-
-            macro_rules! load_fn {
-                ($name:expr, $ty:ty) => {{
-                    let f = GetProcAddress(module, concat!($name, "\0").as_ptr());
-                    if f.is_null() {
-                        FreeLibrary(module);
-                        return None;
-                    }
-                    std::mem::transmute::<_, $ty>(f)
-                }};
-            }
-
-            let create_instance: FnCreateInstance = load_fn!("vkCreateInstance", FnCreateInstance);
-            let destroy_instance: FnDestroyInstance =
-                load_fn!("vkDestroyInstance", FnDestroyInstance);
-            let enum_devices: FnEnumeratePhysicalDevices =
-                load_fn!("vkEnumeratePhysicalDevices", FnEnumeratePhysicalDevices);
-            let get_props: FnGetPhysicalDeviceProperties = load_fn!(
-                "vkGetPhysicalDeviceProperties",
-                FnGetPhysicalDeviceProperties
-            );
-
-            // Create minimal Vulkan instance
-            let app_info = VkApplicationInfo {
-                s_type: 0, // VK_STRUCTURE_TYPE_APPLICATION_INFO
-                p_next: std::ptr::null(),
-                p_application_name: c"dimmy-gpu-probe".as_ptr().cast(),
-                application_version: 0,
-                p_engine_name: std::ptr::null(),
-                engine_version: 0,
-                api_version: VK_API_VERSION_1_0,
-            };
-            let create_info = VkInstanceCreateInfo {
-                s_type: 1, // VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO
-                p_next: std::ptr::null(),
-                flags: 0,
-                p_application_info: &app_info,
-                enabled_layer_count: 0,
-                pp_enabled_layer_names: std::ptr::null(),
-                enabled_extension_count: 0,
-                pp_enabled_extension_names: std::ptr::null(),
-            };
-
-            let mut instance: VkInstance = std::ptr::null_mut();
-            if create_instance(&create_info, std::ptr::null(), &mut instance) != VK_SUCCESS {
-                FreeLibrary(module);
-                return None;
-            }
-
-            // Enumerate physical devices
-            let mut count: u32 = 0;
-            if enum_devices(instance, &mut count, std::ptr::null_mut()) != VK_SUCCESS || count == 0
-            {
-                destroy_instance(instance, std::ptr::null());
-                FreeLibrary(module);
-                return None;
-            }
-
-            let mut devices = vec![std::ptr::null_mut(); count as usize];
-            if enum_devices(instance, &mut count, devices.as_mut_ptr()) != VK_SUCCESS {
-                destroy_instance(instance, std::ptr::null());
-                FreeLibrary(module);
-                return None;
-            }
-
-            // Find first discrete GPU
-            let mut result: Option<c_int> = None;
-            for (i, &dev) in devices.iter().enumerate() {
-                let mut props = std::mem::zeroed::<VkPhysicalDeviceProperties>();
-                get_props(dev, &mut props);
-                let name = std::ffi::CStr::from_ptr(props.device_name.as_ptr() as *const _)
-                    .to_string_lossy();
-                let type_str = match props.device_type {
-                    1 => "Integrated",
-                    2 => "Discrete",
-                    3 => "Virtual",
-                    4 => "CPU",
-                    _ => "Other",
-                };
-                crate::log(&format!(
-                    "[LocalSTT] Vulkan device {}: {} ({})",
-                    i, name, type_str
-                ));
-
-                if props.device_type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU && result.is_none() {
-                    result = Some(i as c_int);
-                }
-            }
-
-            destroy_instance(instance, std::ptr::null());
-            FreeLibrary(module);
-            result
-        }
-
+        let lib_name = b"vulkan-1.dll\0";
         #[cfg(target_os = "linux")]
-        {
-            // On Linux, use dlopen/dlsym (libc)
-            extern "C" {
-                fn dlopen(filename: *const u8, flags: i32) -> *mut std::ffi::c_void;
-                fn dlsym(handle: *mut std::ffi::c_void, symbol: *const u8)
-                    -> *mut std::ffi::c_void;
-                fn dlclose(handle: *mut std::ffi::c_void) -> i32;
-            }
-            const RTLD_LAZY: i32 = 1;
+        let lib_name = b"libvulkan.so.1\0";
 
-            let module = dlopen(lib_name.as_ptr(), RTLD_LAZY);
-            if module.is_null() {
-                return None;
-            }
-
-            macro_rules! load_fn {
-                ($name:expr, $ty:ty) => {{
-                    let f = dlsym(module, concat!($name, "\0").as_ptr());
-                    if f.is_null() {
-                        dlclose(module);
-                        return None;
-                    }
-                    std::mem::transmute::<_, $ty>(f)
-                }};
-            }
-
-            let create_instance: FnCreateInstance = load_fn!("vkCreateInstance", FnCreateInstance);
-            let destroy_instance: FnDestroyInstance =
-                load_fn!("vkDestroyInstance", FnDestroyInstance);
-            let enum_devices: FnEnumeratePhysicalDevices =
-                load_fn!("vkEnumeratePhysicalDevices", FnEnumeratePhysicalDevices);
-            let get_props: FnGetPhysicalDeviceProperties = load_fn!(
-                "vkGetPhysicalDeviceProperties",
-                FnGetPhysicalDeviceProperties
-            );
-
-            let app_info = VkApplicationInfo {
-                s_type: 0,
-                p_next: std::ptr::null(),
-                p_application_name: c"dimmy-gpu-probe".as_ptr().cast(),
-                application_version: 0,
-                p_engine_name: std::ptr::null(),
-                engine_version: 0,
-                api_version: VK_API_VERSION_1_0,
-            };
-            let create_info = VkInstanceCreateInfo {
-                s_type: 1,
-                p_next: std::ptr::null(),
-                flags: 0,
-                p_application_info: &app_info,
-                enabled_layer_count: 0,
-                pp_enabled_layer_names: std::ptr::null(),
-                enabled_extension_count: 0,
-                pp_enabled_extension_names: std::ptr::null(),
-            };
-
-            let mut instance: VkInstance = std::ptr::null_mut();
-            if create_instance(&create_info, std::ptr::null(), &mut instance) != VK_SUCCESS {
-                dlclose(module);
-                return None;
-            }
-
-            let mut count: u32 = 0;
-            if enum_devices(instance, &mut count, std::ptr::null_mut()) != VK_SUCCESS || count == 0
+        let result = std::panic::catch_unwind(|| unsafe {
+            #[cfg(target_os = "windows")]
             {
-                destroy_instance(instance, std::ptr::null());
-                dlclose(module);
-                return None;
-            }
-
-            let mut devices = vec![std::ptr::null_mut(); count as usize];
-            if enum_devices(instance, &mut count, devices.as_mut_ptr()) != VK_SUCCESS {
-                destroy_instance(instance, std::ptr::null());
-                dlclose(module);
-                return None;
-            }
-
-            let mut result: Option<c_int> = None;
-            for (i, &dev) in devices.iter().enumerate() {
-                let mut props = std::mem::zeroed::<VkPhysicalDeviceProperties>();
-                get_props(dev, &mut props);
-                let name = std::ffi::CStr::from_ptr(props.device_name.as_ptr() as *const _)
-                    .to_string_lossy();
-                let type_str = match props.device_type {
-                    1 => "Integrated",
-                    2 => "Discrete",
-                    3 => "Virtual",
-                    4 => "CPU",
-                    _ => "Other",
-                };
-                crate::log(&format!(
-                    "[LocalSTT] Vulkan device {}: {} ({})",
-                    i, name, type_str
-                ));
-
-                if props.device_type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU && result.is_none() {
-                    result = Some(i as c_int);
+                extern "system" {
+                    fn LoadLibraryA(name: *const u8) -> *mut std::ffi::c_void;
+                    fn GetProcAddress(
+                        module: *mut std::ffi::c_void,
+                        name: *const u8,
+                    ) -> *mut std::ffi::c_void;
+                    fn FreeLibrary(module: *mut std::ffi::c_void) -> i32;
                 }
+
+                let module = LoadLibraryA(lib_name.as_ptr());
+                if module.is_null() {
+                    return None;
+                }
+
+                macro_rules! load_fn {
+                    ($name:expr, $ty:ty) => {{
+                        let f = GetProcAddress(module, concat!($name, "\0").as_ptr());
+                        if f.is_null() {
+                            FreeLibrary(module);
+                            return None;
+                        }
+                        std::mem::transmute::<_, $ty>(f)
+                    }};
+                }
+
+                let create_instance: FnCreateInstance =
+                    load_fn!("vkCreateInstance", FnCreateInstance);
+                let destroy_instance: FnDestroyInstance =
+                    load_fn!("vkDestroyInstance", FnDestroyInstance);
+                let enum_devices: FnEnumeratePhysicalDevices =
+                    load_fn!("vkEnumeratePhysicalDevices", FnEnumeratePhysicalDevices);
+                let get_props: FnGetPhysicalDeviceProperties = load_fn!(
+                    "vkGetPhysicalDeviceProperties",
+                    FnGetPhysicalDeviceProperties
+                );
+
+                // Create minimal Vulkan instance
+                let app_info = VkApplicationInfo {
+                    s_type: 0, // VK_STRUCTURE_TYPE_APPLICATION_INFO
+                    p_next: std::ptr::null(),
+                    p_application_name: c"dimmy-gpu-probe".as_ptr().cast(),
+                    application_version: 0,
+                    p_engine_name: std::ptr::null(),
+                    engine_version: 0,
+                    api_version: VK_API_VERSION_1_0,
+                };
+                let create_info = VkInstanceCreateInfo {
+                    s_type: 1, // VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO
+                    p_next: std::ptr::null(),
+                    flags: 0,
+                    p_application_info: &app_info,
+                    enabled_layer_count: 0,
+                    pp_enabled_layer_names: std::ptr::null(),
+                    enabled_extension_count: 0,
+                    pp_enabled_extension_names: std::ptr::null(),
+                };
+
+                let mut instance: VkInstance = std::ptr::null_mut();
+                if create_instance(&create_info, std::ptr::null(), &mut instance) != VK_SUCCESS {
+                    FreeLibrary(module);
+                    return None;
+                }
+
+                // Enumerate physical devices
+                let mut count: u32 = 0;
+                if enum_devices(instance, &mut count, std::ptr::null_mut()) != VK_SUCCESS
+                    || count == 0
+                {
+                    destroy_instance(instance, std::ptr::null());
+                    FreeLibrary(module);
+                    return None;
+                }
+
+                let mut devices = vec![std::ptr::null_mut(); count as usize];
+                if enum_devices(instance, &mut count, devices.as_mut_ptr()) != VK_SUCCESS {
+                    destroy_instance(instance, std::ptr::null());
+                    FreeLibrary(module);
+                    return None;
+                }
+
+                // Find first discrete GPU
+                let mut result: Option<c_int> = None;
+                for (i, &dev) in devices.iter().enumerate() {
+                    let mut props = std::mem::zeroed::<VkPhysicalDeviceProperties>();
+                    get_props(dev, &mut props);
+                    let name = std::ffi::CStr::from_ptr(props.device_name.as_ptr() as *const _)
+                        .to_string_lossy();
+                    let type_str = match props.device_type {
+                        1 => "Integrated",
+                        2 => "Discrete",
+                        3 => "Virtual",
+                        4 => "CPU",
+                        _ => "Other",
+                    };
+                    crate::log(&format!(
+                        "[LocalSTT] Vulkan device {}: {} ({})",
+                        i, name, type_str
+                    ));
+
+                    if props.device_type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU && result.is_none()
+                    {
+                        result = Some(i as c_int);
+                    }
+                }
+
+                destroy_instance(instance, std::ptr::null());
+                FreeLibrary(module);
+                result
             }
 
-            destroy_instance(instance, std::ptr::null());
-            dlclose(module);
-            result
-        }
-    });
+            #[cfg(target_os = "linux")]
+            {
+                // On Linux, use dlopen/dlsym (libc)
+                extern "C" {
+                    fn dlopen(filename: *const u8, flags: i32) -> *mut std::ffi::c_void;
+                    fn dlsym(
+                        handle: *mut std::ffi::c_void,
+                        symbol: *const u8,
+                    ) -> *mut std::ffi::c_void;
+                    fn dlclose(handle: *mut std::ffi::c_void) -> i32;
+                }
+                const RTLD_LAZY: i32 = 1;
 
-    result.unwrap_or(None)
+                let module = dlopen(lib_name.as_ptr(), RTLD_LAZY);
+                if module.is_null() {
+                    return None;
+                }
+
+                macro_rules! load_fn {
+                    ($name:expr, $ty:ty) => {{
+                        let f = dlsym(module, concat!($name, "\0").as_ptr());
+                        if f.is_null() {
+                            dlclose(module);
+                            return None;
+                        }
+                        std::mem::transmute::<_, $ty>(f)
+                    }};
+                }
+
+                let create_instance: FnCreateInstance =
+                    load_fn!("vkCreateInstance", FnCreateInstance);
+                let destroy_instance: FnDestroyInstance =
+                    load_fn!("vkDestroyInstance", FnDestroyInstance);
+                let enum_devices: FnEnumeratePhysicalDevices =
+                    load_fn!("vkEnumeratePhysicalDevices", FnEnumeratePhysicalDevices);
+                let get_props: FnGetPhysicalDeviceProperties = load_fn!(
+                    "vkGetPhysicalDeviceProperties",
+                    FnGetPhysicalDeviceProperties
+                );
+
+                let app_info = VkApplicationInfo {
+                    s_type: 0,
+                    p_next: std::ptr::null(),
+                    p_application_name: c"dimmy-gpu-probe".as_ptr().cast(),
+                    application_version: 0,
+                    p_engine_name: std::ptr::null(),
+                    engine_version: 0,
+                    api_version: VK_API_VERSION_1_0,
+                };
+                let create_info = VkInstanceCreateInfo {
+                    s_type: 1,
+                    p_next: std::ptr::null(),
+                    flags: 0,
+                    p_application_info: &app_info,
+                    enabled_layer_count: 0,
+                    pp_enabled_layer_names: std::ptr::null(),
+                    enabled_extension_count: 0,
+                    pp_enabled_extension_names: std::ptr::null(),
+                };
+
+                let mut instance: VkInstance = std::ptr::null_mut();
+                if create_instance(&create_info, std::ptr::null(), &mut instance) != VK_SUCCESS {
+                    dlclose(module);
+                    return None;
+                }
+
+                let mut count: u32 = 0;
+                if enum_devices(instance, &mut count, std::ptr::null_mut()) != VK_SUCCESS
+                    || count == 0
+                {
+                    destroy_instance(instance, std::ptr::null());
+                    dlclose(module);
+                    return None;
+                }
+
+                let mut devices = vec![std::ptr::null_mut(); count as usize];
+                if enum_devices(instance, &mut count, devices.as_mut_ptr()) != VK_SUCCESS {
+                    destroy_instance(instance, std::ptr::null());
+                    dlclose(module);
+                    return None;
+                }
+
+                let mut result: Option<c_int> = None;
+                for (i, &dev) in devices.iter().enumerate() {
+                    let mut props = std::mem::zeroed::<VkPhysicalDeviceProperties>();
+                    get_props(dev, &mut props);
+                    let name = std::ffi::CStr::from_ptr(props.device_name.as_ptr() as *const _)
+                        .to_string_lossy();
+                    let type_str = match props.device_type {
+                        1 => "Integrated",
+                        2 => "Discrete",
+                        3 => "Virtual",
+                        4 => "CPU",
+                        _ => "Other",
+                    };
+                    crate::log(&format!(
+                        "[LocalSTT] Vulkan device {}: {} ({})",
+                        i, name, type_str
+                    ));
+
+                    if props.device_type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU && result.is_none()
+                    {
+                        result = Some(i as c_int);
+                    }
+                }
+
+                destroy_instance(instance, std::ptr::null());
+                dlclose(module);
+                result
+            }
+        });
+
+        result.unwrap_or(None)
+    }
 }
 
 // ── WhisperContext cache ─────────────────────────────────────────
