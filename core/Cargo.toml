@@ -47,7 +47,7 @@ nnnoiseless = "0.5"
 biquad = "0.4"
 dagc = "0.1"
 whisper-rs = { version = "0.16", optional = true }
-llama-cpp-4 = { version = "0.2.43", optional = true, default-features = false }
+llama-cpp-4 = { git = "https://github.com/eugenehp/llama-cpp-rs", optional = true, default-features = false }
 rusqlite = { version = "0.31", features = ["bundled"] }
 regex = "1"
 tokio-stream = "0.1"

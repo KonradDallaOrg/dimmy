@@ -10,9 +10,8 @@ use crate::error::LlmError;
 
 // ── Model catalogue ───────────────────────────────────────────────
 
-const LLM_MODEL_BASE_URL: &str =
-    "https://huggingface.co/matrixportalx/Phi-4-mini-instruct-Q4_K_M-GGUF/resolve/main";
-pub const DEFAULT_LLM_MODEL: &str = "phi-4-mini-instruct-q4_k_m.gguf";
+const LLM_MODEL_BASE_URL: &str = "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main";
+pub const DEFAULT_LLM_MODEL: &str = "gemma-4-E2B-it-Q4_K_M.gguf";
 
 pub struct LlmModel {
     pub name: &'static str,
@@ -25,21 +24,19 @@ pub struct LlmModel {
 
 pub const AVAILABLE_LLM_MODELS: &[LlmModel] = &[
     LlmModel {
+        name: "Gemma 4 E2B Q4",
+        filename: "gemma-4-E2B-it-Q4_K_M.gguf",
+        size_mb: 3300,
+        description: "Best quality for 4GB+ VRAM, 140+ languages",
+        url: None,
+    },
+    LlmModel {
         name: "Phi-4 Mini Q4",
         filename: "phi-4-mini-instruct-q4_k_m.gguf",
         size_mb: 2500,
         description: "Fast, high quality, multilingual (3.8B params)",
-        url: None,
+        url: Some("https://huggingface.co/matrixportalx/Phi-4-mini-instruct-Q4_K_M-GGUF/resolve/main/phi-4-mini-instruct-q4_k_m.gguf"),
     },
-    // Gemma 4 E2B: blocked by FGDN support in llama.cpp Rust bindings.
-    // Re-enable when llama-cpp-4 crate supports Gated Delta Net architecture.
-    // LlmModel {
-    //     name: "Gemma 4 E2B Q4",
-    //     filename: "gemma-4-E2B-it-Q4_K_M.gguf",
-    //     size_mb: 3300,
-    //     description: "Best quality for 4GB+ VRAM, 140+ languages",
-    //     url: Some("https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf"),
-    // },
 ];
 
 // ── Model directory helpers ──────────────────────────────────────
@@ -206,20 +203,35 @@ pub fn build_local_system_prompt(
 }
 
 /// Build the full prompt string for local LLM inference.
-/// Uses ChatML format (Phi-4, Qwen, etc.) WITHOUT thinking mode.
+/// Build prompt for Gemma 4 with thinking mode disabled.
+/// Inserts `<|/think|>` after model turn start to force direct output.
 pub fn build_local_prompt(system_prompt: &str, user_text: &str) -> String {
     assert!(
         !user_text.is_empty(),
         "user text must not be empty for local LLM"
     );
 
+    // The <|/think|> token after <start_of_turn>model forces the model to
+    // skip its internal reasoning phase and output the answer directly.
+    // This is equivalent to Ollama's "think": false parameter.
+    // Detect input language from first characters to reinforce in prompt
+    let lang_hint = if user_text.contains("è")
+        || user_text.contains("ò")
+        || user_text.contains("à")
+        || user_text.contains("cioè")
+        || user_text.contains("che")
+    {
+        "RESPOND IN ITALIAN ONLY. "
+    } else {
+        "RESPOND IN THE SAME LANGUAGE AS THE INPUT. "
+    };
+
     let prompt = format!(
-        "<|system|>\n{}<|end|>\n\
-         <|user|>\n\
-         Process the following transcription. Output ONLY the transformed text, nothing else.\n\n\
-         [TRANSCRIPTION]\n{}\n[/TRANSCRIPTION]<|end|>\n\
-         <|assistant|>\n",
-        system_prompt, user_text
+        "<start_of_turn>user\n{}\n\n\
+         {}Process the following transcription. Output ONLY the transformed text, nothing else.\n\n\
+         [TRANSCRIPTION]\n{}\n[/TRANSCRIPTION]\n\
+         <end_of_turn>\n<start_of_turn>model\n<|/think|>\n",
+        system_prompt, lang_hint, user_text
     );
 
     // Negative space: ensure we never trigger thinking mode
@@ -295,7 +307,9 @@ mod llm_cache {
             let gpu_device = crate::local_stt::preferred_gpu_device();
             crate::log(&format!("[LocalLLM] Using GPU device: {}", gpu_device));
 
-            let model_params = LlamaModelParams::default().with_n_gpu_layers(99);
+            let model_params = LlamaModelParams::default()
+                .with_n_gpu_layers(99)
+                .with_main_gpu(gpu_device);
 
             let model =
                 LlamaModel::load_from_file(&backend, model_path, &model_params).map_err(|e| {
@@ -381,10 +395,26 @@ mod llm_cache {
 
             let piece = cached
                 .model
-                .token_to_str(new_token, llama_cpp_4::model::Special::Plaintext)
+                .token_to_str(new_token, llama_cpp_4::model::Special::Tokenize)
                 .unwrap_or_default();
-            output.push_str(&piece);
-            n_generated += 1;
+
+            // Stop on turn markers (model trying to generate next turn)
+            if piece.contains("<end_of_turn>")
+                || piece.contains("<start_of_turn>")
+                || piece.contains("</s>")
+            {
+                break;
+            }
+
+            // Skip thinking tokens — Gemma 4 may generate <|think|>...<|/think|>
+            // We only want the actual output, not the reasoning.
+            if piece.contains("<|think|>") || piece.contains("<|/think|>") {
+                n_generated += 1;
+                // Continue but don't add to output
+            } else {
+                output.push_str(&piece);
+                n_generated += 1;
+            }
 
             // Prepare next decode
             batch.clear();
@@ -623,18 +653,17 @@ mod tests {
     fn prompt_has_turn_markers() {
         let prompt = build_local_prompt("Fix grammar.", "test text");
         assert!(
-            prompt.contains("<|system|>"),
-            "prompt must contain system marker"
+            prompt.contains("<start_of_turn>user"),
+            "prompt must contain user turn marker"
         );
         assert!(
-            prompt.contains("<|user|>"),
-            "prompt must contain user marker"
+            prompt.contains("<start_of_turn>model"),
+            "prompt must contain model turn marker"
         );
         assert!(
-            prompt.contains("<|assistant|>"),
-            "prompt must contain assistant marker"
+            prompt.contains("<end_of_turn>"),
+            "prompt must contain end turn marker"
         );
-        assert!(prompt.contains("<|end|>"), "prompt must contain end marker");
     }
 
     #[test]
