@@ -4,6 +4,17 @@ All notable changes to Dimmy are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2] - 2026-04-12
+
+### Fixed
+- **Vulkan GPU auto-detection** — on multi-GPU laptops (e.g. Intel iGPU + NVIDIA dGPU), whisper.cpp defaulted to device 0 (integrated GPU), causing crashes during inference. Now auto-enumerates Vulkan physical devices and selects the first discrete GPU.
+- Added Large-v3-Turbo models (Q5, Q8) and Distil-Large-v3.5 models (Q5, Q8) to the local STT model catalogue
+
+### Added
+- `preferred_gpu_device()` — Vulkan device enumeration via raw FFI (Windows + Linux), zero new dependencies
+- `GGML_VK_DEVICE` env var override for power users / CI to force a specific GPU device index
+- Log output lists all Vulkan devices with type (Integrated/Discrete/Virtual/CPU) at first model load
+
 ## [0.4.0] - 2026-04-08
 
 ### Added
