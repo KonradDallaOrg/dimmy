@@ -40,6 +40,7 @@
 		AA000042 /* RecordingSimulator.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000042; };
 		AA000043 /* HistorySettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000043; };
 		AA000044 /* ModelSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000044; };
+		AA000046 /* LLMModelSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000046; };
 		AA000045 /* ModelDownloadStepView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000045; };
 		AA000031 /* libdimmy_lib.a in Frameworks */ = {isa = PBXBuildFile; fileRef = AB000031; };
 		AA000038 /* Accelerate.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AB000038; };
@@ -87,6 +88,7 @@
 		AB000042 /* RecordingSimulator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingSimulator.swift; sourceTree = "<group>"; };
 		AB000043 /* HistorySettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistorySettingsView.swift; sourceTree = "<group>"; };
 		AB000044 /* ModelSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelSettingsView.swift; sourceTree = "<group>"; };
+		AB000046 /* LLMModelSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMModelSettingsView.swift; sourceTree = "<group>"; };
 		AB000045 /* ModelDownloadStepView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelDownloadStepView.swift; sourceTree = "<group>"; };
 		AB000030 /* DimmyCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DimmyCore.swift; sourceTree = "<group>"; };
 		AB000031 /* libdimmy_lib.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libdimmy_lib.a; path = "$(PROJECT_DIR)/../../core/target/aarch64-apple-darwin/release/libdimmy_lib.a"; sourceTree = "<absolute>"; };
@@ -212,6 +214,7 @@
 				AB000020 /* AboutSettingsView.swift */,
 				AB000043 /* HistorySettingsView.swift */,
 				AB000044 /* ModelSettingsView.swift */,
+				AB000046 /* LLMModelSettingsView.swift */,
 				AB000028 /* StatsSettingsView.swift */,
 				AB000040 /* DebugSettingsView.swift */,
 			);
@@ -352,6 +355,7 @@
 				AA000029 /* DebugSettingsView.swift in Sources */,
 				AA000043 /* HistorySettingsView.swift in Sources */,
 				AA000044 /* ModelSettingsView.swift in Sources */,
+				AA000046 /* LLMModelSettingsView.swift in Sources */,
 				AA000030 /* DimmyCore.swift in Sources */,
 				AA000041 /* SelfTests.swift in Sources */,
 				AA000042 /* RecordingSimulator.swift in Sources */,
