@@ -244,6 +244,44 @@ final class DimmyCore {
         }
     }
 
+    // MARK: - Local LLM Models
+
+    /// List available local LLM models with download status.
+    func listLLMModels() -> [[String: Any]]? {
+        let bufLen = Self.bufferSize
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+
+        let written = dimmy_list_llm_models(buffer, bufLen)
+        guard written > 0 else { return nil }
+
+        let jsonStr = String(cString: buffer)
+        guard let data = jsonStr.data(using: .utf8),
+              let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        else { return nil }
+
+        return arr
+    }
+
+    /// Download an LLM model. Blocking — call from background thread.
+    func downloadLLMModel(_ filename: String) -> Bool {
+        let result = filename.withCString { ptr in
+            dimmy_download_llm_model(ptr)
+        }
+        if result != 0 {
+            print("[DimmyCore] ERROR: downloadLLMModel(\(filename)) failed with code \(result)")
+        }
+        return result == 0
+    }
+
+    /// Check if an LLM model file exists locally.
+    func llmModelExists(_ filename: String) -> Bool {
+        filename.withCString { ptr in
+            dimmy_llm_model_exists(ptr) == 1
+        }
+    }
+
     // MARK: - Transcription History
 
     /// Save a transcript to history. Returns the transcript ID, or -1 on error.
@@ -397,6 +435,13 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
            let total = payload["total"] as? Int,
            total > 0 {
             appState.modelDownloadProgress = Double(downloaded) / Double(total)
+        }
+
+    case "llm_model_download_progress":
+        if let downloaded = payload["downloaded"] as? Int,
+           let total = payload["total"] as? Int,
+           total > 0 {
+            appState.llmModelDownloadProgress = Double(downloaded) / Double(total)
         }
 
     default:

@@ -30,6 +30,21 @@ struct OutputSettingsView: View {
             }
 
             if appState.llmEnabled {
+                Section("LLM Mode") {
+                    Picker("Mode", selection: $appState.llmMode) {
+                        Text("Local (Offline)").tag("local")
+                        Text("Cloud").tag("cloud")
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: appState.llmMode) { _, _ in syncConfigToRust() }
+
+                    if appState.llmMode == "local" {
+                        LLMModelSettingsView()
+                    }
+                }
+            }
+
+            if appState.llmEnabled && appState.llmMode == "cloud" {
                 Section("LLM Provider") {
                     Picker("Provider + Model", selection: $selectedLlmPreset) {
                         ForEach(LlmPreset.presets) { preset in

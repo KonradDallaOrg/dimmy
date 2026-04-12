@@ -97,6 +97,17 @@ int32_t dimmy_download_model(const char * _Nonnull filename);
 /// Returns 1=yes, 0=no.
 int32_t dimmy_model_exists(const char * _Nonnull filename);
 
+// ── Local LLM ────────────────────────────────────────────────────────
+
+/// Get JSON array of available local LLM models with download status.
+int32_t dimmy_list_llm_models(char * _Nonnull out_buf, int32_t buf_len);
+
+/// Download an LLM model file. BLOCKING — call from background thread.
+int32_t dimmy_download_llm_model(const char * _Nonnull filename);
+
+/// Check if a specific LLM model file exists locally. Returns 1=yes, 0=no.
+int32_t dimmy_llm_model_exists(const char * _Nonnull filename);
+
 // ── Transcription History ──────────────────────────────────────────
 
 /// Save a transcript to history. Returns transcript ID, or -1 on error.
