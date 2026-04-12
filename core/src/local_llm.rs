@@ -178,6 +178,32 @@ where
 
 // ── Prompt formatting ────────────────────────────────────────────
 
+/// Strip all special/control tags from LLM output.
+/// Uses regex to catch: <think>...</think>, <start_of_turn>, <|think|>, etc.
+fn strip_special_tags(text: &str) -> String {
+    // 1. Remove thinking blocks with their content: <think>...</think> and <|think|>...<|/think|>
+    let re_think = regex::Regex::new(r"(?s)<think>.*?</think>|<\|think\|>.*?<\|/think\|>")
+        .expect("think regex must compile");
+    let text = re_think.replace_all(text, "");
+
+    // 2. Remove remaining standalone special tags
+    let re = regex::Regex::new(
+        r"</?(?:think|start_of_turn|end_of_turn|pad|s)>|<\|/?(?:think|end|endoftext|assistant|user|system)\|?>"
+    ).expect("strip_special_tags regex must compile");
+
+    let cleaned = re.replace_all(&text, "");
+
+    // Clean up whitespace
+    cleaned
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
+}
+
 /// Build a local system prompt with extra language enforcement for small models.
 /// Wraps `llm::build_system_prompt()` and adds a critical language rule.
 pub fn build_local_system_prompt(
@@ -202,36 +228,38 @@ pub fn build_local_system_prompt(
     )
 }
 
-/// Build the full prompt string for local LLM inference.
-/// Build prompt for Gemma 4 with thinking mode disabled.
-/// Inserts `<|/think|>` after model turn start to force direct output.
+/// Build the full prompt for local LLM inference.
+/// Uses Gemma turn format with thinking mode disabled via `<|/think|>`.
 pub fn build_local_prompt(system_prompt: &str, user_text: &str) -> String {
     assert!(
         !user_text.is_empty(),
         "user text must not be empty for local LLM"
     );
 
-    // The <|/think|> token after <start_of_turn>model forces the model to
-    // skip its internal reasoning phase and output the answer directly.
-    // This is equivalent to Ollama's "think": false parameter.
-    // Detect input language from first characters to reinforce in prompt
-    let lang_hint = if user_text.contains("è")
-        || user_text.contains("ò")
-        || user_text.contains("à")
+    // Detect input language for reinforcement
+    let lang_hint = if user_text.contains('è')
+        || user_text.contains('ò')
+        || user_text.contains('à')
+        || user_text.contains('ù')
         || user_text.contains("cioè")
-        || user_text.contains("che")
+        || user_text.contains("perché")
     {
-        "RESPOND IN ITALIAN ONLY. "
+        "Rispondi SOLO in italiano."
     } else {
-        "RESPOND IN THE SAME LANGUAGE AS THE INPUT. "
+        "IMPORTANT: Respond in the EXACT SAME language as the input text. Do NOT translate."
     };
 
+    // Compact, direct prompt — small models follow short instructions better
     let prompt = format!(
-        "<start_of_turn>user\n{}\n\n\
-         {}Process the following transcription. Output ONLY the transformed text, nothing else.\n\n\
-         [TRANSCRIPTION]\n{}\n[/TRANSCRIPTION]\n\
+        "<start_of_turn>user\n\
+         {system}\n\n\
+         {lang}\n\n\
+         Output ONLY the transformed text. No explanations, no introductions, no tags.\n\n\
+         Text to transform:\n{text}\n\
          <end_of_turn>\n<start_of_turn>model\n<|/think|>\n",
-        system_prompt, lang_hint, user_text
+        system = system_prompt,
+        lang = lang_hint,
+        text = user_text
     );
 
     // Negative space: ensure we never trigger thinking mode
@@ -430,12 +458,21 @@ mod llm_cache {
         }
 
         crate::log(&format!(
-            "[LocalLLM] Generated {} tokens ({} chars)",
+            "[LocalLLM] Raw output ({} tokens): {:?}",
             n_generated,
-            output.len()
+            &output[..output.len().min(200)]
         ));
 
-        Ok(output.trim().to_string())
+        // Post-process: strip ALL remaining special tags from output
+        let cleaned = super::strip_special_tags(&output);
+
+        crate::log(&format!(
+            "[LocalLLM] Cleaned output ({} chars): {:?}",
+            cleaned.len(),
+            &cleaned[..cleaned.len().min(200)]
+        ));
+
+        Ok(cleaned)
     }
 
     /// Clear the cached LLM model (e.g. on shutdown or model change).
@@ -680,8 +717,8 @@ mod tests {
             "prompt must contain user text"
         );
         assert!(
-            prompt.contains("[TRANSCRIPTION]"),
-            "prompt must wrap user text in TRANSCRIPTION tags"
+            prompt.contains("Text to transform:"),
+            "prompt must label the text to transform"
         );
     }
 
@@ -739,6 +776,36 @@ mod tests {
     fn clear_llm_cache_idempotent() {
         clear_llm_cache();
         clear_llm_cache(); // must not panic
+    }
+
+    // ── Tag stripping tests ─────────────────────────────────────
+
+    #[test]
+    fn strip_tags_removes_think() {
+        let input = "<think>reasoning here</think>Actual output text.";
+        let result = strip_special_tags(input);
+        assert_eq!(result, "Actual output text.");
+    }
+
+    #[test]
+    fn strip_tags_removes_turn_markers() {
+        let input = "Hello world<end_of_turn>";
+        let result = strip_special_tags(input);
+        assert_eq!(result, "Hello world");
+    }
+
+    #[test]
+    fn strip_tags_preserves_normal_text() {
+        let input = "Temperature is < 5 degrees and > 0.";
+        let result = strip_special_tags(input);
+        assert_eq!(result, "Temperature is < 5 degrees and > 0.");
+    }
+
+    #[test]
+    fn strip_tags_handles_pipe_tokens() {
+        let input = "<|think|>some thinking<|/think|>The answer.";
+        let result = strip_special_tags(input);
+        assert_eq!(result, "The answer.");
     }
 
     // ── Feature-gated tests ─────────────────────────────────────
