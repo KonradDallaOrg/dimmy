@@ -516,7 +516,7 @@
 					OSAKit,
 					"-framework",
 					Carbon,
-					"-Wl,-multiply_defined,suppress",
+					"-Wl,-ld_classic",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.dimmy.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -562,7 +562,7 @@
 					OSAKit,
 					"-framework",
 					Carbon,
-					"-Wl,-multiply_defined,suppress",
+					"-Wl,-ld_classic",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.dimmy.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
