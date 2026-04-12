@@ -23,18 +23,34 @@ pub struct LlmModel {
 }
 
 pub const AVAILABLE_LLM_MODELS: &[LlmModel] = &[
+    // ── Gemma 4 family (Google, Apache 2.0, 140+ languages) ─────
     LlmModel {
         name: "Gemma 4 E2B Q4",
         filename: "gemma-4-E2B-it-Q4_K_M.gguf",
-        size_mb: 3300,
-        description: "Best quality for 4GB+ VRAM, 140+ languages",
+        size_mb: 3100,
+        description: "Good quality, fits 4GB+ VRAM (5B params)",
         url: None,
     },
+    LlmModel {
+        name: "Gemma 4 E4B Q4",
+        filename: "gemma-4-E4B-it-Q4_K_M.gguf",
+        size_mb: 5000,
+        description: "Best quality, needs 8GB+ VRAM (8B params)",
+        url: Some("https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf"),
+    },
+    LlmModel {
+        name: "Gemma 4 E4B Q8",
+        filename: "gemma-4-E4B-it-Q8_0.gguf",
+        size_mb: 8200,
+        description: "Maximum quality, needs 16GB+ VRAM (8B params, high precision)",
+        url: Some("https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q8_0.gguf"),
+    },
+    // ── Phi-4 (Microsoft, MIT license) ──────────────────────────
     LlmModel {
         name: "Phi-4 Mini Q4",
         filename: "phi-4-mini-instruct-q4_k_m.gguf",
         size_mb: 2500,
-        description: "Fast, high quality, multilingual (3.8B params)",
+        description: "Fast fallback, multilingual (3.8B params)",
         url: Some("https://huggingface.co/matrixportalx/Phi-4-mini-instruct-Q4_K_M-GGUF/resolve/main/phi-4-mini-instruct-q4_k_m.gguf"),
     },
 ];
