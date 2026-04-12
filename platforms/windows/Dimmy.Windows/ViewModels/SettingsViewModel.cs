@@ -95,6 +95,8 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _sttMode = "cloud";
     [ObservableProperty] private string _localModel = "ggml-base-q8_0.bin";
     [ObservableProperty] private bool _fillerRemovalEnabled = true;
+    [ObservableProperty] private string _llmMode = "cloud";
+    [ObservableProperty] private string _localLlmModel = "gemma-4-E2B-it-Q4_K_M.gguf";
     [ObservableProperty] private long _statsTotalWords;
     [ObservableProperty] private double _statsTotalSpeakingSecs;
 
@@ -137,6 +139,8 @@ public partial class SettingsViewModel : ObservableObject
             SttMode = r.TryGetProperty("stt_mode", out var sm2) ? sm2.GetString() ?? "cloud" : "cloud";
             LocalModel = r.TryGetProperty("local_model", out var lmod) ? lmod.GetString() ?? "ggml-base-q8_0.bin" : "ggml-base-q8_0.bin";
             FillerRemovalEnabled = !r.TryGetProperty("filler_removal_enabled", out var fre) || fre.GetBoolean();
+            LlmMode = r.TryGetProperty("llm_mode", out var llmm) ? llmm.GetString() ?? "cloud" : "cloud";
+            LocalLlmModel = r.TryGetProperty("local_llm_model", out var llmod) ? llmod.GetString() ?? "gemma-4-E2B-it-Q4_K_M.gguf" : "gemma-4-E2B-it-Q4_K_M.gguf";
             BorderStyle = r.TryGetProperty("border_style", out var bs) ? bs.GetString() ?? "Rainbow" : "Rainbow";
             WaveformStyle = r.TryGetProperty("waveform_style", out var ws) ? ws.GetString() ?? "Bars" : "Bars";
             OverlayPosition = r.TryGetProperty("overlay_position", out var op) ? op.GetString() ?? "Bottom Right" : "Bottom Right";
@@ -186,6 +190,8 @@ public partial class SettingsViewModel : ObservableObject
             ["stt_mode"] = SttMode,
             ["local_model"] = LocalModel,
             ["filler_removal_enabled"] = FillerRemovalEnabled,
+            ["llm_mode"] = LlmMode,
+            ["local_llm_model"] = LocalLlmModel,
             ["border_style"] = BorderStyle,
             ["waveform_style"] = WaveformStyle,
             ["overlay_position"] = OverlayPosition,

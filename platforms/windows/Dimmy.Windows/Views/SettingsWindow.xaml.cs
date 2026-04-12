@@ -49,6 +49,8 @@ public sealed partial class SettingsWindow : Window
         SyncThemeRadioButtons();
         PopulateLocalModels();
         SyncSttMode();
+        PopulateLocalLlmModels();
+        SyncLlmMode();
         PopulateStats();
         PopulateVersion();
         _loaded = true;
@@ -355,6 +357,145 @@ public sealed partial class SettingsWindow : Window
         finally
         {
             DownloadProgress.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    // ── Local LLM mode ────────────────────────────────────────────
+
+    private System.Collections.Generic.List<LocalModelInfo> _localLlmModels = new();
+
+    private void SyncLlmMode()
+    {
+        bool isLocal = ViewModel.LlmMode == "local";
+        LlmModeLocal.IsChecked = isLocal;
+        LlmModeCloud.IsChecked = !isLocal;
+        LocalLlmPanel.Visibility = isLocal ? Visibility.Visible : Visibility.Collapsed;
+        CloudLlmPanel.Visibility = isLocal ? Visibility.Collapsed : Visibility.Visible;
+
+        if (isLocal)
+            CheckLlmModelStatus();
+    }
+
+    private void LlmMode_Checked(object sender, RoutedEventArgs e)
+    {
+        if (!_loaded) return;
+        if (sender is RadioButton rb && rb.Tag is string tag)
+        {
+            ViewModel.LlmMode = tag;
+            SyncLlmMode();
+        }
+    }
+
+    private void PopulateLocalLlmModels()
+    {
+        try
+        {
+            var json = DimmyNative.ListLocalLlmModels();
+            if (string.IsNullOrEmpty(json)) return;
+
+            using var doc = JsonDocument.Parse(json);
+            _localLlmModels.Clear();
+            LocalLlmModelComboBox.Items.Clear();
+
+            int selectedIdx = 0;
+            int idx = 0;
+            foreach (var el in doc.RootElement.EnumerateArray())
+            {
+                var name = el.GetProperty("name").GetString() ?? "";
+                var filename = el.GetProperty("filename").GetString() ?? "";
+                var sizeMb = el.GetProperty("size_mb").GetInt32();
+                var desc = el.GetProperty("description").GetString() ?? "";
+                var downloaded = el.GetProperty("downloaded").GetBoolean();
+
+                _localLlmModels.Add(new LocalModelInfo(name, filename, sizeMb, desc, downloaded));
+
+                var status = downloaded ? "Ready" : $"{sizeMb}MB";
+                var item = new ComboBoxItem
+                {
+                    Content = $"{name} — {desc} ({status})",
+                    Tag = filename
+                };
+                LocalLlmModelComboBox.Items.Add(item);
+
+                if (filename == ViewModel.LocalLlmModel)
+                    selectedIdx = idx;
+                idx++;
+            }
+
+            if (LocalLlmModelComboBox.Items.Count > 0)
+                LocalLlmModelComboBox.SelectedIndex = selectedIdx;
+        }
+        catch { }
+    }
+
+    private void LocalLlmModel_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_loaded) return;
+        if (LocalLlmModelComboBox.SelectedItem is ComboBoxItem item && item.Tag is string filename)
+        {
+            ViewModel.LocalLlmModel = filename;
+            CheckLlmModelStatus();
+        }
+    }
+
+    private void CheckLlmModelStatus()
+    {
+        try
+        {
+            int exists = DimmyNative.dimmy_llm_model_exists(ViewModel.LocalLlmModel);
+            if (exists == 1)
+            {
+                LocalLlmModelStatus.Text = "Ready";
+                DownloadLlmModelBtn.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                var model = _localLlmModels.Find(m => m.Filename == ViewModel.LocalLlmModel);
+                var sizeInfo = model != null ? $" ({model.SizeMb}MB)" : "";
+                LocalLlmModelStatus.Text = $"Not downloaded{sizeInfo}";
+                DownloadLlmModelBtn.Content = $"Download{sizeInfo}";
+                DownloadLlmModelBtn.Visibility = Visibility.Visible;
+            }
+        }
+        catch
+        {
+            LocalLlmModelStatus.Text = "Unable to check";
+            DownloadLlmModelBtn.Visibility = Visibility.Visible;
+        }
+    }
+
+    private async void DownloadLlmModel_Click(object sender, RoutedEventArgs e)
+    {
+        DownloadLlmModelBtn.IsEnabled = false;
+        DownloadLlmModelBtn.Content = "Downloading...";
+        DownloadLlmProgress.Visibility = Visibility.Visible;
+        LocalLlmModelStatus.Text = "Downloading...";
+
+        try
+        {
+            int result = await Task.Run(() => DimmyNative.dimmy_download_llm_model(ViewModel.LocalLlmModel));
+            if (result == 0)
+            {
+                LocalLlmModelStatus.Text = "Ready";
+                DownloadLlmModelBtn.Visibility = Visibility.Collapsed;
+                PopulateLocalLlmModels();
+            }
+            else
+            {
+                LocalLlmModelStatus.Text = "Download failed";
+                DownloadLlmModelBtn.Content = "Retry Download";
+                DownloadLlmModelBtn.IsEnabled = true;
+            }
+        }
+        catch
+        {
+            LocalLlmModelStatus.Text = "Download failed";
+            DownloadLlmModelBtn.Content = "Retry Download";
+            DownloadLlmModelBtn.IsEnabled = true;
+        }
+        finally
+        {
+            DownloadLlmProgress.Visibility = Visibility.Collapsed;
         }
     }
 

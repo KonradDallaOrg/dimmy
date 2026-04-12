@@ -1254,10 +1254,16 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
             &translate_to,
         ) {
             Ok(enhanced) => {
+                let preview = if enhanced.len() > 120 {
+                    format!("{}...", &enhanced[..120])
+                } else {
+                    enhanced.clone()
+                };
                 log(&format!(
-                    "Local LLM complete: {} chars → {} chars",
+                    "Local LLM complete: {} chars → {} chars: {:?}",
                     text.len(),
-                    enhanced.len()
+                    enhanced.len(),
+                    preview
                 ));
                 return write_to_buf(&enhanced, out_buf, buf_len);
             }

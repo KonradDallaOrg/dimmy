@@ -402,19 +402,21 @@ mod llm_cache {
             if piece.contains("<end_of_turn>")
                 || piece.contains("<start_of_turn>")
                 || piece.contains("</s>")
+                || piece.contains("<|endoftext|>")
             {
                 break;
             }
 
-            // Skip thinking tokens — Gemma 4 may generate <|think|>...<|/think|>
-            // We only want the actual output, not the reasoning.
-            if piece.contains("<|think|>") || piece.contains("<|/think|>") {
+            // Skip any special/control tokens — they start with < and end with >
+            // This catches <|think|>, <|/think|>, <pad>, etc.
+            let trimmed = piece.trim();
+            if trimmed.starts_with('<') && trimmed.ends_with('>') {
                 n_generated += 1;
-                // Continue but don't add to output
-            } else {
-                output.push_str(&piece);
-                n_generated += 1;
+                continue;
             }
+
+            output.push_str(&piece);
+            n_generated += 1;
 
             // Prepare next decode
             batch.clear();
