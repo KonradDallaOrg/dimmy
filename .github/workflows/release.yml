@@ -135,7 +135,7 @@ jobs:
         run: |
           echo "CMake: $(cmake --version | head -1)"
           echo "Xcode CLT: $(xcode-select -p)"
-          cargo build --lib --release --target aarch64-apple-darwin --features local-stt-metal
+          cargo build --lib --release --target aarch64-apple-darwin --features local-stt-metal,local-llm-metal
 
       - name: Verify static library and remove dylib
         run: |
@@ -212,7 +212,7 @@ jobs:
         run: |
           # Clean to avoid stale cached artifacts
           cargo clean --release 2>$null
-          cargo build --lib --release --features local-stt-vulkan
+          cargo build --lib --release --features local-stt-vulkan,local-llm-vulkan
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
