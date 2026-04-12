@@ -135,7 +135,7 @@ jobs:
         run: |
           echo "CMake: $(cmake --version | head -1)"
           echo "Xcode CLT: $(xcode-select -p)"
-          cargo build --lib --release --target aarch64-apple-darwin --features local-stt-metal,local-llm-metal
+          cargo build --lib --release --target aarch64-apple-darwin --features local-stt-metal
 
       - name: Verify static library and remove dylib
         run: |
