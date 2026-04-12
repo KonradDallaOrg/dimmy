@@ -204,28 +204,70 @@ fn strip_special_tags(text: &str) -> String {
         .to_string()
 }
 
-/// Build a local system prompt with extra language enforcement for small models.
-/// Wraps `llm::build_system_prompt()` and adds a critical language rule.
+/// Build a LOCAL system prompt optimized for small models (< 10B params).
+///
+/// Unlike the cloud prompt (long preamble + 7 rules), this uses ultra-short,
+/// direct instructions that small models can actually follow.
+/// The cloud preamble is too complex for E2B — the model ignores most rules.
 pub fn build_local_system_prompt(
     style: crate::llm::LlmStyle,
     tone: crate::llm::LlmTone,
     custom_prompt: &str,
     translate_to: &str,
 ) -> String {
-    let base = crate::llm::build_system_prompt(style, tone, custom_prompt, translate_to);
-    if base.is_empty() {
-        return base;
+    use crate::llm::{LlmStyle, LlmTone};
+
+    if style.is_off() && (translate_to.is_empty() || translate_to == "none") {
+        return String::new();
     }
 
-    // Small models (< 10B) tend to default to English.
-    // Reinforce language preservation aggressively.
-    format!(
-        "{}\n\nCRITICAL LANGUAGE RULE: You MUST output in the SAME language as the input text. \
-         If the input is in Italian, your output MUST be in Italian. \
-         If the input is in French, your output MUST be in French. \
-         NEVER default to English unless the input is in English.",
-        base
-    )
+    // Ultra-short style instructions — small models need direct, simple commands
+    let style_instr = match style {
+        LlmStyle::Off => "",
+        LlmStyle::Correct => "Fix grammar, punctuation, and spelling. Keep the same words.",
+        LlmStyle::Summarize => "Summarize in 1-2 sentences. Keep key facts only.",
+        LlmStyle::Elaborate => "Expand with more detail. Add context and explanations.",
+        LlmStyle::Comprehensible => "Rewrite to be clearer and easier to understand.",
+        LlmStyle::Professional => "Rewrite in formal, professional business tone.",
+        LlmStyle::Prompt => "Rewrite as a clear, structured AI prompt. Fix grammar, organize logically.",
+        LlmStyle::Genz => "Rewrite in Gen-Z slang. Use 'no cap', 'fr fr', 'slay', 'lowkey', 'bussin'.",
+        LlmStyle::Boomer => "Rewrite in a formal, old-fashioned, overly polite tone.",
+        LlmStyle::Emoji => "Rewrite with many emojis. Add 2-4 emojis per sentence.",
+        LlmStyle::Acronyms => "Add common acronyms and abbreviations where possible.",
+        LlmStyle::Imbruttito => "Riscrivi in stile milanese imbruttito. Usa 'performare', 'deliverare', 'taggare', gergo business italiano-inglese.",
+        LlmStyle::Custom => custom_prompt,
+    };
+
+    let tone_instr = match tone {
+        LlmTone::None => "",
+        LlmTone::Formal => "Use formal vocabulary.",
+        LlmTone::Friendly => "Use a warm, friendly tone.",
+        LlmTone::Concise => "Be very brief.",
+        LlmTone::Academic => "Use academic, scholarly language.",
+    };
+
+    let translate_instr = if !translate_to.is_empty() && translate_to != "none" {
+        format!("Translate the output to {}.", translate_to)
+    } else {
+        String::new()
+    };
+
+    // Compose — keep it SHORT. Every extra word confuses small models.
+    let mut parts: Vec<&str> = Vec::new();
+    if !style_instr.is_empty() {
+        parts.push(style_instr);
+    }
+    if !tone_instr.is_empty() {
+        parts.push(tone_instr);
+    }
+
+    let mut prompt = parts.join(" ");
+
+    if !translate_instr.is_empty() {
+        prompt = format!("{} {}", prompt, translate_instr);
+    }
+
+    prompt
 }
 
 /// Build the full prompt for local LLM inference.
@@ -236,8 +278,11 @@ pub fn build_local_prompt(system_prompt: &str, user_text: &str) -> String {
         "user text must not be empty for local LLM"
     );
 
-    // Detect input language for reinforcement
-    let lang_hint = if user_text.contains('è')
+    // Detect input language for reinforcement — but skip if translating
+    let translating = system_prompt.contains("Translate");
+    let lang_hint = if translating {
+        "" // Don't fight the translation instruction
+    } else if user_text.contains('è')
         || user_text.contains('ò')
         || user_text.contains('à')
         || user_text.contains('ù')
@@ -249,13 +294,10 @@ pub fn build_local_prompt(system_prompt: &str, user_text: &str) -> String {
         "IMPORTANT: Respond in the EXACT SAME language as the input text. Do NOT translate."
     };
 
-    // Compact, direct prompt — small models follow short instructions better
     let prompt = format!(
         "<start_of_turn>user\n\
-         {system}\n\n\
-         {lang}\n\n\
-         Output ONLY the transformed text. No explanations, no introductions, no tags.\n\n\
-         Text to transform:\n{text}\n\
+         {system} {lang} Output ONLY the result, nothing else.\n\n\
+         {text}\n\
          <end_of_turn>\n<start_of_turn>model\n<|/think|>\n",
         system = system_prompt,
         lang = lang_hint,
@@ -717,13 +759,13 @@ mod tests {
             "prompt must contain user text"
         );
         assert!(
-            prompt.contains("Text to transform:"),
-            "prompt must label the text to transform"
+            prompt.contains("Output ONLY"),
+            "prompt must contain output instruction"
         );
     }
 
     #[test]
-    fn local_preamble_reinforces_language() {
+    fn local_preamble_is_short_and_direct() {
         let prompt = build_local_system_prompt(
             crate::llm::LlmStyle::Correct,
             crate::llm::LlmTone::None,
@@ -731,32 +773,44 @@ mod tests {
             "none",
         );
         assert!(
-            prompt.contains("SAME language"),
-            "local preamble must reinforce language preservation: {}",
-            &prompt[prompt.len().saturating_sub(200)..]
+            prompt.contains("Fix grammar"),
+            "Correct style must contain 'Fix grammar': {}",
+            prompt
         );
+        // Local prompts must be short — under 200 chars for small models
         assert!(
-            prompt.contains("NEVER default to English"),
-            "local preamble must warn against English default"
+            prompt.len() < 200,
+            "local prompt must be short for small models, got {} chars",
+            prompt.len()
         );
     }
 
     #[test]
-    fn local_preamble_preserves_standard_rules() {
+    fn local_preamble_with_tone() {
+        let prompt = build_local_system_prompt(
+            crate::llm::LlmStyle::Professional,
+            crate::llm::LlmTone::Formal,
+            "",
+            "none",
+        );
+        assert!(prompt.contains("professional"), "must contain style");
+        assert!(prompt.contains("formal"), "must contain tone: {}", prompt);
+    }
+
+    #[test]
+    fn local_preamble_with_translation() {
         let prompt = build_local_system_prompt(
             crate::llm::LlmStyle::Correct,
             crate::llm::LlmTone::None,
             "",
-            "none",
+            "English",
         );
         assert!(
-            prompt.contains("text post-processor"),
-            "local preamble must include standard PREAMBLE content"
+            prompt.contains("Translate"),
+            "must contain translation instruction: {}",
+            prompt
         );
-        assert!(
-            prompt.contains("NEVER answer questions"),
-            "local preamble must include anti-conversation rule"
-        );
+        assert!(prompt.contains("English"), "must contain target language");
     }
 
     #[test]
