@@ -10,8 +10,9 @@ use crate::error::LlmError;
 
 // ── Model catalogue ───────────────────────────────────────────────
 
-const LLM_MODEL_BASE_URL: &str = "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main";
-pub const DEFAULT_LLM_MODEL: &str = "gemma-4-E2B-it-Q4_K_M.gguf";
+const LLM_MODEL_BASE_URL: &str =
+    "https://huggingface.co/matrixportalx/Phi-4-mini-instruct-Q4_K_M-GGUF/resolve/main";
+pub const DEFAULT_LLM_MODEL: &str = "phi-4-mini-instruct-q4_k_m.gguf";
 
 pub struct LlmModel {
     pub name: &'static str,
@@ -22,13 +23,24 @@ pub struct LlmModel {
     pub url: Option<&'static str>,
 }
 
-pub const AVAILABLE_LLM_MODELS: &[LlmModel] = &[LlmModel {
-    name: "Gemma 4 E2B Q4",
-    filename: "gemma-4-E2B-it-Q4_K_M.gguf",
-    size_mb: 3300,
-    description: "Best quality for 4GB+ VRAM, 140+ languages",
-    url: None,
-}];
+pub const AVAILABLE_LLM_MODELS: &[LlmModel] = &[
+    LlmModel {
+        name: "Phi-4 Mini Q4",
+        filename: "phi-4-mini-instruct-q4_k_m.gguf",
+        size_mb: 2500,
+        description: "Fast, high quality, multilingual (3.8B params)",
+        url: None,
+    },
+    // Gemma 4 E2B: blocked by FGDN support in llama.cpp Rust bindings.
+    // Re-enable when llama-cpp-4 crate supports Gated Delta Net architecture.
+    // LlmModel {
+    //     name: "Gemma 4 E2B Q4",
+    //     filename: "gemma-4-E2B-it-Q4_K_M.gguf",
+    //     size_mb: 3300,
+    //     description: "Best quality for 4GB+ VRAM, 140+ languages",
+    //     url: Some("https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf"),
+    // },
+];
 
 // ── Model directory helpers ──────────────────────────────────────
 
@@ -193,8 +205,8 @@ pub fn build_local_system_prompt(
     )
 }
 
-/// Build the full prompt string for Gemma 4 local inference.
-/// Uses Gemma's turn format WITHOUT thinking mode.
+/// Build the full prompt string for local LLM inference.
+/// Uses ChatML format (Phi-4, Qwen, etc.) WITHOUT thinking mode.
 pub fn build_local_prompt(system_prompt: &str, user_text: &str) -> String {
     assert!(
         !user_text.is_empty(),
@@ -202,10 +214,11 @@ pub fn build_local_prompt(system_prompt: &str, user_text: &str) -> String {
     );
 
     let prompt = format!(
-        "<start_of_turn>user\n{}\n\n\
+        "<|system|>\n{}<|end|>\n\
+         <|user|>\n\
          Process the following transcription. Output ONLY the transformed text, nothing else.\n\n\
-         [TRANSCRIPTION]\n{}\n[/TRANSCRIPTION]\n\
-         <end_of_turn>\n<start_of_turn>model\n",
+         [TRANSCRIPTION]\n{}\n[/TRANSCRIPTION]<|end|>\n\
+         <|assistant|>\n",
         system_prompt, user_text
     );
 
@@ -234,12 +247,12 @@ mod llm_cache {
     use std::path::PathBuf;
     use std::sync::Mutex;
 
-    use llama_cpp_2::context::params::LlamaContextParams;
-    use llama_cpp_2::llama_backend::LlamaBackend;
-    use llama_cpp_2::llama_batch::LlamaBatch;
-    use llama_cpp_2::model::params::LlamaModelParams;
-    use llama_cpp_2::model::{AddBos, LlamaModel};
-    use llama_cpp_2::sampling::LlamaSampler;
+    use llama_cpp_4::context::params::LlamaContextParams;
+    use llama_cpp_4::llama_backend::LlamaBackend;
+    use llama_cpp_4::llama_batch::LlamaBatch;
+    use llama_cpp_4::model::params::LlamaModelParams;
+    use llama_cpp_4::model::{AddBos, LlamaModel};
+    use llama_cpp_4::sampling::LlamaSampler;
 
     struct CachedLlmModel {
         model: LlamaModel,
@@ -366,13 +379,10 @@ mod llm_cache {
                 break;
             }
 
-            let piece_bytes = cached
+            let piece = cached
                 .model
-                .token_to_piece_bytes(new_token, 128, false, None)
-                .map_err(|e| {
-                    crate::error::LlmError::LocalModel(format!("token decode failed: {}", e))
-                })?;
-            let piece = String::from_utf8_lossy(&piece_bytes).to_string();
+                .token_to_str(new_token, llama_cpp_4::model::Special::Plaintext)
+                .unwrap_or_default();
             output.push_str(&piece);
             n_generated += 1;
 
@@ -613,17 +623,18 @@ mod tests {
     fn prompt_has_turn_markers() {
         let prompt = build_local_prompt("Fix grammar.", "test text");
         assert!(
-            prompt.contains("<start_of_turn>user"),
-            "prompt must contain user turn marker"
+            prompt.contains("<|system|>"),
+            "prompt must contain system marker"
         );
         assert!(
-            prompt.contains("<start_of_turn>model"),
-            "prompt must contain model turn marker"
+            prompt.contains("<|user|>"),
+            "prompt must contain user marker"
         );
         assert!(
-            prompt.contains("<end_of_turn>"),
-            "prompt must contain end turn marker"
+            prompt.contains("<|assistant|>"),
+            "prompt must contain assistant marker"
         );
+        assert!(prompt.contains("<|end|>"), "prompt must contain end marker");
     }
 
     #[test]

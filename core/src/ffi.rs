@@ -2007,9 +2007,7 @@ mod tests {
                 local_model: Mutex::new("ggml-base-q8_0.bin".to_string()),
                 filler_removal_enabled: Mutex::new(true),
                 llm_mode: Mutex::new("cloud".to_string()),
-                local_llm_model: Mutex::new(
-                    crate::local_llm::DEFAULT_LLM_MODEL.to_string(),
-                ),
+                local_llm_model: Mutex::new(crate::local_llm::DEFAULT_LLM_MODEL.to_string()),
                 border_style: Mutex::new("Rainbow".to_string()),
                 waveform_style: Mutex::new("Bars".to_string()),
                 overlay_position: Mutex::new("Bottom Right".to_string()),

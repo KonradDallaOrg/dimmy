@@ -15,16 +15,21 @@ name = "bench_local"
 path = "src/bin/bench_local.rs"
 required-features = ["local-stt"]
 
+[[bin]]
+name = "test_local_llm"
+path = "src/bin/test_local_llm.rs"
+required-features = ["local-llm"]
+
 [features]
 default = ["local-stt"]
 local-stt = ["dep:whisper-rs"]
 local-stt-metal = ["local-stt", "whisper-rs/metal"]
 local-stt-cuda = ["local-stt", "whisper-rs/cuda"]
 local-stt-vulkan = ["local-stt", "whisper-rs/vulkan"]
-local-llm = ["dep:llama-cpp-2"]
-local-llm-metal = ["local-llm", "llama-cpp-2/metal"]
-local-llm-cuda = ["local-llm", "llama-cpp-2/cuda"]
-local-llm-vulkan = ["local-llm", "llama-cpp-2/vulkan"]
+local-llm = ["dep:llama-cpp-4"]
+local-llm-metal = ["local-llm", "llama-cpp-4/metal"]
+local-llm-cuda = ["local-llm", "llama-cpp-4/cuda"]
+local-llm-vulkan = ["local-llm", "llama-cpp-4/vulkan"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -42,7 +47,7 @@ nnnoiseless = "0.5"
 biquad = "0.4"
 dagc = "0.1"
 whisper-rs = { version = "0.16", optional = true }
-llama-cpp-2 = { version = "0.1.143", optional = true }
+llama-cpp-4 = { version = "0.2.43", optional = true, default-features = false }
 rusqlite = { version = "0.31", features = ["bundled"] }
 regex = "1"
 tokio-stream = "0.1"

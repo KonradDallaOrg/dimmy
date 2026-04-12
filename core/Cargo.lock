@@ -488,7 +488,7 @@ dependencies = [
  "dirs",
  "hound",
  "keyring",
- "llama-cpp-2",
+ "llama-cpp-4",
  "nnnoiseless",
  "regex",
  "reqwest",
@@ -620,15 +620,6 @@ name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
-
-[[package]]
-name = "find_cuda_helper"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9f9e65c593dd01ac77daad909ea4ad17f0d6d1776193fc8ea766356177abdad"
-dependencies = [
- "glob",
-]
 
 [[package]]
 name = "fnv"
@@ -1296,31 +1287,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
 
 [[package]]
-name = "llama-cpp-2"
-version = "0.1.143"
+name = "llama-cpp-4"
+version = "0.2.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d564eb5d7ae88f596e7636ffd549e0f27f4c938a7c7841bb91e2a92c248c9ccb"
+checksum = "cb62f832bd6496039ed04fc33992f9c6d1bca032e5ef2db49c49db7528d5eede"
 dependencies = [
- "encoding_rs",
  "enumflags2",
- "llama-cpp-sys-2",
+ "llama-cpp-sys-4",
  "thiserror 2.0.18",
  "tracing",
- "tracing-core",
 ]
 
 [[package]]
-name = "llama-cpp-sys-2"
-version = "0.1.143"
+name = "llama-cpp-sys-4"
+version = "0.2.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f2cf3435dbadb87817e0a95325c818cd89d43026e8ba1ddd32f1d980d96f33d"
+checksum = "55e0c74fb10e12e4197228c00cbc69775bf0f14d36448d682f36bf71579fecac"
 dependencies = [
  "bindgen",
  "cc",
  "cmake",
- "find_cuda_helper",
  "glob",
- "walkdir",
+ "winreg",
 ]
 
 [[package]]
@@ -2407,7 +2395,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
 dependencies = [
  "once_cell",
- "valuable",
 ]
 
 [[package]]
@@ -2467,12 +2454,6 @@ name = "utf8_iter"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
-
-[[package]]
-name = "valuable"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "vcpkg"
@@ -3085,6 +3066,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09dac053f1cd375980747450bfc7250c264eaae0583872e845c0c7cd578872b5"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "winreg"
+version = "0.56.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d6f32a0ff4a9f6f01231eb2059cc85479330739333e0e58cadf03b6af2cca10"
+dependencies = [
+ "cfg-if",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
