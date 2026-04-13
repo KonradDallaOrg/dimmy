@@ -135,7 +135,7 @@ jobs:
         run: |
           echo "CMake: $(cmake --version | head -1)"
           echo "Xcode CLT: $(xcode-select -p)"
-          cargo build --lib --release --target aarch64-apple-darwin --features local-stt-metal
+          cargo build --lib --release --target aarch64-apple-darwin --features local-stt-metal,local-llm-metal
 
       - name: Verify static library and remove dylib
         run: |
@@ -153,6 +153,24 @@ jobs:
             -derivedDataPath build/derived \
             build \
             CODE_SIGN_IDENTITY="-"
+
+      - name: Bundle llama.cpp dylib
+        run: |
+          APP_PATH="platforms/macos/build/derived/Build/Products/Release/Dimmy.app"
+          FRAMEWORKS_DIR="$APP_PATH/Contents/Frameworks"
+          mkdir -p "$FRAMEWORKS_DIR"
+          # Find and copy libllama.dylib from llama-cpp-sys-4 build output
+          DYLIB=$(find core/target/aarch64-apple-darwin/release -name "libllama.dylib" -o -name "libllama.*.dylib" | head -1)
+          if [ -n "$DYLIB" ]; then
+            cp "$DYLIB" "$FRAMEWORKS_DIR/"
+            echo "Copied $DYLIB to Frameworks"
+            # Fix rpath so the app finds the dylib
+            install_name_tool -add_rpath @executable_path/../Frameworks "$APP_PATH/Contents/MacOS/Dimmy" 2>/dev/null || true
+          else
+            echo "WARNING: libllama.dylib not found — LLM will use CPU fallback"
+            # Also check for ggml dylibs
+            find core/target/aarch64-apple-darwin/release -name "*.dylib" | head -10
+          fi
 
       - name: Create DMG
         working-directory: platforms/macos

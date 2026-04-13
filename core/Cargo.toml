@@ -32,7 +32,7 @@ local-stt-metal = ["local-stt", "whisper-rs/metal"]
 local-stt-cuda = ["local-stt", "whisper-rs/cuda"]
 local-stt-vulkan = ["local-stt", "whisper-rs/vulkan"]
 local-llm = ["dep:llama-cpp-4"]
-local-llm-metal = ["local-llm", "llama-cpp-4/metal"]
+local-llm-metal = ["local-llm", "llama-cpp-4/metal", "llama-cpp-4/dynamic-link"]
 local-llm-cuda = ["local-llm", "llama-cpp-4/cuda"]
 local-llm-vulkan = ["local-llm", "llama-cpp-4/vulkan"]
 
