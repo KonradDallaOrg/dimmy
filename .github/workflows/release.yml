@@ -135,37 +135,16 @@ jobs:
         run: |
           echo "CMake: $(cmake --version | head -1)"
           echo "Xcode CLT: $(xcode-select -p)"
-          cargo build --lib --release --target aarch64-apple-darwin --features local-stt-metal
+          cargo build --lib --release --target aarch64-apple-darwin --features local-stt-metal,local-llm-metal
 
-      - name: Verify static library and prepare dylibs
+      - name: Verify static library
         run: |
           ls -lh core/target/aarch64-apple-darwin/release/libdimmy_lib.a
           file core/target/aarch64-apple-darwin/release/libdimmy_lib.a
           rm -f core/target/aarch64-apple-darwin/release/libdimmy_lib.dylib
           rm -f core/target/aarch64-apple-darwin/release/deps/libdimmy_lib.dylib
-          # Find llama.cpp dylib from llama-cpp-sys-4 build and copy to release dir
-          # so Xcode can find it during linking
-          echo "=== Searching for llama dylibs ==="
-          find core/target/aarch64-apple-darwin/release -name "libllama*" -type f 2>/dev/null
-          LLCB_DIR=$(find core/target/aarch64-apple-darwin/release/build -type d -name "out" -path "*llama-cpp-sys*" 2>/dev/null | head -1)
-          if [ -n "$LLCB_DIR" ]; then
-            echo "llama-cpp-sys build dir: $LLCB_DIR"
-            find "$LLCB_DIR" -name "*.dylib" -o -name "*.a" 2>/dev/null | head -10
-            # Copy dylibs to the release dir where Xcode's LIBRARY_SEARCH_PATHS points
-            cp "$LLCB_DIR"/lib/*.dylib core/target/aarch64-apple-darwin/release/ 2>/dev/null || true
-            cp "$LLCB_DIR"/*.dylib core/target/aarch64-apple-darwin/release/ 2>/dev/null || true
-          fi
-          # Also check the llcb cache dir
-          find "$HOME/Library" -path "*/llcb/*" -name "libllama*" 2>/dev/null | head -5
-          LLCB_CACHE=$(find "$HOME" -type d -name "llcb" 2>/dev/null | head -1)
-          if [ -n "$LLCB_CACHE" ]; then
-            find "$LLCB_CACHE" -name "*.dylib" 2>/dev/null | while read f; do
-              cp "$f" core/target/aarch64-apple-darwin/release/ 2>/dev/null
-              echo "Copied: $f"
-            done
-          fi
-          echo "=== Release dir dylibs ==="
-          ls -la core/target/aarch64-apple-darwin/release/*.dylib 2>/dev/null || echo "No dylibs in release dir"
+          echo "=== llama/ggml dylibs in release dir ==="
+          ls -la core/target/aarch64-apple-darwin/release/libllama* core/target/aarch64-apple-darwin/release/libggml* 2>/dev/null || echo "No dylibs found"
 
       - name: Build Xcode project
         working-directory: platforms/macos
@@ -182,26 +161,26 @@ jobs:
           APP_PATH="platforms/macos/build/derived/Build/Products/Release/Dimmy.app"
           FRAMEWORKS_DIR="$APP_PATH/Contents/Frameworks"
           mkdir -p "$FRAMEWORKS_DIR"
-          # Copy ALL llama/ggml dylibs (not symlinks) to Frameworks
           RELEASE_DIR="core/target/aarch64-apple-darwin/release"
-          for dylib in "$RELEASE_DIR"/libllama.*.dylib "$RELEASE_DIR"/libggml*.dylib; do
-            if [ -f "$dylib" ] && [ ! -L "$dylib" ]; then
-              cp "$dylib" "$FRAMEWORKS_DIR/"
-              basename "$dylib"
-              # Fix install name to use @rpath
-              install_name_tool -id "@rpath/$(basename $dylib)" "$FRAMEWORKS_DIR/$(basename $dylib)" 2>/dev/null || true
-            fi
+
+          # Copy dylibs dereferencing symlinks so every file is a real binary
+          for name in libllama libggml libggml-base libggml-cpu libggml-metal; do
+            for dylib in "$RELEASE_DIR"/${name}*.dylib; do
+              [ -e "$dylib" ] || continue
+              DEST="$FRAMEWORKS_DIR/$(basename "$dylib")"
+              cp -RL "$dylib" "$DEST"
+              # Ensure install name uses @rpath so the app finds them at runtime
+              install_name_tool -id "@rpath/$(basename "$dylib")" "$DEST" 2>/dev/null || true
+            done
           done
-          # Also copy symlinks
-          for link in "$RELEASE_DIR"/libllama.*.dylib "$RELEASE_DIR"/libggml*.dylib; do
-            if [ -L "$link" ]; then
-              cp -a "$link" "$FRAMEWORKS_DIR/"
-            fi
-          done
-          # Fix rpath in main binary
-          install_name_tool -add_rpath @executable_path/../Frameworks "$APP_PATH/Contents/MacOS/Dimmy" 2>/dev/null || true
+
+          # Re-sign all dylibs
+          codesign --force --sign - "$FRAMEWORKS_DIR"/*.dylib
+
           echo "=== Frameworks contents ==="
           ls -la "$FRAMEWORKS_DIR/"
+          echo "=== Verifying no broken symlinks ==="
+          find "$FRAMEWORKS_DIR" -type l ! -exec test -e {} \; -print | grep . && echo "BROKEN SYMLINKS FOUND — BUILD WILL FAIL" && exit 1 || echo "All OK"
 
       - name: Create DMG
         working-directory: platforms/macos

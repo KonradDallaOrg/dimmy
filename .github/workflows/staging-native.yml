@@ -137,14 +137,16 @@ jobs:
 
       - name: Build Rust static library
         working-directory: core
-        run: cargo build --lib --release --target aarch64-apple-darwin --features local-stt-metal
+        run: cargo build --lib --release --target aarch64-apple-darwin --features local-stt-metal,local-llm-metal
 
-      - name: Verify static library and remove dylib
+      - name: Verify static library
         run: |
           ls -lh core/target/aarch64-apple-darwin/release/libdimmy_lib.a
           file core/target/aarch64-apple-darwin/release/libdimmy_lib.a
           rm -f core/target/aarch64-apple-darwin/release/libdimmy_lib.dylib
           rm -f core/target/aarch64-apple-darwin/release/deps/libdimmy_lib.dylib
+          echo "=== llama/ggml dylibs in release dir ==="
+          ls -la core/target/aarch64-apple-darwin/release/libllama* core/target/aarch64-apple-darwin/release/libggml* 2>/dev/null || echo "No dylibs found"
 
       - name: Build Xcode project
         working-directory: platforms/macos
@@ -155,6 +157,31 @@ jobs:
             -derivedDataPath build/derived \
             build \
             CODE_SIGN_IDENTITY="-"
+
+      - name: Bundle llama.cpp dylibs
+        run: |
+          APP_PATH="platforms/macos/build/derived/Build/Products/Release/Dimmy.app"
+          FRAMEWORKS_DIR="$APP_PATH/Contents/Frameworks"
+          mkdir -p "$FRAMEWORKS_DIR"
+          RELEASE_DIR="core/target/aarch64-apple-darwin/release"
+
+          # Copy dylibs dereferencing symlinks so every file is a real binary
+          for name in libllama libggml libggml-base libggml-cpu libggml-metal; do
+            for dylib in "$RELEASE_DIR"/${name}*.dylib; do
+              [ -e "$dylib" ] || continue
+              DEST="$FRAMEWORKS_DIR/$(basename "$dylib")"
+              cp -RL "$dylib" "$DEST"
+              install_name_tool -id "@rpath/$(basename "$dylib")" "$DEST" 2>/dev/null || true
+            done
+          done
+
+          # Re-sign all dylibs
+          codesign --force --sign - "$FRAMEWORKS_DIR"/*.dylib
+
+          echo "=== Frameworks contents ==="
+          ls -la "$FRAMEWORKS_DIR/"
+          echo "=== Verifying no broken symlinks ==="
+          find "$FRAMEWORKS_DIR" -type l ! -exec test -e {} \; -print | grep . && echo "BROKEN SYMLINKS FOUND" && exit 1 || echo "All OK"
 
       - name: Create DMG
         working-directory: platforms/macos
