@@ -516,11 +516,6 @@
 					OSAKit,
 					"-framework",
 					Carbon,
-					"-lllama",
-					"-lggml",
-					"-lggml-base",
-					"-lggml-cpu",
-					"-lggml-metal",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.dimmy.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -566,11 +561,6 @@
 					OSAKit,
 					"-framework",
 					Carbon,
-					"-lllama",
-					"-lggml",
-					"-lggml-base",
-					"-lggml-cpu",
-					"-lggml-metal",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.dimmy.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
