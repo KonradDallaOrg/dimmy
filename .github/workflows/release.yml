@@ -177,23 +177,31 @@ jobs:
             build \
             CODE_SIGN_IDENTITY="-"
 
-      - name: Bundle llama.cpp dylib
+      - name: Bundle llama.cpp dylibs
         run: |
           APP_PATH="platforms/macos/build/derived/Build/Products/Release/Dimmy.app"
           FRAMEWORKS_DIR="$APP_PATH/Contents/Frameworks"
           mkdir -p "$FRAMEWORKS_DIR"
-          # Find and copy libllama.dylib from llama-cpp-sys-4 build output
-          DYLIB=$(find core/target/aarch64-apple-darwin/release -name "libllama.dylib" -o -name "libllama.*.dylib" | head -1)
-          if [ -n "$DYLIB" ]; then
-            cp "$DYLIB" "$FRAMEWORKS_DIR/"
-            echo "Copied $DYLIB to Frameworks"
-            # Fix rpath so the app finds the dylib
-            install_name_tool -add_rpath @executable_path/../Frameworks "$APP_PATH/Contents/MacOS/Dimmy" 2>/dev/null || true
-          else
-            echo "WARNING: libllama.dylib not found — LLM will use CPU fallback"
-            # Also check for ggml dylibs
-            find core/target/aarch64-apple-darwin/release -name "*.dylib" | head -10
-          fi
+          # Copy ALL llama/ggml dylibs (not symlinks) to Frameworks
+          RELEASE_DIR="core/target/aarch64-apple-darwin/release"
+          for dylib in "$RELEASE_DIR"/libllama.*.dylib "$RELEASE_DIR"/libggml*.dylib; do
+            if [ -f "$dylib" ] && [ ! -L "$dylib" ]; then
+              cp "$dylib" "$FRAMEWORKS_DIR/"
+              basename "$dylib"
+              # Fix install name to use @rpath
+              install_name_tool -id "@rpath/$(basename $dylib)" "$FRAMEWORKS_DIR/$(basename $dylib)" 2>/dev/null || true
+            fi
+          done
+          # Also copy symlinks
+          for link in "$RELEASE_DIR"/libllama.*.dylib "$RELEASE_DIR"/libggml*.dylib; do
+            if [ -L "$link" ]; then
+              cp -a "$link" "$FRAMEWORKS_DIR/"
+            fi
+          done
+          # Fix rpath in main binary
+          install_name_tool -add_rpath @executable_path/../Frameworks "$APP_PATH/Contents/MacOS/Dimmy" 2>/dev/null || true
+          echo "=== Frameworks contents ==="
+          ls -la "$FRAMEWORKS_DIR/"
 
       - name: Create DMG
         working-directory: platforms/macos
