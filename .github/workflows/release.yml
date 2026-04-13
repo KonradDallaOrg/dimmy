@@ -137,12 +137,35 @@ jobs:
           echo "Xcode CLT: $(xcode-select -p)"
           cargo build --lib --release --target aarch64-apple-darwin --features local-stt-metal,local-llm-metal
 
-      - name: Verify static library and remove dylib
+      - name: Verify static library and prepare dylibs
         run: |
           ls -lh core/target/aarch64-apple-darwin/release/libdimmy_lib.a
           file core/target/aarch64-apple-darwin/release/libdimmy_lib.a
           rm -f core/target/aarch64-apple-darwin/release/libdimmy_lib.dylib
           rm -f core/target/aarch64-apple-darwin/release/deps/libdimmy_lib.dylib
+          # Find llama.cpp dylib from llama-cpp-sys-4 build and copy to release dir
+          # so Xcode can find it during linking
+          echo "=== Searching for llama dylibs ==="
+          find core/target/aarch64-apple-darwin/release -name "libllama*" -type f 2>/dev/null
+          LLCB_DIR=$(find core/target/aarch64-apple-darwin/release/build -type d -name "out" -path "*llama-cpp-sys*" 2>/dev/null | head -1)
+          if [ -n "$LLCB_DIR" ]; then
+            echo "llama-cpp-sys build dir: $LLCB_DIR"
+            find "$LLCB_DIR" -name "*.dylib" -o -name "*.a" 2>/dev/null | head -10
+            # Copy dylibs to the release dir where Xcode's LIBRARY_SEARCH_PATHS points
+            cp "$LLCB_DIR"/lib/*.dylib core/target/aarch64-apple-darwin/release/ 2>/dev/null || true
+            cp "$LLCB_DIR"/*.dylib core/target/aarch64-apple-darwin/release/ 2>/dev/null || true
+          fi
+          # Also check the llcb cache dir
+          find "$HOME/Library" -path "*/llcb/*" -name "libllama*" 2>/dev/null | head -5
+          LLCB_CACHE=$(find "$HOME" -type d -name "llcb" 2>/dev/null | head -1)
+          if [ -n "$LLCB_CACHE" ]; then
+            find "$LLCB_CACHE" -name "*.dylib" 2>/dev/null | while read f; do
+              cp "$f" core/target/aarch64-apple-darwin/release/ 2>/dev/null
+              echo "Copied: $f"
+            done
+          fi
+          echo "=== Release dir dylibs ==="
+          ls -la core/target/aarch64-apple-darwin/release/*.dylib 2>/dev/null || echo "No dylibs in release dir"
 
       - name: Build Xcode project
         working-directory: platforms/macos
