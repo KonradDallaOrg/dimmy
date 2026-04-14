@@ -189,6 +189,7 @@ jobs:
           APP_PATH="build/derived/Build/Products/Release/Dimmy.app"
           mkdir -p build/dmg
           cp -R "$APP_PATH" build/dmg/
+          ln -s /Applications build/dmg/Applications
           hdiutil create -volname "Dimmy" \
             -srcfolder build/dmg \
             -ov -format UDZO \
