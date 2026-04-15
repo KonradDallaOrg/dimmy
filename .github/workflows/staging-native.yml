@@ -130,14 +130,23 @@ jobs:
         with:
           targets: aarch64-apple-darwin
 
+      - name: Install CMake
+        run: |
+          brew install cmake
+          cmake --version
+
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: core
+          shared-key: macos-staging
 
       - name: Build Rust static library
         working-directory: core
-        run: cargo build --lib --release --target aarch64-apple-darwin --features local-stt-metal,local-llm-metal
+        run: |
+          echo "CMake: $(cmake --version | head -1)"
+          echo "Xcode CLT: $(xcode-select -p)"
+          cargo build --lib --release --target aarch64-apple-darwin --features local-stt-metal,local-llm-metal
 
       - name: Verify static library
         run: |
