@@ -196,6 +196,7 @@ where
 
 /// Strip all special/control tags from LLM output.
 /// Uses regex to catch: <think>...</think>, <start_of_turn>, <|think|>, etc.
+#[cfg_attr(not(feature = "local-llm"), allow(dead_code))]
 fn strip_special_tags(text: &str) -> String {
     // 1. Remove thinking blocks with their content: <think>...</think> and <|think|>...<|/think|>
     let re_think = regex::Regex::new(r"(?s)<think>.*?</think>|<\|think\|>.*?<\|/think\|>")
