@@ -268,22 +268,20 @@ jobs:
         working-directory: platforms/windows/Dimmy.Windows
         run: dotnet restore
 
-      - name: Build Windows app
+      - name: Publish Windows app (self-contained)
         working-directory: platforms/windows/Dimmy.Windows
-        run: dotnet build Dimmy.Windows.csproj -c Release
+        run: dotnet publish Dimmy.Windows.csproj -c Release -r win-x64 --self-contained true -p:WindowsAppSDKSelfContained=true -p:SelfContained=true -o publish
 
       - name: Prepare distribution
         shell: pwsh
         run: |
-          $binDir = (Get-ChildItem -Path "platforms/windows/Dimmy.Windows/bin" -Recurse -Filter "Dimmy.Windows.exe" | Select-Object -First 1).DirectoryName
-          Write-Host "Build dir: $binDir"
-          # Copy Rust DLL into bin output
-          Copy-Item "D:\t\release\dimmy_lib.dll" "$binDir/"
-          # Remove PDB files to reduce zip size
-          Get-ChildItem "$binDir" -Filter "*.pdb" -Recurse | Remove-Item -ErrorAction SilentlyContinue
-          # Create publish alias for packaging step
-          New-Item -ItemType Directory -Force -Path "platforms/windows/Dimmy.Windows/publish"
-          Copy-Item "$binDir/*" "platforms/windows/Dimmy.Windows/publish/" -Recurse
+          $pubDir = "platforms/windows/Dimmy.Windows/publish"
+          Copy-Item "D:\t\release\dimmy_lib.dll" "$pubDir/"
+          Get-ChildItem "$pubDir" -Filter "*.pdb" -Recurse | Remove-Item -ErrorAction SilentlyContinue
+
+      - name: Verify self-contained bundle
+        shell: pwsh
+        run: platforms/windows/verify-self-contained.ps1 -Path platforms/windows/Dimmy.Windows/publish
 
       - name: Run Windows tests
         working-directory: platforms/windows/Dimmy.Windows.Tests

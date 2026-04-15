@@ -259,17 +259,20 @@ jobs:
         working-directory: platforms/windows/Dimmy.Windows
         run: dotnet restore
 
-      - name: Build Windows app
+      - name: Publish Windows app (self-contained)
         working-directory: platforms/windows/Dimmy.Windows
-        run: dotnet build Dimmy.Windows.csproj -c Release
+        run: dotnet publish Dimmy.Windows.csproj -c Release -r win-x64 --self-contained true -p:WindowsAppSDKSelfContained=true -p:SelfContained=true -o publish
 
       - name: Prepare distribution
         shell: pwsh
         run: |
-          $binDir = (Get-ChildItem -Path "platforms/windows/Dimmy.Windows/bin" -Recurse -Filter "Dimmy.Windows.exe" | Select-Object -First 1).DirectoryName
-          Write-Host "Build dir: $binDir"
-          Copy-Item "D:\t\release\dimmy_lib.dll" "$binDir/"
-          Get-ChildItem "$binDir" -Filter "*.pdb" -Recurse | Remove-Item -ErrorAction SilentlyContinue
+          $pubDir = "platforms/windows/Dimmy.Windows/publish"
+          Copy-Item "D:\t\release\dimmy_lib.dll" "$pubDir/"
+          Get-ChildItem "$pubDir" -Filter "*.pdb" -Recurse | Remove-Item -ErrorAction SilentlyContinue
+
+      - name: Verify self-contained bundle
+        shell: pwsh
+        run: platforms/windows/verify-self-contained.ps1 -Path platforms/windows/Dimmy.Windows/publish
 
       - name: Run Windows tests
         working-directory: platforms/windows/Dimmy.Windows.Tests
@@ -282,9 +285,9 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ needs.create-release.outputs.version }}"
-          $binDir = (Get-ChildItem -Path "platforms/windows/Dimmy.Windows/bin" -Recurse -Filter "Dimmy.Windows.exe" | Select-Object -First 1).DirectoryName
-          Write-Host "Packing Velopack v$version from $binDir"
-          vpk pack --packId Dimmy --packVersion $version --packDir "$binDir" --mainExe Dimmy.Windows.exe --icon "platforms/windows/Dimmy.Windows/Assets/dimmy.ico" --framework "net8.0-x64-desktop,vcredist143-x64" --outputDir platforms/windows/velopack-output
+          $pubDir = (Resolve-Path "platforms/windows/Dimmy.Windows/publish").Path
+          Write-Host "Packing Velopack v$version from $pubDir"
+          vpk pack --packId Dimmy --packVersion $version --packDir "$pubDir" --mainExe Dimmy.Windows.exe --icon "platforms/windows/Dimmy.Windows/Assets/dimmy.ico" --framework "vcredist143-x64" --outputDir platforms/windows/velopack-output
           Get-ChildItem platforms/windows/velopack-output | ForEach-Object { Write-Host "$($_.Name) ($([math]::Round($_.Length/1MB, 1)) MB)" }
 
       - name: Upload to release
