@@ -34,7 +34,6 @@ $required = @(
     'dimmy_lib.dll',
     # VC++ runtime (needed by Rust DLL — without these, app silently exits on clean machines)
     'vcruntime140.dll',
-    'vcruntime140_1.dll',
     'msvcp140.dll'
 )
 
