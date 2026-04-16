@@ -1,33 +1,50 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="660" height="400" viewBox="0 0 660 400">
   <defs>
-    <linearGradient id="bg" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" style="stop-color:#1a1a2e;stop-opacity:1"/>
-      <stop offset="100%" style="stop-color:#16213e;stop-opacity:1"/>
+    <!-- Background gradient: deep navy to dark blue -->
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="400" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0f0f1a"/>
+      <stop offset="100%" stop-color="#1a1a2e"/>
     </linearGradient>
-    <linearGradient id="arrow" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" style="stop-color:#ffffff;stop-opacity:0.6"/>
-      <stop offset="100%" style="stop-color:#ffffff;stop-opacity:0.9"/>
+
+    <!-- Arrow gradient: subtle white fade -->
+    <linearGradient id="arrowGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.3"/>
+      <stop offset="50%" stop-color="#ffffff" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0.4"/>
     </linearGradient>
+
+    <!-- Subtle radial glow behind the arrow -->
+    <radialGradient id="glow" cx="330" cy="200" r="160" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.03"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Arrowhead: path ends at base (refX=0), tip extends forward. No overlap. -->
+    <marker id="arrowhead" markerWidth="12" markerHeight="10" refX="0" refY="5" orient="auto" overflow="visible">
+      <polygon points="0,0 12,5 0,10" fill="#ffffff" opacity="0.55"/>
+    </marker>
   </defs>
 
   <!-- Background -->
-  <rect width="660" height="400" fill="url(#bg)" rx="0"/>
+  <rect width="660" height="400" fill="url(#bg)"/>
 
-  <!-- Subtle grid pattern -->
-  <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-    <rect width="40" height="40" fill="none"/>
-    <circle cx="20" cy="20" r="0.5" fill="rgba(255,255,255,0.05)"/>
-  </pattern>
-  <rect width="660" height="400" fill="url(#grid)"/>
+  <!-- Subtle center glow -->
+  <ellipse cx="330" cy="200" rx="200" ry="120" fill="url(#glow)"/>
 
-  <!-- "Drag to install" arrow: centered between icon positions (165, 495), y=200 -->
-  <!-- Arrow body -->
-  <line x1="240" y1="200" x2="400" y2="200" stroke="url(#arrow)" stroke-width="3" stroke-linecap="round" stroke-dasharray="12,6"/>
-  <!-- Arrow head -->
-  <polygon points="410,200 390,185 390,215" fill="rgba(255,255,255,0.8)"/>
+  <!-- Curved arrow — path ends where the arrowhead base starts -->
+  <path d="M 240 200 C 290 160, 370 160, 420 200"
+        fill="none" stroke="url(#arrowGrad)" stroke-width="1.5"
+        stroke-linecap="round"
+        marker-end="url(#arrowhead)"/>
 
-  <!-- Label -->
-  <text x="330" y="260" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif" font-size="13" fill="rgba(255,255,255,0.5)" letter-spacing="2">
-    DRAG TO INSTALL
+  <!-- "Drag to Applications" label -->
+  <text x="330" y="270"
+        text-anchor="middle"
+        font-family="SF Pro Display, SF Pro Text, -apple-system, Helvetica Neue, sans-serif"
+        font-size="13"
+        font-weight="300"
+        fill="rgba(255,255,255,0.4)"
+        letter-spacing="3">
+    DRAG TO APPLICATIONS
   </text>
 </svg>

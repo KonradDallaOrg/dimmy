@@ -183,8 +183,10 @@ jobs:
           echo "=== Verifying no broken symlinks ==="
           find "$FRAMEWORKS_DIR" -type l ! -exec test -e {} \; -print | grep . && echo "BROKEN SYMLINKS FOUND — BUILD WILL FAIL" && exit 1 || echo "All OK"
 
-      - name: Generate DMG background
-        run: python3 platforms/macos/dmg-assets/generate-background.py
+      - name: Generate DMG background (SVG → PNG)
+        run: |
+          brew install librsvg
+          rsvg-convert -w 660 -h 400 platforms/macos/dmg-assets/dmg-background.svg -o platforms/macos/dmg-assets/dmg-background.png
 
       - name: Create DMG
         working-directory: platforms/macos
