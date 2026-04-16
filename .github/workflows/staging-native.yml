@@ -83,12 +83,15 @@ jobs:
             echo "| Platform | File |"
             echo "|----------|------|"
             echo "| macOS (Apple Silicon) | \`Dimmy-native-macos-arm64.dmg\` |"
-            echo "| Windows | \`Dimmy-native-windows-x64.zip\` |"
+            echo "| Windows (installer) | \`Dimmy-win-Setup.exe\` |"
+            echo "| Windows (portable) | \`Dimmy-win-Portable.zip\` |"
             echo "| Linux (GTK4) | \`Dimmy-native-linux-x86_64.AppImage\` |"
             echo ""
-            echo "## Windows Requirements"
+            echo "## Windows"
             echo ""
-            echo "Requires .NET 8 Desktop Runtime. Download: https://dotnet.microsoft.com/download/dotnet/8.0"
+            echo "Self-contained — no .NET runtime or VC++ redist install needed."
+            echo "- **Setup.exe**: Installer (recommended) — installs VC++ redist automatically"
+            echo "- **Portable.zip**: Extract and run anywhere"
             echo ""
             echo "## macOS Installation"
             echo ""
@@ -296,17 +299,27 @@ jobs:
         working-directory: platforms/windows/Dimmy.Windows.Tests
         run: dotnet test -c Release --logger "console;verbosity=normal"
 
-      - name: Package installer
-        working-directory: platforms/windows/Dimmy.Windows
+      - name: Install Velopack CLI
+        run: dotnet tool install -g vpk
+
+      - name: Package with Velopack (self-contained + VC++ redist)
         shell: pwsh
         run: |
-          Compress-Archive -Path publish\* -DestinationPath ..\Dimmy-native-windows-x64.zip
+          $version = "${{ needs.create-release.outputs.version }}"
+          # Velopack needs semver (X.Y.Z) — extract base version before any suffix
+          if ($version -match '^(\d+\.\d+\.\d+)') { $semver = $Matches[1] } else { $semver = "0.0.1" }
+          $pubDir = (Resolve-Path "platforms/windows/Dimmy.Windows/publish").Path
+          Write-Host "Packing Velopack v$semver from $pubDir"
+          vpk pack --packId Dimmy --packVersion $semver --packDir "$pubDir" --mainExe Dimmy.Windows.exe --icon "platforms/windows/Dimmy.Windows/Assets/dimmy.ico" --framework "vcredist143-x64" --outputDir platforms/windows/velopack-output
+          Get-ChildItem platforms/windows/velopack-output | ForEach-Object { Write-Host "$($_.Name) ($([math]::Round($_.Length/1MB, 1)) MB)" }
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: staging-latest
-          files: platforms/windows/Dimmy-native-windows-x64.zip
+          files: |
+            platforms/windows/velopack-output/Dimmy-win-Setup.exe
+            platforms/windows/velopack-output/Dimmy-win-Portable.zip
 
   # ── Linux Native Build (parallel with macOS + Windows + rust-check) ──
   build-linux:

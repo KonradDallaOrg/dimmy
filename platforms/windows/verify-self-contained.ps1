@@ -31,7 +31,10 @@ $required = @(
     # App + native
     'Dimmy.Windows.exe',
     'Dimmy.Windows.dll',
-    'dimmy_lib.dll'
+    'dimmy_lib.dll',
+    # VC++ runtime (needed by Rust DLL — without these, app silently exits on clean machines)
+    'vcruntime140.dll',
+    'vcruntime140_1.dll'
 )
 
 $files = Get-ChildItem -Path $Path -Recurse -File | ForEach-Object { $_.Name } | Sort-Object -Unique
