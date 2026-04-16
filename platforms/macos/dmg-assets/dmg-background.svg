@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="660" height="400" viewBox="0 0 660 400">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a1a2e;stop-opacity:1"/>
+      <stop offset="100%" style="stop-color:#16213e;stop-opacity:1"/>
+    </linearGradient>
+    <linearGradient id="arrow" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#ffffff;stop-opacity:0.6"/>
+      <stop offset="100%" style="stop-color:#ffffff;stop-opacity:0.9"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="660" height="400" fill="url(#bg)" rx="0"/>
+
+  <!-- Subtle grid pattern -->
+  <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+    <rect width="40" height="40" fill="none"/>
+    <circle cx="20" cy="20" r="0.5" fill="rgba(255,255,255,0.05)"/>
+  </pattern>
+  <rect width="660" height="400" fill="url(#grid)"/>
+
+  <!-- "Drag to install" arrow: centered between icon positions (165, 495), y=200 -->
+  <!-- Arrow body -->
+  <line x1="240" y1="200" x2="400" y2="200" stroke="url(#arrow)" stroke-width="3" stroke-linecap="round" stroke-dasharray="12,6"/>
+  <!-- Arrow head -->
+  <polygon points="410,200 390,185 390,215" fill="rgba(255,255,255,0.8)"/>
+
+  <!-- Label -->
+  <text x="330" y="260" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif" font-size="13" fill="rgba(255,255,255,0.5)" letter-spacing="2">
+    DRAG TO INSTALL
+  </text>
+</svg>
