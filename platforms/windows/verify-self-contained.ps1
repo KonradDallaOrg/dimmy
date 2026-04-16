@@ -34,7 +34,8 @@ $required = @(
     'dimmy_lib.dll',
     # VC++ runtime (needed by Rust DLL — without these, app silently exits on clean machines)
     'vcruntime140.dll',
-    'vcruntime140_1.dll'
+    'vcruntime140_1.dll',
+    'msvcp140.dll'
 )
 
 $files = Get-ChildItem -Path $Path -Recurse -File | ForEach-Object { $_.Name } | Sort-Object -Unique
@@ -50,11 +51,12 @@ Write-Host "Files: $($files.Count), Total: $sizeMB MB"
 
 if ($missing.Count -gt 0) {
     Write-Host ""
-    Write-Error "Self-contained check FAILED. Missing DLLs:"
-    $missing | ForEach-Object { Write-Host "  - $_" }
+    Write-Host "Self-contained check FAILED. Missing DLLs:" -ForegroundColor Red
+    $missing | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
     Write-Host ""
     Write-Host "Did you use 'dotnet publish -r win-x64 --self-contained'?"
     Write-Host "'dotnet build' does NOT honor <SelfContained> / <WindowsAppSDKSelfContained>."
+    Write-Host "VC++ runtime DLLs must be copied from MSVC toolchain (see CI workflow)."
     exit 1
 }
 

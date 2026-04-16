@@ -291,6 +291,16 @@ jobs:
         run: |
           $pubDir = "platforms/windows/Dimmy.Windows/publish"
           Copy-Item "D:\t\release\dimmy_lib.dll" "$pubDir/"
+          # Bundle VC++ runtime DLLs (dotnet publish uses its own vcruntime140_cor3.dll,
+          # but the Rust DLL needs the standard vcruntime140.dll)
+          $vsDir = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $vcRedist = "$vsDir\VC\Redist\MSVC"
+          $latestRedist = Get-ChildItem $vcRedist -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          $dllDir = "$($latestRedist.FullName)\x64\Microsoft.VC143.CRT"
+          Write-Host "Copying VC++ runtime from $dllDir"
+          Copy-Item "$dllDir\vcruntime140.dll" "$pubDir/"
+          Copy-Item "$dllDir\vcruntime140_1.dll" "$pubDir/"
+          Copy-Item "$dllDir\msvcp140.dll" "$pubDir/"
           Get-ChildItem "$pubDir" -Filter "*.pdb" -Recurse | Remove-Item -ErrorAction SilentlyContinue
 
       - name: Verify self-contained bundle
