@@ -135,6 +135,7 @@ jobs:
         run: |
           echo "CMake: $(cmake --version | head -1)"
           echo "Xcode CLT: $(xcode-select -p)"
+          cargo clean --release 2>/dev/null
           cargo build --lib --release --target aarch64-apple-darwin --features local-stt-metal,local-llm-metal
 
       - name: Verify static library
@@ -182,17 +183,27 @@ jobs:
           echo "=== Verifying no broken symlinks ==="
           find "$FRAMEWORKS_DIR" -type l ! -exec test -e {} \; -print | grep . && echo "BROKEN SYMLINKS FOUND — BUILD WILL FAIL" && exit 1 || echo "All OK"
 
+      - name: Generate DMG background (SVG → PNG)
+        run: |
+          brew install librsvg
+          rsvg-convert -w 660 -h 400 platforms/macos/dmg-assets/dmg-background.svg -o platforms/macos/dmg-assets/dmg-background.png
+
       - name: Create DMG
         working-directory: platforms/macos
         run: |
+          brew install create-dmg
           APP_PATH="build/derived/Build/Products/Release/Dimmy.app"
-          mkdir -p build/dmg
-          cp -R "$APP_PATH" build/dmg/
-          ln -s /Applications build/dmg/Applications
-          hdiutil create -volname "Dimmy" \
-            -srcfolder build/dmg \
-            -ov -format UDZO \
-            "build/Dimmy-macos-arm64.dmg"
+          create-dmg \
+            --volname "Dimmy" \
+            --background "dmg-assets/dmg-background.png" \
+            --window-pos 200 120 \
+            --window-size 660 400 \
+            --icon-size 128 \
+            --icon "Dimmy.app" 165 200 \
+            --app-drop-link 495 200 \
+            --no-internet-enable \
+            "build/Dimmy-macos-arm64.dmg" \
+            "$APP_PATH"
 
       - name: Upload DMG to release
         uses: softprops/action-gh-release@v2
@@ -259,17 +270,30 @@ jobs:
         working-directory: platforms/windows/Dimmy.Windows
         run: dotnet restore
 
-      - name: Build Windows app
+      - name: Publish Windows app (self-contained)
         working-directory: platforms/windows/Dimmy.Windows
-        run: dotnet build Dimmy.Windows.csproj -c Release
+        run: dotnet publish Dimmy.Windows.csproj -c Release -r win-x64 --self-contained true -p:WindowsAppSDKSelfContained=true -p:SelfContained=true -o publish
 
       - name: Prepare distribution
         shell: pwsh
         run: |
-          $binDir = (Get-ChildItem -Path "platforms/windows/Dimmy.Windows/bin" -Recurse -Filter "Dimmy.Windows.exe" | Select-Object -First 1).DirectoryName
-          Write-Host "Build dir: $binDir"
-          Copy-Item "D:\t\release\dimmy_lib.dll" "$binDir/"
-          Get-ChildItem "$binDir" -Filter "*.pdb" -Recurse | Remove-Item -ErrorAction SilentlyContinue
+          $pubDir = "platforms/windows/Dimmy.Windows/publish"
+          Copy-Item "D:\t\release\dimmy_lib.dll" "$pubDir/"
+          # Bundle VC++ runtime DLLs (dotnet publish uses vcruntime140_cor3.dll,
+          # but the Rust DLL needs the standard vcruntime140.dll)
+          $vsDir = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $vcrt = Get-ChildItem "$vsDir\VC" -Recurse -Filter "vcruntime140.dll" | Where-Object { $_.DirectoryName -match "\\x64\\" -and $_.DirectoryName -notmatch "onecore|store" } | Select-Object -First 1
+          if (-not $vcrt) { Write-Error "vcruntime140.dll not found under $vsDir\VC"; exit 1 }
+          $dllDir = $vcrt.DirectoryName
+          Write-Host "Copying VC++ runtime from $dllDir"
+          Copy-Item "$dllDir\vcruntime140.dll" "$pubDir/"
+          Copy-Item "$dllDir\vcruntime140_1.dll" "$pubDir/" -ErrorAction SilentlyContinue
+          Copy-Item "$dllDir\msvcp140.dll" "$pubDir/"
+          Get-ChildItem "$pubDir" -Filter "*.pdb" -Recurse | Remove-Item -ErrorAction SilentlyContinue
+
+      - name: Verify self-contained bundle
+        shell: pwsh
+        run: platforms/windows/verify-self-contained.ps1 -Path platforms/windows/Dimmy.Windows/publish
 
       - name: Run Windows tests
         working-directory: platforms/windows/Dimmy.Windows.Tests
@@ -282,9 +306,9 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ needs.create-release.outputs.version }}"
-          $binDir = (Get-ChildItem -Path "platforms/windows/Dimmy.Windows/bin" -Recurse -Filter "Dimmy.Windows.exe" | Select-Object -First 1).DirectoryName
-          Write-Host "Packing Velopack v$version from $binDir"
-          vpk pack --packId Dimmy --packVersion $version --packDir "$binDir" --mainExe Dimmy.Windows.exe --icon "platforms/windows/Dimmy.Windows/Assets/dimmy.ico" --framework "net8.0-x64-desktop,vcredist143-x64" --outputDir platforms/windows/velopack-output
+          $pubDir = (Resolve-Path "platforms/windows/Dimmy.Windows/publish").Path
+          Write-Host "Packing Velopack v$version from $pubDir"
+          vpk pack --packId Dimmy --packVersion $version --packDir "$pubDir" --mainExe Dimmy.Windows.exe --icon "platforms/windows/Dimmy.Windows/Assets/dimmy.ico" --framework "vcredist143-x64" --outputDir platforms/windows/velopack-output
           Get-ChildItem platforms/windows/velopack-output | ForEach-Object { Write-Host "$($_.Name) ($([math]::Round($_.Length/1MB, 1)) MB)" }
 
       - name: Upload to release
@@ -365,10 +389,21 @@ jobs:
           tag_name: ${{ github.ref_name }}
           files: Dimmy-linux-x86_64.AppImage
 
-  # ── Publish (waits for all jobs) ───────────────────────────────────
+  # ── Clean-machine install test ──────────────────────────────────────
+  # Gates publish: a broken installer must never leave draft state on a real v-tag.
+  test-install:
+    name: Test Install (Clean Windows)
+    needs: build-windows
+    uses: ./.github/workflows/test-install.yml
+    permissions:
+      contents: write
+    with:
+      tag: ${{ github.ref_name }}
+
+  # ── Publish (waits for all jobs including test-install) ─────────────
   publish-release:
     name: Publish Release
-    needs: [rust-check, create-release, build-macos, build-windows, build-linux]
+    needs: [rust-check, create-release, build-macos, build-windows, build-linux, test-install]
     runs-on: ubuntu-latest
     steps:
       - name: Publish release

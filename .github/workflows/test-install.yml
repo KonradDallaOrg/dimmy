@@ -1,0 +1,213 @@
+name: Test Install (Clean Windows)
+
+# Downloads a Windows Setup.exe from a given release tag, installs it silently
+# on a clean windows-latest runner (no WinAppSDK, no VC++ redist, only .NET SDK
+# preinstalled), launches the app, and verifies %TEMP%\dimmy_startup.log shows
+# no CRASH line.
+#
+# Triggers:
+#   - workflow_call: invoked as a reusable job by staging-native.yml and
+#     release.yml immediately after the Windows build uploads the installer.
+#     Gate the "publish release" step on this so broken bundles never ship.
+#   - workflow_dispatch: ad-hoc re-runs for any existing tag.
+#
+# Cost: ~3 min per run on a free runner. Catches self-contained bundling
+# regressions (missing DLL / PRI / Velopack packaging bugs) BEFORE any
+# human tester has to install locally.
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: 'Release tag to download the installer from'
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to download the installer from (e.g. staging-latest or v0.6.3)'
+        required: false
+        default: staging-latest
+        type: string
+
+permissions:
+  # write needed because gh release download must read draft release assets
+  contents: write
+
+jobs:
+  test-install:
+    name: Install + launch on clean Windows
+    runs-on: windows-latest
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Runner baseline (what's already installed)
+        shell: pwsh
+        run: |
+          Write-Host "=== OS ==="
+          (Get-CimInstance Win32_OperatingSystem).Caption
+          [System.Environment]::OSVersion.Version
+          Write-Host ""
+          Write-Host "=== .NET runtimes (preinstalled) ==="
+          try { dotnet --list-runtimes } catch { Write-Host "(no dotnet)" }
+          Write-Host ""
+          Write-Host "=== WinAppSDK runtime (should be absent) ==="
+          $sdk = Get-ChildItem "C:\Program Files\WindowsApps" -Filter "Microsoft.WindowsAppRuntime*" -ErrorAction SilentlyContinue
+          if ($sdk) { $sdk | Select-Object Name } else { Write-Host "(none — good)" }
+          Write-Host ""
+          Write-Host "=== VC++ runtime DLLs in System32 ==="
+          Get-ChildItem "C:\Windows\System32\vcruntime140*.dll","C:\Windows\System32\msvcp140*.dll" -ErrorAction SilentlyContinue | Select-Object Name
+
+      - name: Download Setup.exe from release tag
+        shell: pwsh
+        run: |
+          $tag = $env:RELEASE_TAG
+          if (-not $tag) { throw "No RELEASE_TAG set — reusable workflow caller must pass 'tag' input" }
+          $dest = "$env:RUNNER_TEMP\Dimmy-Setup.exe"
+          Write-Host "Downloading Dimmy-win-Setup.exe from release '$tag' via gh CLI"
+          # gh release download works on drafts and prereleases too (uses GITHUB_TOKEN)
+          gh release download $tag --repo "${{ github.repository }}" --pattern "Dimmy-win-Setup.exe" --output $dest --clobber
+          if ($LASTEXITCODE -ne 0) { throw "gh release download failed" }
+          $size = (Get-Item $dest).Length
+          Write-Host "Downloaded: $([math]::Round($size/1MB,1)) MB"
+          if ($size -lt 50MB) { throw "Setup.exe suspiciously small ($size bytes) — likely an empty asset" }
+
+      - name: Install silently
+        shell: pwsh
+        run: |
+          $setup = "$env:RUNNER_TEMP\Dimmy-Setup.exe"
+          Write-Host "Running Velopack Setup with --silent"
+          $proc = Start-Process -FilePath $setup -ArgumentList "--silent" -Wait -PassThru
+          Write-Host "Install exit code: $($proc.ExitCode)"
+          if ($proc.ExitCode -ne 0) {
+            Write-Host "Installer failed (exit $($proc.ExitCode))" -ForegroundColor Red
+            exit $proc.ExitCode
+          }
+
+      - name: Verify install location + bundle integrity
+        shell: pwsh
+        run: |
+          $appDir = "$env:LOCALAPPDATA\Dimmy\current"
+          if (-not (Test-Path $appDir)) {
+            Write-Host "Install dir NOT found: $appDir" -ForegroundColor Red
+            Write-Host "Full LOCALAPPDATA\Dimmy tree:"
+            Get-ChildItem "$env:LOCALAPPDATA\Dimmy" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
+            exit 1
+          }
+          $files = Get-ChildItem $appDir -Recurse -File
+          $size = ($files | Measure-Object Length -Sum).Sum
+          Write-Host "Installed at: $appDir"
+          Write-Host "Files: $($files.Count), Size: $([math]::Round($size/1MB,1)) MB"
+          Write-Host ""
+          $critical = @(
+            'Dimmy.Windows.exe',
+            'dimmy_lib.dll',
+            'coreclr.dll',
+            'hostfxr.dll',
+            'Microsoft.UI.Xaml.dll',
+            'Microsoft.WindowsAppRuntime.dll',
+            'Microsoft.WindowsAppRuntime.Bootstrap.dll',
+            'Microsoft.Internal.FrameworkUdk.dll',
+            'vcruntime140.dll',
+            'msvcp140.dll'
+          )
+          $missing = @()
+          foreach ($f in $critical) {
+            if (-not (Test-Path (Join-Path $appDir $f))) { $missing += $f }
+          }
+          if ($missing.Count -gt 0) {
+            Write-Host "Missing critical files in installed bundle:" -ForegroundColor Red
+            $missing | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
+            exit 1
+          }
+          $pri = Get-ChildItem $appDir -Filter "*.pri" -File
+          if ($pri.Count -eq 0) {
+            Write-Host "No .pri file in installed bundle — app will crash at InitializeComponent()" -ForegroundColor Red
+            exit 1
+          }
+          Write-Host "Bundle integrity: OK" -ForegroundColor Green
+
+      - name: Launch app and wait 15 seconds
+        shell: pwsh
+        run: |
+          $exe = "$env:LOCALAPPDATA\Dimmy\current\Dimmy.Windows.exe"
+          Remove-Item "$env:TEMP\dimmy_startup.log" -ErrorAction SilentlyContinue
+          Write-Host "Launching: $exe"
+          $proc = Start-Process -FilePath $exe -PassThru
+          Write-Host "PID: $($proc.Id)"
+          Start-Sleep -Seconds 15
+          $proc.Refresh()
+          if ($proc.HasExited) {
+            Write-Host "Process EXITED early (code $($proc.ExitCode)) — likely a silent crash" -ForegroundColor Red
+            "exited_early" | Out-File "$env:RUNNER_TEMP\launch_result.txt"
+          } else {
+            Write-Host "Process still alive after 15s — app survived startup" -ForegroundColor Green
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            "alive" | Out-File "$env:RUNNER_TEMP\launch_result.txt"
+          }
+
+      - name: Dump startup log
+        if: always()
+        shell: pwsh
+        run: |
+          $log = "$env:TEMP\dimmy_startup.log"
+          if (Test-Path $log) {
+            Write-Host "=== %TEMP%\dimmy_startup.log ==="
+            Get-Content $log
+            Write-Host "=== end log ==="
+            Copy-Item $log "$env:RUNNER_TEMP\dimmy_startup.log" -Force
+          } else {
+            Write-Host "No startup log at $log"
+            Write-Host "App did not reach Program.Main — check Event Viewer below"
+          }
+
+      - name: Dump Application event log (last 5 min)
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "=== Recent app errors ==="
+          $events = Get-WinEvent -FilterHashtable @{
+            LogName='Application'
+            StartTime=(Get-Date).AddMinutes(-5)
+            Level=1,2,3
+          } -ErrorAction SilentlyContinue
+          if ($events) {
+            $events | Where-Object {
+              $_.Message -match 'Dimmy' -or $_.ProviderName -match 'Application Error|.NET Runtime|Windows Error Reporting'
+            } | Select-Object TimeCreated, LevelDisplayName, ProviderName, Id, Message |
+              Format-List | Out-String | Write-Host
+          } else {
+            Write-Host "(no recent app errors)"
+          }
+
+      - name: Upload logs as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clean-install-test-logs
+          path: |
+            ${{ runner.temp }}/dimmy_startup.log
+            ${{ runner.temp }}/launch_result.txt
+          if-no-files-found: warn
+
+      - name: Fail on crash or early exit
+        shell: pwsh
+        run: |
+          $log = "$env:TEMP\dimmy_startup.log"
+          $result = Get-Content "$env:RUNNER_TEMP\launch_result.txt" -ErrorAction SilentlyContinue
+          $failed = $false
+          if (Test-Path $log) {
+            $content = Get-Content $log -Raw
+            if ($content -match 'CRASH at') {
+              Write-Host "Startup log contains CRASH entry" -ForegroundColor Red
+              $failed = $true
+            }
+          }
+          if ($result -eq 'exited_early') {
+            Write-Host "App exited before 15s — startup failure" -ForegroundColor Red
+            $failed = $true
+          }
+          if ($failed) { exit 1 }
+          Write-Host "Clean-install test PASSED" -ForegroundColor Green
