@@ -4,6 +4,16 @@ All notable changes to Dimmy are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.6] - 2026-04-19
+
+### Fixed
+- **CI build on Linux / macOS (v0.6.5 hotfix)** — `ggml_log_level` is a
+  bindgen-generated C enum whose Rust alias is `c_int` on Windows/macOS
+  (MSVC + Apple clang sign the enum) but `c_uint` on Linux (gcc defaults
+  to unsigned). The v0.6.5 callback signature hard-coded `i32`, which
+  matched Windows only. Introduce `GgmlLogLevel` as a cfg-conditional
+  alias so the fn-pointer type matches what each platform's bindgen emits.
+
 ## [0.6.5] - 2026-04-19
 
 ### Added

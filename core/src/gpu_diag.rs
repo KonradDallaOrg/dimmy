@@ -16,6 +16,16 @@ use std::ffi::CStr;
 use std::os::raw::{c_char, c_void};
 use std::sync::Once;
 
+// `ggml_log_level` is bindgen-generated from a C enum and its underlying type
+// differs per target: `c_int` on Windows/macOS (MSVC + Apple clang treat the
+// enum as signed int) and `c_uint` on Linux (gcc defaults to unsigned for
+// non-negative enums). The fn-pointer signature must match exactly for the
+// `whisper_log_set` / `llama_log_set` call, so type-alias it conditionally.
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+type GgmlLogLevel = std::os::raw::c_int;
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+type GgmlLogLevel = std::os::raw::c_uint;
+
 /// Install log callbacks for whisper and llama. Safe to call multiple times —
 /// only the first call installs. Callbacks route all ggml output through
 /// `crate::log` with a `[ggml]` prefix and level tag.
@@ -37,7 +47,11 @@ pub fn install_ggml_log_callbacks() {
 /// C ABI trampoline for ggml log output. Must NOT unwind across the FFI
 /// boundary — wrap everything in `catch_unwind` and swallow panics.
 #[cfg(any(feature = "local-stt", feature = "local-llm"))]
-unsafe extern "C" fn ggml_log_trampoline(level: i32, text: *const c_char, _user_data: *mut c_void) {
+unsafe extern "C" fn ggml_log_trampoline(
+    level: GgmlLogLevel,
+    text: *const c_char,
+    _user_data: *mut c_void,
+) {
     let _ = std::panic::catch_unwind(|| {
         if text.is_null() {
             return;
@@ -47,11 +61,15 @@ unsafe extern "C" fn ggml_log_trampoline(level: i32, text: *const c_char, _user_
         if trimmed.is_empty() {
             return;
         }
+        const LVL_DEBUG: GgmlLogLevel = 1;
+        const LVL_INFO: GgmlLogLevel = 2;
+        const LVL_WARN: GgmlLogLevel = 3;
+        const LVL_ERROR: GgmlLogLevel = 4;
         let tag = match level {
-            1 => "DEBUG",
-            2 => "INFO",
-            3 => "WARN",
-            4 => "ERROR",
+            LVL_DEBUG => "DEBUG",
+            LVL_INFO => "INFO",
+            LVL_WARN => "WARN",
+            LVL_ERROR => "ERROR",
             _ => "LOG",
         };
         crate::log(&format!("[ggml {}] {}", tag, trimmed));
