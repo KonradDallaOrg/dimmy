@@ -14,17 +14,14 @@
     <WindowsPackageType>None</WindowsPackageType>
     <Nullable>enable</Nullable>
     <DefineConstants>DISABLE_XAML_GENERATED_MAIN</DefineConstants>
-    <!-- Disable PRI/MSIX — unpackaged app, .resw processing not available without full VS workload -->
+    <!-- Unpackaged app: no MSIX tooling. MrtCore PRI generation IS enabled
+         (XAML metadata provider needs it to resolve controls + .resw resources). -->
     <AppxPackage>false</AppxPackage>
     <EnableMsixTooling>false</EnableMsixTooling>
-    <MrtCoreGenPriFileEnabled>false</MrtCoreGenPriFileEnabled>
-    <AppxGeneratePriEnabled>false</AppxGeneratePriEnabled>
-    <ShouldComputeInputPris>false</ShouldComputeInputPris>
-    <EnableDefaultWindowsAppSdkPRIResourceItems>false</EnableDefaultWindowsAppSdkPRIResourceItems>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.6.241114003" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.7.260224002" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.1742" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
     <PackageReference Include="H.NotifyIcon.WinUI" Version="2.2.0" />
