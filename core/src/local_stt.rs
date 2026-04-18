@@ -315,18 +315,6 @@ fn compute_gpu_backend_status() -> GpuBackendStatus {
     }
 }
 
-/// Back-compat wrapper for call sites that only need the device index and don't
-/// branch on availability. Returns 0 when Vulkan is unusable, but that's a
-/// meaningless value — callers MUST check [`gpu_backend_status`] and set
-/// `use_gpu(false)` before handing ctx params to whisper/llama.
-#[cfg(any(feature = "local-stt", feature = "local-llm"))]
-pub(crate) fn preferred_gpu_device() -> std::ffi::c_int {
-    match gpu_backend_status() {
-        GpuBackendStatus::Available { device } => device,
-        GpuBackendStatus::Unavailable => 0,
-    }
-}
-
 #[cfg(not(target_os = "macos"))]
 #[cfg(any(feature = "local-stt", feature = "local-llm"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
