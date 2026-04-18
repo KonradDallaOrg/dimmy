@@ -411,10 +411,22 @@ jobs:
           name: dimmy-linux
           path: platforms/linux/target/release/dimmy-linux
 
-  # ── Publish (waits for all jobs including rust-check) ───────────────
+  # ── Clean-machine install test ──────────────────────────────────────
+  # Gates publish: if the installer is broken on a fresh Windows runner,
+  # the staging release stays in draft and never reaches testers.
+  test-install:
+    name: Test Install (Clean Windows)
+    needs: build-windows
+    uses: ./.github/workflows/test-install.yml
+    permissions:
+      contents: write
+    with:
+      tag: staging-latest
+
+  # ── Publish (waits for all jobs including rust-check + test-install) ─
   publish:
     name: Publish Staging Release
-    needs: [rust-check, create-release, build-macos, build-windows, build-linux]
+    needs: [rust-check, create-release, build-macos, build-windows, build-linux, test-install]
     runs-on: ubuntu-latest
     steps:
       - name: Publish release

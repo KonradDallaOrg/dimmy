@@ -1,32 +1,46 @@
 name: Test Install (Clean Windows)
 
-# Downloads the latest Windows Setup.exe from the staging-latest release,
-# installs it silently on a clean windows-latest runner (no WinAppSDK,
-# no VC++ redist, only .NET SDK preinstalled), launches the app, and
-# verifies %TEMP%\dimmy_startup.log shows no CRASH line.
+# Downloads a Windows Setup.exe from a given release tag, installs it silently
+# on a clean windows-latest runner (no WinAppSDK, no VC++ redist, only .NET SDK
+# preinstalled), launches the app, and verifies %TEMP%\dimmy_startup.log shows
+# no CRASH line.
 #
 # Triggers:
-#   - Automatically after every successful "Staging Release" run
-#   - Manually via workflow_dispatch (for ad-hoc re-runs)
+#   - workflow_call: invoked as a reusable job by staging-native.yml and
+#     release.yml immediately after the Windows build uploads the installer.
+#     Gate the "publish release" step on this so broken bundles never ship.
+#   - workflow_dispatch: ad-hoc re-runs for any existing tag.
 #
 # Cost: ~3 min per run on a free runner. Catches self-contained bundling
 # regressions (missing DLL / PRI / Velopack packaging bugs) BEFORE any
 # human tester has to install locally.
 
 on:
-  workflow_run:
-    workflows: ["Staging Release"]
-    types: [completed]
+  workflow_call:
+    inputs:
+      tag:
+        description: 'Release tag to download the installer from'
+        required: true
+        type: string
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to download the installer from (e.g. staging-latest or v0.6.3)'
+        required: false
+        default: staging-latest
+        type: string
 
 permissions:
-  contents: read
+  # write needed because gh release download must read draft release assets
+  contents: write
 
 jobs:
   test-install:
     name: Install + launch on clean Windows
     runs-on: windows-latest
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
       - name: Runner baseline (what's already installed)
@@ -46,16 +60,19 @@ jobs:
           Write-Host "=== VC++ runtime DLLs in System32 ==="
           Get-ChildItem "C:\Windows\System32\vcruntime140*.dll","C:\Windows\System32\msvcp140*.dll" -ErrorAction SilentlyContinue | Select-Object Name
 
-      - name: Download Setup.exe from staging-latest
+      - name: Download Setup.exe from release tag
         shell: pwsh
         run: |
-          $url = "https://github.com/${{ github.repository }}/releases/download/staging-latest/Dimmy-win-Setup.exe"
+          $tag = $env:RELEASE_TAG
+          if (-not $tag) { throw "No RELEASE_TAG set — reusable workflow caller must pass 'tag' input" }
           $dest = "$env:RUNNER_TEMP\Dimmy-Setup.exe"
-          Write-Host "Downloading $url"
-          Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+          Write-Host "Downloading Dimmy-win-Setup.exe from release '$tag' via gh CLI"
+          # gh release download works on drafts and prereleases too (uses GITHUB_TOKEN)
+          gh release download $tag --repo "${{ github.repository }}" --pattern "Dimmy-win-Setup.exe" --output $dest --clobber
+          if ($LASTEXITCODE -ne 0) { throw "gh release download failed" }
           $size = (Get-Item $dest).Length
           Write-Host "Downloaded: $([math]::Round($size/1MB,1)) MB"
-          if ($size -lt 50MB) { throw "Setup.exe suspiciously small — likely a 404 HTML page" }
+          if ($size -lt 50MB) { throw "Setup.exe suspiciously small ($size bytes) — likely an empty asset" }
 
       - name: Install silently
         shell: pwsh
