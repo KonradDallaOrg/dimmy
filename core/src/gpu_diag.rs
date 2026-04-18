@@ -17,13 +17,14 @@ use std::os::raw::{c_char, c_void};
 use std::sync::Once;
 
 // `ggml_log_level` is bindgen-generated from a C enum and its underlying type
-// differs per target: `c_int` on Windows/macOS (MSVC + Apple clang treat the
-// enum as signed int) and `c_uint` on Linux (gcc defaults to unsigned for
-// non-negative enums). The fn-pointer signature must match exactly for the
-// `whisper_log_set` / `llama_log_set` call, so type-alias it conditionally.
-#[cfg(any(target_os = "windows", target_os = "macos"))]
+// differs per target: MSVC on Windows emits `c_int` (signed) because MSVC
+// defaults C enums to signed int; gcc on Linux and Apple clang on macOS both
+// emit `c_uint` (unsigned) because non-negative enum values round up to the
+// unsigned representation. The fn-pointer signature must match exactly for
+// `whisper_log_set` / `llama_log_set`, so type-alias it conditionally.
+#[cfg(target_os = "windows")]
 type GgmlLogLevel = std::os::raw::c_int;
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+#[cfg(not(target_os = "windows"))]
 type GgmlLogLevel = std::os::raw::c_uint;
 
 /// Install log callbacks for whisper and llama. Safe to call multiple times —
