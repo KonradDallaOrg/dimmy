@@ -4,6 +4,20 @@ All notable changes to Dimmy are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.5] - 2026-04-19
+
+### Added
+- **GPU diagnostic logging** — when the GPU backend is first queried, Dimmy now:
+  - Installs log callbacks on both `whisper.cpp` and `llama.cpp` so their
+    internal ggml messages (including the error text that precedes a
+    process abort) land in `dimmy.log` with a `[ggml <LEVEL>]` prefix.
+  - Logs a Vulkan environment snapshot: `vulkan-1.dll` path/size, registered
+    Vulkan ICDs (from `HKLM\Software\Khronos\Vulkan\Drivers`), and
+    `TdrDelay`/`TdrDdiDelay` registry values. Linux logs the `.json` files
+    under `/etc/vulkan/icd.d` and `/usr/share/vulkan/icd.d`.
+  - Makes post-mortem analysis of GPU crashes possible without extra tooling:
+    the last words of ggml before an abort are now in the user's log file.
+
 ## [0.6.4] - 2026-04-19
 
 ### Fixed

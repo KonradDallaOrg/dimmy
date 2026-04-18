@@ -3,6 +3,8 @@ pub mod error;
 pub mod ffi;
 pub mod filler;
 #[cfg(any(feature = "local-stt", feature = "local-llm"))]
+pub mod gpu_diag;
+#[cfg(any(feature = "local-stt", feature = "local-llm"))]
 pub mod gpu_health;
 pub mod history;
 mod hotkey;

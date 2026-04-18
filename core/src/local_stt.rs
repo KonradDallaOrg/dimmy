@@ -268,6 +268,13 @@ pub(crate) fn gpu_backend_status() -> GpuBackendStatus {
 
 #[cfg(any(feature = "local-stt", feature = "local-llm"))]
 fn compute_gpu_backend_status() -> GpuBackendStatus {
+    // Install ggml log callbacks so whisper/llama's internal messages go
+    // into dimmy.log — critical for diagnosing the exact cause of a GPU
+    // abort on the NEXT run if this run crashes. Also log the environment
+    // snapshot (vulkan-1.dll path, TdrDelay, registered ICDs, etc).
+    crate::gpu_diag::install_ggml_log_callbacks();
+    crate::gpu_diag::log_environment_snapshot();
+
     // Crash-recovery: if a previous process aborted during GPU init, the
     // sentinel file still exists. Force CPU for this session so the user
     // gets a working app instead of a crash loop. Clear the sentinel so the
