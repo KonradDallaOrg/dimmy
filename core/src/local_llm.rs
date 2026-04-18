@@ -391,23 +391,35 @@ mod llm_cache {
             let backend = LlamaBackend::init()
                 .map_err(|e| crate::error::LlmError::LocalModel(format!("backend init: {}", e)))?;
 
-            let model_params = match crate::local_stt::gpu_backend_status() {
+            let (model_params, using_gpu) = match crate::local_stt::gpu_backend_status() {
                 crate::local_stt::GpuBackendStatus::Available { device } => {
                     crate::log(&format!("[LocalLLM] GPU backend: device {}", device));
-                    LlamaModelParams::default()
-                        .with_n_gpu_layers(99)
-                        .with_main_gpu(device)
+                    (
+                        LlamaModelParams::default()
+                            .with_n_gpu_layers(99)
+                            .with_main_gpu(device),
+                        true,
+                    )
                 }
                 crate::local_stt::GpuBackendStatus::Unavailable => {
                     crate::log("[LocalLLM] GPU backend unavailable — loading model on CPU");
-                    LlamaModelParams::default().with_n_gpu_layers(0)
+                    (LlamaModelParams::default().with_n_gpu_layers(0), false)
                 }
             };
 
-            let model =
-                LlamaModel::load_from_file(&backend, model_path, &model_params).map_err(|e| {
-                    crate::error::LlmError::LocalModel(format!("failed to load LLM model: {}", e))
-                })?;
+            // See note in local_stt.rs: ggml-vulkan / ggml-cuda can abort the
+            // process inside C++ when GPU init fails. The sentinel lets the
+            // next run fall back to CPU instead of looping.
+            if using_gpu {
+                crate::gpu_health::mark_begin(&format!("llama_load: {}", model_path.display()));
+            }
+            let model_result = LlamaModel::load_from_file(&backend, model_path, &model_params);
+            if using_gpu {
+                crate::gpu_health::mark_end();
+            }
+            let model = model_result.map_err(|e| {
+                crate::error::LlmError::LocalModel(format!("failed to load LLM model: {}", e))
+            })?;
 
             *guard = Some(CachedLlmModel {
                 model,

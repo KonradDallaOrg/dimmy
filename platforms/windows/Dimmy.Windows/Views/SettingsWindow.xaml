@@ -42,12 +42,19 @@
 
       <ScrollViewer Padding="24,20,24,20">
         <Grid>
-          <!-- Advanced toggle — top-right, fixed position across all tabs -->
-          <ToggleSwitch Header="Advanced" IsOn="{Binding IsAdvanced, Mode=TwoWay}"
-                        HorizontalAlignment="Right" VerticalAlignment="Top" />
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+          </Grid.RowDefinitions>
 
-          <!-- All panels share this container: left-aligned, consistent max width -->
-          <StackPanel MaxWidth="480" HorizontalAlignment="Left" Margin="0,0,120,0">
+          <!-- Advanced toggle — sits above content so it never overlaps on narrow windows -->
+          <ToggleSwitch Grid.Row="0" Header="Advanced"
+                        IsOn="{Binding IsAdvanced, Mode=TwoWay}"
+                        HorizontalAlignment="Right" VerticalAlignment="Top"
+                        Margin="0,0,0,8" />
+
+          <!-- All panels share this container: left-aligned, with generous max width for readability -->
+          <StackPanel Grid.Row="1" MaxWidth="720" HorizontalAlignment="Left">
 
             <!-- ═══ General ═══ -->
             <StackPanel x:Name="GeneralPanel" Spacing="16" Visibility="Visible">

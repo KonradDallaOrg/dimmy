@@ -87,8 +87,30 @@ public static class WindowHelper
         public uint dwFlags;
     }
 
+    [DllImport("user32.dll")]
+    private static extern uint GetDpiForWindow(IntPtr hwnd);
+
     public static IntPtr GetHwnd(Window window) =>
         WindowNative.GetWindowHandle(window);
+
+    /// <summary>
+    /// Resize a window using logical (DIP) dimensions — scales to physical
+    /// pixels using the window's current DPI. AppWindow.Resize takes physical
+    /// pixels, so hard-coding sizes like 780x560 gives a cramped window on
+    /// 150%/200% displays. Use this helper for any size the user sees.
+    /// </summary>
+    public static void ResizeLogical(Window window, int logicalWidth, int logicalHeight)
+    {
+        var appWindow = GetAppWindow(window);
+        if (appWindow is null) return;
+        var hwnd = GetHwnd(window);
+        var dpi = GetDpiForWindow(hwnd);
+        if (dpi == 0) dpi = 96; // fallback when called before window is shown
+        var scale = dpi / 96.0;
+        var physW = (int)Math.Round(logicalWidth * scale);
+        var physH = (int)Math.Round(logicalHeight * scale);
+        appWindow.Resize(new global::Windows.Graphics.SizeInt32(physW, physH));
+    }
 
     public static AppWindow? GetAppWindow(Window window)
     {

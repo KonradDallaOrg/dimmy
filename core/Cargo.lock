@@ -478,7 +478,7 @@ dependencies = [
 
 [[package]]
 name = "dimmy"
-version = "0.6.3"
+version = "0.6.4"
 dependencies = [
  "base64",
  "biquad",

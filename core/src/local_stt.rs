@@ -268,6 +268,22 @@ pub(crate) fn gpu_backend_status() -> GpuBackendStatus {
 
 #[cfg(any(feature = "local-stt", feature = "local-llm"))]
 fn compute_gpu_backend_status() -> GpuBackendStatus {
+    // Crash-recovery: if a previous process aborted during GPU init, the
+    // sentinel file still exists. Force CPU for this session so the user
+    // gets a working app instead of a crash loop. Clear the sentinel so the
+    // NEXT boot retries the GPU path (drivers may have been updated, etc).
+    if crate::gpu_health::previous_crash_detected() {
+        let ctx = crate::gpu_health::crash_context().unwrap_or_else(|| "unknown".to_string());
+        crate::log(&format!(
+            "[GPU] Previous process aborted during GPU init (context: {}). \
+             Forcing CPU backend for this session. Set DIMMY_FORCE_CPU=1 \
+             to make this permanent.",
+            ctx
+        ));
+        crate::gpu_health::clear();
+        return GpuBackendStatus::Unavailable;
+    }
+
     // Escape hatch for debugging / CI: force CPU backend regardless of probe.
     if std::env::var("DIMMY_FORCE_CPU").is_ok() {
         crate::log("[GPU] DIMMY_FORCE_CPU set — forcing CPU backend");
@@ -670,11 +686,13 @@ mod whisper_cache {
                 model_path.display()
             ));
             let mut ctx_params = WhisperContextParameters::default();
+            let mut using_gpu = false;
 
             match super::gpu_backend_status() {
                 super::GpuBackendStatus::Available { device } => {
                     ctx_params.use_gpu(true);
                     ctx_params.gpu_device(device);
+                    using_gpu = true;
                     crate::log(&format!("[LocalSTT] GPU backend: device {}", device));
                 }
                 super::GpuBackendStatus::Unavailable => {
@@ -682,7 +700,20 @@ mod whisper_cache {
                     crate::log("[LocalSTT] GPU backend unavailable — loading model on CPU");
                 }
             }
-            let ctx = WhisperContext::new_with_params(model_path, ctx_params).map_err(|e| {
+
+            // Crash-recovery sentinel: ggml-vulkan can abort the whole process
+            // when the GPU path fails inside the C++ layer. Writing a sentinel
+            // file before the call lets the NEXT run detect the crash and fall
+            // back to CPU. The sentinel is cleared whether init succeeds or
+            // returns a Rust error — only a hard abort leaves it behind.
+            if using_gpu {
+                crate::gpu_health::mark_begin(&format!("whisper_load: {}", model_path.display()));
+            }
+            let ctx_result = WhisperContext::new_with_params(model_path, ctx_params);
+            if using_gpu {
+                crate::gpu_health::mark_end();
+            }
+            let ctx = ctx_result.map_err(|e| {
                 crate::error::TranscribeError::LocalModel(format!("failed to load model: {}", e))
             })?;
             *guard = Some(CachedModel {

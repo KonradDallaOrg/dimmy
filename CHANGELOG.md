@@ -4,6 +4,25 @@ All notable changes to Dimmy are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.4] - 2026-04-19
+
+### Fixed
+- **GPU crash recovery (Windows/Linux)** — on some machines with Vulkan-capable
+  discrete GPUs, `ggml-vulkan` aborts the process during whisper/llama model init
+  (not a recoverable Rust error). The app would restart in a loop whenever the
+  user chose local STT or local LLM. Added a sentinel file in the config dir that
+  is written before any GPU init attempt and deleted on success; if a subsequent
+  launch still sees the sentinel, the backend is forced to CPU for that session
+  so the app remains usable. Drivers or settings fixed between runs will allow
+  the GPU path to be retried automatically.
+- **Windows UI clipped on high-DPI displays** — Settings and Onboarding windows
+  were resized in raw physical pixels, so at 150%/200% scaling the windows were
+  too small and toggles/buttons were cut off. Windows now resize using logical
+  DIPs scaled by the monitor DPI (`WindowHelper.ResizeLogical`).
+- **Settings "Advanced" toggle overlap** — on narrow window widths the Advanced
+  toggle overlapped the scrollable content. The layout now stacks the toggle
+  above the content instead of absolute-positioning it over the panel.
+
 ## [0.5.2] - 2026-04-12
 
 ### Fixed

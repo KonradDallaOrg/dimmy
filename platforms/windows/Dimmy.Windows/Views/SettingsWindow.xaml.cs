@@ -30,7 +30,7 @@ public sealed partial class SettingsWindow : Window
         Title = "Dimmy Settings";
 
         var appWindow = WindowHelper.GetAppWindow(this);
-        appWindow?.Resize(new global::Windows.Graphics.SizeInt32(780, 560));
+        WindowHelper.ResizeLogical(this, 920, 640);
 
         // Set window icon
         try
