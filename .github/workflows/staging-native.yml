@@ -282,9 +282,32 @@ jobs:
         working-directory: platforms/windows/Dimmy.Windows
         run: dotnet restore
 
+      - name: Locate VS AppxPackage tools (for MrtCore PRI generation)
+        shell: pwsh
+        run: |
+          # MrtCore.PriGen.targets references Microsoft.Build.Packaging.Pri.Tasks.dll
+          # which only ships with the VS AppxPackage workload, not the .NET SDK.
+          # Without it, resources.pri is not generated and the app runs headless at
+          # runtime (every ms-appx:///Views/*.xaml URI fails to resolve).
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          if (-not $vs) { throw "vswhere did not find a VS install" }
+          $candidates = @(
+            "$vs\MSBuild\Microsoft\VisualStudio\v17.0\AppxPackage\",
+            "$vs\MSBuild\Microsoft\VisualStudio\v18.0\AppxPackage\"
+          )
+          $found = $candidates | Where-Object { Test-Path (Join-Path $_ "Microsoft.Build.Packaging.Pri.Tasks.dll") } | Select-Object -First 1
+          if (-not $found) {
+            Write-Host "VS install at: $vs"
+            Write-Host "Probed paths:"
+            $candidates | ForEach-Object { Write-Host "  - $_" }
+            throw "Microsoft.Build.Packaging.Pri.Tasks.dll not found in VS install. UWP workload missing?"
+          }
+          Write-Host "AppxMSBuildToolsPath = $found"
+          echo "AppxMSBuildToolsPath=$found" >> $env:GITHUB_ENV
+
       - name: Publish Windows app (self-contained)
         working-directory: platforms/windows/Dimmy.Windows
-        run: dotnet publish Dimmy.Windows.csproj -c Release -r win-x64 --self-contained true -p:WindowsAppSDKSelfContained=true -p:SelfContained=true -o publish
+        run: dotnet publish Dimmy.Windows.csproj -c Release -r win-x64 --self-contained true -p:WindowsAppSDKSelfContained=true -p:SelfContained=true "-p:AppxMSBuildToolsPath=$env:AppxMSBuildToolsPath" -o publish
 
       - name: Prepare distribution
         shell: pwsh
