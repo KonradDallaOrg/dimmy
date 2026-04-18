@@ -391,12 +391,18 @@ mod llm_cache {
             let backend = LlamaBackend::init()
                 .map_err(|e| crate::error::LlmError::LocalModel(format!("backend init: {}", e)))?;
 
-            let gpu_device = crate::local_stt::preferred_gpu_device();
-            crate::log(&format!("[LocalLLM] Using GPU device: {}", gpu_device));
-
-            let model_params = LlamaModelParams::default()
-                .with_n_gpu_layers(99)
-                .with_main_gpu(gpu_device);
+            let model_params = match crate::local_stt::gpu_backend_status() {
+                crate::local_stt::GpuBackendStatus::Available { device } => {
+                    crate::log(&format!("[LocalLLM] GPU backend: device {}", device));
+                    LlamaModelParams::default()
+                        .with_n_gpu_layers(99)
+                        .with_main_gpu(device)
+                }
+                crate::local_stt::GpuBackendStatus::Unavailable => {
+                    crate::log("[LocalLLM] GPU backend unavailable — loading model on CPU");
+                    LlamaModelParams::default().with_n_gpu_layers(0)
+                }
+            };
 
             let model =
                 LlamaModel::load_from_file(&backend, model_path, &model_params).map_err(|e| {

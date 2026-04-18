@@ -230,49 +230,120 @@ where
     Ok(dest)
 }
 
-// ── Vulkan GPU device selection ──────────────────────────────────
+// ── GPU backend availability + device selection ─────────────────
 //
-// On multi-GPU systems (e.g. Optimus laptops with Intel iGPU + NVIDIA dGPU),
-// ggml_vulkan defaults to device 0, which is often the integrated GPU.
-// Intel iGPU Vulkan compute is unstable and crashes during whisper inference.
-// We enumerate Vulkan physical devices and prefer the first discrete GPU.
+// Two questions to answer before loading a model:
+//   1. Is the GPU backend usable at all (vulkan-1.dll loadable, vkCreateInstance
+//      succeeds, ≥1 physical device enumerates)?
+//   2. If so, which device index should whisper/llama use?
+//
+// On clean Windows machines without a Vulkan ICD (old Intel iGPU drivers,
+// some VMs, stripped-down installs), the Vulkan loader may be present but
+// return zero devices. Without an explicit fallback, ggml_vulkan hard-fails
+// inside whisper_init / llama_init and crashes the whole process.
+//
+// `gpu_backend_status()` caches a single probe result for the life of the
+// process. Callers branch on it: Available → GPU init with device index,
+// Unavailable → force CPU backend via `use_gpu(false)` / `n_gpu_layers(0)`.
+//
+// On multi-GPU systems (Optimus: Intel iGPU + NVIDIA dGPU), device 0 is
+// usually the integrated GPU. Intel iGPU Vulkan compute has historically
+// been unstable for whisper — we prefer the first discrete GPU when present.
 
-/// Returns the Vulkan device index to use for GPU inference.
-/// Priority: GGML_VK_DEVICE env var > first discrete GPU > 0.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GpuBackendStatus {
+    /// Vulkan (or Metal, on macOS) is usable; `device` is the index to pass to ggml.
+    Available { device: std::ffi::c_int },
+    /// GPU backend cannot be initialized. Callers MUST fall back to CPU inference.
+    Unavailable,
+}
+
+/// Probe the GPU backend once per process (cached). See module notes above.
 #[cfg(any(feature = "local-stt", feature = "local-llm"))]
-pub(crate) fn preferred_gpu_device() -> std::ffi::c_int {
-    // 1. Env var override — power users / CI can force a specific device
-    if let Ok(val) = std::env::var("GGML_VK_DEVICE") {
-        if let Ok(d) = val.parse::<std::ffi::c_int>() {
-            crate::log(&format!(
-                "[LocalSTT] GPU device override from GGML_VK_DEVICE={}",
-                d
-            ));
-            return d;
-        }
+pub(crate) fn gpu_backend_status() -> GpuBackendStatus {
+    use std::sync::OnceLock;
+    static CACHE: OnceLock<GpuBackendStatus> = OnceLock::new();
+    *CACHE.get_or_init(compute_gpu_backend_status)
+}
+
+#[cfg(any(feature = "local-stt", feature = "local-llm"))]
+fn compute_gpu_backend_status() -> GpuBackendStatus {
+    // Escape hatch for debugging / CI: force CPU backend regardless of probe.
+    if std::env::var("DIMMY_FORCE_CPU").is_ok() {
+        crate::log("[GPU] DIMMY_FORCE_CPU set — forcing CPU backend");
+        return GpuBackendStatus::Unavailable;
     }
 
-    // 2. Auto-detect: enumerate Vulkan devices, prefer discrete GPU
-    match detect_discrete_gpu() {
-        Some(idx) => {
-            crate::log(&format!(
-                "[LocalSTT] Auto-detected discrete GPU at device {}",
-                idx
-            ));
-            idx
-        }
-        None => {
-            crate::log("[LocalSTT] No discrete GPU found, using device 0");
-            0
+    // macOS uses Metal via ggml-metal; there is no separate Vulkan loader to
+    // probe and Metal is always available on supported hardware. Trust it.
+    #[cfg(target_os = "macos")]
+    {
+        GpuBackendStatus::Available { device: 0 }
+    }
+    // Windows / Linux: probe Vulkan.
+    #[cfg(not(target_os = "macos"))]
+    {
+        match probe_vulkan() {
+            VulkanProbe::Unusable => {
+                crate::log(
+                    "[GPU] Vulkan backend is not usable on this machine — falling back to CPU. \
+                     (Check that vulkan-1.dll is installed and a recent GPU driver exposes an ICD.)",
+                );
+                GpuBackendStatus::Unavailable
+            }
+            VulkanProbe::Usable { discrete_gpu_idx } => {
+                // Explicit env override wins over auto-detect.
+                if let Ok(val) = std::env::var("GGML_VK_DEVICE") {
+                    if let Ok(d) = val.parse::<std::ffi::c_int>() {
+                        crate::log(&format!("[GPU] Device override from GGML_VK_DEVICE={}", d));
+                        return GpuBackendStatus::Available { device: d };
+                    }
+                }
+                let device = discrete_gpu_idx.unwrap_or(0);
+                crate::log(&format!(
+                    "[GPU] Vulkan usable, selecting device {} ({})",
+                    device,
+                    if discrete_gpu_idx.is_some() {
+                        "auto-detected discrete GPU"
+                    } else {
+                        "no discrete GPU found, using device 0"
+                    }
+                ));
+                GpuBackendStatus::Available { device }
+            }
         }
     }
 }
 
-/// Enumerate Vulkan physical devices via raw FFI to vulkan-1.dll.
-/// Returns the index of the first discrete GPU, or None.
-/// Zero new dependencies — vulkan-1.dll is already loaded by ggml_vulkan.
+/// Back-compat wrapper for call sites that only need the device index and don't
+/// branch on availability. Returns 0 when Vulkan is unusable, but that's a
+/// meaningless value — callers MUST check [`gpu_backend_status`] and set
+/// `use_gpu(false)` before handing ctx params to whisper/llama.
 #[cfg(any(feature = "local-stt", feature = "local-llm"))]
-fn detect_discrete_gpu() -> Option<std::ffi::c_int> {
+pub(crate) fn preferred_gpu_device() -> std::ffi::c_int {
+    match gpu_backend_status() {
+        GpuBackendStatus::Available { device } => device,
+        GpuBackendStatus::Unavailable => 0,
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+#[cfg(any(feature = "local-stt", feature = "local-llm"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VulkanProbe {
+    /// Vulkan loader / ICD / device enumeration failed — the backend cannot run.
+    Unusable,
+    /// Vulkan initialized successfully; optional index of the first discrete GPU.
+    Usable { discrete_gpu_idx: Option<std::ffi::c_int> },
+}
+
+/// Enumerate Vulkan physical devices via raw FFI to vulkan-1.dll.
+/// Distinguishes between "Vulkan loader / ICD not usable" and "Vulkan usable but
+/// no discrete GPU" — critical for deciding whether to fall back to CPU at the
+/// whisper/llama init call site.
+#[cfg(not(target_os = "macos"))]
+#[cfg(any(feature = "local-stt", feature = "local-llm"))]
+fn probe_vulkan() -> VulkanProbe {
     use std::ffi::c_int;
 
     // Vulkan constants
@@ -331,20 +402,13 @@ fn detect_discrete_gpu() -> Option<std::ffi::c_int> {
     type FnGetPhysicalDeviceProperties =
         unsafe extern "system" fn(VkPhysicalDevice, *mut VkPhysicalDeviceProperties);
 
-    // macOS uses Metal, not Vulkan — no device enumeration needed
-    #[cfg(target_os = "macos")]
-    {
-        return None;
-    }
+    // macOS is excluded at the cfg level above (Metal handles its own probe).
+    #[cfg(target_os = "windows")]
+    let lib_name = b"vulkan-1.dll\0";
+    #[cfg(target_os = "linux")]
+    let lib_name = b"libvulkan.so.1\0";
 
-    #[cfg(not(target_os = "macos"))]
-    {
-        #[cfg(target_os = "windows")]
-        let lib_name = b"vulkan-1.dll\0";
-        #[cfg(target_os = "linux")]
-        let lib_name = b"libvulkan.so.1\0";
-
-        let result = std::panic::catch_unwind(|| unsafe {
+    let result = std::panic::catch_unwind(|| unsafe {
             #[cfg(target_os = "windows")]
             {
                 extern "system" {
@@ -358,7 +422,7 @@ fn detect_discrete_gpu() -> Option<std::ffi::c_int> {
 
                 let module = LoadLibraryA(lib_name.as_ptr());
                 if module.is_null() {
-                    return None;
+                    return VulkanProbe::Unusable;
                 }
 
                 macro_rules! load_fn {
@@ -366,7 +430,7 @@ fn detect_discrete_gpu() -> Option<std::ffi::c_int> {
                         let f = GetProcAddress(module, concat!($name, "\0").as_ptr());
                         if f.is_null() {
                             FreeLibrary(module);
-                            return None;
+                            return VulkanProbe::Unusable;
                         }
                         std::mem::transmute::<_, $ty>(f)
                     }};
@@ -407,7 +471,7 @@ fn detect_discrete_gpu() -> Option<std::ffi::c_int> {
                 let mut instance: VkInstance = std::ptr::null_mut();
                 if create_instance(&create_info, std::ptr::null(), &mut instance) != VK_SUCCESS {
                     FreeLibrary(module);
-                    return None;
+                    return VulkanProbe::Unusable;
                 }
 
                 // Enumerate physical devices
@@ -417,14 +481,14 @@ fn detect_discrete_gpu() -> Option<std::ffi::c_int> {
                 {
                     destroy_instance(instance, std::ptr::null());
                     FreeLibrary(module);
-                    return None;
+                    return VulkanProbe::Unusable;
                 }
 
                 let mut devices = vec![std::ptr::null_mut(); count as usize];
                 if enum_devices(instance, &mut count, devices.as_mut_ptr()) != VK_SUCCESS {
                     destroy_instance(instance, std::ptr::null());
                     FreeLibrary(module);
-                    return None;
+                    return VulkanProbe::Unusable;
                 }
 
                 // Find first discrete GPU
@@ -454,7 +518,9 @@ fn detect_discrete_gpu() -> Option<std::ffi::c_int> {
 
                 destroy_instance(instance, std::ptr::null());
                 FreeLibrary(module);
-                result
+                VulkanProbe::Usable {
+                    discrete_gpu_idx: result,
+                }
             }
 
             #[cfg(target_os = "linux")]
@@ -472,7 +538,7 @@ fn detect_discrete_gpu() -> Option<std::ffi::c_int> {
 
                 let module = dlopen(lib_name.as_ptr(), RTLD_LAZY);
                 if module.is_null() {
-                    return None;
+                    return VulkanProbe::Unusable;
                 }
 
                 macro_rules! load_fn {
@@ -480,7 +546,7 @@ fn detect_discrete_gpu() -> Option<std::ffi::c_int> {
                         let f = dlsym(module, concat!($name, "\0").as_ptr());
                         if f.is_null() {
                             dlclose(module);
-                            return None;
+                            return VulkanProbe::Unusable;
                         }
                         std::mem::transmute::<_, $ty>(f)
                     }};
@@ -520,7 +586,7 @@ fn detect_discrete_gpu() -> Option<std::ffi::c_int> {
                 let mut instance: VkInstance = std::ptr::null_mut();
                 if create_instance(&create_info, std::ptr::null(), &mut instance) != VK_SUCCESS {
                     dlclose(module);
-                    return None;
+                    return VulkanProbe::Unusable;
                 }
 
                 let mut count: u32 = 0;
@@ -529,14 +595,14 @@ fn detect_discrete_gpu() -> Option<std::ffi::c_int> {
                 {
                     destroy_instance(instance, std::ptr::null());
                     dlclose(module);
-                    return None;
+                    return VulkanProbe::Unusable;
                 }
 
                 let mut devices = vec![std::ptr::null_mut(); count as usize];
                 if enum_devices(instance, &mut count, devices.as_mut_ptr()) != VK_SUCCESS {
                     destroy_instance(instance, std::ptr::null());
                     dlclose(module);
-                    return None;
+                    return VulkanProbe::Unusable;
                 }
 
                 let mut result: Option<c_int> = None;
@@ -565,12 +631,13 @@ fn detect_discrete_gpu() -> Option<std::ffi::c_int> {
 
                 destroy_instance(instance, std::ptr::null());
                 dlclose(module);
-                result
+                VulkanProbe::Usable {
+                    discrete_gpu_idx: result,
+                }
             }
         });
 
-        result.unwrap_or(None)
-    }
+    result.unwrap_or(VulkanProbe::Unusable)
 }
 
 // ── WhisperContext cache ─────────────────────────────────────────
@@ -622,9 +689,17 @@ mod whisper_cache {
             ));
             let mut ctx_params = WhisperContextParameters::default();
 
-            let gpu_device = super::preferred_gpu_device();
-            ctx_params.gpu_device(gpu_device);
-            crate::log(&format!("[LocalSTT] Using GPU device: {}", gpu_device));
+            match super::gpu_backend_status() {
+                super::GpuBackendStatus::Available { device } => {
+                    ctx_params.use_gpu(true);
+                    ctx_params.gpu_device(device);
+                    crate::log(&format!("[LocalSTT] GPU backend: device {}", device));
+                }
+                super::GpuBackendStatus::Unavailable => {
+                    ctx_params.use_gpu(false);
+                    crate::log("[LocalSTT] GPU backend unavailable — loading model on CPU");
+                }
+            }
             let ctx = WhisperContext::new_with_params(model_path, ctx_params).map_err(|e| {
                 crate::error::TranscribeError::LocalModel(format!("failed to load model: {}", e))
             })?;
