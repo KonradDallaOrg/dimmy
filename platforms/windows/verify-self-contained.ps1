@@ -34,7 +34,7 @@ $requiredFiles = @(
     'Dimmy.Windows.exe',
     'Dimmy.Windows.dll',
     'dimmy_lib.dll',
-    # VC++ runtime (needed by Rust DLL — without these, app silently exits on clean machines)
+    # VC++ runtime (needed by Rust DLL -- without these, app silently exits on clean machines)
     'vcruntime140.dll',
     'msvcp140.dll'
 )
@@ -44,9 +44,17 @@ $requiredDirs = @(
     'Microsoft.UI.Xaml'
 )
 
-# At least ONE .pri file must exist at root — MRT Core uses it for XAML resource
-# resolution. Without it, App.InitializeComponent() throws 0xc000027b silently.
+# The APP's own PRI file (resources.pri) must exist at root. MRT Core uses it
+# to resolve ms-appx:///Views/*.xaml URIs at InitializeComponent() time.
+# Without it, every Window throws XamlParseException and the app runs headless
+# (the try/catch in App.OnLaunched swallows the error => process stays alive
+# but no pill, no tray). Do NOT relax this check to "any .pri" -- the
+# WindowsAppSDK ships Microsoft.UI.pri + Microsoft.UI.Xaml.Controls.pri by
+# default and those would give a false positive while the app's resources.pri
+# is missing. Bug: staging-latest 2026-04-18 shipped without app PRI because
+# Directory.Build.targets stubbed MrtCore targets.
 $priFiles = @(Get-ChildItem -Path $Path -Filter '*.pri' -File -ErrorAction SilentlyContinue)
+$appPri = $priFiles | Where-Object { $_.Name -eq 'resources.pri' -or $_.Name -eq 'Dimmy.Windows.pri' }
 
 $files = Get-ChildItem -Path $Path -Recurse -File | ForEach-Object { $_.Name } | Sort-Object -Unique
 $missingFiles = @()
@@ -91,6 +99,25 @@ if ($priFiles.Count -eq 0) {
     Write-Host "MrtCore PRI generation is disabled or failing. Without a PRI file," -ForegroundColor Red
     Write-Host "WinUI XAML metadata provider throws 0xc000027b and the app dies silently." -ForegroundColor Red
     Write-Host "Check csproj: MrtCoreGenPriFileEnabled must NOT be false." -ForegroundColor Red
+    $failed = $true
+}
+if (-not $appPri) {
+    Write-Host ""
+    Write-Host "App's own PRI (resources.pri or Dimmy.Windows.pri) NOT FOUND at root." -ForegroundColor Red
+    Write-Host "The .pri files present are:" -ForegroundColor Red
+    foreach ($f in $priFiles) {
+        $kb = [math]::Round($f.Length / 1KB, 1)
+        Write-Host "  - $($f.Name) ($kb KB)" -ForegroundColor Red
+    }
+    Write-Host ""
+    Write-Host "Microsoft.UI.pri / Microsoft.UI.Xaml.Controls.pri are NOT the app PRI --" -ForegroundColor Red
+    Write-Host "they ship with WindowsAppSDK and index only MUX controls, NOT Views/*.xbf." -ForegroundColor Red
+    Write-Host "At runtime, Application.LoadComponent('ms-appx:///Views/OnboardingWindow.xaml')" -ForegroundColor Red
+    Write-Host "will throw XamlParseException. Process stays alive (try/catch swallows) but" -ForegroundColor Red
+    Write-Host "NO WINDOW EVER SHOWS. This is the 2026-04-18 regression." -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Fix: csproj must have EnableMsixTooling=true and AppxMSBuildToolsPath must" -ForegroundColor Red
+    Write-Host "point at a VS install with the UWP workload (contains Microsoft.Build.Packaging.Pri.Tasks.dll)." -ForegroundColor Red
     $failed = $true
 }
 

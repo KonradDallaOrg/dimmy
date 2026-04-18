@@ -14,10 +14,35 @@
     <WindowsPackageType>None</WindowsPackageType>
     <Nullable>enable</Nullable>
     <DefineConstants>DISABLE_XAML_GENERATED_MAIN</DefineConstants>
-    <!-- Unpackaged app: no MSIX tooling. MrtCore PRI generation IS enabled
-         (XAML metadata provider needs it to resolve controls + .resw resources). -->
+    <!-- Unpackaged app, but MrtCore PRI generation MUST run. Without resources.pri
+         the ms-appx:/// URIs used by InitializeComponent() can't resolve the XBF,
+         so every Window throws XamlParseException and the process runs headless.
+         EnableMsixTooling=true pulls in MrtCore even with AppxPackage=false. -->
     <AppxPackage>false</AppxPackage>
-    <EnableMsixTooling>false</EnableMsixTooling>
+    <EnableMsixTooling>true</EnableMsixTooling>
+  </PropertyGroup>
+
+  <!-- MrtCore's PRI tasks live in the VS AppxPackage workload, not the dotnet SDK.
+       `dotnet publish` / `dotnet build` won't find Microsoft.Build.Packaging.Pri.Tasks.dll
+       unless we point AppxMSBuildToolsPath at a VS install. This PropertyGroup probes
+       the common locations; CI may also pass -p:AppxMSBuildToolsPath=... to override.
+       Evaluation order matters: UsingTask in MrtCore.PriGen.targets reads this at
+       import time, so it MUST be set via PropertyGroup (not Target). -->
+  <PropertyGroup Condition="'$(AppxMSBuildToolsPath)' == ''">
+    <_VsAppxPath17Enterprise>$(ProgramFiles)\Microsoft Visual Studio\2022\Enterprise\MSBuild\Microsoft\VisualStudio\v17.0\AppxPackage\</_VsAppxPath17Enterprise>
+    <_VsAppxPath17Professional>$(ProgramFiles)\Microsoft Visual Studio\2022\Professional\MSBuild\Microsoft\VisualStudio\v17.0\AppxPackage\</_VsAppxPath17Professional>
+    <_VsAppxPath17Community>$(ProgramFiles)\Microsoft Visual Studio\2022\Community\MSBuild\Microsoft\VisualStudio\v17.0\AppxPackage\</_VsAppxPath17Community>
+    <_VsAppxPath17BuildTools>$(ProgramFiles)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Microsoft\VisualStudio\v17.0\AppxPackage\</_VsAppxPath17BuildTools>
+    <_VsAppxPath18Community>$(ProgramFiles)\Microsoft Visual Studio\18\Community\MSBuild\Microsoft\VisualStudio\v18.0\AppxPackage\</_VsAppxPath18Community>
+    <_VsAppxPath18Professional>$(ProgramFiles)\Microsoft Visual Studio\18\Professional\MSBuild\Microsoft\VisualStudio\v18.0\AppxPackage\</_VsAppxPath18Professional>
+    <_VsAppxPath18Enterprise>$(ProgramFiles)\Microsoft Visual Studio\18\Enterprise\MSBuild\Microsoft\VisualStudio\v18.0\AppxPackage\</_VsAppxPath18Enterprise>
+    <AppxMSBuildToolsPath Condition="Exists('$(_VsAppxPath17Enterprise)Microsoft.Build.Packaging.Pri.Tasks.dll')">$(_VsAppxPath17Enterprise)</AppxMSBuildToolsPath>
+    <AppxMSBuildToolsPath Condition="'$(AppxMSBuildToolsPath)' == '' and Exists('$(_VsAppxPath17Professional)Microsoft.Build.Packaging.Pri.Tasks.dll')">$(_VsAppxPath17Professional)</AppxMSBuildToolsPath>
+    <AppxMSBuildToolsPath Condition="'$(AppxMSBuildToolsPath)' == '' and Exists('$(_VsAppxPath17Community)Microsoft.Build.Packaging.Pri.Tasks.dll')">$(_VsAppxPath17Community)</AppxMSBuildToolsPath>
+    <AppxMSBuildToolsPath Condition="'$(AppxMSBuildToolsPath)' == '' and Exists('$(_VsAppxPath17BuildTools)Microsoft.Build.Packaging.Pri.Tasks.dll')">$(_VsAppxPath17BuildTools)</AppxMSBuildToolsPath>
+    <AppxMSBuildToolsPath Condition="'$(AppxMSBuildToolsPath)' == '' and Exists('$(_VsAppxPath18Community)Microsoft.Build.Packaging.Pri.Tasks.dll')">$(_VsAppxPath18Community)</AppxMSBuildToolsPath>
+    <AppxMSBuildToolsPath Condition="'$(AppxMSBuildToolsPath)' == '' and Exists('$(_VsAppxPath18Professional)Microsoft.Build.Packaging.Pri.Tasks.dll')">$(_VsAppxPath18Professional)</AppxMSBuildToolsPath>
+    <AppxMSBuildToolsPath Condition="'$(AppxMSBuildToolsPath)' == '' and Exists('$(_VsAppxPath18Enterprise)Microsoft.Build.Packaging.Pri.Tasks.dll')">$(_VsAppxPath18Enterprise)</AppxMSBuildToolsPath>
   </PropertyGroup>
 
   <ItemGroup>

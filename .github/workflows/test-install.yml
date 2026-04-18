@@ -122,11 +122,22 @@ jobs:
             $missing | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
             exit 1
           }
-          $pri = Get-ChildItem $appDir -Filter "*.pri" -File
-          if ($pri.Count -eq 0) {
-            Write-Host "No .pri file in installed bundle — app will crash at InitializeComponent()" -ForegroundColor Red
+          # The app's own PRI is required. Microsoft.UI.pri / Microsoft.UI.Xaml.Controls.pri
+          # ship with WindowsAppSDK and don't index Views/*.xbf -- checking for "any .pri"
+          # gives a false positive. Staging build on 2026-04-18 shipped without app PRI
+          # because Directory.Build.targets stubbed the MrtCore generation targets.
+          $appPri = Get-ChildItem $appDir -Filter "resources.pri" -File -ErrorAction SilentlyContinue
+          if (-not $appPri) {
+            $appPri = Get-ChildItem $appDir -Filter "Dimmy.Windows.pri" -File -ErrorAction SilentlyContinue
+          }
+          if (-not $appPri) {
+            Write-Host "App PRI (resources.pri / Dimmy.Windows.pri) MISSING from installed bundle." -ForegroundColor Red
+            Write-Host "Present .pri files:" -ForegroundColor Red
+            Get-ChildItem $appDir -Filter "*.pri" -File | ForEach-Object { Write-Host "  - $($_.Name)" -ForegroundColor Red }
+            Write-Host "App will throw XamlParseException at InitializeComponent() and run headless." -ForegroundColor Red
             exit 1
           }
+          Write-Host ("App PRI: {0} ({1} KB)" -f $appPri.Name, [math]::Round($appPri.Length/1KB,1))
           Write-Host "Bundle integrity: OK" -ForegroundColor Green
 
       - name: Launch app and wait 15 seconds
@@ -160,7 +171,31 @@ jobs:
             Copy-Item $log "$env:RUNNER_TEMP\dimmy_startup.log" -Force
           } else {
             Write-Host "No startup log at $log"
-            Write-Host "App did not reach Program.Main — check Event Viewer below"
+            Write-Host "App did not reach Program.Main -- check Event Viewer below"
+          }
+
+      - name: Dump UI crash log (APPDATA)
+        if: always()
+        shell: pwsh
+        run: |
+          # App.OnLaunched catches XAML / UI exceptions and writes them here.
+          # If this file exists, the app is running HEADLESS -- process alive,
+          # no pill, no tray. This is the 2026-04-18 regression symptom.
+          $crashLog = "$env:APPDATA\dimmy\crash.log"
+          $pttLog = "$env:APPDATA\dimmy\ptt.log"
+          if (Test-Path $crashLog) {
+            Write-Host "=== %APPDATA%\dimmy\crash.log (UI crash, process survived) ==="
+            Get-Content $crashLog
+            Write-Host "=== end crash log ==="
+            Copy-Item $crashLog "$env:RUNNER_TEMP\crash.log" -Force
+          } else {
+            Write-Host "No crash.log at $crashLog (good -- UI creation did not throw)"
+          }
+          if (Test-Path $pttLog) {
+            Write-Host "=== %APPDATA%\dimmy\ptt.log (last 40 lines) ==="
+            Get-Content $pttLog -Tail 40
+            Write-Host "=== end ptt log ==="
+            Copy-Item $pttLog "$env:RUNNER_TEMP\ptt.log" -Force
           }
 
       - name: Dump Application event log (last 5 min)
@@ -189,24 +224,40 @@ jobs:
           name: clean-install-test-logs
           path: |
             ${{ runner.temp }}/dimmy_startup.log
+            ${{ runner.temp }}/crash.log
+            ${{ runner.temp }}/ptt.log
             ${{ runner.temp }}/launch_result.txt
           if-no-files-found: warn
 
-      - name: Fail on crash or early exit
+      - name: Fail on crash, early exit, or headless UI
         shell: pwsh
         run: |
-          $log = "$env:TEMP\dimmy_startup.log"
+          $startLog = "$env:TEMP\dimmy_startup.log"
+          $crashLog = "$env:APPDATA\dimmy\crash.log"
           $result = Get-Content "$env:RUNNER_TEMP\launch_result.txt" -ErrorAction SilentlyContinue
           $failed = $false
-          if (Test-Path $log) {
-            $content = Get-Content $log -Raw
+          if (Test-Path $startLog) {
+            $content = Get-Content $startLog -Raw
             if ($content -match 'CRASH at') {
               Write-Host "Startup log contains CRASH entry" -ForegroundColor Red
               $failed = $true
             }
           }
+          # CRITICAL: process-alive-but-UI-dead detection. App.OnLaunched wraps
+          # OnboardingWindow / PillWindow creation in try/catch and writes to
+          # crash.log, so the process stays alive with NO WINDOW visible. Old
+          # gate returned green. This is exactly the 2026-04-18 regression.
+          if (Test-Path $crashLog) {
+            $crashContent = Get-Content $crashLog -Raw
+            Write-Host "UI crash log present at $crashLog" -ForegroundColor Red
+            Write-Host "--- crash.log ---" -ForegroundColor Red
+            Write-Host $crashContent -ForegroundColor Red
+            Write-Host "-----------------" -ForegroundColor Red
+            Write-Host "App is running headless (process alive, no pill/tray). FAIL." -ForegroundColor Red
+            $failed = $true
+          }
           if ($result -eq 'exited_early') {
-            Write-Host "App exited before 15s — startup failure" -ForegroundColor Red
+            Write-Host "App exited before 15s -- startup failure" -ForegroundColor Red
             $failed = $true
           }
           if ($failed) { exit 1 }
