@@ -109,9 +109,11 @@ jobs:
             'Microsoft.UI.Xaml.dll',
             'Microsoft.WindowsAppRuntime.dll',
             'Microsoft.WindowsAppRuntime.Bootstrap.dll',
-            'Microsoft.Internal.FrameworkUdk.dll',
-            'vcruntime140.dll',
-            'msvcp140.dll'
+            'Microsoft.Internal.FrameworkUdk.dll'
+            # vcruntime140/msvcp140 are NOT expected in $appDir — Velopack
+            # `--framework vcredist143-x64` installs the official Microsoft
+            # VC Redist at setup time (into System32). Co-locating our own
+            # copy was removed in v0.6.12 after it caused ABI mismatches.
           )
           $missing = @()
           foreach ($f in $critical) {

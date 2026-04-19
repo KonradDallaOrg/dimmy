@@ -4,6 +4,17 @@ All notable changes to Dimmy are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.20] - 2026-04-20
+
+### Fixed
+- **`test-install.yml` still demanded `vcruntime140.dll` + `msvcp140.dll`
+  in the installed app folder.** v0.6.19 finally produced a clean build
+  and packed a Velopack installer, but the clean-install smoke test
+  failed verifying bundle integrity — the check list still required
+  those two DLLs even though v0.6.12 had already removed the bundling
+  (Velopack's `--framework vcredist143-x64` installs them to System32).
+  Removed them from the critical-files check.
+
 ## [0.6.19] - 2026-04-20
 
 ### Fixed
