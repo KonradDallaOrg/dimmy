@@ -274,14 +274,26 @@ jobs:
             }
             if (-not $vs2026) { throw "VS 2026 not found after choco install + 60s wait — installer silently failed or vswhere can't see it even with -prerelease" }
           }
-          $tools = Get-ChildItem "$vs2026\VC\Tools\MSVC" -Directory | Sort-Object Name -Descending | Select-Object -First 1
-          if (-not $tools) { throw "VS 2026 installed at $vs2026 but VC\Tools\MSVC is empty — VCTools workload missing?" }
-          Write-Host "VS 2026 MSVC toolchain: $($tools.Name) at $vs2026"
-          $ver = [version]($tools.Name -replace '^(\d+\.\d+\.\d+).*','$1')
-          if ($ver -lt [version]"14.50") {
-            throw "VS 2026 has MSVC $($tools.Name), still < 14.50"
+          Write-Host "VS 2026 installationPath: '$vs2026'"
+          $mscvDir = Join-Path $vs2026 "VC\Tools\MSVC"
+          Write-Host "Listing MSVC toolchains at: $mscvDir"
+          if (-not (Test-Path $mscvDir)) { throw "VC\Tools\MSVC not found — VCTools workload missing" }
+          $tools = Get-ChildItem $mscvDir -Directory -ErrorAction Stop | Sort-Object Name -Descending
+          Write-Host "Found $($tools.Count) MSVC toolchain(s): $($tools.Name -join ', ')"
+          if (-not $tools -or $tools.Count -eq 0) { throw "VC\Tools\MSVC is empty" }
+          $toolName = $tools[0].Name
+          Write-Host "Picking newest: $toolName"
+          $verMatch = [regex]::Match($toolName, '^(\d+)\.(\d+)')
+          if (-not $verMatch.Success) { throw "Cannot parse major.minor from toolchain name '$toolName'" }
+          $major = [int]$verMatch.Groups[1].Value
+          $minor = [int]$verMatch.Groups[2].Value
+          Write-Host "Parsed major=$major minor=$minor"
+          if ($major -lt 14 -or ($major -eq 14 -and $minor -lt 50)) {
+            throw "VS 2026 has MSVC $toolName (major=$major, minor=$minor), < 14.50 required"
           }
-          echo "VS2026_PATH=$vs2026" >> $env:GITHUB_ENV
+          Write-Host "Toolchain OK, exporting VS2026_PATH"
+          Add-Content -Path $env:GITHUB_ENV -Value "VS2026_PATH=$vs2026" -Encoding utf8
+          Write-Host "DONE"
 
       - name: Install Vulkan SDK
         shell: pwsh

@@ -4,6 +4,18 @@ All notable changes to Dimmy are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.17] - 2026-04-20
+
+### Fixed
+- **Silent exit 1 after VS 2026 detection.** v0.6.16 reached the
+  toolchain verification (`VS 2026 MSVC toolchain: 14.51.36231 at
+  C:\Program Files (x86)\Microsoft Visual Studio\18\Insiders`) then
+  aborted with exit 1 and no exception text. Replaced the
+  `[version]` cast + `echo >> $env:GITHUB_ENV` with explicit regex
+  parsing + `Add-Content -Encoding utf8`. Added Write-Host
+  breadcrumbs before each potentially-throwing operation to expose
+  which line trips next time.
+
 ## [0.6.16] - 2026-04-19
 
 ### Fixed
