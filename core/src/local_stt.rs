@@ -279,6 +279,15 @@ fn compute_gpu_backend_status() -> GpuBackendStatus {
     // sentinel file still exists. Force CPU for this session so the user
     // gets a working app instead of a crash loop. Clear the sentinel so the
     // NEXT boot retries the GPU path (drivers may have been updated, etc).
+    //
+    // Critical: we also disable the Vulkan loader via env vars here. Setting
+    // `use_gpu(false)` on whisper/llama params is NOT sufficient because
+    // ggml_backend_registry unconditionally registers ggml-vulkan at
+    // `WhisperContext::new_with_params` / `LlamaBackend::init()` time, and
+    // `ggml_vk_instance_init` aborts the process on hosts where a device is
+    // discoverable but its driver stack is broken (seen on dual-boot Windows
+    // installs where ICD registration is partial). Blocking at the loader
+    // layer makes ggml-vulkan see zero ICDs and skip all device init.
     if crate::gpu_health::previous_crash_detected() {
         let ctx = crate::gpu_health::crash_context().unwrap_or_else(|| "unknown".to_string());
         crate::log(&format!(
@@ -288,12 +297,16 @@ fn compute_gpu_backend_status() -> GpuBackendStatus {
             ctx
         ));
         crate::gpu_health::clear();
+        crate::gpu_diag::disable_vulkan_loader(
+            "sentinel: previous process aborted during GPU init",
+        );
         return GpuBackendStatus::Unavailable;
     }
 
     // Escape hatch for debugging / CI: force CPU backend regardless of probe.
     if std::env::var("DIMMY_FORCE_CPU").is_ok() {
         crate::log("[GPU] DIMMY_FORCE_CPU set — forcing CPU backend");
+        crate::gpu_diag::disable_vulkan_loader("DIMMY_FORCE_CPU=1");
         return GpuBackendStatus::Unavailable;
     }
 
@@ -312,6 +325,7 @@ fn compute_gpu_backend_status() -> GpuBackendStatus {
                     "[GPU] Vulkan backend is not usable on this machine — falling back to CPU. \
                      (Check that vulkan-1.dll is installed and a recent GPU driver exposes an ICD.)",
                 );
+                crate::gpu_diag::disable_vulkan_loader("probe_vulkan returned Unusable");
                 GpuBackendStatus::Unavailable
             }
             VulkanProbe::Usable { discrete_gpu_idx } => {

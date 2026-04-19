@@ -388,9 +388,13 @@ mod llm_cache {
                 model_path.display()
             ));
 
-            let backend = LlamaBackend::init()
-                .map_err(|e| crate::error::LlmError::LocalModel(format!("backend init: {}", e)))?;
-
+            // Order matters: `gpu_backend_status()` may set VK_DRIVER_FILES to
+            // disable the Vulkan loader when the sentinel indicates a previous
+            // crash. That env var must be in place BEFORE `LlamaBackend::init()`
+            // because llama.cpp registers ggml-vulkan during backend init and
+            // `ggml_vk_instance_init` reads the loader env vars via
+            // `vk::createInstance`. Calling `LlamaBackend::init()` first would
+            // re-trigger the original abort on broken hosts.
             let (model_params, using_gpu) = match crate::local_stt::gpu_backend_status() {
                 crate::local_stt::GpuBackendStatus::Available { device } => {
                     crate::log(&format!("[LocalLLM] GPU backend: device {}", device));
@@ -406,6 +410,9 @@ mod llm_cache {
                     (LlamaModelParams::default().with_n_gpu_layers(0), false)
                 }
             };
+
+            let backend = LlamaBackend::init()
+                .map_err(|e| crate::error::LlmError::LocalModel(format!("backend init: {}", e)))?;
 
             // See note in local_stt.rs: ggml-vulkan / ggml-cuda can abort the
             // process inside C++ when GPU init fails. The sentinel lets the

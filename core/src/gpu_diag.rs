@@ -91,6 +91,56 @@ pub fn log_environment_snapshot() {
     });
 }
 
+/// Point the Vulkan loader at a non-existent ICD manifest so that
+/// `vkEnumeratePhysicalDevices` returns zero devices. ggml-vulkan's
+/// `ggml_vk_instance_init` then takes the "No devices found" early-return
+/// path at ggml-vulkan.cpp:5500 and never touches driver code that may
+/// abort the process.
+///
+/// Critical on hosts where `ggml_vk_instance_init` aborts even when the
+/// caller passes `use_gpu=false`: whisper.cpp's `ggml_backend_init_by_type(CPU)`
+/// unconditionally triggers the backend-registry singleton, which calls
+/// `ggml_backend_vk_reg` → `ggml_vk_instance_init`. The only reliable way to
+/// bypass that C++ path from Rust is at the Vulkan loader layer.
+///
+/// Must be called BEFORE the first `LlamaBackend::init()` or
+/// `WhisperContext::new_with_params` call in the process. Idempotent.
+///
+/// No-op on macOS (Metal backend, no Vulkan loader).
+pub fn disable_vulkan_loader(reason: &str) {
+    #[cfg(not(target_os = "macos"))]
+    {
+        static DONE: Once = Once::new();
+        DONE.call_once(|| {
+            // Cross-platform: both env var names are honored — VK_DRIVER_FILES
+            // is the current name (Vulkan SDK 1.3.207+), VK_ICD_FILENAMES is
+            // the legacy name still accepted by older loaders.
+            #[cfg(target_os = "windows")]
+            let bogus = r"C:\nonexistent\dimmy-vulkan-disabled.json";
+            #[cfg(target_os = "linux")]
+            let bogus = "/nonexistent/dimmy-vulkan-disabled.json";
+            #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+            let bogus = "/nonexistent/dimmy-vulkan-disabled.json";
+
+            // SAFETY: first caller is `compute_gpu_backend_status` on the
+            // thread that will next call into ggml; ggml-vulkan reads these
+            // env vars inside `vk::createInstance` on the same thread shortly
+            // after. No other thread reads these Vulkan-loader env vars.
+            std::env::set_var("VK_DRIVER_FILES", bogus);
+            std::env::set_var("VK_ICD_FILENAMES", bogus);
+            crate::log(&format!(
+                "[gpu_diag] Vulkan loader disabled (VK_DRIVER_FILES + VK_ICD_FILENAMES → {}). \
+                 Reason: {}. ggml-vulkan will see zero ICDs and take the safe early-return.",
+                bogus, reason
+            ));
+        });
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = reason;
+    }
+}
+
 #[cfg(target_os = "windows")]
 fn log_windows_env() {
     // vulkan-1.dll location + size (if present in PATH or System32)
@@ -321,5 +371,36 @@ mod tests {
     fn log_environment_snapshot_is_idempotent() {
         log_environment_snapshot();
         log_environment_snapshot();
+    }
+
+    #[test]
+    #[cfg(not(target_os = "macos"))]
+    fn disable_vulkan_loader_sets_env_vars() {
+        // First call in this test process — other tests may not touch VK vars.
+        disable_vulkan_loader("unit test");
+        let drv = std::env::var("VK_DRIVER_FILES").unwrap_or_default();
+        let icd = std::env::var("VK_ICD_FILENAMES").unwrap_or_default();
+        assert!(
+            drv.contains("dimmy-vulkan-disabled.json"),
+            "VK_DRIVER_FILES must point to bogus path, got: {:?}",
+            drv
+        );
+        assert!(
+            icd.contains("dimmy-vulkan-disabled.json"),
+            "VK_ICD_FILENAMES must point to bogus path, got: {:?}",
+            icd
+        );
+        // Subsequent calls must be idempotent (Once) — same values after.
+        disable_vulkan_loader("second call should be a no-op");
+        assert_eq!(std::env::var("VK_DRIVER_FILES").unwrap(), drv);
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn disable_vulkan_loader_is_noop_on_macos() {
+        // macOS uses Metal — no Vulkan loader to disable. Must not touch env.
+        std::env::remove_var("VK_DRIVER_FILES");
+        disable_vulkan_loader("macOS no-op check");
+        assert!(std::env::var("VK_DRIVER_FILES").is_err());
     }
 }

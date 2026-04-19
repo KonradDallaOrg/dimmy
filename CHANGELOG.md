@@ -4,6 +4,28 @@ All notable changes to Dimmy are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.8] - 2026-04-19
+
+### Fixed
+- **Local STT/LLM on hosts where ggml-vulkan aborts inside its own init**
+  — on dual-boot Windows installs where the same hardware has a partially
+  broken driver stack, `WhisperContext::new_with_params` and
+  `LlamaBackend::init()` could still abort the process *after* our sentinel
+  forced `use_gpu(false)`. Root cause: whisper.cpp/llama.cpp call
+  `ggml_backend_init_by_type(CPU)` → `ggml_backend_registry` singleton →
+  `ggml_backend_vk_reg()` → `ggml_vk_instance_init()` unconditionally, so
+  the `use_gpu` flag on params doesn't prevent Vulkan driver code from
+  running. The CPU fallback was effectively identical to the GPU path on
+  these machines.
+
+  Fix: when the GPU backend is declared `Unavailable` (sentinel, env var,
+  or probe failure), also set `VK_DRIVER_FILES` + `VK_ICD_FILENAMES` to a
+  non-existent path. The Vulkan loader then reports zero ICDs, ggml-vulkan
+  logs "No devices found" and returns early without touching driver code.
+  Re-ordered `llm_cache::generate` so `gpu_backend_status()` runs before
+  `LlamaBackend::init()` — the env var must be set before llama.cpp
+  triggers its backend registry.
+
 ## [0.6.7] - 2026-04-19
 
 ### Fixed
