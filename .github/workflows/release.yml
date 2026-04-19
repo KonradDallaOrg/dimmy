@@ -249,7 +249,7 @@ jobs:
             # choco's --package-parameters is a single string passed to the
             # VS bootstrapper. --wait blocks until install completes.
             $params = "--add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.Windows11SDK.22621 --quiet --norestart --wait --nocache"
-            choco install visualstudio2026buildtools-preview -y --no-progress --package-parameters="$params"
+            choco install visualstudio2026buildtools-preview -y --pre --no-progress --package-parameters="$params"
             if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 3010) {
               throw "chocolatey install of VS 2026 BuildTools failed with exit $LASTEXITCODE"
             }

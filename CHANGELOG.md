@@ -4,6 +4,15 @@ All notable changes to Dimmy are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.15] - 2026-04-19
+
+### Fixed
+- **`choco install` of the VS 2026 BuildTools preview needs `--pre`.**
+  v0.6.14 failed with `visualstudio2026buildtools-preview not installed.
+  The package was not found with the source(s) listed` — chocolatey
+  silently omits prerelease packages unless `--pre` is passed. Added
+  the flag to both release.yml and staging-native.yml.
+
 ## [0.6.14] - 2026-04-19
 
 ### Fixed
