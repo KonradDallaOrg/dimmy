@@ -283,6 +283,11 @@ jobs:
           Write-Host "Toolchain OK, exporting VS2026_PATH"
           Add-Content -Path $env:GITHUB_ENV -Value "VS2026_PATH=$vs2026" -Encoding utf8
           Write-Host "DONE"
+          # choco's exit 3010 (reboot-required) sets $LASTEXITCODE=3010 and
+          # in pwsh 7.3+ with $PSNativeCommandUseErrorActionPreference=$true
+          # the GitHub Actions wrapper returns non-zero at step end regardless
+          # of subsequent logic. Explicit exit 0 overrides.
+          exit 0
 
       - name: Install Vulkan SDK
         shell: pwsh

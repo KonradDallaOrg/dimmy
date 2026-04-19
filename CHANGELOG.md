@@ -4,6 +4,17 @@ All notable changes to Dimmy are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.18] - 2026-04-20
+
+### Fixed
+- **Explicit `exit 0` at end of VS 2026 install step.** v0.6.17 ran the
+  whole script cleanly (printed "DONE") then still exited 1 —
+  chocolatey's exit 3010 (reboot-required) leaves `$LASTEXITCODE=3010`,
+  and pwsh 7.3+ with `$PSNativeCommandUseErrorActionPreference=$true`
+  (the default on GitHub Actions pwsh wrapper) propagates that to the
+  step exit code regardless of what runs after. Adding `exit 0` at the
+  end of the PowerShell block overrides the inherited code.
+
 ## [0.6.17] - 2026-04-20
 
 ### Fixed
