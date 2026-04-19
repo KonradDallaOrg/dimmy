@@ -4,6 +4,19 @@ All notable changes to Dimmy are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.10] - 2026-04-19
+
+### Added
+- **Forensic logging across the whisper inference path** — previously the
+  log trail ended at `[LocalSTT] Model cached successfully` followed by
+  ggml's `whisper_backend_init_gpu: no GPU found`, making it impossible to
+  tell whether a subsequent silent process abort happened in
+  `create_state`, during `whisper_full`, or in segment extraction. Dimmy
+  now emits a line on entry and exit of each of those three phases,
+  including `n_threads`, `single_segment`, and sample count. Lines are
+  flushed synchronously per the existing `crate::log` semantics, so the
+  last line before a C++ abort pins the crash site for post-mortem.
+
 ## [0.6.9] - 2026-04-19
 
 ### Added

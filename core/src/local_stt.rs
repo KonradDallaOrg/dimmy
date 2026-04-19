@@ -781,9 +781,24 @@ mod whisper_cache {
         let cached = guard.as_ref().expect("cache must be populated after load");
 
         // ── Create state + run inference ─────────────────────────
+        // Forensic logging: `crate::log` flushes synchronously per line, so
+        // each checkpoint survives a C++ abort. If a future post-mortem shows
+        // the log cutting off between two lines here, the crash site is
+        // pinned to the call in between.
+        crate::log(&format!(
+            "[LocalSTT] Creating inference state ({} samples, lang={})",
+            samples.len(),
+            if language.is_empty() {
+                "auto"
+            } else {
+                language
+            }
+        ));
         let mut state = cached.ctx.create_state().map_err(|e| {
+            crate::log(&format!("[LocalSTT] create_state returned error: {}", e));
             crate::error::TranscribeError::LocalModel(format!("failed to create state: {}", e))
         })?;
+        crate::log("[LocalSTT] Inference state created");
 
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
 
@@ -804,15 +819,28 @@ mod whisper_cache {
         params.set_print_timestamps(false);
 
         const SAMPLES_30S: usize = 30 * 16_000;
-        if samples.len() < SAMPLES_30S {
+        let single_segment = samples.len() < SAMPLES_30S;
+        if single_segment {
             params.set_single_segment(true);
         }
 
-        state.full(params, samples).map_err(|e| {
+        crate::log(&format!(
+            "[LocalSTT] Running whisper_full (n_threads={}, single_segment={}, samples={})",
+            n_threads,
+            single_segment,
+            samples.len()
+        ));
+        let full_result = state.full(params, samples);
+        match &full_result {
+            Ok(_) => crate::log("[LocalSTT] whisper_full returned Ok"),
+            Err(e) => crate::log(&format!("[LocalSTT] whisper_full returned Err: {}", e)),
+        }
+        full_result.map_err(|e| {
             crate::error::TranscribeError::LocalModel(format!("whisper inference failed: {}", e))
         })?;
 
         let n_segments = state.full_n_segments();
+        crate::log(&format!("[LocalSTT] Extracting {} segment(s)", n_segments));
         let mut text = String::new();
         for i in 0..n_segments {
             let segment = state.get_segment(i).ok_or_else(|| {
@@ -830,7 +858,12 @@ mod whisper_cache {
             text.push_str(seg_text.trim());
         }
 
-        Ok(text.trim().to_string())
+        let final_text = text.trim().to_string();
+        crate::log(&format!(
+            "[LocalSTT] Inference complete — {} chars",
+            final_text.len()
+        ));
+        Ok(final_text)
     }
 
     /// Clear the cached model (e.g. on shutdown or model change).
