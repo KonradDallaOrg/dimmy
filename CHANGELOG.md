@@ -4,6 +4,22 @@ All notable changes to Dimmy are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.14] - 2026-04-19
+
+### Fixed
+- **VS 2026 BuildTools install via chocolatey instead of
+  `aka.ms/vs/18`.** v0.6.13 tried to download
+  `https://aka.ms/vs/18/release/vs_buildtools.exe` but Microsoft has not
+  registered the `aka.ms/vs/18/*` short-URLs yet — they all 302-redirect
+  to Bing search results, so the "bootstrapper" ended up being ~63 KB
+  of HTML and the installer aborted with "The file or directory is
+  corrupted and unreadable". Chocolatey hosts
+  `visualstudio2026buildtools-preview` (published 2025-12-22), whose
+  install script internally fetches the signed bootstrapper from
+  Microsoft's CDN. Switching the CI step to `choco install
+  visualstudio2026buildtools-preview -y --package-parameters "..."`
+  sidesteps the aka.ms gap entirely.
+
 ## [0.6.13] - 2026-04-19
 
 ### Fixed

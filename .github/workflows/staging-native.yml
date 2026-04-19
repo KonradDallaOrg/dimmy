@@ -244,41 +244,36 @@ jobs:
         shell: pwsh
         run: |
           # windows-2025 ships VS 2022 Enterprise only (MSVC 14.44, which
-          # miscompiles whisper.cpp's ggml-vulkan state-init path). 14.50+
-          # lives exclusively in VS 2026 (VS 18). `setup.exe update` cannot
-          # bridge major versions, so we install VS 2026 BuildTools
-          # side-by-side with VCTools workload only. Used solely for the
-          # Rust cargo build step; VS 2022 stays authoritative for the
-          # .NET publish + UWP AppxPackage PRI generation steps that
-          # follow (VS 2026 BuildTools SKU lacks those workloads).
+          # miscompiles whisper.cpp's ggml-vulkan state-init path). MSVC
+          # 14.50+ exists only in VS 2026 (VS 18). Install path: Microsoft
+          # has not yet registered aka.ms/vs/18/* short-urls (they all
+          # redirect to Bing), so the official bootstrapper has no public
+          # direct URL. Chocolatey hosts the preview package that internally
+          # fetches the signed installer from Microsoft's CDN. Install it
+          # side-by-side with VS 2022 — VS 2022 stays authoritative for the
+          # .NET publish + UWP AppxPackage PRI generation steps because the
+          # BuildTools SKU lacks those workloads.
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
           $vs2026 = & $vswhere -version "[18.0,19.0)" -products "*" -property installationPath 2>$null | Select-Object -First 1
           if ($vs2026) {
             Write-Host "VS 2026 already present at $vs2026"
           } else {
-            $bootstrapper = "$env:RUNNER_TEMP\vs_buildtools.exe"
-            Write-Host "Downloading VS 2026 BuildTools bootstrapper..."
-            Invoke-WebRequest -Uri "https://aka.ms/vs/18/release/vs_buildtools.exe" -OutFile $bootstrapper
-            $vsArgs = @(
-              "--quiet", "--norestart", "--wait", "--nocache",
-              "--add", "Microsoft.VisualStudio.Workload.VCTools",
-              "--add", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
-              "--add", "Microsoft.VisualStudio.Component.Windows11SDK.22621"
-            )
-            Write-Host "Installing VS 2026 BuildTools (this takes ~10-15 min)..."
-            $proc = Start-Process -FilePath $bootstrapper -ArgumentList $vsArgs -Wait -NoNewWindow -PassThru
-            # 0=success, 3010=success+reboot-required (we don't reboot)
-            if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) {
-              throw "VS 2026 BuildTools install failed with exit $($proc.ExitCode)"
+            Write-Host "Installing visualstudio2026buildtools-preview via chocolatey..."
+            $params = "--add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.Windows11SDK.22621 --quiet --norestart --wait --nocache"
+            choco install visualstudio2026buildtools-preview -y --no-progress --package-parameters="$params"
+            if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 3010) {
+              throw "chocolatey install of VS 2026 BuildTools failed with exit $LASTEXITCODE"
             }
+            Start-Sleep -Seconds 3
             $vs2026 = & $vswhere -version "[18.0,19.0)" -products "*" -property installationPath 2>$null | Select-Object -First 1
-            if (-not $vs2026) { throw "VS 2026 not found after install (aka.ms URL may be outdated or install silently failed)" }
+            if (-not $vs2026) { throw "VS 2026 not found after choco install — installer silently failed or vswhere can't see it" }
           }
           $tools = Get-ChildItem "$vs2026\VC\Tools\MSVC" -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $tools) { throw "VS 2026 installed at $vs2026 but VC\Tools\MSVC is empty — VCTools workload missing?" }
           Write-Host "VS 2026 MSVC toolchain: $($tools.Name) at $vs2026"
           $ver = [version]($tools.Name -replace '^(\d+\.\d+\.\d+).*','$1')
           if ($ver -lt [version]"14.50") {
-            throw "VS 2026 has MSVC $($tools.Name), still < 14.50 — aka.ms/vs/18/release may point at an older build"
+            throw "VS 2026 has MSVC $($tools.Name), still < 14.50"
           }
           echo "VS2026_PATH=$vs2026" >> $env:GITHUB_ENV
 
