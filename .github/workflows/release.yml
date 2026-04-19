@@ -302,13 +302,20 @@ jobs:
         run: |
           $pubDir = "platforms/windows/Dimmy.Windows/publish"
           Copy-Item "D:\t\release\dimmy_lib.dll" "$pubDir/"
-          # Bundle VC++ runtime DLLs (dotnet publish uses vcruntime140_cor3.dll,
-          # but the Rust DLL needs the standard vcruntime140.dll)
+          # Bundle VC++ runtime DLLs from the newest MSVC toolchain — the one the
+          # Rust DLL actually links against. The old `VC -Recurse ... -First 1`
+          # query walked VC\Redist\MSVC\ and returned the oldest version (14.29),
+          # while dimmy_lib.dll imports symbols from the current toolchain (14.4x+).
+          # DLL search order loads co-located DLLs first, so the old bundled
+          # redist won over the matching System32 copy and triggered
+          # AccessViolationException deep in whisper/llama. Point at
+          # VC\Tools\MSVC\<newest>\bin\Hostx64\x64 instead.
           $vsDir = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
-          $vcrt = Get-ChildItem "$vsDir\VC" -Recurse -Filter "vcruntime140.dll" | Where-Object { $_.DirectoryName -match "\\x64\\" -and $_.DirectoryName -notmatch "onecore|store" } | Select-Object -First 1
-          if (-not $vcrt) { Write-Error "vcruntime140.dll not found under $vsDir\VC"; exit 1 }
-          $dllDir = $vcrt.DirectoryName
-          Write-Host "Copying VC++ runtime from $dllDir"
+          $toolsDir = Get-ChildItem "$vsDir\VC\Tools\MSVC" -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $toolsDir) { Write-Error "MSVC toolchain not found under $vsDir\VC\Tools\MSVC"; exit 1 }
+          $dllDir = Join-Path $toolsDir.FullName "bin\Hostx64\x64"
+          if (-not (Test-Path (Join-Path $dllDir "vcruntime140.dll"))) { Write-Error "vcruntime140.dll not found in $dllDir"; exit 1 }
+          Write-Host "Copying VC++ runtime from $dllDir (toolchain $($toolsDir.Name))"
           Copy-Item "$dllDir\vcruntime140.dll" "$pubDir/"
           Copy-Item "$dllDir\vcruntime140_1.dll" "$pubDir/" -ErrorAction SilentlyContinue
           Copy-Item "$dllDir\msvcp140.dll" "$pubDir/"

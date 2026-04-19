@@ -4,6 +4,24 @@ All notable changes to Dimmy are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.11] - 2026-04-19
+
+### Fixed
+- **Windows installer crashed in `dimmy_stop_recording` with
+  `AccessViolationException`** — ABI mismatch between the Rust DLL and the
+  bundled Visual C++ runtime. The CI step that copies `vcruntime140.dll` /
+  `msvcp140.dll` into the publish folder walked the entire `VC` tree with
+  `Get-ChildItem -Recurse ... | Select-Object -First 1`, which in practice
+  returned the oldest redistributable package shipped with Visual Studio
+  (e.g. `14.29.30157.0` from 2021). `dimmy_lib.dll` was linked against the
+  current compiler toolchain (14.4x+) so imports that existed only in the
+  newer `msvcp140.dll` resolved against the older co-located copy — the
+  process dereferenced a null vtable entry deep inside whisper.cpp and
+  segfaulted. The step now pins to `VC\Tools\MSVC\<newest>\bin\Hostx64\x64`,
+  i.e. the exact toolchain the compiler used, so bundled and linked
+  runtimes always match. Affected every self-contained installer produced
+  by `staging-native.yml` and `release.yml`.
+
 ## [0.6.10] - 2026-04-19
 
 ### Added
