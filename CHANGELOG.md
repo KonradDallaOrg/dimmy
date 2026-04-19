@@ -4,6 +4,18 @@ All notable changes to Dimmy are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.19] - 2026-04-20
+
+### Fixed
+- **Linker gate couldn't find `dumpbin.exe`.** v0.6.18 built
+  `dimmy_lib.dll` successfully (cargo finished, toolchain 14.51
+  confirmed active) but the post-build gate step called bare
+  `dumpbin` via `& dumpbin`, and `dumpbin.exe` wasn't in PATH —
+  the previous step's `vcvars64.bat` activation was scoped to its
+  `shell: cmd` subshell only. Fix locates dumpbin under
+  `$env:VS2026_PATH\VC\Tools\MSVC\<ver>\bin\Hostx64\x64\` and
+  invokes via absolute path.
+
 ## [0.6.18] - 2026-04-20
 
 ### Fixed

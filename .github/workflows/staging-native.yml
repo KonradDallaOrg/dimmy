@@ -338,20 +338,28 @@ jobs:
         run: |
           # Hard gate: the whisper Vulkan backend miscompile lives in MSVC
           # linker <= 14.44. Any DLL linked with an older toolchain must NOT
-          # ship. Extracts the linker version from PE headers and aborts if
-          # too old. Prevents another v0.6.11-style ship of a known-broken
-          # build.
+          # ship. Extracts linker version from PE headers via dumpbin.
+          # dumpbin is not in PATH here (the previous step's vcvars
+          # activation was scoped to that cmd subshell), so locate it under
+          # VS2026_PATH.
           $dll = "D:\t\release\dimmy_lib.dll"
           if (-not (Test-Path $dll)) { throw "dimmy_lib.dll not found at $dll" }
-          $out = & dumpbin /headers $dll
+          $mscvDir = Join-Path $env:VS2026_PATH "VC\Tools\MSVC"
+          $tool = Get-ChildItem $mscvDir -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          $dumpbin = Join-Path $tool.FullName "bin\Hostx64\x64\dumpbin.exe"
+          if (-not (Test-Path $dumpbin)) { throw "dumpbin.exe not found at $dumpbin" }
+          Write-Host "Using dumpbin at: $dumpbin"
+          $out = & $dumpbin /headers $dll
           $line = $out | Select-String "linker version" | Select-Object -First 1
           if (-not $line) { throw "Could not find linker version in dumpbin output" }
           if ($line -notmatch '(\d+)\.(\d+)') { throw "Could not parse linker version from '$line'" }
-          $linkerVer = [version]("$($Matches[1]).$($Matches[2])")
-          Write-Host "dimmy_lib.dll linker version: $linkerVer"
-          if ($linkerVer -lt [version]"14.50") {
-            throw "dimmy_lib.dll linked with MSVC $linkerVer. Known whisper.cpp Vulkan codegen bug in <14.50. Aborting release. Update the windows-2025 runner image or fix the VS update step."
+          $major = [int]$Matches[1]
+          $minor = [int]$Matches[2]
+          Write-Host "dimmy_lib.dll linker version: $major.$minor"
+          if ($major -lt 14 -or ($major -eq 14 -and $minor -lt 50)) {
+            throw "dimmy_lib.dll linked with MSVC $major.$minor. Known whisper.cpp Vulkan codegen bug in <14.50. Aborting release."
           }
+          exit 0
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
