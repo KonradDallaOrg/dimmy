@@ -161,6 +161,7 @@ pub extern "C" fn dimmy_init() -> c_int {
         chunk_streaming_enabled: Mutex::new(file_cfg.chunk_streaming_enabled),
         preprocessing_enabled: Mutex::new(file_cfg.preprocessing_enabled),
         audio_debug_enabled: Mutex::new(file_cfg.audio_debug_enabled),
+        ggml_debug_logging: Mutex::new(file_cfg.ggml_debug_logging),
         use_keyring: Mutex::new(file_cfg.use_keyring),
         stt_mode: Mutex::new(file_cfg.stt_mode),
         local_model: Mutex::new(file_cfg.local_model),
@@ -184,6 +185,11 @@ pub extern "C" fn dimmy_init() -> c_int {
             crate::history::HistoryStore::new(&history_db).ok()
         }),
     };
+
+    // Apply ggml debug toggle to the gpu_diag trampoline before any model
+    // load. set_ggml_debug_enabled is the lock-free side of the AtomicBool
+    // the C-ABI log callback reads on every line.
+    crate::gpu_diag::set_ggml_debug_enabled(file_cfg.ggml_debug_logging);
 
     match GLOBAL_STATE.set(app_state) {
         Ok(()) => {
@@ -676,6 +682,7 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "chunk_streaming_enabled": *st.chunk_streaming_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "preprocessing_enabled": *st.preprocessing_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "audio_debug_enabled": *st.audio_debug_enabled.lock().unwrap_or_else(|e| e.into_inner()),
+        "ggml_debug_logging": *st.ggml_debug_logging.lock().unwrap_or_else(|e| e.into_inner()),
         "use_keyring": use_kr,
         "stt_mode": *st.stt_mode.lock().unwrap_or_else(|e| e.into_inner()),
         "local_model": *st.local_model.lock().unwrap_or_else(|e| e.into_inner()),
@@ -867,6 +874,13 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
             *a = b;
         }
     }
+    if let Some(b) = v["ggml_debug_logging"].as_bool() {
+        if let Ok(mut g) = st.ggml_debug_logging.lock() {
+            *g = b;
+        }
+        // Mirror to the lock-free atomic the gpu_diag trampoline reads.
+        crate::gpu_diag::set_ggml_debug_enabled(b);
+    }
     // Local STT fields
     if let Some(s) = v["stt_mode"].as_str() {
         if let Ok(mut m) = st.stt_mode.lock() {
@@ -951,6 +965,55 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
         save_config_file(&cfg);
     }
 
+    0
+}
+
+// ── GPU diagnostics ─────────────────────────────────────────────────
+
+/// Read the current GPU known-bad marker. Returns a JSON document via the
+/// caller-provided buffer. Fields:
+/// - `known_bad` (bool): a recovered crash record exists on disk.
+/// - `timestamp` (string|null): ISO-ish timestamp from the saved record.
+/// - `context` (string|null): which call aborted (e.g. "whisper_load: …").
+/// - `fingerprint_matches` (bool|null): true → driver looks unchanged since
+///   the crash → GPU stays disabled. false → driver appears to have changed
+///   → next launch will retry GPU. null when `known_bad` is false.
+///
+/// Writes the JSON body and returns its byte length, or -1 on error.
+#[no_mangle]
+pub extern "C" fn dimmy_gpu_get_status(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    let json = match crate::gpu_health::read_known_bad() {
+        None => serde_json::json!({
+            "known_bad": false,
+            "timestamp": null,
+            "context": null,
+            "fingerprint_matches": null,
+        }),
+        Some(record) => {
+            let current = crate::gpu_diag::compute_driver_fingerprint();
+            let matches = current == record.fingerprint;
+            serde_json::json!({
+                "known_bad": true,
+                "timestamp": record.timestamp,
+                "context": record.context,
+                "fingerprint_matches": matches,
+            })
+        }
+    };
+    let s = serde_json::to_string(&json).unwrap_or_else(|_| "{}".to_string());
+    write_to_buf(&s, out_buf, buf_len)
+}
+
+/// Remove the sticky GPU known-bad marker. After this call, the next process
+/// launch will re-probe the GPU instead of forcing CPU. Within the current
+/// process the GPU backend status is already cached in a `OnceLock`, so the
+/// effect only takes hold after a restart — the UI must surface that.
+///
+/// Returns 0 on success.
+#[no_mangle]
+pub extern "C" fn dimmy_gpu_clear_known_bad() -> c_int {
+    crate::gpu_health::clear_known_bad();
+    log("[GPU] Known-bad marker cleared by user — GPU will be retried on next launch");
     0
 }
 
@@ -2008,6 +2071,7 @@ mod tests {
                 chunk_streaming_enabled: Mutex::new(false),
                 preprocessing_enabled: Mutex::new(true),
                 audio_debug_enabled: Mutex::new(false),
+                ggml_debug_logging: Mutex::new(false),
                 use_keyring: Mutex::new(false),
                 stt_mode: Mutex::new("local".to_string()),
                 local_model: Mutex::new("ggml-base-q8_0.bin".to_string()),

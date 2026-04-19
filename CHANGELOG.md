@@ -4,6 +4,29 @@ All notable changes to Dimmy are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.9] - 2026-04-19
+
+### Added
+- **Sticky GPU known-bad marker with driver fingerprint (Windows/Linux)** —
+  v0.6.8 recovered from a ggml-vulkan abort within a single relaunch, but
+  the recovery state was session-scoped: every cold start re-tried the GPU
+  path and crashed again before falling back. Dimmy now persists a
+  `.gpu_known_bad` record next to the session-scoped sentinel, including a
+  fingerprint of the Vulkan loader environment (vulkan-1.dll size +
+  registered ICDs on Windows; ICD JSON files on Linux). Subsequent cold
+  starts compare the current fingerprint against the recorded one: match →
+  stay on CPU without crashing; mismatch (driver/ICD updated) → clear the
+  marker and give the GPU another chance automatically. Settings → Debug
+  surfaces the status and a "Retry GPU on next launch" button that wipes
+  the marker manually. macOS path is a no-op (Metal does not need it).
+- **ggml debug logging toggle (Settings → Debug)** — the per-tensor /
+  per-layer dumps from whisper + llama load are now suppressed by default,
+  cutting cold-start log volume by ~80%. The toggle re-enables them when
+  diagnosing a model load. INFO/WARN/ERROR continue to flow at all times.
+- **`dimmy_gpu_get_status` / `dimmy_gpu_clear_known_bad` FFI** — JSON status
+  reader and one-shot clear for native UIs to surface the GPU recovery
+  state and the manual-retry action.
+
 ## [0.6.8] - 2026-04-19
 
 ### Fixed

@@ -320,6 +320,47 @@
                             IsOn="{Binding LlmLogEnabled, Mode=TwoWay}" />
               <ToggleSwitch Header="Audio debug"
                             IsOn="{Binding AudioDebugEnabled, Mode=TwoWay}" />
+              <ToggleSwitch Header="ggml debug logging (verbose model load)"
+                            IsOn="{Binding GgmlDebugLogging, Mode=TwoWay}" />
+
+              <TextBlock Text="GPU acceleration" FontWeight="SemiBold" FontSize="14"
+                         Margin="0,16,0,0" />
+
+              <!-- Healthy state: no known-bad marker -->
+              <TextBlock Text="GPU enabled — no prior crashes detected."
+                         Foreground="#16a34a"
+                         Visibility="{Binding GpuKnownBad, Mode=OneWay,
+                                      Converter={StaticResource BoolToVisibilityConverter},
+                                      ConverterParameter=Invert}" />
+
+              <!-- Known-bad block: only visible when the marker is present -->
+              <StackPanel Spacing="6"
+                          Visibility="{Binding GpuKnownBad, Mode=OneWay,
+                                       Converter={StaticResource BoolToVisibilityConverter}}">
+                <TextBlock Text="GPU disabled — auto-detected driver crash" Foreground="#dc2626" />
+                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}">
+                  <Run Text="Last crash: " />
+                  <Run Text="{Binding GpuKnownBadSince, Mode=OneWay}" />
+                </TextBlock>
+                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           TextWrapping="Wrap">
+                  <Run Text="Context: " />
+                  <Run Text="{Binding GpuKnownBadContext, Mode=OneWay}" />
+                </TextBlock>
+                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                           TextWrapping="Wrap"
+                           Text="Driver fingerprint matches the crash — Dimmy will keep using CPU. If you've updated drivers, click Retry GPU and restart Dimmy."
+                           Visibility="{Binding GpuFingerprintMatches, Mode=OneWay,
+                                        Converter={StaticResource BoolToVisibilityConverter}}" />
+                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                           TextWrapping="Wrap"
+                           Text="Driver fingerprint changed since the crash — GPU will be retried automatically on next launch."
+                           Visibility="{Binding GpuFingerprintMatches, Mode=OneWay,
+                                        Converter={StaticResource BoolToVisibilityConverter},
+                                        ConverterParameter=Invert}" />
+                <Button Content="Retry GPU on next launch" Click="RetryGpu_Click"
+                        Margin="0,4,0,0" />
+              </StackPanel>
             </StackPanel>
 
           </StackPanel>

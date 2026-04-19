@@ -275,12 +275,41 @@ fn compute_gpu_backend_status() -> GpuBackendStatus {
     crate::gpu_diag::install_ggml_log_callbacks();
     crate::gpu_diag::log_environment_snapshot();
 
-    // Crash-recovery: if a previous process aborted during GPU init, the
-    // sentinel file still exists. Force CPU for this session so the user
-    // gets a working app instead of a crash loop. Clear the sentinel so the
-    // NEXT boot retries the GPU path (drivers may have been updated, etc).
+    // Sticky known-bad check (cross-session): if a prior crash was recovered
+    // and the driver fingerprint has not changed since, skip the GPU path
+    // entirely instead of crashing once and recovering again every cold start.
+    // Fingerprint mismatch → driver/ICD likely updated → clear the marker and
+    // give GPU one more chance.
+    if let Some(record) = crate::gpu_health::read_known_bad() {
+        let current = crate::gpu_diag::compute_driver_fingerprint();
+        if current == record.fingerprint {
+            crate::log(&format!(
+                "[GPU] Sticky known-bad marker present (since {}, context: {}). \
+                 Driver fingerprint unchanged — keeping CPU backend. \
+                 User can clear this from Settings > Debug > Retry GPU.",
+                record.timestamp, record.context
+            ));
+            crate::gpu_diag::disable_vulkan_loader(
+                "known-bad marker: prior GPU crash, driver fingerprint unchanged",
+            );
+            return GpuBackendStatus::Unavailable;
+        }
+        crate::log(&format!(
+            "[GPU] Sticky known-bad marker present but driver fingerprint changed \
+             (was: {}, now: {}). Clearing marker and retrying GPU.",
+            record.fingerprint, current
+        ));
+        crate::gpu_health::clear_known_bad();
+    }
+
+    // Crash-recovery (session-scoped): if the previous process aborted during
+    // GPU init, the short-lived sentinel file is still on disk. Force CPU for
+    // this session so the user gets a working app instead of a crash loop,
+    // and promote the recovery into a sticky known-bad record so the NEXT
+    // cold start skips the crashing GPU path too. Clear the sentinel either
+    // way so subsequent recoveries within this run don't loop on it.
     //
-    // Critical: we also disable the Vulkan loader via env vars here. Setting
+    // We also disable the Vulkan loader via env vars here. Setting
     // `use_gpu(false)` on whisper/llama params is NOT sufficient because
     // ggml_backend_registry unconditionally registers ggml-vulkan at
     // `WhisperContext::new_with_params` / `LlamaBackend::init()` time, and
@@ -290,12 +319,15 @@ fn compute_gpu_backend_status() -> GpuBackendStatus {
     // layer makes ggml-vulkan see zero ICDs and skip all device init.
     if crate::gpu_health::previous_crash_detected() {
         let ctx = crate::gpu_health::crash_context().unwrap_or_else(|| "unknown".to_string());
+        let fingerprint = crate::gpu_diag::compute_driver_fingerprint();
         crate::log(&format!(
             "[GPU] Previous process aborted during GPU init (context: {}). \
-             Forcing CPU backend for this session. Set DIMMY_FORCE_CPU=1 \
-             to make this permanent.",
-            ctx
+             Forcing CPU backend for this session and writing sticky \
+             known-bad marker (fingerprint: {}) so future cold starts skip \
+             the GPU path until drivers change.",
+            ctx, fingerprint
         ));
+        crate::gpu_health::mark_known_bad(&ctx, &fingerprint);
         crate::gpu_health::clear();
         crate::gpu_diag::disable_vulkan_loader(
             "sentinel: previous process aborted during GPU init",

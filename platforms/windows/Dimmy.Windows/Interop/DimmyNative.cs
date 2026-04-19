@@ -43,6 +43,13 @@ public static class DimmyNative
     public static extern int dimmy_set_config_json(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string json);
 
+    // ── GPU diagnostics ──────────────────────────────────────────────
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_gpu_get_status(byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_gpu_clear_known_bad();
+
     // ── Audio ────────────────────────────────────────────────────────
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern float dimmy_get_amplitude();
@@ -179,4 +186,6 @@ public static class DimmyNative
         ReadBuffer((buf, len) => dimmy_history_search(query, limit, buf, len));
 
     public static string? HistoryStats() => ReadBuffer(dimmy_history_stats);
+
+    public static string? GpuGetStatus() => ReadBuffer(dimmy_gpu_get_status);
 }

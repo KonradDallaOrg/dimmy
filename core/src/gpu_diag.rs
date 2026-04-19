@@ -14,7 +14,26 @@
 
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_void};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Once;
+
+/// Whether to forward `[ggml DEBUG]` lines to dimmy.log. Toggled from the UI
+/// via FFI (`dimmy_set_config_json` → `set_ggml_debug_enabled`). Default OFF
+/// because the per-tensor / per-layer dumps from whisper + llama load fill
+/// hundreds of lines per cold start. INFO/WARN/ERROR always pass through —
+/// those carry the actual diagnostic signal we keep for crash post-mortems.
+static GGML_DEBUG_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Set at startup from `AppConfig::ggml_debug_logging` and on every
+/// `dimmy_set_config_json` call. Lock-free read in the C-ABI trampoline.
+pub fn set_ggml_debug_enabled(enabled: bool) {
+    GGML_DEBUG_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+/// Read the current toggle state. Used only by the trampoline.
+fn is_ggml_debug_enabled() -> bool {
+    GGML_DEBUG_ENABLED.load(Ordering::Relaxed)
+}
 
 // `ggml_log_level` is bindgen-generated from a C enum and its underlying type
 // differs per target: MSVC on Windows emits `c_int` (signed) because MSVC
@@ -66,6 +85,11 @@ unsafe extern "C" fn ggml_log_trampoline(
         const LVL_INFO: GgmlLogLevel = 2;
         const LVL_WARN: GgmlLogLevel = 3;
         const LVL_ERROR: GgmlLogLevel = 4;
+        // DEBUG is the loud one (per-tensor / per-layer dumps). Drop unless
+        // the user explicitly asked for it via the Settings toggle.
+        if level == LVL_DEBUG && !is_ggml_debug_enabled() {
+            return;
+        }
         let tag = match level {
             LVL_DEBUG => "DEBUG",
             LVL_INFO => "INFO",
@@ -75,6 +99,62 @@ unsafe extern "C" fn ggml_log_trampoline(
         };
         crate::log(&format!("[ggml {}] {}", tag, trimmed));
     });
+}
+
+/// Deterministic, opaque fingerprint of the GPU loader environment. Used by
+/// the sticky known-bad marker (see `gpu_health::KnownBadRecord`) to decide
+/// whether a previously-crashing GPU stack might now be fixed: if the
+/// fingerprint changes between sessions (driver update, ICD added/removed,
+/// vulkan-1.dll replaced), we retry GPU once. If it matches, we stay on CPU
+/// and skip the crash.
+///
+/// Format is intentionally human-readable rather than hashed — the file is
+/// inspected by hand during diagnosis. Stability across runs is required;
+/// we sort the ICD list to drop registry enumeration order.
+///
+/// macOS returns a constant since Metal has no equivalent loader to probe.
+pub fn compute_driver_fingerprint() -> String {
+    let result;
+    #[cfg(target_os = "windows")]
+    {
+        let mut parts: Vec<String> = Vec::new();
+        if let Some((_path, size)) = find_dll("vulkan-1.dll") {
+            parts.push(format!("vk={}", size));
+        } else {
+            parts.push("vk=none".to_string());
+        }
+        let mut icds: Vec<String> = enumerate_registered_icds()
+            .into_iter()
+            .map(|(name, disabled)| format!("{}|{}", name, disabled as u8))
+            .collect();
+        icds.sort();
+        parts.push(format!("icds=[{}]", icds.join(",")));
+        result = parts.join(";");
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let mut entries: Vec<String> = Vec::new();
+        for dir in ["/etc/vulkan/icd.d", "/usr/share/vulkan/icd.d"] {
+            if let Ok(rd) = std::fs::read_dir(dir) {
+                for e in rd.flatten() {
+                    let path = e.path();
+                    let size = path.metadata().map(|m| m.len()).unwrap_or(0);
+                    entries.push(format!("{}|{}", path.display(), size));
+                }
+            }
+        }
+        entries.sort();
+        result = format!("icds=[{}]", entries.join(","));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        result = "macos-metal".to_string();
+    }
+    assert!(
+        !result.is_empty(),
+        "compute_driver_fingerprint: result must be non-empty"
+    );
+    result
 }
 
 /// Log a one-shot snapshot of the Vulkan environment. Call once before first
@@ -273,10 +353,16 @@ fn read_registry_dword(subkey: &str, value: &str) -> Option<u32> {
     }
 }
 
+/// Enumerate registered Vulkan ICDs from
+/// `HKLM\SOFTWARE\Khronos\Vulkan\Drivers`. Each entry is `(value_name,
+/// disabled)` where `value_name` is the ICD JSON path and `disabled` is true
+/// when the REG_DWORD value is non-zero (Vulkan loader convention).
+///
+/// Returns an empty Vec if the registry key is missing, unreadable, or empty.
+/// Used both by `log_registered_icds` (one-line-per-ICD diagnostic) and
+/// `compute_driver_fingerprint` (sorted, joined into the fingerprint).
 #[cfg(target_os = "windows")]
-fn log_registered_icds() {
-    // HKLM\Software\Khronos\Vulkan\Drivers contains REG_DWORD values where the
-    // value NAME is the ICD JSON path. Enumerate and log.
+fn enumerate_registered_icds() -> Vec<(String, bool)> {
     const HKEY_LOCAL_MACHINE: isize = 0x80000002_u32 as i32 as isize;
     const KEY_READ: u32 = 0x20019;
     const ERROR_SUCCESS: i32 = 0;
@@ -307,6 +393,7 @@ fn log_registered_icds() {
         .chain([0])
         .collect();
     let mut hkey: isize = 0;
+    let mut entries = Vec::new();
     unsafe {
         if RegOpenKeyExW(
             HKEY_LOCAL_MACHINE,
@@ -316,13 +403,9 @@ fn log_registered_icds() {
             &mut hkey,
         ) != ERROR_SUCCESS
         {
-            crate::log(
-                "[gpu_diag] No Vulkan ICDs registered in HKLM\\...\\Khronos\\Vulkan\\Drivers",
-            );
-            return;
+            return entries;
         }
         let mut index = 0u32;
-        let mut found = 0u32;
         loop {
             let mut name = [0u16; 1024];
             let mut name_len = name.len() as u32;
@@ -342,18 +425,26 @@ fn log_registered_icds() {
                 break;
             }
             let icd_path = String::from_utf16_lossy(&name[..name_len as usize]);
-            crate::log(&format!(
-                "[gpu_diag] Vulkan ICD: {} (disabled={})",
-                icd_path,
-                data != 0
-            ));
-            found += 1;
+            entries.push((icd_path, data != 0));
             index += 1;
         }
         RegCloseKey(hkey);
-        if found == 0 {
-            crate::log("[gpu_diag] HKLM Khronos\\Vulkan\\Drivers exists but empty");
-        }
+    }
+    entries
+}
+
+#[cfg(target_os = "windows")]
+fn log_registered_icds() {
+    let entries = enumerate_registered_icds();
+    if entries.is_empty() {
+        crate::log("[gpu_diag] No Vulkan ICDs registered in HKLM\\...\\Khronos\\Vulkan\\Drivers");
+        return;
+    }
+    for (path, disabled) in &entries {
+        crate::log(&format!(
+            "[gpu_diag] Vulkan ICD: {} (disabled={})",
+            path, disabled
+        ));
     }
 }
 
@@ -402,5 +493,44 @@ mod tests {
         std::env::remove_var("VK_DRIVER_FILES");
         disable_vulkan_loader("macOS no-op check");
         assert!(std::env::var("VK_DRIVER_FILES").is_err());
+    }
+
+    #[test]
+    fn driver_fingerprint_is_non_empty() {
+        let fp = compute_driver_fingerprint();
+        assert!(
+            !fp.is_empty(),
+            "fingerprint must always be a non-empty string"
+        );
+    }
+
+    #[test]
+    fn driver_fingerprint_is_stable_across_calls() {
+        // Same env → same fingerprint. Required for the known-bad equality
+        // check to be meaningful: spurious mismatches would force GPU retry
+        // (and another crash) on every cold start.
+        let a = compute_driver_fingerprint();
+        let b = compute_driver_fingerprint();
+        assert_eq!(a, b, "fingerprint must be deterministic for a given env");
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn driver_fingerprint_is_constant_on_macos() {
+        // Metal has no equivalent loader — fingerprint must be a fixed marker
+        // so the known-bad path becomes a no-op on macOS.
+        assert_eq!(compute_driver_fingerprint(), "macos-metal");
+    }
+
+    #[test]
+    fn ggml_debug_toggle_round_trips() {
+        // The toggle is a process-wide AtomicBool; restore it after the test
+        // so we don't leak state to other tests in this run.
+        let prior = is_ggml_debug_enabled();
+        set_ggml_debug_enabled(true);
+        assert!(is_ggml_debug_enabled());
+        set_ggml_debug_enabled(false);
+        assert!(!is_ggml_debug_enabled());
+        set_ggml_debug_enabled(prior);
     }
 }

@@ -43,6 +43,7 @@ public sealed partial class SettingsWindow : Window
         catch { }
 
         LoadConfig();
+        ViewModel.LoadGpuStatus();
         SyncProviderComboBox();
         SyncLlmProviderComboBox();
         SyncLanguageComboBox();
@@ -616,6 +617,18 @@ public sealed partial class SettingsWindow : Window
     {
         ViewModel.OverlayPosition = "Bottom Right";
         App.Instance?.ApplySettings(ViewModel);
+    }
+
+    /// <summary>
+    /// Clear the sticky GPU known-bad marker. Effect takes hold on the next
+    /// process launch since the GPU backend status is cached for the life of
+    /// the current process. We refresh the displayed status so the user sees
+    /// the marker disappear immediately.
+    /// </summary>
+    private void RetryGpu_Click(object sender, RoutedEventArgs e)
+    {
+        DimmyNative.dimmy_gpu_clear_known_bad();
+        ViewModel.LoadGpuStatus();
     }
 
     private void PopulateStats()

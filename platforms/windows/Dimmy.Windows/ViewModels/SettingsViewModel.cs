@@ -85,6 +85,12 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _llmTranslateTo = "";
     [ObservableProperty] private bool _llmLogEnabled;
     [ObservableProperty] private bool _audioDebugEnabled;
+    [ObservableProperty] private bool _ggmlDebugLogging;
+    // GPU known-bad surface (read-only in the UI; populated by LoadGpuStatus).
+    [ObservableProperty] private bool _gpuKnownBad;
+    [ObservableProperty] private string _gpuKnownBadSince = "";
+    [ObservableProperty] private string _gpuKnownBadContext = "";
+    [ObservableProperty] private bool _gpuFingerprintMatches;
     [ObservableProperty] private string _borderStyle = "Rainbow";
     [ObservableProperty] private string _waveformStyle = "Bars";
     [ObservableProperty] private string _overlayPosition = "Bottom Right";
@@ -136,6 +142,7 @@ public partial class SettingsViewModel : ObservableObject
             LlmTranslateTo = r.TryGetProperty("llm_translate_to", out var lt) ? lt.GetString() ?? "" : "";
             LlmLogEnabled = r.TryGetProperty("llm_log_enabled", out var lle) && lle.GetBoolean();
             AudioDebugEnabled = r.TryGetProperty("audio_debug_enabled", out var ade) && ade.GetBoolean();
+            GgmlDebugLogging = r.TryGetProperty("ggml_debug_logging", out var gdl) && gdl.GetBoolean();
             SttMode = r.TryGetProperty("stt_mode", out var sm2) ? sm2.GetString() ?? "cloud" : "cloud";
             LocalModel = r.TryGetProperty("local_model", out var lmod) ? lmod.GetString() ?? "ggml-base-q8_0.bin" : "ggml-base-q8_0.bin";
             FillerRemovalEnabled = !r.TryGetProperty("filler_removal_enabled", out var fre) || fre.GetBoolean();
@@ -187,6 +194,7 @@ public partial class SettingsViewModel : ObservableObject
             ["llm_translate_to"] = LlmTranslateTo,
             ["llm_log_enabled"] = LlmLogEnabled,
             ["audio_debug_enabled"] = AudioDebugEnabled,
+            ["ggml_debug_logging"] = GgmlDebugLogging,
             ["stt_mode"] = SttMode,
             ["local_model"] = LocalModel,
             ["filler_removal_enabled"] = FillerRemovalEnabled,
@@ -203,5 +211,29 @@ public partial class SettingsViewModel : ObservableObject
         if (!string.IsNullOrEmpty(LlmApiKey)) dict["llm_api_key"] = LlmApiKey;
 
         return JsonSerializer.Serialize(dict);
+    }
+
+    /// <summary>
+    /// Pull the current GPU known-bad state from Rust and populate the
+    /// Gpu* properties so the Debug panel can render the status block.
+    /// Safe to call from the UI thread; it's a single FFI read.
+    /// </summary>
+    public void LoadGpuStatus()
+    {
+        var json = Dimmy.Windows.Interop.DimmyNative.GpuGetStatus();
+        if (string.IsNullOrEmpty(json)) return;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var r = doc.RootElement;
+            GpuKnownBad = r.TryGetProperty("known_bad", out var kb) && kb.GetBoolean();
+            GpuKnownBadSince = r.TryGetProperty("timestamp", out var ts) && ts.ValueKind == JsonValueKind.String
+                ? ts.GetString() ?? "" : "";
+            GpuKnownBadContext = r.TryGetProperty("context", out var ctx) && ctx.ValueKind == JsonValueKind.String
+                ? ctx.GetString() ?? "" : "";
+            GpuFingerprintMatches = r.TryGetProperty("fingerprint_matches", out var fm)
+                && fm.ValueKind == JsonValueKind.True;
+        }
+        catch (JsonException) { }
     }
 }

@@ -238,6 +238,9 @@ pub struct AppConfig {
     pub chunk_streaming_enabled: bool,
     pub preprocessing_enabled: bool,
     pub audio_debug_enabled: bool,
+    /// When true, forward `[ggml DEBUG]` lines to dimmy.log. Default false:
+    /// per-tensor / per-layer dumps would balloon the log on every cold start.
+    pub ggml_debug_logging: bool,
     pub use_keyring: bool,
     // Local STT fields
     pub stt_mode: String,    // "cloud" or "local"
@@ -288,6 +291,7 @@ impl Default for AppConfig {
             chunk_streaming_enabled: false,
             preprocessing_enabled: true,
             audio_debug_enabled: false,
+            ggml_debug_logging: false,
             use_keyring: false,
             stt_mode: "cloud".to_string(),
             local_model: "ggml-base-q8_0.bin".to_string(),
@@ -356,6 +360,7 @@ pub fn save_config_file(cfg: &AppConfig) {
             "chunk_streaming_enabled": cfg.chunk_streaming_enabled,
             "preprocessing_enabled": cfg.preprocessing_enabled,
             "audio_debug_enabled": cfg.audio_debug_enabled,
+            "ggml_debug_logging": cfg.ggml_debug_logging,
             "use_keyring": cfg.use_keyring,
             "stt_mode": cfg.stt_mode,
             "local_model": cfg.local_model,
@@ -449,6 +454,9 @@ pub fn load_config_file() -> AppConfig {
                     audio_debug_enabled: v["audio_debug_enabled"]
                         .as_bool()
                         .unwrap_or(defaults.audio_debug_enabled),
+                    ggml_debug_logging: v["ggml_debug_logging"]
+                        .as_bool()
+                        .unwrap_or(defaults.ggml_debug_logging),
                     // Force use_keyring to false — local encrypted storage is the default.
                     // OS keyring is kept as read-only fallback for backward compatibility.
                     use_keyring: false,
@@ -677,6 +685,7 @@ pub struct AppState {
     pub chunk_streaming_enabled: Mutex<bool>,
     pub preprocessing_enabled: Mutex<bool>,
     pub audio_debug_enabled: Mutex<bool>,
+    pub ggml_debug_logging: Mutex<bool>,
     pub use_keyring: Mutex<bool>,
     // Local STT state
     pub stt_mode: Mutex<String>,
@@ -775,6 +784,7 @@ impl AppState {
             chunk_streaming_enabled: Mutex::new(file_cfg.chunk_streaming_enabled),
             preprocessing_enabled: Mutex::new(file_cfg.preprocessing_enabled),
             audio_debug_enabled: Mutex::new(file_cfg.audio_debug_enabled),
+            ggml_debug_logging: Mutex::new(file_cfg.ggml_debug_logging),
             use_keyring: Mutex::new(file_cfg.use_keyring),
             stt_mode: Mutex::new(file_cfg.stt_mode),
             local_model: Mutex::new(file_cfg.local_model),
@@ -869,6 +879,7 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         .audio_debug_enabled
         .lock()
         .map_err(|e| e.to_string())?;
+    let ggml_debug_logging = *state.ggml_debug_logging.lock().map_err(|e| e.to_string())?;
     let stt_mode = state.stt_mode.lock().map_err(|e| e.to_string())?.clone();
     let local_model = state.local_model.lock().map_err(|e| e.to_string())?.clone();
     let filler_removal_enabled = *state
@@ -897,6 +908,7 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         chunk_streaming_enabled,
         preprocessing_enabled,
         audio_debug_enabled,
+        ggml_debug_logging,
         use_keyring: *state.use_keyring.lock().map_err(|e| e.to_string())?,
         stt_mode,
         local_model,
