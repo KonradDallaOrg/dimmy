@@ -33,10 +33,12 @@ $requiredFiles = @(
     # App + native
     'Dimmy.Windows.exe',
     'Dimmy.Windows.dll',
-    'dimmy_lib.dll',
-    # VC++ runtime (needed by Rust DLL -- without these, app silently exits on clean machines)
-    'vcruntime140.dll',
-    'msvcp140.dll'
+    'dimmy_lib.dll'
+    # VC++ runtime (msvcp140/vcruntime140) is NOT bundled here — Velopack
+    # installs it at setup time via `--framework vcredist143-x64` (the
+    # official Microsoft Redist, which lands in System32). Co-locating our
+    # own copy is redundant and historically caused ABI mismatches when the
+    # bundled version was older than System32.
 )
 
 # Directories that must exist (WinAppSDK ships XAML controls here)
@@ -128,7 +130,7 @@ if ($failed) {
     Write-Host "Fix hints:"
     Write-Host "  - Use 'dotnet publish -r win-x64 --self-contained' (not 'dotnet build')"
     Write-Host "  - 'dotnet build' does NOT honor <SelfContained>/<WindowsAppSDKSelfContained>"
-    Write-Host "  - VC++ runtime DLLs must be copied from MSVC toolchain (see CI workflow)"
+    Write-Host "  - VC++ runtime is installed by Velopack (--framework vcredist143-x64), not bundled here"
     Write-Host "  - PRI files require MrtCoreGenPriFileEnabled=true (or unset)"
     exit 1
 }

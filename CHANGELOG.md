@@ -4,6 +4,41 @@ All notable changes to Dimmy are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.12] - 2026-04-19
+
+### Fixed
+- **Windows installer crashed on first transcription at
+  `whisper_backend_init_gpu` — MSVC 14.44 linker miscompiles whisper.cpp
+  Vulkan state init.** v0.6.11 addressed a related-but-wrong ABI theory
+  around the bundled VC runtime; removing the bundle reproduced the crash
+  identically, proving the runtime wasn't the cause. An empirical DLL swap
+  against a locally-built `dimmy_lib.dll` (same source commit, MSVC 14.50
+  linker) ran clean end-to-end on the same machine, pinning the bug to
+  MSVC 14.44 codegen around `ggml-vulkan`'s per-state backend allocation.
+  Fix has three parts:
+  1. Windows CI runners pinned to `windows-2025` which ships MSVC 14.50+.
+  2. A pre-build step verifies `VC\Tools\MSVC\<newest>` is >= 14.50 and
+     invokes the VS Installer to update if not, aborting with a clear
+     error message otherwise.
+  3. A post-build gate parses the PE header of `dimmy_lib.dll` via
+     `dumpbin /headers` and fails the workflow if linker version < 14.50,
+     preventing another silent ship of a known-broken build.
+- **Stopped co-locating `msvcp140.dll` / `vcruntime140.dll` in the
+  installer folder.** Velopack `--framework vcredist143-x64` already
+  installs the official Microsoft VC Redist at setup time (lands in
+  System32), and Windows DLL search order makes a second co-located copy
+  either redundant (when versions match) or actively harmful (when the
+  bundled copy shadows a newer System32 ABI — this was the whole v0.6.10
+  crash cause). `verify-self-contained.ps1` updated to reflect the
+  delegation.
+
+### Details
+- `test-install.yml` still only probes 15 s of startup; it does NOT yet
+  exercise `dimmy_stop_recording`, which is why both v0.6.10 and v0.6.11
+  shipped with this latent break. Extending it to round-trip a synthetic
+  WAV through the FFI before ticking the release green is tracked for
+  v0.6.13.
+
 ## [0.6.11] - 2026-04-19
 
 ### Fixed

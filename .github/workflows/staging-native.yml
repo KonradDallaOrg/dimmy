@@ -228,7 +228,7 @@ jobs:
   build-windows:
     name: Build Windows Native
     needs: create-release
-    runs-on: windows-latest
+    runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
 
@@ -239,6 +239,32 @@ jobs:
 
       - name: Install CMake & Ninja
         uses: lukka/get-cmake@latest
+
+      - name: Ensure MSVC toolchain >= 14.50 (codegen fix)
+        shell: pwsh
+        run: |
+          # MSVC linker 14.44 (pre-windows-2025) miscompiles whisper.cpp's
+          # Vulkan state-init path — dimmy_lib.dll crashes silently at
+          # whisper_backend_init_gpu inside create_state. 14.50+ compiles
+          # it correctly. This step verifies the runner has a new enough
+          # toolchain and aborts early with a clear message if not.
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -property installationPath
+          if (-not $vs) { throw "vswhere did not find a VS install" }
+          $tools = Get-ChildItem "$vs\VC\Tools\MSVC" -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          Write-Host "Latest MSVC toolchain: $($tools.Name)"
+          $ver = [version]($tools.Name -replace '^(\d+\.\d+\.\d+).*','$1')
+          if ($ver -lt [version]"14.50") {
+            Write-Host "Toolchain $($tools.Name) < 14.50 — updating Visual Studio..."
+            $installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe"
+            Start-Process -FilePath $installer -ArgumentList "update","--installPath","`"$vs`"","--passive","--norestart","--wait" -Wait -NoNewWindow
+            $tools = Get-ChildItem "$vs\VC\Tools\MSVC" -Directory | Sort-Object Name -Descending | Select-Object -First 1
+            $ver = [version]($tools.Name -replace '^(\d+\.\d+\.\d+).*','$1')
+            Write-Host "After VS update: $($tools.Name)"
+            if ($ver -lt [version]"14.50") {
+              throw "MSVC toolchain still < 14.50 after VS update. Cannot ship — see docs/memory project_v0_6_11_root_cause_msvc_toolchain."
+            }
+          }
 
       - name: Install Vulkan SDK
         shell: pwsh
@@ -265,6 +291,26 @@ jobs:
         run: |
           cargo clean --release 2>$null
           cargo build --lib --release --features local-stt-vulkan,local-llm-vulkan
+
+      - name: Gate — verify dimmy_lib.dll linker version
+        shell: pwsh
+        run: |
+          # Hard gate: the whisper Vulkan backend miscompile lives in MSVC
+          # linker <= 14.44. Any DLL linked with an older toolchain must NOT
+          # ship. Extracts the linker version from PE headers and aborts if
+          # too old. Prevents another v0.6.11-style ship of a known-broken
+          # build.
+          $dll = "D:\t\release\dimmy_lib.dll"
+          if (-not (Test-Path $dll)) { throw "dimmy_lib.dll not found at $dll" }
+          $out = & dumpbin /headers $dll
+          $line = $out | Select-String "linker version" | Select-Object -First 1
+          if (-not $line) { throw "Could not find linker version in dumpbin output" }
+          if ($line -notmatch '(\d+)\.(\d+)') { throw "Could not parse linker version from '$line'" }
+          $linkerVer = [version]("$($Matches[1]).$($Matches[2])")
+          Write-Host "dimmy_lib.dll linker version: $linkerVer"
+          if ($linkerVer -lt [version]"14.50") {
+            throw "dimmy_lib.dll linked with MSVC $linkerVer. Known whisper.cpp Vulkan codegen bug in <14.50. Aborting release. Update the windows-2025 runner image or fix the VS update step."
+          }
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -312,25 +358,13 @@ jobs:
       - name: Prepare distribution
         shell: pwsh
         run: |
+          # No co-located VC++ runtime: Velopack `--framework vcredist143-x64`
+          # already installs the official Microsoft VC Redist at setup time,
+          # which lands in System32. Shipping a second copy next to
+          # dimmy_lib.dll is at best redundant and at worst overrides System32
+          # with an older ABI (v0.6.10 crash cause). System32 wins.
           $pubDir = "platforms/windows/Dimmy.Windows/publish"
           Copy-Item "D:\t\release\dimmy_lib.dll" "$pubDir/"
-          # Bundle VC++ runtime DLLs from the newest MSVC toolchain — the one the
-          # Rust DLL actually links against. The old `VC -Recurse ... -First 1`
-          # query walked VC\Redist\MSVC\ and returned the oldest version (14.29),
-          # while dimmy_lib.dll imports symbols from the current toolchain (14.4x+).
-          # DLL search order loads co-located DLLs first, so the old bundled
-          # redist won over the matching System32 copy and triggered
-          # AccessViolationException deep in whisper/llama. Point at
-          # VC\Tools\MSVC\<newest>\bin\Hostx64\x64 instead.
-          $vsDir = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
-          $toolsDir = Get-ChildItem "$vsDir\VC\Tools\MSVC" -Directory | Sort-Object Name -Descending | Select-Object -First 1
-          if (-not $toolsDir) { Write-Error "MSVC toolchain not found under $vsDir\VC\Tools\MSVC"; exit 1 }
-          $dllDir = Join-Path $toolsDir.FullName "bin\Hostx64\x64"
-          if (-not (Test-Path (Join-Path $dllDir "vcruntime140.dll"))) { Write-Error "vcruntime140.dll not found in $dllDir"; exit 1 }
-          Write-Host "Copying VC++ runtime from $dllDir (toolchain $($toolsDir.Name))"
-          Copy-Item "$dllDir\vcruntime140.dll" "$pubDir/"
-          Copy-Item "$dllDir\vcruntime140_1.dll" "$pubDir/" -ErrorAction SilentlyContinue
-          Copy-Item "$dllDir\msvcp140.dll" "$pubDir/"
           Get-ChildItem "$pubDir" -Filter "*.pdb" -Recurse | Remove-Item -ErrorAction SilentlyContinue
 
       - name: Verify self-contained bundle
