@@ -227,31 +227,47 @@ jobs:
       - name: Install CMake & Ninja
         uses: lukka/get-cmake@latest
 
-      - name: Ensure MSVC toolchain >= 14.50 (codegen fix)
+      - name: Install VS 2026 BuildTools side-by-side (MSVC 14.50+)
         shell: pwsh
         run: |
-          # MSVC linker 14.44 (pre-windows-2025) miscompiles whisper.cpp's
-          # Vulkan state-init path — dimmy_lib.dll crashes silently at
-          # whisper_backend_init_gpu inside create_state. 14.50+ compiles
-          # it correctly. This step verifies the runner has a new enough
-          # toolchain and aborts early with a clear message if not.
+          # windows-2025 ships VS 2022 Enterprise only (MSVC 14.44, which
+          # miscompiles whisper.cpp's ggml-vulkan state-init path). 14.50+
+          # lives exclusively in VS 2026 (VS 18). `setup.exe update` cannot
+          # bridge major versions, so we install VS 2026 BuildTools
+          # side-by-side with VCTools workload only. Used solely for the
+          # Rust cargo build step; VS 2022 stays authoritative for the
+          # .NET publish + UWP AppxPackage PRI generation steps that
+          # follow (VS 2026 BuildTools SKU lacks those workloads).
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $vs = & $vswhere -latest -property installationPath
-          if (-not $vs) { throw "vswhere did not find a VS install" }
-          $tools = Get-ChildItem "$vs\VC\Tools\MSVC" -Directory | Sort-Object Name -Descending | Select-Object -First 1
-          Write-Host "Latest MSVC toolchain: $($tools.Name)"
+          $vs2026 = & $vswhere -version "[18.0,19.0)" -products "*" -property installationPath 2>$null | Select-Object -First 1
+          if ($vs2026) {
+            Write-Host "VS 2026 already present at $vs2026"
+          } else {
+            $bootstrapper = "$env:RUNNER_TEMP\vs_buildtools.exe"
+            Write-Host "Downloading VS 2026 BuildTools bootstrapper..."
+            Invoke-WebRequest -Uri "https://aka.ms/vs/18/release/vs_buildtools.exe" -OutFile $bootstrapper
+            $vsArgs = @(
+              "--quiet", "--norestart", "--wait", "--nocache",
+              "--add", "Microsoft.VisualStudio.Workload.VCTools",
+              "--add", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+              "--add", "Microsoft.VisualStudio.Component.Windows11SDK.22621"
+            )
+            Write-Host "Installing VS 2026 BuildTools (this takes ~10-15 min)..."
+            $proc = Start-Process -FilePath $bootstrapper -ArgumentList $vsArgs -Wait -NoNewWindow -PassThru
+            # 0=success, 3010=success+reboot-required (we don't reboot)
+            if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) {
+              throw "VS 2026 BuildTools install failed with exit $($proc.ExitCode)"
+            }
+            $vs2026 = & $vswhere -version "[18.0,19.0)" -products "*" -property installationPath 2>$null | Select-Object -First 1
+            if (-not $vs2026) { throw "VS 2026 not found after install (aka.ms URL may be outdated or install silently failed)" }
+          }
+          $tools = Get-ChildItem "$vs2026\VC\Tools\MSVC" -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          Write-Host "VS 2026 MSVC toolchain: $($tools.Name) at $vs2026"
           $ver = [version]($tools.Name -replace '^(\d+\.\d+\.\d+).*','$1')
           if ($ver -lt [version]"14.50") {
-            Write-Host "Toolchain $($tools.Name) < 14.50 — updating Visual Studio..."
-            $installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe"
-            Start-Process -FilePath $installer -ArgumentList "update","--installPath","`"$vs`"","--passive","--norestart","--wait" -Wait -NoNewWindow
-            $tools = Get-ChildItem "$vs\VC\Tools\MSVC" -Directory | Sort-Object Name -Descending | Select-Object -First 1
-            $ver = [version]($tools.Name -replace '^(\d+\.\d+\.\d+).*','$1')
-            Write-Host "After VS update: $($tools.Name)"
-            if ($ver -lt [version]"14.50") {
-              throw "MSVC toolchain still < 14.50 after VS update. Cannot ship — see docs/memory project_v0_6_11_root_cause_msvc_toolchain."
-            }
+            throw "VS 2026 has MSVC $($tools.Name), still < 14.50 — aka.ms/vs/18/release may point at an older build"
           }
+          echo "VS2026_PATH=$vs2026" >> $env:GITHUB_ENV
 
       - name: Install Vulkan SDK
         shell: pwsh
@@ -268,16 +284,22 @@ jobs:
           workspaces: core
           shared-key: windows-release
 
-      - name: Build Rust DLL
+      - name: Build Rust DLL (VS 2026 MSVC env)
         working-directory: core
-        shell: pwsh
+        shell: cmd
         env:
           LIBCLANG_PATH: "C:\\Program Files\\LLVM\\bin"
           CMAKE_GENERATOR: Ninja
           CARGO_TARGET_DIR: "D:\\t"
         run: |
-          # Clean to avoid stale cached artifacts
-          cargo clean --release 2>$null
+          REM Activate VS 2026 MSVC for this step only — PATH, INCLUDE,
+          REM LIB point at the 14.50+ toolchain. Subsequent steps inherit
+          REM the original job env (VS 2022) because activation is
+          REM scoped to this shell invocation. cmd is required because
+          REM vcvars64.bat is a batch script.
+          call "%VS2026_PATH%\VC\Auxiliary\Build\vcvars64.bat"
+          if errorlevel 1 exit /b 1
+          cargo clean --release 2>nul
           cargo build --lib --release --features local-stt-vulkan,local-llm-vulkan
 
       - name: Gate — verify dimmy_lib.dll linker version
@@ -323,8 +345,11 @@ jobs:
           # which only ships with the VS AppxPackage workload, not the .NET SDK.
           # Without it, resources.pri is not generated and the app runs headless at
           # runtime (every ms-appx:///Views/*.xaml URI fails to resolve).
-          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
-          if (-not $vs) { throw "vswhere did not find a VS install" }
+          # Pin to VS 2022 (17.x) — the side-by-side VS 2026 BuildTools used
+          # for the Rust build lacks UWP/AppxPackage workloads entirely, so
+          # a naive `-latest` would pick VS 2026 and this step would fail.
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -version "[17.0,18.0)" -products "*" -property installationPath | Select-Object -First 1
+          if (-not $vs) { throw "vswhere did not find a VS 2022 install" }
           $candidates = @(
             "$vs\MSBuild\Microsoft\VisualStudio\v17.0\AppxPackage\",
             "$vs\MSBuild\Microsoft\VisualStudio\v18.0\AppxPackage\"

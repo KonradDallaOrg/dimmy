@@ -4,6 +4,36 @@ All notable changes to Dimmy are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.13] - 2026-04-19
+
+### Fixed
+- **Windows build succeeds with MSVC 14.50 via side-by-side VS 2026
+  BuildTools install.** v0.6.12 hit the expected wall: the pinned
+  `windows-2025` runner image ships VS 2022 Enterprise only (MSVC
+  14.44), and `setup.exe update` cannot bridge major Visual Studio
+  versions, so the pre-build gate aborted. `windows-2025` has no
+  path to 14.50 short of installing VS 2026 separately. New Windows
+  build step downloads `vs_buildtools.exe` from
+  `aka.ms/vs/18/release` and installs the VCTools + VC.Tools.x86.x64
+  components to a side-by-side VS 2026 install. The Rust cargo step
+  activates that toolchain via `vcvars64.bat` in a cmd shell, scoped
+  to the step so subsequent .NET / MSBuild / AppxPackage steps
+  continue to use VS 2022 Enterprise (which has the UWP workloads
+  VS 2026 BuildTools lacks). The post-build linker-version gate
+  from v0.6.12 still enforces `dumpbin /headers` linker >= 14.50,
+  so any future regression that drops the toolchain fails CI loudly.
+- **Locate VS AppxPackage tools now pins to VS 2022 explicitly.** With
+  VS 2026 BuildTools installed alongside, a bare `vswhere -latest`
+  would return VS 2026 (newer) which lacks AppxPackage tasks. The
+  step now uses `-version "[17.0,18.0)"` to select VS 2022 regardless
+  of install ordering.
+
+### Known
+- v0.6.12 tag was pushed with the pre-build gate in place but CI
+  aborted before producing a Windows build. GitHub release v0.6.12
+  exists with Linux + macOS artifacts only. Do not upgrade to v0.6.12
+  on Windows; v0.6.13 supersedes it.
+
 ## [0.6.12] - 2026-04-19
 
 ### Fixed
