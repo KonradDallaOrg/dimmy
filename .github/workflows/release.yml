@@ -241,7 +241,7 @@ jobs:
           # .NET publish + UWP AppxPackage PRI generation steps because the
           # BuildTools SKU lacks those workloads.
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $vs2026 = & $vswhere -version "[18.0,19.0)" -products "*" -property installationPath 2>$null | Select-Object -First 1
+          $vs2026 = & $vswhere -version "[18.0,19.0)" -prerelease -products "*" -property installationPath 2>$null | Select-Object -First 1
           if ($vs2026) {
             Write-Host "VS 2026 already present at $vs2026"
           } else {
@@ -253,9 +253,15 @@ jobs:
             if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 3010) {
               throw "chocolatey install of VS 2026 BuildTools failed with exit $LASTEXITCODE"
             }
-            Start-Sleep -Seconds 3
-            $vs2026 = & $vswhere -version "[18.0,19.0)" -products "*" -property installationPath 2>$null | Select-Object -First 1
-            if (-not $vs2026) { throw "VS 2026 not found after choco install — installer silently failed or vswhere can't see it" }
+            # Poll vswhere — Installer registration can lag a few seconds
+            # after choco reports "installed" (exit 3010 = reboot-pending).
+            for ($i = 0; $i -lt 12; $i++) {
+              Start-Sleep -Seconds 5
+              $vs2026 = & $vswhere -version "[18.0,19.0)" -prerelease -products "*" -property installationPath 2>$null | Select-Object -First 1
+              if ($vs2026) { break }
+              Write-Host "Poll $($i+1)/12: VS 2026 not yet registered by vswhere..."
+            }
+            if (-not $vs2026) { throw "VS 2026 not found after choco install + 60s wait — installer silently failed or vswhere can't see it even with -prerelease" }
           }
           $tools = Get-ChildItem "$vs2026\VC\Tools\MSVC" -Directory | Sort-Object Name -Descending | Select-Object -First 1
           if (-not $tools) { throw "VS 2026 installed at $vs2026 but VC\Tools\MSVC is empty — VCTools workload missing?" }

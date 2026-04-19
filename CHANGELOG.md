@@ -4,6 +4,18 @@ All notable changes to Dimmy are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.16] - 2026-04-19
+
+### Fixed
+- **`vswhere` missing `-prerelease` flag hid the just-installed VS 2026
+  preview.** v0.6.15 choco install succeeded (`Chocolatey installed 5/5
+  packages`, VS 2026 BuildTools v118.6.0.117102900-preview1 deployed)
+  but the post-install `vswhere -version "[18.0,19.0)"` query returned
+  nothing — vswhere filters out preview releases by default. Added
+  `-prerelease` to every VS 2026 lookup. Also replaced the 3 s sleep
+  with a 60 s poll loop because Installer registration can lag the
+  choco `installed` report.
+
 ## [0.6.15] - 2026-04-19
 
 ### Fixed
