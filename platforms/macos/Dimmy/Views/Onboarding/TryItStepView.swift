@@ -7,10 +7,21 @@ struct TryItStepView: View {
     @State private var demoText: String = ""
     @State private var hasTriedRecording = false
     @State private var showSuccess = false
+    @State private var modelReady: Bool = false
+
+    private var needsCloudKey: Bool {
+        appState.sttMode == "cloud" && !appState.hasKey
+    }
+    private var needsLocalModel: Bool {
+        appState.sttMode == "local" && !modelReady
+    }
+    private var needsSetup: Bool {
+        needsCloudKey || needsLocalModel
+    }
 
     var body: some View {
-        VStack(spacing: 20) {
-            Spacer()
+        VStack(spacing: 16) {
+            Spacer(minLength: 4)
 
             if showSuccess {
                 successView
@@ -18,12 +29,14 @@ struct TryItStepView: View {
                 tryView
             }
 
-            Spacer()
+            Spacer(minLength: 4)
         }
-        .padding(.horizontal, 40)
+        .padding(.horizontal, 32)
+        .onAppear {
+            modelReady = DimmyCore.shared.modelExists(appState.localModel)
+        }
         .onChange(of: appState.recordingState) { _, newState in
             if case .completing = newState {
-                // Use real transcript from Rust, fall back to placeholder
                 demoText = appState.lastTranscript.isEmpty ? "No speech detected" : appState.lastTranscript
                 hasTriedRecording = true
             }
@@ -36,19 +49,37 @@ struct TryItStepView: View {
     }
 
     private var tryView: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 16) {
             Text("Try it!")
-                .font(.system(size: 28, weight: .bold))
+                .font(.system(size: 26, weight: .bold))
 
+            if needsSetup {
+                setupCard
+            } else {
+                readyView
+            }
+
+            Button(action: {
+                withAnimation(.spring(response: 0.4)) { showSuccess = true }
+            }) {
+                Text(needsSetup ? "Finish (I'll set up later)" : "Skip for now")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var readyView: some View {
+        VStack(spacing: 14) {
             Text("Hold \(appState.shortcut.displayString) and say something")
                 .font(.system(size: 14))
                 .foregroundColor(.secondary)
 
-            Text("Look at the pill overlay — it will animate while you speak")
+            Text("The pill overlay will animate while you speak")
                 .font(.system(size: 12))
                 .foregroundColor(Color(nsColor: .tertiaryLabelColor))
 
-            // Demo text field
             VStack(alignment: .leading, spacing: 6) {
                 Text("Your dictation will appear here:")
                     .font(.system(size: 11))
@@ -75,19 +106,59 @@ struct TryItStepView: View {
                         .stroke(Color.primary.opacity(0.1), lineWidth: 1)
                 )
             }
+        }
+    }
 
-            Button(action: {
-                withAnimation(.spring(response: 0.4)) {
-                    showSuccess = true
-                }
-            }) {
-                Text("Skip for now")
+    private var setupCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "gearshape.fill")
+                    .foregroundColor(.accentColor)
+                Text("One more thing")
+                    .font(.system(size: 14, weight: .semibold))
+            }
+
+            if needsCloudKey {
+                Text("Dimmy is configured for cloud transcription. Add an API key in Settings to start dictating.")
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Open Settings") {
+                    AppDelegate.shared?.openSettings()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+            } else if needsLocalModel {
+                Text("Download the local Whisper model (78 MB) to start dictating — no internet needed afterwards.")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if appState.isDownloadingModel {
+                    VStack(spacing: 6) {
+                        ProgressView(value: appState.modelDownloadProgress, total: 1.0)
+                        Text("\(Int(appState.modelDownloadProgress * 100))%")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                    }
+                } else {
+                    Button("Download model") {
+                        startDownload()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.regular)
+                }
             }
-            .buttonStyle(.plain)
-            .padding(.top, 4)
         }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.accentColor.opacity(0.2), lineWidth: 1)
+        )
     }
 
     private var successView: some View {
@@ -115,6 +186,21 @@ struct TryItStepView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
+        }
+    }
+
+    private func startDownload() {
+        appState.isDownloadingModel = true
+        appState.modelDownloadProgress = 0.0
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let success = DimmyCore.shared.downloadModel(appState.localModel)
+            DispatchQueue.main.async {
+                appState.isDownloadingModel = false
+                if success {
+                    modelReady = DimmyCore.shared.modelExists(appState.localModel)
+                }
+            }
         }
     }
 }
