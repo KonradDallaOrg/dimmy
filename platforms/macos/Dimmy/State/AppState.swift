@@ -391,6 +391,17 @@ struct ModifierShortcut: Equatable {
     }
 }
 
+// MARK: - Hotkey Status (surfaces CGEventTap install state to the UI)
+
+/// Tracks whether the global shortcut interception is live.
+/// Drives pill/menu-bar warning overlays and the Diagnostics pane.
+enum HotkeyStatus: Equatable {
+    case uninstalled            // app just launched, not yet attempted
+    case installed              // CGEventTap active, shortcut works
+    case accessibilityMissing   // Accessibility permission not granted
+    case tapFailed(reason: String)  // unexpected install failure
+}
+
 @MainActor
 final class AppState: ObservableObject {
     static let shared = AppState()
@@ -402,6 +413,7 @@ final class AppState: ObservableObject {
     @Published var waveformLevels: [CGFloat] = Array(repeating: 0.2, count: 7)
     @Published var lastTranscript: String = ""
     @Published var lastError: String?
+    @Published var hotkeyStatus: HotkeyStatus = .uninstalled
     @Published var chunkProgress: (current: Int, total: Int)?
 
     var isRecording: Bool {
