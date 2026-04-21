@@ -46,7 +46,7 @@ final class PermissionsManager: ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
     }
@@ -59,6 +59,12 @@ final class PermissionsManager: ObservableObject {
         if newMic != microphone { microphone = newMic }
         if newAx != accessibility { accessibility = newAx }
         if newIm != inputMonitoring { inputMonitoring = newIm }
+    }
+
+    /// Explicit refresh intended for user-action sites (button clicks, post-dialog).
+    /// Identical to `refresh()`; separate name signals intent at the call site.
+    func refreshNow() {
+        refresh()
     }
 
     /// Trigger the native microphone prompt. No-op if the user has already decided.
