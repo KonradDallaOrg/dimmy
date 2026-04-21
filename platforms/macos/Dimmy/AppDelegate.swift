@@ -50,10 +50,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if permissionsGranted() {
                 initializeCoreAsync()
             } else {
-                // Onboarding previously done but permissions were revoked → re-run permissions flow.
-                hkLog("[AppDelegate] onboarding complete but permissions missing — reopening permissions onboarding")
-                appState.isOnboardingComplete = false
-                showOnboarding()
+                hkLog("[AppDelegate] onboarding complete but permissions missing — reopening Permissions step")
+                showOnboarding(startStep: 1)
             }
         } else {
             hkLog("[AppDelegate] showing onboarding")
@@ -124,8 +122,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.settingsWindow = window
     }
 
-    private func showOnboarding() {
-        let onboardingView = OnboardingContainerView(appState: appState)
+    func reopenOnboarding() {
+        showOnboarding(startStep: 0)
+    }
+
+    private func showOnboarding(startStep: Int = 0) {
+        let onboardingView = OnboardingContainerView(appState: appState, startStep: startStep)
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 520, height: 440),
