@@ -16,7 +16,7 @@ struct PermissionsStepView: View {
             Text("Permissions")
                 .font(.system(size: 26, weight: .bold))
 
-            Text("Dimmy needs three permissions to record, listen for your shortcut, and paste text.")
+            Text("Dimmy needs access to your microphone and to the active app so it can paste transcribed text.")
                 .font(.system(size: 13))
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
@@ -41,14 +41,16 @@ struct PermissionsStepView: View {
                     action: requestAccessibility
                 )
 
-                permissionRow(
-                    icon: "keyboard",
-                    title: "Input Monitoring",
-                    description: "Listen for your global shortcut",
-                    granted: perms.inputMonitoringGranted,
-                    pending: perms.inputMonitoring == kIOHIDAccessTypeUnknown && !inputMonitoringPromptShown,
-                    action: requestInputMonitoring
-                )
+                if appState.shortcut.isFnOnly {
+                    permissionRow(
+                        icon: "keyboard",
+                        title: "Input Monitoring",
+                        description: "Required for your Fn-key shortcut",
+                        granted: perms.inputMonitoringGranted,
+                        pending: perms.inputMonitoring == kIOHIDAccessTypeUnknown && !inputMonitoringPromptShown,
+                        action: requestInputMonitoring
+                    )
+                }
             }
             .padding(.horizontal, 20)
 
@@ -59,7 +61,7 @@ struct PermissionsStepView: View {
                     text: "Toggle **Dimmy** ON in System Settings → Privacy & Security → Accessibility"
                 )
             }
-            if inputMonitoringPromptShown && !perms.inputMonitoringGranted {
+            if appState.shortcut.isFnOnly && inputMonitoringPromptShown && !perms.inputMonitoringGranted {
                 hintBanner(
                     icon: "arrow.up.right.square",
                     color: .orange,
@@ -177,6 +179,7 @@ struct PermissionsStepView: View {
                 }
             }
             micRequestInFlight = false
+            perms.refreshNow()
         }
     }
 
@@ -188,6 +191,7 @@ struct PermissionsStepView: View {
             perms.promptAccessibility()
             withAnimation { accessibilityPromptShown = true }
         }
+        perms.refreshNow()
     }
 
     private func requestInputMonitoring() {
@@ -198,5 +202,6 @@ struct PermissionsStepView: View {
             perms.requestInputMonitoring()
             withAnimation { inputMonitoringPromptShown = true }
         }
+        perms.refreshNow()
     }
 }
