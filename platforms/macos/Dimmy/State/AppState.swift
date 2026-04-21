@@ -1,5 +1,111 @@
-import SwiftUI
+import AppKit
+import ApplicationServices
+import AVFoundation
 import Combine
+import IOKit.hid
+import SwiftUI
+
+// MARK: - PermissionsManager (single source of truth for macOS privacy permissions)
+
+/// Live view of the macOS TCC state for the permissions Dimmy needs.
+/// - Reads the system on every `refresh()` — never assumes or caches stale state.
+/// - Auto-refreshes on `NSApplication.didBecomeActiveNotification` (user returns from System Settings)
+///   plus a low-frequency timer as a safety net.
+/// - Exposes request methods that trigger the native prompts. Separate from the status getters so
+///   UI can display real state even when the user has not yet clicked a "Grant" button.
+@MainActor
+final class PermissionsManager: ObservableObject {
+    static let shared = PermissionsManager()
+
+    @Published private(set) var microphone: AVAuthorizationStatus = .notDetermined
+    @Published private(set) var accessibility: Bool = false
+    @Published private(set) var inputMonitoring: IOHIDAccessType = kIOHIDAccessTypeUnknown
+
+    /// True when the permissions strictly required for Dimmy's core loop are granted.
+    /// Microphone (record) + Accessibility (active CGEventTap + paste via CGEvent).
+    /// Input Monitoring is NOT strictly required because `.defaultTap` on `.cgSessionEventTap`
+    /// is gated by Accessibility, not Input Monitoring — but we still surface it so users whose
+    /// machines route modifier events through HID pipelines have a one-click fix.
+    var allRequiredGranted: Bool {
+        microphone == .authorized && accessibility
+    }
+
+    var microphoneGranted: Bool { microphone == .authorized }
+    var accessibilityGranted: Bool { accessibility }
+    var inputMonitoringGranted: Bool { inputMonitoring == kIOHIDAccessTypeGranted }
+
+    private var pollTimer: Timer?
+    private var didBecomeActiveObserver: NSObjectProtocol?
+
+    private init() {
+        refresh()
+        didBecomeActiveObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.refresh() }
+        }
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refresh() }
+        }
+    }
+
+    /// Re-query TCC directly. Safe to call often; updates published properties only on change.
+    func refresh() {
+        let newMic = AVCaptureDevice.authorizationStatus(for: .audio)
+        let newAx = AXIsProcessTrustedWithOptions(nil)
+        let newIm = IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)
+        if newMic != microphone { microphone = newMic }
+        if newAx != accessibility { accessibility = newAx }
+        if newIm != inputMonitoring { inputMonitoring = newIm }
+    }
+
+    /// Trigger the native microphone prompt. No-op if the user has already decided.
+    /// Returns the final status after the user responds (or immediately if already decided).
+    @discardableResult
+    func requestMicrophone() async -> Bool {
+        if microphone == .notDetermined {
+            _ = await AVCaptureDevice.requestAccess(for: .audio)
+        }
+        refresh()
+        return microphoneGranted
+    }
+
+    /// Show the native Accessibility prompt. If the user clicks "Open System Settings",
+    /// they're taken to Privacy & Security → Accessibility with Dimmy pre-selected.
+    func promptAccessibility() {
+        let key = kAXTrustedCheckOptionPrompt.takeRetainedValue()
+        let options = [key: true] as CFDictionary
+        _ = AXIsProcessTrustedWithOptions(options)
+        refresh()
+    }
+
+    /// Deep-link to System Settings → Privacy & Security → Accessibility.
+    func openAccessibilitySettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    /// Trigger the Input Monitoring prompt. macOS shows its own dialog if status is unknown.
+    func requestInputMonitoring() {
+        _ = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
+        refresh()
+    }
+
+    /// Deep-link to System Settings → Privacy & Security → Input Monitoring.
+    func openInputMonitoringSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    deinit {
+        if let o = didBecomeActiveObserver {
+            NotificationCenter.default.removeObserver(o)
+        }
+        pollTimer?.invalidate()
+    }
+}
 
 enum RecordingMode: String, CaseIterable {
     case pushToTalk = "Push-to-Talk"
@@ -289,13 +395,6 @@ struct ModifierShortcut: Equatable {
 final class AppState: ObservableObject {
     static let shared = AppState()
 
-    /// When true, permission checks are bypassed (for dev machines without admin rights).
-    #if DEBUG
-    static let skipPermissions = true
-    #else
-    static let skipPermissions = false
-    #endif
-
     // MARK: - Recording State
 
     @Published var recordingState: RecordingState = .idle
@@ -331,8 +430,6 @@ final class AppState: ObservableObject {
 
     // MARK: - Permissions
 
-    @Published var micPermissionGranted: Bool = false
-    @Published var accessibilityPermissionGranted: Bool = false
 
     // MARK: - STT Mode (local vs cloud)
 

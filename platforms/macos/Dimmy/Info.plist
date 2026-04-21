@@ -3,8 +3,10 @@
 <plist version="1.0">
 <dict>
 	<key>LSUIElement</key>
-	<false/>
+	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Dimmy needs microphone access to transcribe your voice.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Dimmy uses Apple Events to paste transcribed text into the active application.</string>
 </dict>
 </plist>

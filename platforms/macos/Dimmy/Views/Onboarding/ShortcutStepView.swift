@@ -21,14 +21,13 @@ struct ShortcutStepView: View {
     ]
 
     var body: some View {
-        VStack(spacing: 24) {
-            Spacer()
-
+        ScrollView(.vertical, showsIndicators: false) {
+        VStack(spacing: 20) {
             Text("Your Shortcut")
-                .font(.system(size: 28, weight: .bold))
+                .font(.system(size: 26, weight: .bold))
 
             Text("Hold to dictate, release to paste")
-                .font(.system(size: 14))
+                .font(.system(size: 13))
                 .foregroundColor(.secondary)
 
             // Current shortcut display / recorder
@@ -127,7 +126,10 @@ struct ShortcutStepView: View {
                 }
             }
 
-            Spacer()
+            if activeShortcut.isFnOnly {
+                fnConflictBanner
+                    .padding(.horizontal, 20)
+            }
 
             Button(action: {
                 if let pending = pendingShortcut {
@@ -141,13 +143,50 @@ struct ShortcutStepView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
+            .padding(.top, 4)
 
-            Spacer().frame(height: 20)
+            Spacer().frame(height: 12)
         }
-        .padding(.horizontal, 40)
+        .padding(.horizontal, 32)
+        .padding(.vertical, 20)
+        }
         .onDisappear {
             stopRecording()
         }
+    }
+
+    /// Warn the user about macOS's "Press Fn key to …" setting. macOS consumes Fn for
+    /// Dictation / Siri / Emoji picker if that setting is anything other than "Do Nothing",
+    /// and there's no public API for us to override it.
+    private var fnConflictBanner: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundColor(.orange)
+                Text("macOS may intercept Fn")
+                    .font(.system(size: 13, weight: .semibold))
+            }
+            Text("If Fn doesn't trigger Dimmy, open **System Settings → Keyboard → Dictation** and set **Shortcut** to anything else — or set **Press 🌐 Key to** to **Do Nothing**.")
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Open Keyboard Settings") {
+                if let url = URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+            .buttonStyle(.link)
+            .font(.system(size: 12))
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.orange.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.orange.opacity(0.3), lineWidth: 1)
+        )
     }
 
     private func startRecording() {
