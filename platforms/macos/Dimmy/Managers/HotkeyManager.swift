@@ -44,10 +44,6 @@ final class HotkeyManager {
     // Re-install the tap after sleep/wake (macOS disables taps during sleep).
     private var wakeObserver: NSObjectProtocol?
 
-    // Fallback passive monitor (cannot override other apps). Used only if event tap install fails.
-    private var globalFlagsMonitor: Any?
-    private var localFlagsMonitor: Any?
-
     // Track modifier state
     private var controlOptionDown = false
 
@@ -72,25 +68,14 @@ final class HotkeyManager {
         self.appState = appState
         hkLog("[HotkeyManager] start() trusted=\(AXIsProcessTrusted())")
 
-        installPassiveFallback()
-        tryInstallEventTap()
-
-        if eventTap == nil {
-            // Poll for Accessibility grant so the tap activates as soon as user enables it.
-            accessibilityPollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-                Task { @MainActor in
-                    guard let self, self.eventTap == nil else { return }
-                    if AXIsProcessTrustedWithOptions(nil) {
-                        hkLog("[HotkeyManager] Accessibility now trusted — installing event tap")
-                        self.tryInstallEventTap()
-                        if self.eventTap != nil {
-                            self.teardownPassiveFallback()
-                            self.accessibilityPollTimer?.invalidate()
-                            self.accessibilityPollTimer = nil
-                        }
-                    }
-                }
-            }
+        if AXIsProcessTrustedWithOptions(nil) {
+            tryInstallEventTap()
+            appState.hotkeyStatus = eventTap != nil
+                ? .installed
+                : .tapFailed(reason: "CGEvent.tapCreate returned nil despite Accessibility being trusted")
+        } else {
+            appState.hotkeyStatus = .accessibilityMissing
+            startAccessibilityPolling()
         }
 
         // macOS disables event taps during sleep — reinstall on wake.
@@ -106,6 +91,7 @@ final class HotkeyManager {
                     CGEvent.tapEnable(tap: self.eventTap!, enable: true)
                 } else if AXIsProcessTrustedWithOptions(nil) {
                     self.tryInstallEventTap()
+                    if self.eventTap != nil { self.appState?.hotkeyStatus = .installed }
                 }
             }
         }
@@ -114,36 +100,31 @@ final class HotkeyManager {
     func stop() {
         stopAmplitudePolling()
         uninstallEventTap()
-        teardownPassiveFallback()
         accessibilityPollTimer?.invalidate()
         accessibilityPollTimer = nil
         if let wakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
         }
         wakeObserver = nil
+        appState?.hotkeyStatus = .uninstalled
     }
 
-    private func installPassiveFallback() {
-        guard globalFlagsMonitor == nil else { return }
-        globalFlagsMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+    private func startAccessibilityPolling() {
+        guard accessibilityPollTimer == nil else { return }
+        accessibilityPollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                self?.handleFlags(event.modifierFlags)
+                guard let self, self.eventTap == nil else { return }
+                if AXIsProcessTrustedWithOptions(nil) {
+                    hkLog("[HotkeyManager] Accessibility now trusted — installing event tap")
+                    self.tryInstallEventTap()
+                    if self.eventTap != nil {
+                        self.appState?.hotkeyStatus = .installed
+                        self.accessibilityPollTimer?.invalidate()
+                        self.accessibilityPollTimer = nil
+                    }
+                }
             }
         }
-        localFlagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            Task { @MainActor in
-                self?.handleFlags(event.modifierFlags)
-            }
-            return event
-        }
-        hkLog("[HotkeyManager] Passive NSEvent monitor installed (cannot override other apps)")
-    }
-
-    private func teardownPassiveFallback() {
-        if let m = globalFlagsMonitor { NSEvent.removeMonitor(m) }
-        if let m = localFlagsMonitor { NSEvent.removeMonitor(m) }
-        globalFlagsMonitor = nil
-        localFlagsMonitor = nil
     }
 
     private func tryInstallEventTap() {
