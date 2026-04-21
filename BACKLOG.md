@@ -69,12 +69,14 @@
 - [ ] Automate changelog validation in CI (optional: use `git-cliff` or `changelog-enforcer` action)
 
 ### Documentation & Context Engineering
-- [ ] Review and update CLAUDE.md to reflect local STT architecture, new modules (filler, history, local_stt), updated config fields
-- [ ] Fix CLAUDE.md memory file path references (audio_pipeline.md → docs/dev/audio-pipeline.md, etc.)
-- [ ] Update README.md architecture diagram to include local STT path and new modules
-- [ ] Add per-platform CLAUDE.md files (platforms/macos/CLAUDE.md, platforms/windows/CLAUDE.md)
-- [ ] Create ADRs in docs/adr/ for key decisions (native UI over Tauri, whisper-rs over WhisperKit, C FFI over UniFFI)
-- [ ] Review all docs/dev/ files for coherence with v0.4.0 changes
+- [x] Review and update CLAUDE.md to reflect local STT architecture, new modules (filler, history, local_stt), updated config fields — rewritten 2026-04-21 as slim TOC-style playbook
+- [x] Fix CLAUDE.md memory file path references — all paths verified and pointing to `docs/dev/*` correctly
+- [x] Update README.md architecture diagram to include local STT path and new modules — mermaid diagram reflects LOCAL/CLOUD split and all modules
+- [x] Add per-platform docs — created `platforms/{windows,macos,linux}/README.md`. (README convention rather than per-platform CLAUDE.md; simpler discoverability.)
+- [x] Document key architectural decisions — captured as "Decision log" table in `docs/ARCHITECTURE.md`. (Formal `docs/adr/` directory deferred — table is sufficient at current scale.)
+- [x] Review all docs/dev/ files for coherence — done 2026-04-21
+- [x] Create `docs/BUILD.md`, `docs/RELEASING.md`, `docs/dev/modules.md`, `docs/dev/windows-ci.md`, `CONTRIBUTING.md` — new canonical homes for scattered content
+- [ ] Add synthetic WAV transcription smoke check to `test-install.yml` (v0.6.10 shipped an FFI ABI mismatch because the existing smoke test only checks 15s startup — does NOT exercise `dimmy_stop_recording`). Tracked at the bottom of `docs/dev/windows-ci.md`.
 
 ### Cross-Platform
 - [ ] Launch at login (macOS: ServiceManagement, Windows: registry/startup folder)

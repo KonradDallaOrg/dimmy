@@ -1,15 +1,15 @@
-# Native UI Plan
+# Native UI — status & platform equivalents
 
-Replacing the Tauri WebView frontend with native UIs per platform.
+> This file was the original "Native UI Plan". All 4 phases are now implemented and shipping. It now serves as a **status reference + cross-platform equivalence map**. For per-platform dev notes, see `platforms/{windows,macos,linux}/README.md`. For the big-feature implementation plans that drove the rewrite, see `docs/superpowers/plans/` and `docs/superpowers/specs/`.
 
 ## Status Summary
 
 | Phase | Platform | Status | Files | Tests |
 |-------|----------|--------|-------|-------|
-| 0 | Rust FFI (`ffi.rs`) | COMPLETE | 1 | 40+ |
-| 1 | Windows (WinUI3/C#) | IMPLEMENTED | 34 | 41 |
-| 2 | macOS (SwiftUI) | IMPLEMENTED | — | — |
-| 3 | Linux (GTK4+libadwaita) | IMPLEMENTED | — | — |
+| 0 | Rust FFI (`ffi.rs`) | COMPLETE | 1 | 40+ (part of core's 246) |
+| 1 | Windows (WinUI3/C#) | IMPLEMENTED & shipping | ~34 | 41 C# tests |
+| 2 | macOS (SwiftUI) | IMPLEMENTED & shipping | — | XCTest suite |
+| 3 | Linux (GTK4+libadwaita) | IMPLEMENTED & shipping | — | crate tests on CI |
 
 ## Architecture
 
