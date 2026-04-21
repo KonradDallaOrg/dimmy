@@ -33,6 +33,7 @@
 		AA000025 /* OutputSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000025 /* OutputSettingsView.swift */; };
 		AA000026 /* OverlaySettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000026 /* OverlaySettingsView.swift */; };
 		AA000027 /* PermissionsSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000027 /* PermissionsSettingsView.swift */; };
+		AA000100 /* DiagnosticsSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000100 /* DiagnosticsSettingsView.swift */; };
 		AA000028 /* StatsSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000028 /* StatsSettingsView.swift */; };
 		AA000029 /* DebugSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000040 /* DebugSettingsView.swift */; };
 		AA000030 /* DimmyCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000030 /* DimmyCore.swift */; };
@@ -81,6 +82,7 @@
 		AB000025 /* OutputSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutputSettingsView.swift; sourceTree = "<group>"; };
 		AB000026 /* OverlaySettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlaySettingsView.swift; sourceTree = "<group>"; };
 		AB000027 /* PermissionsSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionsSettingsView.swift; sourceTree = "<group>"; };
+		AB000100 /* DiagnosticsSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsSettingsView.swift; sourceTree = "<group>"; };
 		AB000028 /* StatsSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatsSettingsView.swift; sourceTree = "<group>"; };
 		AB000029 /* DimmyFFI.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DimmyFFI.h; sourceTree = "<group>"; };
 		AB000030 /* DimmyCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DimmyCore.swift; sourceTree = "<group>"; };
@@ -211,6 +213,7 @@
 				AB000025 /* OutputSettingsView.swift */,
 				AB000026 /* OverlaySettingsView.swift */,
 				AB000027 /* PermissionsSettingsView.swift */,
+				AB000100 /* DiagnosticsSettingsView.swift */,
 				AB000020 /* AboutSettingsView.swift */,
 				AB000043 /* HistorySettingsView.swift */,
 				AB000044 /* ModelSettingsView.swift */,
@@ -351,6 +354,7 @@
 				AA000025 /* OutputSettingsView.swift in Sources */,
 				AA000026 /* OverlaySettingsView.swift in Sources */,
 				AA000027 /* PermissionsSettingsView.swift in Sources */,
+				AA000100 /* DiagnosticsSettingsView.swift in Sources */,
 				AA000028 /* StatsSettingsView.swift in Sources */,
 				AA000029 /* DebugSettingsView.swift in Sources */,
 				AA000043 /* HistorySettingsView.swift in Sources */,
