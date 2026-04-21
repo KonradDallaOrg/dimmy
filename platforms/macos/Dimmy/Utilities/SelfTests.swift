@@ -20,6 +20,7 @@ enum SelfTests {
         testRecordingStateAnimationIds()
         testSttProviderFromUrl()
         testHotkeyStatusCases()
+        testOnboardingStepCount()
         print("[SelfTests] All \(testCount) tests passed.")
         #endif
     }
@@ -195,5 +196,11 @@ enum SelfTests {
         assert(HotkeyStatus.accessibilityMissing != .installed, "accessibilityMissing != installed")
         assert(HotkeyStatus.tapFailed(reason: "a") != HotkeyStatus.tapFailed(reason: "b"), "tapFailed differs by reason")
         assert(HotkeyStatus.tapFailed(reason: "x") == HotkeyStatus.tapFailed(reason: "x"), "tapFailed equals by reason")
+    }
+
+    // MARK: - Onboarding
+
+    private static func testOnboardingStepCount() {
+        assert(OnboardingContainerView.totalSteps == 4, "Onboarding has 4 steps, got \(OnboardingContainerView.totalSteps)")
     }
 }

@@ -1,14 +1,21 @@
 import SwiftUI
 
 struct OnboardingContainerView: View {
+    static let totalSteps = 4
+
     @ObservedObject var appState: AppState
-    @State private var currentStep = 0
+    @State private var currentStep: Int
+
+    init(appState: AppState, startStep: Int = 0) {
+        self.appState = appState
+        let clamped = max(0, min(startStep, Self.totalSteps - 1))
+        self._currentStep = State(initialValue: clamped)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            // Progress dots
             HStack(spacing: 8) {
-                ForEach(0..<5, id: \.self) { index in
+                ForEach(0..<Self.totalSteps, id: \.self) { index in
                     Circle()
                         .fill(index <= currentStep ? Color.accentColor : Color.secondary.opacity(0.3))
                         .frame(width: 8, height: 8)
@@ -16,7 +23,6 @@ struct OnboardingContainerView: View {
             }
             .padding(.top, 20)
 
-            // Step content
             Group {
                 switch currentStep {
                 case 0:
@@ -28,16 +34,11 @@ struct OnboardingContainerView: View {
                         withAnimation { currentStep = 2 }
                     }
                 case 2:
-                    ModelDownloadStepView(appState: appState) {
+                    ShortcutStepView(appState: appState) {
+                        appState.showPillIntro = true
                         withAnimation { currentStep = 3 }
                     }
                 case 3:
-                    ShortcutStepView(appState: appState) {
-                        // Show pill with glow before Try It step
-                        appState.showPillIntro = true
-                        withAnimation { currentStep = 4 }
-                    }
-                case 4:
                     TryItStepView(appState: appState) {
                         appState.isOnboardingComplete = true
                     }
