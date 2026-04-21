@@ -77,6 +77,17 @@ struct PillView: View {
                 completionView
             }
         }
+        .overlay(alignment: .topTrailing) {
+            if appState.hotkeyStatus != .installed {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundColor(.orange)
+                    .padding(6)
+                    .background(Circle().fill(Color.black.opacity(0.6)))
+                    .offset(x: 4, y: -4)
+                    .help(Self.warningText(for: appState.hotkeyStatus))
+            }
+        }
         // Context menu is handled by PillHostingView (NSMenu) — not SwiftUI .contextMenu
         // which doesn't work on borderless NSPanel
         .onChange(of: appState.showPillIntro) { _, show in
@@ -308,6 +319,14 @@ struct PillView: View {
     private func phaseGlowColor(phase: Double, offset: Double) -> Color {
         let hue = ((phase / 360.0) + offset).truncatingRemainder(dividingBy: 1.0)
         return Color(hue: hue, saturation: 0.6, brightness: 1.0).opacity(0.4)
+    }
+
+    private static func warningText(for status: HotkeyStatus) -> String {
+        switch status {
+        case .installed, .uninstalled: return ""
+        case .accessibilityMissing: return "Shortcut disabled: grant Accessibility in System Settings"
+        case .tapFailed(let reason): return "Shortcut disabled: \(reason)"
+        }
     }
 
     private var rainbowColors: [Color] {
