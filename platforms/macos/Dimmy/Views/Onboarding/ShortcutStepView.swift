@@ -12,13 +12,17 @@ struct ShortcutStepView: View {
         pendingShortcut ?? appState.shortcut
     }
 
-    /// Preset shortcuts the user can pick with a click (no keyboard needed)
+    /// Preset shortcuts the user can pick with a click (no keyboard needed).
+    /// Fn is excluded by default — it's architecturally unreliable on macOS
+    /// without manual Keyboard Settings tweaks. Available via the Advanced disclosure below.
     private let presets: [(label: String, shortcut: ModifierShortcut)] = [
         ("⌃⌥", ModifierShortcut(fn: false, control: true, option: true, command: false, shift: false)),
         ("⌃⇧", ModifierShortcut(fn: false, control: true, option: false, command: false, shift: true)),
         ("⌥⇧", ModifierShortcut(fn: false, control: false, option: true, command: false, shift: true)),
-        ("fn", ModifierShortcut.fnOnly),
     ]
+
+    @State private var showAdvanced = false
+    @State private var pendingFnConfirmation = false
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
@@ -126,6 +130,44 @@ struct ShortcutStepView: View {
                 }
             }
 
+            DisclosureGroup(isExpanded: $showAdvanced) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Button(action: {
+                        pendingFnConfirmation = true
+                    }) {
+                        HStack(spacing: 8) {
+                            Text("fn")
+                                .font(.system(size: 16, weight: .medium, design: .rounded))
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 8)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill(activeShortcut.isFnOnly
+                                              ? Color.accentColor.opacity(0.15)
+                                              : Color(nsColor: .controlBackgroundColor))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .stroke(activeShortcut.isFnOnly
+                                                ? Color.accentColor
+                                                : Color.primary.opacity(0.12),
+                                                lineWidth: activeShortcut.isFnOnly ? 1.5 : 1)
+                                )
+                            Text("Use Fn key (requires macOS tweaks)")
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.top, 6)
+            } label: {
+                Text("Advanced")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.secondary)
+            }
+            .padding(.horizontal, 20)
+
             if activeShortcut.isFnOnly {
                 fnConflictBanner
                     .padding(.horizontal, 20)
@@ -149,6 +191,16 @@ struct ShortcutStepView: View {
         }
         .padding(.horizontal, 32)
         .padding(.vertical, 20)
+        }
+        .alert("Use Fn as your shortcut?", isPresented: $pendingFnConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Use Fn") {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    pendingShortcut = ModifierShortcut.fnOnly
+                }
+            }
+        } message: {
+            Text("Fn requires disabling macOS Dictation/Globe shortcuts in Keyboard Settings and granting Input Monitoring. Without those, the Fn key will be intercepted by macOS and Dimmy will not trigger.")
         }
         .onDisappear {
             stopRecording()
