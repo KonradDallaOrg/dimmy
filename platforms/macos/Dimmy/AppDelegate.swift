@@ -127,6 +127,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showOnboarding(startStep: Int = 0) {
+        if let existing = onboardingWindow, existing.isVisible {
+            existing.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
         let onboardingView = OnboardingContainerView(appState: appState, startStep: startStep)
 
         let window = NSWindow(

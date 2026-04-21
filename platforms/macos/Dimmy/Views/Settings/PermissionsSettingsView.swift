@@ -22,13 +22,15 @@ struct PermissionsSettingsView: View {
                     granted: perms.accessibilityGranted,
                     openAction: perms.openAccessibilitySettings
                 )
-                row(
-                    icon: "keyboard",
-                    title: "Input Monitoring",
-                    description: "Required to listen for your global shortcut",
-                    granted: perms.inputMonitoringGranted,
-                    openAction: perms.openInputMonitoringSettings
-                )
+                if appState.shortcut.isFnOnly {
+                    row(
+                        icon: "keyboard",
+                        title: "Input Monitoring",
+                        description: "Required for your Fn-key shortcut",
+                        granted: perms.inputMonitoringGranted,
+                        openAction: perms.openInputMonitoringSettings
+                    )
+                }
             }
 
             Section {
