@@ -40,9 +40,30 @@ if [[ ! -d "$SRC" ]]; then
     exit 1
 fi
 
+echo "[install] bundling llama/ggml dylibs into $SRC/Contents/Frameworks"
+FRAMEWORKS_DIR="$SRC/Contents/Frameworks"
+RELEASE_DIR="$ROOT/core/target/aarch64-apple-darwin/release"
+if compgen -G "$RELEASE_DIR/libllama*.dylib" >/dev/null; then
+    mkdir -p "$FRAMEWORKS_DIR"
+    for name in libllama libggml libggml-base libggml-cpu libggml-metal; do
+        for dylib in "$RELEASE_DIR"/${name}*.dylib; do
+            [ -e "$dylib" ] || continue
+            DEST="$FRAMEWORKS_DIR/$(basename "$dylib")"
+            cp -RL "$dylib" "$DEST"
+            install_name_tool -id "@rpath/$(basename "$dylib")" "$DEST" 2>/dev/null || true
+        done
+    done
+    codesign --force --sign - "$FRAMEWORKS_DIR"/*.dylib
+else
+    echo "[install] no llama/ggml dylibs in $RELEASE_DIR — skipping bundle step"
+fi
+
 echo "[install] replacing $DST"
 rm -rf "$DST"
 cp -R "$SRC" "$DST"
+
+echo "[install] re-signing app (dylibs in Frameworks/ changed the bundle hash)"
+codesign --force --deep --sign - "$DST"
 
 echo "[install] verifying code signature"
 codesign --verify --deep --strict "$DST"
