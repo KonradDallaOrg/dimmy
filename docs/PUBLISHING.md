@@ -4,37 +4,40 @@
 >
 > For the release runbook itself see [`RELEASING.md`](RELEASING.md). For Windows CI invariants see [`dev/windows-ci.md`](dev/windows-ci.md).
 
-## TL;DR — minimum-cost track (individual, closed-source)
+## TL;DR — minimum-cost track (individual, closed-source, private repo)
 
-Dimmy ships as closed-source for now (may open-source selected components later). That disqualifies the free OSS-only signing programs (SignPath Foundation, Certum Open Source). The realistic floor is therefore **~$170–220/yr total**: $99 Apple + €69–120 Windows cloud OV cert.
+Dimmy ships as closed-source for now (may open-source selected components later), and the repo is private. That disqualifies every free OSS-only signing program. The cheapest path that still gives us a usable product on both OSes is a **two-phase plan**:
 
-| Item | Cost | Lead time | Notes |
-|---|---|---|---|
-| Apple Developer Program (**Individual**) | $99 / yr | hours (no D-U-N-S needed) | Cert reads "Developer ID Application: Firstname Lastname (TEAMID)". Upgrade to Organization later without losing the Team ID. |
-| Apple "Developer ID Application" cert + app-specific password | included | minutes | `codesign` + `notarytool submit` for direct distribution |
-| **Certum Standard Code Signing** (individual OV, cloud HSM via SimplySign) | ~€69–99 / yr | 3–7 days ID validation | Cheapest reliable closed-source path. Shows publisher as "Firstname Lastname". No USB token required (SimplySign is their cloud-HSM service). |
-| PostHog Cloud EU | free tier (1M events/mo) | minutes | product analytics, feature flags, session replay |
-| Sentry (optional, later) | free tier (5k errors/mo) | minutes | crash reporting |
+- **Phase 1 — ship now: $99/yr (Apple only).** macOS signed + notarised, Windows **unsigned** with a clear "How to install" explainer page on the site. SmartScreen shows a "More info → Run anyway" warning — ugly, but the app runs. Gatekeeper blocks unsigned macOS apps much harder, so macOS is the mandatory spend, not Windows.
+- **Phase 2 — when justified (revenue or user complaints): +~€69–120/yr for Windows signing.** Add a Certum Standard individual OV cert (or Azure Trusted Signing) to kill the SmartScreen warning.
 
-**No free option for macOS or Windows signing** once the project is closed-source. Self-signed bundles are blocked by Gatekeeper; Authenticode "unknown publisher" triggers SmartScreen's red full-screen warning. These are mandatory spends.
+| Item | Phase | Cost | Lead time | Notes |
+|---|---|---|---|---|
+| Apple Developer Program (**Individual**) | **1** | $99 / yr | hours | No D-U-N-S. Cert CN = your legal name. Upgrade to Organization later, Team ID + certs carry over. |
+| Apple "Developer ID Application" cert + app-specific password | **1** | included | minutes | `codesign` + `notarytool` for direct DMG distribution |
+| **Windows: ship unsigned + install instructions page** | **1** | $0 | — | SmartScreen "More info → Run anyway" UX. Acceptable for early access; not for scale. |
+| PostHog Cloud EU | **1** | free tier (1M events/mo) | minutes | product analytics, feature flags, session replay |
+| Certum Standard Code Signing (individual OV, SimplySign cloud HSM) | **2** | ~€69–99 / yr | 3–7 days ID validation | Kills SmartScreen warning after reputation ramp. Do this when Phase 1 friction starts costing us installs. |
+| Sentry | optional | free tier (5k errors/mo) | minutes | crash reporting |
 
-### Windows signing — alternatives, ranked by total cost of ownership
+**Why no free Windows signing?** Self-signed Authenticode certs don't chain to a trusted root, so Windows treats them as untrusted (identical UX to unsigned). The only "free" Windows cert programs (SignPath Foundation, Certum Open Source) require a qualified OSS project on a **public** repo. Both disqualified for us.
+
+### Windows signing — options ranked for Phase 2
 
 | Option | Cost | Pros | Cons |
 |---|---|---|---|
-| **Certum Standard (individual OV)** | ~€69–99/yr | Cheapest closed-source. SimplySign cloud HSM works in CI. EU-based. | Slower SmartScreen reputation ramp than EV. ID validation is strict. |
-| **Azure Trusted Signing** | ~$10/mo (~$120/yr) | Native Microsoft service; cleanest GitHub Actions integration (OIDC). Reputation inherited from Microsoft's pool. | Eligibility: individuals need ID verification; businesses need ≥3 years history. May reject new individuals depending on region. Try only if Certum is unavailable. |
-| **SSL.com OV with eSigner** | ~$170–230/yr | Battle-tested for CI. eSigner is a documented cloud-HSM API. | ~3× the cost of Certum for the same trust level. |
-| Commercial EV (DigiCert, Sectigo) | $300–600/yr | Instant SmartScreen trust, no reputation ramp. | Overkill pre-revenue. Individuals often rejected. Skip. |
-| Self-signed / unsigned | $0 | — | SmartScreen red wall. Conversion killer. Internal builds only. |
+| **Certum Standard (individual OV)** | ~€69–99/yr | Cheapest reliable path. SimplySign cloud HSM works in CI. EU-based (GDPR-friendly). | Slow SmartScreen ramp (1000–3000 downloads before warning clears). |
+| **Azure Trusted Signing** | ~$120/yr | OIDC auth from GitHub Actions (no long-lived secret). Reputation inherits from Microsoft pool → faster ramp. | Individual eligibility is selective; Microsoft may reject. |
+| **SSL.com OV with eSigner** | ~$170–230/yr | Mature cloud-HSM API. | ~3× Certum for same trust level. |
+| Commercial EV (DigiCert, Sectigo) | $300–600/yr | Instant SmartScreen trust. | Individuals often rejected. Skip until there's revenue. |
 
-### About the current licence
+### Private-repo caveat for auto-update
 
-The repo still has an `AGPL-3.0-only` LICENSE and a public GitHub URL from the earlier open-source plan. Two loose ends to close before (or alongside) the first closed-source release:
-- Decide whether the repo goes **private**, stays public with **source-available** licence (e.g. BUSL-1.1, Elastic 2.0, PolyForm Noncommercial), or stays AGPL with future selective open-sourcing.
-- If the repo goes private, confirm Velopack's auto-update still works: GitHub Releases in a private repo are private too. Either make the release artifacts public (Releases can be made public on a private repo) or move the update feed to a public CDN (S3/R2 + CloudFront).
+GitHub Releases in a **private** repo are private — Velopack can't download updates anonymously. Two ways to fix this:
+- **Mark the Release itself public.** In the GitHub UI, a release on a private repo can be flipped to "public" — artifact URLs then work without auth. Check that this option is still exposed (behaviour has changed before).
+- **Mirror artifacts to a public CDN** (S3 / Cloudflare R2 + public bucket) and point Velopack's update feed at that URL. Slightly more work, fully independent of GitHub's private-repo policy.
 
-This is a licensing/distribution policy decision, not a technical one — flagging so it isn't forgotten.
+Verify this **before** shipping the first auto-updating release, or every user will be stuck on whatever version they first installed.
 
 ## macOS checklist (direct-download DMG)
 
@@ -58,32 +61,51 @@ This is a licensing/distribution policy decision, not a technical one — flaggi
 - **Velopack macOS** (we already use it on Windows). Pros: one codebase for both OSes. Cons: younger on macOS; confirm it supports notarised DMG flow end-to-end before committing.
 - **Recommendation:** try Velopack first for parity with Windows. Fall back to Sparkle if its macOS flow is rough.
 
-## Windows checklist (direct-download Setup.exe) — Certum Standard path
+## Windows checklist (direct-download Setup.exe)
 
-Velopack + auto-updater are already wired (see `release.yml`). Remaining work is **signing**, and the cheapest closed-source path is **Certum Standard Code Signing** (~€69–99/yr) with their **SimplySign** cloud HSM.
+Velopack + auto-updater are already wired (see `release.yml`). Two-phase plan.
 
-1. **Buy** the individual OV cert on `shop.certum.eu` → "Standard Code Signing Certificate" → 1 year, individual. Choose **SimplySign** (cloud) — not the USB token option. USB tokens break headless CI.
-2. **Validate identity.** Certum requires a video call or document upload (passport / ID card + utility bill). Allow 3–7 days. The cert's CN will be your legal name as it appears on the ID.
-3. Certum emits the cert directly into their HSM. Download the **SimplySign Desktop** client once to activate, then **never again** — CI uses the SimplySign API.
-4. Add GitHub Actions secrets:
-   - `CERTUM_API_USER`, `CERTUM_API_PASSWORD` (SimplySign API credentials)
-   - `CERTUM_CERT_THUMBPRINT` (the cert's SHA-1, used by `signtool /sha1`)
-5. In `release.yml` and `staging-native.yml`, install Certum's `signtool`-compatible wrapper (they ship a `.dll` that fronts the cloud HSM) and sign **in this order**:
-   - `dimmy_lib.dll` and `Dimmy.Windows.exe` **before** `vpk pack`
-   - the final `Dimmy-win-Setup.exe` **after** `vpk pack`
-   - Always include `/tr http://time.certum.pl /td sha256 /fd sha256` so signatures survive cert rotation.
-6. Velopack's `--signTemplate` accepts a full `signtool sign` command — use it to sign the inner binaries in one pass instead of separate steps. Shape:
+### Phase 1 — ship unsigned (free)
+
+Velopack already builds a working `Dimmy-win-Setup.exe`. Ship that as-is, with a dedicated install page on the website that walks users through the SmartScreen bypass so the red warning doesn't scare them off.
+
+1. **Website install page** (e.g. `dimmy.app/download/windows`) — one screenshot per step:
+   - Download `Dimmy-Setup.exe`
+   - Double-click → if SmartScreen appears, click **"More info"** → **"Run anyway"**
+   - Installer runs, app launches
+   - One line explaining why: "We're working on code-signing. The installer is safe — see our GitHub Release checksums: [link]"
+2. **Publish SHA-256 checksums** alongside each release (GitHub's UI does this automatically for assets, but add them to the install page too) so paranoid users can verify.
+3. **Leave `release.yml` and `staging-native.yml` as-is** — no signing secrets, no signtool step. One less thing to break.
+4. **Do not self-sign**: a self-signed cert adds zero trust (Windows still shows SmartScreen), makes the chain look more suspicious, and resets the SmartScreen reputation once you *do* buy a real cert. Ship plain unsigned.
+
+**Expected friction.** Modern Windows Defender SmartScreen is aggressive with unsigned installers — expect ~30–50% of first-time users to bounce on the red warning if the install page isn't prominent. That's the cost of Phase 1. Track the install→first-launch conversion in PostHog (`installer_downloaded` vs `app_first_launch`); when the drop-off gets painful, flip to Phase 2.
+
+### Phase 2 — add signing (when justified)
+
+Go with **Certum Standard Code Signing** (~€69–99/yr) via **SimplySign** cloud HSM.
+
+1. **Buy** on `shop.certum.eu` → "Standard Code Signing Certificate" → 1 year, individual. Choose **SimplySign** (cloud), NOT the USB token option — USB tokens can't sign from CI.
+2. **Validate identity.** Document upload or video call (passport / ID card + proof of address). 3–7 days. Cert CN = your legal name.
+3. Certum emits the cert directly into SimplySign's HSM. Install **SimplySign Desktop** once to activate, then CI uses the API.
+4. Add GitHub Actions secrets: `CERTUM_API_USER`, `CERTUM_API_PASSWORD`, `CERTUM_CERT_THUMBPRINT` (SHA-1, for `signtool /sha1`).
+5. In `release.yml` and `staging-native.yml`:
+   - Install Certum's `signtool` CSP/wrapper on the runner
+   - Sign `dimmy_lib.dll` and `Dimmy.Windows.exe` **before** `vpk pack`
+   - Sign the final `Dimmy-win-Setup.exe` **after** `vpk pack`
+   - Always include `/tr http://time.certum.pl /td sha256 /fd sha256`
+6. Velopack's `--signTemplate` accepts a full `signtool sign` command — use it to sign embedded binaries in one pass:
    ```
    vpk pack ... --signTemplate "signtool sign /sha1 $env:CERTUM_CERT_THUMBPRINT /tr http://time.certum.pl /td sha256 /fd sha256 {{file}}"
    ```
-7. Verify: `signtool verify /pa /v Dimmy-win-Setup.exe` → chain rooted at Certum's CA, publisher = your legal name.
-8. Update `dev/windows-ci.md` with a new invariant: **every `.exe`/`.dll` shipped to users must have a valid Authenticode signature**; add a CI gate (`signtool verify /pa`) in `test-install.yml`.
+7. Verify: `signtool verify /pa /v Dimmy-win-Setup.exe` → chain rooted at Certum, publisher = your legal name.
+8. Add to `dev/windows-ci.md`: new invariant that every shipped `.exe`/`.dll` must have a valid Authenticode signature; add a CI gate (`signtool verify /pa`) in `test-install.yml`.
+9. Update the install page — remove the SmartScreen bypass instructions.
 
-**SmartScreen reality check.** A brand-new OV cert has **zero reputation**. First users on Windows 11 will see "More info" → "Run anyway" prompts for roughly the first ~1000–3000 downloads before SmartScreen warms up. Nothing to do except ship, not re-issue the cert, and wait. Symptoms that look like "the signature doesn't work" are almost always just reputation ramp-up.
+**SmartScreen reputation ramp.** A brand-new OV cert starts at **zero reputation**. Expect "More info → Run anyway" prompts for the first 1000–3000 downloads. Don't re-issue the cert trying to "fix" it; you'd reset the reputation.
 
-### Alternative: Azure Trusted Signing (~$120/yr)
+### Phase 2 alternative: Azure Trusted Signing
 
-If Certum's individual validation fails or is too slow, try **Azure Trusted Signing** (https://learn.microsoft.com/azure/trusted-signing/). Pros: $10/mo flat, OIDC auth from GitHub Actions (no long-lived secret), reputation inherits from Microsoft's pool (faster SmartScreen ramp). Cons: eligibility is selective for individuals — expect an identity-verification step that Microsoft may reject. Only worth pursuing after Certum, not in parallel (you don't need two certs).
+If Certum's individual validation fails, try **Azure Trusted Signing** (~$120/yr). OIDC auth from GitHub Actions (no long-lived secret), and SmartScreen reputation inherits faster from Microsoft's pool. Downside: individual eligibility is selective and Microsoft may reject. Don't pursue in parallel with Certum — one cert is enough.
 
 ## Auto-updater (already in place on Windows)
 
@@ -113,22 +135,27 @@ PostHog is the right tool: product analytics + feature flags + session replay + 
 
 ## Order of work (suggested)
 
-1. **Apple Developer enrollment as Individual** — a few hours; start first.
-2. **Certum Standard Code Signing purchase + ID validation** in parallel — 3–7 days is the long pole on Windows.
-3. **Decide licence + repo visibility** (see "About the current licence" above). Blocks nothing technical but needs a call before the first public release.
-4. **macOS signing + notarisation** in `release.yml` as soon as the Apple cert is issued.
-5. **Windows signing** via Certum SimplySign in `release.yml` + `staging-native.yml` — biggest UX win, kills the SmartScreen red wall.
-6. **macOS auto-updater** (Velopack-macOS preferred for parity, Sparkle as fallback).
-7. **PostHog integration** (opt-in), ship with the next signed release.
-8. **Sentry** (optional, when crash reports from the field become the bottleneck).
+**Phase 1 — get to "shippable" ($99/yr):**
+1. **Apple Developer enrollment as Individual** — a few hours; start first, it's the only long-lead-free blocker.
+2. **Verify private-repo auto-update path** — confirm Velopack can fetch releases (public-release-on-private-repo, or mirror to CDN).
+3. **macOS signing + notarisation** in `release.yml` once the Apple cert is in hand.
+4. **macOS auto-updater** (try Velopack-macOS first for parity with Windows, Sparkle as fallback).
+5. **Windows install page** on the website with the SmartScreen bypass walkthrough + SHA-256 checksums.
+6. **PostHog integration** (opt-in), ship with the next release so we have install-funnel telemetry before Phase 2.
+7. **Ship v1.0.0** — signed/notarised macOS, unsigned-but-documented Windows.
 
-**Total upfront cost: ~$170–220/yr** ($99 Apple + €69–99 Certum). No recurring infra costs on top while PostHog/Sentry stay on free tiers.
+**Phase 2 — polish when the data says so:**
+8. **Windows signing** via Certum SimplySign (or Azure Trusted Signing) when PostHog funnel data or user reports show SmartScreen is costing us too many installs.
+9. **Sentry** (optional, when crashes in the field become the bottleneck we can't debug from PostHog alone).
+
+**Upfront cost: $99/yr** (Apple only). Phase 2 adds ~€69–120/yr when triggered by real data, not upfront guessing.
 
 ## Things NOT to do
 
-- Do not ship an unsigned binary "just for now" — SmartScreen / Gatekeeper reputation starts on the first signed artifact; every unsigned release is a reset.
-- Do not buy a **USB-token** code-signing cert. They cannot sign from GitHub Actions without manual intervention — cloud HSM only (SimplySign, Azure TS, eSigner).
-- Do not re-issue the Certum cert trying to "fix" SmartScreen warnings during the reputation ramp — you lose what little reputation you'd accrued. Ship, wait.
-- Do not pay for a commercial EV cert pre-revenue. The instant-trust UX doesn't justify $300+/yr at this stage.
-- Do not send any user content (audio, transcripts) to PostHog, ever. This is a hard line, enforced in code review.
-- Do not skip notarisation for "internal builds" we share with users — Gatekeeper on recent macOS will block them and cost us trust.
+- Do not ship an **unsigned macOS** build — Gatekeeper blocks it with no easy bypass and the user blames us. macOS signing is non-negotiable from day one.
+- Do not **self-sign** the Windows installer — a self-signed Authenticode cert adds zero trust (Windows still flags it) and resets SmartScreen reputation when you later switch to Certum.
+- Do not buy a **USB-token** code-signing cert when you reach Phase 2 — they can't sign from GitHub Actions headlessly. Cloud HSM only (SimplySign, Azure TS, eSigner).
+- Do not re-issue the Certum cert trying to "fix" SmartScreen warnings during the reputation ramp — you lose what little reputation accrued. Ship, wait.
+- Do not pay for a commercial EV cert pre-revenue. $300+/yr isn't justified by the instant-trust UX at this stage.
+- Do not send any user content (audio, transcripts) to PostHog, ever. Hard line, enforced in code review.
+- Do not skip notarisation for "internal builds" shared with users — Gatekeeper blocks them and costs us trust.
