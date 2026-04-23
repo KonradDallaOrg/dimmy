@@ -27,6 +27,7 @@
                        FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                        HorizontalAlignment="Center" TextAlignment="Center" />
             <Button Content="Get Started" HorizontalAlignment="Center"
+                    AutomationProperties.AutomationId="OnboardingGetStartedButton"
                     Style="{ThemeResource AccentButtonStyle}" Width="200"
                     Click="NextStep_Click" Margin="0,16,0,0" />
         </StackPanel>
@@ -49,6 +50,8 @@
 
                 <!-- Local card -->
                 <Border Grid.Column="0"
+                        AutomationProperties.AutomationId="OnboardingLocalCard"
+                        AutomationProperties.Name="Local mode"
                         Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                         BorderBrush="{Binding IsLocalSelected, Mode=OneWay, Converter={StaticResource BoolToAccentBrush}}"
                         BorderThickness="2"
@@ -95,6 +98,8 @@
 
                 <!-- Cloud card -->
                 <Border Grid.Column="1"
+                        AutomationProperties.AutomationId="OnboardingCloudCard"
+                        AutomationProperties.Name="Cloud mode"
                         Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                         BorderBrush="{Binding IsCloudSelected, Mode=OneWay, Converter={StaticResource BoolToAccentBrush}}"
                         BorderThickness="2"
@@ -115,6 +120,7 @@
                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
 
                         <PasswordBox x:Name="GroqKeyBox"
+                                     AutomationProperties.AutomationId="OnboardingGroqKeyBox"
                                      PlaceholderText="gsk_..."
                                      Margin="0,8,0,0"
                                      PasswordChanged="GroqKeyBox_PasswordChanged" />
@@ -140,8 +146,11 @@
 
             <StackPanel Orientation="Horizontal" Spacing="12" HorizontalAlignment="Center"
                         Margin="0,8,0,0">
-                <Button Content="Back" Click="PrevStep_Click" Width="90" />
+                <Button Content="Back"
+                        AutomationProperties.AutomationId="OnboardingChoiceBackButton"
+                        Click="PrevStep_Click" Width="90" />
                 <Button Content="{Binding ChoiceContinueLabel, Mode=OneWay}"
+                        AutomationProperties.AutomationId="OnboardingChoiceContinueButton"
                         IsEnabled="{Binding CanAdvanceFromChoiceStep, Mode=OneWay}"
                         Click="NextStep_Click"
                         Style="{ThemeResource AccentButtonStyle}" Width="180" />
