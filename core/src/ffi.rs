@@ -1923,12 +1923,7 @@ pub unsafe extern "C" fn dimmy_inject_pcm_for_test(
     // Validate: all samples finite and in [-1.0, 1.0]. Reject bad test input
     // early — catches malformed fixtures before they poison the pipeline.
     for (i, &s) in slice.iter().enumerate() {
-        assert!(
-            s.is_finite(),
-            "injected sample {} is not finite: {}",
-            i,
-            s
-        );
+        assert!(s.is_finite(), "injected sample {} is not finite: {}", i, s);
         assert!(
             (-1.0..=1.0).contains(&s),
             "injected sample {} out of range: {}",

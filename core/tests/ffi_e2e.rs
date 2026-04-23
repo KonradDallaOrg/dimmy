@@ -143,9 +143,8 @@ fn set_config(json: &str) {
 
 /// Inject → stop → decode transcript (best-effort — returns empty on error paths).
 fn transcribe_pcm(samples: &[f32], sample_rate: u32) -> String {
-    let rc = unsafe {
-        dimmy_inject_pcm_for_test(samples.as_ptr(), samples.len() as c_int, sample_rate)
-    };
+    let rc =
+        unsafe { dimmy_inject_pcm_for_test(samples.as_ptr(), samples.len() as c_int, sample_rate) };
     assert_eq!(rc, 0, "inject_pcm failed: {}", rc);
 
     let mut buf: Vec<u8> = vec![0; 8192];
@@ -315,11 +314,11 @@ fn cloud_stt_401_produces_empty_transcript_without_crash() {
     rt.block_on(async {
         wiremock::Mock::given(wiremock::matchers::method("POST"))
             .and(wiremock::matchers::path("/audio/transcriptions"))
-            .respond_with(wiremock::ResponseTemplate::new(401).set_body_json(
-                serde_json::json!({
+            .respond_with(
+                wiremock::ResponseTemplate::new(401).set_body_json(serde_json::json!({
                     "error": {"message": "invalid x-api-key", "type": "authentication_error"}
-                }),
-            ))
+                })),
+            )
             .mount(&server)
             .await;
     });
@@ -420,10 +419,7 @@ fn cloud_stt_ok_but_llm_same_key_against_different_provider_fails_loud() {
         .collect();
     let transcript = transcribe_pcm(&samples, 16_000);
 
-    eprintln!(
-        "[test] provider-mismatch transcript: {:?}",
-        transcript
-    );
+    eprintln!("[test] provider-mismatch transcript: {:?}", transcript);
     // We accept either:
     //   (a) raw STT transcript returned (LLM failed but STT kept)
     //   (b) empty transcript (hard fail)
