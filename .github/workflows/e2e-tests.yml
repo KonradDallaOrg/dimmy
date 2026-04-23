@@ -59,7 +59,10 @@ jobs:
           DIMMY_FORCE_CPU: "1"
           # Rust backtrace on panic for easier CI debugging
           RUST_BACKTRACE: "1"
-        run: cargo test --test ffi_e2e --features local-stt,test-ffi -- --nocapture --test-threads=1
+        # --release: debug-mode whisper.cpp on windows-2025 crashes with
+        # STATUS_ILLEGAL_INSTRUCTION (CPU-feature mismatch on the runner).
+        # Release mode uses safer codegen + runtime CPU detection paths.
+        run: cargo test --release --test ffi_e2e --features local-stt,test-ffi -- --nocapture --test-threads=1
 
       - name: Upload test debug artifacts on failure
         if: failure()
