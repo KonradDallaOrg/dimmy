@@ -818,11 +818,11 @@ mod whisper_cache {
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
 
-        const SAMPLES_30S: usize = 30 * 16_000;
-        let single_segment = samples.len() < SAMPLES_30S;
-        if single_segment {
-            params.set_single_segment(true);
-        }
+        // Intentionally not calling `set_single_segment(true)`. It interacts badly with
+        // language detection: whisper returns Ok with zero segments even when the audio is
+        // clear speech and the detected language is confident (observed p=0.97 Italian,
+        // 5 s of audio, 0 chars output). Letting whisper chunk normally produces segments.
+        let single_segment = false;
 
         crate::log(&format!(
             "[LocalSTT] Running whisper_full (n_threads={}, single_segment={}, samples={})",
