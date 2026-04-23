@@ -65,3 +65,7 @@ tokio-stream = "0.1"
 # Integration test infrastructure. Kept minimal — no snapshot crate yet,
 # assertions use substring checks which are robust under whisper determinism.
 wiremock = "0.6"
+# Blocking HTTP for downloading audio/model fixtures on first test run.
+ureq = "2"
+# Serialize tests that share global Dimmy state (GLOBAL_STATE is process-wide).
+serial_test = "3"
