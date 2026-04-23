@@ -204,7 +204,9 @@ public partial class App : Application
 
     private void OnboardingWindow_Closed(object sender, WindowEventArgs args)
     {
-        MarkOnboardingComplete();
+        // Marker is written explicitly once the user commits to a model choice
+        // (see OnboardingWindow.PersistModelChoice). Closing without choosing
+        // leaves the marker absent → onboarding shows again next launch.
         StartNormalMode();
     }
 
@@ -524,7 +526,7 @@ public partial class App : Application
         return File.Exists(marker);
     }
 
-    private static void MarkOnboardingComplete()
+    public static void MarkOnboardingComplete()
     {
         var configDir = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         var dimmyDir = Path.Combine(configDir, "dimmy");

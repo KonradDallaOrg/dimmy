@@ -10,7 +10,7 @@ public class OnboardingViewModelTests
     {
         var vm = new OnboardingViewModel();
         Assert.Equal(0, vm.CurrentStep);
-        Assert.Equal(3, vm.TotalSteps);
+        Assert.Equal(4, vm.TotalSteps);
     }
 
     [Fact]
@@ -28,7 +28,8 @@ public class OnboardingViewModelTests
         vm.NextStep();
         vm.NextStep();
         vm.NextStep();
-        Assert.Equal(2, vm.CurrentStep);
+        vm.NextStep();
+        Assert.Equal(3, vm.CurrentStep);
     }
 
     [Fact]
