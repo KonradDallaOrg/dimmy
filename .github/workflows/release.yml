@@ -249,36 +249,34 @@ jobs:
             # choco's --package-parameters is a single string passed to the
             # VS bootstrapper. --wait blocks until install completes.
             $params = "--add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.Windows11SDK.22621 --quiet --norestart --wait --nocache"
-            # Retry on transient 5xx from community.chocolatey.org (outages
-            # kill otherwise-correct builds; observed 503/504 during peak).
-            # Preserves all invariants: --pre, exit semantics, step name.
+            # Retry on transient community.chocolatey.org outages (503/504
+            # on V2 feed — chocolatey silently exits 0 on fetch failure,
+            # so we retry based on observed install result, not exit code).
+            # Each attempt: choco install → poll vswhere 60s → check present.
             $maxTries = 3
             $attempt = 0
-            $rc = 1
             do {
               $attempt++
               Write-Host "choco install attempt $attempt/$maxTries..."
               choco install visualstudio2026buildtools-preview -y --pre --no-progress --package-parameters="$params"
               $rc = $LASTEXITCODE
-              if ($rc -eq 0 -or $rc -eq 3010) { break }
+              # Poll vswhere — Installer registration can lag a few seconds
+              # after choco reports "installed" (exit 3010 = reboot-pending).
+              for ($i = 0; $i -lt 12; $i++) {
+                Start-Sleep -Seconds 5
+                $vs2026 = & $vswhere -version "[18.0,19.0)" -prerelease -products "*" -property installationPath 2>$null | Select-Object -First 1
+                if ($vs2026) { break }
+              }
+              if ($vs2026) { break }
               if ($attempt -lt $maxTries) {
                 $backoff = 30 * $attempt
-                Write-Host "chocolatey returned exit $rc — retrying in ${backoff}s..."
+                Write-Host "Attempt $attempt did not produce VS 2026 (choco exit $rc). Retrying in ${backoff}s..."
                 Start-Sleep -Seconds $backoff
               }
             } while ($attempt -lt $maxTries)
-            if ($rc -ne 0 -and $rc -ne 3010) {
-              throw "chocolatey install of VS 2026 BuildTools failed with exit $rc after $maxTries attempts"
+            if (-not $vs2026) {
+              throw "VS 2026 not found after $maxTries chocolatey attempts (community.chocolatey.org may be degraded — re-run workflow when repo recovers)"
             }
-            # Poll vswhere — Installer registration can lag a few seconds
-            # after choco reports "installed" (exit 3010 = reboot-pending).
-            for ($i = 0; $i -lt 12; $i++) {
-              Start-Sleep -Seconds 5
-              $vs2026 = & $vswhere -version "[18.0,19.0)" -prerelease -products "*" -property installationPath 2>$null | Select-Object -First 1
-              if ($vs2026) { break }
-              Write-Host "Poll $($i+1)/12: VS 2026 not yet registered by vswhere..."
-            }
-            if (-not $vs2026) { throw "VS 2026 not found after choco install + 60s wait — installer silently failed or vswhere can't see it even with -prerelease" }
           }
           Write-Host "VS 2026 installationPath: '$vs2026'"
           $mscvDir = Join-Path $vs2026 "VC\Tools\MSVC"
@@ -309,25 +307,28 @@ jobs:
       - name: Install Vulkan SDK
         shell: pwsh
         run: |
+          # Retry based on observed install result — chocolatey silently
+          # exits 0 on V2 feed fetch failures (503/504), so we verify
+          # C:\VulkanSDK exists rather than trusting the exit code.
           $maxTries = 3
           $attempt = 0
-          $rc = 1
+          $sdkDir = $null
           do {
             $attempt++
             Write-Host "choco install vulkan-sdk attempt $attempt/$maxTries..."
             choco install vulkan-sdk -y --no-progress
-            $rc = $LASTEXITCODE
-            if ($rc -eq 0 -or $rc -eq 3010) { break }
+            $sdkDir = Get-ChildItem "C:\VulkanSDK" -Directory -ErrorAction SilentlyContinue |
+                      Sort-Object Name -Descending | Select-Object -First 1
+            if ($sdkDir) { break }
             if ($attempt -lt $maxTries) {
               $backoff = 30 * $attempt
-              Write-Host "chocolatey returned exit $rc — retrying in ${backoff}s..."
+              Write-Host "Attempt $attempt did not produce VulkanSDK. Retrying in ${backoff}s..."
               Start-Sleep -Seconds $backoff
             }
           } while ($attempt -lt $maxTries)
-          if ($rc -ne 0 -and $rc -ne 3010) {
-            throw "chocolatey install of vulkan-sdk failed with exit $rc after $maxTries attempts"
+          if (-not $sdkDir) {
+            throw "VulkanSDK not found after $maxTries chocolatey attempts (community.chocolatey.org may be degraded — re-run workflow when repo recovers)"
           }
-          $sdkDir = Get-ChildItem "C:\VulkanSDK" -Directory | Select-Object -First 1
           echo "VULKAN_SDK=$($sdkDir.FullName)" >> $env:GITHUB_ENV
           echo "$($sdkDir.FullName)\Bin" >> $env:GITHUB_PATH
           Write-Host "Vulkan SDK: $($sdkDir.FullName)"
