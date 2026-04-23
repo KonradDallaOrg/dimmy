@@ -10,6 +10,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     case permissions = "Permissions"
     case stats = "Stats"
     case debug = "Debug"
+    case diagnostics = "Diagnostics"
     case about = "About"
 
     var id: String { rawValue }
@@ -25,6 +26,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .permissions: return "lock.shield"
         case .stats: return "chart.bar"
         case .debug: return "ant"
+        case .diagnostics: return "stethoscope"
         case .about: return "info.circle"
         }
     }
@@ -39,6 +41,8 @@ struct SettingsContainerView: View {
         SettingsTab.allCases.filter { tab in
             switch tab {
             case .debug:
+                return appState.showAdvanced
+            case .diagnostics:
                 return appState.showAdvanced
             default:
                 return true
@@ -99,6 +103,8 @@ struct SettingsContainerView: View {
             StatsSettingsView(appState: appState)
         case .debug:
             DebugSettingsView(appState: appState)
+        case .diagnostics:
+            DiagnosticsSettingsView(appState: appState)
         case .about:
             AboutSettingsView()
         }

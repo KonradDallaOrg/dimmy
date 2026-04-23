@@ -1,5 +1,138 @@
-import SwiftUI
+import AppKit
+import ApplicationServices
+import AVFoundation
 import Combine
+import IOKit.hid
+import SwiftUI
+
+// MARK: - PermissionsManager (single source of truth for macOS privacy permissions)
+
+/// Live view of the macOS TCC state for the permissions Dimmy needs.
+/// - Reads the system on every `refresh()` — never assumes or caches stale state.
+/// - Auto-refreshes on `NSApplication.didBecomeActiveNotification` (user returns from System Settings)
+///   plus a low-frequency timer as a safety net.
+/// - Exposes request methods that trigger the native prompts. Separate from the status getters so
+///   UI can display real state even when the user has not yet clicked a "Grant" button.
+@MainActor
+final class PermissionsManager: ObservableObject {
+    static let shared = PermissionsManager()
+
+    @Published private(set) var microphone: AVAuthorizationStatus = .notDetermined
+    @Published private(set) var accessibility: Bool = false
+    @Published private(set) var inputMonitoring: IOHIDAccessType = kIOHIDAccessTypeUnknown
+
+    /// True when the permissions strictly required for Dimmy's core loop are granted.
+    /// Microphone (record) + Accessibility (active CGEventTap + paste via CGEvent).
+    /// Input Monitoring is NOT strictly required because `.defaultTap` on `.cgSessionEventTap`
+    /// is gated by Accessibility, not Input Monitoring — but we still surface it so users whose
+    /// machines route modifier events through HID pipelines have a one-click fix.
+    var allRequiredGranted: Bool {
+        microphone == .authorized && accessibility
+    }
+
+    var microphoneGranted: Bool { microphone == .authorized }
+    var accessibilityGranted: Bool { accessibility }
+    var inputMonitoringGranted: Bool { inputMonitoring == kIOHIDAccessTypeGranted }
+
+    private var pollTimer: Timer?
+    private var didBecomeActiveObserver: NSObjectProtocol?
+
+    private init() {
+        refresh()
+        didBecomeActiveObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.refresh() }
+        }
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refresh() }
+        }
+    }
+
+    /// Re-query TCC directly. Safe to call often; updates published properties only on change.
+    func refresh() {
+        let newMic = AVCaptureDevice.authorizationStatus(for: .audio)
+        let newAx = AXIsProcessTrustedWithOptions(nil)
+        let newIm = IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)
+        if newMic != microphone { microphone = newMic }
+        if newAx != accessibility { accessibility = newAx }
+        if newIm != inputMonitoring { inputMonitoring = newIm }
+    }
+
+    /// Explicit refresh intended for user-action sites (button clicks, post-dialog).
+    /// Identical to `refresh()`; separate name signals intent at the call site.
+    func refreshNow() {
+        refresh()
+    }
+
+    /// Trigger the native microphone prompt. No-op if the user has already decided.
+    /// Returns the final status after the user responds (or immediately if already decided).
+    @discardableResult
+    func requestMicrophone() async -> Bool {
+        if microphone == .notDetermined {
+            _ = await AVCaptureDevice.requestAccess(for: .audio)
+        }
+        refresh()
+        return microphoneGranted
+    }
+
+    /// Show the native Accessibility prompt. If the user clicks "Open System Settings",
+    /// they're taken to Privacy & Security → Accessibility with Dimmy pre-selected.
+    func promptAccessibility() {
+        let key = kAXTrustedCheckOptionPrompt.takeRetainedValue()
+        let options = [key: true] as CFDictionary
+        _ = AXIsProcessTrustedWithOptions(options)
+        refresh()
+    }
+
+    /// Deep-link to System Settings → Privacy & Security → Accessibility.
+    func openAccessibilitySettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    /// Wipe TCC entries for this bundle and service so the next grant request creates a fresh
+    /// record matching the current binary's code signature. Works around macOS's tendency to
+    /// keep stale entries keyed on old signatures (common when developing ad-hoc signed builds
+    /// — System Settings shows the app as granted but `AXIsProcessTrustedWithOptions` returns
+    /// false because the running process's signature matches a different/missing entry).
+    func resetTccEntries(services: [String]) {
+        let bundleId = Bundle.main.bundleIdentifier ?? "com.dimmy.app"
+        for service in services {
+            let process = Process()
+            process.launchPath = "/usr/bin/tccutil"
+            process.arguments = ["reset", service, bundleId]
+            do {
+                try process.run()
+                process.waitUntilExit()
+            } catch {
+                NSLog("[PermissionsManager] tccutil reset %@ failed: %@", service, error.localizedDescription)
+            }
+        }
+        refresh()
+    }
+
+    /// Trigger the Input Monitoring prompt. macOS shows its own dialog if status is unknown.
+    func requestInputMonitoring() {
+        _ = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
+        refresh()
+    }
+
+    /// Deep-link to System Settings → Privacy & Security → Input Monitoring.
+    func openInputMonitoringSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    deinit {
+        if let o = didBecomeActiveObserver {
+            NotificationCenter.default.removeObserver(o)
+        }
+        pollTimer?.invalidate()
+    }
+}
 
 enum RecordingMode: String, CaseIterable {
     case pushToTalk = "Push-to-Talk"
@@ -255,7 +388,7 @@ struct ModifierShortcut: Equatable {
 
     static let fnOnly = ModifierShortcut(fn: true, control: false, option: false, command: false, shift: false)
     static let controlOption = ModifierShortcut(fn: false, control: true, option: true, command: false, shift: false)
-    static let `default` = controlOption
+    static let `default` = fnOnly
 
     // Persistence
     var encoded: Int {
@@ -285,16 +418,20 @@ struct ModifierShortcut: Equatable {
     }
 }
 
+// MARK: - Hotkey Status (surfaces CGEventTap install state to the UI)
+
+/// Tracks whether the global shortcut interception is live.
+/// Drives pill/menu-bar warning overlays and the Diagnostics pane.
+enum HotkeyStatus: Equatable {
+    case uninstalled            // app just launched, not yet attempted
+    case installed              // CGEventTap active, shortcut works
+    case accessibilityMissing   // Accessibility permission not granted
+    case tapFailed(reason: String)  // unexpected install failure
+}
+
 @MainActor
 final class AppState: ObservableObject {
     static let shared = AppState()
-
-    /// When true, permission checks are bypassed (for dev machines without admin rights).
-    #if DEBUG
-    static let skipPermissions = true
-    #else
-    static let skipPermissions = false
-    #endif
 
     // MARK: - Recording State
 
@@ -303,6 +440,7 @@ final class AppState: ObservableObject {
     @Published var waveformLevels: [CGFloat] = Array(repeating: 0.2, count: 7)
     @Published var lastTranscript: String = ""
     @Published var lastError: String?
+    @Published var hotkeyStatus: HotkeyStatus = .uninstalled
     @Published var chunkProgress: (current: Int, total: Int)?
 
     var isRecording: Bool {
@@ -314,6 +452,13 @@ final class AppState: ObservableObject {
 
     @Published var isOnboardingComplete: Bool {
         didSet { UserDefaults.standard.set(isOnboardingComplete, forKey: "isOnboardingComplete") }
+    }
+    /// Whether Dimmy shows a Dock icon outside of onboarding.
+    /// Onboarding always forces the app into `.regular` activation policy so the user
+    /// can find it again after clicking away to System Settings. This preference
+    /// controls the post-onboarding steady state only.
+    @Published var showInDock: Bool {
+        didSet { UserDefaults.standard.set(showInDock, forKey: "showInDock") }
     }
     @Published var theme: AppTheme = .auto
     @Published var shortcut: ModifierShortcut {
@@ -331,12 +476,10 @@ final class AppState: ObservableObject {
 
     // MARK: - Permissions
 
-    @Published var micPermissionGranted: Bool = false
-    @Published var accessibilityPermissionGranted: Bool = false
 
     // MARK: - STT Mode (local vs cloud)
 
-    @Published var sttMode: String = "cloud"  // "local" or "cloud"
+    @Published var sttMode: String = "local"  // "local" or "cloud" — macOS defaults to local (no API key prompt during onboarding)
     @Published var localModel: String = "ggml-base-q8_0.bin"
     @Published var modelDownloadProgress: Double = 0.0
     @Published var isDownloadingModel: Bool = false
@@ -425,10 +568,19 @@ final class AppState: ObservableObject {
 
     let languages: [String] = languageMap.map(\.display)
 
+    /// System's preferred language mapped to a supported Whisper code, or `""` if unsupported.
+    /// Used as a fallback default during onboarding to avoid Whisper's unreliable auto-detect
+    /// on short clips (it misfires on < ~2s of speech and can produce empty transcripts).
+    static func systemPreferredLanguageCode() -> String {
+        let code = Locale.current.language.languageCode?.identifier ?? ""
+        return languageMap.contains(where: { $0.code == code }) ? code : ""
+    }
+
     // MARK: - Init
 
     private init() {
         self.isOnboardingComplete = UserDefaults.standard.bool(forKey: "isOnboardingComplete")
+        self.showInDock = UserDefaults.standard.bool(forKey: "showInDock")
         let savedX = UserDefaults.standard.double(forKey: "pillX")
         let savedY = UserDefaults.standard.double(forKey: "pillY")
         if savedX != 0 || savedY != 0 {
@@ -452,7 +604,17 @@ final class AppState: ObservableObject {
             sttProvider = SttProvider.from(url: url)
         }
         if let model = config["api_model"] as? String { apiModel = model }
-        if let lang = config["language"] as? String { selectedLanguage = Self.displayLanguage(for: lang) }
+        if let lang = config["language"] as? String {
+            // First-run guard: Rust defaults language="" (auto-detect), but Whisper's language
+            // detection is unreliable on short audio (<2s) and often misfires — a 1-second Italian
+            // clip can be classified as Turkish, producing empty transcripts. Seed the language
+            // from the system locale on first onboarding so new users get sensible results
+            // without digging into Settings. Users can still pick "Auto Detect" explicitly later.
+            let effectiveLang = (lang.isEmpty && !isOnboardingComplete)
+                ? Self.systemPreferredLanguageCode()
+                : lang
+            selectedLanguage = Self.displayLanguage(for: effectiveLang)
+        }
         if let p = config["prompt"] as? String { prompt = p }
         if let hk = config["has_key"] as? Bool { hasKey = hk }
         if let dev = config["selected_device"] as? String { selectedDevice = dev }

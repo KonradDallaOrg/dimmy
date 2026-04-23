@@ -14,7 +14,7 @@ final class StatusBarController: NSObject {
         super.init()
         setupStatusItem()
         setupPopover()
-        observeRecordingState()
+        observeState()
     }
 
     private func setupStatusItem() {
@@ -39,18 +39,38 @@ final class StatusBarController: NSObject {
         )
     }
 
-    private func observeRecordingState() {
+    private func observeState() {
         appState.$recordingState
             .receive(on: DispatchQueue.main)
             .sink { [weak self] state in
-                self?.updateIcon(for: state)
+                self?.updateIcon(for: state, hotkey: self?.appState.hotkeyStatus ?? .uninstalled)
+            }
+            .store(in: &cancellables)
+
+        appState.$hotkeyStatus
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] status in
+                self?.updateIcon(for: self?.appState.recordingState ?? .idle, hotkey: status)
             }
             .store(in: &cancellables)
     }
 
-    private func updateIcon(for state: RecordingState) {
+    private func updateIcon(for state: RecordingState, hotkey: HotkeyStatus) {
         guard let button = statusItem?.button else { return }
         let size = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
+
+        // Hotkey health overrides idle icon so users see the problem at a glance.
+        if case .idle = state, hotkey != .installed {
+            let warn = size.applying(NSImage.SymbolConfiguration(paletteColors: [.systemOrange]))
+            button.image = NSImage(systemSymbolName: "exclamationmark.triangle.fill",
+                                   accessibilityDescription: "Dimmy - Hotkey disabled")?
+                .withSymbolConfiguration(warn)
+            button.image?.isTemplate = false
+            button.toolTip = Self.tooltip(for: hotkey)
+            return
+        }
+
+        button.toolTip = nil
 
         switch state {
         case .idle:
@@ -77,6 +97,15 @@ final class StatusBarController: NSObject {
             button.image = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: "Dimmy - Done")?
                 .withSymbolConfiguration(config)
             button.image?.isTemplate = false
+        }
+    }
+
+    private static func tooltip(for hotkey: HotkeyStatus) -> String {
+        switch hotkey {
+        case .installed: return ""
+        case .uninstalled: return "Dimmy: hotkey not yet initialized"
+        case .accessibilityMissing: return "Dimmy: shortcut disabled — grant Accessibility in System Settings"
+        case .tapFailed(let reason): return "Dimmy: shortcut disabled (\(reason))"
         }
     }
 

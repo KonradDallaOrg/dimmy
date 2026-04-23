@@ -7,50 +7,51 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		AA000001 /* DimmyApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000001; };
-		AA000002 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000002; };
-		AA000003 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000003; };
-		AA000004 /* StatusBarController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000004; };
-		AA000005 /* PillWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000005; };
-		AA000006 /* HotkeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000006; };
-		AA000007 /* AudioSimulator.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000007; };
-		AA000008 /* TextInjector.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000008; };
-		AA000009 /* FunnyTexts.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000009; };
-		AA000010 /* PillView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000010; };
-		AA000011 /* WaveformView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000011; };
-		AA000012 /* MenuBarPopover.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000012; };
-		AA000013 /* OnboardingContainerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000013; };
-		AA000014 /* WelcomeStepView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000014; };
-		AA000015 /* PermissionsStepView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000015; };
-		AA000016 /* ShortcutStepView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000016; };
-		AA000017 /* TryItStepView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000017; };
-		AA000018 /* GeneralSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000018; };
-		AA000019 /* ShortcutSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000019; };
-		AA000020 /* AboutSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000020; };
-		AA000021 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AB000021; };
-		AA000022 /* AppStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000023; };
-		AA000024 /* SettingsContainerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000024; };
-		AA000025 /* OutputSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000025; };
-		AA000026 /* OverlaySettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000026; };
-		AA000027 /* PermissionsSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000027; };
-		AA000028 /* StatsSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000028; };
-		AA000029 /* DebugSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000040; };
-		AA000030 /* DimmyCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000030; };
-		AA000041 /* SelfTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000041; };
-		AA000042 /* RecordingSimulator.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000042; };
-		AA000043 /* HistorySettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000043; };
-		AA000044 /* ModelSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000044; };
-		AA000046 /* LLMModelSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000046; };
-		AA000045 /* ModelDownloadStepView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000045; };
-		AA000031 /* libdimmy_lib.a in Frameworks */ = {isa = PBXBuildFile; fileRef = AB000031; };
-		AA000038 /* Accelerate.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AB000038; };
-		AA000039 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AB000039; };
-		AA000032 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AB000032; };
-		AA000033 /* CoreAudio.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AB000033; };
-		AA000034 /* AudioToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AB000034; };
-		AA000035 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AB000035; };
-		AA000036 /* IOKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AB000036; };
-		AA000037 /* CoreFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AB000037; };
+		AA000001 /* DimmyApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000001 /* DimmyApp.swift */; };
+		AA000002 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000002 /* AppDelegate.swift */; };
+		AA000003 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000003 /* AppState.swift */; };
+		AA000004 /* StatusBarController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000004 /* StatusBarController.swift */; };
+		AA000005 /* PillWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000005 /* PillWindowController.swift */; };
+		AA000006 /* HotkeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000006 /* HotkeyManager.swift */; };
+		AA000007 /* AudioSimulator.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000007 /* AudioSimulator.swift */; };
+		AA000008 /* TextInjector.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000008 /* TextInjector.swift */; };
+		AA000009 /* FunnyTexts.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000009 /* FunnyTexts.swift */; };
+		AA000010 /* PillView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000010 /* PillView.swift */; };
+		AA000011 /* WaveformView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000011 /* WaveformView.swift */; };
+		AA000012 /* MenuBarPopover.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000012 /* MenuBarPopover.swift */; };
+		AA000013 /* OnboardingContainerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000013 /* OnboardingContainerView.swift */; };
+		AA000014 /* WelcomeStepView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000014 /* WelcomeStepView.swift */; };
+		AA000015 /* PermissionsStepView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000015 /* PermissionsStepView.swift */; };
+		AA000016 /* ShortcutStepView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000016 /* ShortcutStepView.swift */; };
+		AA000017 /* TryItStepView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000017 /* TryItStepView.swift */; };
+		AA000018 /* GeneralSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000018 /* GeneralSettingsView.swift */; };
+		AA000019 /* ShortcutSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000019 /* ShortcutSettingsView.swift */; };
+		AA000020 /* AboutSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000020 /* AboutSettingsView.swift */; };
+		AA000021 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AB000021 /* Assets.xcassets */; };
+		AA000022 /* AppStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000023 /* AppStyle.swift */; };
+		AA000024 /* SettingsContainerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000024 /* SettingsContainerView.swift */; };
+		AA000025 /* OutputSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000025 /* OutputSettingsView.swift */; };
+		AA000026 /* OverlaySettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000026 /* OverlaySettingsView.swift */; };
+		AA000027 /* PermissionsSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000027 /* PermissionsSettingsView.swift */; };
+		AA000100 /* DiagnosticsSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000100 /* DiagnosticsSettingsView.swift */; };
+		AA000028 /* StatsSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000028 /* StatsSettingsView.swift */; };
+		AA000029 /* DebugSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000040 /* DebugSettingsView.swift */; };
+		AA000030 /* DimmyCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000030 /* DimmyCore.swift */; };
+		AA000031 /* libdimmy_lib.a in Frameworks */ = {isa = PBXBuildFile; fileRef = AB000031 /* libdimmy_lib.a */; };
+		AA000032 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AB000032 /* Security.framework */; };
+		AA000033 /* CoreAudio.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AB000033 /* CoreAudio.framework */; };
+		AA000034 /* AudioToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AB000034 /* AudioToolbox.framework */; };
+		AA000035 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AB000035 /* SystemConfiguration.framework */; };
+		AA000036 /* IOKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AB000036 /* IOKit.framework */; };
+		AA000037 /* CoreFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AB000037 /* CoreFoundation.framework */; };
+		AA000038 /* Accelerate.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AB000038 /* Accelerate.framework */; };
+		AA000039 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AB000039 /* Metal.framework */; };
+		AA000041 /* SelfTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000041 /* SelfTests.swift */; };
+		AA000042 /* RecordingSimulator.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000042 /* RecordingSimulator.swift */; };
+		AA000043 /* HistorySettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000043 /* HistorySettingsView.swift */; };
+		AA000044 /* ModelSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000044 /* ModelSettingsView.swift */; };
+		AA000045 /* ModelDownloadStepView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000045 /* ModelDownloadStepView.swift */; };
+		AA000046 /* LLMModelSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000046 /* LLMModelSettingsView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -81,15 +82,9 @@
 		AB000025 /* OutputSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutputSettingsView.swift; sourceTree = "<group>"; };
 		AB000026 /* OverlaySettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlaySettingsView.swift; sourceTree = "<group>"; };
 		AB000027 /* PermissionsSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionsSettingsView.swift; sourceTree = "<group>"; };
+		AB000100 /* DiagnosticsSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsSettingsView.swift; sourceTree = "<group>"; };
 		AB000028 /* StatsSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatsSettingsView.swift; sourceTree = "<group>"; };
 		AB000029 /* DimmyFFI.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DimmyFFI.h; sourceTree = "<group>"; };
-		AB000040 /* DebugSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugSettingsView.swift; sourceTree = "<group>"; };
-		AB000041 /* SelfTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelfTests.swift; sourceTree = "<group>"; };
-		AB000042 /* RecordingSimulator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingSimulator.swift; sourceTree = "<group>"; };
-		AB000043 /* HistorySettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistorySettingsView.swift; sourceTree = "<group>"; };
-		AB000044 /* ModelSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelSettingsView.swift; sourceTree = "<group>"; };
-		AB000046 /* LLMModelSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMModelSettingsView.swift; sourceTree = "<group>"; };
-		AB000045 /* ModelDownloadStepView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelDownloadStepView.swift; sourceTree = "<group>"; };
 		AB000030 /* DimmyCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DimmyCore.swift; sourceTree = "<group>"; };
 		AB000031 /* libdimmy_lib.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libdimmy_lib.a; path = "$(PROJECT_DIR)/../../core/target/aarch64-apple-darwin/release/libdimmy_lib.a"; sourceTree = "<absolute>"; };
 		AB000032 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
@@ -100,6 +95,13 @@
 		AB000037 /* CoreFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreFoundation.framework; path = System/Library/Frameworks/CoreFoundation.framework; sourceTree = SDKROOT; };
 		AB000038 /* Accelerate.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Accelerate.framework; path = System/Library/Frameworks/Accelerate.framework; sourceTree = SDKROOT; };
 		AB000039 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
+		AB000040 /* DebugSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugSettingsView.swift; sourceTree = "<group>"; };
+		AB000041 /* SelfTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelfTests.swift; sourceTree = "<group>"; };
+		AB000042 /* RecordingSimulator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingSimulator.swift; sourceTree = "<group>"; };
+		AB000043 /* HistorySettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistorySettingsView.swift; sourceTree = "<group>"; };
+		AB000044 /* ModelSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelSettingsView.swift; sourceTree = "<group>"; };
+		AB000045 /* ModelDownloadStepView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelDownloadStepView.swift; sourceTree = "<group>"; };
+		AB000046 /* LLMModelSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMModelSettingsView.swift; sourceTree = "<group>"; };
 		AB000099 /* Dimmy.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Dimmy.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -211,6 +213,7 @@
 				AB000025 /* OutputSettingsView.swift */,
 				AB000026 /* OverlaySettingsView.swift */,
 				AB000027 /* PermissionsSettingsView.swift */,
+				AB000100 /* DiagnosticsSettingsView.swift */,
 				AB000020 /* AboutSettingsView.swift */,
 				AB000043 /* HistorySettingsView.swift */,
 				AB000044 /* ModelSettingsView.swift */,
@@ -351,6 +354,7 @@
 				AA000025 /* OutputSettingsView.swift in Sources */,
 				AA000026 /* OverlaySettingsView.swift in Sources */,
 				AA000027 /* PermissionsSettingsView.swift in Sources */,
+				AA000100 /* DiagnosticsSettingsView.swift in Sources */,
 				AA000028 /* StatsSettingsView.swift in Sources */,
 				AA000029 /* DebugSettingsView.swift in Sources */,
 				AA000043 /* HistorySettingsView.swift in Sources */,
@@ -486,12 +490,12 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = "Dimmy/Dimmy.entitlements";
+				CODE_SIGN_ENTITLEMENTS = Dimmy/Dimmy.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 3D78VX54UN;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -525,7 +529,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.dimmy.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = "Dimmy/DimmyFFI.h";
+				SWIFT_OBJC_BRIDGING_HEADER = Dimmy/DimmyFFI.h;
 				SWIFT_STRICT_CONCURRENCY = complete;
 				SWIFT_VERSION = 5.0;
 			};
@@ -536,12 +540,12 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = "Dimmy/Dimmy.entitlements";
+				CODE_SIGN_ENTITLEMENTS = Dimmy/Dimmy.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 3D78VX54UN;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -575,7 +579,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.dimmy.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = "Dimmy/DimmyFFI.h";
+				SWIFT_OBJC_BRIDGING_HEADER = Dimmy/DimmyFFI.h;
 				SWIFT_STRICT_CONCURRENCY = complete;
 				SWIFT_VERSION = 5.0;
 			};
@@ -603,7 +607,6 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
-
 	};
 	rootObject = AE000099 /* Project object */;
 }

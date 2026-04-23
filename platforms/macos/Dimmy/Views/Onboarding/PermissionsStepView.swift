@@ -1,109 +1,126 @@
-import SwiftUI
 import AVFoundation
+import SwiftUI
 
 struct PermissionsStepView: View {
     @ObservedObject var appState: AppState
-    let onContinue: () -> Void
-    @State private var pollTimer: Timer?
-    @State private var accessibilityOpened = false
+    @ObservedObject private var perms = PermissionsManager.shared
+
+    @State private var micRequestInFlight = false
+    @State private var accessibilityPromptShown = false
+    @State private var inputMonitoringPromptShown = false
 
     var body: some View {
-        VStack(spacing: 20) {
-            Spacer()
-
+        ScrollView(.vertical, showsIndicators: false) {
+        VStack(spacing: 16) {
             Text("Permissions")
-                .font(.system(size: 28, weight: .bold))
+                .font(.system(size: 26, weight: .bold))
 
-            Text("Dimmy needs two permissions to work")
-                .font(.system(size: 14))
+            Text("Dimmy needs access to your microphone and to the active app so it can paste transcribed text.")
+                .font(.system(size: 13))
                 .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
 
-            VStack(spacing: 16) {
+            VStack(spacing: 12) {
                 permissionRow(
                     icon: "mic.fill",
                     title: "Microphone",
-                    description: "To hear your voice",
-                    granted: appState.micPermissionGranted,
-                    action: requestMicrophonePermission
+                    description: "Record your voice",
+                    granted: perms.microphoneGranted,
+                    pending: perms.microphone == .notDetermined,
+                    action: requestMic
                 )
 
                 permissionRow(
                     icon: "hand.raised.fill",
                     title: "Accessibility",
-                    description: "To paste text in the active app",
-                    granted: appState.accessibilityPermissionGranted,
-                    action: openAccessibilitySettings
+                    description: "Paste text into active apps",
+                    granted: perms.accessibilityGranted,
+                    pending: !perms.accessibilityGranted && !accessibilityPromptShown,
+                    action: requestAccessibility
                 )
+
+                if appState.shortcut.isFnOnly {
+                    permissionRow(
+                        icon: "keyboard",
+                        title: "Input Monitoring",
+                        description: "Required for your Fn-key shortcut",
+                        granted: perms.inputMonitoringGranted,
+                        pending: perms.inputMonitoring == kIOHIDAccessTypeUnknown && !inputMonitoringPromptShown,
+                        action: requestInputMonitoring
+                    )
+                }
             }
             .padding(.horizontal, 20)
 
-            // Hint when accessibility settings were opened but not yet granted
-            if accessibilityOpened && !appState.accessibilityPermissionGranted {
-                HStack(spacing: 10) {
-                    Image(systemName: "arrow.up.right.square")
-                        .foregroundColor(.orange)
-                        .font(.system(size: 16))
-                    Text("Find **Dimmy** in the list and toggle it **ON**")
-                        .font(.system(size: 13))
-                        .foregroundColor(.secondary)
-                }
-                .padding(14)
-                .background(
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(Color.orange.opacity(0.1))
-                )
-                .padding(.horizontal, 20)
-                .transition(.opacity.combined(with: .move(edge: .top)))
-            }
-
-            // Warning when mic not granted
-            if !appState.micPermissionGranted && !AppState.skipPermissions {
-                HStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundColor(.yellow)
-                        .font(.system(size: 14))
-                    Text("Some features won't work without microphone access.")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                }
-                .padding(10)
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.yellow.opacity(0.08))
-                )
-                .padding(.horizontal, 20)
-            }
-
-            Spacer()
-
-            Button(action: onContinue) {
-                Text("Continue")
-                    .font(.system(size: 15, weight: .semibold))
-                    .frame(maxWidth: 220)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-
-            if !appState.accessibilityPermissionGranted && !accessibilityOpened {
-                Text("You can grant Accessibility later")
+            if !perms.microphoneGranted {
+                Text("Microphone is required. The global shortcut won't work without Accessibility either.")
                     .font(.system(size: 11))
                     .foregroundColor(Color(nsColor: .tertiaryLabelColor))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 4)
+            } else if !perms.allRequiredGranted {
+                Text("Accessibility can be granted later, but the global shortcut won't work without it.")
+                    .font(.system(size: 11))
+                    .foregroundColor(Color(nsColor: .tertiaryLabelColor))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 4)
             }
 
-            Spacer().frame(height: 16)
+            if accessibilityPromptShown && !perms.accessibilityGranted {
+                stuckHelpView
+                    .padding(.horizontal, 20)
+                    .padding(.top, 6)
+            }
+
+            Spacer().frame(height: 8)
         }
-        .padding(.horizontal, 40)
-        .onAppear {
-            checkPermissions()
-            startPolling()
+        .padding(.horizontal, 28)
+        .padding(.vertical, 16)
         }
-        .onDisappear {
-            pollTimer?.invalidate()
-            pollTimer = nil
-        }
+        .onAppear { perms.refresh() }
     }
 
-    private func permissionRow(icon: String, title: String, description: String, granted: Bool, action: @escaping () -> Void) -> some View {
+    // MARK: - Stuck help (for stale TCC entries on ad-hoc signed dev builds)
+
+    /// Shown when the user has already been prompted but Accessibility still reads as not granted —
+    /// classic symptom of a signature mismatch between the running binary and an older TCC entry.
+    /// Running `tccutil reset` clears stale entries so the next grant creates a fresh one.
+    private var stuckHelpView: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Dimmy looks enabled in Settings but still isn't detected?")
+                .font(.system(size: 12, weight: .medium))
+            Text("macOS may have kept a stale entry from a previous build. Reset Dimmy's Accessibility grant and try again.")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Reset and re-grant Accessibility") {
+                perms.resetTccEntries(services: ["Accessibility"])
+                accessibilityPromptShown = false
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.secondary.opacity(0.08))
+        )
+    }
+
+    // MARK: - Rows / banners
+
+    private func permissionRow(
+        icon: String,
+        title: String,
+        description: String,
+        granted: Bool,
+        pending: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
         HStack(spacing: 14) {
             Image(systemName: icon)
                 .font(.system(size: 22))
@@ -120,13 +137,13 @@ struct PermissionsStepView: View {
 
             Spacer()
 
-            if granted || AppState.skipPermissions {
+            if granted {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 22))
                     .foregroundColor(.green)
                     .transition(.scale.combined(with: .opacity))
             } else {
-                Button("Grant") {
+                Button(pending ? "Grant" : "Open Settings") {
                     action()
                 }
                 .buttonStyle(.bordered)
@@ -141,49 +158,44 @@ struct PermissionsStepView: View {
         .animation(.easeInOut(duration: 0.3), value: granted)
     }
 
-    private func requestMicrophonePermission() {
-        AVCaptureDevice.requestAccess(for: .audio) { granted in
-            Task { @MainActor in
-                appState.micPermissionGranted = granted
+    // MARK: - Actions
+
+    private func requestMic() {
+        guard !micRequestInFlight else { return }
+        micRequestInFlight = true
+        Task { @MainActor in
+            if perms.microphone == .notDetermined {
+                _ = await perms.requestMicrophone()
+            } else {
+                // Already denied — user must toggle manually.
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+                    NSWorkspace.shared.open(url)
+                }
             }
+            micRequestInFlight = false
+            perms.refreshNow()
         }
     }
 
-    private func openAccessibilitySettings() {
-        // This triggers the native macOS prompt to add the app to Accessibility
-        let options = [kAXTrustedCheckOptionPrompt.takeRetainedValue(): true] as CFDictionary
-        let trusted = AXIsProcessTrustedWithOptions(options)
-
-        if trusted {
-            appState.accessibilityPermissionGranted = true
+    private func requestAccessibility() {
+        if perms.accessibilityGranted { return }
+        if accessibilityPromptShown {
+            perms.openAccessibilitySettings()
         } else {
-            withAnimation {
-                accessibilityOpened = true
-            }
+            perms.promptAccessibility()
+            withAnimation { accessibilityPromptShown = true }
         }
+        perms.refreshNow()
     }
 
-    private func startPolling() {
-        pollTimer?.invalidate()
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
-            Task { @MainActor in
-                checkPermissions()
-            }
+    private func requestInputMonitoring() {
+        if perms.inputMonitoringGranted { return }
+        if inputMonitoringPromptShown {
+            perms.openInputMonitoringSettings()
+        } else {
+            perms.requestInputMonitoring()
+            withAnimation { inputMonitoringPromptShown = true }
         }
-    }
-
-    private func checkPermissions() {
-        if AppState.skipPermissions {
-            appState.micPermissionGranted = true
-            appState.accessibilityPermissionGranted = true
-            return
-        }
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
-        case .authorized:
-            appState.micPermissionGranted = true
-        default:
-            appState.micPermissionGranted = false
-        }
-        appState.accessibilityPermissionGranted = AXIsProcessTrusted()
+        perms.refreshNow()
     }
 }

@@ -293,7 +293,12 @@ impl Default for AppConfig {
             audio_debug_enabled: false,
             ggml_debug_logging: false,
             use_keyring: false,
-            stt_mode: "cloud".to_string(),
+            stt_mode: if cfg!(target_os = "macos") {
+                "local"
+            } else {
+                "cloud"
+            }
+            .to_string(),
             local_model: "ggml-base-q8_0.bin".to_string(),
             filler_removal_enabled: true,
             llm_mode: "cloud".to_string(),

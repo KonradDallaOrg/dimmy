@@ -19,6 +19,8 @@ enum SelfTests {
         testTimeSavedFormula()
         testRecordingStateAnimationIds()
         testSttProviderFromUrl()
+        testHotkeyStatusCases()
+        testOnboardingStepCount()
         print("[SelfTests] All \(testCount) tests passed.")
         #endif
     }
@@ -184,5 +186,21 @@ enum SelfTests {
         assert(SttProvider.from(url: "https://api.deepgram.com/v1/listen") == .deepgram, "deepgram")
         assert(SttProvider.from(url: "https://generativelanguage.googleapis.com/v1beta") == .gemini, "gemini")
         assert(SttProvider.from(url: "https://custom.example.com/api") == .custom, "custom")
+    }
+
+    // MARK: - HotkeyStatus
+
+    private static func testHotkeyStatusCases() {
+        assert(HotkeyStatus.installed == .installed, "installed == installed")
+        assert(HotkeyStatus.uninstalled != .installed, "uninstalled != installed")
+        assert(HotkeyStatus.accessibilityMissing != .installed, "accessibilityMissing != installed")
+        assert(HotkeyStatus.tapFailed(reason: "a") != HotkeyStatus.tapFailed(reason: "b"), "tapFailed differs by reason")
+        assert(HotkeyStatus.tapFailed(reason: "x") == HotkeyStatus.tapFailed(reason: "x"), "tapFailed equals by reason")
+    }
+
+    // MARK: - Onboarding
+
+    private static func testOnboardingStepCount() {
+        assert(OnboardingContainerView.totalSteps == 4, "Onboarding has 4 steps, got \(OnboardingContainerView.totalSteps)")
     }
 }

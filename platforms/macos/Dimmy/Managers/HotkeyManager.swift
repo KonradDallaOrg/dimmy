@@ -1,12 +1,48 @@
 import AppKit
+import ApplicationServices
 import Carbon
+import CoreGraphics
+import Darwin
+
+/// Write a line to /tmp/dimmy-hotkey.log with immediate flush — survives any buffering quirks.
+func hkLog(_ msg: String) {
+    NSLog("%@", msg)
+    let line = "\(Date()): \(msg)\n"
+    guard let data = line.data(using: .utf8) else { return }
+    let path = "/tmp/dimmy-hotkey.log"
+    let fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
+    if fd >= 0 {
+        _ = data.withUnsafeBytes { write(fd, $0.baseAddress, data.count) }
+        fsync(fd)
+        close(fd)
+    }
+}
+
+extension NSEvent.ModifierFlags {
+    init(cgFlags: CGEventFlags) {
+        var f: NSEvent.ModifierFlags = []
+        if cgFlags.contains(.maskCommand) { f.insert(.command) }
+        if cgFlags.contains(.maskAlternate) { f.insert(.option) }
+        if cgFlags.contains(.maskShift) { f.insert(.shift) }
+        if cgFlags.contains(.maskControl) { f.insert(.control) }
+        if cgFlags.contains(.maskSecondaryFn) { f.insert(.function) }
+        self = f
+    }
+}
 
 @MainActor
 final class HotkeyManager {
     static let shared = HotkeyManager()
 
-    private var globalFlagsMonitor: Any?
-    private var localFlagsMonitor: Any?
+    // Active global interception (consumes events from other apps). Requires Accessibility.
+    private var eventTap: CFMachPort?
+    private var runLoopSource: CFRunLoopSource?
+
+    // Polling timer that tries to install the tap once Accessibility is granted.
+    private var accessibilityPollTimer: Timer?
+
+    // Re-install the tap after sleep/wake (macOS disables taps during sleep).
+    private var wakeObserver: NSObjectProtocol?
 
     // Track modifier state
     private var controlOptionDown = false
@@ -24,37 +60,155 @@ final class HotkeyManager {
 
     private var appState: AppState?
 
-    private init() {}
+    private init() {
+        hkLog("[HotkeyManager] singleton init")
+    }
 
     func start(appState: AppState) {
         self.appState = appState
+        hkLog("[HotkeyManager] start() trusted=\(AXIsProcessTrusted())")
 
-        globalFlagsMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            Task { @MainActor in
-                self?.handleFlagsChanged(event)
-            }
+        if AXIsProcessTrustedWithOptions(nil) {
+            tryInstallEventTap()
+            appState.hotkeyStatus = eventTap != nil
+                ? .installed
+                : .tapFailed(reason: "CGEvent.tapCreate returned nil despite Accessibility being trusted")
+        } else {
+            appState.hotkeyStatus = .accessibilityMissing
+            startAccessibilityPolling()
         }
 
-        localFlagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+        // macOS disables event taps during sleep — reinstall on wake.
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
             Task { @MainActor in
-                self?.handleFlagsChanged(event)
+                guard let self else { return }
+                hkLog("[HotkeyManager] system woke — refreshing event tap")
+                if self.eventTap != nil {
+                    CGEvent.tapEnable(tap: self.eventTap!, enable: true)
+                } else if AXIsProcessTrustedWithOptions(nil) {
+                    self.tryInstallEventTap()
+                    if self.eventTap != nil { self.appState?.hotkeyStatus = .installed }
+                }
             }
-            return event
         }
     }
 
     func stop() {
         stopAmplitudePolling()
-        if let m = globalFlagsMonitor { NSEvent.removeMonitor(m) }
-        if let m = localFlagsMonitor { NSEvent.removeMonitor(m) }
-        globalFlagsMonitor = nil
-        localFlagsMonitor = nil
+        uninstallEventTap()
+        accessibilityPollTimer?.invalidate()
+        accessibilityPollTimer = nil
+        if let wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+        }
+        wakeObserver = nil
+        appState?.hotkeyStatus = .uninstalled
     }
 
-    private func handleFlagsChanged(_ event: NSEvent) {
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        guard let appState else { return }
+    private func startAccessibilityPolling() {
+        guard accessibilityPollTimer == nil else { return }
+        accessibilityPollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.eventTap == nil else { return }
+                if AXIsProcessTrustedWithOptions(nil) {
+                    hkLog("[HotkeyManager] Accessibility now trusted — installing event tap")
+                    self.tryInstallEventTap()
+                    if self.eventTap != nil {
+                        self.appState?.hotkeyStatus = .installed
+                        self.accessibilityPollTimer?.invalidate()
+                        self.accessibilityPollTimer = nil
+                    }
+                }
+            }
+        }
+    }
+
+    private func tryInstallEventTap() {
+        if eventTap != nil { return }
+        if installEventTap() {
+            hkLog("[HotkeyManager] CGEventTap installed (.cgSessionEventTap) — shortcut events will be consumed from other apps")
+        } else {
+            hkLog("[HotkeyManager] CGEventTap install FAILED (Accessibility not granted). Override disabled.")
+        }
+    }
+
+    // MARK: - CGEventTap (active, consumes events globally)
+
+    private func installEventTap() -> Bool {
+        let mask: CGEventMask = (1 << CGEventType.flagsChanged.rawValue)
+        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+
+        let callback: CGEventTapCallBack = { _, type, event, userInfo in
+            guard let userInfo = userInfo else { return Unmanaged.passUnretained(event) }
+            let manager = Unmanaged<HotkeyManager>.fromOpaque(userInfo).takeUnretainedValue()
+
+            // Re-enable if system suspended the tap (timeout or user input)
+            if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                hkLog("[HotkeyManager] tap disabled type=\(type.rawValue) — re-enabling")
+                if let tap = MainActor.assumeIsolated({ manager.eventTap }) {
+                    CGEvent.tapEnable(tap: tap, enable: true)
+                }
+                return Unmanaged.passUnretained(event)
+            }
+
+            guard type == .flagsChanged else { return Unmanaged.passUnretained(event) }
+            hkLog("[HotkeyManager] TAP callback fired, rawFlags=0x\(String(event.flags.rawValue, radix: 16))")
+
+            let flags = NSEvent.ModifierFlags(cgFlags: event.flags)
+            // CGEventTap callback runs on the main runloop thread (tap attached to main runloop).
+            let shouldConsume = MainActor.assumeIsolated {
+                manager.handleFlags(flags)
+            }
+            return shouldConsume ? nil : Unmanaged.passUnretained(event)
+        }
+
+        // .cgSessionEventTap runs at login-session level (no root required, only Accessibility).
+        // Active taps at this point can modify or suppress events before they reach other apps.
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: mask,
+            callback: callback,
+            userInfo: selfPtr
+        ) else {
+            return false
+        }
+
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+
+        self.eventTap = tap
+        self.runLoopSource = source
+        return true
+    }
+
+    private func uninstallEventTap() {
+        if let tap = eventTap {
+            CGEvent.tapEnable(tap: tap, enable: false)
+        }
+        if let source = runLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+        }
+        eventTap = nil
+        runLoopSource = nil
+    }
+
+    /// Returns true if the event should be consumed (i.e. not forwarded to other apps).
+    @discardableResult
+    private func handleFlags(_ rawFlags: NSEvent.ModifierFlags) -> Bool {
+        let flags = rawFlags.intersection(.deviceIndependentFlagsMask)
+        guard let appState else { return false }
         let onlyControlOption = appState.shortcut.matches(flags: flags)
+        hkLog("[HotkeyManager] flagsChanged raw=0x\(String(flags.rawValue, radix: 16)) fn=\(flags.contains(.function)) ctrl=\(flags.contains(.control)) opt=\(flags.contains(.option)) cmd=\(flags.contains(.command)) shift=\(flags.contains(.shift)) matchesShortcut=\(onlyControlOption) storedShortcut=\(appState.shortcut.displayString) controlOptionDown=\(controlOptionDown)")
+
+        // Consume if shortcut is either pressed-and-matching or being released from a pressed state
+        let consume = onlyControlOption || controlOptionDown
 
         if onlyControlOption && !controlOptionDown {
             // Shortcut just pressed
@@ -66,6 +220,8 @@ final class HotkeyManager {
             controlOptionDown = false
             handleRelease()
         }
+
+        return consume
     }
 
     private func handlePress() {

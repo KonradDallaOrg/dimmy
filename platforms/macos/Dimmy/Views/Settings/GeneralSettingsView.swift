@@ -53,6 +53,11 @@ struct GeneralSettingsView: View {
                 .onChange(of: appState.theme) { _, newTheme in
                     applyTheme(newTheme)
                 }
+
+                Toggle("Show app in Dock", isOn: $appState.showInDock)
+                Text("Dimmy lives in your menu bar. Enable this to also show a Dock icon and appear in Cmd+Tab.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
 
             // MARK: - Advanced sections
