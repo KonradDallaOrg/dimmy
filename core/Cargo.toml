@@ -35,6 +35,10 @@ local-llm = ["dep:llama-cpp-4"]
 local-llm-metal = ["local-llm", "llama-cpp-4/metal", "llama-cpp-4/dynamic-link"]
 local-llm-cuda = ["local-llm", "llama-cpp-4/cuda"]
 local-llm-vulkan = ["local-llm", "llama-cpp-4/vulkan"]
+# test-ffi: gates test-only FFI entry points that bypass cpal by injecting
+# PCM samples directly into the audio buffer. Never enabled in release builds.
+# Used only by integration tests under core/tests/.
+test-ffi = []
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -56,3 +60,8 @@ llama-cpp-4 = { git = "https://github.com/KonradDallaOrg/llama-cpp-rs", optional
 rusqlite = { version = "0.31", features = ["bundled"] }
 regex = "1"
 tokio-stream = "0.1"
+
+[dev-dependencies]
+# Integration test infrastructure. Kept minimal — no snapshot crate yet,
+# assertions use substring checks which are robust under whisper determinism.
+wiremock = "0.6"
