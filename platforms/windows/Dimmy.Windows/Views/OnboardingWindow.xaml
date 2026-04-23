@@ -31,10 +31,127 @@
                     Click="NextStep_Click" Margin="0,16,0,0" />
         </StackPanel>
 
-        <!-- Step 1: Shortcut -->
-        <StackPanel x:Name="Step1Panel" Spacing="12" VerticalAlignment="Center"
-                    HorizontalAlignment="Center"
+        <!-- Step 1: Local or Cloud -->
+        <StackPanel x:Name="Step1Panel" Spacing="14" VerticalAlignment="Center"
+                    HorizontalAlignment="Stretch"
                     Visibility="{Binding IsStep1, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+            <TextBlock Text="How should Dimmy transcribe?" FontSize="26" FontWeight="Bold"
+                       HorizontalAlignment="Center" />
+            <TextBlock Text="Private and offline, or fastest with cloud"
+                       FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                       HorizontalAlignment="Center" />
+
+            <Grid ColumnSpacing="16" Margin="0,8,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <!-- Local card -->
+                <Border Grid.Column="0"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{Binding IsLocalSelected, Mode=OneWay, Converter={StaticResource BoolToAccentBrush}}"
+                        BorderThickness="2"
+                        CornerRadius="10"
+                        Padding="18"
+                        MinHeight="220"
+                        Tapped="LocalCard_Tapped">
+                    <StackPanel Spacing="8">
+                        <FontIcon Glyph="&#xE72E;" FontSize="24"
+                                  HorizontalAlignment="Left"
+                                  Foreground="{ThemeResource AccentFillColorDefaultBrush}" />
+                        <TextBlock Text="Local" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock Text="Private · offline · 78 MB"
+                                   FontSize="12"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBlock Text="Your voice never leaves your device"
+                                   FontSize="11" TextWrapping="Wrap"
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+
+                        <StackPanel Spacing="4" Margin="0,8,0,0"
+                                    Visibility="{Binding IsLocalReady, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Invert}">
+                            <ProgressBar Value="{Binding DownloadPercent, Mode=OneWay}"
+                                         Maximum="100" Height="4" />
+                            <TextBlock Text="{Binding DownloadStatusText, Mode=OneWay}"
+                                       FontSize="11"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <TextBlock Text="{Binding DownloadBytesText, Mode=OneWay}"
+                                       FontSize="11"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                            <TextBlock Text="{Binding LocalErrorText, Mode=OneWay}"
+                                       FontSize="11" Foreground="#E06060"
+                                       TextWrapping="Wrap"
+                                       Visibility="{Binding IsLocalFailed, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,8,0,0"
+                                    Visibility="{Binding IsLocalReady, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                            <FontIcon Glyph="&#xE73E;" FontSize="14" Foreground="#60C060" />
+                            <TextBlock Text="Ready to use" FontSize="12"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- Cloud card -->
+                <Border Grid.Column="1"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{Binding IsCloudSelected, Mode=OneWay, Converter={StaticResource BoolToAccentBrush}}"
+                        BorderThickness="2"
+                        CornerRadius="10"
+                        Padding="18"
+                        MinHeight="220"
+                        Tapped="CloudCard_Tapped">
+                    <StackPanel Spacing="8">
+                        <FontIcon Glyph="&#xE753;" FontSize="24"
+                                  HorizontalAlignment="Left"
+                                  Foreground="{ThemeResource AccentFillColorDefaultBrush}" />
+                        <TextBlock Text="Cloud (Groq)" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock Text="Fastest · most accurate"
+                                   FontSize="12"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBlock Text="Free tier available · uses your API key"
+                                   FontSize="11" TextWrapping="Wrap"
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+
+                        <PasswordBox x:Name="GroqKeyBox"
+                                     PlaceholderText="gsk_..."
+                                     Margin="0,8,0,0"
+                                     PasswordChanged="GroqKeyBox_PasswordChanged" />
+
+                        <HyperlinkButton NavigateUri="https://console.groq.com/keys"
+                                         Padding="0,4,0,0">
+                            <TextBlock Text="Get API key →" FontSize="12" />
+                        </HyperlinkButton>
+
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <ProgressRing IsActive="{Binding IsValidatingKey, Mode=OneWay}"
+                                          Width="14" Height="14"
+                                          Visibility="{Binding IsValidatingKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
+                            <FontIcon Glyph="&#xE73E;" FontSize="14" Foreground="#60C060"
+                                      Visibility="{Binding IsCloudReady, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
+                            <TextBlock Text="{Binding CloudErrorText, Mode=OneWay}" FontSize="11"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </Grid>
+
+            <StackPanel Orientation="Horizontal" Spacing="12" HorizontalAlignment="Center"
+                        Margin="0,8,0,0">
+                <Button Content="Back" Click="PrevStep_Click" Width="90" />
+                <Button Content="{Binding ChoiceContinueLabel, Mode=OneWay}"
+                        IsEnabled="{Binding CanAdvanceFromChoiceStep, Mode=OneWay}"
+                        Click="NextStep_Click"
+                        Style="{ThemeResource AccentButtonStyle}" Width="180" />
+            </StackPanel>
+        </StackPanel>
+
+        <!-- Step 2: Shortcut -->
+        <StackPanel x:Name="Step2Panel" Spacing="12" VerticalAlignment="Center"
+                    HorizontalAlignment="Center"
+                    Visibility="{Binding IsStep2, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
             <TextBlock Text="Your Shortcut" FontSize="28" FontWeight="Bold"
                        HorizontalAlignment="Center" />
             <TextBlock Text="Hold to dictate, release to paste" FontSize="14"
@@ -65,10 +182,10 @@
             </StackPanel>
         </StackPanel>
 
-        <!-- Step 2: Try It -->
-        <StackPanel x:Name="Step2Panel" Spacing="12" VerticalAlignment="Center"
+        <!-- Step 3: Try It -->
+        <StackPanel x:Name="Step3Panel" Spacing="12" VerticalAlignment="Center"
                     HorizontalAlignment="Center"
-                    Visibility="{Binding IsStep2, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                    Visibility="{Binding IsStep3, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
             <StackPanel Visibility="{Binding IsTrialSuccess, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Invert}"
                         Spacing="12" HorizontalAlignment="Center">
                 <TextBlock Text="Try it!" FontSize="28" FontWeight="Bold"
@@ -137,6 +254,9 @@
             <Ellipse Width="8" Height="8"
                      Fill="{ThemeResource AccentFillColorDefaultBrush}"
                      Opacity="{Binding Step2Reached, Mode=OneWay, Converter={StaticResource BoolToOpacityConverter}, ConverterParameter=Invert}" />
+            <Ellipse Width="8" Height="8"
+                     Fill="{ThemeResource AccentFillColorDefaultBrush}"
+                     Opacity="{Binding Step3Reached, Mode=OneWay, Converter={StaticResource BoolToOpacityConverter}, ConverterParameter=Invert}" />
         </StackPanel>
     </Grid>
 </Window>
