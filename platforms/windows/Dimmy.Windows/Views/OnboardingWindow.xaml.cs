@@ -209,6 +209,7 @@ public sealed partial class OnboardingWindow : Window
             {
                 DimmyNative.dimmy_set_config_json(json);
                 App.Instance?.ReloadConfig();
+                App.MarkOnboardingComplete();
             }
         }
         catch (Exception ex)
