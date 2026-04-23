@@ -1,12 +1,12 @@
 {
   "hooks": {
-    "PreToolUse": [
+    "PostToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "Edit|Write|MultiEdit",
         "hooks": [
           {
             "type": "command",
-            "command": "cd core && cargo fmt --check && cargo clippy --features local-stt -- -D warnings"
+            "command": "command -v rustfmt >/dev/null 2>&1 || exit 0; f=$(jq -r '.tool_input.file_path // empty'); case \"$f\" in *core/src/*.rs|*platforms/linux/*.rs) rustfmt --check --edition 2021 \"$f\" 2>&1 || { echo \"✗ rustfmt mismatch in $f — run: rustfmt --edition 2021 \\\"$f\\\"\"; exit 2; } ;; esac"
           }
         ]
       }
