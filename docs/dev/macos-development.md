@@ -12,9 +12,14 @@ the running binary's code directory against the recorded one; a mismatch
 presents as "I granted it in System Settings but the app still sees it as
 denied".
 
-The fix is trivial: always test from `/Applications/Dimmy.app`, rebuilt in
-place. TCC associates the permission with that path once and forgets about
-DerivedData.
+Always test from `/Applications/Dimmy.app`, rebuilt in place via the install
+script below. Path stability is *necessary but not sufficient*: when ad-hoc
+signing (`codesign --sign -`, as the install script does) the signature still
+depends on the binary hash, so **changing source code invalidates the TCC
+grant** even though the path is the same. If you see "grants look good in
+Settings but Dimmy acts like they're missing", run the TCC reset below and
+re-grant once for the new binary. Stable grants across builds would require a
+proper Developer ID cert.
 
 ## The script
 
@@ -32,13 +37,13 @@ and launches the app.
 If you want a truly clean state (e.g., to test the onboarding from scratch):
 
 ```
-tccutil reset Microphone com.konrad.dimmy
-tccutil reset Accessibility com.konrad.dimmy
-tccutil reset ListenEvent com.konrad.dimmy
-defaults delete com.konrad.dimmy isOnboardingComplete 2>/dev/null || true
+tccutil reset Microphone com.dimmy.app
+tccutil reset Accessibility com.dimmy.app
+tccutil reset ListenEvent com.dimmy.app
+defaults delete com.dimmy.app isOnboardingComplete 2>/dev/null || true
 ```
 
-(Replace `com.konrad.dimmy` with the actual bundle ID shown in the Diagnostics
+(Replace `com.dimmy.app` with the actual bundle ID shown in the Diagnostics
 pane if it has diverged.)
 
 ## Hotkey diagnostics

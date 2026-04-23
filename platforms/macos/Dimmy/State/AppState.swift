@@ -93,6 +93,27 @@ final class PermissionsManager: ObservableObject {
         NSWorkspace.shared.open(url)
     }
 
+    /// Wipe TCC entries for this bundle and service so the next grant request creates a fresh
+    /// record matching the current binary's code signature. Works around macOS's tendency to
+    /// keep stale entries keyed on old signatures (common when developing ad-hoc signed builds
+    /// — System Settings shows the app as granted but `AXIsProcessTrustedWithOptions` returns
+    /// false because the running process's signature matches a different/missing entry).
+    func resetTccEntries(services: [String]) {
+        let bundleId = Bundle.main.bundleIdentifier ?? "com.dimmy.app"
+        for service in services {
+            let process = Process()
+            process.launchPath = "/usr/bin/tccutil"
+            process.arguments = ["reset", service, bundleId]
+            do {
+                try process.run()
+                process.waitUntilExit()
+            } catch {
+                NSLog("[PermissionsManager] tccutil reset %@ failed: %@", service, error.localizedDescription)
+            }
+        }
+        refresh()
+    }
+
     /// Trigger the Input Monitoring prompt. macOS shows its own dialog if status is unknown.
     func requestInputMonitoring() {
         _ = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
@@ -367,7 +388,7 @@ struct ModifierShortcut: Equatable {
 
     static let fnOnly = ModifierShortcut(fn: true, control: false, option: false, command: false, shift: false)
     static let controlOption = ModifierShortcut(fn: false, control: true, option: true, command: false, shift: false)
-    static let `default` = controlOption
+    static let `default` = fnOnly
 
     // Persistence
     var encoded: Int {
@@ -432,6 +453,13 @@ final class AppState: ObservableObject {
     @Published var isOnboardingComplete: Bool {
         didSet { UserDefaults.standard.set(isOnboardingComplete, forKey: "isOnboardingComplete") }
     }
+    /// Whether Dimmy shows a Dock icon outside of onboarding.
+    /// Onboarding always forces the app into `.regular` activation policy so the user
+    /// can find it again after clicking away to System Settings. This preference
+    /// controls the post-onboarding steady state only.
+    @Published var showInDock: Bool {
+        didSet { UserDefaults.standard.set(showInDock, forKey: "showInDock") }
+    }
     @Published var theme: AppTheme = .auto
     @Published var shortcut: ModifierShortcut {
         didSet { UserDefaults.standard.set(shortcut.encoded, forKey: "shortcutEncoded") }
@@ -451,7 +479,7 @@ final class AppState: ObservableObject {
 
     // MARK: - STT Mode (local vs cloud)
 
-    @Published var sttMode: String = "cloud"  // "local" or "cloud"
+    @Published var sttMode: String = "local"  // "local" or "cloud" — macOS defaults to local (no API key prompt during onboarding)
     @Published var localModel: String = "ggml-base-q8_0.bin"
     @Published var modelDownloadProgress: Double = 0.0
     @Published var isDownloadingModel: Bool = false
@@ -540,10 +568,19 @@ final class AppState: ObservableObject {
 
     let languages: [String] = languageMap.map(\.display)
 
+    /// System's preferred language mapped to a supported Whisper code, or `""` if unsupported.
+    /// Used as a fallback default during onboarding to avoid Whisper's unreliable auto-detect
+    /// on short clips (it misfires on < ~2s of speech and can produce empty transcripts).
+    static func systemPreferredLanguageCode() -> String {
+        let code = Locale.current.language.languageCode?.identifier ?? ""
+        return languageMap.contains(where: { $0.code == code }) ? code : ""
+    }
+
     // MARK: - Init
 
     private init() {
         self.isOnboardingComplete = UserDefaults.standard.bool(forKey: "isOnboardingComplete")
+        self.showInDock = UserDefaults.standard.bool(forKey: "showInDock")
         let savedX = UserDefaults.standard.double(forKey: "pillX")
         let savedY = UserDefaults.standard.double(forKey: "pillY")
         if savedX != 0 || savedY != 0 {
@@ -567,7 +604,17 @@ final class AppState: ObservableObject {
             sttProvider = SttProvider.from(url: url)
         }
         if let model = config["api_model"] as? String { apiModel = model }
-        if let lang = config["language"] as? String { selectedLanguage = Self.displayLanguage(for: lang) }
+        if let lang = config["language"] as? String {
+            // First-run guard: Rust defaults language="" (auto-detect), but Whisper's language
+            // detection is unreliable on short audio (<2s) and often misfires — a 1-second Italian
+            // clip can be classified as Turkish, producing empty transcripts. Seed the language
+            // from the system locale on first onboarding so new users get sensible results
+            // without digging into Settings. Users can still pick "Auto Detect" explicitly later.
+            let effectiveLang = (lang.isEmpty && !isOnboardingComplete)
+                ? Self.systemPreferredLanguageCode()
+                : lang
+            selectedLanguage = Self.displayLanguage(for: effectiveLang)
+        }
         if let p = config["prompt"] as? String { prompt = p }
         if let hk = config["has_key"] as? Bool { hasKey = hk }
         if let dev = config["selected_device"] as? String { selectedDevice = dev }

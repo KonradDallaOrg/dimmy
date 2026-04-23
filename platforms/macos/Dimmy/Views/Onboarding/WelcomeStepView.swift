@@ -1,8 +1,6 @@
 import SwiftUI
 
 struct WelcomeStepView: View {
-    let onContinue: () -> Void
-
     var body: some View {
         VStack(spacing: 20) {
             Spacer()
@@ -25,16 +23,6 @@ struct WelcomeStepView: View {
                 .lineSpacing(4)
 
             Spacer()
-
-            Button(action: onContinue) {
-                Text("Get Started")
-                    .font(.system(size: 14, weight: .semibold))
-                    .frame(maxWidth: 200)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-
-            Spacer().frame(height: 20)
         }
         .padding(.horizontal, 40)
     }

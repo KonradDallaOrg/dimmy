@@ -4,7 +4,6 @@ import SwiftUI
 struct PermissionsStepView: View {
     @ObservedObject var appState: AppState
     @ObservedObject private var perms = PermissionsManager.shared
-    let onContinue: () -> Void
 
     @State private var micRequestInFlight = false
     @State private var accessibilityPromptShown = false
@@ -54,41 +53,26 @@ struct PermissionsStepView: View {
             }
             .padding(.horizontal, 20)
 
-            if accessibilityPromptShown && !perms.accessibilityGranted {
-                hintBanner(
-                    icon: "arrow.up.right.square",
-                    color: .orange,
-                    text: "Toggle **Dimmy** ON in System Settings → Privacy & Security → Accessibility"
-                )
-            }
-            if appState.shortcut.isFnOnly && inputMonitoringPromptShown && !perms.inputMonitoringGranted {
-                hintBanner(
-                    icon: "arrow.up.right.square",
-                    color: .orange,
-                    text: "Toggle **Dimmy** ON in System Settings → Privacy & Security → Input Monitoring"
-                )
-            }
-
-            Button(action: onContinue) {
-                Text(perms.allRequiredGranted ? "Continue" : "Continue anyway")
-                    .font(.system(size: 15, weight: .semibold))
-                    .frame(maxWidth: 220)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(!perms.microphoneGranted)
-            .padding(.top, 4)
-
             if !perms.microphoneGranted {
-                Text("Microphone is required — grant it to continue.")
+                Text("Microphone is required. The global shortcut won't work without Accessibility either.")
                     .font(.system(size: 11))
                     .foregroundColor(Color(nsColor: .tertiaryLabelColor))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 4)
             } else if !perms.allRequiredGranted {
                 Text("Accessibility can be granted later, but the global shortcut won't work without it.")
                     .font(.system(size: 11))
                     .foregroundColor(Color(nsColor: .tertiaryLabelColor))
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 24)
+                    .padding(.top, 4)
+            }
+
+            if accessibilityPromptShown && !perms.accessibilityGranted {
+                stuckHelpView
+                    .padding(.horizontal, 20)
+                    .padding(.top, 6)
             }
 
             Spacer().frame(height: 8)
@@ -97,6 +81,34 @@ struct PermissionsStepView: View {
         .padding(.vertical, 16)
         }
         .onAppear { perms.refresh() }
+    }
+
+    // MARK: - Stuck help (for stale TCC entries on ad-hoc signed dev builds)
+
+    /// Shown when the user has already been prompted but Accessibility still reads as not granted —
+    /// classic symptom of a signature mismatch between the running binary and an older TCC entry.
+    /// Running `tccutil reset` clears stale entries so the next grant creates a fresh one.
+    private var stuckHelpView: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Dimmy looks enabled in Settings but still isn't detected?")
+                .font(.system(size: 12, weight: .medium))
+            Text("macOS may have kept a stale entry from a previous build. Reset Dimmy's Accessibility grant and try again.")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Reset and re-grant Accessibility") {
+                perms.resetTccEntries(services: ["Accessibility"])
+                accessibilityPromptShown = false
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.secondary.opacity(0.08))
+        )
     }
 
     // MARK: - Rows / banners
@@ -144,24 +156,6 @@ struct PermissionsStepView: View {
                 .fill(Color(nsColor: .controlBackgroundColor))
         )
         .animation(.easeInOut(duration: 0.3), value: granted)
-    }
-
-    private func hintBanner(icon: String, color: Color, text: String) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: icon)
-                .foregroundColor(color)
-                .font(.system(size: 16))
-            Text(.init(text))
-                .font(.system(size: 12))
-                .foregroundColor(.secondary)
-        }
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(color.opacity(0.1))
-        )
-        .padding(.horizontal, 20)
-        .transition(.opacity.combined(with: .move(edge: .top)))
     }
 
     // MARK: - Actions
