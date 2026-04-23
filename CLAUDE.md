@@ -15,6 +15,7 @@ Cross-platform voice-transcription overlay. Records audio via global hotkey, tra
 | System architecture, directory map, FFI | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
 | Build commands (all platforms, feature flags) | [`docs/BUILD.md`](docs/BUILD.md) |
 | Cutting a release | [`docs/RELEASING.md`](docs/RELEASING.md) |
+| Signing, notarisation, auto-updater, analytics (direct-download distribution) | [`docs/PUBLISHING.md`](docs/PUBLISHING.md) |
 | Development philosophy (mandatory reading) | [`docs/dev/development-practices.md`](docs/dev/development-practices.md) |
 | Audio DSP pipeline, VAD, AGC rules | [`docs/dev/audio-pipeline.md`](docs/dev/audio-pipeline.md) |
 | Known bugs — read before touching audio, macOS FFI, Windows transparency | [`docs/dev/known-bugs.md`](docs/dev/known-bugs.md) |
