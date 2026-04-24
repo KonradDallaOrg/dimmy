@@ -102,10 +102,7 @@ CI treats clippy warnings as errors. CI uses the same feature flags — mismatch
 - API keys live in `~/.config/dimmy/keys.enc` (AES-256-GCM, machine-specific key derivation). **Never in `config.json`.** The `use_keyring` config field is forced to `false` — keyring is read-only fallback only.
 
 ### Windows CI
-- `dimmy_lib.dll` linker version MUST be ≥ 14.50 (14.44 miscompiles `ggml-vulkan`). CI gate uses `dumpbin /headers`.
-- VS 2026 BuildTools and VS 2022 are installed side-by-side. VS 2022 is needed for MrtCore PRI generation (`dotnet publish`).
-- Velopack `vpk pack ... --framework vcredist143-x64` installs VC Redist to System32. Do NOT bundle `vcruntime140.dll` / `msvcp140.dll` in the publish folder.
-- All 10 invariants: [`docs/dev/windows-ci.md`](docs/dev/windows-ci.md).
+All 10 invariants live in [`docs/dev/windows-ci.md`](docs/dev/windows-ci.md) — paid in blood, MUST be read before editing `.github/workflows/` or `platforms/windows/`. Run `/windows-ci-preflight` before pushing any workflow change.
 
 ### Versioning
 - Update `core/Cargo.toml` → `version = "x.y.z"` for every release.
