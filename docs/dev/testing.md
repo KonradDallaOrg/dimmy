@@ -22,16 +22,23 @@
              └────────────────────────────────┘
 ```
 
-**Bugs that reached production and are now caught by tier 1**:
-- v0.6.10 FFI ABI mismatch (installer crashed on first transcription)
-- `set_single_segment(true)` → empty transcript on clips shorter than ~30 s
-- Onboarding Cloud path writing a Groq STT key while pre-existing LLM config pointed to Anthropic with `llm_use_same_key=true` → silent 401 on every dictation
+**Bugs that reached production and are now caught by the test pyramid**:
+- v0.6.10 FFI ABI mismatch (installer crashed on first transcription) — caught at PR time by tier 1.5 ABI snapshot + installer FFI smoke.
+- `set_single_segment(true)` → empty transcript on clips shorter than ~30 s — caught by tier 1 short-clip test.
+- Onboarding Cloud path writing a Groq STT key while pre-existing LLM config pointed to Anthropic with `llm_use_same_key=true` → silent 401 on every dictation — caught by tier 1 provider-mismatch test.
+- AUDIO-001 (zero-amplitude samples → permanent NaN in dagc AGC) — caught by tier 1.5 preprocess proptest.
 
 ## Tier 1 — FFI integration (Rust)
 
 **What it tests.** Pre-recorded PCM fed directly into the audio buffer via a test-only FFI (`dimmy_inject_pcm_for_test`, gated by `--features test-ffi`), then the normal `dimmy_stop_recording` runs the whole pipeline (preprocess → STT → filler → LLM). Cloud HTTP is mocked with `wiremock-rs`.
 
-**Where.** `core/tests/ffi_e2e.rs` — 6 tests, cross-platform, all green in ~3 s.
+**Where.** `core/tests/ffi_e2e.rs` — 12 tests, cross-platform.
+
+Coverage groups:
+- **Local STT**: jfk sample, silent input, short clip (<30s, set_single_segment guard), long clip (>30s, segmentation guard), preprocess pipeline end-to-end.
+- **Cloud STT**: mocked 200, mocked 401, provider mismatch (Groq STT key + Anthropic LLM URL).
+- **Cloud LLM** (`dimmy_process_with_llm`): mocked 200 rewrite, mocked 401 → original text fallback, mocked 500 → original text fallback.
+- **Config round-trip**: 30-field set/get verification — the contract every native UI relies on.
 
 **Fixtures** (downloaded on first run to `core/target/test-fixtures/`, gitignored, cached in CI):
 - `jfk.wav` — [whisper.cpp/samples](https://github.com/ggerganov/whisper.cpp/raw/master/samples/jfk.wav) (MIT, 11 s English)
@@ -51,6 +58,55 @@ cargo test --release --test ffi_e2e --features local-stt,test-ffi -- --nocapture
 **Add a new test.** Pick a scenario that should be caught before the installer ships. Follow the existing pattern: `ensure_init()`, `set_config(...)` to a minimal JSON, `transcribe_pcm(samples, sr)`, assert on substring or behaviour. For cloud provider mismatches, mount a `wiremock::MockServer` per test.
 
 **Do not ignore a failing test to unblock a push.** The test exists because the bug reached production before. If you genuinely believe the test is wrong, rewrite it; don't `#[ignore]` it.
+
+## Tier 1.5 — ABI snapshot + preprocess properties + installer FFI smoke
+
+Three additional Rust integration suites that run alongside tier 1. They guard regression classes that the tier-1 happy-path tests don't surface.
+
+### ABI snapshot (`core/tests/abi_snapshot.rs`)
+
+Builds `dimmy_lib` as a cdylib and parses the resulting shared library cross-platform via the `object` crate (PE / ELF / Mach-O). Extracts the sorted set of `dimmy_*` exports and diffs against the golden file at `core/tests/fixtures/abi_exports.txt`. Any silent rename, drop, or accidental mangling fails the PR before the installer ships — the upstream guard for the v0.6.10 ABI-mismatch class.
+
+```bash
+# Run normally
+cargo test --release --test abi_snapshot --features local-stt
+
+# Intentionally update the golden after adding/removing an FFI export
+UPDATE_ABI=1 cargo test --release --test abi_snapshot --features local-stt
+```
+
+**The fixture must be updated in the same PR as every UI** (C# / Swift / Rust GTK) that consumes the changed symbol. Do not regenerate without a corresponding consumer update.
+
+### Preprocess properties (`core/tests/preprocess_properties.rs`)
+
+`proptest`-driven property tests for `preprocess::process_buffer`. Three properties guard the audio invariants that have shipped as bugs in the past:
+1. Arbitrary `Vec<f32>` in `[-2.0, 2.0]` → output finite, clamped to `[-1.0, 1.0]`.
+2. All-zero input → no NaN/Inf in output (AUDIO-001 guard).
+3. Near-rail sinusoidal signal → still clamped, AGC must not amplify past the rails.
+
+Run for 16 / 44.1 / 48 kHz on every property. Fast (~1.5 s) — proptest defaults to ~256 cases per property.
+
+```bash
+cargo test --release --test preprocess_properties --features local-stt
+```
+
+### Installer FFI smoke (`core/src/bin/dimmy_smoke.rs`)
+
+A standalone binary that runtime-loads `dimmy_lib.{dll,dylib,so}` via `libloading` and calls every shipping `dimmy_*` export with safe, side-effect-light arguments. Exits 0 if every call returns a sensible code without panicking. Catches the v0.6.10 ABI-mismatch class at PR time without needing a Setup.exe — runs against the freshly-built cdylib in CI.
+
+Gated behind the `smoke-test` feature so default builds don't pull `libloading`.
+
+```bash
+# Build
+cargo build --release --bin dimmy_smoke --features smoke-test
+
+# Run (cwd must contain dimmy_lib.dll on Windows; LD_LIBRARY_PATH on Unix)
+cd target/release && ./dimmy_smoke
+```
+
+Ships as a separate `ffi-smoke` job in `e2e-tests.yml`, matrix Win/Mac/Linux, `needs: ffi-integration` for fail-fast ordering.
+
+The release-critical `test-install.yml` is intentionally not modified by this gate. A follow-up can extend `dimmy_smoke` to load the *installed* DLL after Setup.exe runs.
 
 ## Tier 2 — Windows UI smoke (FlaUI)
 
@@ -107,9 +163,9 @@ Not shipped. Would validate the whole stack including WASAPI capture via a virtu
 - `test-install.yml` — clean-Windows install test, triggered by release workflows
 
 **Additive testing pipeline**:
-- `e2e-tests.yml` — tier 1 FFI (matrix Win/Mac/Linux) + tier 2 Windows UI smoke. Triggers on `pull_request` and `workflow_dispatch`. Does not push to releases, does not overlap with production workflows.
+- `e2e-tests.yml` — tier 1 FFI (matrix Win/Mac/Linux) + tier 2 Windows UI smoke + cross-platform FFI smoke (matrix Win/Mac/Linux). Triggers on `pull_request` and `workflow_dispatch`. Does not push to releases, does not overlap with production workflows.
 
-**Fail-fast ordering**: `windows-ui-smoke` has `needs: ffi-integration`, so cheap FFI tests run first; UI job skips if tier 1 fails.
+**Fail-fast ordering**: `windows-ui-smoke` and `ffi-smoke` both have `needs: ffi-integration`, so cheap FFI tests run first; UI / smoke jobs skip if tier 1 fails.
 
 ## Pre-push checklist
 
@@ -122,6 +178,8 @@ cargo fmt --check
 cargo clippy --features local-stt,local-llm -- -D warnings
 cargo test --lib --features local-stt,local-llm
 cargo test --release --test ffi_e2e --features local-stt,test-ffi -- --test-threads=1
+cargo test --release --test abi_snapshot --features local-stt
+cargo test --release --test preprocess_properties --features local-stt
 
 # C# (Windows)
 cd ../platforms/windows/Dimmy.Windows.Tests
