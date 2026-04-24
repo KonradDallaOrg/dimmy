@@ -29,8 +29,8 @@ use std::time::Duration;
 use serial_test::serial;
 
 use dimmy_lib::ffi::{
-    dimmy_get_config_json, dimmy_init, dimmy_inject_pcm_for_test, dimmy_set_config_json,
-    dimmy_stop_recording,
+    dimmy_get_config_json, dimmy_init, dimmy_inject_pcm_for_test, dimmy_process_with_llm,
+    dimmy_set_config_json, dimmy_stop_recording,
 };
 
 // ── Fixture URLs ──────────────────────────────────────────────────────
@@ -697,5 +697,161 @@ fn local_stt_with_preprocessing_enabled_still_produces_transcript() {
         transcript.to_lowercase().contains("ask"),
         "expected 'ask' in JFK transcript with preprocess enabled, got: {:?}",
         transcript
+    );
+}
+
+// ── Tests: cloud LLM post-processing (wiremock) ─────────────────────
+//
+// dimmy_process_with_llm is the FFI entry the native UIs call after STT
+// returns a transcript. Its contract on cloud mode: post to an
+// OpenAI-compatible chat-completions endpoint, return the rewritten text
+// on 2xx, return the *original* text on any error (graceful degradation).
+//
+// These tests pin both branches so a future refactor cannot silently turn
+// an LLM failure into an empty transcript or a panic.
+
+/// Invoke `dimmy_process_with_llm` and return the resulting buffer as String.
+/// The pipeline returns the original text on error paths; assertions below
+/// distinguish between "rewritten" and "fallback to original".
+fn process_with_llm(text: &str) -> String {
+    let c_text = CString::new(text).expect("no nul in text");
+    let mut buf: Vec<u8> = vec![0; 8192];
+    let n = unsafe {
+        dimmy_process_with_llm(
+            c_text.as_ptr(),
+            buf.as_mut_ptr() as *mut c_char,
+            buf.len() as c_int,
+        )
+    };
+    assert!(n >= 0, "dimmy_process_with_llm returned error rc={}", n);
+    let cstr = unsafe { CStr::from_ptr(buf.as_ptr() as *const c_char) };
+    cstr.to_string_lossy().into_owned()
+}
+
+/// Build a minimal config that points the cloud LLM path at a wiremock
+/// server. STT is forced to local-disabled-style values that
+/// process_with_llm doesn't touch — only the LLM-related fields matter.
+fn cloud_llm_config(mock_uri: &str, llm_key: &str) -> serde_json::Value {
+    serde_json::json!({
+        "stt_mode": "cloud",
+        "api_url": "https://example.test/v1/stt-unused",
+        "api_model": "unused",
+        "api_key": "stt-unused-key",
+        "language": "en",
+        "preprocessing_enabled": false,
+        "filler_removal_enabled": false,
+        // The bits process_with_llm actually reads
+        "llm_enabled": true,
+        "llm_mode": "cloud",
+        "llm_style": "correct",
+        "llm_tone": "none",
+        "llm_translate_to": "none",
+        "llm_api_url": format!("{}/v1/chat/completions", mock_uri),
+        "llm_api_model": "test-llm-model",
+        "llm_use_same_key": false,
+        "llm_api_key": llm_key,
+    })
+}
+
+#[test]
+#[serial]
+fn llm_cloud_200_rewrites_transcript() {
+    ensure_init();
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let server = rt.block_on(async { wiremock::MockServer::start().await });
+
+    rt.block_on(async {
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/chat/completions"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion",
+                    "choices": [{
+                        "index": 0,
+                        "message": { "role": "assistant", "content": "rewritten by llm" },
+                        "finish_reason": "stop",
+                    }],
+                })),
+            )
+            .mount(&server)
+            .await;
+    });
+
+    set_config(&cloud_llm_config(&server.uri(), "llm-test-key").to_string());
+
+    let result = process_with_llm("raw transcript text");
+    eprintln!("[test] llm 200 result: {:?}", result);
+    assert_eq!(
+        result, "rewritten by llm",
+        "expected mock LLM rewrite, got: {:?}",
+        result
+    );
+}
+
+#[test]
+#[serial]
+fn llm_cloud_401_falls_back_to_original_text() {
+    // Contract: when the LLM rejects the key, the FFI must return the
+    // original transcript unchanged (graceful degradation), not an empty
+    // string and not a panic. The user keeps their dictation.
+    ensure_init();
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let server = rt.block_on(async { wiremock::MockServer::start().await });
+
+    rt.block_on(async {
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/chat/completions"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(401).set_body_json(serde_json::json!({
+                    "error": { "message": "invalid api key", "type": "authentication_error" }
+                })),
+            )
+            .mount(&server)
+            .await;
+    });
+
+    set_config(&cloud_llm_config(&server.uri(), "wrong-key").to_string());
+
+    let original = "raw transcript text";
+    let result = process_with_llm(original);
+    eprintln!("[test] llm 401 result: {:?}", result);
+    assert_eq!(
+        result, original,
+        "401 must fall back to the original transcript, got: {:?}",
+        result
+    );
+}
+
+#[test]
+#[serial]
+fn llm_cloud_500_falls_back_to_original_text() {
+    // Same contract as 401 but for transient 5xx — proves the fallback
+    // is not auth-specific. Catches a regression where 5xx would bubble
+    // up as an exception or wipe the transcript.
+    ensure_init();
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let server = rt.block_on(async { wiremock::MockServer::start().await });
+
+    rt.block_on(async {
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/chat/completions"))
+            .respond_with(wiremock::ResponseTemplate::new(500).set_body_string("upstream down"))
+            .mount(&server)
+            .await;
+    });
+
+    set_config(&cloud_llm_config(&server.uri(), "any-key").to_string());
+
+    let original = "raw transcript text";
+    let result = process_with_llm(original);
+    eprintln!("[test] llm 500 result: {:?}", result);
+    assert_eq!(
+        result, original,
+        "5xx must fall back to the original transcript, got: {:?}",
+        result
     );
 }
