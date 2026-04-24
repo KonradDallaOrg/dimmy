@@ -1,0 +1,41 @@
+# ABI snapshot for dimmy_lib (cdylib). DO NOT EDIT BY HAND.
+# Regenerate with: UPDATE_ABI=1 cargo test --release --test abi_snapshot --features local-stt
+# See core/tests/abi_snapshot.rs for what this guards against.
+dimmy_cancel_recording
+dimmy_check_audio_health
+dimmy_cycle_llm_style
+dimmy_cycle_llm_tone
+dimmy_download_llm_model
+dimmy_download_model
+dimmy_get_amplitude
+dimmy_get_config_json
+dimmy_get_version
+dimmy_gpu_clear_known_bad
+dimmy_gpu_get_status
+dimmy_has_api_key
+dimmy_history_delete
+dimmy_history_recent
+dimmy_history_save
+dimmy_history_search
+dimmy_history_stats
+dimmy_hotkey_install
+dimmy_hotkey_poll_recording
+dimmy_hotkey_set
+dimmy_hotkey_start_recording
+dimmy_hotkey_stop_recording
+dimmy_hotkey_take_event
+dimmy_hotkey_take_recorded
+dimmy_init
+dimmy_is_recording
+dimmy_list_devices_json
+dimmy_list_llm_models
+dimmy_list_local_models
+dimmy_llm_model_exists
+dimmy_model_exists
+dimmy_process_with_llm
+dimmy_set_config_json
+dimmy_set_event_callback
+dimmy_shutdown
+dimmy_start_recording
+dimmy_stop_recording
+dimmy_update_stats

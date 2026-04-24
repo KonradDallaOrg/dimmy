@@ -71,3 +71,5 @@ ureq = "2"
 serial_test = "3"
 # Property-based tests for the audio preprocess pipeline (NaN/Inf, clamp invariants).
 proptest = "1"
+# Cross-platform binary parser for the ABI snapshot test (PE / ELF / Mach-O).
+object = { version = "0.36", default-features = false, features = ["read", "std"] }
