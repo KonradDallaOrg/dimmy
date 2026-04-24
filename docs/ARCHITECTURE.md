@@ -52,15 +52,20 @@ pai-voice/
 │
 ├── platforms/
 │   ├── windows/              WinUI 3 / C# / .NET 8
-│   │   ├── Dimmy.Windows/    Main app (XAML + C#)
-│   │   └── Dimmy.Windows.Tests/  41 tests
+│   │   ├── Dimmy.Windows/        Main app (XAML + C#)
+│   │   ├── Dimmy.Windows.Tests/  xUnit unit tests (ViewModels, Services)
+│   │   └── Dimmy.Windows.UiTests/ FlaUI UIA3 smoke tests (see testing.md)
 │   ├── macos/                SwiftUI
 │   │   ├── Dimmy/            Main app (DimmyApp.swift, Views/, Managers/)
 │   │   └── DimmyTests/       XCTest suite
 │   └── linux/                GTK4 + libadwaita (Rust)
 │       └── src/              hotkey, pill, settings, tray, waveform
 │
-├── .github/workflows/        ci.yml, staging-native.yml, release.yml, test-install.yml
+├── core/tests/               Rust integration tests
+│   ├── ffi_e2e.rs            Tier-1 end-to-end: pre-recorded PCM → FFI → assert
+│   └── stress_tests.rs       Offline stress (no API calls)
+│
+├── .github/workflows/        ci.yml, staging-native.yml, release.yml, test-install.yml, e2e-tests.yml
 ├── docs/                     You are here
 │   ├── ARCHITECTURE.md       This file
 │   ├── BUILD.md              Build commands per platform
@@ -72,6 +77,7 @@ pai-voice/
 │   │   ├── modules.md            Per-module reference
 │   │   ├── native-ui-plan.md     FFI + per-platform status
 │   │   ├── windows-ci.md         10 CI invariants (paid in blood)
+│   │   ├── testing.md            Test pyramid: unit / tier-1 / tier-2 / tier-3
 │   │   └── local-llm-feasibility.md  Feasibility study (2026-04-12)
 │   └── superpowers/          Historical implementation plans + specs
 │       ├── plans/            Big-feature task lists
