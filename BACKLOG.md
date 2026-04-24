@@ -76,7 +76,7 @@
 - [x] Document key architectural decisions — captured as "Decision log" table in `docs/ARCHITECTURE.md`. (Formal `docs/adr/` directory deferred — table is sufficient at current scale.)
 - [x] Review all docs/dev/ files for coherence — done 2026-04-21
 - [x] Create `docs/BUILD.md`, `docs/RELEASING.md`, `docs/dev/modules.md`, `docs/dev/windows-ci.md`, `CONTRIBUTING.md` — new canonical homes for scattered content
-- [ ] Add synthetic WAV transcription smoke check to `test-install.yml` (v0.6.10 shipped an FFI ABI mismatch because the existing smoke test only checks 15s startup — does NOT exercise `dimmy_stop_recording`). Tracked at the bottom of `docs/dev/windows-ci.md`.
+- [x] Add synthetic WAV transcription smoke check — shipped as **tier-1 FFI integration harness** in `core/tests/ffi_e2e.rs` (feeds JFK sample + silent/noise fixtures through the full FFI, mocks cloud HTTP with wiremock). 6 tests, cross-platform Win/Mac/Linux, runs on every PR via `.github/workflows/e2e-tests.yml`. See [`docs/dev/testing.md`](docs/dev/testing.md).
 
 ### Cross-Platform
 - [ ] Launch at login (macOS: ServiceManagement, Windows: registry/startup folder)

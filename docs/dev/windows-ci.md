@@ -9,6 +9,8 @@
 
 The CHANGELOG entries for v0.6.11–v0.6.20 are the per-rule archaeology. Read the block next to each invariant if you need to understand *how* this bug actually manifested.
 
+> **Note on `.github/workflows/e2e-tests.yml`** — this is the additive tier-1/tier-2 testing pipeline (see [`testing.md`](testing.md)). It runs on `pull_request` only, produces no release artifacts, and is NOT one of the four files above. You can edit it freely without triggering the invariants.
+
 ---
 
 ## I1. `dimmy_lib.dll` is built with MSVC linker ≥ 14.50

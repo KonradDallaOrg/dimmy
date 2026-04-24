@@ -35,13 +35,17 @@ These are the rules. Skipping them is how Dimmy would turn from "works" to "haun
 
 ## Pre-push checklist
 
-Run these three commands from `core/` before every push. CI will fail the build otherwise.
+Run these commands from `core/` before every push. CI will fail the build otherwise.
 
 ```bash
 cargo fmt --check
 cargo clippy --features local-stt,local-llm -- -D warnings
 cargo test --lib --features local-stt,local-llm
+# tier-1 end-to-end integration (Rust, cross-platform, ~3 s after first run):
+cargo test --release --test ffi_e2e --features local-stt,test-ffi -- --test-threads=1
 ```
+
+The tier-1 harness feeds pre-recorded PCM (JFK sample + silence + synthetic noise) through the actual FFI and asserts on transcripts. See [`docs/dev/testing.md`](docs/dev/testing.md) for the full pyramid, what each layer catches, and how to add tests.
 
 If you touched the Linux GTK4 UI:
 
@@ -51,7 +55,19 @@ cargo clippy -- -D warnings
 cargo test
 ```
 
-Native UI builds on macOS and Windows are platform-specific; CI handles them. You don't need to compile them locally unless you're changing them.
+If you touched the Windows UI / XAML / onboarding:
+
+```bash
+# Build Rust + C# first, then run the FlaUI smoke tests
+cd core
+cargo build --release --lib --features local-stt
+cd ../platforms/windows/Dimmy.Windows
+dotnet build Dimmy.Windows.csproj -c Release
+cd ../Dimmy.Windows.UiTests
+dotnet test -c Debug
+```
+
+Native UI builds on macOS are platform-specific; CI handles them. You don't need to compile them locally unless you're changing them.
 
 ## Branches & commits
 
