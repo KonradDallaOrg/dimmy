@@ -1,0 +1,76 @@
+name: E2E Tests
+
+# Additive workflow — does NOT touch staging-native / release / test-install / ci.yml.
+# Runs on pull_request (both branches) and manual trigger, never on push to staging.
+# The installer pipeline remains untouched.
+
+on:
+  pull_request:
+    branches: [staging, main]
+  workflow_dispatch:
+
+concurrency:
+  group: e2e-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ffi-integration:
+    name: FFI integration (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-latest, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust build cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+          shared-key: e2e-${{ matrix.os }}
+
+      - name: Cache test fixtures (jfk.wav + ggml-tiny.en-q8_0.bin)
+        uses: actions/cache@v4
+        with:
+          path: core/target/test-fixtures
+          key: ffi-fixtures-v1-${{ matrix.os }}
+
+      # ── Platform-specific build deps for whisper-rs (C/C++) ───────────
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libxdo-dev libdbus-1-dev libssl-dev cmake
+
+      - name: Install macOS dependencies
+        if: matrix.os == 'macos-latest'
+        run: brew install cmake
+
+      # windows-2025 ships cmake + VS 2022 BuildTools — no Vulkan needed for CPU whisper
+
+      - name: Run FFI integration tests
+        working-directory: core
+        env:
+          # Force CPU path — GHA runners have no GPU for local STT
+          DIMMY_FORCE_CPU: "1"
+          # Rust backtrace on panic for easier CI debugging
+          RUST_BACKTRACE: "1"
+        # --release: debug-mode whisper.cpp on windows-2025 crashes with
+        # STATUS_ILLEGAL_INSTRUCTION (CPU-feature mismatch on the runner).
+        # Release mode uses safer codegen + runtime CPU detection paths.
+        run: cargo test --release --test ffi_e2e --features local-stt,test-ffi -- --nocapture --test-threads=1
+
+      - name: Upload test debug artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffi-e2e-debug-${{ matrix.os }}
+          path: |
+            core/target/debug/deps/ffi_e2e-*
+            core/target/debug/build/dimmy-*/output
+          if-no-files-found: ignore
+          retention-days: 7

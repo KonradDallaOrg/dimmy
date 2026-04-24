@@ -1888,6 +1888,74 @@ pub extern "C" fn dimmy_history_stats(buf: *mut c_char, buf_len: c_int) -> c_int
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// Test-only FFI — compiled ONLY when `--features test-ffi` is set.
+// Never reaches release binaries. Used by integration tests in core/tests/.
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Inject pre-recorded PCM samples directly into the audio buffer, bypassing
+/// cpal entirely. After calling this, `dimmy_stop_recording` will process the
+/// injected samples through the exact same pipeline (preprocess → STT → LLM)
+/// as a real recording.
+///
+/// This is the Tier-1 hook for integration testing: deterministic audio in,
+/// assertable transcript out, no microphone required.
+///
+/// # Safety
+/// `samples_ptr` must be a valid pointer to `samples_len` contiguous `f32`
+/// values. Callers guarantee this lifetime covers the duration of the call.
+///
+/// Returns 0 on success, -1 on null/empty input, -2 on mutex poisoning.
+#[cfg(feature = "test-ffi")]
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_inject_pcm_for_test(
+    samples_ptr: *const f32,
+    samples_len: c_int,
+    sample_rate: u32,
+) -> c_int {
+    if samples_ptr.is_null() || samples_len <= 0 {
+        return -1;
+    }
+    assert!(sample_rate > 0, "sample_rate must be positive");
+
+    let slice = std::slice::from_raw_parts(samples_ptr, samples_len as usize);
+
+    // Validate: all samples finite and in [-1.0, 1.0]. Reject bad test input
+    // early — catches malformed fixtures before they poison the pipeline.
+    for (i, &s) in slice.iter().enumerate() {
+        assert!(s.is_finite(), "injected sample {} is not finite: {}", i, s);
+        assert!(
+            (-1.0..=1.0).contains(&s),
+            "injected sample {} out of range: {}",
+            i,
+            s
+        );
+    }
+
+    let st = state();
+
+    if let Ok(mut sr) = st.audio_sample_rate.lock() {
+        *sr = sample_rate;
+    } else {
+        return -2;
+    }
+
+    if let Ok(mut r) = st.recording.lock() {
+        *r = true;
+    } else {
+        return -2;
+    }
+
+    if let Ok(mut b) = st.audio_buffer.lock() {
+        b.clear();
+        b.extend_from_slice(slice);
+    } else {
+        return -2;
+    }
+
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -84,6 +84,21 @@
 - [ ] Sound feedback on recording start/stop (optional)
 - [ ] VoiceOver / screen reader accessibility
 
+### Onboarding safety — provider mismatch after Cloud setup
+> **Observed (2026-04-23):** Existing-user ran Windows onboarding, picked **Cloud + Groq key**. Config also had pre-existing `llm_enabled=true`, `llm_api_url=api.anthropic.com`, `llm_use_same_key=true` (Rust default). Post-onboarding, every transcription triggered `HTTP 401 invalid x-api-key` because LLM post-processing sent the Groq key to Anthropic. Workaround: user manually set `llm_use_same_key=false`. Onboarding didn't warn, didn't coerce.
+>
+> Impact: any user whose existing config has LLM cloud provider ≠ STT cloud provider + `llm_use_same_key=true` at time of onboarding Cloud setup. New installs are safe (`llm_enabled=false` by default). All platforms potentially affected as onboarding adds Cloud-choice flows — same risk will land on macOS/Linux when their onboarding is similarly shaped.
+>
+> **Options:**
+> - **A (preferred):** defensive coerce in onboarding code-behind. When Cloud is picked + `api_key` written, also inspect `llm_enabled` + `llm_api_url`; if `llm_enabled=true` AND `llm_api_url` provider ≠ new STT provider, force `llm_use_same_key=false`. Localized (~20 lines C# in `OnboardingWindow.xaml.cs::PersistModelChoice`), non-breaking, no other paths affected.
+> - **B:** coerce in Rust core `dimmy_set_config_json` — when `api_url` or `api_key` changes, if `llm_api_url` points to a different provider and `llm_use_same_key=true`, force it to `false`. Cross-platform, but touches shared core (higher blast radius).
+> - **C:** change default `llm_use_same_key: true → false` in `lib.rs::AppConfig::default`. Breaking for existing users who relied on the default.
+>
+> Prefer **A**. Cross-apply the same check when macOS/Linux onboarding adds an analogous Cloud step.
+- [ ] Implement Option A: provider-mismatch coercion in `OnboardingWindow.xaml.cs::PersistModelChoice` (Windows)
+- [ ] Mirror to macOS onboarding Cloud step when added
+- [ ] Mirror to Linux onboarding Cloud step when added
+
 ### Local STT Improvements
 - [ ] Model size picker in settings (tiny/base/small/medium)
 - [ ] GPU/CPU toggle in advanced settings
