@@ -546,6 +546,7 @@ dependencies = [
  "dirs",
  "hound",
  "keyring",
+ "libloading",
  "llama-cpp-4",
  "nnnoiseless",
  "object",

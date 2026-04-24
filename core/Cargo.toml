@@ -25,6 +25,16 @@ name = "bench_llm_quality"
 path = "src/bin/bench_llm_quality.rs"
 required-features = ["local-llm"]
 
+# Installer FFI smoke test: loads the installed dimmy_lib.dll at runtime
+# (via libloading) and exercises all `dimmy_*` exports without invoking
+# STT, LLM, or any model file. Catches the v0.6.10-style ABI mismatch
+# class — symbols missing, mangled, or runtime-incompatible — at install
+# time, before the user records anything.
+[[bin]]
+name = "dimmy_smoke"
+path = "src/bin/dimmy_smoke.rs"
+required-features = ["smoke-test"]
+
 [features]
 default = ["local-stt"]
 local-stt = ["dep:whisper-rs"]
@@ -39,6 +49,9 @@ local-llm-vulkan = ["local-llm", "llama-cpp-4/vulkan"]
 # PCM samples directly into the audio buffer. Never enabled in release builds.
 # Used only by integration tests under core/tests/.
 test-ffi = []
+# smoke-test: gates the dimmy_smoke binary that runtime-loads the installed
+# dimmy_lib.dll via libloading. Used by the installer-ffi-smoke CI job.
+smoke-test = ["dep:libloading"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -60,6 +73,9 @@ llama-cpp-4 = { git = "https://github.com/KonradDallaOrg/llama-cpp-rs", optional
 rusqlite = { version = "0.31", features = ["bundled"] }
 regex = "1"
 tokio-stream = "0.1"
+# Used only by the dimmy_smoke binary (smoke-test feature) to runtime-load
+# the installed dimmy_lib.dll. Optional so default builds don't pull it in.
+libloading = { version = "0.8", optional = true }
 
 [dev-dependencies]
 # Integration test infrastructure. Kept minimal — no snapshot crate yet,
