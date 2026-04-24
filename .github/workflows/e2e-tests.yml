@@ -74,3 +74,53 @@ jobs:
             core/target/debug/build/dimmy-*/output
           if-no-files-found: ignore
           retention-days: 7
+
+  windows-ui-smoke:
+    name: Windows UI smoke (FlaUI)
+    runs-on: windows-2025
+    needs: ffi-integration
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+          shared-key: ui-smoke-win
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Build Rust dimmy_lib.dll (CPU only, no Vulkan)
+        working-directory: core
+        run: cargo build --release --lib --features local-stt
+
+      - name: Restore + build Dimmy.Windows
+        working-directory: platforms/windows/Dimmy.Windows
+        run: dotnet build Dimmy.Windows.csproj -c Release
+
+      - name: Restore + build Dimmy.Windows.UiTests
+        working-directory: platforms/windows/Dimmy.Windows.UiTests
+        run: dotnet build Dimmy.Windows.UiTests.csproj -c Debug
+
+      - name: Run FlaUI smoke tests
+        working-directory: platforms/windows/Dimmy.Windows.UiTests
+        env:
+          RUST_BACKTRACE: "1"
+        run: dotnet test Dimmy.Windows.UiTests.csproj -c Debug --no-build --logger "console;verbosity=normal"
+
+      - name: Upload UI test artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-smoke-debug
+          path: |
+            platforms/windows/Dimmy.Windows.UiTests/bin/Debug/**/*.log
+            platforms/windows/Dimmy.Windows.UiTests/TestResults/**
+          if-no-files-found: ignore
+          retention-days: 7
