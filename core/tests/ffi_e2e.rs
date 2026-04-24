@@ -29,7 +29,8 @@ use std::time::Duration;
 use serial_test::serial;
 
 use dimmy_lib::ffi::{
-    dimmy_init, dimmy_inject_pcm_for_test, dimmy_set_config_json, dimmy_stop_recording,
+    dimmy_get_config_json, dimmy_init, dimmy_inject_pcm_for_test, dimmy_process_with_llm,
+    dimmy_set_config_json, dimmy_stop_recording,
 };
 
 // ── Fixture URLs ──────────────────────────────────────────────────────
@@ -428,5 +429,429 @@ fn cloud_stt_ok_but_llm_same_key_against_different_provider_fails_loud() {
         transcript.is_empty() || transcript.to_lowercase().contains("raw stt"),
         "provider-mismatch path produced unexpected transcript: {:?}",
         transcript
+    );
+}
+
+// ── Test: config round-trip (set → get → assert all writable fields preserved) ──
+
+/// Read full config back via the FFI getter. Panics if the buffer is too small.
+fn get_config_json() -> serde_json::Value {
+    let mut buf: Vec<u8> = vec![0; 16_384];
+    let n = dimmy_get_config_json(buf.as_mut_ptr() as *mut c_char, buf.len() as c_int);
+    assert!(
+        n > 0,
+        "get_config_json must return positive length, got {}",
+        n
+    );
+    let cstr = unsafe { CStr::from_ptr(buf.as_ptr() as *const c_char) };
+    let s = cstr.to_string_lossy().into_owned();
+    serde_json::from_str(&s).expect("config JSON must parse")
+}
+
+#[test]
+#[serial]
+fn config_round_trip_preserves_all_writable_fields() {
+    // Guards against silent rename/drop of fields between
+    // dimmy_set_config_json (writer) and dimmy_get_config_json (reader).
+    // Any C# / Swift UI relies on this contract; a mismatch surfaces here
+    // instead of as a "setting silently reverts" UX bug in production.
+    ensure_init();
+
+    // Two distinct payloads — A then B — to verify the setter actually
+    // updated state (avoids accidentally reading defaults that happen to
+    // equal payload A on a fresh process).
+    let payload_a = serde_json::json!({
+        "api_url": "https://example.test/v1/stt-a",
+        "api_model": "whisper-test-a",
+        "language": "en",
+        "prompt": "Hello A.",
+        "shortcut_mode": "hold",
+        "shortcut": "ctrl+shift",
+        "selected_device": "Test Mic A",
+        "llm_enabled": true,
+        "llm_style": "correct",
+        "llm_tone": "formal",
+        "llm_custom_prompt": "custom A",
+        "llm_translate_to": "italian",
+        "llm_api_url": "https://example.test/v1/llm-a",
+        "llm_api_model": "claude-test-a",
+        "llm_use_same_key": false,
+        "llm_log_enabled": true,
+        "preprocessing_enabled": false,
+        "chunk_streaming_enabled": true,
+        "audio_debug_enabled": true,
+        "ggml_debug_logging": true,
+        "stt_mode": "cloud",
+        "local_model": "ggml-tiny-test-a.bin",
+        "filler_removal_enabled": false,
+        "llm_mode": "cloud",
+        "local_llm_model": "gemma-test-a.gguf",
+        "border_style": "Solid",
+        "waveform_style": "Dots",
+        "overlay_position": "Top Left",
+        "keep_in_clipboard": true,
+        "input_gain": 1.5_f64,
+    });
+
+    let payload_b = serde_json::json!({
+        "api_url": "https://example.test/v1/stt-b",
+        "api_model": "whisper-test-b",
+        "language": "it",
+        "prompt": "Hello B.",
+        "shortcut_mode": "toggle",
+        "shortcut": "alt+space",
+        "selected_device": "Test Mic B",
+        "llm_enabled": false,
+        "llm_style": "summarize",
+        "llm_tone": "friendly",
+        "llm_custom_prompt": "custom B",
+        "llm_translate_to": "english",
+        "llm_api_url": "https://example.test/v1/llm-b",
+        "llm_api_model": "claude-test-b",
+        "llm_use_same_key": true,
+        "llm_log_enabled": false,
+        "preprocessing_enabled": true,
+        "chunk_streaming_enabled": false,
+        "audio_debug_enabled": false,
+        "ggml_debug_logging": false,
+        "stt_mode": "local",
+        "local_model": "ggml-tiny-test-b.bin",
+        "filler_removal_enabled": true,
+        "llm_mode": "local",
+        "local_llm_model": "gemma-test-b.gguf",
+        "border_style": "Rainbow",
+        "waveform_style": "Bars",
+        "overlay_position": "Bottom Right",
+        "keep_in_clipboard": false,
+        "input_gain": 0.75_f64,
+    });
+
+    // Fields whose value must round-trip identically when present in both
+    // setter input and getter output. Any divergence indicates a missing
+    // field in get_config_json or a bug in set_config_json.
+    let writable_string_fields = [
+        "api_url",
+        "api_model",
+        "language",
+        "prompt",
+        "shortcut_mode",
+        "shortcut",
+        "selected_device",
+        "llm_style",
+        "llm_tone",
+        "llm_custom_prompt",
+        "llm_translate_to",
+        "llm_api_url",
+        "llm_api_model",
+        "stt_mode",
+        "local_model",
+        "llm_mode",
+        "local_llm_model",
+        "border_style",
+        "waveform_style",
+        "overlay_position",
+    ];
+    let writable_bool_fields = [
+        "llm_enabled",
+        "llm_use_same_key",
+        "llm_log_enabled",
+        "preprocessing_enabled",
+        "chunk_streaming_enabled",
+        "audio_debug_enabled",
+        "ggml_debug_logging",
+        "filler_removal_enabled",
+        "keep_in_clipboard",
+    ];
+
+    for payload in [&payload_a, &payload_b] {
+        set_config(&payload.to_string());
+        let got = get_config_json();
+
+        for field in writable_string_fields {
+            let expected = payload[field].as_str().expect("payload string field");
+            let actual = got[field]
+                .as_str()
+                .unwrap_or_else(|| panic!("getter missing string field: {}", field));
+            assert_eq!(
+                actual, expected,
+                "round-trip mismatch on {}: set={:?} got={:?}",
+                field, expected, actual
+            );
+        }
+        for field in writable_bool_fields {
+            let expected = payload[field].as_bool().expect("payload bool field");
+            let actual = got[field]
+                .as_bool()
+                .unwrap_or_else(|| panic!("getter missing bool field: {}", field));
+            assert_eq!(
+                actual, expected,
+                "round-trip mismatch on {}: set={} got={}",
+                field, expected, actual
+            );
+        }
+        // input_gain is clamped to [0.0, 2.0] and stored as f32 bits;
+        // assert with a tolerance to account for f64→f32 rounding.
+        let expected_gain = payload["input_gain"].as_f64().expect("input_gain f64");
+        let actual_gain = got["input_gain"].as_f64().expect("getter input_gain f64");
+        assert!(
+            (actual_gain - expected_gain).abs() < 1e-4,
+            "input_gain mismatch: set={} got={}",
+            expected_gain,
+            actual_gain
+        );
+    }
+}
+
+// ── Test: long clip (>30s) — guards segmentation regressions ────────
+
+#[test]
+#[serial]
+fn local_stt_long_clip_over_30s_produces_full_transcript() {
+    // Whisper's set_single_segment(true) regression cut transcripts on clips
+    // <30s; the inverse risk is segmentation-related truncation on long
+    // clips. We concatenate JFK three times (~33s) to exercise the path
+    // beyond the 30s boundary and assert non-empty multi-occurrence output.
+    ensure_init();
+    ensure_tiny_model();
+
+    set_config(
+        &serde_json::json!({
+            "stt_mode": "local",
+            "local_model": MODEL_FILENAME,
+            "language": "en",
+            "preprocessing_enabled": false,
+            "filler_removal_enabled": false,
+            "llm_enabled": false,
+        })
+        .to_string(),
+    );
+
+    let wav = jfk_wav();
+    let (single, sr) = load_wav_f32(&wav);
+    let mut samples = Vec::with_capacity(single.len() * 3);
+    for _ in 0..3 {
+        samples.extend_from_slice(&single);
+    }
+    let duration_s = samples.len() as f32 / sr as f32;
+    assert!(
+        duration_s > 30.0,
+        "concatenated clip must be >30s, got {:.1}s",
+        duration_s
+    );
+
+    let transcript = transcribe_pcm(&samples, sr);
+    eprintln!(
+        "[test] long-clip ({:.1}s) transcript: {:?}",
+        duration_s, transcript
+    );
+    assert!(
+        !transcript.trim().is_empty(),
+        "long clip produced empty transcript — segmentation regression?"
+    );
+    // Phrase appears once per repeat; require at least two hits as a soft
+    // signal that segmentation isn't dropping the second/third pass.
+    let hits = transcript.to_lowercase().matches("ask not").count();
+    assert!(
+        hits >= 2,
+        "expected 'ask not' at least twice in 3x-concatenated JFK, got {} hit(s) in: {:?}",
+        hits,
+        transcript
+    );
+}
+
+// ── Test: preprocess pipeline end-to-end via FFI ────────────────────
+
+#[test]
+#[serial]
+fn local_stt_with_preprocessing_enabled_still_produces_transcript() {
+    // Tier 1 STT tests run with preprocessing_enabled=false to keep
+    // assertions tight on whisper output. This test exercises the full
+    // DSP path (highpass → VAD → AGC → downsample) end-to-end and asserts
+    // the pipeline does not eat the signal or inject NaN/silence that
+    // makes whisper produce empty output (the AUDIO-001 family of bugs).
+    ensure_init();
+    ensure_tiny_model();
+
+    set_config(
+        &serde_json::json!({
+            "stt_mode": "local",
+            "local_model": MODEL_FILENAME,
+            "language": "en",
+            "preprocessing_enabled": true,
+            "filler_removal_enabled": false,
+            "llm_enabled": false,
+        })
+        .to_string(),
+    );
+
+    let wav = jfk_wav();
+    let (samples, sr) = load_wav_f32(&wav);
+    let transcript = transcribe_pcm(&samples, sr);
+
+    eprintln!("[test] preprocess-on transcript: {:?}", transcript);
+    assert!(
+        !transcript.trim().is_empty(),
+        "preprocess pipeline produced empty transcript on JFK — DSP regression?"
+    );
+    assert!(
+        transcript.to_lowercase().contains("ask"),
+        "expected 'ask' in JFK transcript with preprocess enabled, got: {:?}",
+        transcript
+    );
+}
+
+// ── Tests: cloud LLM post-processing (wiremock) ─────────────────────
+//
+// dimmy_process_with_llm is the FFI entry the native UIs call after STT
+// returns a transcript. Its contract on cloud mode: post to an
+// OpenAI-compatible chat-completions endpoint, return the rewritten text
+// on 2xx, return the *original* text on any error (graceful degradation).
+//
+// These tests pin both branches so a future refactor cannot silently turn
+// an LLM failure into an empty transcript or a panic.
+
+/// Invoke `dimmy_process_with_llm` and return the resulting buffer as String.
+/// The pipeline returns the original text on error paths; assertions below
+/// distinguish between "rewritten" and "fallback to original".
+fn process_with_llm(text: &str) -> String {
+    let c_text = CString::new(text).expect("no nul in text");
+    let mut buf: Vec<u8> = vec![0; 8192];
+    let n = unsafe {
+        dimmy_process_with_llm(
+            c_text.as_ptr(),
+            buf.as_mut_ptr() as *mut c_char,
+            buf.len() as c_int,
+        )
+    };
+    assert!(n >= 0, "dimmy_process_with_llm returned error rc={}", n);
+    let cstr = unsafe { CStr::from_ptr(buf.as_ptr() as *const c_char) };
+    cstr.to_string_lossy().into_owned()
+}
+
+/// Build a minimal config that points the cloud LLM path at a wiremock
+/// server. STT is forced to local-disabled-style values that
+/// process_with_llm doesn't touch — only the LLM-related fields matter.
+fn cloud_llm_config(mock_uri: &str, llm_key: &str) -> serde_json::Value {
+    serde_json::json!({
+        "stt_mode": "cloud",
+        "api_url": "https://example.test/v1/stt-unused",
+        "api_model": "unused",
+        "api_key": "stt-unused-key",
+        "language": "en",
+        "preprocessing_enabled": false,
+        "filler_removal_enabled": false,
+        // The bits process_with_llm actually reads
+        "llm_enabled": true,
+        "llm_mode": "cloud",
+        "llm_style": "correct",
+        "llm_tone": "none",
+        "llm_translate_to": "none",
+        "llm_api_url": format!("{}/v1/chat/completions", mock_uri),
+        "llm_api_model": "test-llm-model",
+        "llm_use_same_key": false,
+        "llm_api_key": llm_key,
+    })
+}
+
+#[test]
+#[serial]
+fn llm_cloud_200_rewrites_transcript() {
+    ensure_init();
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let server = rt.block_on(async { wiremock::MockServer::start().await });
+
+    rt.block_on(async {
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/chat/completions"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion",
+                    "choices": [{
+                        "index": 0,
+                        "message": { "role": "assistant", "content": "rewritten by llm" },
+                        "finish_reason": "stop",
+                    }],
+                })),
+            )
+            .mount(&server)
+            .await;
+    });
+
+    set_config(&cloud_llm_config(&server.uri(), "llm-test-key").to_string());
+
+    let result = process_with_llm("raw transcript text");
+    eprintln!("[test] llm 200 result: {:?}", result);
+    assert_eq!(
+        result, "rewritten by llm",
+        "expected mock LLM rewrite, got: {:?}",
+        result
+    );
+}
+
+#[test]
+#[serial]
+fn llm_cloud_401_falls_back_to_original_text() {
+    // Contract: when the LLM rejects the key, the FFI must return the
+    // original transcript unchanged (graceful degradation), not an empty
+    // string and not a panic. The user keeps their dictation.
+    ensure_init();
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let server = rt.block_on(async { wiremock::MockServer::start().await });
+
+    rt.block_on(async {
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/chat/completions"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(401).set_body_json(serde_json::json!({
+                    "error": { "message": "invalid api key", "type": "authentication_error" }
+                })),
+            )
+            .mount(&server)
+            .await;
+    });
+
+    set_config(&cloud_llm_config(&server.uri(), "wrong-key").to_string());
+
+    let original = "raw transcript text";
+    let result = process_with_llm(original);
+    eprintln!("[test] llm 401 result: {:?}", result);
+    assert_eq!(
+        result, original,
+        "401 must fall back to the original transcript, got: {:?}",
+        result
+    );
+}
+
+#[test]
+#[serial]
+fn llm_cloud_500_falls_back_to_original_text() {
+    // Same contract as 401 but for transient 5xx — proves the fallback
+    // is not auth-specific. Catches a regression where 5xx would bubble
+    // up as an exception or wipe the transcript.
+    ensure_init();
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let server = rt.block_on(async { wiremock::MockServer::start().await });
+
+    rt.block_on(async {
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/chat/completions"))
+            .respond_with(wiremock::ResponseTemplate::new(500).set_body_string("upstream down"))
+            .mount(&server)
+            .await;
+    });
+
+    set_config(&cloud_llm_config(&server.uri(), "any-key").to_string());
+
+    let original = "raw transcript text";
+    let result = process_with_llm(original);
+    eprintln!("[test] llm 500 result: {:?}", result);
+    assert_eq!(
+        result, original,
+        "5xx must fall back to the original transcript, got: {:?}",
+        result
     );
 }

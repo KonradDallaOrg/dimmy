@@ -124,3 +124,71 @@ jobs:
             platforms/windows/Dimmy.Windows.UiTests/TestResults/**
           if-no-files-found: ignore
           retention-days: 7
+
+  # ── FFI smoke: every shipping `dimmy_*` symbol is dynamically loaded
+  # from the freshly-built dimmy_lib.dll and called with safe arguments.
+  # Catches the v0.6.10 ABI-mismatch class at PR time without needing a
+  # Setup.exe — the binary loads the DLL via libloading, so any missing
+  # symbol, mangled signature, or runtime-incompatible build fails here
+  # instead of in the user's first dictation. Cross-platform matrix
+  # mirrors the FFI integration job.
+  ffi-smoke:
+    name: FFI smoke (${{ matrix.os }})
+    needs: ffi-integration
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-latest, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+          shared-key: ffi-smoke-${{ matrix.os }}
+
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libxdo-dev libdbus-1-dev libssl-dev cmake
+
+      - name: Install macOS dependencies
+        if: matrix.os == 'macos-latest'
+        run: brew install cmake
+
+      - name: Build dimmy_lib (cdylib) + dimmy_smoke
+        working-directory: core
+        env:
+          DIMMY_FORCE_CPU: "1"
+        run: |
+          cargo build --release --lib --features local-stt
+          cargo build --release --bin dimmy_smoke --features smoke-test
+
+      - name: Run smoke binary against fresh dimmy_lib (Unix)
+        if: matrix.os != 'windows-2025'
+        working-directory: core/target/release
+        env:
+          DIMMY_FORCE_CPU: "1"
+          # macOS / Linux library search via DYLD_/LD_LIBRARY_PATH; cwd is
+          # not searched by default the way Windows does.
+          LD_LIBRARY_PATH: ${{ github.workspace }}/core/target/release
+          DYLD_LIBRARY_PATH: ${{ github.workspace }}/core/target/release
+        run: ./dimmy_smoke
+
+      - name: Run smoke binary against fresh dimmy_lib (Windows)
+        if: matrix.os == 'windows-2025'
+        working-directory: core/target/release
+        env:
+          DIMMY_FORCE_CPU: "1"
+        # Windows loader searches the directory of the .exe first, so
+        # running from target/release picks up dimmy_lib.dll automatically.
+        shell: pwsh
+        run: |
+          .\dimmy_smoke.exe
+          if ($LASTEXITCODE -ne 0) { throw "dimmy_smoke exited with code $LASTEXITCODE" }
