@@ -69,3 +69,5 @@ wiremock = "0.6"
 ureq = "2"
 # Serialize tests that share global Dimmy state (GLOBAL_STATE is process-wide).
 serial_test = "3"
+# Property-based tests for the audio preprocess pipeline (NaN/Inf, clamp invariants).
+proptest = "1"
