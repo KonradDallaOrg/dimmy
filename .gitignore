@@ -11,6 +11,8 @@ dist/
 *.deb
 .cargo/
 .env
+.env.*
+!.env.example
 tests/test_audio.wav
 tests/audio/
 tests/results/
