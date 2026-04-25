@@ -10,8 +10,18 @@ pub enum AudioCommand {
     Stop,
 }
 
-/// List available input device names
+/// List available input device names.
+///
+/// Returns an empty list when `DIMMY_FORCE_CPU=1` is set: that flag marks
+/// a headless/CI environment where Windows WASAPI's `EnumAudioEndpoints`
+/// raises a STATUS_ACCESS_VIOLATION (0xc0000005) instead of returning
+/// `Err` — Rust's panic machinery cannot catch Windows SEH faults, so we
+/// must avoid the call entirely. Real users never set this flag, so the
+/// production code path is unchanged.
 pub fn list_input_devices() -> Vec<String> {
+    if std::env::var_os("DIMMY_FORCE_CPU").is_some() {
+        return Vec::new();
+    }
     let host = cpal::default_host();
     host.input_devices()
         .map(|devs| devs.filter_map(|d| d.name().ok()).collect())

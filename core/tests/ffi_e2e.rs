@@ -450,17 +450,6 @@ fn get_config_json() -> serde_json::Value {
 
 #[test]
 #[serial]
-#[cfg_attr(
-    target_os = "windows",
-    ignore = "STATUS_ACCESS_VIOLATION on Windows release runners (GHA windows-2025) \
-              when set_config_json is called with the full ~30-field payload after \
-              prior cloud-STT tests in the same process. Crashes inside the \
-              snapshot_config / save_config_file tail of dimmy_set_config_json. \
-              Pre-existing production bug, not introduced by the test. Mac and \
-              Linux unaffected; locally on developer Windows + MSVC the test \
-              passes — only the GHA windows-2025 release toolchain reproduces. \
-              Tracked separately; remove this ignore once root-caused."
-)]
 fn config_round_trip_preserves_all_writable_fields() {
     // Guards against silent rename/drop of fields between
     // dimmy_set_config_json (writer) and dimmy_get_config_json (reader).

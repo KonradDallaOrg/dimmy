@@ -31,7 +31,11 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: core
-          shared-key: e2e-${{ matrix.os }}
+          # Bumped to v2 (2026-04-25) to evict a stale Swatinem cache that
+          # contained a whisper.cpp object file built on a runner with a
+          # different CPU instruction set, causing SIGILL on ubuntu-22.04
+          # runners during whisper_model_load. Bump again if SIGILL recurs.
+          shared-key: e2e-v2-${{ matrix.os }}
 
       - name: Cache test fixtures (jfk.wav + ggml-tiny.en-q8_0.bin)
         uses: actions/cache@v4
