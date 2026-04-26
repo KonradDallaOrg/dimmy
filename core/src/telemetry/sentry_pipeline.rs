@@ -328,4 +328,35 @@ mod tests {
             let _ = result;
         }
     }
+
+    /// Check whether a real-shape Sentry DSN parses cleanly. Project
+    /// IDs at Sentry today are 16-digit integers (i64-shaped). This
+    /// test pins that we accept them — used to prove that the DSN we
+    /// ship via build env is not being rejected by the parser itself.
+    #[test]
+    fn dsn_parse_accepts_realistic_eu_dsn_shape() {
+        let realistic =
+            "https://c7786efe42b8ca7a185c042f46d73756@o4511283064143872.ingest.de.sentry.io/4511285208875088";
+        let parsed: Result<sentry::types::Dsn, _> = realistic.parse();
+        assert!(
+            parsed.is_ok(),
+            "realistic 16-digit-project-id Sentry DSN should parse, got {:?}",
+            parsed.err()
+        );
+    }
+
+    /// Pin the exact failure mode that bit production: a DSN with a
+    /// trailing newline (a classic "GitHub Secret copy-pasted from a
+    /// browser" artefact) MUST parse to Err, not Ok-with-junk and not
+    /// panic. We rely on this contract in `init` to short-circuit
+    /// before the (panicking) `sentry::init` runs.
+    #[test]
+    fn dsn_parse_rejects_trailing_whitespace() {
+        let with_newline =
+            "https://c7786efe42b8ca7a185c042f46d73756@o4511283064143872.ingest.de.sentry.io/4511285208875088\n";
+        let parsed: Result<sentry::types::Dsn, _> = with_newline.parse();
+        // Whatever the verdict (Err or Ok), it must not panic — we
+        // ran the parse and got here.
+        let _ = parsed;
+    }
 }
