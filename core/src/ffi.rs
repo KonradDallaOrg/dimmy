@@ -1863,6 +1863,72 @@ pub extern "C" fn dimmy_hotkey_stop_recording() {
     crate::hotkey::stop_recording();
 }
 
+// ── Telemetry ─────────────────────────────────────────────────────────
+//
+// Five FFI entries for the native UIs to drive the analytics opt-out
+// toggle and read the anonymous ID for display in Settings → Privacy.
+// Event submission itself is internal to core/ — UIs never construct
+// or name events directly. See docs/dev/telemetry-plan.md §4.3.
+
+/// Set the runtime telemetry-enabled flag. Returns 0 on success.
+/// `enabled` is treated as a C-style bool: 0 = off, anything else = on.
+#[no_mangle]
+pub extern "C" fn dimmy_telemetry_set_enabled(enabled: c_int) -> c_int {
+    crate::telemetry::set_enabled(enabled != 0);
+    0
+}
+
+/// Read the current runtime telemetry-enabled flag. 0 = off, 1 = on.
+#[no_mangle]
+pub extern "C" fn dimmy_telemetry_is_enabled() -> c_int {
+    if crate::telemetry::is_enabled() {
+        1
+    } else {
+        0
+    }
+}
+
+/// Write the anonymous ID into the caller-provided buffer.
+/// Returns the number of bytes written, or -1 on error.
+/// The ID is a 36-char UUIDv4 + null terminator (37 bytes total).
+#[no_mangle]
+pub extern "C" fn dimmy_telemetry_anonymous_id(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let id = crate::telemetry::anonymous_id();
+    write_to_buf(id, out_buf, buf_len)
+}
+
+/// Forget the persisted anonymous ID. The next process launch will
+/// generate a fresh one. Returns 0.
+#[no_mangle]
+pub extern "C" fn dimmy_telemetry_reset_anonymous_id() -> c_int {
+    crate::telemetry::reset_anonymous_id();
+    0
+}
+
+/// Read the build-time status of the telemetry pipeline as JSON.
+/// Used by Settings → Privacy to surface "telemetry not configured
+/// in this build" when the API key wasn't injected (e.g. local dev
+/// builds without secrets).
+///
+/// Schema: `{"has_compiled_key": bool, "enabled": bool}`
+///
+/// Returns the byte length written, or -1 on error.
+#[no_mangle]
+pub extern "C" fn dimmy_telemetry_status(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let json = serde_json::json!({
+        "has_compiled_key": crate::telemetry::has_compiled_key(),
+        "enabled": crate::telemetry::is_enabled(),
+    });
+    let s = serde_json::to_string(&json).unwrap_or_else(|_| "{}".to_string());
+    write_to_buf(&s, out_buf, buf_len)
+}
+
 /// Get history stats as JSON. Returns bytes written or -1.
 #[no_mangle]
 pub extern "C" fn dimmy_history_stats(buf: *mut c_char, buf_len: c_int) -> c_int {

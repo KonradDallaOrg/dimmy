@@ -14,6 +14,7 @@ pub mod local_llm;
 pub mod local_stt;
 pub mod preprocess;
 pub mod provider;
+pub mod telemetry;
 pub mod transcribe;
 
 use audio::AudioCommand;

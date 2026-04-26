@@ -17,4 +17,16 @@ fn main() {
         #[cfg(target_os = "macos")]
         println!("cargo:rustc-link-arg=-Wl,-multiply_defined,suppress");
     }
+
+    // Telemetry secrets — read from env at compile time, embed via env!().
+    // Missing values become empty strings; the runtime client treats an
+    // empty key as "telemetry disabled" and stays silent. This keeps
+    // local dev builds working without secrets while letting CI inject
+    // real values via GitHub Secrets (POSTHOG_API_KEY / SENTRY_DSN).
+    let posthog_key = std::env::var("POSTHOG_API_KEY").unwrap_or_default();
+    let sentry_dsn = std::env::var("SENTRY_DSN").unwrap_or_default();
+    println!("cargo:rustc-env=DIMMY_POSTHOG_API_KEY={}", posthog_key);
+    println!("cargo:rustc-env=DIMMY_SENTRY_DSN={}", sentry_dsn);
+    println!("cargo:rerun-if-env-changed=POSTHOG_API_KEY");
+    println!("cargo:rerun-if-env-changed=SENTRY_DSN");
 }
