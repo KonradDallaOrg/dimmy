@@ -27,6 +27,14 @@ pub use events::Event;
 
 /// Initialise both pipelines. Idempotent. Call once from FFI init.
 pub fn init() {
+    crate::log(&format!(
+        "[telemetry] init: posthog_key_compiled={}, sentry_dsn_compiled={}, analytics_enabled={}, crashes_enabled={}, anonymous_id={}",
+        client::has_compiled_key(),
+        sentry_pipeline::has_compiled_dsn(),
+        client::is_enabled(),
+        sentry_pipeline::is_enabled(),
+        identity::anonymous_id(),
+    ));
     sentry_pipeline::init();
 }
 
