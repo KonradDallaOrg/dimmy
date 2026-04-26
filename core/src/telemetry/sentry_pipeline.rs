@@ -49,42 +49,36 @@ pub fn init() {
             return None;
         }
 
-        crate::log("[sentry-init] S1: about to call sentry::init (minimal opts)");
+        crate::log("[sentry-init] S1: about to call sentry::init (upstream pattern)");
 
-        // Diagnostic build: minimal Sentry options, default_integrations
-        // disabled. Eliminates panic-hook interception, contexts, and
-        // backtrace integrations as suspects. We can re-add them
-        // incrementally once the WindowsAppSDK boot crash is identified.
+        // Match docs.sentry.io/platforms/rust/logs/ verbatim, plus the
+        // bits we need: env, scrub hook, no PII. Defaults are kept ON
+        // (panic, contexts, backtrace integrations) — disabling them
+        // via default_integrations=false on 0.34 was the suspected
+        // cause of the WindowsAppSDK static-init crash.
         let guard = sentry::init((
             SENTRY_DSN,
             sentry::ClientOptions {
                 release: sentry::release_name!(),
                 environment: Some(detect_environment().into()),
+                enable_logs: true,
                 send_default_pii: false,
-                attach_stacktrace: false,
-                max_breadcrumbs: 50,
-                default_integrations: false,
                 before_send: Some(std::sync::Arc::new(|event| Some(scrub_event(event)))),
                 ..Default::default()
             },
         ));
         crate::log("[sentry-init] S2: sentry::init returned");
 
-        crate::log("[sentry-init] S3: about to configure_scope");
         sentry::configure_scope(|scope| {
-            crate::log("[sentry-init] S4: scope callback entered");
             scope.set_user(Some(sentry::User {
                 id: Some(crate::telemetry::anonymous_id().to_string()),
                 ..Default::default()
             }));
-            crate::log("[sentry-init] S5: set_user done");
             scope.set_tag("os", crate::telemetry::events::os_name());
             scope.set_tag("arch", crate::telemetry::events::arch_name());
-            crate::log("[sentry-init] S6: set_tag done");
         });
-        crate::log("[sentry-init] S7: configure_scope returned");
+        crate::log("[sentry-init] S3: scope configured, returning guard");
 
-        crate::log("[sentry-init] S8: returning guard");
         Some(guard)
     });
 }

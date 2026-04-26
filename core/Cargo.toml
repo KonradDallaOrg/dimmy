@@ -80,10 +80,13 @@ tokio-stream = "0.1"
 # Used only by the dimmy_smoke binary (smoke-test feature) to runtime-load
 # the installed dimmy_lib.dll. Optional so default builds don't pull it in.
 libloading = { version = "0.8", optional = true }
-# Sentry crash + manual capture. Optional behind telemetry-sentry feature.
-# Minimal feature set: panic auto-capture, backtrace, contexts, reqwest
-# transport using rustls (no native-tls = no openssl on Linux).
-sentry = { version = "0.34", default-features = false, features = ["backtrace", "contexts", "panic", "reqwest", "rustls"], optional = true }
+# Sentry crash + manual capture + structured logs. Optional behind
+# telemetry-sentry feature. Match the upstream-recommended setup pattern
+# from docs.sentry.io/platforms/rust/logs/ to avoid the static-init
+# crash that 0.34 with `default-features = false` triggered in the
+# WindowsAppSDK loader context (see project memory
+# project_sentry_dll_load_crash_2026_04_26.md).
+sentry = { version = "0.47", features = ["logs"], optional = true }
 
 [dev-dependencies]
 # Integration test infrastructure. Kept minimal — no snapshot crate yet,
