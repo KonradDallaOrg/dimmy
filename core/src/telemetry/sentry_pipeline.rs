@@ -43,48 +43,34 @@ pub fn has_compiled_dsn() -> bool {
 #[cfg(feature = "telemetry-sentry")]
 pub fn init() {
     GUARD.get_or_init(|| {
-        crate::log("[sentry-init] S0: enter");
         if SENTRY_DSN.is_empty() {
-            crate::log("[sentry-init] S0a: empty DSN, skipping");
             return None;
         }
 
-        crate::log("[sentry-init] S1: about to call sentry::init (minimal opts)");
-
-        // Diagnostic build: minimal Sentry options, default_integrations
-        // disabled. Eliminates panic-hook interception, contexts, and
-        // backtrace integrations as suspects. We can re-add them
-        // incrementally once the WindowsAppSDK boot crash is identified.
         let guard = sentry::init((
             SENTRY_DSN,
             sentry::ClientOptions {
                 release: sentry::release_name!(),
                 environment: Some(detect_environment().into()),
                 send_default_pii: false,
-                attach_stacktrace: false,
+                attach_stacktrace: true,
                 max_breadcrumbs: 50,
-                default_integrations: false,
                 before_send: Some(std::sync::Arc::new(|event| Some(scrub_event(event)))),
                 ..Default::default()
             },
         ));
-        crate::log("[sentry-init] S2: sentry::init returned");
 
-        crate::log("[sentry-init] S3: about to configure_scope");
+        // Tag the session with anonymous ID + OS so we can filter
+        // crashes by platform without ever knowing who the user is.
         sentry::configure_scope(|scope| {
-            crate::log("[sentry-init] S4: scope callback entered");
             scope.set_user(Some(sentry::User {
                 id: Some(crate::telemetry::anonymous_id().to_string()),
                 ..Default::default()
             }));
-            crate::log("[sentry-init] S5: set_user done");
             scope.set_tag("os", crate::telemetry::events::os_name());
             scope.set_tag("arch", crate::telemetry::events::arch_name());
-            crate::log("[sentry-init] S6: set_tag done");
         });
-        crate::log("[sentry-init] S7: configure_scope returned");
 
-        crate::log("[sentry-init] S8: returning guard");
         Some(guard)
     });
 }
