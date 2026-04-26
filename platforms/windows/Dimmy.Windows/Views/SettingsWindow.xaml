@@ -31,6 +31,9 @@
         <NavigationViewItem Content="About" Tag="about">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE946;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
+        <NavigationViewItem Content="Privacy" Tag="privacy">
+          <NavigationViewItem.Icon><FontIcon Glyph="&#xE72E;" /></NavigationViewItem.Icon>
+        </NavigationViewItem>
         <NavigationViewItem Content="Stats" Tag="stats">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE9D9;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
@@ -298,10 +301,87 @@
               <TextBlock Text="Voice dictation that stays out of your way" FontSize="12"
                          Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
               <HyperlinkButton x:Name="UpdateLink" Content="" Visibility="Collapsed" />
+              <HyperlinkButton x:Name="CheckUpdatesLink"
+                               Content="Check for updates"
+                               NavigateUri="https://dimmy.app/download"
+                               Margin="0,8,0,0" />
+              <HyperlinkButton x:Name="ReleaseNotesLink"
+                               Content="View release notes"
+                               NavigateUri="https://github.com/KonradDallaOrg/dimmy/releases" />
               <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}"
                       Margin="0,8" Width="200" HorizontalAlignment="Left" />
               <TextBlock Text="Made with irony" FontSize="11"
                          Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+            </StackPanel>
+
+            <!-- ═══ Privacy ═══ -->
+            <StackPanel x:Name="PrivacyPanel" Spacing="12" Visibility="Collapsed">
+              <TextBlock Text="Privacy &amp; data" FontSize="20" FontWeight="Bold" />
+              <TextBlock TextWrapping="Wrap" FontSize="13"
+                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                         Text="Dimmy never sends your transcriptions, audio, API keys, microphone names, or anything personal. Anonymous usage data and crash reports help us spot bugs and decide what to build next." />
+
+              <ToggleSwitch x:Name="AnalyticsToggle"
+                            Header="Send anonymous usage data"
+                            IsOn="{Binding TelemetryEnabled, Mode=TwoWay}"
+                            Margin="0,12,0,0" />
+              <TextBlock TextWrapping="Wrap" FontSize="11"
+                         Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                         Text="Things like &quot;app started&quot;, &quot;transcription completed in 2.3s&quot;, &quot;cloud provider: groq&quot;. No content, no identifiers." />
+
+              <ToggleSwitch x:Name="CrashesToggle"
+                            Header="Send crash reports"
+                            IsOn="{Binding CrashReportsEnabled, Mode=TwoWay}"
+                            Margin="0,8,0,0" />
+              <TextBlock TextWrapping="Wrap" FontSize="11"
+                         Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                         Text="If Dimmy crashes, sends a stack trace (no environment variables, no paths with your username) so we can fix it." />
+
+              <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}"
+                      Margin="0,12" />
+
+              <TextBlock Text="Anonymous identifier" FontWeight="SemiBold" FontSize="13" />
+              <TextBlock x:Name="AnonymousIdText" FontSize="12"
+                         FontFamily="Consolas"
+                         Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+              <Button x:Name="ResetAnonymousIdBtn"
+                      Content="Reset identifier"
+                      Click="ResetAnonymousId_Click"
+                      Margin="0,4,0,0" />
+              <TextBlock TextWrapping="Wrap" FontSize="11"
+                         Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                         Text="A random ID generated locally on first launch. Resetting takes effect after restart." />
+
+              <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}"
+                      Margin="0,12" />
+
+              <TextBlock Text="Send feedback" FontWeight="SemiBold" FontSize="13" />
+              <ComboBox x:Name="FeedbackKindCombo" SelectedIndex="0" MinWidth="160">
+                <ComboBoxItem Content="General" Tag="general" />
+                <ComboBoxItem Content="Bug report" Tag="bug" />
+                <ComboBoxItem Content="Feature request" Tag="feature" />
+              </ComboBox>
+              <TextBox x:Name="FeedbackText"
+                       AcceptsReturn="True"
+                       TextWrapping="Wrap"
+                       MinHeight="80"
+                       PlaceholderText="What's on your mind? Bugs, ideas, anything." />
+              <TextBox x:Name="FeedbackEmail"
+                       PlaceholderText="Your email (optional, only if you want a reply)" />
+              <Button x:Name="SendFeedbackBtn"
+                      Content="Send"
+                      Click="SendFeedback_Click"
+                      Margin="0,4,0,0" />
+              <TextBlock x:Name="FeedbackStatus" FontSize="11"
+                         Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+
+              <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}"
+                      Margin="0,12" />
+
+              <HyperlinkButton Content="Privacy policy"
+                               NavigateUri="https://dimmy.app/privacy" />
+              <HyperlinkButton Content="What we collect"
+                               NavigateUri="https://dimmy.app/privacy#data" />
             </StackPanel>
 
             <!-- ═══ Stats ═══ -->

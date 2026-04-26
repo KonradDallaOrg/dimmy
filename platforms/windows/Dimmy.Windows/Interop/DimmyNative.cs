@@ -188,4 +188,53 @@ public static class DimmyNative
     public static string? HistoryStats() => ReadBuffer(dimmy_history_stats);
 
     public static string? GpuGetStatus() => ReadBuffer(dimmy_gpu_get_status);
+
+    // ── Telemetry ────────────────────────────────────────────────
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_telemetry_set_enabled(int enabled);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_telemetry_is_enabled();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_telemetry_anonymous_id(byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_telemetry_reset_anonymous_id();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_telemetry_status(byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_telemetry_set_crash_enabled(int enabled);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_telemetry_is_crash_enabled();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_telemetry_capture_feedback(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? kind,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string message,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? email);
+
+    public static bool TelemetryEnabled
+    {
+        get => dimmy_telemetry_is_enabled() == 1;
+        set => dimmy_telemetry_set_enabled(value ? 1 : 0);
+    }
+
+    public static bool CrashReportsEnabled
+    {
+        get => dimmy_telemetry_is_crash_enabled() == 1;
+        set => dimmy_telemetry_set_crash_enabled(value ? 1 : 0);
+    }
+
+    public static string? TelemetryAnonymousId() => ReadBuffer(dimmy_telemetry_anonymous_id);
+
+    public static void TelemetryResetAnonymousId() => dimmy_telemetry_reset_anonymous_id();
+
+    public static string? TelemetryStatus() => ReadBuffer(dimmy_telemetry_status);
+
+    public static int CaptureFeedback(string kind, string message, string? email = null)
+        => dimmy_telemetry_capture_feedback(kind, message, email);
 }
