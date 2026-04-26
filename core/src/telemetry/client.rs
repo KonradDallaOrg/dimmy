@@ -37,6 +37,13 @@ static ENABLED: AtomicBool = AtomicBool::new(true);
 /// reuses the connection pool across events.
 static HTTP: OnceLock<reqwest::Client> = OnceLock::new();
 
+/// Dedicated tokio runtime for telemetry sends. We can't rely on the
+/// caller's runtime (most FFI entry points are called from C# main
+/// thread or other contexts where no tokio runtime is active).
+/// Lazy-init on first send; lives for the rest of the process.
+/// Single worker thread is enough — events are tiny and infrequent.
+static TELEMETRY_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+
 /// Counters for the local log only. Never exfiltrated.
 static SENT: AtomicU64 = AtomicU64::new(0);
 static DROPPED_SECRET_GUARD: AtomicU64 = AtomicU64::new(0);
@@ -67,6 +74,24 @@ fn http_client() -> &'static reqwest::Client {
             .build()
             .unwrap_or_else(|_| reqwest::Client::new())
     })
+}
+
+fn telemetry_runtime() -> Option<&'static tokio::runtime::Runtime> {
+    static FAILED: AtomicBool = AtomicBool::new(false);
+    if FAILED.load(Ordering::Relaxed) {
+        return None;
+    }
+    Some(TELEMETRY_RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_name("dimmy-telemetry")
+            .enable_all()
+            .build()
+            .unwrap_or_else(|e| {
+                FAILED.store(true, Ordering::Relaxed);
+                panic!("dimmy: failed to build telemetry tokio runtime: {}", e);
+            })
+    }))
 }
 
 /// Submit an event. Best-effort. Returns immediately after queueing
@@ -114,17 +139,16 @@ fn build_payload(event: &Event) -> Result<String, serde_json::Error> {
 }
 
 fn spawn_send(payload: String) {
-    // Try to use the current tokio runtime if there is one. If not,
-    // drop the event silently — we don't spawn a private runtime per
-    // event (cost) or block the caller (latency).
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        handle.spawn(async move {
+    // Use our dedicated telemetry runtime — most FFI call sites
+    // (dimmy_init, dimmy_stop_recording's success branch, …) run on
+    // the C# main thread or other contexts where no tokio runtime is
+    // currently active. Relying on Handle::try_current() dropped events
+    // silently in V3/V4. The dedicated runtime is lazy-init at first
+    // call and reused for the rest of the process lifetime.
+    if let Some(rt) = telemetry_runtime() {
+        rt.spawn(async move {
             send(payload).await;
         });
-    } else {
-        // No runtime: drop. In Dimmy's case we always have a runtime
-        // by the time the first event fires (FFI init creates one),
-        // so this is a defensive branch.
     }
 }
 
