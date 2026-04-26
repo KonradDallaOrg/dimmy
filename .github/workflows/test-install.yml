@@ -147,6 +147,11 @@ jobs:
         run: |
           $exe = "$env:LOCALAPPDATA\Dimmy\current\Dimmy.Windows.exe"
           Remove-Item "$env:TEMP\dimmy_startup.log" -ErrorAction SilentlyContinue
+          # Also clear the dimmy_init early-init trace so we capture only
+          # the markers from this launch. dimmy_init writes P0..P5 here
+          # before each step; if dimmy_init aborts we still see how far
+          # it got.
+          Remove-Item "$env:TEMP\dimmy_init_trace.log" -ErrorAction SilentlyContinue
           Write-Host "Launching: $exe"
           $proc = Start-Process -FilePath $exe -PassThru
           Write-Host "PID: $($proc.Id)"
@@ -174,6 +179,19 @@ jobs:
           } else {
             Write-Host "No startup log at $log"
             Write-Host "App did not reach Program.Main -- check Event Viewer below"
+          }
+          # dimmy_init trace markers (P0..P5). Tells us how far the Rust
+          # core got before any panic. P0=enter, P1=session set, P2=hook
+          # installed, P3=first log line, P4=telemetry init, P5=GLOBAL_STATE
+          # set. P_PANIC line means catch_unwind caught a panic in the body.
+          $traceLog = "$env:TEMP\dimmy_init_trace.log"
+          if (Test-Path $traceLog) {
+            Write-Host "=== %TEMP%\dimmy_init_trace.log ==="
+            Get-Content $traceLog
+            Write-Host "=== end init trace ==="
+            Copy-Item $traceLog "$env:RUNNER_TEMP\dimmy_init_trace.log" -Force
+          } else {
+            Write-Host "No dimmy_init_trace.log -- DLL may not have loaded yet"
           }
 
       - name: Dump UI crash log (APPDATA)
@@ -226,6 +244,7 @@ jobs:
           name: clean-install-test-logs
           path: |
             ${{ runner.temp }}/dimmy_startup.log
+            ${{ runner.temp }}/dimmy_init_trace.log
             ${{ runner.temp }}/crash.log
             ${{ runner.temp }}/ptt.log
             ${{ runner.temp }}/launch_result.txt
