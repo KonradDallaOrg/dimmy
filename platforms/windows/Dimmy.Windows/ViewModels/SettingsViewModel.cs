@@ -86,6 +86,22 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _llmLogEnabled;
     [ObservableProperty] private bool _audioDebugEnabled;
     [ObservableProperty] private bool _ggmlDebugLogging;
+    // Telemetry — runtime-only for now (no persistence in config.json yet).
+    // Initialised from DimmyNative state on viewmodel load; the on-change
+    // partials forward toggles to the Rust core. Persistence is a separate
+    // workstream (the Rust core needs config.telemetry_enabled fields).
+    [ObservableProperty] private bool _telemetryEnabled = true;
+    [ObservableProperty] private bool _crashReportsEnabled = true;
+
+    partial void OnTelemetryEnabledChanged(bool value)
+    {
+        try { Interop.DimmyNative.TelemetryEnabled = value; } catch { }
+    }
+
+    partial void OnCrashReportsEnabledChanged(bool value)
+    {
+        try { Interop.DimmyNative.CrashReportsEnabled = value; } catch { }
+    }
     // GPU known-bad surface (read-only in the UI; populated by LoadGpuStatus).
     [ObservableProperty] private bool _gpuKnownBad;
     [ObservableProperty] private string _gpuKnownBadSince = "";
@@ -143,6 +159,14 @@ public partial class SettingsViewModel : ObservableObject
             LlmLogEnabled = r.TryGetProperty("llm_log_enabled", out var lle) && lle.GetBoolean();
             AudioDebugEnabled = r.TryGetProperty("audio_debug_enabled", out var ade) && ade.GetBoolean();
             GgmlDebugLogging = r.TryGetProperty("ggml_debug_logging", out var gdl) && gdl.GetBoolean();
+            // Telemetry toggles read directly from Rust core (runtime state),
+            // not from the JSON — they're not persisted yet.
+            try
+            {
+                TelemetryEnabled = Interop.DimmyNative.TelemetryEnabled;
+                CrashReportsEnabled = Interop.DimmyNative.CrashReportsEnabled;
+            }
+            catch { /* DLL maybe missing in test/headless context */ }
             SttMode = r.TryGetProperty("stt_mode", out var sm2) ? sm2.GetString() ?? "cloud" : "cloud";
             LocalModel = r.TryGetProperty("local_model", out var lmod) ? lmod.GetString() ?? "ggml-base-q8_0.bin" : "ggml-base-q8_0.bin";
             FillerRemovalEnabled = !r.TryGetProperty("filler_removal_enabled", out var fre) || fre.GetBoolean();

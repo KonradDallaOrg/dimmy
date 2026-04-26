@@ -36,7 +36,7 @@ path = "src/bin/dimmy_smoke.rs"
 required-features = ["smoke-test"]
 
 [features]
-default = ["local-stt"]
+default = ["local-stt", "telemetry-sentry"]
 local-stt = ["dep:whisper-rs"]
 local-stt-metal = ["local-stt", "whisper-rs/metal"]
 local-stt-cuda = ["local-stt", "whisper-rs/cuda"]

@@ -540,6 +540,7 @@ public sealed partial class SettingsWindow : Window
             OutputPanel.Visibility = Visibility.Collapsed;
             OverlayPanel.Visibility = Visibility.Collapsed;
             AboutPanel.Visibility = Visibility.Collapsed;
+            PrivacyPanel.Visibility = Visibility.Collapsed;
             StatsPanel.Visibility = Visibility.Collapsed;
             DebugPanel.Visibility = Visibility.Collapsed;
 
@@ -550,11 +551,17 @@ public sealed partial class SettingsWindow : Window
                 "output" => OutputPanel,
                 "overlay" => OverlayPanel,
                 "about" => AboutPanel,
+                "privacy" => PrivacyPanel,
                 "stats" => StatsPanel,
                 "debug" => DebugPanel,
                 _ => GeneralPanel,
             };
             panel.Visibility = Visibility.Visible;
+
+            if (tag == "privacy")
+            {
+                RefreshAnonymousIdText();
+            }
         }
     }
 
@@ -702,5 +709,58 @@ public sealed partial class SettingsWindow : Window
     private void Cancel_Click(object sender, RoutedEventArgs e)
     {
         this.Close();
+    }
+
+    // ── Privacy panel handlers ──────────────────────────────────
+
+    private void RefreshAnonymousIdText()
+    {
+        try
+        {
+            var id = DimmyNative.TelemetryAnonymousId() ?? "(unavailable)";
+            // Display only the first 8 chars + ellipsis to avoid overwhelming
+            // the UI with the full UUID. The full ID never needs to be shown.
+            var preview = id.Length >= 8 ? $"{id[..8]}…" : id;
+            AnonymousIdText.Text = preview;
+        }
+        catch
+        {
+            AnonymousIdText.Text = "(unavailable)";
+        }
+    }
+
+    private void ResetAnonymousId_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            DimmyNative.TelemetryResetAnonymousId();
+            AnonymousIdText.Text = "(reset — restart Dimmy to apply)";
+        }
+        catch { /* best-effort, this is a privacy action */ }
+    }
+
+    private void SendFeedback_Click(object sender, RoutedEventArgs e)
+    {
+        var message = FeedbackText.Text?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            FeedbackStatus.Text = "Type something first.";
+            return;
+        }
+        var kind = (FeedbackKindCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "general";
+        var email = FeedbackEmail.Text?.Trim();
+        if (string.IsNullOrWhiteSpace(email)) email = null;
+
+        try
+        {
+            DimmyNative.CaptureFeedback(kind, message, email);
+            FeedbackStatus.Text = "Thanks! Feedback sent.";
+            FeedbackText.Text = string.Empty;
+            FeedbackEmail.Text = string.Empty;
+        }
+        catch
+        {
+            FeedbackStatus.Text = "Couldn't send right now. Try again later.";
+        }
     }
 }
