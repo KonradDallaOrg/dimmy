@@ -70,9 +70,18 @@ fn write_to_buf(s: &str, buf: *mut c_char, buf_len: c_int) -> c_int {
 
 /// Initialize the Dimmy core. Must be called once before any other function.
 /// Returns 0 on success, -1 on error.
+/// Session start timestamp, set on first dimmy_init call. Used to
+/// compute the duration in app.session_ended.
+static SESSION_START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// Counter of successful transcriptions in this session. Incremented
+/// from the success branch of dimmy_stop_recording. Read on shutdown.
+static TRANSCRIBE_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 #[no_mangle]
 pub extern "C" fn dimmy_init() -> c_int {
     let init_start = std::time::Instant::now();
+    let _ = SESSION_START.set(init_start);
 
     // Set up panic hook with backtrace
     std::panic::set_hook(Box::new(|info| {
@@ -256,6 +265,18 @@ pub extern "C" fn dimmy_shutdown() {
             log("Config saved on shutdown");
         }
     }
+
+    // Telemetry: app.session_ended. Best-effort; if SESSION_START was
+    // never set (init failed), we skip rather than guess a duration.
+    if let Some(start) = SESSION_START.get() {
+        let duration_secs = start.elapsed().as_secs();
+        let transcribe_count = TRANSCRIBE_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+        crate::telemetry::track(crate::telemetry::Event::AppSessionEnded {
+            duration_secs,
+            transcribe_count,
+        });
+    }
+
     log("=== Dimmy FFI shutdown ===");
 }
 
@@ -646,6 +667,7 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
                 had_filler_removal: filler_enabled,
                 had_llm: llm_enabled_now,
             });
+            TRANSCRIBE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
             // Auto-save to history
             if !text.trim().is_empty() {
@@ -703,6 +725,15 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
 #[no_mangle]
 pub extern "C" fn dimmy_cancel_recording() {
     let st = state();
+
+    // Compute audio_secs BEFORE clearing, for the telemetry event.
+    let sample_rate = st.audio_sample_rate.lock().map(|s| *s).unwrap_or(16_000);
+    let audio_secs = st
+        .audio_buffer
+        .lock()
+        .map(|b| b.len() as f64 / sample_rate.max(1) as f64)
+        .unwrap_or(0.0);
+
     let _ = st.audio_tx.lock().map(|tx| tx.send(AudioCommand::Stop));
     if let Ok(mut r) = st.recording.lock() {
         *r = false;
@@ -711,6 +742,8 @@ pub extern "C" fn dimmy_cancel_recording() {
         b.clear();
     }
     emit_event("recording_cancelled", "{}");
+
+    crate::telemetry::track(crate::telemetry::Event::TranscriptionCancelled { audio_secs });
 }
 
 // ── Config ──────────────────────────────────────────────────────────
