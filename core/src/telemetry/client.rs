@@ -145,12 +145,19 @@ pub fn track(event: Event) {
 }
 
 fn build_payload(event: &Event) -> Result<String, serde_json::Error> {
+    // No `timestamp` field on purpose: PostHog drops events whose
+    // explicit `timestamp` differs from receive time by more than a
+    // small (undocumented) tolerance. Verified 2026-04-26: backdated
+    // payloads sent via curl returned HTTP 200 but never appeared in
+    // the events table; identical payloads without `timestamp` were
+    // ingested. PostHog uses request receive time when the field is
+    // absent, which is what we want — events are emitted at the
+    // moment they happen, network latency is tiny.
     let body = serde_json::json!({
         "api_key": POSTHOG_API_KEY,
         "event": event.name(),
         "distinct_id": crate::telemetry::identity::anonymous_id(),
         "properties": event.properties(),
-        "timestamp": chrono::Utc::now().to_rfc3339(),
     });
     serde_json::to_string(&body)
 }
