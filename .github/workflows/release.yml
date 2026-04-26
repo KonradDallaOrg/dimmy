@@ -133,9 +133,12 @@ jobs:
       - name: Build Rust static library
         working-directory: core
         env:
-          # Diagnostic build: re-enable SENTRY_DSN to trigger the
-          # WindowsAppSDK boot crash with granular S0..S8 logs in
-          # sentry_pipeline::init.
+          # Telemetry secrets — embedded into the binary at build time via
+          # core/build.rs. PostHog analytics + Sentry crash reporting +
+          # logs both active. Sentry 0.47 with default-features = false
+          # + explicit native-tls (schannel on Windows) avoids the
+          # rustls/CryptoProvider static-init panic that __fastfailed
+          # the cdylib under WindowsAppSDK + Velopack (V3 / V8).
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
         run: |

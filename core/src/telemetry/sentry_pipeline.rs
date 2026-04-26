@@ -52,10 +52,12 @@ pub fn init() {
         crate::log("[sentry-init] S1: about to call sentry::init (upstream pattern)");
 
         // Match docs.sentry.io/platforms/rust/logs/ verbatim, plus the
-        // bits we need: env, scrub hook, no PII. Defaults are kept ON
-        // (panic, contexts, backtrace integrations) — disabling them
-        // via default_integrations=false on 0.34 was the suspected
-        // cause of the WindowsAppSDK static-init crash.
+        // bits we need: env, scrub hook, no PII, stacktraces, and a
+        // breadcrumb cap. The crate is at 0.47 with explicit
+        // `default-features = false` + native-tls (schannel) — that
+        // combination avoids the rustls/CryptoProvider static-init
+        // panic that __fastfailed the cdylib under WindowsAppSDK +
+        // Velopack on V3 / V8.
         let guard = sentry::init((
             SENTRY_DSN,
             sentry::ClientOptions {
@@ -63,6 +65,8 @@ pub fn init() {
                 environment: Some(detect_environment().into()),
                 enable_logs: true,
                 send_default_pii: false,
+                attach_stacktrace: true,
+                max_breadcrumbs: 50,
                 before_send: Some(std::sync::Arc::new(|event| Some(scrub_event(event)))),
                 ..Default::default()
             },

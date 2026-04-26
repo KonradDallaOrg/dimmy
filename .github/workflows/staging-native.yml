@@ -149,9 +149,10 @@ jobs:
         env:
           # Telemetry secrets — embedded into the binary at build time via
           # core/build.rs. PostHog analytics + Sentry crash reporting +
-          # logs both active. Sentry crate at 0.47 (upstream-recommended
-          # config, defaults ON) avoids the 0.34 + default-features=false
-          # static-init crash that hit V8 on WindowsAppSDK.
+          # logs both active. Sentry 0.47 with default-features = false
+          # + explicit native-tls (schannel on Windows) avoids the
+          # rustls/CryptoProvider static-init panic that __fastfailed
+          # the cdylib under WindowsAppSDK + Velopack (V3 / V8).
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
         run: |
