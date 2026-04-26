@@ -14,7 +14,7 @@
 //!
 //! Fixtures are downloaded on first run and cached under
 //! `core/target/test-fixtures/`. Sources:
-//! - `jfk.wav` — https://github.com/ggerganov/whisper.cpp/raw/master/samples/jfk.wav (MIT)
+//! - `jfk.wav` — https://github.com/ggml-org/whisper.cpp/raw/master/samples/jfk.wav (MIT)
 //! - `ggml-tiny.en-q8_0.bin` — https://huggingface.co/ggerganov/whisper.cpp (MIT)
 
 #![cfg(all(feature = "test-ffi", feature = "local-stt"))]
@@ -35,7 +35,10 @@ use dimmy_lib::ffi::{
 
 // ── Fixture URLs ──────────────────────────────────────────────────────
 
-const JFK_WAV_URL: &str = "https://github.com/ggerganov/whisper.cpp/raw/master/samples/jfk.wav";
+// whisper.cpp moved from `ggerganov/whisper.cpp` to `ggml-org/whisper.cpp`.
+// GitHub still serves the old URL via redirect, but that path returns 502 in
+// 2026-04 — pinned to the canonical location to avoid the redirect dance.
+const JFK_WAV_URL: &str = "https://github.com/ggml-org/whisper.cpp/raw/master/samples/jfk.wav";
 const MODEL_URL: &str =
     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en-q8_0.bin";
 const MODEL_FILENAME: &str = "ggml-tiny.en-q8_0.bin";
