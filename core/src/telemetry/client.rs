@@ -101,18 +101,26 @@ fn telemetry_runtime() -> Option<&'static tokio::runtime::Runtime> {
 /// the call is dropped silently (we don't want to spawn a runtime per
 /// event).
 pub fn track(event: Event) {
+    let event_name = event.name();
+    crate::log(&format!("[telemetry] track event={}", event_name));
+
     if !is_enabled() {
         DROPPED_DISABLED.fetch_add(1, Ordering::Relaxed);
+        crate::log("[telemetry] dropped: disabled (analytics toggle off)");
         return;
     }
     if !has_compiled_key() {
         DROPPED_NO_KEY.fetch_add(1, Ordering::Relaxed);
+        crate::log("[telemetry] dropped: no compile-time POSTHOG_API_KEY");
         return;
     }
 
     let payload = match build_payload(&event) {
         Ok(p) => p,
-        Err(_) => return,
+        Err(e) => {
+            crate::log(&format!("[telemetry] build_payload error: {}", e));
+            return;
+        }
     };
 
     // Defensive last-ditch grep: if for any reason the serialised JSON
@@ -121,9 +129,18 @@ pub fn track(event: Event) {
     // that accidentally puts user content into a property.
     if looks_like_secret(&payload) {
         DROPPED_SECRET_GUARD.fetch_add(1, Ordering::Relaxed);
+        crate::log(&format!(
+            "[telemetry] dropped: secret-guard tripped on event={}",
+            event_name
+        ));
         return;
     }
 
+    crate::log(&format!(
+        "[telemetry] spawn send for event={} (payload {} bytes)",
+        event_name,
+        payload.len()
+    ));
     spawn_send(payload);
 }
 
@@ -145,14 +162,21 @@ fn spawn_send(payload: String) {
     // currently active. Relying on Handle::try_current() dropped events
     // silently in V3/V4. The dedicated runtime is lazy-init at first
     // call and reused for the rest of the process lifetime.
-    if let Some(rt) = telemetry_runtime() {
-        rt.spawn(async move {
-            send(payload).await;
-        });
+    match telemetry_runtime() {
+        Some(rt) => {
+            crate::log("[telemetry] runtime ok, spawning send task");
+            rt.spawn(async move {
+                send(payload).await;
+            });
+        }
+        None => {
+            crate::log("[telemetry] dropped: telemetry runtime unavailable");
+        }
     }
 }
 
 async fn send(payload: String) {
+    crate::log("[telemetry] send: HTTP POST starting");
     let client = http_client();
     let resp = client
         .post(POSTHOG_ENDPOINT)
@@ -162,13 +186,36 @@ async fn send(payload: String) {
         .await;
 
     match resp {
-        Ok(r) if r.status().is_success() => {
-            SENT.fetch_add(1, Ordering::Relaxed);
+        Ok(r) => {
+            let status = r.status();
+            if status.is_success() {
+                SENT.fetch_add(1, Ordering::Relaxed);
+                crate::log(&format!(
+                    "[telemetry] send: HTTP {} OK (sent={})",
+                    status.as_u16(),
+                    SENT.load(Ordering::Relaxed)
+                ));
+            } else {
+                crate::log(&format!(
+                    "[telemetry] send: HTTP {} non-success",
+                    status.as_u16()
+                ));
+            }
         }
-        _ => {
-            // Silent. Telemetry must never spam dimmy.log on transient
-            // network errors. The counters above are accessible from
-            // diagnostics if we ever need to debug.
+        Err(e) => {
+            // Sanitize: never log full URL (could include path) or full
+            // error message (could include stray text). Just the
+            // category.
+            let cat = if e.is_timeout() {
+                "timeout"
+            } else if e.is_connect() {
+                "connect"
+            } else if e.is_request() {
+                "request"
+            } else {
+                "other"
+            };
+            crate::log(&format!("[telemetry] send: error category={}", cat));
         }
     }
 }
