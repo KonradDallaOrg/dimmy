@@ -70,8 +70,19 @@ fn write_to_buf(s: &str, buf: *mut c_char, buf_len: c_int) -> c_int {
 
 /// Initialize the Dimmy core. Must be called once before any other function.
 /// Returns 0 on success, -1 on error.
+/// Session start timestamp, set on first dimmy_init call. Used to
+/// compute the duration in app.session_ended.
+static SESSION_START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// Counter of successful transcriptions in this session. Incremented
+/// from the success branch of dimmy_stop_recording. Read on shutdown.
+static TRANSCRIBE_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 #[no_mangle]
 pub extern "C" fn dimmy_init() -> c_int {
+    let init_start = std::time::Instant::now();
+    let _ = SESSION_START.set(init_start);
+
     // Set up panic hook with backtrace
     std::panic::set_hook(Box::new(|info| {
         let bt = std::backtrace::Backtrace::force_capture();
@@ -200,6 +211,18 @@ pub extern "C" fn dimmy_init() -> c_int {
     match GLOBAL_STATE.set(app_state) {
         Ok(()) => {
             log("FFI init complete");
+
+            // Emit app.started — once per process. The cold-start figure
+            // includes everything between dimmy_init entry and now
+            // (panic-hook setup, config load, key migration, etc).
+            let cold_start_ms = init_start.elapsed().as_millis() as u64;
+            crate::telemetry::track(crate::telemetry::Event::AppStarted {
+                version: env!("CARGO_PKG_VERSION"),
+                os: crate::telemetry::events::os_name(),
+                arch: crate::telemetry::events::arch_name(),
+                cold_start_ms,
+            });
+
             0
         }
         Err(_) => {
@@ -242,6 +265,18 @@ pub extern "C" fn dimmy_shutdown() {
             log("Config saved on shutdown");
         }
     }
+
+    // Telemetry: app.session_ended. Best-effort; if SESSION_START was
+    // never set (init failed), we skip rather than guess a duration.
+    if let Some(start) = SESSION_START.get() {
+        let duration_secs = start.elapsed().as_secs();
+        let transcribe_count = TRANSCRIBE_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+        crate::telemetry::track(crate::telemetry::Event::AppSessionEnded {
+            duration_secs,
+            transcribe_count,
+        });
+    }
+
     log("=== Dimmy FFI shutdown ===");
 }
 
@@ -484,6 +519,7 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
     }
 
     // Route transcription based on stt_mode: "local" or "cloud"
+    let transcribe_start = std::time::Instant::now();
     let transcript = if stt_mode == "local" {
         log(&format!(
             "[StopRec] Local STT mode — model: {}",
@@ -607,6 +643,32 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
             let words = text.split_whitespace().count() as c_int;
             dimmy_update_stats(words, speaking_secs);
 
+            // Telemetry: transcription.completed (success path).
+            let processing_ms = transcribe_start.elapsed().as_millis() as u64;
+            let mode_static: &'static str = if stt_mode == "local" {
+                "local"
+            } else {
+                "cloud"
+            };
+            let provider_static: &'static str = if stt_mode == "local" {
+                "local_whisper"
+            } else {
+                crate::telemetry::sanitize::provider_from_url(&api_url)
+            };
+            let llm_enabled_now = st.llm_enabled.lock().map(|e| *e).unwrap_or(false);
+            crate::telemetry::track(crate::telemetry::Event::TranscriptionCompleted {
+                mode: mode_static,
+                provider: provider_static,
+                audio_secs: speaking_secs,
+                processing_ms,
+                word_count: words.max(0) as u32,
+                language: language.clone(),
+                success: true,
+                had_filler_removal: filler_enabled,
+                had_llm: llm_enabled_now,
+            });
+            TRANSCRIBE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
             // Auto-save to history
             if !text.trim().is_empty() {
                 if let Ok(guard) = st.history_store.lock() {
@@ -634,6 +696,26 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
                 "error",
                 &format!(r#"{{"message":"{}"}}"#, err_msg.replace('"', "\\\"")),
             );
+
+            // Telemetry: transcription.failed + Sentry mirror.
+            let mode_static: &'static str = if stt_mode == "local" {
+                "local"
+            } else {
+                "cloud"
+            };
+            let provider_static: &'static str = if stt_mode == "local" {
+                "local_whisper"
+            } else {
+                crate::telemetry::sanitize::provider_from_url(&api_url)
+            };
+            let category = crate::telemetry::sanitize::error_category(&err_msg, None);
+            crate::telemetry::track(crate::telemetry::Event::TranscriptionFailed {
+                mode: mode_static,
+                provider: provider_static,
+                error_category: category,
+            });
+            crate::telemetry::capture_error(category, &err_msg);
+
             write_to_buf("", out_buf, buf_len)
         }
     }
@@ -643,6 +725,15 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
 #[no_mangle]
 pub extern "C" fn dimmy_cancel_recording() {
     let st = state();
+
+    // Compute audio_secs BEFORE clearing, for the telemetry event.
+    let sample_rate = st.audio_sample_rate.lock().map(|s| *s).unwrap_or(16_000);
+    let audio_secs = st
+        .audio_buffer
+        .lock()
+        .map(|b| b.len() as f64 / sample_rate.max(1) as f64)
+        .unwrap_or(0.0);
+
     let _ = st.audio_tx.lock().map(|tx| tx.send(AudioCommand::Stop));
     if let Ok(mut r) = st.recording.lock() {
         *r = false;
@@ -651,6 +742,8 @@ pub extern "C" fn dimmy_cancel_recording() {
         b.clear();
     }
     emit_event("recording_cancelled", "{}");
+
+    crate::telemetry::track(crate::telemetry::Event::TranscriptionCancelled { audio_secs });
 }
 
 // ── Config ──────────────────────────────────────────────────────────
@@ -1402,6 +1495,7 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
         }
     };
 
+    let llm_start = std::time::Instant::now();
     let result = rt.block_on(crate::llm::process_text(
         &api_url,
         &api_model,
@@ -1412,6 +1506,8 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
         &custom_prompt,
         &translate_to,
     ));
+    let llm_processing_ms = llm_start.elapsed().as_millis() as u64;
+    let llm_provider_static: &'static str = crate::telemetry::sanitize::provider_from_url(&api_url);
 
     match result {
         Ok(enhanced) => {
@@ -1420,11 +1516,26 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
                 text.len(),
                 enhanced.len()
             ));
+            crate::telemetry::track(crate::telemetry::Event::LlmApplied {
+                mode: "cloud",
+                provider: llm_provider_static,
+                style: style.as_str().to_string(),
+                tone: tone.as_str().to_string(),
+                processing_ms: llm_processing_ms,
+                success: true,
+            });
             write_to_buf(&enhanced, out_buf, buf_len)
         }
         Err(e) => {
             let err_msg = format!("{}", e);
             log(&format!("ERROR: LLM processing failed: {}", err_msg));
+            let category = crate::telemetry::sanitize::error_category(&err_msg, None);
+            crate::telemetry::track(crate::telemetry::Event::LlmFailed {
+                mode: "cloud",
+                provider: llm_provider_static,
+                error_category: category,
+            });
+            crate::telemetry::capture_error(category, &err_msg);
             emit_event(
                 "error",
                 &format!(r#"{{"message":"LLM: {}"}}"#, err_msg.replace('"', "\\\"")),
