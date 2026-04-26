@@ -146,6 +146,11 @@ jobs:
 
       - name: Build Rust static library
         working-directory: core
+        env:
+          # Telemetry secrets — embedded into the binary at build time via
+          # core/build.rs. Empty values produce a silent no-op runtime.
+          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
         run: |
           echo "CMake: $(cmake --version | head -1)"
           echo "Xcode CLT: $(xcode-select -p)"
@@ -357,6 +362,9 @@ jobs:
           LIBCLANG_PATH: "C:\\Program Files\\LLVM\\bin"
           CMAKE_GENERATOR: Ninja
           CARGO_TARGET_DIR: "D:\\t"
+          # Telemetry secrets — embedded at build time via core/build.rs.
+          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
         run: |
           REM Activate VS 2026 MSVC for this step only — PATH, INCLUDE,
           REM LIB point at the 14.50+ toolchain. Subsequent steps inherit
@@ -523,6 +531,11 @@ jobs:
 
       - name: Build release
         working-directory: platforms/linux
+        env:
+          # Telemetry secrets for the dimmy_lib build pulled in by the
+          # platforms/linux workspace. Empty values = no-op runtime.
+          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
         run: cargo build --release
 
       - name: Package AppImage
