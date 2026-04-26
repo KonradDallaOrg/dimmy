@@ -52,6 +52,10 @@ test-ffi = []
 # smoke-test: gates the dimmy_smoke binary that runtime-loads the installed
 # dimmy_lib.dll via libloading. Used by the installer-ffi-smoke CI job.
 smoke-test = ["dep:libloading"]
+# telemetry-sentry: enables the Sentry crash + error pipeline. Default ON
+# in release builds, off in headless/local dev unless explicitly requested.
+# When off, the Sentry init is a no-op and no events are captured.
+telemetry-sentry = ["dep:sentry"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -76,6 +80,10 @@ tokio-stream = "0.1"
 # Used only by the dimmy_smoke binary (smoke-test feature) to runtime-load
 # the installed dimmy_lib.dll. Optional so default builds don't pull it in.
 libloading = { version = "0.8", optional = true }
+# Sentry crash + manual capture. Optional behind telemetry-sentry feature.
+# Minimal feature set: panic auto-capture, backtrace, contexts, reqwest
+# transport using rustls (no native-tls = no openssl on Linux).
+sentry = { version = "0.34", default-features = false, features = ["backtrace", "contexts", "panic", "reqwest", "rustls"], optional = true }
 
 [dev-dependencies]
 # Integration test infrastructure. Kept minimal — no snapshot crate yet,

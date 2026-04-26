@@ -92,6 +92,12 @@ pub extern "C" fn dimmy_init() -> c_int {
 
     log("=== Dimmy FFI starting ===");
 
+    // Initialise telemetry (Sentry crash + error pipeline). No-op when
+    // the build did not embed a DSN, or when telemetry-sentry feature
+    // is disabled. Must be after the panic hook above so Sentry's
+    // own panic integration nests cleanly.
+    crate::telemetry::init();
+
     // Load config
     let file_cfg = load_config_file();
     let use_kr = file_cfg.use_keyring;
@@ -1913,7 +1919,8 @@ pub extern "C" fn dimmy_telemetry_reset_anonymous_id() -> c_int {
 /// in this build" when the API key wasn't injected (e.g. local dev
 /// builds without secrets).
 ///
-/// Schema: `{"has_compiled_key": bool, "enabled": bool}`
+/// Schema: `{"has_compiled_key": bool, "enabled": bool,
+///          "has_compiled_dsn": bool, "crash_enabled": bool}`
 ///
 /// Returns the byte length written, or -1 on error.
 #[no_mangle]
@@ -1924,9 +1931,76 @@ pub extern "C" fn dimmy_telemetry_status(out_buf: *mut c_char, buf_len: c_int) -
     let json = serde_json::json!({
         "has_compiled_key": crate::telemetry::has_compiled_key(),
         "enabled": crate::telemetry::is_enabled(),
+        "has_compiled_dsn": crate::telemetry::has_compiled_dsn(),
+        "crash_enabled": crate::telemetry::is_crash_enabled(),
     });
     let s = serde_json::to_string(&json).unwrap_or_else(|_| "{}".to_string());
     write_to_buf(&s, out_buf, buf_len)
+}
+
+/// Set the runtime crash-reporting enabled flag (Sentry pipeline).
+/// Independent of the analytics toggle. Returns 0.
+#[no_mangle]
+pub extern "C" fn dimmy_telemetry_set_crash_enabled(enabled: c_int) -> c_int {
+    crate::telemetry::set_crash_enabled(enabled != 0);
+    0
+}
+
+/// Read the runtime crash-reporting enabled flag. 0 = off, 1 = on.
+#[no_mangle]
+pub extern "C" fn dimmy_telemetry_is_crash_enabled() -> c_int {
+    if crate::telemetry::is_crash_enabled() {
+        1
+    } else {
+        0
+    }
+}
+
+/// Submit user-provided feedback to Sentry.
+///
+/// `kind_ptr`: `bug`, `feature`, or `general`. Defaults to `general`
+///   if null or unknown.
+/// `message_ptr`: required, the user's text. Up to 4 KB after
+///   sanitisation. Null or empty → no-op (returns 0).
+/// `email_ptr`: optional. May be null. Empty/whitespace → not included.
+///
+/// Returns 0 on success (best-effort: queued for send, no confirmation
+/// of delivery), or -1 on a precondition failure (e.g. invalid UTF-8).
+///
+/// # Safety
+/// All non-null string pointers must be valid null-terminated UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_telemetry_capture_feedback(
+    kind_ptr: *const c_char,
+    message_ptr: *const c_char,
+    email_ptr: *const c_char,
+) -> c_int {
+    if message_ptr.is_null() {
+        return 0; // empty feedback is a no-op, not an error
+    }
+    let message = match CStr::from_ptr(message_ptr).to_str() {
+        Ok(s) if !s.trim().is_empty() => s,
+        _ => return 0,
+    };
+    let kind = if kind_ptr.is_null() {
+        "general"
+    } else {
+        CStr::from_ptr(kind_ptr).to_str().unwrap_or("general")
+    };
+    let email_owned;
+    let email = if email_ptr.is_null() {
+        None
+    } else {
+        match CStr::from_ptr(email_ptr).to_str() {
+            Ok(s) if !s.trim().is_empty() => {
+                email_owned = s.to_string();
+                Some(email_owned.as_str())
+            }
+            _ => None,
+        }
+    };
+    crate::telemetry::capture_feedback(kind, message, email);
+    0
 }
 
 /// Get history stats as JSON. Returns bytes written or -1.
