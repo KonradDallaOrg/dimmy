@@ -187,7 +187,13 @@ fn debug_transcription(msg: &str) {
 /// Write a log line to %APPDATA%/dimmy/dimmy.log (visible on Windows GUI apps)
 pub fn log(msg: &str) {
     use std::io::Write;
-    eprintln!("{}", msg); // also stderr for dev/terminal use
+    // NB: do NOT use eprintln!. On Windows when the host process (Velopack-
+    // launched windowed C# app) has no stderr handle, eprintln! routes
+    // through std::io::_eprint which `panic!`s on any non-BrokenPipe
+    // write error. Hitting that panic from inside dimmy_init aborts the
+    // whole DLL via __fastfail (extern "C" no-unwind boundary). Use a
+    // best-effort writeln! that swallows errors instead.
+    let _ = writeln!(std::io::stderr(), "{}", msg);
     if let Some(path) = log_path() {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -1401,5 +1407,27 @@ mod tests {
             gain
         );
         assert!(gain.is_finite(), "gain must be finite, got {}", gain);
+    }
+
+    /// Regression: `crate::log` must NEVER panic, regardless of the
+    /// state of stdout/stderr or filesystem. The previous implementation
+    /// used `eprintln!`, which on Windows windowed apps (Velopack-launched
+    /// C# host with no stderr handle) routes through `std::io::_eprint`
+    /// and panics on any non-BrokenPipe write error. Hitting that panic
+    /// inside `dimmy_init` aborts the cdylib via __fastfail because the
+    /// extern "C" boundary is no-unwind. The fix uses a best-effort
+    /// `writeln!(io::stderr(), ...)` whose error is discarded.
+    #[test]
+    fn log_does_not_panic_on_any_input() {
+        // Plain ASCII.
+        log("test message");
+        // Empty.
+        log("");
+        // Multiline.
+        log("line one\nline two\nline three");
+        // UTF-8 with multi-byte chars.
+        log("emoji 🎙️ è à ü");
+        // Long line — exercise rotation path if we happen to hit the cap.
+        log(&"x".repeat(8192));
     }
 }

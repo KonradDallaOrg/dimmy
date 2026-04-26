@@ -78,16 +78,45 @@ static SESSION_START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceL
 /// from the success branch of dimmy_stop_recording. Read on shutdown.
 static TRANSCRIBE_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
-#[no_mangle]
-pub extern "C" fn dimmy_init() -> c_int {
+/// Best-effort early-init trace writer. Used to debug crashes that occur
+/// before `crate::log` is reachable (e.g., panics during dimmy_init prior
+/// to the first `log()` call). Writes to %TEMP%\dimmy_init_trace.log on
+/// Windows, $TMPDIR/dimmy_init_trace.log elsewhere. Never panics — every
+/// failure mode silently no-ops, so this can be safely invoked from
+/// inside a panic hook or from a not-yet-initialised context.
+fn write_init_trace(msg: &str) {
+    use std::io::Write;
+    let path = std::env::temp_dir().join("dimmy_init_trace.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
+        let _ = writeln!(f, "[{}] {}", ts, msg);
+    }
+}
+
+/// Inner body of dimmy_init. Split out so the public extern "C" wrapper
+/// can run it inside `catch_unwind` and convert any panic into a clean
+/// -1 return value. With `panic = unwind` (the default release profile)
+/// a panic that escapes an `extern "C"` boundary is forced to abort via
+/// __fastfail; catching it here keeps the host process alive and lets
+/// the caller surface a normal error to the user.
+fn dimmy_init_inner() -> c_int {
     let init_start = std::time::Instant::now();
     let _ = SESSION_START.set(init_start);
+    write_init_trace("P1: SESSION_START set");
 
-    // Set up panic hook with backtrace
+    // Set up panic hook with backtrace. NB: must NOT use eprintln!/println!
+    // — see crate::log for why (Velopack-launched windowed app has no
+    // stderr handle and eprintln panics, which inside a panic hook
+    // recurses straight into __fastfail).
     std::panic::set_hook(Box::new(|info| {
         let bt = std::backtrace::Backtrace::force_capture();
         let msg = format!("PANIC: {}\nBacktrace:\n{}", info, bt);
-        eprintln!("{}", msg);
+        // Always best-effort; never panic from the hook.
+        write_init_trace(&msg);
         if let Some(path) = crate::log_path() {
             if let Ok(mut f) = std::fs::OpenOptions::new()
                 .create(true)
@@ -100,14 +129,17 @@ pub extern "C" fn dimmy_init() -> c_int {
             }
         }
     }));
+    write_init_trace("P2: panic hook installed");
 
     log("=== Dimmy FFI starting ===");
+    write_init_trace("P3: first log line written");
 
     // Initialise telemetry (Sentry crash + error pipeline). No-op when
     // the build did not embed a DSN, or when telemetry-sentry feature
     // is disabled. Must be after the panic hook above so Sentry's
     // own panic integration nests cleanly.
     crate::telemetry::init();
+    write_init_trace("P4: telemetry init returned");
 
     // Load config
     let file_cfg = load_config_file();
@@ -211,6 +243,7 @@ pub extern "C" fn dimmy_init() -> c_int {
     match GLOBAL_STATE.set(app_state) {
         Ok(()) => {
             log("FFI init complete");
+            write_init_trace("P5: GLOBAL_STATE set, init complete");
 
             // Emit app.started — once per process. The cold-start figure
             // includes everything between dimmy_init entry and now
@@ -227,6 +260,35 @@ pub extern "C" fn dimmy_init() -> c_int {
         }
         Err(_) => {
             log("ERROR: dimmy_init() called twice");
+            -1
+        }
+    }
+}
+
+/// Public FFI entry. Wraps the body in `catch_unwind` so any panic
+/// inside the inner init (config load, audio thread spawn, telemetry
+/// init, …) is converted to a -1 return value rather than aborting the
+/// host process via __fastfail. Without this, a panic crossing the
+/// `extern "C"` boundary would force-abort because the default ABI is
+/// no-unwind. The C# host can then surface a normal error to the user.
+#[no_mangle]
+pub extern "C" fn dimmy_init() -> c_int {
+    write_init_trace("P0: dimmy_init entered");
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(dimmy_init_inner));
+    match result {
+        Ok(rc) => {
+            write_init_trace(&format!("P_OK: dimmy_init returning {}", rc));
+            rc
+        }
+        Err(payload) => {
+            let msg = if let Some(s) = payload.downcast_ref::<String>() {
+                s.clone()
+            } else if let Some(s) = payload.downcast_ref::<&'static str>() {
+                (*s).to_string()
+            } else {
+                "(unknown panic payload)".to_string()
+            };
+            write_init_trace(&format!("P_PANIC: dimmy_init body panicked: {}", msg));
             -1
         }
     }
