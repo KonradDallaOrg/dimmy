@@ -43,15 +43,27 @@ pub fn has_compiled_dsn() -> bool {
 #[cfg(feature = "telemetry-sentry")]
 pub fn init() {
     GUARD.get_or_init(|| {
+        crate::log("[sentry-init] S0: enter");
         if SENTRY_DSN.is_empty() {
+            crate::log("[sentry-init] S0a: empty DSN, skipping");
             return None;
         }
 
+        crate::log("[sentry-init] S1: about to call sentry::init (upstream pattern)");
+
+        // Match docs.sentry.io/platforms/rust/logs/ verbatim, plus the
+        // bits we need: env, scrub hook, no PII, stacktraces, and a
+        // breadcrumb cap. The crate is at 0.47 with explicit
+        // `default-features = false` + native-tls (schannel) — that
+        // combination avoids the rustls/CryptoProvider static-init
+        // panic that __fastfailed the cdylib under WindowsAppSDK +
+        // Velopack on V3 / V8.
         let guard = sentry::init((
             SENTRY_DSN,
             sentry::ClientOptions {
                 release: sentry::release_name!(),
                 environment: Some(detect_environment().into()),
+                enable_logs: true,
                 send_default_pii: false,
                 attach_stacktrace: true,
                 max_breadcrumbs: 50,
@@ -59,9 +71,8 @@ pub fn init() {
                 ..Default::default()
             },
         ));
+        crate::log("[sentry-init] S2: sentry::init returned");
 
-        // Tag the session with anonymous ID + OS so we can filter
-        // crashes by platform without ever knowing who the user is.
         sentry::configure_scope(|scope| {
             scope.set_user(Some(sentry::User {
                 id: Some(crate::telemetry::anonymous_id().to_string()),
@@ -70,6 +81,7 @@ pub fn init() {
             scope.set_tag("os", crate::telemetry::events::os_name());
             scope.set_tag("arch", crate::telemetry::events::arch_name());
         });
+        crate::log("[sentry-init] S3: scope configured, returning guard");
 
         Some(guard)
     });

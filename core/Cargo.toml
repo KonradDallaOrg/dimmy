@@ -80,10 +80,17 @@ tokio-stream = "0.1"
 # Used only by the dimmy_smoke binary (smoke-test feature) to runtime-load
 # the installed dimmy_lib.dll. Optional so default builds don't pull it in.
 libloading = { version = "0.8", optional = true }
-# Sentry crash + manual capture. Optional behind telemetry-sentry feature.
-# Minimal feature set: panic auto-capture, backtrace, contexts, reqwest
-# transport using rustls (no native-tls = no openssl on Linux).
-sentry = { version = "0.34", default-features = false, features = ["backtrace", "contexts", "panic", "reqwest", "rustls"], optional = true }
+# Sentry crash + manual capture + structured logs. Optional behind
+# telemetry-sentry feature.
+#
+# IMPORTANT: explicit native-tls. sentry 0.47 → reqwest 0.13 → rustls
+# by default; rustls 0.23+ requires CryptoProvider::install_default(),
+# without which a static lazy init panics inside the cdylib's load
+# path on WindowsAppSDK + Velopack and triggers __fastfail (0xc0000409).
+# native-tls uses schannel on Windows — no CryptoProvider, no panic.
+# Reference: rustls#2070, project memory
+# project_sentry_dll_load_crash_2026_04_26.md.
+sentry = { version = "0.47", default-features = false, features = ["backtrace", "contexts", "panic", "reqwest", "native-tls", "logs"], optional = true }
 
 [dev-dependencies]
 # Integration test infrastructure. Kept minimal — no snapshot crate yet,
