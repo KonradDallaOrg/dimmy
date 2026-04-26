@@ -147,12 +147,12 @@ jobs:
       - name: Build Rust static library
         working-directory: core
         env:
-          # Diagnostic build: re-enable SENTRY_DSN to trigger the
-          # WindowsAppSDK boot crash with the granular S0..S8 logs in
-          # sentry_pipeline::init. The dimmy_startup.log + crash.log
-          # captured by test-install will pinpoint the failing step.
+          # PostHog only — Sentry DSN injection temporarily disabled because
+          # sentry::init at process start crashes the WindowsAppSDK boot
+          # sequence with STATUS_STACK_BUFFER_OVERRUN (V3 staging-latest test
+          # 2026-04-26). Empty SENTRY_DSN forces sentry_pipeline::init to
+          # no-op until the root cause is investigated.
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
-          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
         run: |
           echo "CMake: $(cmake --version | head -1)"
           echo "Xcode CLT: $(xcode-select -p)"
@@ -364,9 +364,9 @@ jobs:
           LIBCLANG_PATH: "C:\\Program Files\\LLVM\\bin"
           CMAKE_GENERATOR: Ninja
           CARGO_TARGET_DIR: "D:\\t"
-          # Diagnostic build (see macOS step for the rationale).
+          # PostHog only — Sentry DSN injection temporarily disabled
+          # (see staging-native.yml macOS step for the rationale).
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
-          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
         run: |
           REM Activate VS 2026 MSVC for this step only — PATH, INCLUDE,
           REM LIB point at the 14.50+ toolchain. Subsequent steps inherit
@@ -534,9 +534,9 @@ jobs:
       - name: Build release
         working-directory: platforms/linux
         env:
-          # Diagnostic build (see macOS step for the rationale).
+          # PostHog only — Sentry DSN injection temporarily disabled
+          # (see staging-native.yml macOS step for the rationale).
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
-          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
         run: cargo build --release
 
       - name: Package AppImage
