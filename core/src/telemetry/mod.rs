@@ -21,8 +21,14 @@ pub mod client;
 pub mod events;
 pub mod identity;
 pub mod sanitize;
+pub mod sentry_pipeline;
 
 pub use events::Event;
+
+/// Initialise both pipelines. Idempotent. Call once from FFI init.
+pub fn init() {
+    sentry_pipeline::init();
+}
 
 /// Submit an event to the analytics pipeline. Best-effort: never
 /// blocks the caller, never panics, never logs at the user-facing
@@ -62,4 +68,34 @@ pub fn reset_anonymous_id() {
 /// the key itself.
 pub fn has_compiled_key() -> bool {
     client::has_compiled_key()
+}
+
+// ── Sentry crash + feedback pipeline ──────────────────────────────────
+
+/// Set the runtime enabled flag for crash reporting. Independent of
+/// the analytics toggle.
+pub fn set_crash_enabled(enabled: bool) {
+    sentry_pipeline::set_enabled(enabled);
+}
+
+/// Read the current crash-reporting enabled flag.
+pub fn is_crash_enabled() -> bool {
+    sentry_pipeline::is_enabled()
+}
+
+/// True when a non-empty Sentry DSN was compiled in.
+pub fn has_compiled_dsn() -> bool {
+    sentry_pipeline::has_compiled_dsn()
+}
+
+/// Capture an error that already happened (e.g. from an Event::Error*
+/// variant). Best-effort, silent.
+pub fn capture_error(category: &str, message: &str) {
+    sentry_pipeline::capture_error(category, message);
+}
+
+/// Capture user-submitted feedback. `kind` is `bug` / `feature` /
+/// `general`. `email` is optional, only included if the user typed it.
+pub fn capture_feedback(kind: &str, message: &str, email: Option<&str>) {
+    sentry_pipeline::capture_feedback(kind, message, email);
 }
