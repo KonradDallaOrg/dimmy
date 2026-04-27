@@ -112,6 +112,13 @@ pub fn reset() {
     }
 }
 
+/// Generate a fresh UUIDv4. Public wrapper used by other telemetry
+/// modules that need a one-shot session-scoped identifier (e.g.
+/// `session_id` in the PostHog client) without persisting it.
+pub fn new_uuid_v4() -> String {
+    generate()
+}
+
 fn is_valid_uuid(s: &str) -> bool {
     s.len() == 36
         && s.chars().enumerate().all(|(i, c)| match i {
