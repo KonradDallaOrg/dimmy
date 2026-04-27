@@ -144,6 +144,17 @@ pub fn track(event: Event) {
     spawn_send(payload);
 }
 
+/// Process-lifetime session identifier. A fresh UUIDv4 generated on
+/// first event; reused for every subsequent event in the same process.
+/// Lets PostHog group activity into sessions without us tracking
+/// open/close round-trips. Anonymous-ID stays stable across launches;
+/// session_id changes per launch.
+static SESSION_ID: OnceLock<String> = OnceLock::new();
+
+fn session_id() -> &'static str {
+    SESSION_ID.get_or_init(crate::telemetry::identity::new_uuid_v4)
+}
+
 fn build_payload(event: &Event) -> Result<String, serde_json::Error> {
     // No `timestamp` field on purpose: PostHog drops events whose
     // explicit `timestamp` differs from receive time by more than a
@@ -153,11 +164,32 @@ fn build_payload(event: &Event) -> Result<String, serde_json::Error> {
     // ingested. PostHog uses request receive time when the field is
     // absent, which is what we want — events are emitted at the
     // moment they happen, network latency is tiny.
+    //
+    // Augment with common properties (app_version, os, arch,
+    // session_id). These let dashboards filter/segment by version and
+    // group activity by session without burdening every Event variant
+    // with the same boilerplate. We use `entry().or_insert_with` so a
+    // variant that already declares its own `version` (e.g.
+    // PerfStartupMs) wins over the generic value.
+    let mut props = event.properties();
+    if let serde_json::Value::Object(ref mut map) = props {
+        map.entry("app_version".to_string())
+            .or_insert_with(|| serde_json::Value::String(env!("CARGO_PKG_VERSION").to_string()));
+        map.entry("os".to_string()).or_insert_with(|| {
+            serde_json::Value::String(crate::telemetry::events::os_name().to_string())
+        });
+        map.entry("arch".to_string()).or_insert_with(|| {
+            serde_json::Value::String(crate::telemetry::events::arch_name().to_string())
+        });
+        map.entry("session_id".to_string())
+            .or_insert_with(|| serde_json::Value::String(session_id().to_string()));
+    }
+
     let body = serde_json::json!({
         "api_key": POSTHOG_API_KEY,
         "event": event.name(),
         "distinct_id": crate::telemetry::identity::anonymous_id(),
-        "properties": event.properties(),
+        "properties": props,
     });
     serde_json::to_string(&body)
 }
@@ -251,5 +283,60 @@ mod tests {
         set_enabled(false);
         track(Event::OnboardingStarted);
         set_enabled(true);
+    }
+
+    /// Every payload must carry the four shared properties added in
+    /// the Phase 2 enrichment: `app_version`, `os`, `arch`,
+    /// `session_id`. These are what dashboards filter on, so missing
+    /// any of them silently degrades segment analysis.
+    #[test]
+    fn build_payload_carries_shared_properties() {
+        let e = Event::ConfigPreprocessingChanged { enabled: true };
+        let p = build_payload(&e).expect("build");
+        // Use the parsed JSON to be insensitive to key/whitespace
+        // serialisation choices.
+        let v: serde_json::Value = serde_json::from_str(&p).expect("json");
+        let props = &v["properties"];
+        assert!(props["app_version"].is_string(), "missing app_version");
+        assert!(props["os"].is_string(), "missing os");
+        assert!(props["arch"].is_string(), "missing arch");
+        assert!(props["session_id"].is_string(), "missing session_id");
+        assert_eq!(props["app_version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(props["enabled"], true);
+    }
+
+    /// Variant-declared property values must win over the generic
+    /// shared-property fallback. PerfStartupMs declares its own
+    /// `version`; the build_payload generic enrichment is keyed on
+    /// `app_version` instead, so both can coexist. This test pins
+    /// that the variant's `version` is preserved verbatim and that
+    /// `app_version` is added alongside it.
+    #[test]
+    fn build_payload_variant_fields_win_over_shared_defaults() {
+        let e = Event::PerfStartupMs {
+            value: 999,
+            version: "0.0.0-test",
+        };
+        let p = build_payload(&e).expect("build");
+        let v: serde_json::Value = serde_json::from_str(&p).expect("json");
+        assert_eq!(v["properties"]["version"], "0.0.0-test");
+        assert_eq!(v["properties"]["app_version"], env!("CARGO_PKG_VERSION"));
+    }
+
+    /// session_id stays stable for the lifetime of the process —
+    /// every event in the same run should carry the same value so
+    /// PostHog can group activity into a session without us tracking
+    /// open/close events explicitly.
+    #[test]
+    fn session_id_stable_across_events() {
+        let a = build_payload(&Event::OnboardingStarted).expect("a");
+        let b = build_payload(&Event::OnboardingStarted).expect("b");
+        let va: serde_json::Value = serde_json::from_str(&a).expect("ja");
+        let vb: serde_json::Value = serde_json::from_str(&b).expect("jb");
+        assert_eq!(
+            va["properties"]["session_id"], vb["properties"]["session_id"],
+            "session_id must be stable within a process"
+        );
+        assert!(va["properties"]["session_id"].as_str().unwrap().len() == 36);
     }
 }

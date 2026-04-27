@@ -889,6 +889,21 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
     };
 
     let st = state();
+
+    // ─── Snapshot config-trackable fields BEFORE apply ──────────────
+    // Used after the apply block to diff and emit `config.*_changed`
+    // PostHog events. Only the fields explicitly listed below feed
+    // analytics; others (prompt text, custom shortcut string, …) are
+    // intentionally NOT tracked because their content can include user
+    // language and we want to keep PostHog payloads PII-free.
+    let prev_stt_mode: String = st.stt_mode.lock().map(|m| m.clone()).unwrap_or_default();
+    let prev_api_url: String = st.api_url.lock().map(|u| u.clone()).unwrap_or_default();
+    let prev_llm_api_url: String = st.llm_api_url.lock().map(|u| u.clone()).unwrap_or_default();
+    let prev_llm_enabled: bool = st.llm_enabled.lock().map(|e| *e).unwrap_or(false);
+    let prev_llm_style: &'static str = st.llm_style.lock().map(|s| s.as_str()).unwrap_or("default");
+    let prev_preprocessing: bool = st.preprocessing_enabled.lock().map(|p| *p).unwrap_or(false);
+    let prev_input_gain = f32::from_bits(st.input_gain.load(std::sync::atomic::Ordering::Relaxed));
+
     let use_kr = st.use_keyring.lock().map(|k| *k).unwrap_or(false);
 
     // Apply each field if present
@@ -1121,12 +1136,92 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
         }
     }
 
+    // ─── Diff against pre-apply snapshot and emit telemetry ─────────
+    // Best-effort: every track() is fire-and-forget and silently drops
+    // when the user has disabled analytics or no API key was compiled
+    // in. Provider changes are derived from URL deltas via Provider::
+    // from_url so that we report a stable "groq" / "openai" / "anthropic"
+    // tag rather than the raw URL (which may include user-custom paths
+    // or self-hosted endpoints).
+    {
+        let new_stt_mode: String = st.stt_mode.lock().map(|m| m.clone()).unwrap_or_default();
+        if new_stt_mode != prev_stt_mode {
+            crate::telemetry::track(crate::telemetry::Event::ConfigSttModeChanged {
+                mode: stt_mode_to_static(&new_stt_mode),
+            });
+        }
+
+        let new_api_url: String = st.api_url.lock().map(|u| u.clone()).unwrap_or_default();
+        let prev_provider = Provider::from_url(&prev_api_url);
+        let new_provider = Provider::from_url(&new_api_url);
+        if prev_provider != new_provider {
+            crate::telemetry::track(crate::telemetry::Event::ConfigCloudProviderChanged {
+                provider: new_provider.as_str(),
+            });
+        }
+
+        // LLM provider change tracked under the same event with a
+        // marker, since adding a new variant would churn the schema.
+        let new_llm_api_url: String = st.llm_api_url.lock().map(|u| u.clone()).unwrap_or_default();
+        let prev_llm_provider = Provider::from_url(&prev_llm_api_url);
+        let new_llm_provider = Provider::from_url(&new_llm_api_url);
+        if prev_llm_provider != new_llm_provider {
+            crate::telemetry::track(crate::telemetry::Event::ConfigCloudProviderChanged {
+                provider: new_llm_provider.as_str(),
+            });
+        }
+
+        let new_llm_enabled: bool = st.llm_enabled.lock().map(|e| *e).unwrap_or(false);
+        if new_llm_enabled != prev_llm_enabled {
+            crate::telemetry::track(crate::telemetry::Event::ConfigLlmEnabledChanged {
+                enabled: new_llm_enabled,
+            });
+        }
+
+        let new_llm_style: &'static str =
+            st.llm_style.lock().map(|s| s.as_str()).unwrap_or("default");
+        if new_llm_style != prev_llm_style {
+            crate::telemetry::track(crate::telemetry::Event::ConfigLlmStyleChanged {
+                style: new_llm_style.to_string(),
+            });
+        }
+
+        let new_preprocessing: bool = st.preprocessing_enabled.lock().map(|p| *p).unwrap_or(false);
+        if new_preprocessing != prev_preprocessing {
+            crate::telemetry::track(crate::telemetry::Event::ConfigPreprocessingChanged {
+                enabled: new_preprocessing,
+            });
+        }
+
+        let new_input_gain =
+            f32::from_bits(st.input_gain.load(std::sync::atomic::Ordering::Relaxed));
+        // Only emit if delta exceeds a perceptible threshold; the slider
+        // ticks in 0.05 increments so 0.001 catches every real movement
+        // while filtering Mutex/atomic round-trip noise.
+        if (new_input_gain - prev_input_gain).abs() > 0.001 {
+            crate::telemetry::track(crate::telemetry::Event::ConfigInputGainChanged {
+                gain: new_input_gain,
+            });
+        }
+    }
+
     // Save to disk
     if let Ok(cfg) = crate::snapshot_config(st) {
         save_config_file(&cfg);
     }
 
     0
+}
+
+/// Map a free-form `stt_mode` string (read from config / FFI) to the
+/// stable analytics enum tag. Anything we don't recognise becomes
+/// `"unknown"` so the dashboard can flag UI regressions cleanly.
+fn stt_mode_to_static(s: &str) -> &'static str {
+    match s {
+        "local" => "local",
+        "cloud" => "cloud",
+        _ => "unknown",
+    }
 }
 
 // ── GPU diagnostics ─────────────────────────────────────────────────
