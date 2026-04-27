@@ -240,6 +240,35 @@ fn dimmy_init_inner() -> c_int {
     // the C-ABI log callback reads on every line.
     crate::gpu_diag::set_ggml_debug_enabled(file_cfg.ggml_debug_logging);
 
+    // GPU stability telemetry: read the sticky known-bad marker the
+    // previous run may have left on disk. We do NOT eagerly probe the
+    // GPU at init time (the probe has side effects: env-var mutation,
+    // ggml backend init, library loads); instead we report the
+    // *intended* backend (compile-time feature) and whether last run
+    // crashed during GPU init. perf.gpu_status fires every launch;
+    // error.gpu_crash fires only on the launch immediately after a
+    // crash, so that we can compute "GPU crashes per N launches"
+    // independently of whether the user actually triggered a
+    // local-STT call this session.
+    let known_bad_record = crate::gpu_health::read_known_bad();
+    let known_bad_found = known_bad_record.is_some();
+    let compiled_backend = compiled_gpu_backend();
+    crate::telemetry::track(crate::telemetry::Event::PerfGpuStatus {
+        backend: compiled_backend,
+        fell_back_to_cpu: known_bad_found,
+        known_bad: known_bad_found,
+    });
+    if let Some(rec) = known_bad_record {
+        crate::telemetry::track(crate::telemetry::Event::ErrorGpuCrash {
+            backend: compiled_backend,
+            // `context` is a free-form Rust string written by us at
+            // crash recovery time (e.g. "whisper_load: <path>"); the
+            // sanitize::scrub_path filter applied by `looks_like_secret`
+            // before send guards against any path leakage.
+            context: rec.context,
+        });
+    }
+
     match GLOBAL_STATE.set(app_state) {
         Ok(()) => {
             log("FFI init complete");
@@ -952,6 +981,13 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
             if let Ok(mut k) = st.api_key.lock() {
                 *k = Some(key.to_string());
             }
+            // Telemetry: provider-only, never the key value. Activation
+            // signal — distinguishes "configured something" from "left
+            // defaults".
+            crate::telemetry::track(crate::telemetry::Event::FeatureApiKeySet {
+                scope: "stt",
+                provider: provider.as_str(),
+            });
         }
     }
 
@@ -1015,6 +1051,10 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
             if let Ok(mut k) = st.llm_api_key.lock() {
                 *k = Some(key.to_string());
             }
+            crate::telemetry::track(crate::telemetry::Event::FeatureApiKeySet {
+                scope: "llm",
+                provider: provider.as_str(),
+            });
         }
     }
     // If llm_api_url changed but no new key was provided, reload key from keystore
@@ -1221,6 +1261,24 @@ fn stt_mode_to_static(s: &str) -> &'static str {
         "local" => "local",
         "cloud" => "cloud",
         _ => "unknown",
+    }
+}
+
+/// Returns the GPU backend that this binary was compiled with — the
+/// *intended* path, not the runtime success/fallback. Used as a
+/// stable property for `perf.gpu_status` and `error.gpu_crash` so
+/// dashboards segment by build flavour. CUDA/Metal/Vulkan flags are
+/// mutually exclusive in practice; the precedence below matches the
+/// dominant real-world build targets per platform.
+fn compiled_gpu_backend() -> &'static str {
+    if cfg!(feature = "local-stt-cuda") || cfg!(feature = "local-llm-cuda") {
+        "cuda"
+    } else if cfg!(feature = "local-stt-metal") || cfg!(feature = "local-llm-metal") {
+        "metal"
+    } else if cfg!(feature = "local-stt-vulkan") || cfg!(feature = "local-llm-vulkan") {
+        "vulkan"
+    } else {
+        "cpu"
     }
 }
 
@@ -2103,7 +2161,18 @@ pub unsafe extern "C" fn dimmy_hotkey_set(combo_ptr: *const c_char) {
 /// - 2 = released (any key in combo released after press)
 #[no_mangle]
 pub extern "C" fn dimmy_hotkey_take_event() -> c_int {
-    crate::hotkey::take_event() as c_int
+    let ev = crate::hotkey::take_event();
+    // Emit telemetry on EVENT_PRESSED (=1). The C# host polls this
+    // every ~50ms; a non-zero return at the press edge means the
+    // user actually triggered a recording via the global hotkey
+    // (vs the in-app button, which calls `dimmy_start_recording`
+    // directly and never goes through the hotkey path). Combined
+    // with `transcription.completed` totals, dashboards derive the
+    // hotkey-vs-button ratio.
+    if ev == 1 {
+        crate::telemetry::track(crate::telemetry::Event::FeatureHotkeyTriggered);
+    }
+    ev as c_int
 }
 
 /// Start recording mode for shortcut capture.

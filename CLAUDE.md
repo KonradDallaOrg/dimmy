@@ -23,6 +23,8 @@ Cross-platform voice-transcription overlay. Records audio via global hotkey, tra
 | **Testing strategy — tiers, fixtures, how to run + extend** | [`docs/dev/testing.md`](docs/dev/testing.md) |
 | Native UI status across platforms | [`docs/dev/native-ui-plan.md`](docs/dev/native-ui-plan.md) |
 | Local LLM feasibility study | [`docs/dev/local-llm-feasibility.md`](docs/dev/local-llm-feasibility.md) |
+| **Telemetry implementation (PostHog + Sentry)** | [`docs/dev/telemetry-implementation.md`](docs/dev/telemetry-implementation.md) |
+| **User-facing privacy policy** | [`PRIVACY.md`](PRIVACY.md) |
 | Per-platform notes | [`platforms/windows/README.md`](platforms/windows/README.md), [`platforms/macos/README.md`](platforms/macos/README.md), [`platforms/linux/README.md`](platforms/linux/README.md) |
 
 ## Development philosophy — MANDATORY
@@ -107,6 +109,12 @@ All 10 invariants live in [`docs/dev/windows-ci.md`](docs/dev/windows-ci.md) —
 ### Versioning
 - Update `core/Cargo.toml` → `version = "x.y.z"` for every release.
 - Full runbook: [`docs/RELEASING.md`](docs/RELEASING.md).
+
+### Telemetry — privacy hard rules
+- **NEVER** include user content (transcribed text, prompt text, custom LLM prompt, microphone device name, file paths, hostname, username, IP) in any PostHog property or Sentry message. The `looks_like_secret` filter is a safety net, not a substitute for review.
+- Provider names (groq/openai/anthropic/...) are categorical enums and OK to send.
+- Counts, durations, error categories are OK to send.
+- Adding a new event: add an `Event` variant in `core/src/telemetry/events.rs`, wire the emit, add a unit test, and update [`docs/dev/telemetry-implementation.md`](docs/dev/telemetry-implementation.md) + [`PRIVACY.md`](PRIVACY.md) if a new category of data is collected.
 
 ## Conventions
 

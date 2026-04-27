@@ -74,7 +74,7 @@ Learn more at **[dimmy.app](https://dimmy.app)**.
 - **LLM post-processing** — 13 styles (correct grammar, summarize, rewrite professionally, translate, custom prompts, and more).
 - **Filler word removal** — strips "um", "basically", "cioè" etc. in six languages.
 - **Searchable history** — SQLite + FTS5 full-text search over every transcription.
-- **Privacy-first** — no telemetry, no account, API keys encrypted locally with AES-256-GCM.
+- **Privacy-first** — no account; API keys encrypted locally with AES-256-GCM; minimal anonymous opt-out telemetry (no transcripts, no prompts, no IP — full list in [`PRIVACY.md`](PRIVACY.md)).
 - **GPU acceleration** — Metal on Apple Silicon, Vulkan on Windows (all GPU vendors), CUDA on NVIDIA.
 - **Multilingual** — auto-detect or pick from 12+ languages.
 - **Configurable hotkey** — toggle or hold-to-record, any modifier combination.
@@ -420,7 +420,9 @@ Full backlog with MoSCoW prioritization: **[`BACKLOG.md`](BACKLOG.md)**. Highlig
 
 In **local mode** (the default), no. Audio is captured, preprocessed, and transcribed entirely on your device. Nothing touches the network.
 
-In **cloud mode**, audio is sent over HTTPS to the provider you chose (Groq, OpenAI, Deepgram, or Gemini). Each provider has its own data-retention policy — check their terms. Dimmy itself has no server, no telemetry, no analytics.
+In **cloud mode**, audio is sent over HTTPS to the provider you chose (Groq, OpenAI, Deepgram, or Gemini). Each provider has its own data-retention policy — check their terms.
+
+Dimmy also sends a small amount of anonymous opt-out telemetry to PostHog EU and Sentry EU (event names like `transcription.completed`, error categories, app version, OS — never the audio, never the text, never IP, never your API keys). Toggle it off in **Settings → Privacy**. Full list of what's collected: [`PRIVACY.md`](PRIVACY.md).
 </details>
 
 <details>

@@ -217,6 +217,7 @@ fn build_payload(event: &Event) -> Result<String, serde_json::Error> {
     // with the same boilerplate. We use `entry().or_insert_with` so a
     // variant that already declares its own `version` (e.g.
     // PerfStartupMs) wins over the generic value.
+    let event_name = event.name();
     let mut props = event.properties();
     if let serde_json::Value::Object(ref mut map) = props {
         map.entry("app_version".to_string())
@@ -230,25 +231,31 @@ fn build_payload(event: &Event) -> Result<String, serde_json::Error> {
         map.entry("session_id".to_string())
             .or_insert_with(|| serde_json::Value::String(session_id().to_string()));
 
+        // Privacy: explicitly opt out of PostHog's automatic IP
+        // capture. By default the ingest server records the originating
+        // IP. We never want it. Setting `$ip: null` in properties is
+        // the documented opt-out (PostHog respects it before geo-
+        // resolution runs).
+        map.insert("$ip".to_string(), serde_json::Value::Null);
+
         // PostHog Person properties — attach user-level metadata so
         // dashboards can build cohorts (retention, "users on v0.6.20",
-        // platform breakdown) without joining events. Two flavours:
+        // platform breakdown) without joining events. Three flavours:
         //   - `$set_once`: only takes effect on first event for this
         //     distinct_id. Subsequent events leave the value alone.
-        //     Used for fields that describe the user's "first contact"
-        //     (first_seen_at, first_app_version, first_os).
+        //     Used for fields that describe the user's "first contact".
         //   - `$set`: overwrites every time. Used for "current state"
-        //     fields (latest_app_version, latest_seen_at). Sent on
-        //     every event so PostHog always has the freshest value.
-        //
-        // We intentionally do NOT include the user's transcription
-        // count or LLM provider here — those would require coordinated
-        // updates from multiple call sites and are better handled in a
-        // follow-up phase via $add operators on specific events.
+        //     fields. Sent on every event so PostHog always has the
+        //     freshest value.
+        //   - `$add`: atomic increment (PostHog Person operator). Used
+        //     for cumulative counters (total_transcriptions etc.) so
+        //     cohort queries can filter "users with >10 transcriptions"
+        //     in O(1) without an events-table scan.
         let now_iso = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
         let app_version = env!("CARGO_PKG_VERSION");
         let os = crate::telemetry::events::os_name();
         let arch = crate::telemetry::events::arch_name();
+
         map.insert(
             "$set_once".to_string(),
             serde_json::json!({
@@ -258,20 +265,67 @@ fn build_payload(event: &Event) -> Result<String, serde_json::Error> {
                 "first_arch": arch,
             }),
         );
-        map.insert(
-            "$set".to_string(),
-            serde_json::json!({
-                "latest_app_version": app_version,
-                "latest_seen_at": now_iso,
-                "latest_os": os,
-                "latest_arch": arch,
-            }),
+
+        // Build $set incrementally so we can inject event-specific
+        // "latest_*" fields (provider, mode) when the source event
+        // carries them. The base layer is the always-present platform
+        // metadata; on top we splice in latest_stt_* from
+        // transcription.completed and latest_llm_* from llm.applied.
+        let mut set_obj = serde_json::Map::new();
+        set_obj.insert(
+            "latest_app_version".to_string(),
+            serde_json::Value::String(app_version.to_string()),
         );
+        set_obj.insert(
+            "latest_seen_at".to_string(),
+            serde_json::Value::String(now_iso),
+        );
+        set_obj.insert(
+            "latest_os".to_string(),
+            serde_json::Value::String(os.to_string()),
+        );
+        set_obj.insert(
+            "latest_arch".to_string(),
+            serde_json::Value::String(arch.to_string()),
+        );
+        if event_name == "transcription.completed" {
+            if let Some(p) = map.get("provider").cloned() {
+                set_obj.insert("latest_stt_provider".to_string(), p);
+            }
+            if let Some(m) = map.get("mode").cloned() {
+                set_obj.insert("latest_stt_mode".to_string(), m);
+            }
+        }
+        if event_name == "llm.applied" {
+            if let Some(p) = map.get("provider").cloned() {
+                set_obj.insert("latest_llm_provider".to_string(), p);
+            }
+        }
+        map.insert("$set".to_string(), serde_json::Value::Object(set_obj));
+
+        // $add: atomic counters for cohort segmentation. Each branch is
+        // a discrete event-name match so we never silently double-count
+        // (e.g. transcription.completed and transcription.failed do NOT
+        // both feed `total_transcriptions`).
+        let add_block: Option<serde_json::Value> = match event_name {
+            "transcription.completed" => Some(serde_json::json!({"total_transcriptions": 1})),
+            "transcription.failed" => Some(serde_json::json!({"total_transcription_failures": 1})),
+            "transcription.cancelled" => {
+                Some(serde_json::json!({"total_transcriptions_cancelled": 1}))
+            }
+            "llm.applied" => Some(serde_json::json!({"total_llm_uses": 1})),
+            "llm.failed" => Some(serde_json::json!({"total_llm_failures": 1})),
+            "app.started" => Some(serde_json::json!({"total_sessions": 1})),
+            _ => None,
+        };
+        if let Some(add) = add_block {
+            map.insert("$add".to_string(), add);
+        }
     }
 
     let body = serde_json::json!({
         "api_key": POSTHOG_API_KEY,
-        "event": event.name(),
+        "event": event_name,
         "distinct_id": crate::telemetry::identity::anonymous_id(),
         "properties": props,
     });
@@ -468,5 +522,193 @@ mod tests {
             "session_id must be stable within a process"
         );
         assert!(va["properties"]["session_id"].as_str().unwrap().len() == 36);
+    }
+
+    /// `$ip: null` must always be present so PostHog skips its
+    /// server-side IP capture / geo-resolution pipeline. Sentry EU
+    /// already drops IPs by default; PostHog needs explicit opt-out.
+    #[test]
+    fn build_payload_opts_out_of_ip_capture() {
+        let p = build_payload(&Event::OnboardingStarted).expect("build");
+        let v: serde_json::Value = serde_json::from_str(&p).expect("json");
+        assert!(
+            v["properties"]["$ip"].is_null(),
+            "$ip must be null (got {:?})",
+            v["properties"]["$ip"]
+        );
+    }
+
+    /// Cumulative counters via PostHog `$add` operator: the right
+    /// counter increments for the right event, no double-counting,
+    /// no counter on events that shouldn't carry one.
+    #[test]
+    fn build_payload_increments_correct_counter_per_event() {
+        let cases: &[(Event, &str)] = &[
+            (
+                Event::TranscriptionCompleted {
+                    mode: "cloud",
+                    provider: "groq",
+                    audio_secs: 1.0,
+                    processing_ms: 100,
+                    word_count: 5,
+                    language: "en".into(),
+                    success: true,
+                    had_filler_removal: false,
+                    had_llm: false,
+                },
+                "total_transcriptions",
+            ),
+            (
+                Event::TranscriptionFailed {
+                    mode: "cloud",
+                    provider: "groq",
+                    error_category: "401",
+                },
+                "total_transcription_failures",
+            ),
+            (
+                Event::TranscriptionCancelled { audio_secs: 2.0 },
+                "total_transcriptions_cancelled",
+            ),
+            (
+                Event::LlmApplied {
+                    mode: "cloud",
+                    provider: "openai",
+                    style: "casual".into(),
+                    tone: "neutral".into(),
+                    processing_ms: 200,
+                    success: true,
+                },
+                "total_llm_uses",
+            ),
+            (
+                Event::LlmFailed {
+                    mode: "cloud",
+                    provider: "openai",
+                    error_category: "429",
+                },
+                "total_llm_failures",
+            ),
+            (
+                Event::AppStarted {
+                    version: "0.6.20",
+                    os: "windows",
+                    arch: "x86_64",
+                    cold_start_ms: 50,
+                },
+                "total_sessions",
+            ),
+        ];
+        for (event, expected_counter) in cases {
+            let p = build_payload(event).expect("build");
+            let v: serde_json::Value = serde_json::from_str(&p).expect("json");
+            let add = &v["properties"]["$add"];
+            assert!(add.is_object(), "$add missing for {:?}", event);
+            assert_eq!(
+                add[expected_counter], 1,
+                "counter {} should be 1 for {:?}",
+                expected_counter, event
+            );
+        }
+    }
+
+    /// Events that don't represent a user action (config changes,
+    /// feature triggers, perf snapshots) must NOT increment any
+    /// `$add` counter — those signals are already captured by the
+    /// event itself; double-counting via $add would inflate cohort
+    /// metrics.
+    #[test]
+    fn build_payload_omits_add_for_non_counter_events() {
+        for event in [
+            Event::FeatureHotkeyTriggered,
+            Event::FeatureApiKeySet {
+                scope: "stt",
+                provider: "groq",
+            },
+            Event::ConfigPreprocessingChanged { enabled: true },
+            Event::PerfGpuStatus {
+                backend: "vulkan",
+                fell_back_to_cpu: false,
+                known_bad: false,
+            },
+        ] {
+            let p = build_payload(&event).expect("build");
+            let v: serde_json::Value = serde_json::from_str(&p).expect("json");
+            assert!(
+                v["properties"].get("$add").is_none()
+                    || v["properties"]["$add"]
+                        .as_object()
+                        .map(|o| o.is_empty())
+                        .unwrap_or(true),
+                "event {:?} must NOT carry an $add block",
+                event
+            );
+        }
+    }
+
+    /// `latest_stt_provider` must be set on `transcription.completed`
+    /// only — not on every event. This is what enables filters like
+    /// "users whose latest STT provider is groq".
+    #[test]
+    fn build_payload_sets_latest_stt_provider_on_transcription_completed() {
+        let e = Event::TranscriptionCompleted {
+            mode: "cloud",
+            provider: "anthropic",
+            audio_secs: 1.0,
+            processing_ms: 100,
+            word_count: 5,
+            language: "it".into(),
+            success: true,
+            had_filler_removal: false,
+            had_llm: false,
+        };
+        let p = build_payload(&e).expect("build");
+        let v: serde_json::Value = serde_json::from_str(&p).expect("json");
+        assert_eq!(v["properties"]["$set"]["latest_stt_provider"], "anthropic");
+        assert_eq!(v["properties"]["$set"]["latest_stt_mode"], "cloud");
+    }
+
+    /// `latest_llm_provider` must be set on `llm.applied` only.
+    #[test]
+    fn build_payload_sets_latest_llm_provider_on_llm_applied() {
+        let e = Event::LlmApplied {
+            mode: "cloud",
+            provider: "openai",
+            style: "casual".into(),
+            tone: "neutral".into(),
+            processing_ms: 200,
+            success: true,
+        };
+        let p = build_payload(&e).expect("build");
+        let v: serde_json::Value = serde_json::from_str(&p).expect("json");
+        assert_eq!(v["properties"]["$set"]["latest_llm_provider"], "openai");
+    }
+
+    /// New event variants must roundtrip through name() and properties()
+    /// without panicking and produce the expected event names.
+    #[test]
+    fn new_feature_events_roundtrip() {
+        assert_eq!(
+            Event::FeatureHotkeyTriggered.name(),
+            "feature.hotkey_triggered"
+        );
+        assert_eq!(
+            Event::FeatureApiKeySet {
+                scope: "stt",
+                provider: "groq",
+            }
+            .name(),
+            "feature.api_key_set"
+        );
+        // Properties roundtrip — must not panic and produce the
+        // declared field names.
+        let p = build_payload(&Event::FeatureApiKeySet {
+            scope: "llm",
+            provider: "openai",
+        })
+        .expect("build");
+        let v: serde_json::Value = serde_json::from_str(&p).expect("json");
+        assert_eq!(v["properties"]["scope"], "llm");
+        assert_eq!(v["properties"]["provider"], "openai");
     }
 }

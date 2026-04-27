@@ -124,6 +124,22 @@ pub enum Event {
         provider: &'static str,
     },
 
+    // ── Feature usage (engagement signals) ───────────────────
+    /// Emitted when the global hotkey starts a recording. Pairs with
+    /// the existing `transcription.*` events to derive the
+    /// hotkey-vs-button ratio (= recordings without a corresponding
+    /// `feature.hotkey_triggered` originated from a UI button).
+    FeatureHotkeyTriggered,
+    /// Emitted when the user successfully writes an API key for any
+    /// provider. Carries `scope` (stt|llm) and `provider` (stable
+    /// enum tag — never the key value). Used to measure the
+    /// "configured a real provider" activation step independently of
+    /// whether they then ran a transcription.
+    FeatureApiKeySet {
+        scope: &'static str,
+        provider: &'static str,
+    },
+
     // ── Errors (also forwarded to Sentry) ────────────────────
     ErrorCloudStt {
         provider: &'static str,
@@ -185,6 +201,8 @@ impl Event {
             Event::ErrorLocalLlm { .. } => "error.local_llm",
             Event::ErrorGpuCrash { .. } => "error.gpu_crash",
             Event::ErrorAudioHealth { .. } => "error.audio_health",
+            Event::FeatureHotkeyTriggered => "feature.hotkey_triggered",
+            Event::FeatureApiKeySet { .. } => "feature.api_key_set",
         }
     }
 
