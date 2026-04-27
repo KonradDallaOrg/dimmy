@@ -81,7 +81,8 @@
                           Visibility="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
               </StackPanel>
 
-              <ToggleSwitch Header="Launch at login" IsEnabled="False" />
+              <ToggleSwitch Header="Launch at login"
+                            IsOn="{Binding AutostartEnabled, Mode=TwoWay}" />
 
               <!-- STT Mode: Local vs Cloud -->
               <TextBlock Text="Speech-to-Text Mode" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />

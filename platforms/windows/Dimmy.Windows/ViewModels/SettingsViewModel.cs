@@ -102,6 +102,35 @@ public partial class SettingsViewModel : ObservableObject
     {
         try { Interop.DimmyNative.CrashReportsEnabled = value; } catch { }
     }
+
+    // Autostart — read at viewmodel load from the Rust core's actual
+    // OS-level state (HKCU\…\Run presence on Windows). The on-change
+    // partial forwards the new value through the FFI; if the FFI
+    // throws (registry write denied etc.), we revert the property to
+    // the actually-applied value so the UI matches reality. The
+    // `_supressAutostartCallback` flag breaks the recursion that
+    // would otherwise loop on the revert.
+    [ObservableProperty] private bool _autostartEnabled;
+    private bool _supressAutostartCallback;
+
+    partial void OnAutostartEnabledChanged(bool value)
+    {
+        if (_supressAutostartCallback) return;
+        try
+        {
+            Interop.DimmyNative.AutostartEnabled = value;
+        }
+        catch
+        {
+            var actual = Interop.DimmyNative.AutostartEnabled;
+            if (actual != value)
+            {
+                _supressAutostartCallback = true;
+                try { AutostartEnabled = actual; }
+                finally { _supressAutostartCallback = false; }
+            }
+        }
+    }
     // GPU known-bad surface (read-only in the UI; populated by LoadGpuStatus).
     [ObservableProperty] private bool _gpuKnownBad;
     [ObservableProperty] private string _gpuKnownBadSince = "";
@@ -165,6 +194,10 @@ public partial class SettingsViewModel : ObservableObject
             {
                 TelemetryEnabled = Interop.DimmyNative.TelemetryEnabled;
                 CrashReportsEnabled = Interop.DimmyNative.CrashReportsEnabled;
+                // Autostart is read from the actual OS state (HKCU\…\Run on
+                // Windows etc.), not from config.json — it's not a config
+                // setting we own, it's an OS integration we observe.
+                AutostartEnabled = Interop.DimmyNative.AutostartEnabled;
             }
             catch { /* DLL maybe missing in test/headless context */ }
             SttMode = r.TryGetProperty("stt_mode", out var sm2) ? sm2.GetString() ?? "cloud" : "cloud";

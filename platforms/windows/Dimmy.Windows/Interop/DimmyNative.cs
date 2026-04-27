@@ -237,4 +237,35 @@ public static class DimmyNative
 
     public static int CaptureFeedback(string kind, string message, string? email = null)
         => dimmy_telemetry_capture_feedback(kind, message, email);
+
+    // ── Autostart (Launch at login) ─────────────────────────────
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_autostart_set_enabled(int enabled);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_autostart_is_enabled();
+
+    /// <summary>
+    /// Cross-platform "launch at login" toggle. Wraps the OS-specific
+    /// mechanisms (HKCU\…\Run on Windows, LaunchAgent plist on macOS,
+    /// XDG autostart on Linux). Setting this to true writes the
+    /// platform's user-scope autostart entry; setting it to false
+    /// removes it. Both are reversible and require no admin rights.
+    ///
+    /// NB: the property setter throws on OS-level failure — callers
+    /// should wrap in try/catch and revert the UI toggle on
+    /// exception, otherwise the user sees the switch flip but
+    /// autostart didn't actually engage.
+    /// </summary>
+    public static bool AutostartEnabled
+    {
+        get => dimmy_autostart_is_enabled() == 1;
+        set
+        {
+            int rc = dimmy_autostart_set_enabled(value ? 1 : 0);
+            if (rc != 0)
+                throw new InvalidOperationException(
+                    $"Failed to set autostart to {value} (return code {rc})");
+        }
+    }
 }

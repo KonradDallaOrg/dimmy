@@ -2340,6 +2340,48 @@ pub unsafe extern "C" fn dimmy_telemetry_capture_feedback(
     0
 }
 
+// ── Autostart ─────────────────────────────────────────────────────
+
+/// Enable or disable launch-at-login. Returns 0 on success, -1 on
+/// any OS-level failure (registry write denied, plist directory
+/// missing, exe path unresolvable, …). On success, also emits a
+/// `config.autostart_changed` PostHog event so dashboards see the
+/// flip rate.
+///
+/// The C# UI is expected to bind this as a real toggle — on
+/// non-zero return, the UI should NOT flip its `IsOn` state and
+/// should surface an error, otherwise the user sees "the switch
+/// went on but autostart did nothing" and quietly loses trust.
+#[no_mangle]
+pub extern "C" fn dimmy_autostart_set_enabled(enabled: c_int) -> c_int {
+    let want = enabled != 0;
+    match crate::autostart::set_enabled(want) {
+        Ok(()) => {
+            log(&format!("[autostart] set enabled={}", want));
+            crate::telemetry::track(crate::telemetry::Event::ConfigAutostartChanged {
+                enabled: want,
+            });
+            0
+        }
+        Err(e) => {
+            log(&format!("[autostart] set failed: {}", e));
+            -1
+        }
+    }
+}
+
+/// Read the current autostart state. Returns 1 if the autostart
+/// entry is present, 0 if not (or if we couldn't tell — see
+/// `crate::autostart::is_enabled` for the swallowed-error rationale).
+#[no_mangle]
+pub extern "C" fn dimmy_autostart_is_enabled() -> c_int {
+    if crate::autostart::is_enabled() {
+        1
+    } else {
+        0
+    }
+}
+
 /// Get history stats as JSON. Returns bytes written or -1.
 #[no_mangle]
 pub extern "C" fn dimmy_history_stats(buf: *mut c_char, buf_len: c_int) -> c_int {
