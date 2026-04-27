@@ -229,6 +229,44 @@ fn build_payload(event: &Event) -> Result<String, serde_json::Error> {
         });
         map.entry("session_id".to_string())
             .or_insert_with(|| serde_json::Value::String(session_id().to_string()));
+
+        // PostHog Person properties — attach user-level metadata so
+        // dashboards can build cohorts (retention, "users on v0.6.20",
+        // platform breakdown) without joining events. Two flavours:
+        //   - `$set_once`: only takes effect on first event for this
+        //     distinct_id. Subsequent events leave the value alone.
+        //     Used for fields that describe the user's "first contact"
+        //     (first_seen_at, first_app_version, first_os).
+        //   - `$set`: overwrites every time. Used for "current state"
+        //     fields (latest_app_version, latest_seen_at). Sent on
+        //     every event so PostHog always has the freshest value.
+        //
+        // We intentionally do NOT include the user's transcription
+        // count or LLM provider here — those would require coordinated
+        // updates from multiple call sites and are better handled in a
+        // follow-up phase via $add operators on specific events.
+        let now_iso = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let app_version = env!("CARGO_PKG_VERSION");
+        let os = crate::telemetry::events::os_name();
+        let arch = crate::telemetry::events::arch_name();
+        map.insert(
+            "$set_once".to_string(),
+            serde_json::json!({
+                "first_seen_at": now_iso,
+                "first_app_version": app_version,
+                "first_os": os,
+                "first_arch": arch,
+            }),
+        );
+        map.insert(
+            "$set".to_string(),
+            serde_json::json!({
+                "latest_app_version": app_version,
+                "latest_seen_at": now_iso,
+                "latest_os": os,
+                "latest_arch": arch,
+            }),
+        );
     }
 
     let body = serde_json::json!({
@@ -367,6 +405,52 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&p).expect("json");
         assert_eq!(v["properties"]["version"], "0.0.0-test");
         assert_eq!(v["properties"]["app_version"], env!("CARGO_PKG_VERSION"));
+    }
+
+    /// `$set_once` and `$set` Person-property blocks must be present
+    /// on every payload. PostHog needs them to populate the User
+    /// (Person) record so cohort/retention queries work without
+    /// joining the events table on every operation.
+    #[test]
+    fn build_payload_emits_person_property_set_blocks() {
+        let e = Event::AppStarted {
+            version: "0.6.20",
+            os: "windows",
+            arch: "x86_64",
+            cold_start_ms: 100,
+        };
+        let p = build_payload(&e).expect("build");
+        let v: serde_json::Value = serde_json::from_str(&p).expect("json");
+        let props = &v["properties"];
+
+        let set_once = &props["$set_once"];
+        assert!(set_once.is_object(), "$set_once must be an object");
+        assert!(set_once["first_seen_at"].is_string());
+        assert_eq!(set_once["first_app_version"], env!("CARGO_PKG_VERSION"));
+        assert!(set_once["first_os"].is_string());
+        assert!(set_once["first_arch"].is_string());
+
+        let set = &props["$set"];
+        assert!(set.is_object(), "$set must be an object");
+        assert_eq!(set["latest_app_version"], env!("CARGO_PKG_VERSION"));
+        assert!(set["latest_seen_at"].is_string());
+        assert!(set["latest_os"].is_string());
+        assert!(set["latest_arch"].is_string());
+    }
+
+    /// `first_seen_at` must be in ISO 8601 UTC format (PostHog parses
+    /// timestamps in this shape for the People view).
+    #[test]
+    fn person_property_first_seen_at_is_iso_utc() {
+        let p = build_payload(&Event::OnboardingStarted).expect("build");
+        let v: serde_json::Value = serde_json::from_str(&p).expect("json");
+        let ts = v["properties"]["$set_once"]["first_seen_at"]
+            .as_str()
+            .expect("first_seen_at present");
+        // 2026-04-27T07:30:12Z — at least 20 chars, ends with Z, has T.
+        assert!(ts.len() >= 20, "ISO timestamp too short: {}", ts);
+        assert!(ts.ends_with('Z'), "ISO timestamp must end with Z: {}", ts);
+        assert!(ts.contains('T'), "ISO timestamp must contain T: {}", ts);
     }
 
     /// session_id stays stable for the lifetime of the process —
