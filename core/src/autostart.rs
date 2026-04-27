@@ -26,7 +26,7 @@
 //! state is never load-bearing for the app's runtime — losing it
 //! just means "next reboot, the user has to launch Dimmy manually".
 
-use auto_launch::AutoLaunch;
+use auto_launch::{AutoLaunch, AutoLaunchBuilder};
 use std::sync::OnceLock;
 
 /// Display name used by the OS to label the autostart entry.
@@ -45,10 +45,22 @@ fn auto_launch() -> Result<&'static AutoLaunch, String> {
         .ok_or_else(|| "autostart: failed to resolve current exe path".to_string())
 }
 
+/// Build the `AutoLaunch` instance using the builder API. The plain
+/// `AutoLaunch::new` constructor has a *different* arity per OS
+/// (macOS adds a `use_launch_agent: bool` parameter that Windows /
+/// Linux don't have), which would break the build on at least one
+/// platform. The builder normalises this — `set_use_launch_agent`
+/// is a no-op outside macOS and we always set it `true` to prefer
+/// the per-user LaunchAgent over a system-wide LaunchDaemon.
 fn build_auto_launch() -> Option<AutoLaunch> {
     let exe = std::env::current_exe().ok()?;
     let exe_str = exe.to_string_lossy().to_string();
-    Some(AutoLaunch::new(APP_NAME, &exe_str, &[] as &[&str]))
+    AutoLaunchBuilder::new()
+        .set_app_name(APP_NAME)
+        .set_app_path(&exe_str)
+        .set_use_launch_agent(true)
+        .build()
+        .ok()
 }
 
 /// Enable or disable autostart. Returns `Err` if the underlying OS
