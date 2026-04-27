@@ -71,6 +71,15 @@ pub enum Event {
     ConfigInputGainChanged {
         gain: f32,
     },
+    /// Emitted when the user flips the "Launch at login" toggle in
+    /// Settings. The autostart toggle is a real cross-platform OS
+    /// integration, so success here is non-trivial; we track only
+    /// successful flips (the Rust core returns -1 from the FFI on
+    /// OS-level failures, in which case the C# UI does NOT flip its
+    /// `IsOn` state and no event is emitted).
+    ConfigAutostartChanged {
+        enabled: bool,
+    },
 
     // ── Transcription ────────────────────────────────────────
     TranscriptionCompleted {
@@ -187,6 +196,7 @@ impl Event {
             Event::ConfigShortcutChanged => "config.shortcut_changed",
             Event::ConfigPreprocessingChanged { .. } => "config.preprocessing_changed",
             Event::ConfigInputGainChanged { .. } => "config.input_gain_changed",
+            Event::ConfigAutostartChanged { .. } => "config.autostart_changed",
             Event::TranscriptionCompleted { .. } => "transcription.completed",
             Event::TranscriptionFailed { .. } => "transcription.failed",
             Event::TranscriptionCancelled { .. } => "transcription.cancelled",

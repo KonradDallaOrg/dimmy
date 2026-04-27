@@ -1,6 +1,6 @@
 [package]
 name = "dimmy"
-version = "0.6.20"
+version = "0.6.21"
 edition = "2021"
 description = "Dimmy — Cross-platform voice transcription overlay"
 license = "AGPL-3.0-only"
@@ -91,6 +91,13 @@ libloading = { version = "0.8", optional = true }
 # Reference: rustls#2070, project memory
 # project_sentry_dll_load_crash_2026_04_26.md.
 sentry = { version = "0.47", default-features = false, features = ["backtrace", "contexts", "panic", "reqwest", "native-tls", "logs"], optional = true }
+# Cross-platform "launch at login" toggle. Wraps the OS-specific
+# autostart mechanisms (HKCU\…\Run on Windows, ~/Library/LaunchAgents
+# on macOS, ~/.config/autostart/*.desktop on Linux) behind a single
+# enable/disable/is_enabled API. ~400 LoC, MIT. The alternative would
+# be three platform-specific modules in core/src/autostart/, which is
+# what we'd write anyway — better to take the dep.
+auto-launch = "0.5"
 
 [dev-dependencies]
 # Integration test infrastructure. Kept minimal — no snapshot crate yet,
