@@ -56,6 +56,46 @@ pub fn has_compiled_key() -> bool {
     !POSTHOG_API_KEY.is_empty()
 }
 
+/// Logged once on first event send to make "key is wrong" failures
+/// debuggable from the client log alone. PostHog's ingest endpoint
+/// returns HTTP 200 + `{"status":"Ok"}` for *every* request,
+/// including those with a non-existent api_key (verified 2026-04-27
+/// with a fake `phc_FAKE_…` value), so HTTP 200 in our log proves
+/// nothing about the event arriving in the dashboard. Logging the
+/// masked prefix + length lets ops correlate the embedded key with
+/// the GitHub Secret value without exfiltrating the secret.
+static KEY_DIAG_LOGGED: AtomicBool = AtomicBool::new(false);
+
+fn log_key_diagnostic_once() {
+    if KEY_DIAG_LOGGED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let key = POSTHOG_API_KEY;
+    if key.is_empty() {
+        crate::log("[telemetry] key-diag: POSTHOG_API_KEY is empty, telemetry disabled");
+        return;
+    }
+    // Mask: keep the public `phc_` prefix + first 4 hex chars; redact
+    // the rest. `phc_` keys are write-only, so the prefix alone is
+    // safe to log (it identifies the project, not the user). If the
+    // key is mis-shaped (no `phc_` prefix) we still log the first 4
+    // chars — knowing it's wrong is more valuable than guarding the
+    // value of a key that's already broken.
+    let prefix: String = key.chars().take(8).collect();
+    let len = key.len();
+    let starts_phc = key.starts_with("phc_");
+    crate::log(&format!(
+        "[telemetry] key-diag: prefix={}… len={} starts_with_phc={}",
+        prefix, len, starts_phc
+    ));
+    if !starts_phc {
+        crate::log(
+            "[telemetry] key-diag: WARNING POSTHOG_API_KEY does not start with `phc_`. \
+             PostHog will silently drop events. Verify GitHub Secret value.",
+        );
+    }
+}
+
 /// Set the runtime enabled flag (driven by the user's settings).
 pub fn set_enabled(enabled: bool) {
     ENABLED.store(enabled, Ordering::Relaxed);
@@ -114,6 +154,12 @@ pub fn track(event: Event) {
         crate::log("[telemetry] dropped: no compile-time POSTHOG_API_KEY");
         return;
     }
+
+    // First event in this process: log the key prefix (masked) so
+    // "events sent but never appear in dashboard" failures can be
+    // diagnosed from the client log alone (PostHog returns 200 OK for
+    // every request, including bogus keys).
+    log_key_diagnostic_once();
 
     let payload = match build_payload(&event) {
         Ok(p) => p,
