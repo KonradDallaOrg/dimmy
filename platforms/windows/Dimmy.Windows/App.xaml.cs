@@ -68,6 +68,7 @@ public partial class App : Application
         _appViewModel.WaveformStyle = settings.WaveformStyle;
         _appViewModel.Theme = settings.Theme;
         _appViewModel.Language = settings.Language;
+        _appViewModel.LlmTranslateTo = settings.LlmTranslateTo;
         _appViewModel.LlmStyle = settings.LlmStyle;
         _appViewModel.KeepInClipboard = settings.KeepInClipboard;
 
@@ -257,6 +258,8 @@ public partial class App : Application
                 _appViewModel.ShortcutMode = sm.GetString() ?? "toggle";
             if (r.TryGetProperty("language", out var lang))
                 _appViewModel.Language = lang.GetString() ?? "";
+            if (r.TryGetProperty("llm_translate_to", out var trans))
+                _appViewModel.LlmTranslateTo = trans.GetString() ?? "";
             if (r.TryGetProperty("llm_style", out var style))
                 _appViewModel.LlmStyle = style.GetString() ?? "off";
             if (r.TryGetProperty("selected_device", out var dev))
