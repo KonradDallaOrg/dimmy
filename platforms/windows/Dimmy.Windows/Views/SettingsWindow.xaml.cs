@@ -3,6 +3,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Dimmy.Windows.Helpers;
@@ -14,7 +15,7 @@ namespace Dimmy.Windows.Views;
 public sealed partial class SettingsWindow : Window
 {
     public SettingsViewModel ViewModel { get; } = new();
-    private string _currentTag = "general";
+    private string _currentTag = "home";
     private bool _loaded; // suppress SelectionChanged during init
 
     public SettingsWindow()
@@ -54,6 +55,20 @@ public sealed partial class SettingsWindow : Window
         SyncLlmMode();
         PopulateStats();
         PopulateVersion();
+
+        // Default to Home tab. Without this the NavigationView starts with no
+        // selection, so the user sees the Home panel content (Visibility=
+        // Visible in XAML) but no sidebar highlight, which is jarring.
+        if (NavView.MenuItems.Count > 0 && NavView.MenuItems[0] is NavigationViewItem first)
+        {
+            NavView.SelectedItem = first;
+        }
+
+        // Pulse "Saved" InfoBar on any ViewModel field change (Win11 auto-save
+        // pattern). The Save button still flushes to disk; this is purely
+        // a visual hint that the form is dirty.
+        ViewModel.PropertyChanged += (_, _) => PulseSavedInfoBar();
+
         _loaded = true;
     }
 
@@ -535,10 +550,15 @@ public sealed partial class SettingsWindow : Window
         if (args.SelectedItem is NavigationViewItem item && item.Tag is string tag)
         {
             _currentTag = tag;
+            // V2 IA: home / voice / output / pill / rules / shortcut / privacy / about / advanced.
+            // Legacy tags (general / overlay / debug / stats) accepted for back-compat with any
+            // saved nav-state path elsewhere — they map to the v2 panels behind the scenes.
+            HomePanel.Visibility = Visibility.Collapsed;
             GeneralPanel.Visibility = Visibility.Collapsed;
             ShortcutPanel.Visibility = Visibility.Collapsed;
             OutputPanel.Visibility = Visibility.Collapsed;
             OverlayPanel.Visibility = Visibility.Collapsed;
+            RulesPanel.Visibility = Visibility.Collapsed;
             AboutPanel.Visibility = Visibility.Collapsed;
             PrivacyPanel.Visibility = Visibility.Collapsed;
             StatsPanel.Visibility = Visibility.Collapsed;
@@ -546,15 +566,17 @@ public sealed partial class SettingsWindow : Window
 
             var panel = tag switch
             {
-                "general" => GeneralPanel,
-                "shortcut" => ShortcutPanel,
+                "home" => HomePanel,
+                "voice" or "general" => GeneralPanel,
                 "output" => OutputPanel,
-                "overlay" => OverlayPanel,
-                "about" => AboutPanel,
+                "pill" or "overlay" => OverlayPanel,
+                "rules" => RulesPanel,
+                "shortcut" => ShortcutPanel,
                 "privacy" => PrivacyPanel,
+                "about" => AboutPanel,
+                "advanced" or "debug" => DebugPanel,
                 "stats" => StatsPanel,
-                "debug" => DebugPanel,
-                _ => GeneralPanel,
+                _ => HomePanel,
             };
             panel.Visibility = Visibility.Visible;
 
@@ -563,6 +585,50 @@ public sealed partial class SettingsWindow : Window
                 RefreshAnonymousIdText();
             }
         }
+    }
+
+    /// <summary>
+    /// Filter NavigationView items by user-typed query in the AutoSuggestBox.
+    /// Hidden items are simply collapsed; the user clears the query to see
+    /// everything again. Case-insensitive substring match on Content text.
+    /// </summary>
+    private void NavSearchBox_TextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)
+    {
+        var query = (sender.Text ?? string.Empty).Trim().ToLowerInvariant();
+        foreach (var item in NavView.MenuItems)
+        {
+            if (item is NavigationViewItem navItem)
+            {
+                var label = (navItem.Content as string ?? string.Empty).ToLowerInvariant();
+                navItem.Visibility = string.IsNullOrEmpty(query) || label.Contains(query)
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Brief "Saved" InfoBar pulse triggered by any setting change. Win11-
+    /// native auto-save UX. The actual persistence still happens on Save
+    /// click for now; this is a visual hint that the form has been edited.
+    /// </summary>
+    private DispatcherQueueTimer? _savedPulseTimer;
+    private void PulseSavedInfoBar()
+    {
+        if (!_loaded) return;
+        SavedInfoBar.IsOpen = true;
+        _savedPulseTimer ??= DispatcherQueue.CreateTimer();
+        _savedPulseTimer.Stop();
+        _savedPulseTimer.Interval = TimeSpan.FromMilliseconds(1500);
+        _savedPulseTimer.IsRepeating = false;
+        _savedPulseTimer.Tick -= OnSavedPulseTick;
+        _savedPulseTimer.Tick += OnSavedPulseTick;
+        _savedPulseTimer.Start();
+    }
+    private void OnSavedPulseTick(DispatcherQueueTimer sender, object args)
+    {
+        SavedInfoBar.IsOpen = false;
+        sender.Stop();
     }
 
     private void Save_Click(object sender, RoutedEventArgs e)

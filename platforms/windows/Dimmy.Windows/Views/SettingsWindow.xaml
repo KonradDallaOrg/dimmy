@@ -12,36 +12,56 @@
       <RowDefinition Height="Auto" />
     </Grid.RowDefinitions>
 
-    <NavigationView x:Name="NavView" PaneDisplayMode="Left" OpenPaneLength="160"
+    <NavigationView x:Name="NavView" PaneDisplayMode="Left" OpenPaneLength="200"
                     IsBackButtonVisible="Collapsed"
                     IsSettingsVisible="False" SelectionChanged="Nav_SelectionChanged">
+      <NavigationView.AutoSuggestBox>
+        <AutoSuggestBox x:Name="NavSearchBox" PlaceholderText="Search settings"
+                        QueryIcon="Find"
+                        TextChanged="NavSearchBox_TextChanged" />
+      </NavigationView.AutoSuggestBox>
       <NavigationView.MenuItems>
-        <NavigationViewItem Content="General" Tag="general">
-          <NavigationViewItem.Icon><FontIcon Glyph="&#xE713;" /></NavigationViewItem.Icon>
+        <NavigationViewItem Content="Home" Tag="home">
+          <NavigationViewItem.Icon><FontIcon Glyph="&#xE80F;" /></NavigationViewItem.Icon>
+        </NavigationViewItem>
+        <NavigationViewItem Content="Voice input" Tag="voice">
+          <NavigationViewItem.Icon><FontIcon Glyph="&#xE720;" /></NavigationViewItem.Icon>
+        </NavigationViewItem>
+        <NavigationViewItem Content="Output" Tag="output">
+          <NavigationViewItem.Icon><FontIcon Glyph="&#xE945;" /></NavigationViewItem.Icon>
+        </NavigationViewItem>
+        <NavigationViewItem Content="Pill overlay" Tag="pill">
+          <NavigationViewItem.Icon><FontIcon Glyph="&#xE7B5;" /></NavigationViewItem.Icon>
+        </NavigationViewItem>
+        <NavigationViewItem Content="App rules" Tag="rules">
+          <NavigationViewItem.Icon><FontIcon Glyph="&#xECAA;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
         <NavigationViewItem Content="Shortcut" Tag="shortcut">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE765;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
-        <NavigationViewItem Content="Output" Tag="output">
-          <NavigationViewItem.Icon><FontIcon Glyph="&#xE8A1;" /></NavigationViewItem.Icon>
-        </NavigationViewItem>
-        <NavigationViewItem Content="Overlay" Tag="overlay">
-          <NavigationViewItem.Icon><FontIcon Glyph="&#xE740;" /></NavigationViewItem.Icon>
+        <NavigationViewItem Content="Privacy &amp; data" Tag="privacy">
+          <NavigationViewItem.Icon><FontIcon Glyph="&#xE72E;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
         <NavigationViewItem Content="About" Tag="about">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE946;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
-        <NavigationViewItem Content="Privacy" Tag="privacy">
-          <NavigationViewItem.Icon><FontIcon Glyph="&#xE72E;" /></NavigationViewItem.Icon>
-        </NavigationViewItem>
-        <NavigationViewItem Content="Stats" Tag="stats">
-          <NavigationViewItem.Icon><FontIcon Glyph="&#xE9D9;" /></NavigationViewItem.Icon>
-        </NavigationViewItem>
-        <NavigationViewItem Content="Debug" Tag="debug"
+        <NavigationViewItem Content="Advanced" Tag="advanced"
                             Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-          <NavigationViewItem.Icon><FontIcon Glyph="&#xEBE8;" /></NavigationViewItem.Icon>
+          <NavigationViewItem.Icon><FontIcon Glyph="&#xE957;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
       </NavigationView.MenuItems>
+
+      <NavigationView.PaneFooter>
+        <!-- Advanced mode toggle in the sidebar footer (Win11 native pattern,
+             matches the design bundle). Reveals the Advanced nav item for
+             developer-only diagnostics + debug toggles. -->
+        <Border Padding="14,8" BorderThickness="0,1,0,0"
+                BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}">
+          <ToggleSwitch Header="Advanced mode"
+                        IsOn="{Binding IsAdvanced, Mode=TwoWay}"
+                        OnContent="On" OffContent="Off" />
+        </Border>
+      </NavigationView.PaneFooter>
 
       <ScrollViewer Padding="24,20,24,20">
         <Grid>
@@ -50,396 +70,632 @@
             <RowDefinition Height="*" />
           </Grid.RowDefinitions>
 
-          <!-- Advanced toggle — sits above content so it never overlaps on narrow windows -->
-          <ToggleSwitch Grid.Row="0" Header="Advanced"
-                        IsOn="{Binding IsAdvanced, Mode=TwoWay}"
-                        HorizontalAlignment="Right" VerticalAlignment="Top"
-                        Margin="0,0,0,8" />
-
           <!-- All panels share this container: left-aligned, with generous max width for readability -->
-          <StackPanel Grid.Row="1" MaxWidth="720" HorizontalAlignment="Left">
+          <StackPanel Grid.Row="1" MaxWidth="760" HorizontalAlignment="Left">
 
-            <!-- ═══ General ═══ -->
-            <StackPanel x:Name="GeneralPanel" Spacing="16" Visibility="Visible">
-              <TextBlock Text="Theme" FontWeight="SemiBold" FontSize="14" />
-              <StackPanel x:Name="ThemeRadioPanel" Orientation="Horizontal" Spacing="12">
-                <RadioButton Content="Auto" GroupName="Theme" Tag="Default" Checked="Theme_Checked" />
-                <RadioButton Content="Light" GroupName="Theme" Tag="Light" Checked="Theme_Checked" />
-                <RadioButton Content="Dark" GroupName="Theme" Tag="Dark" Checked="Theme_Checked" />
+            <!-- ═══ Home (NEW) — welcome card + system prefs (theme, autostart) + quick stats ═══ -->
+            <StackPanel x:Name="HomePanel" Spacing="20" Visibility="Visible">
+              <StackPanel Spacing="2" Margin="0,0,0,4">
+                <TextBlock Text="Home" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="Get a quick read on Dimmy and jump to what you need."
+                           FontSize="13"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
               </StackPanel>
-
-              <ComboBox x:Name="LanguageComboBox" Header="Native language (you speak)" Width="240"
-                        DisplayMemberPath="Value"
-                        ItemsSource="{Binding LanguageItems}"
-                        ToolTipService.ToolTip="The language you actually speak when recording. Used as a hint for the speech-to-text engine. To translate the output to a different language, scroll the pill or use Output → Translate to."
-                        SelectionChanged="Language_SelectionChanged" />
-
-              <StackPanel Orientation="Horizontal" Spacing="8">
-                <PasswordBox x:Name="ApiKeyBox" Header="STT API Key" Width="320"
-                             PlaceholderText="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}" />
-                <FontIcon Glyph="&#xE73E;" FontSize="16" Foreground="#4ade80"
-                          VerticalAlignment="Bottom" Margin="0,0,0,8"
-                          Visibility="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
-              </StackPanel>
-
-              <ToggleSwitch Header="Launch at login"
-                            IsOn="{Binding AutostartEnabled, Mode=TwoWay}" />
-
-              <!-- STT Mode: Local vs Cloud -->
-              <TextBlock Text="Speech-to-Text Mode" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
-              <StackPanel Orientation="Horizontal" Spacing="16">
-                <RadioButton x:Name="SttModeLocal" Content="Local (Offline)" GroupName="SttMode"
-                             Checked="SttMode_Checked" Tag="local" />
-                <RadioButton x:Name="SttModeCloud" Content="Cloud" GroupName="SttMode"
-                             Checked="SttMode_Checked" Tag="cloud" />
-              </StackPanel>
-
-              <!-- Local STT info panel (visible when local mode is selected) -->
-              <StackPanel x:Name="LocalSttPanel" Spacing="8">
-                <ComboBox x:Name="LocalModelComboBox" Header="Model" Width="360"
-                          SelectionChanged="LocalModel_SelectionChanged" />
-                <TextBlock x:Name="LocalModelStatus" Text="Checking..."
-                           FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-                <Button x:Name="DownloadModelBtn" Content="Download Model"
-                        Click="DownloadModel_Click" Visibility="Collapsed" />
-                <ProgressBar x:Name="DownloadProgress" IsIndeterminate="True"
-                             Visibility="Collapsed" Width="320" HorizontalAlignment="Left" />
-                <ToggleSwitch Header="Remove filler words (um, uh, etc.)"
-                              IsOn="{Binding FillerRemovalEnabled, Mode=TwoWay}" />
-              </StackPanel>
-
-              <!-- Cloud STT panel (visible when cloud mode is selected) -->
-              <StackPanel x:Name="CloudSttPanel" Spacing="8" Visibility="Collapsed">
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                  <PasswordBox x:Name="CloudApiKeyBox" Header="STT API Key" Width="320"
-                               PlaceholderText="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}" />
-                  <FontIcon Glyph="&#xE73E;" FontSize="16" Foreground="#4ade80"
-                            VerticalAlignment="Bottom" Margin="0,0,0,8"
-                            Visibility="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
+              <!-- Welcome card -->
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="20,16">
+                <StackPanel Spacing="6">
+                  <TextBlock Text="Welcome to Dimmy" FontSize="20" FontWeight="SemiBold" />
+                  <TextBlock TextWrapping="Wrap"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                             Text="Voice dictation that stays out of your way. Press your shortcut, speak, and the transcript pastes into whatever app has focus." />
                 </StackPanel>
-              </StackPanel>
+              </Border>
 
-              <!-- Advanced: STT Provider -->
-              <StackPanel Spacing="12"
+              <!-- System preferences card: theme + autostart -->
+              <TextBlock Text="System" FontWeight="SemiBold" FontSize="14" />
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="20,16">
+                <StackPanel Spacing="14">
+                  <StackPanel Spacing="6">
+                    <TextBlock Text="Theme" FontWeight="SemiBold" FontSize="13" />
+                    <StackPanel x:Name="ThemeRadioPanel" Orientation="Horizontal" Spacing="12">
+                      <RadioButton Content="Auto" GroupName="Theme" Tag="Default" Checked="Theme_Checked" />
+                      <RadioButton Content="Light" GroupName="Theme" Tag="Light" Checked="Theme_Checked" />
+                      <RadioButton Content="Dark" GroupName="Theme" Tag="Dark" Checked="Theme_Checked" />
+                    </StackPanel>
+                  </StackPanel>
+                  <ToggleSwitch Header="Launch at login"
+                                IsOn="{Binding AutostartEnabled, Mode=TwoWay}" />
+                </StackPanel>
+              </Border>
+
+              <!-- Quick stats card -->
+              <TextBlock Text="Your dictation" FontWeight="SemiBold" FontSize="14" />
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="20,16">
+                <Grid ColumnSpacing="32">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                  </Grid.ColumnDefinitions>
+                  <StackPanel Grid.Column="0" Spacing="2">
+                    <TextBlock FontSize="28" FontWeight="SemiBold"
+                               Text="{Binding StatsTotalWords, Mode=OneWay}" />
+                    <TextBlock FontSize="12"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               Text="words transcribed" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="1" Spacing="2">
+                    <TextBlock FontSize="28" FontWeight="SemiBold"
+                               Text="{Binding TimeSavedDisplay, Mode=OneWay}" />
+                    <TextBlock FontSize="12"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               Text="time saved vs typing" />
+                  </StackPanel>
+                </Grid>
+              </Border>
+            </StackPanel>
+
+            <!-- ═══ Voice input (was General) — STT settings ═══ -->
+            <StackPanel x:Name="GeneralPanel" Spacing="16" Visibility="Collapsed">
+              <StackPanel Spacing="2" Margin="0,0,0,4">
+                <TextBlock Text="Voice input" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="How Dimmy hears and transcribes your voice."
+                           FontSize="13"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+              </StackPanel>
+              <!-- Card: Language -->
+              <TextBlock Text="Language" FontWeight="SemiBold" FontSize="14" />
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="20,16">
+                <ComboBox x:Name="LanguageComboBox" Header="Native language (you speak)" Width="240"
+                          DisplayMemberPath="Value"
+                          ItemsSource="{Binding LanguageItems}"
+                          ToolTipService.ToolTip="The language you actually speak when recording. Used as a hint for the speech-to-text engine. To translate the output to a different language, scroll the pill or use Output → Translate to."
+                          SelectionChanged="Language_SelectionChanged" />
+              </Border>
+
+              <!-- Card: Speech-to-Text -->
+              <TextBlock Text="Speech-to-Text" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="20,16">
+                <StackPanel Spacing="14">
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <PasswordBox x:Name="ApiKeyBox" Header="STT API Key" Width="320"
+                                 PlaceholderText="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}" />
+                    <FontIcon Glyph="&#xE73E;" FontSize="16" Foreground="#4ade80"
+                              VerticalAlignment="Bottom" Margin="0,0,0,8"
+                              Visibility="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
+                  </StackPanel>
+
+                  <StackPanel Spacing="6">
+                    <TextBlock Text="Mode" FontWeight="SemiBold" FontSize="13" />
+                    <StackPanel Orientation="Horizontal" Spacing="16">
+                      <RadioButton x:Name="SttModeLocal" Content="Local (Offline)" GroupName="SttMode"
+                                   Checked="SttMode_Checked" Tag="local" />
+                      <RadioButton x:Name="SttModeCloud" Content="Cloud" GroupName="SttMode"
+                                   Checked="SttMode_Checked" Tag="cloud" />
+                    </StackPanel>
+                  </StackPanel>
+
+                  <!-- Local STT (when Local selected) -->
+                  <StackPanel x:Name="LocalSttPanel" Spacing="8">
+                    <ComboBox x:Name="LocalModelComboBox" Header="Model" Width="360"
+                              SelectionChanged="LocalModel_SelectionChanged" />
+                    <TextBlock x:Name="LocalModelStatus" Text="Checking..."
+                               FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                    <Button x:Name="DownloadModelBtn" Content="Download Model"
+                            Click="DownloadModel_Click" Visibility="Collapsed" />
+                    <ProgressBar x:Name="DownloadProgress" IsIndeterminate="True"
+                                 Visibility="Collapsed" Width="320" HorizontalAlignment="Left" />
+                    <ToggleSwitch Header="Remove filler words (um, uh, etc.)"
+                                  IsOn="{Binding FillerRemovalEnabled, Mode=TwoWay}" />
+                  </StackPanel>
+
+                  <!-- Cloud STT (when Cloud selected) -->
+                  <StackPanel x:Name="CloudSttPanel" Spacing="8" Visibility="Collapsed">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <PasswordBox x:Name="CloudApiKeyBox" Header="STT API Key" Width="320"
+                                   PlaceholderText="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}" />
+                      <FontIcon Glyph="&#xE73E;" FontSize="16" Foreground="#4ade80"
+                                VerticalAlignment="Bottom" Margin="0,0,0,8"
+                                Visibility="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
+                    </StackPanel>
+                  </StackPanel>
+                </StackPanel>
+              </Border>
+
+              <!-- Advanced cards: Provider details + Microphone -->
+              <StackPanel Spacing="16"
                           Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-                <TextBlock Text="Speech-to-Text Provider" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
-                <ComboBox x:Name="ProviderComboBox" Header="Provider" Width="360"
-                          SelectionChanged="Provider_SelectionChanged">
-                  <ComboBoxItem Content="Groq — whisper-large-v3-turbo (free)" Tag="groq" />
-                  <ComboBoxItem Content="Groq — whisper-large-v3 (free)" Tag="groq-v3" />
-                  <ComboBoxItem Content="Groq — distil-whisper-en (free)" Tag="groq-distil" />
-                  <ComboBoxItem Content="OpenAI — whisper-1" Tag="openai" />
-                  <ComboBoxItem Content="OpenAI — gpt-4o-transcribe" Tag="openai-4o" />
-                  <ComboBoxItem Content="OpenAI — gpt-4o-mini-transcribe" Tag="openai-4o-mini" />
-                  <ComboBoxItem Content="Deepgram — nova-3" Tag="deepgram" />
-                  <ComboBoxItem Content="Deepgram — nova-2" Tag="deepgram-nova2" />
-                  <ComboBoxItem Content="Gemini — gemini-2.5-flash (free)" Tag="gemini" />
-                  <ComboBoxItem Content="Gemini — gemini-2.5-pro (free)" Tag="gemini-pro" />
-                  <ComboBoxItem Content="Custom endpoint" Tag="custom" />
-                </ComboBox>
-                <TextBox x:Name="CustomUrlBox" Header="Custom endpoint URL" Width="320"
-                         Text="{Binding ApiUrl, Mode=TwoWay}" Visibility="Collapsed" />
-                <TextBox x:Name="CustomModelBox" Header="Custom model" Width="240"
-                         Text="{Binding ApiModel, Mode=TwoWay}" Visibility="Collapsed" />
-                <TextBox Header="Prompt / Vocabulary" Width="400"
-                         AcceptsReturn="True" TextWrapping="Wrap" Height="80"
-                         Text="{Binding Prompt, Mode=TwoWay}" />
-                <ComboBox Header="Audio input device" Width="320"
-                          SelectedItem="{Binding SelectedDevice, Mode=TwoWay}"
-                          ItemsSource="{Binding Devices}" />
-                <Slider x:Name="InputGainSlider" Header="Microphone volume" Width="320"
-                        Minimum="10" Maximum="100" StepFrequency="5"
-                        Value="{Binding InputGainPercent, Mode=TwoWay}" />
-                <ToggleSwitch Header="Preprocessing"
-                              IsOn="{Binding PreprocessingEnabled, Mode=TwoWay}" />
-                <ToggleSwitch Header="Chunk streaming"
-                              IsOn="{Binding ChunkStreamingEnabled, Mode=TwoWay}" />
+
+                <TextBlock Text="Provider details" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
+                <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                        BorderThickness="1" CornerRadius="8" Padding="20,16">
+                  <StackPanel Spacing="12">
+                    <ComboBox x:Name="ProviderComboBox" Header="Provider" Width="360"
+                              SelectionChanged="Provider_SelectionChanged">
+                      <ComboBoxItem Content="Groq — whisper-large-v3-turbo (free)" Tag="groq" />
+                      <ComboBoxItem Content="Groq — whisper-large-v3 (free)" Tag="groq-v3" />
+                      <ComboBoxItem Content="Groq — distil-whisper-en (free)" Tag="groq-distil" />
+                      <ComboBoxItem Content="OpenAI — whisper-1" Tag="openai" />
+                      <ComboBoxItem Content="OpenAI — gpt-4o-transcribe" Tag="openai-4o" />
+                      <ComboBoxItem Content="OpenAI — gpt-4o-mini-transcribe" Tag="openai-4o-mini" />
+                      <ComboBoxItem Content="Deepgram — nova-3" Tag="deepgram" />
+                      <ComboBoxItem Content="Deepgram — nova-2" Tag="deepgram-nova2" />
+                      <ComboBoxItem Content="Gemini — gemini-2.5-flash (free)" Tag="gemini" />
+                      <ComboBoxItem Content="Gemini — gemini-2.5-pro (free)" Tag="gemini-pro" />
+                      <ComboBoxItem Content="Custom endpoint" Tag="custom" />
+                    </ComboBox>
+                    <TextBox x:Name="CustomUrlBox" Header="Custom endpoint URL" Width="320"
+                             Text="{Binding ApiUrl, Mode=TwoWay}" Visibility="Collapsed" />
+                    <TextBox x:Name="CustomModelBox" Header="Custom model" Width="240"
+                             Text="{Binding ApiModel, Mode=TwoWay}" Visibility="Collapsed" />
+                    <TextBox Header="Prompt / Vocabulary" Width="400"
+                             AcceptsReturn="True" TextWrapping="Wrap" Height="80"
+                             Text="{Binding Prompt, Mode=TwoWay}" />
+                  </StackPanel>
+                </Border>
+
+                <TextBlock Text="Microphone" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
+                <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                        BorderThickness="1" CornerRadius="8" Padding="20,16">
+                  <StackPanel Spacing="12">
+                    <ComboBox Header="Audio input device" Width="320"
+                              SelectedItem="{Binding SelectedDevice, Mode=TwoWay}"
+                              ItemsSource="{Binding Devices}" />
+                    <Slider x:Name="InputGainSlider" Header="Microphone volume" Width="320"
+                            Minimum="10" Maximum="100" StepFrequency="5"
+                            Value="{Binding InputGainPercent, Mode=TwoWay}" />
+                    <ToggleSwitch Header="Preprocessing"
+                                  IsOn="{Binding PreprocessingEnabled, Mode=TwoWay}" />
+                    <ToggleSwitch Header="Chunk streaming"
+                                  IsOn="{Binding ChunkStreamingEnabled, Mode=TwoWay}" />
+                  </StackPanel>
+                </Border>
                 <!-- API keys always stored in local encrypted file (keys.enc) -->
               </StackPanel>
             </StackPanel>
 
             <!-- ═══ Shortcut ═══ -->
             <StackPanel x:Name="ShortcutPanel" Spacing="16" Visibility="Collapsed">
-              <TextBlock Text="Hotkey" FontWeight="SemiBold" FontSize="14" />
-              <controls:ShortcutRecorder Shortcut="{Binding Shortcut, Mode=TwoWay}" />
-              <TextBlock Text="Mode" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
-              <StackPanel Orientation="Horizontal" Spacing="16">
-                <RadioButton Content="Push-to-Talk" GroupName="ShortcutMode"
-                             IsChecked="{Binding ShortcutMode, Mode=TwoWay, Converter={StaticResource StringToBoolConverter}, ConverterParameter=hold}" />
-                <RadioButton Content="Toggle" GroupName="ShortcutMode"
-                             IsChecked="{Binding ShortcutMode, Mode=TwoWay, Converter={StaticResource StringToBoolConverter}, ConverterParameter=toggle}" />
+              <StackPanel Spacing="2" Margin="0,0,0,4">
+                <TextBlock Text="Shortcut" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="The hotkey that starts and stops recording."
+                           FontSize="13"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
               </StackPanel>
+              <!-- Card: Hotkey + Mode -->
+              <TextBlock Text="Hotkey" FontWeight="SemiBold" FontSize="14" />
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="20,16">
+                <StackPanel Spacing="14">
+                  <controls:ShortcutRecorder Shortcut="{Binding Shortcut, Mode=TwoWay}" />
+                  <StackPanel Spacing="6">
+                    <TextBlock Text="Mode" FontWeight="SemiBold" FontSize="13" />
+                    <StackPanel Orientation="Horizontal" Spacing="16">
+                      <RadioButton Content="Push-to-Talk" GroupName="ShortcutMode"
+                                   IsChecked="{Binding ShortcutMode, Mode=TwoWay, Converter={StaticResource StringToBoolConverter}, ConverterParameter=hold}" />
+                      <RadioButton Content="Toggle" GroupName="ShortcutMode"
+                                   IsChecked="{Binding ShortcutMode, Mode=TwoWay, Converter={StaticResource StringToBoolConverter}, ConverterParameter=toggle}" />
+                    </StackPanel>
+                  </StackPanel>
+                </StackPanel>
+              </Border>
             </StackPanel>
 
             <!-- ═══ Output ═══ -->
             <StackPanel x:Name="OutputPanel" Spacing="16" Visibility="Collapsed">
-              <TextBlock Text="LLM Enhancement" FontWeight="SemiBold" FontSize="14" />
-              <ComboBox Header="Style" Width="240"
-                        SelectedItem="{Binding LlmStyle, Mode=TwoWay}"
-                        ItemsSource="{Binding LlmStyleItems}" />
-
-              <TextBlock Text="LLM Mode" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
-              <StackPanel Orientation="Horizontal" Spacing="16">
-                <RadioButton x:Name="LlmModeLocal" Content="Local (Offline)" GroupName="LlmMode"
-                             Checked="LlmMode_Checked" Tag="local" />
-                <RadioButton x:Name="LlmModeCloud" Content="Cloud" GroupName="LlmMode"
-                             Checked="LlmMode_Checked" Tag="cloud" />
+              <StackPanel Spacing="2" Margin="0,0,0,4">
+                <TextBlock Text="Output" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="How Dimmy rewrites and delivers your dictation."
+                           FontSize="13"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
               </StackPanel>
+              <!-- Card: Style -->
+              <TextBlock Text="LLM enhancement" FontWeight="SemiBold" FontSize="14" />
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="20,16">
+                <ComboBox Header="Style" Width="240"
+                          SelectedItem="{Binding LlmStyle, Mode=TwoWay}"
+                          ItemsSource="{Binding LlmStyleItems}" />
+              </Border>
 
-              <!-- Local LLM panel -->
-              <StackPanel x:Name="LocalLlmPanel" Spacing="8" Visibility="Collapsed">
-                <ComboBox x:Name="LocalLlmModelComboBox" Header="Model" Width="360"
-                          SelectionChanged="LocalLlmModel_SelectionChanged" />
-                <TextBlock x:Name="LocalLlmModelStatus" Text="Checking..."
-                           FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-                <Button x:Name="DownloadLlmModelBtn" Content="Download Model"
-                        Click="DownloadLlmModel_Click" Visibility="Collapsed" />
-                <ProgressBar x:Name="DownloadLlmProgress" IsIndeterminate="True"
-                             Visibility="Collapsed" Width="320" HorizontalAlignment="Left" />
-              </StackPanel>
+              <!-- Card: Mode + Local/Cloud panels -->
+              <TextBlock Text="LLM mode" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="20,16">
+                <StackPanel Spacing="14">
+                  <StackPanel Orientation="Horizontal" Spacing="16">
+                    <RadioButton x:Name="LlmModeLocal" Content="Local (Offline)" GroupName="LlmMode"
+                                 Checked="LlmMode_Checked" Tag="local" />
+                    <RadioButton x:Name="LlmModeCloud" Content="Cloud" GroupName="LlmMode"
+                                 Checked="LlmMode_Checked" Tag="cloud" />
+                  </StackPanel>
 
-              <!-- Cloud LLM panel -->
-              <StackPanel x:Name="CloudLlmPanel" Spacing="8">
-              <TextBlock Text="LLM Provider" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
-              <ComboBox x:Name="LlmProviderComboBox" Header="Provider" Width="320"
-                        SelectionChanged="LlmProvider_SelectionChanged">
-                <ComboBoxItem Content="Groq — llama-3.3-70b (free)" Tag="groq" />
-                <ComboBoxItem Content="OpenAI — gpt-4o-mini" Tag="openai" />
-                <ComboBoxItem Content="OpenRouter — llama-3.3-70b (free)" Tag="openrouter" />
-                <ComboBoxItem Content="OpenRouter — DeepSeek R1 (free)" Tag="openrouter-deepseek" />
-                <ComboBoxItem Content="Gemini — gemini-2.5-flash (free)" Tag="gemini" />
-                <ComboBoxItem Content="Anthropic — claude-haiku-4.5" Tag="anthropic" />
-                <ComboBoxItem Content="Anthropic — claude-sonnet-4" Tag="anthropic-sonnet" />
-                <ComboBoxItem Content="Custom endpoint" Tag="custom" />
-              </ComboBox>
-              <TextBox x:Name="LlmCustomUrlBox" Header="Custom LLM endpoint" Width="320"
-                       Visibility="Collapsed" Text="{Binding LlmApiUrl, Mode=TwoWay}" />
-              <TextBox x:Name="LlmCustomModelBox" Header="Custom LLM model" Width="240"
-                       Visibility="Collapsed" Text="{Binding LlmApiModel, Mode=TwoWay}" />
+                  <!-- Local LLM panel -->
+                  <StackPanel x:Name="LocalLlmPanel" Spacing="8" Visibility="Collapsed">
+                    <ComboBox x:Name="LocalLlmModelComboBox" Header="Model" Width="360"
+                              SelectionChanged="LocalLlmModel_SelectionChanged" />
+                    <TextBlock x:Name="LocalLlmModelStatus" Text="Checking..."
+                               FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                    <Button x:Name="DownloadLlmModelBtn" Content="Download Model"
+                            Click="DownloadLlmModel_Click" Visibility="Collapsed" />
+                    <ProgressBar x:Name="DownloadLlmProgress" IsIndeterminate="True"
+                                 Visibility="Collapsed" Width="320" HorizontalAlignment="Left" />
+                  </StackPanel>
 
-              <ToggleSwitch Header="Use same API key as STT"
-                            IsOn="{Binding LlmUseSameKey, Mode=TwoWay}" />
-              <StackPanel Orientation="Horizontal" Spacing="8"
-                          Visibility="{Binding LlmUseSameKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Invert}">
-                <PasswordBox x:Name="LlmApiKeyBox" Header="LLM API Key" Width="320"
-                             PlaceholderText="{Binding HasLlmKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}" />
-                <FontIcon Glyph="&#xE73E;" FontSize="16" Foreground="#4ade80"
-                          VerticalAlignment="Bottom" Margin="0,0,0,8"
-                          Visibility="{Binding HasLlmKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
-              </StackPanel>
-              </StackPanel>
+                  <!-- Cloud LLM panel -->
+                  <StackPanel x:Name="CloudLlmPanel" Spacing="12">
+                    <ComboBox x:Name="LlmProviderComboBox" Header="Provider" Width="320"
+                              SelectionChanged="LlmProvider_SelectionChanged">
+                      <ComboBoxItem Content="Groq — llama-3.3-70b (free)" Tag="groq" />
+                      <ComboBoxItem Content="OpenAI — gpt-4o-mini" Tag="openai" />
+                      <ComboBoxItem Content="OpenRouter — llama-3.3-70b (free)" Tag="openrouter" />
+                      <ComboBoxItem Content="OpenRouter — DeepSeek R1 (free)" Tag="openrouter-deepseek" />
+                      <ComboBoxItem Content="Gemini — gemini-2.5-flash (free)" Tag="gemini" />
+                      <ComboBoxItem Content="Anthropic — claude-haiku-4.5" Tag="anthropic" />
+                      <ComboBoxItem Content="Anthropic — claude-sonnet-4" Tag="anthropic-sonnet" />
+                      <ComboBoxItem Content="Custom endpoint" Tag="custom" />
+                    </ComboBox>
+                    <TextBox x:Name="LlmCustomUrlBox" Header="Custom LLM endpoint" Width="320"
+                             Visibility="Collapsed" Text="{Binding LlmApiUrl, Mode=TwoWay}" />
+                    <TextBox x:Name="LlmCustomModelBox" Header="Custom LLM model" Width="240"
+                             Visibility="Collapsed" Text="{Binding LlmApiModel, Mode=TwoWay}" />
+                    <ToggleSwitch Header="Use same API key as STT"
+                                  IsOn="{Binding LlmUseSameKey, Mode=TwoWay}" />
+                    <StackPanel Orientation="Horizontal" Spacing="8"
+                                Visibility="{Binding LlmUseSameKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Invert}">
+                      <PasswordBox x:Name="LlmApiKeyBox" Header="LLM API Key" Width="320"
+                                   PlaceholderText="{Binding HasLlmKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}" />
+                      <FontIcon Glyph="&#xE73E;" FontSize="16" Foreground="#4ade80"
+                                VerticalAlignment="Bottom" Margin="0,0,0,8"
+                                Visibility="{Binding HasLlmKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
+                    </StackPanel>
+                  </StackPanel>
+                </StackPanel>
+              </Border>
 
+              <!-- Card: Clipboard -->
               <TextBlock Text="Clipboard" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
-              <ToggleSwitch Header="Keep in clipboard"
-                            IsOn="{Binding KeepInClipboard, Mode=TwoWay}" />
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="20,16">
+                <ToggleSwitch Header="Keep in clipboard history"
+                              IsOn="{Binding KeepInClipboard, Mode=TwoWay}" />
+              </Border>
 
-              <!-- Advanced -->
-              <StackPanel Spacing="12"
+              <!-- Card: Advanced LLM -->
+              <StackPanel Spacing="16"
                           Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
                 <TextBlock Text="Advanced LLM" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
-                <ComboBox Header="Tone" Width="240"
-                          SelectedItem="{Binding LlmTone, Mode=TwoWay}"
-                          ItemsSource="{Binding LlmToneItems}" />
-                <ComboBox Header="Translate output to" Width="240"
-                          DisplayMemberPath="Value"
-                          SelectedValuePath="Key"
-                          SelectedValue="{Binding LlmTranslateTo, Mode=TwoWay}"
-                          ItemsSource="{Binding TranslateToItems}"
-                          ToolTipService.ToolTip="Translate the LLM-processed transcript to this language. Empty = keep the original language. The pill's language scroll wheel changes this same setting." />
-                <TextBox Header="Custom prompt" Width="400"
-                         AcceptsReturn="True" TextWrapping="Wrap" Height="80"
-                         Text="{Binding LlmCustomPrompt, Mode=TwoWay}" />
+                <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                        BorderThickness="1" CornerRadius="8" Padding="20,16">
+                  <StackPanel Spacing="12">
+                    <ComboBox Header="Tone" Width="240"
+                              SelectedItem="{Binding LlmTone, Mode=TwoWay}"
+                              ItemsSource="{Binding LlmToneItems}" />
+                    <ComboBox Header="Translate output to" Width="240"
+                              DisplayMemberPath="Value"
+                              SelectedValuePath="Key"
+                              SelectedValue="{Binding LlmTranslateTo, Mode=TwoWay}"
+                              ItemsSource="{Binding TranslateToItems}"
+                              ToolTipService.ToolTip="Translate the LLM-processed transcript to this language. Empty = keep the original language. The pill's language scroll wheel changes this same setting." />
+                    <TextBox Header="Custom prompt" Width="400"
+                             AcceptsReturn="True" TextWrapping="Wrap" Height="80"
+                             Text="{Binding LlmCustomPrompt, Mode=TwoWay}" />
+                  </StackPanel>
+                </Border>
               </StackPanel>
             </StackPanel>
 
-            <!-- ═══ Overlay ═══ -->
+            <!-- ═══ Pill overlay (was Overlay) ═══ -->
             <StackPanel x:Name="OverlayPanel" Spacing="16" Visibility="Collapsed">
+              <StackPanel Spacing="2" Margin="0,0,0,4">
+                <TextBlock Text="Pill overlay" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="The floating pill — where it lives and how it looks."
+                           FontSize="13"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+              </StackPanel>
+              <!-- Card: Position -->
               <TextBlock Text="Position" FontWeight="SemiBold" FontSize="14" />
-              <ComboBox Header="Default position" Width="240"
-                        SelectedItem="{Binding OverlayPosition, Mode=TwoWay}"
-                        SelectionChanged="OverlayPosition_SelectionChanged">
-                <x:String>Top Right</x:String>
-                <x:String>Top Left</x:String>
-                <x:String>Bottom Right</x:String>
-                <x:String>Bottom Left</x:String>
-                <x:String>Bottom Center</x:String>
-              </ComboBox>
-              <Button Content="Reset position" Click="ResetPosition_Click" />
-              <TextBlock Text="You can always drag the pill to reposition it"
-                         FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="20,16">
+                <StackPanel Spacing="12">
+                  <ComboBox Header="Default position" Width="240"
+                            SelectedItem="{Binding OverlayPosition, Mode=TwoWay}"
+                            SelectionChanged="OverlayPosition_SelectionChanged">
+                    <x:String>Top Right</x:String>
+                    <x:String>Top Left</x:String>
+                    <x:String>Bottom Right</x:String>
+                    <x:String>Bottom Left</x:String>
+                    <x:String>Bottom Center</x:String>
+                  </ComboBox>
+                  <Button Content="Reset position" Click="ResetPosition_Click" />
+                  <TextBlock Text="You can always drag the pill to reposition it"
+                             FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                </StackPanel>
+              </Border>
 
+              <!-- Card: Appearance -->
               <TextBlock Text="Appearance" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
-              <ComboBox Header="Border style" Width="240"
-                        SelectedItem="{Binding BorderStyle, Mode=TwoWay}"
-                        SelectionChanged="BorderStyle_SelectionChanged">
-                <x:String>Rainbow</x:String>
-                <x:String>Blue</x:String>
-                <x:String>Green</x:String>
-                <x:String>Purple</x:String>
-                <x:String>Orange</x:String>
-                <x:String>None</x:String>
-              </ComboBox>
-              <ComboBox Header="Waveform style" Width="240"
-                        SelectedItem="{Binding WaveformStyle, Mode=TwoWay}"
-                        SelectionChanged="WaveformStyle_SelectionChanged">
-                <x:String>Bars</x:String>
-                <x:String>Bars Center</x:String>
-                <x:String>Bars Round</x:String>
-                <x:String>Line</x:String>
-                <x:String>Dots</x:String>
-              </ComboBox>
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="20,16">
+                <StackPanel Spacing="12">
+                  <ComboBox Header="Border style" Width="240"
+                            SelectedItem="{Binding BorderStyle, Mode=TwoWay}"
+                            SelectionChanged="BorderStyle_SelectionChanged">
+                    <x:String>Rainbow</x:String>
+                    <x:String>Blue</x:String>
+                    <x:String>Green</x:String>
+                    <x:String>Purple</x:String>
+                    <x:String>Orange</x:String>
+                    <x:String>None</x:String>
+                  </ComboBox>
+                  <ComboBox Header="Waveform style" Width="240"
+                            SelectedItem="{Binding WaveformStyle, Mode=TwoWay}"
+                            SelectionChanged="WaveformStyle_SelectionChanged">
+                    <x:String>Bars</x:String>
+                    <x:String>Bars Center</x:String>
+                    <x:String>Bars Round</x:String>
+                    <x:String>Line</x:String>
+                    <x:String>Dots</x:String>
+                  </ComboBox>
+                </StackPanel>
+              </Border>
+            </StackPanel>
+
+            <!-- ═══ App rules (placeholder pending PR-B backend) ═══ -->
+            <StackPanel x:Name="RulesPanel" Spacing="16" Visibility="Collapsed">
+              <StackPanel Spacing="2" Margin="0,0,0,4">
+                <TextBlock Text="App rules" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="Auto-switch the rewrite style based on the focused app."
+                           FontSize="13"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+              </StackPanel>
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="20,16">
+                <StackPanel Spacing="6">
+                  <TextBlock Text="App rules" FontSize="16" FontWeight="SemiBold" />
+                  <TextBlock TextWrapping="Wrap"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                             Text="Auto-switch the LLM rewrite style based on the focused app — Slack/Telegram → Casual, Outlook → Professional, VS Code → off, etc." />
+                  <TextBlock Margin="0,8,0,0"
+                             FontSize="12"
+                             Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                             Text="🚧 Coming in V21 — backend in development." />
+                </StackPanel>
+              </Border>
             </StackPanel>
 
             <!-- ═══ About ═══ -->
-            <StackPanel x:Name="AboutPanel" Spacing="8" Visibility="Collapsed">
-              <Ellipse Width="48" Height="48" Fill="{ThemeResource AccentFillColorDefaultBrush}"
-                       HorizontalAlignment="Left" Margin="0,16,0,0" />
-              <TextBlock Text="Dimmy" FontSize="20" FontWeight="Bold" />
-              <TextBlock x:Name="VersionText" FontSize="12"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-              <TextBlock Text="Voice dictation that stays out of your way" FontSize="12"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-              <HyperlinkButton x:Name="UpdateLink" Content="" Visibility="Collapsed" />
-              <HyperlinkButton x:Name="CheckUpdatesLink"
-                               Content="Check for updates"
-                               NavigateUri="https://dimmy.app/download"
-                               Margin="0,8,0,0" />
-              <HyperlinkButton x:Name="ReleaseNotesLink"
-                               Content="View release notes"
-                               NavigateUri="https://github.com/KonradDallaOrg/dimmy/releases" />
-              <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}"
-                      Margin="0,8" Width="200" HorizontalAlignment="Left" />
-              <TextBlock Text="Made with irony" FontSize="11"
-                         Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-            </StackPanel>
-
-            <!-- ═══ Privacy ═══ -->
-            <StackPanel x:Name="PrivacyPanel" Spacing="12" Visibility="Collapsed">
-              <TextBlock Text="Privacy &amp; data" FontSize="20" FontWeight="Bold" />
-              <TextBlock TextWrapping="Wrap" FontSize="13"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         Text="Dimmy never sends your transcriptions, audio, API keys, microphone names, or anything personal. Anonymous usage data and crash reports help us spot bugs and decide what to build next." />
-
-              <ToggleSwitch x:Name="AnalyticsToggle"
-                            Header="Send anonymous usage data"
-                            IsOn="{Binding TelemetryEnabled, Mode=TwoWay}"
-                            Margin="0,12,0,0" />
-              <TextBlock TextWrapping="Wrap" FontSize="11"
-                         Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                         Text="Things like &quot;app started&quot;, &quot;transcription completed in 2.3s&quot;, &quot;cloud provider: groq&quot;. No content, no identifiers." />
-
-              <ToggleSwitch x:Name="CrashesToggle"
-                            Header="Send crash reports"
-                            IsOn="{Binding CrashReportsEnabled, Mode=TwoWay}"
-                            Margin="0,8,0,0" />
-              <TextBlock TextWrapping="Wrap" FontSize="11"
-                         Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                         Text="If Dimmy crashes, sends a stack trace (no environment variables, no paths with your username) so we can fix it." />
-
-              <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}"
-                      Margin="0,12" />
-
-              <TextBlock Text="Anonymous identifier" FontWeight="SemiBold" FontSize="13" />
-              <TextBlock x:Name="AnonymousIdText" FontSize="12"
-                         FontFamily="Consolas"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-              <Button x:Name="ResetAnonymousIdBtn"
-                      Content="Reset identifier"
-                      Click="ResetAnonymousId_Click"
-                      Margin="0,4,0,0" />
-              <TextBlock TextWrapping="Wrap" FontSize="11"
-                         Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                         Text="A random ID generated locally on first launch. Resetting takes effect after restart." />
-
-              <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}"
-                      Margin="0,12" />
-
-              <TextBlock Text="Send feedback" FontWeight="SemiBold" FontSize="13" />
-              <ComboBox x:Name="FeedbackKindCombo" SelectedIndex="0" MinWidth="160">
-                <ComboBoxItem Content="General" Tag="general" />
-                <ComboBoxItem Content="Bug report" Tag="bug" />
-                <ComboBoxItem Content="Feature request" Tag="feature" />
-              </ComboBox>
-              <TextBox x:Name="FeedbackText"
-                       AcceptsReturn="True"
-                       TextWrapping="Wrap"
-                       MinHeight="80"
-                       PlaceholderText="What's on your mind? Bugs, ideas, anything." />
-              <TextBox x:Name="FeedbackEmail"
-                       PlaceholderText="Your email (optional, only if you want a reply)" />
-              <Button x:Name="SendFeedbackBtn"
-                      Content="Send"
-                      Click="SendFeedback_Click"
-                      Margin="0,4,0,0" />
-              <TextBlock x:Name="FeedbackStatus" FontSize="11"
-                         Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-
-              <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}"
-                      Margin="0,12" />
-
-              <HyperlinkButton Content="Privacy policy"
-                               NavigateUri="https://dimmy.app/privacy" />
-              <HyperlinkButton Content="What we collect"
-                               NavigateUri="https://dimmy.app/privacy#data" />
-            </StackPanel>
-
-            <!-- ═══ Stats ═══ -->
-            <StackPanel x:Name="StatsPanel" Spacing="12" Visibility="Collapsed">
-              <TextBlock Text="Total words dictated" FontSize="14" />
-              <TextBlock Text="{Binding StatsTotalWords, Mode=OneWay}" FontSize="28" FontWeight="Bold" />
-              <TextBlock Text="Total speaking time" FontSize="14" Margin="0,16,0,0" />
-              <TextBlock x:Name="SpeakingTimeText" FontSize="28" FontWeight="Bold" />
-              <TextBlock Text="Time saved estimate" FontSize="14" Margin="0,16,0,0" />
-              <TextBlock x:Name="TimeSavedText" FontSize="28" FontWeight="Bold" />
-            </StackPanel>
-
-            <!-- ═══ Debug ═══ -->
-            <StackPanel x:Name="DebugPanel" Spacing="12" Visibility="Collapsed">
-              <ToggleSwitch Header="LLM log enabled"
-                            IsOn="{Binding LlmLogEnabled, Mode=TwoWay}" />
-              <ToggleSwitch Header="Audio debug"
-                            IsOn="{Binding AudioDebugEnabled, Mode=TwoWay}" />
-              <ToggleSwitch Header="ggml debug logging (verbose model load)"
-                            IsOn="{Binding GgmlDebugLogging, Mode=TwoWay}" />
-
-              <TextBlock Text="GPU acceleration" FontWeight="SemiBold" FontSize="14"
-                         Margin="0,16,0,0" />
-
-              <!-- Healthy state: no known-bad marker -->
-              <TextBlock Text="GPU enabled — no prior crashes detected."
-                         Foreground="#16a34a"
-                         Visibility="{Binding GpuKnownBad, Mode=OneWay,
-                                      Converter={StaticResource BoolToVisibilityConverter},
-                                      ConverterParameter=Invert}" />
-
-              <!-- Known-bad block: only visible when the marker is present -->
-              <StackPanel Spacing="6"
-                          Visibility="{Binding GpuKnownBad, Mode=OneWay,
-                                       Converter={StaticResource BoolToVisibilityConverter}}">
-                <TextBlock Text="GPU disabled — auto-detected driver crash" Foreground="#dc2626" />
-                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}">
-                  <Run Text="Last crash: " />
-                  <Run Text="{Binding GpuKnownBadSince, Mode=OneWay}" />
-                </TextBlock>
-                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                           TextWrapping="Wrap">
-                  <Run Text="Context: " />
-                  <Run Text="{Binding GpuKnownBadContext, Mode=OneWay}" />
-                </TextBlock>
-                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                           TextWrapping="Wrap"
-                           Text="Driver fingerprint matches the crash — Dimmy will keep using CPU. If you've updated drivers, click Retry GPU and restart Dimmy."
-                           Visibility="{Binding GpuFingerprintMatches, Mode=OneWay,
-                                        Converter={StaticResource BoolToVisibilityConverter}}" />
-                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                           TextWrapping="Wrap"
-                           Text="Driver fingerprint changed since the crash — GPU will be retried automatically on next launch."
-                           Visibility="{Binding GpuFingerprintMatches, Mode=OneWay,
-                                        Converter={StaticResource BoolToVisibilityConverter},
-                                        ConverterParameter=Invert}" />
-                <Button Content="Retry GPU on next launch" Click="RetryGpu_Click"
-                        Margin="0,4,0,0" />
+            <StackPanel x:Name="AboutPanel" Spacing="16" Visibility="Collapsed">
+              <StackPanel Spacing="2" Margin="0,0,0,4">
+                <TextBlock Text="About" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="Version, updates, and resources."
+                           FontSize="13"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
               </StackPanel>
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="20,20">
+                <StackPanel Spacing="6">
+                  <Ellipse Width="48" Height="48" Fill="{ThemeResource AccentFillColorDefaultBrush}"
+                           HorizontalAlignment="Left" Margin="0,0,0,4" />
+                  <TextBlock Text="Dimmy" FontSize="20" FontWeight="Bold" />
+                  <TextBlock x:Name="VersionText" FontSize="12"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                  <TextBlock Text="Voice dictation that stays out of your way" FontSize="12"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                </StackPanel>
+              </Border>
+
+              <TextBlock Text="Updates" FontWeight="SemiBold" FontSize="14" />
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="20,16">
+                <StackPanel Spacing="8">
+                  <HyperlinkButton x:Name="UpdateLink" Content="" Visibility="Collapsed" />
+                  <HyperlinkButton x:Name="CheckUpdatesLink"
+                                   Content="Check for updates"
+                                   NavigateUri="https://dimmy.app/download" />
+                  <HyperlinkButton x:Name="ReleaseNotesLink"
+                                   Content="View release notes"
+                                   NavigateUri="https://github.com/KonradDallaOrg/dimmy/releases" />
+                </StackPanel>
+              </Border>
+
+              <TextBlock Text="Made with irony" FontSize="11"
+                         Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                         HorizontalAlignment="Center" Margin="0,12,0,0" />
+            </StackPanel>
+
+            <!-- ═══ Privacy & data ═══ -->
+            <StackPanel x:Name="PrivacyPanel" Spacing="16" Visibility="Collapsed">
+              <StackPanel Spacing="2" Margin="0,0,0,4">
+                <TextBlock Text="Privacy &amp; data" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="What leaves your machine, and what doesn't."
+                           FontSize="13"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+              </StackPanel>
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="20,16">
+                <TextBlock TextWrapping="Wrap" FontSize="13"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           Text="Dimmy never sends your transcriptions, audio, API keys, microphone names, or anything personal. Anonymous usage data and crash reports help us spot bugs and decide what to build next." />
+              </Border>
+
+              <!-- Card: Telemetry toggles -->
+              <TextBlock Text="Telemetry" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="20,16">
+                <StackPanel Spacing="14">
+                  <StackPanel Spacing="2">
+                    <ToggleSwitch x:Name="AnalyticsToggle"
+                                  Header="Send anonymous usage data"
+                                  IsOn="{Binding TelemetryEnabled, Mode=TwoWay}" />
+                    <TextBlock TextWrapping="Wrap" FontSize="11"
+                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                               Text="Things like &quot;app started&quot;, &quot;transcription completed in 2.3s&quot;, &quot;cloud provider: groq&quot;. No content, no identifiers." />
+                  </StackPanel>
+                  <StackPanel Spacing="2">
+                    <ToggleSwitch x:Name="CrashesToggle"
+                                  Header="Send crash reports"
+                                  IsOn="{Binding CrashReportsEnabled, Mode=TwoWay}" />
+                    <TextBlock TextWrapping="Wrap" FontSize="11"
+                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                               Text="If Dimmy crashes, sends a stack trace (no environment variables, no paths with your username) so we can fix it." />
+                  </StackPanel>
+                </StackPanel>
+              </Border>
+
+              <!-- Card: Anonymous identifier -->
+              <TextBlock Text="Anonymous identifier" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="20,16">
+                <StackPanel Spacing="8">
+                  <TextBlock x:Name="AnonymousIdText" FontSize="12"
+                             FontFamily="Consolas"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                  <Button x:Name="ResetAnonymousIdBtn"
+                          Content="Reset identifier"
+                          Click="ResetAnonymousId_Click" />
+                  <TextBlock TextWrapping="Wrap" FontSize="11"
+                             Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                             Text="A random ID generated locally on first launch. Resetting takes effect after restart." />
+                </StackPanel>
+              </Border>
+
+              <!-- Card: Send feedback -->
+              <TextBlock Text="Send feedback" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="20,16">
+                <StackPanel Spacing="10">
+                  <ComboBox x:Name="FeedbackKindCombo" SelectedIndex="0" MinWidth="160">
+                    <ComboBoxItem Content="General" Tag="general" />
+                    <ComboBoxItem Content="Bug report" Tag="bug" />
+                    <ComboBoxItem Content="Feature request" Tag="feature" />
+                  </ComboBox>
+                  <TextBox x:Name="FeedbackText"
+                           AcceptsReturn="True"
+                           TextWrapping="Wrap"
+                           MinHeight="80"
+                           PlaceholderText="What's on your mind? Bugs, ideas, anything." />
+                  <TextBox x:Name="FeedbackEmail"
+                           PlaceholderText="Your email (optional, only if you want a reply)" />
+                  <Button x:Name="SendFeedbackBtn"
+                          Content="Send"
+                          Click="SendFeedback_Click" />
+                  <TextBlock x:Name="FeedbackStatus" FontSize="11"
+                             Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                </StackPanel>
+              </Border>
+
+              <!-- Card: Resources -->
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="20,12">
+                <StackPanel>
+                  <HyperlinkButton Content="Privacy policy"
+                                   NavigateUri="https://dimmy.app/privacy" />
+                  <HyperlinkButton Content="What we collect"
+                                   NavigateUri="https://dimmy.app/privacy#data" />
+                </StackPanel>
+              </Border>
+            </StackPanel>
+
+            <!-- Orphan Stats panel — kept so existing code-behind that writes
+                 SpeakingTimeText / TimeSavedText doesn't NPE. The stats are
+                 now surfaced in the Home dashboard quick-stats card. This
+                 panel is never made Visible by Nav_SelectionChanged. -->
+            <StackPanel x:Name="StatsPanel" Spacing="12" Visibility="Collapsed">
+              <TextBlock Text="{Binding StatsTotalWords, Mode=OneWay}" Visibility="Collapsed" />
+              <TextBlock x:Name="SpeakingTimeText" Visibility="Collapsed" />
+              <TextBlock x:Name="TimeSavedText" Visibility="Collapsed" />
+            </StackPanel>
+
+            <!-- ═══ Advanced (was Debug) ═══ -->
+            <StackPanel x:Name="DebugPanel" Spacing="16" Visibility="Collapsed">
+              <StackPanel Spacing="2" Margin="0,0,0,4">
+                <TextBlock Text="Advanced" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="Developer-leaning controls and diagnostics."
+                           FontSize="13"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+              </StackPanel>
+              <!-- Card: Diagnostic toggles -->
+              <TextBlock Text="Diagnostics" FontWeight="SemiBold" FontSize="14" />
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="20,16">
+                <StackPanel Spacing="12">
+                  <ToggleSwitch Header="LLM log enabled"
+                                IsOn="{Binding LlmLogEnabled, Mode=TwoWay}" />
+                  <ToggleSwitch Header="Audio debug"
+                                IsOn="{Binding AudioDebugEnabled, Mode=TwoWay}" />
+                  <ToggleSwitch Header="ggml debug logging (verbose model load)"
+                                IsOn="{Binding GgmlDebugLogging, Mode=TwoWay}" />
+                </StackPanel>
+              </Border>
+
+              <!-- Card: GPU acceleration -->
+              <TextBlock Text="GPU acceleration" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="20,16">
+                <StackPanel Spacing="8">
+                  <TextBlock Text="GPU enabled — no prior crashes detected."
+                             Foreground="#16a34a"
+                             Visibility="{Binding GpuKnownBad, Mode=OneWay,
+                                          Converter={StaticResource BoolToVisibilityConverter},
+                                          ConverterParameter=Invert}" />
+                  <StackPanel Spacing="6"
+                              Visibility="{Binding GpuKnownBad, Mode=OneWay,
+                                           Converter={StaticResource BoolToVisibilityConverter}}">
+                    <TextBlock Text="GPU disabled — auto-detected driver crash" Foreground="#dc2626" />
+                    <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}">
+                      <Run Text="Last crash: " />
+                      <Run Text="{Binding GpuKnownBadSince, Mode=OneWay}" />
+                    </TextBlock>
+                    <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               TextWrapping="Wrap">
+                      <Run Text="Context: " />
+                      <Run Text="{Binding GpuKnownBadContext, Mode=OneWay}" />
+                    </TextBlock>
+                    <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                               TextWrapping="Wrap"
+                               Text="Driver fingerprint matches the crash — Dimmy will keep using CPU. If you've updated drivers, click Retry GPU and restart Dimmy."
+                               Visibility="{Binding GpuFingerprintMatches, Mode=OneWay,
+                                            Converter={StaticResource BoolToVisibilityConverter}}" />
+                    <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                               TextWrapping="Wrap"
+                               Text="Driver fingerprint changed since the crash — GPU will be retried automatically on next launch."
+                               Visibility="{Binding GpuFingerprintMatches, Mode=OneWay,
+                                            Converter={StaticResource BoolToVisibilityConverter},
+                                            ConverterParameter=Invert}" />
+                    <Button Content="Retry GPU on next launch" Click="RetryGpu_Click"
+                            Margin="0,4,0,0" />
+                  </StackPanel>
+                </StackPanel>
+              </Border>
             </StackPanel>
 
           </StackPanel>
@@ -448,10 +704,22 @@
     </NavigationView>
 
     <!-- Footer -->
-    <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right"
-                Spacing="8" Margin="16">
-      <Button Content="Cancel" Click="Cancel_Click" />
-      <Button Content="Save" Click="Save_Click" Style="{ThemeResource AccentButtonStyle}" />
-    </StackPanel>
+    <Grid Grid.Row="1" Margin="16">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*" />
+        <ColumnDefinition Width="Auto" />
+      </Grid.ColumnDefinitions>
+      <!-- Auto-save InfoBar — appears briefly when a setting is changed so
+           the user gets confirmation that the change persisted. Win11-native
+           pattern; pairs with the existing Save button for explicit commits. -->
+      <InfoBar x:Name="SavedInfoBar" Grid.Column="0"
+               IsOpen="False" IsClosable="False" Severity="Success"
+               Message="Saved"
+               HorizontalAlignment="Left" VerticalAlignment="Center" />
+      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+        <Button Content="Cancel" Click="Cancel_Click" />
+        <Button Content="Save" Click="Save_Click" Style="{ThemeResource AccentButtonStyle}" />
+      </StackPanel>
+    </Grid>
   </Grid>
 </Window>

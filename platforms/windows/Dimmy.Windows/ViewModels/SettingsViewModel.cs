@@ -189,6 +189,31 @@ public partial class SettingsViewModel : ObservableObject
     // saved = (words / 40 - words / 150) * 60 seconds
     public double TimeSavedEstimate => StatsTotalWords * (1.0 / 40 - 1.0 / 150) * 60;
 
+    /// <summary>Human-friendly "12m 34s" / "3h 21m" / "—" formatting of
+    /// TimeSavedEstimate, for the Home panel quick-stats card. Updated
+    /// automatically when StatsTotalWords changes via OnStatsTotalWordsChanged
+    /// below (CommunityToolkit.Mvvm partial).</summary>
+    public string TimeSavedDisplay
+    {
+        get
+        {
+            var seconds = TimeSavedEstimate;
+            if (seconds < 1) return "—";
+            if (seconds < 60) return $"{(int)seconds}s";
+            var minutes = (int)(seconds / 60);
+            if (minutes < 60) return $"{minutes}m";
+            var hours = minutes / 60;
+            var rem = minutes % 60;
+            return rem == 0 ? $"{hours}h" : $"{hours}h {rem}m";
+        }
+    }
+
+    partial void OnStatsTotalWordsChanged(long value)
+    {
+        OnPropertyChanged(nameof(TimeSavedEstimate));
+        OnPropertyChanged(nameof(TimeSavedDisplay));
+    }
+
     private string _snapshotJson = "";
     public bool IsDirty => ToJson() != _snapshotJson;
 
