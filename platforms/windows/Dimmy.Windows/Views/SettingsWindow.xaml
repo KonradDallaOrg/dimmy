@@ -51,6 +51,18 @@
         </NavigationViewItem>
       </NavigationView.MenuItems>
 
+      <NavigationView.PaneFooter>
+        <!-- Advanced mode toggle in the sidebar footer (Win11 native pattern,
+             matches the design bundle). Reveals the Advanced nav item for
+             developer-only diagnostics + debug toggles. -->
+        <Border Padding="14,8" BorderThickness="0,1,0,0"
+                BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}">
+          <ToggleSwitch Header="Advanced mode"
+                        IsOn="{Binding IsAdvanced, Mode=TwoWay}"
+                        OnContent="On" OffContent="Off" />
+        </Border>
+      </NavigationView.PaneFooter>
+
       <ScrollViewer Padding="24,20,24,20">
         <Grid>
           <Grid.RowDefinitions>
@@ -58,17 +70,17 @@
             <RowDefinition Height="*" />
           </Grid.RowDefinitions>
 
-          <!-- Advanced toggle — sits above content so it never overlaps on narrow windows -->
-          <ToggleSwitch Grid.Row="0" Header="Advanced"
-                        IsOn="{Binding IsAdvanced, Mode=TwoWay}"
-                        HorizontalAlignment="Right" VerticalAlignment="Top"
-                        Margin="0,0,0,8" />
-
           <!-- All panels share this container: left-aligned, with generous max width for readability -->
-          <StackPanel Grid.Row="1" MaxWidth="720" HorizontalAlignment="Left">
+          <StackPanel Grid.Row="1" MaxWidth="760" HorizontalAlignment="Left">
 
             <!-- ═══ Home (NEW) — welcome card + system prefs (theme, autostart) + quick stats ═══ -->
             <StackPanel x:Name="HomePanel" Spacing="20" Visibility="Visible">
+              <StackPanel Spacing="2" Margin="0,0,0,4">
+                <TextBlock Text="Home" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="Get a quick read on Dimmy and jump to what you need."
+                           FontSize="13"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+              </StackPanel>
               <!-- Welcome card -->
               <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                       BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
@@ -130,6 +142,12 @@
 
             <!-- ═══ Voice input (was General) — STT settings ═══ -->
             <StackPanel x:Name="GeneralPanel" Spacing="16" Visibility="Collapsed">
+              <StackPanel Spacing="2" Margin="0,0,0,4">
+                <TextBlock Text="Voice input" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="How Dimmy hears and transcribes your voice."
+                           FontSize="13"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+              </StackPanel>
               <!-- Card: Language -->
               <TextBlock Text="Language" FontWeight="SemiBold" FontSize="14" />
               <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
@@ -249,6 +267,12 @@
 
             <!-- ═══ Shortcut ═══ -->
             <StackPanel x:Name="ShortcutPanel" Spacing="16" Visibility="Collapsed">
+              <StackPanel Spacing="2" Margin="0,0,0,4">
+                <TextBlock Text="Shortcut" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="The hotkey that starts and stops recording."
+                           FontSize="13"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+              </StackPanel>
               <!-- Card: Hotkey + Mode -->
               <TextBlock Text="Hotkey" FontWeight="SemiBold" FontSize="14" />
               <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
@@ -271,6 +295,12 @@
 
             <!-- ═══ Output ═══ -->
             <StackPanel x:Name="OutputPanel" Spacing="16" Visibility="Collapsed">
+              <StackPanel Spacing="2" Margin="0,0,0,4">
+                <TextBlock Text="Output" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="How Dimmy rewrites and delivers your dictation."
+                           FontSize="13"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+              </StackPanel>
               <!-- Card: Style -->
               <TextBlock Text="LLM enhancement" FontWeight="SemiBold" FontSize="14" />
               <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
@@ -373,6 +403,12 @@
 
             <!-- ═══ Pill overlay (was Overlay) ═══ -->
             <StackPanel x:Name="OverlayPanel" Spacing="16" Visibility="Collapsed">
+              <StackPanel Spacing="2" Margin="0,0,0,4">
+                <TextBlock Text="Pill overlay" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="The floating pill — where it lives and how it looks."
+                           FontSize="13"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+              </StackPanel>
               <!-- Card: Position -->
               <TextBlock Text="Position" FontWeight="SemiBold" FontSize="14" />
               <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
@@ -425,6 +461,12 @@
 
             <!-- ═══ App rules (placeholder pending PR-B backend) ═══ -->
             <StackPanel x:Name="RulesPanel" Spacing="16" Visibility="Collapsed">
+              <StackPanel Spacing="2" Margin="0,0,0,4">
+                <TextBlock Text="App rules" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="Auto-switch the rewrite style based on the focused app."
+                           FontSize="13"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+              </StackPanel>
               <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                       BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
                       BorderThickness="1" CornerRadius="8" Padding="20,16">
@@ -443,6 +485,12 @@
 
             <!-- ═══ About ═══ -->
             <StackPanel x:Name="AboutPanel" Spacing="16" Visibility="Collapsed">
+              <StackPanel Spacing="2" Margin="0,0,0,4">
+                <TextBlock Text="About" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="Version, updates, and resources."
+                           FontSize="13"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+              </StackPanel>
               <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                       BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
                       BorderThickness="1" CornerRadius="8" Padding="20,20">
@@ -479,6 +527,12 @@
 
             <!-- ═══ Privacy & data ═══ -->
             <StackPanel x:Name="PrivacyPanel" Spacing="16" Visibility="Collapsed">
+              <StackPanel Spacing="2" Margin="0,0,0,4">
+                <TextBlock Text="Privacy &amp; data" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="What leaves your machine, and what doesn't."
+                           FontSize="13"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+              </StackPanel>
               <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                       BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
                       BorderThickness="1" CornerRadius="8" Padding="20,16">
@@ -581,6 +635,12 @@
 
             <!-- ═══ Advanced (was Debug) ═══ -->
             <StackPanel x:Name="DebugPanel" Spacing="16" Visibility="Collapsed">
+              <StackPanel Spacing="2" Margin="0,0,0,4">
+                <TextBlock Text="Advanced" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="Developer-leaning controls and diagnostics."
+                           FontSize="13"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+              </StackPanel>
               <!-- Card: Diagnostic toggles -->
               <TextBlock Text="Diagnostics" FontWeight="SemiBold" FontSize="14" />
               <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
