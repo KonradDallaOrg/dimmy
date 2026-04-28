@@ -68,9 +68,10 @@
                 <RadioButton Content="Dark" GroupName="Theme" Tag="Dark" Checked="Theme_Checked" />
               </StackPanel>
 
-              <ComboBox x:Name="LanguageComboBox" Header="Language" Width="240"
+              <ComboBox x:Name="LanguageComboBox" Header="Native language (you speak)" Width="240"
                         DisplayMemberPath="Value"
                         ItemsSource="{Binding LanguageItems}"
+                        ToolTipService.ToolTip="The language you actually speak when recording. Used as a hint for the speech-to-text engine. To translate the output to a different language, scroll the pill or use Output → Translate to."
                         SelectionChanged="Language_SelectionChanged" />
 
               <StackPanel Orientation="Horizontal" Spacing="8">
@@ -239,15 +240,12 @@
                 <ComboBox Header="Tone" Width="240"
                           SelectedItem="{Binding LlmTone, Mode=TwoWay}"
                           ItemsSource="{Binding LlmToneItems}" />
-                <ComboBox Header="Translate to" Width="240"
-                          SelectedItem="{Binding LlmTranslateTo, Mode=TwoWay}">
-                  <x:String>none</x:String>
-                  <x:String>EN</x:String>
-                  <x:String>IT</x:String>
-                  <x:String>DE</x:String>
-                  <x:String>FR</x:String>
-                  <x:String>ES</x:String>
-                </ComboBox>
+                <ComboBox Header="Translate output to" Width="240"
+                          DisplayMemberPath="Value"
+                          SelectedValuePath="Key"
+                          SelectedValue="{Binding LlmTranslateTo, Mode=TwoWay}"
+                          ItemsSource="{Binding TranslateToItems}"
+                          ToolTipService.ToolTip="Translate the LLM-processed transcript to this language. Empty = keep the original language. The pill's language scroll wheel changes this same setting." />
                 <TextBox Header="Custom prompt" Width="400"
                          AcceptsReturn="True" TextWrapping="Wrap" Height="80"
                          Text="{Binding LlmCustomPrompt, Mode=TwoWay}" />

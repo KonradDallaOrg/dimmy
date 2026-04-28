@@ -57,6 +57,40 @@ public partial class SettingsViewModel : ObservableObject
     public List<KeyValuePair<string, string>> LanguageItems => Languages;
     public string[] LlmStyleItems => LlmStyles;
     public string[] LlmToneItems => LlmTones;
+
+    /// <summary>Translation target list — same as Languages but with
+    /// an explicit "" → "No translation" option as first item, since
+    /// `llm_translate_to=""` in Rust means "keep transcript in source
+    /// language, do not translate". The Settings dropdown previously
+    /// used a parallel list with uppercase codes ("EN", "IT", "none")
+    /// which mismatched the pill (lowercase) and required runtime
+    /// normalisation in core. Now both UIs share this single list.</summary>
+    public List<KeyValuePair<string, string>> TranslateToItems => _translateToItems;
+    private static readonly List<KeyValuePair<string, string>> _translateToItems = new()
+    {
+        new("", "No translation"),
+        new("it", "Italiano"),
+        new("en", "English"),
+        new("es", "Español"),
+        new("fr", "Français"),
+        new("de", "Deutsch"),
+        new("pt", "Português"),
+    };
+
+    /// <summary>Map legacy `llm_translate_to` config values to the
+    /// canonical lowercase ISO code (or "" for "no translation"). Old
+    /// installs may have "EN"/"IT" or the literal string "none";
+    /// normalise both so the new shared dropdown finds a match.
+    /// Public for unit-testability from the Tests project.</summary>
+    public static string NormaliseTranslateTo(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "";
+        var trimmed = raw.Trim().ToLowerInvariant();
+        if (trimmed == "none") return "";
+        // Accept any 2-letter code; let the LLM handle unknown ones
+        // gracefully rather than silently dropping the user's choice.
+        return trimmed;
+    }
     public List<ProviderPreset> ProviderPresetItems => ProviderPresets;
 
     [ObservableProperty] private bool _isAdvanced;
@@ -184,7 +218,13 @@ public partial class SettingsViewModel : ObservableObject
             LlmUseSameKey = !r.TryGetProperty("llm_use_same_key", out var lsk) || lsk.GetBoolean();
             HasLlmKey = r.TryGetProperty("has_llm_key", out var hlk) && hlk.GetBoolean();
             LlmCustomPrompt = r.TryGetProperty("llm_custom_prompt", out var lcp) ? lcp.GetString() ?? "" : "";
-            LlmTranslateTo = r.TryGetProperty("llm_translate_to", out var lt) ? lt.GetString() ?? "" : "";
+            // Normalise legacy values: pre-V19 the dropdown used uppercase
+            // codes ("EN", "IT") plus the string "none"; the pill used
+            // lowercase ("en", "it"). Both surfaces now share lowercase
+            // codes + "" for no translation, so collapse on read.
+            LlmTranslateTo = NormaliseTranslateTo(
+                r.TryGetProperty("llm_translate_to", out var lt) ? lt.GetString() ?? "" : ""
+            );
             LlmLogEnabled = r.TryGetProperty("llm_log_enabled", out var lle) && lle.GetBoolean();
             AudioDebugEnabled = r.TryGetProperty("audio_debug_enabled", out var ade) && ade.GetBoolean();
             GgmlDebugLogging = r.TryGetProperty("ggml_debug_logging", out var gdl) && gdl.GetBoolean();

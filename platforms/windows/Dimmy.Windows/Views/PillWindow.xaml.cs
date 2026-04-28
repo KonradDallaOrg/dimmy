@@ -786,7 +786,9 @@ public sealed partial class PillWindow : Window
         if (_vm.CurrentState == AppState.Idle)
         {
             RootGrid.Opacity = 0.95;
-            LanguageLabel.Text = string.IsNullOrEmpty(_vm.Language) ? "" : _vm.Language.ToUpperInvariant();
+            // Pill language label = output TRANSLATION target, NOT STT input.
+            // Native (input) language is configured in Settings → General.
+            LanguageLabel.Text = string.IsNullOrEmpty(_vm.LlmTranslateTo) ? "" : _vm.LlmTranslateTo.ToUpperInvariant();
             ShortcutLabel.Text = _vm.Shortcut;
             if (!string.IsNullOrEmpty(LanguageLabel.Text))
                 LanguageLabel.Visibility = Visibility.Visible;
@@ -898,15 +900,20 @@ public sealed partial class PillWindow : Window
         var now = DateTime.UtcNow;
         if ((now - _lastScrollTime).TotalMilliseconds < 250) { e.Handled = true; return; }
         _lastScrollTime = now;
-        int idx = LangList.FindIndex(kv => kv.Key == _vm.Language);
+        // Pill cycles the OUTPUT translation target, NOT the STT input
+        // language. Input language stays set in Settings → General
+        // (`Language`); the pill writes to `llm_translate_to` so the
+        // transcript gets translated to the picked language at LLM
+        // post-process time.
+        int idx = LangList.FindIndex(kv => kv.Key == _vm.LlmTranslateTo);
         if (idx < 0) idx = 0;
         idx = (idx + (delta > 0 ? -1 : 1) + LangList.Count) % LangList.Count;
-        _vm.Language = LangList[idx].Key;
-        LanguageLabel.Text = _vm.Language.ToUpperInvariant();
-        ShowScrollTooltip(LangList[idx].Value); // full language name (e.g. "Italiano")
+        _vm.LlmTranslateTo = LangList[idx].Key;
+        LanguageLabel.Text = _vm.LlmTranslateTo.ToUpperInvariant();
+        ShowScrollTooltip($"Translate to: {LangList[idx].Value}");
         // Single writer: only FFI, Rust saves to disk
         DimmyNative.dimmy_set_config_json(System.Text.Json.JsonSerializer.Serialize(
-            new System.Collections.Generic.Dictionary<string, string> { ["language"] = _vm.Language }));
+            new System.Collections.Generic.Dictionary<string, string> { ["llm_translate_to"] = _vm.LlmTranslateTo }));
         e.Handled = true;
     }
 
@@ -940,8 +947,10 @@ public sealed partial class PillWindow : Window
         menu.Items.Add(new MenuFlyoutSeparator());
 
         // Info lines (read-only)
-        var lang = string.IsNullOrEmpty(_vm.Language) ? "(auto)" : _vm.Language;
-        menu.Items.Add(new MenuFlyoutItem { Text = $"Language: {lang}", IsEnabled = false });
+        var nativeLang = string.IsNullOrEmpty(_vm.Language) ? "(auto)" : _vm.Language;
+        menu.Items.Add(new MenuFlyoutItem { Text = $"Native: {nativeLang}", IsEnabled = false });
+        var translateTo = string.IsNullOrEmpty(_vm.LlmTranslateTo) ? "(none)" : _vm.LlmTranslateTo;
+        menu.Items.Add(new MenuFlyoutItem { Text = $"Translate to: {translateTo}", IsEnabled = false });
         var style = _vm.LlmStyle == "off" ? "off" : _vm.LlmStyle;
         menu.Items.Add(new MenuFlyoutItem { Text = $"Style: {style}", IsEnabled = false });
         menu.Items.Add(new MenuFlyoutItem { Text = $"Shortcut: {_vm.Shortcut}", IsEnabled = false });

@@ -40,6 +40,14 @@ public partial class AppViewModel : ObservableObject
     [ObservableProperty] private string _llmStyle = "off";
     [ObservableProperty] private string _deviceName = "";
     [ObservableProperty] private string _language = "";
+    /// <summary>
+    /// Output translation language. Bound to Rust core's `llm_translate_to`
+    /// config field. The pill's language scroll selector writes here, NOT
+    /// to `Language` (which is the STT *input* hint set via Settings →
+    /// Native language). Empty = no translation, transcript stays in
+    /// whatever language the STT auto-detected (or `Language` hinted).
+    /// </summary>
+    [ObservableProperty] private string _llmTranslateTo = "";
     [ObservableProperty] private string _shortcut = "Win+Alt";
     [ObservableProperty] private string _shortcutMode = "toggle";
     [ObservableProperty] private string _timerText = "00:00";

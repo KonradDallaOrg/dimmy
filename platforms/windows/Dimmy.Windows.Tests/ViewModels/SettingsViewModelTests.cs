@@ -226,4 +226,46 @@ public class SettingsViewModelTests
         Assert.Equal(vm1.Language, vm2.Language);
         Assert.Equal(vm1.LlmStyle, vm2.LlmStyle);
     }
+
+    /// <summary>
+    /// Pre-V19 saved either uppercase codes ("EN", "IT") or the literal
+    /// string "none" in `llm_translate_to`. The normaliser must collapse
+    /// both to the canonical lowercase ISO code (or "" for none) so the
+    /// shared TranslateToItems dropdown finds a match.
+    /// </summary>
+    [Theory]
+    [InlineData("", "")]
+    [InlineData("none", "")]
+    [InlineData("None", "")]
+    [InlineData("NONE", "")]
+    [InlineData(" none ", "")]
+    [InlineData("EN", "en")]
+    [InlineData("IT", "it")]
+    [InlineData("De", "de")]
+    [InlineData("en", "en")]
+    [InlineData("it", "it")]
+    [InlineData("  it  ", "it")]
+    public void NormaliseTranslateTo_handles_legacy_values(string input, string expected)
+    {
+        Assert.Equal(expected, SettingsViewModel.NormaliseTranslateTo(input));
+    }
+
+    /// <summary>
+    /// Round-trip via LoadFromJson: a config.json carrying legacy
+    /// "EN"/"none" must populate LlmTranslateTo with the canonical
+    /// lowercase form so the bound dropdown displays correctly after
+    /// the V18 → V19 upgrade.
+    /// </summary>
+    [Theory]
+    [InlineData("\"EN\"", "en")]
+    [InlineData("\"none\"", "")]
+    [InlineData("\"\"", "")]
+    [InlineData("\"de\"", "de")]
+    public void LoadFromJson_normalises_legacy_translate_to(string jsonValue, string expected)
+    {
+        var json = $"{{\"llm_translate_to\":{jsonValue}}}";
+        var vm = new SettingsViewModel();
+        vm.LoadFromJson(json);
+        Assert.Equal(expected, vm.LlmTranslateTo);
+    }
 }
