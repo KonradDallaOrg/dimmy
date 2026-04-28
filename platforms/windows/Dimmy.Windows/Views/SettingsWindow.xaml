@@ -477,133 +477,165 @@
                          HorizontalAlignment="Center" Margin="0,12,0,0" />
             </StackPanel>
 
-            <!-- ═══ Privacy ═══ -->
-            <StackPanel x:Name="PrivacyPanel" Spacing="12" Visibility="Collapsed">
-              <TextBlock Text="Privacy &amp; data" FontSize="20" FontWeight="Bold" />
-              <TextBlock TextWrapping="Wrap" FontSize="13"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         Text="Dimmy never sends your transcriptions, audio, API keys, microphone names, or anything personal. Anonymous usage data and crash reports help us spot bugs and decide what to build next." />
+            <!-- ═══ Privacy & data ═══ -->
+            <StackPanel x:Name="PrivacyPanel" Spacing="16" Visibility="Collapsed">
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="20,16">
+                <TextBlock TextWrapping="Wrap" FontSize="13"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           Text="Dimmy never sends your transcriptions, audio, API keys, microphone names, or anything personal. Anonymous usage data and crash reports help us spot bugs and decide what to build next." />
+              </Border>
 
-              <ToggleSwitch x:Name="AnalyticsToggle"
-                            Header="Send anonymous usage data"
-                            IsOn="{Binding TelemetryEnabled, Mode=TwoWay}"
-                            Margin="0,12,0,0" />
-              <TextBlock TextWrapping="Wrap" FontSize="11"
-                         Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                         Text="Things like &quot;app started&quot;, &quot;transcription completed in 2.3s&quot;, &quot;cloud provider: groq&quot;. No content, no identifiers." />
+              <!-- Card: Telemetry toggles -->
+              <TextBlock Text="Telemetry" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="20,16">
+                <StackPanel Spacing="14">
+                  <StackPanel Spacing="2">
+                    <ToggleSwitch x:Name="AnalyticsToggle"
+                                  Header="Send anonymous usage data"
+                                  IsOn="{Binding TelemetryEnabled, Mode=TwoWay}" />
+                    <TextBlock TextWrapping="Wrap" FontSize="11"
+                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                               Text="Things like &quot;app started&quot;, &quot;transcription completed in 2.3s&quot;, &quot;cloud provider: groq&quot;. No content, no identifiers." />
+                  </StackPanel>
+                  <StackPanel Spacing="2">
+                    <ToggleSwitch x:Name="CrashesToggle"
+                                  Header="Send crash reports"
+                                  IsOn="{Binding CrashReportsEnabled, Mode=TwoWay}" />
+                    <TextBlock TextWrapping="Wrap" FontSize="11"
+                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                               Text="If Dimmy crashes, sends a stack trace (no environment variables, no paths with your username) so we can fix it." />
+                  </StackPanel>
+                </StackPanel>
+              </Border>
 
-              <ToggleSwitch x:Name="CrashesToggle"
-                            Header="Send crash reports"
-                            IsOn="{Binding CrashReportsEnabled, Mode=TwoWay}"
-                            Margin="0,8,0,0" />
-              <TextBlock TextWrapping="Wrap" FontSize="11"
-                         Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                         Text="If Dimmy crashes, sends a stack trace (no environment variables, no paths with your username) so we can fix it." />
+              <!-- Card: Anonymous identifier -->
+              <TextBlock Text="Anonymous identifier" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="20,16">
+                <StackPanel Spacing="8">
+                  <TextBlock x:Name="AnonymousIdText" FontSize="12"
+                             FontFamily="Consolas"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                  <Button x:Name="ResetAnonymousIdBtn"
+                          Content="Reset identifier"
+                          Click="ResetAnonymousId_Click" />
+                  <TextBlock TextWrapping="Wrap" FontSize="11"
+                             Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                             Text="A random ID generated locally on first launch. Resetting takes effect after restart." />
+                </StackPanel>
+              </Border>
 
-              <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}"
-                      Margin="0,12" />
+              <!-- Card: Send feedback -->
+              <TextBlock Text="Send feedback" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="20,16">
+                <StackPanel Spacing="10">
+                  <ComboBox x:Name="FeedbackKindCombo" SelectedIndex="0" MinWidth="160">
+                    <ComboBoxItem Content="General" Tag="general" />
+                    <ComboBoxItem Content="Bug report" Tag="bug" />
+                    <ComboBoxItem Content="Feature request" Tag="feature" />
+                  </ComboBox>
+                  <TextBox x:Name="FeedbackText"
+                           AcceptsReturn="True"
+                           TextWrapping="Wrap"
+                           MinHeight="80"
+                           PlaceholderText="What's on your mind? Bugs, ideas, anything." />
+                  <TextBox x:Name="FeedbackEmail"
+                           PlaceholderText="Your email (optional, only if you want a reply)" />
+                  <Button x:Name="SendFeedbackBtn"
+                          Content="Send"
+                          Click="SendFeedback_Click" />
+                  <TextBlock x:Name="FeedbackStatus" FontSize="11"
+                             Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                </StackPanel>
+              </Border>
 
-              <TextBlock Text="Anonymous identifier" FontWeight="SemiBold" FontSize="13" />
-              <TextBlock x:Name="AnonymousIdText" FontSize="12"
-                         FontFamily="Consolas"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-              <Button x:Name="ResetAnonymousIdBtn"
-                      Content="Reset identifier"
-                      Click="ResetAnonymousId_Click"
-                      Margin="0,4,0,0" />
-              <TextBlock TextWrapping="Wrap" FontSize="11"
-                         Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                         Text="A random ID generated locally on first launch. Resetting takes effect after restart." />
-
-              <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}"
-                      Margin="0,12" />
-
-              <TextBlock Text="Send feedback" FontWeight="SemiBold" FontSize="13" />
-              <ComboBox x:Name="FeedbackKindCombo" SelectedIndex="0" MinWidth="160">
-                <ComboBoxItem Content="General" Tag="general" />
-                <ComboBoxItem Content="Bug report" Tag="bug" />
-                <ComboBoxItem Content="Feature request" Tag="feature" />
-              </ComboBox>
-              <TextBox x:Name="FeedbackText"
-                       AcceptsReturn="True"
-                       TextWrapping="Wrap"
-                       MinHeight="80"
-                       PlaceholderText="What's on your mind? Bugs, ideas, anything." />
-              <TextBox x:Name="FeedbackEmail"
-                       PlaceholderText="Your email (optional, only if you want a reply)" />
-              <Button x:Name="SendFeedbackBtn"
-                      Content="Send"
-                      Click="SendFeedback_Click"
-                      Margin="0,4,0,0" />
-              <TextBlock x:Name="FeedbackStatus" FontSize="11"
-                         Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-
-              <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}"
-                      Margin="0,12" />
-
-              <HyperlinkButton Content="Privacy policy"
-                               NavigateUri="https://dimmy.app/privacy" />
-              <HyperlinkButton Content="What we collect"
-                               NavigateUri="https://dimmy.app/privacy#data" />
+              <!-- Card: Resources -->
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="20,12">
+                <StackPanel>
+                  <HyperlinkButton Content="Privacy policy"
+                                   NavigateUri="https://dimmy.app/privacy" />
+                  <HyperlinkButton Content="What we collect"
+                                   NavigateUri="https://dimmy.app/privacy#data" />
+                </StackPanel>
+              </Border>
             </StackPanel>
 
-            <!-- ═══ Stats ═══ -->
+            <!-- Orphan Stats panel — kept so existing code-behind that writes
+                 SpeakingTimeText / TimeSavedText doesn't NPE. The stats are
+                 now surfaced in the Home dashboard quick-stats card. This
+                 panel is never made Visible by Nav_SelectionChanged. -->
             <StackPanel x:Name="StatsPanel" Spacing="12" Visibility="Collapsed">
-              <TextBlock Text="Total words dictated" FontSize="14" />
-              <TextBlock Text="{Binding StatsTotalWords, Mode=OneWay}" FontSize="28" FontWeight="Bold" />
-              <TextBlock Text="Total speaking time" FontSize="14" Margin="0,16,0,0" />
-              <TextBlock x:Name="SpeakingTimeText" FontSize="28" FontWeight="Bold" />
-              <TextBlock Text="Time saved estimate" FontSize="14" Margin="0,16,0,0" />
-              <TextBlock x:Name="TimeSavedText" FontSize="28" FontWeight="Bold" />
+              <TextBlock Text="{Binding StatsTotalWords, Mode=OneWay}" Visibility="Collapsed" />
+              <TextBlock x:Name="SpeakingTimeText" Visibility="Collapsed" />
+              <TextBlock x:Name="TimeSavedText" Visibility="Collapsed" />
             </StackPanel>
 
-            <!-- ═══ Debug ═══ -->
-            <StackPanel x:Name="DebugPanel" Spacing="12" Visibility="Collapsed">
-              <ToggleSwitch Header="LLM log enabled"
-                            IsOn="{Binding LlmLogEnabled, Mode=TwoWay}" />
-              <ToggleSwitch Header="Audio debug"
-                            IsOn="{Binding AudioDebugEnabled, Mode=TwoWay}" />
-              <ToggleSwitch Header="ggml debug logging (verbose model load)"
-                            IsOn="{Binding GgmlDebugLogging, Mode=TwoWay}" />
+            <!-- ═══ Advanced (was Debug) ═══ -->
+            <StackPanel x:Name="DebugPanel" Spacing="16" Visibility="Collapsed">
+              <!-- Card: Diagnostic toggles -->
+              <TextBlock Text="Diagnostics" FontWeight="SemiBold" FontSize="14" />
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="20,16">
+                <StackPanel Spacing="12">
+                  <ToggleSwitch Header="LLM log enabled"
+                                IsOn="{Binding LlmLogEnabled, Mode=TwoWay}" />
+                  <ToggleSwitch Header="Audio debug"
+                                IsOn="{Binding AudioDebugEnabled, Mode=TwoWay}" />
+                  <ToggleSwitch Header="ggml debug logging (verbose model load)"
+                                IsOn="{Binding GgmlDebugLogging, Mode=TwoWay}" />
+                </StackPanel>
+              </Border>
 
-              <TextBlock Text="GPU acceleration" FontWeight="SemiBold" FontSize="14"
-                         Margin="0,16,0,0" />
-
-              <!-- Healthy state: no known-bad marker -->
-              <TextBlock Text="GPU enabled — no prior crashes detected."
-                         Foreground="#16a34a"
-                         Visibility="{Binding GpuKnownBad, Mode=OneWay,
-                                      Converter={StaticResource BoolToVisibilityConverter},
-                                      ConverterParameter=Invert}" />
-
-              <!-- Known-bad block: only visible when the marker is present -->
-              <StackPanel Spacing="6"
-                          Visibility="{Binding GpuKnownBad, Mode=OneWay,
-                                       Converter={StaticResource BoolToVisibilityConverter}}">
-                <TextBlock Text="GPU disabled — auto-detected driver crash" Foreground="#dc2626" />
-                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}">
-                  <Run Text="Last crash: " />
-                  <Run Text="{Binding GpuKnownBadSince, Mode=OneWay}" />
-                </TextBlock>
-                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                           TextWrapping="Wrap">
-                  <Run Text="Context: " />
-                  <Run Text="{Binding GpuKnownBadContext, Mode=OneWay}" />
-                </TextBlock>
-                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                           TextWrapping="Wrap"
-                           Text="Driver fingerprint matches the crash — Dimmy will keep using CPU. If you've updated drivers, click Retry GPU and restart Dimmy."
-                           Visibility="{Binding GpuFingerprintMatches, Mode=OneWay,
-                                        Converter={StaticResource BoolToVisibilityConverter}}" />
-                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                           TextWrapping="Wrap"
-                           Text="Driver fingerprint changed since the crash — GPU will be retried automatically on next launch."
-                           Visibility="{Binding GpuFingerprintMatches, Mode=OneWay,
-                                        Converter={StaticResource BoolToVisibilityConverter},
-                                        ConverterParameter=Invert}" />
-                <Button Content="Retry GPU on next launch" Click="RetryGpu_Click"
-                        Margin="0,4,0,0" />
-              </StackPanel>
+              <!-- Card: GPU acceleration -->
+              <TextBlock Text="GPU acceleration" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="20,16">
+                <StackPanel Spacing="8">
+                  <TextBlock Text="GPU enabled — no prior crashes detected."
+                             Foreground="#16a34a"
+                             Visibility="{Binding GpuKnownBad, Mode=OneWay,
+                                          Converter={StaticResource BoolToVisibilityConverter},
+                                          ConverterParameter=Invert}" />
+                  <StackPanel Spacing="6"
+                              Visibility="{Binding GpuKnownBad, Mode=OneWay,
+                                           Converter={StaticResource BoolToVisibilityConverter}}">
+                    <TextBlock Text="GPU disabled — auto-detected driver crash" Foreground="#dc2626" />
+                    <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}">
+                      <Run Text="Last crash: " />
+                      <Run Text="{Binding GpuKnownBadSince, Mode=OneWay}" />
+                    </TextBlock>
+                    <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               TextWrapping="Wrap">
+                      <Run Text="Context: " />
+                      <Run Text="{Binding GpuKnownBadContext, Mode=OneWay}" />
+                    </TextBlock>
+                    <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                               TextWrapping="Wrap"
+                               Text="Driver fingerprint matches the crash — Dimmy will keep using CPU. If you've updated drivers, click Retry GPU and restart Dimmy."
+                               Visibility="{Binding GpuFingerprintMatches, Mode=OneWay,
+                                            Converter={StaticResource BoolToVisibilityConverter}}" />
+                    <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                               TextWrapping="Wrap"
+                               Text="Driver fingerprint changed since the crash — GPU will be retried automatically on next launch."
+                               Visibility="{Binding GpuFingerprintMatches, Mode=OneWay,
+                                            Converter={StaticResource BoolToVisibilityConverter},
+                                            ConverterParameter=Invert}" />
+                    <Button Content="Retry GPU on next launch" Click="RetryGpu_Click"
+                            Margin="0,4,0,0" />
+                  </StackPanel>
+                </StackPanel>
+              </Border>
             </StackPanel>
 
           </StackPanel>
