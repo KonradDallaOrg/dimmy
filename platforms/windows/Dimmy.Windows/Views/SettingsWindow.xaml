@@ -12,34 +12,37 @@
       <RowDefinition Height="Auto" />
     </Grid.RowDefinitions>
 
-    <NavigationView x:Name="NavView" PaneDisplayMode="Left" OpenPaneLength="160"
+    <NavigationView x:Name="NavView" PaneDisplayMode="Left" OpenPaneLength="200"
                     IsBackButtonVisible="Collapsed"
                     IsSettingsVisible="False" SelectionChanged="Nav_SelectionChanged">
       <NavigationView.MenuItems>
-        <NavigationViewItem Content="General" Tag="general">
-          <NavigationViewItem.Icon><FontIcon Glyph="&#xE713;" /></NavigationViewItem.Icon>
+        <NavigationViewItem Content="Home" Tag="home">
+          <NavigationViewItem.Icon><FontIcon Glyph="&#xE80F;" /></NavigationViewItem.Icon>
+        </NavigationViewItem>
+        <NavigationViewItem Content="Voice input" Tag="voice">
+          <NavigationViewItem.Icon><FontIcon Glyph="&#xE720;" /></NavigationViewItem.Icon>
+        </NavigationViewItem>
+        <NavigationViewItem Content="Output" Tag="output">
+          <NavigationViewItem.Icon><FontIcon Glyph="&#xE945;" /></NavigationViewItem.Icon>
+        </NavigationViewItem>
+        <NavigationViewItem Content="Pill overlay" Tag="pill">
+          <NavigationViewItem.Icon><FontIcon Glyph="&#xE7B5;" /></NavigationViewItem.Icon>
+        </NavigationViewItem>
+        <NavigationViewItem Content="App rules" Tag="rules">
+          <NavigationViewItem.Icon><FontIcon Glyph="&#xECAA;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
         <NavigationViewItem Content="Shortcut" Tag="shortcut">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE765;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
-        <NavigationViewItem Content="Output" Tag="output">
-          <NavigationViewItem.Icon><FontIcon Glyph="&#xE8A1;" /></NavigationViewItem.Icon>
-        </NavigationViewItem>
-        <NavigationViewItem Content="Overlay" Tag="overlay">
-          <NavigationViewItem.Icon><FontIcon Glyph="&#xE740;" /></NavigationViewItem.Icon>
+        <NavigationViewItem Content="Privacy &amp; data" Tag="privacy">
+          <NavigationViewItem.Icon><FontIcon Glyph="&#xE72E;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
         <NavigationViewItem Content="About" Tag="about">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE946;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
-        <NavigationViewItem Content="Privacy" Tag="privacy">
-          <NavigationViewItem.Icon><FontIcon Glyph="&#xE72E;" /></NavigationViewItem.Icon>
-        </NavigationViewItem>
-        <NavigationViewItem Content="Stats" Tag="stats">
-          <NavigationViewItem.Icon><FontIcon Glyph="&#xE9D9;" /></NavigationViewItem.Icon>
-        </NavigationViewItem>
-        <NavigationViewItem Content="Debug" Tag="debug"
+        <NavigationViewItem Content="Advanced" Tag="advanced"
                             Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-          <NavigationViewItem.Icon><FontIcon Glyph="&#xEBE8;" /></NavigationViewItem.Icon>
+          <NavigationViewItem.Icon><FontIcon Glyph="&#xE957;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
       </NavigationView.MenuItems>
 
@@ -59,15 +62,69 @@
           <!-- All panels share this container: left-aligned, with generous max width for readability -->
           <StackPanel Grid.Row="1" MaxWidth="720" HorizontalAlignment="Left">
 
-            <!-- ═══ General ═══ -->
-            <StackPanel x:Name="GeneralPanel" Spacing="16" Visibility="Visible">
-              <TextBlock Text="Theme" FontWeight="SemiBold" FontSize="14" />
-              <StackPanel x:Name="ThemeRadioPanel" Orientation="Horizontal" Spacing="12">
-                <RadioButton Content="Auto" GroupName="Theme" Tag="Default" Checked="Theme_Checked" />
-                <RadioButton Content="Light" GroupName="Theme" Tag="Light" Checked="Theme_Checked" />
-                <RadioButton Content="Dark" GroupName="Theme" Tag="Dark" Checked="Theme_Checked" />
-              </StackPanel>
+            <!-- ═══ Home (NEW) — welcome card + system prefs (theme, autostart) + quick stats ═══ -->
+            <StackPanel x:Name="HomePanel" Spacing="20" Visibility="Visible">
+              <!-- Welcome card -->
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="20,16">
+                <StackPanel Spacing="6">
+                  <TextBlock Text="Welcome to Dimmy" FontSize="20" FontWeight="SemiBold" />
+                  <TextBlock TextWrapping="Wrap"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                             Text="Voice dictation that stays out of your way. Press your shortcut, speak, and the transcript pastes into whatever app has focus." />
+                </StackPanel>
+              </Border>
 
+              <!-- System preferences card: theme + autostart -->
+              <TextBlock Text="System" FontWeight="SemiBold" FontSize="14" />
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="20,16">
+                <StackPanel Spacing="14">
+                  <StackPanel Spacing="6">
+                    <TextBlock Text="Theme" FontWeight="SemiBold" FontSize="13" />
+                    <StackPanel x:Name="ThemeRadioPanel" Orientation="Horizontal" Spacing="12">
+                      <RadioButton Content="Auto" GroupName="Theme" Tag="Default" Checked="Theme_Checked" />
+                      <RadioButton Content="Light" GroupName="Theme" Tag="Light" Checked="Theme_Checked" />
+                      <RadioButton Content="Dark" GroupName="Theme" Tag="Dark" Checked="Theme_Checked" />
+                    </StackPanel>
+                  </StackPanel>
+                  <ToggleSwitch Header="Launch at login"
+                                IsOn="{Binding AutostartEnabled, Mode=TwoWay}" />
+                </StackPanel>
+              </Border>
+
+              <!-- Quick stats card -->
+              <TextBlock Text="Your dictation" FontWeight="SemiBold" FontSize="14" />
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="20,16">
+                <Grid ColumnSpacing="32">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                  </Grid.ColumnDefinitions>
+                  <StackPanel Grid.Column="0" Spacing="2">
+                    <TextBlock FontSize="28" FontWeight="SemiBold"
+                               Text="{Binding StatsTotalWords, Mode=OneWay}" />
+                    <TextBlock FontSize="12"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               Text="words transcribed" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="1" Spacing="2">
+                    <TextBlock FontSize="28" FontWeight="SemiBold"
+                               Text="{Binding TimeSavedDisplay, Mode=OneWay}" />
+                    <TextBlock FontSize="12"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               Text="time saved vs typing" />
+                  </StackPanel>
+                </Grid>
+              </Border>
+            </StackPanel>
+
+            <!-- ═══ Voice input (was General) — STT settings ═══ -->
+            <StackPanel x:Name="GeneralPanel" Spacing="16" Visibility="Collapsed">
               <ComboBox x:Name="LanguageComboBox" Header="Native language (you speak)" Width="240"
                         DisplayMemberPath="Value"
                         ItemsSource="{Binding LanguageItems}"
@@ -81,9 +138,6 @@
                           VerticalAlignment="Bottom" Margin="0,0,0,8"
                           Visibility="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
               </StackPanel>
-
-              <ToggleSwitch Header="Launch at login"
-                            IsOn="{Binding AutostartEnabled, Mode=TwoWay}" />
 
               <!-- STT Mode: Local vs Cloud -->
               <TextBlock Text="Speech-to-Text Mode" FontWeight="SemiBold" FontSize="14" Margin="0,8,0,0" />
@@ -288,6 +342,24 @@
                 <x:String>Line</x:String>
                 <x:String>Dots</x:String>
               </ComboBox>
+            </StackPanel>
+
+            <!-- ═══ App rules (placeholder pending PR-B backend) ═══ -->
+            <StackPanel x:Name="RulesPanel" Spacing="16" Visibility="Collapsed">
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="20,16">
+                <StackPanel Spacing="6">
+                  <TextBlock Text="App rules" FontSize="16" FontWeight="SemiBold" />
+                  <TextBlock TextWrapping="Wrap"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                             Text="Auto-switch the LLM rewrite style based on the focused app — Slack/Telegram → Casual, Outlook → Professional, VS Code → off, etc." />
+                  <TextBlock Margin="0,8,0,0"
+                             FontSize="12"
+                             Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                             Text="🚧 Coming in V21 — backend in development." />
+                </StackPanel>
+              </Border>
             </StackPanel>
 
             <!-- ═══ About ═══ -->
