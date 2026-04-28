@@ -15,6 +15,11 @@
     <NavigationView x:Name="NavView" PaneDisplayMode="Left" OpenPaneLength="200"
                     IsBackButtonVisible="Collapsed"
                     IsSettingsVisible="False" SelectionChanged="Nav_SelectionChanged">
+      <NavigationView.AutoSuggestBox>
+        <AutoSuggestBox x:Name="NavSearchBox" PlaceholderText="Search settings"
+                        QueryIcon="Find"
+                        TextChanged="NavSearchBox_TextChanged" />
+      </NavigationView.AutoSuggestBox>
       <NavigationView.MenuItems>
         <NavigationViewItem Content="Home" Tag="home">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE80F;" /></NavigationViewItem.Icon>
@@ -520,10 +525,22 @@
     </NavigationView>
 
     <!-- Footer -->
-    <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right"
-                Spacing="8" Margin="16">
-      <Button Content="Cancel" Click="Cancel_Click" />
-      <Button Content="Save" Click="Save_Click" Style="{ThemeResource AccentButtonStyle}" />
-    </StackPanel>
+    <Grid Grid.Row="1" Margin="16">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*" />
+        <ColumnDefinition Width="Auto" />
+      </Grid.ColumnDefinitions>
+      <!-- Auto-save InfoBar — appears briefly when a setting is changed so
+           the user gets confirmation that the change persisted. Win11-native
+           pattern; pairs with the existing Save button for explicit commits. -->
+      <InfoBar x:Name="SavedInfoBar" Grid.Column="0"
+               IsOpen="False" IsClosable="False" Severity="Success"
+               Message="Saved"
+               HorizontalAlignment="Left" VerticalAlignment="Center" />
+      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+        <Button Content="Cancel" Click="Cancel_Click" />
+        <Button Content="Save" Click="Save_Click" Style="{ThemeResource AccentButtonStyle}" />
+      </StackPanel>
+    </Grid>
   </Grid>
 </Window>

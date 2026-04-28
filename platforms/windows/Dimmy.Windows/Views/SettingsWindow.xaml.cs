@@ -3,6 +3,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Dimmy.Windows.Helpers;
@@ -62,6 +63,11 @@ public sealed partial class SettingsWindow : Window
         {
             NavView.SelectedItem = first;
         }
+
+        // Pulse "Saved" InfoBar on any ViewModel field change (Win11 auto-save
+        // pattern). The Save button still flushes to disk; this is purely
+        // a visual hint that the form is dirty.
+        ViewModel.PropertyChanged += (_, _) => PulseSavedInfoBar();
 
         _loaded = true;
     }
@@ -579,6 +585,50 @@ public sealed partial class SettingsWindow : Window
                 RefreshAnonymousIdText();
             }
         }
+    }
+
+    /// <summary>
+    /// Filter NavigationView items by user-typed query in the AutoSuggestBox.
+    /// Hidden items are simply collapsed; the user clears the query to see
+    /// everything again. Case-insensitive substring match on Content text.
+    /// </summary>
+    private void NavSearchBox_TextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)
+    {
+        var query = (sender.Text ?? string.Empty).Trim().ToLowerInvariant();
+        foreach (var item in NavView.MenuItems)
+        {
+            if (item is NavigationViewItem navItem)
+            {
+                var label = (navItem.Content as string ?? string.Empty).ToLowerInvariant();
+                navItem.Visibility = string.IsNullOrEmpty(query) || label.Contains(query)
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Brief "Saved" InfoBar pulse triggered by any setting change. Win11-
+    /// native auto-save UX. The actual persistence still happens on Save
+    /// click for now; this is a visual hint that the form has been edited.
+    /// </summary>
+    private DispatcherQueueTimer? _savedPulseTimer;
+    private void PulseSavedInfoBar()
+    {
+        if (!_loaded) return;
+        SavedInfoBar.IsOpen = true;
+        _savedPulseTimer ??= DispatcherQueue.CreateTimer();
+        _savedPulseTimer.Stop();
+        _savedPulseTimer.Interval = TimeSpan.FromMilliseconds(1500);
+        _savedPulseTimer.IsRepeating = false;
+        _savedPulseTimer.Tick -= OnSavedPulseTick;
+        _savedPulseTimer.Tick += OnSavedPulseTick;
+        _savedPulseTimer.Start();
+    }
+    private void OnSavedPulseTick(DispatcherQueueTimer sender, object args)
+    {
+        SavedInfoBar.IsOpen = false;
+        sender.Stop();
     }
 
     private void Save_Click(object sender, RoutedEventArgs e)
