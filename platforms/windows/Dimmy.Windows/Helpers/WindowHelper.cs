@@ -253,6 +253,10 @@ public static class WindowHelper
                 x = workArea.Right - width - margin;
                 y = workArea.Top + margin;
                 break;
+            case "Top Center":
+                x = (workArea.Left + workArea.Right) / 2 - width / 2;
+                y = workArea.Top + margin;
+                break;
             case "Bottom Left":
                 x = workArea.Left + margin;
                 y = workArea.Bottom - height - margin;

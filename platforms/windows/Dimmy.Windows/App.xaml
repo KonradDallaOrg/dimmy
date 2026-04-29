@@ -15,6 +15,76 @@
             <converters:StringEqualityConverter x:Key="StringToBoolConverter" />
             <converters:BoolToApiKeyPlaceholderConverter x:Key="BoolToApiKeyPlaceholder" />
             <converters:BoolToAccentBrushConverter x:Key="BoolToAccentBrush" />
+            <converters:StyleToColorBrushConverter x:Key="StyleToColorBrush" />
+
+            <!-- Position grid cell style — a clickable square that mimics a
+                 monitor quadrant. Selected state shows the accent ring + a
+                 mini pill marker indicating where the overlay will spawn. -->
+            <Style x:Key="PositionCellStyle" TargetType="RadioButton">
+                <Setter Property="MinWidth" Value="0" />
+                <Setter Property="MinHeight" Value="0" />
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="HorizontalAlignment" Value="Stretch" />
+                <Setter Property="VerticalAlignment" Value="Stretch" />
+                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                <Setter Property="VerticalContentAlignment" Value="Stretch" />
+                <Setter Property="Background" Value="{ThemeResource SubtleFillColorTransparentBrush}" />
+                <Setter Property="BorderBrush" Value="{ThemeResource ControlStrokeColorDefaultBrush}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="RadioButton">
+                            <Grid x:Name="RootGrid"
+                                  Background="{TemplateBinding Background}"
+                                  BorderBrush="{TemplateBinding BorderBrush}"
+                                  BorderThickness="{TemplateBinding BorderThickness}"
+                                  CornerRadius="6">
+                                <VisualStateManager.VisualStateGroups>
+                                    <VisualStateGroup x:Name="CommonStates">
+                                        <VisualState x:Name="Normal" />
+                                        <VisualState x:Name="PointerOver">
+                                            <VisualState.Setters>
+                                                <Setter Target="RootGrid.Background"
+                                                        Value="{ThemeResource SubtleFillColorSecondaryBrush}" />
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="Pressed">
+                                            <VisualState.Setters>
+                                                <Setter Target="RootGrid.Background"
+                                                        Value="{ThemeResource SubtleFillColorTertiaryBrush}" />
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="Disabled">
+                                            <VisualState.Setters>
+                                                <Setter Target="RootGrid.Opacity" Value="0.5" />
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                    </VisualStateGroup>
+                                    <VisualStateGroup x:Name="CheckStates">
+                                        <VisualState x:Name="Checked">
+                                            <VisualState.Setters>
+                                                <Setter Target="RootGrid.BorderBrush"
+                                                        Value="{ThemeResource AccentFillColorDefaultBrush}" />
+                                                <Setter Target="RootGrid.BorderThickness" Value="2" />
+                                                <Setter Target="Marker.Visibility" Value="Visible" />
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="Unchecked" />
+                                    </VisualStateGroup>
+                                </VisualStateManager.VisualStateGroups>
+                                <!-- Mini pill marker — only visible when this cell is checked.
+                                     Centered, scales down nicely in the compact embedded grid. -->
+                                <Border x:Name="Marker"
+                                        Visibility="Collapsed"
+                                        Background="{ThemeResource AccentFillColorDefaultBrush}"
+                                        Width="12" Height="4" CornerRadius="2"
+                                        HorizontalAlignment="Center"
+                                        VerticalAlignment="Center" />
+                            </Grid>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
         </ResourceDictionary>
     </Application.Resources>
 </Application>
