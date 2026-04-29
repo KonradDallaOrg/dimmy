@@ -227,6 +227,8 @@ fn dimmy_init_inner() -> c_int {
         window_anchor: Mutex::new(None),
         stats_total_words: Mutex::new(file_cfg.stats_total_words),
         stats_total_speaking_secs: Mutex::new(file_cfg.stats_total_speaking_secs),
+        app_rules: Mutex::new(file_cfg.app_rules.clone()),
+        current_app_context: Mutex::new(crate::app_rules::AppContext::default()),
         history_store: Mutex::new({
             let history_db = crate::config_dir_path()
                 .map(|p| p.join("history.db"))
@@ -849,7 +851,7 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
     let has_stt_key = st.api_key.lock().map(|k| k.is_some()).unwrap_or(false);
     let has_llm_key = st.llm_api_key.lock().map(|k| k.is_some()).unwrap_or(false);
 
-    let json = serde_json::json!({
+    let mut json = serde_json::json!({
         "has_key": has_stt_key,
         "api_url": *st.api_url.lock().unwrap_or_else(|e| e.into_inner()),
         "api_model": *st.api_model.lock().unwrap_or_else(|e| e.into_inner()),
