@@ -2186,6 +2186,9 @@ pub unsafe extern "C" fn dimmy_hotkey_set(combo_ptr: *const c_char) {
 ///   `{"process_name": "slack.exe", "bundle_id": "", "wm_class": ""}`
 ///
 /// Returns 0 on success, non-zero on parse error.
+///
+/// # Safety
+/// `json_ptr` must be a valid null-terminated UTF-8 C string, or null.
 #[no_mangle]
 pub unsafe extern "C" fn dimmy_set_app_context(json_ptr: *const c_char) -> c_int {
     if json_ptr.is_null() {
@@ -2216,6 +2219,9 @@ pub unsafe extern "C" fn dimmy_set_app_context(json_ptr: *const c_char) -> c_int
 
 /// Clear the foreground-app snapshot. Called after transcription completes
 /// so a stale snapshot can't bleed into the next recording.
+///
+/// # Safety
+/// Safe to call from any thread once `dimmy_init` has run.
 #[no_mangle]
 pub unsafe extern "C" fn dimmy_clear_app_context() {
     if let Some(st) = GLOBAL_STATE.get() {

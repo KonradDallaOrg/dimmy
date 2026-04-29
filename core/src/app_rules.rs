@@ -149,7 +149,7 @@ pub fn resolve(rules: &[AppRule], ctx: &AppContext) -> RuleOverride {
 fn matches(rule: &AppRule, ctx: &AppContext) -> bool {
     match rule.match_type {
         MatchType::ProcessName => normalise_process_name(&ctx.process_name)
-            .eq_ignore_ascii_case(&normalise_process_name(&rule.match_pattern)),
+            .eq_ignore_ascii_case(normalise_process_name(&rule.match_pattern)),
         MatchType::BundleId => ctx.bundle_id == rule.match_pattern,
         MatchType::WmClass => ctx.wm_class.eq_ignore_ascii_case(&rule.match_pattern),
     }
