@@ -453,7 +453,7 @@ struct MacStatusPill: View {
 
 struct MacNote: View {
     let title: String
-    let body: String
+    let message: String
     var systemImage: String = "info.circle.fill"
 
     var body: some View {
@@ -469,7 +469,7 @@ struct MacNote: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.system(size: 12, weight: .semibold))
-                Text(body)
+                Text(message)
                     .font(.system(size: 12))
                     .foregroundStyle(Color.macTextSecondary)
                     .fixedSize(horizontal: false, vertical: true)

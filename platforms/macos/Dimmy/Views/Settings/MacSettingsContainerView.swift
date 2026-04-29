@@ -379,7 +379,7 @@ struct MacPlaceholderPage: View {
         VStack(alignment: .leading, spacing: 10) {
             MacNote(
                 title: title,
-                body: message,
+                message: message,
                 systemImage: "hammer.fill"
             )
             Spacer(minLength: 240)

@@ -19,7 +19,7 @@ struct MacRulesPage: View {
         VStack(alignment: .leading, spacing: 0) {
             MacNote(
                 title: "Match the rewrite to the app you're in",
-                body: "Dimmy detects the focused app and applies its rule before pasting. Slack gets Gen Z, Mail gets Professional, your terminal gets nothing — your call. Rules are evaluated top-down; the first match wins.",
+                message: "Dimmy detects the focused app and applies its rule before pasting. Slack gets Gen Z, Mail gets Professional, your terminal gets nothing — your call. Rules are evaluated top-down; the first match wins.",
                 systemImage: "info.circle.fill"
             )
             .padding(.bottom, 8)

@@ -16,7 +16,7 @@ struct MacPrivacyPage: View {
         VStack(alignment: .leading, spacing: 0) {
             MacNote(
                 title: "Your transcriptions stay yours",
-                body: "Dimmy never sends your transcriptions, audio, API keys, or microphone names. Anonymous usage data and crash reports help us spot bugs and decide what to build next.",
+                message: "Dimmy never sends your transcriptions, audio, API keys, or microphone names. Anonymous usage data and crash reports help us spot bugs and decide what to build next.",
                 systemImage: "shield.fill"
             )
             .padding(.bottom, 8)

@@ -11,7 +11,7 @@ struct MacAdvancedPage: View {
         VStack(alignment: .leading, spacing: 0) {
             MacNote(
                 title: "Advanced settings",
-                body: "These options can affect performance and stability. Change them only if you know what you're doing.",
+                message: "These options can affect performance and stability. Change them only if you know what you're doing.",
                 systemImage: "exclamationmark.triangle.fill"
             )
             .padding(.bottom, 8)
