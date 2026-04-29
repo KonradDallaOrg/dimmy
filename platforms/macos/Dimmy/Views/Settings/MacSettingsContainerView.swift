@@ -309,22 +309,14 @@ struct MacSettingsContainerView: View {
     private var page: some View {
         switch current {
         case .home:     MacHomePage(appState: appState, onTabChange: goTo)
-        case .voice:    MacPlaceholderPage(title: current.label,
-                                          message: "Coming next — Voice input page")
-        case .output:   MacPlaceholderPage(title: current.label,
-                                          message: "Coming next — Output page")
-        case .rules:    MacPlaceholderPage(title: current.label,
-                                          message: "Coming next — App rules page")
-        case .pill:     MacPlaceholderPage(title: current.label,
-                                          message: "Coming next — Pill overlay page")
-        case .shortcut: MacPlaceholderPage(title: current.label,
-                                          message: "Coming next — Shortcut page")
-        case .privacy:  MacPlaceholderPage(title: current.label,
-                                          message: "Coming next — Privacy page")
-        case .about:    MacPlaceholderPage(title: current.label,
-                                          message: "Coming next — About page")
-        case .advanced: MacPlaceholderPage(title: current.label,
-                                          message: "Coming next — Advanced page")
+        case .voice:    MacVoicePage(appState: appState)
+        case .output:   MacOutputPage(appState: appState)
+        case .rules:    MacRulesPage(appState: appState)
+        case .pill:     MacPillPage(appState: appState)
+        case .shortcut: MacShortcutPage(appState: appState)
+        case .privacy:  MacPrivacyPage(appState: appState)
+        case .about:    MacAboutPage(appState: appState)
+        case .advanced: MacAdvancedPage(appState: appState)
         }
     }
 

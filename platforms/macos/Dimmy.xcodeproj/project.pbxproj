@@ -55,6 +55,14 @@
 		AA000200 /* MacAtoms.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000200 /* MacAtoms.swift */; };
 		AA000201 /* MacSettingsContainerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000201 /* MacSettingsContainerView.swift */; };
 		AA000202 /* MacHomePage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000202 /* MacHomePage.swift */; };
+		AA000203 /* MacVoicePage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000203 /* MacVoicePage.swift */; };
+		AA000204 /* MacOutputPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000204 /* MacOutputPage.swift */; };
+		AA000205 /* MacPillPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000205 /* MacPillPage.swift */; };
+		AA000206 /* MacShortcutPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000206 /* MacShortcutPage.swift */; };
+		AA000207 /* MacPrivacyPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000207 /* MacPrivacyPage.swift */; };
+		AA000208 /* MacAboutPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000208 /* MacAboutPage.swift */; };
+		AA000209 /* MacAdvancedPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000209 /* MacAdvancedPage.swift */; };
+		AA000210 /* MacRulesPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000210 /* MacRulesPage.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -108,6 +116,14 @@
 		AB000200 /* MacAtoms.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAtoms.swift; sourceTree = "<group>"; };
 		AB000201 /* MacSettingsContainerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSettingsContainerView.swift; sourceTree = "<group>"; };
 		AB000202 /* MacHomePage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacHomePage.swift; sourceTree = "<group>"; };
+		AB000203 /* MacVoicePage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacVoicePage.swift; sourceTree = "<group>"; };
+		AB000204 /* MacOutputPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacOutputPage.swift; sourceTree = "<group>"; };
+		AB000205 /* MacPillPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPillPage.swift; sourceTree = "<group>"; };
+		AB000206 /* MacShortcutPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacShortcutPage.swift; sourceTree = "<group>"; };
+		AB000207 /* MacPrivacyPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPrivacyPage.swift; sourceTree = "<group>"; };
+		AB000208 /* MacAboutPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAboutPage.swift; sourceTree = "<group>"; };
+		AB000209 /* MacAdvancedPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAdvancedPage.swift; sourceTree = "<group>"; };
+		AB000210 /* MacRulesPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacRulesPage.swift; sourceTree = "<group>"; };
 		AB000099 /* Dimmy.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Dimmy.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -229,6 +245,14 @@
 				AB000200 /* MacAtoms.swift */,
 				AB000201 /* MacSettingsContainerView.swift */,
 				AB000202 /* MacHomePage.swift */,
+				AB000203 /* MacVoicePage.swift */,
+				AB000204 /* MacOutputPage.swift */,
+				AB000205 /* MacPillPage.swift */,
+				AB000206 /* MacShortcutPage.swift */,
+				AB000207 /* MacPrivacyPage.swift */,
+				AB000208 /* MacAboutPage.swift */,
+				AB000209 /* MacAdvancedPage.swift */,
+				AB000210 /* MacRulesPage.swift */,
 			);
 			path = Settings;
 			sourceTree = "<group>";
@@ -372,6 +396,14 @@
 				AA000200 /* MacAtoms.swift in Sources */,
 				AA000201 /* MacSettingsContainerView.swift in Sources */,
 				AA000202 /* MacHomePage.swift in Sources */,
+				AA000203 /* MacVoicePage.swift in Sources */,
+				AA000204 /* MacOutputPage.swift in Sources */,
+				AA000205 /* MacPillPage.swift in Sources */,
+				AA000206 /* MacShortcutPage.swift in Sources */,
+				AA000207 /* MacPrivacyPage.swift in Sources */,
+				AA000208 /* MacAboutPage.swift in Sources */,
+				AA000209 /* MacAdvancedPage.swift in Sources */,
+				AA000210 /* MacRulesPage.swift in Sources */,
 				AA000030 /* DimmyCore.swift in Sources */,
 				AA000041 /* SelfTests.swift in Sources */,
 				AA000042 /* RecordingSimulator.swift in Sources */,

@@ -1,0 +1,195 @@
+import SwiftUI
+
+// About — hero with app icon + version + check-for-updates / release
+// notes, then Updates settings (auto-update, channel) and Resources
+// links. Footer credit "Made with [Anthropic mark] Claude Code" matches
+// the Windows v3 footer.
+
+struct MacAboutPage: View {
+    @ObservedObject var appState: AppState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            heroCard
+                .padding(.bottom, 8)
+            updatesGroup
+            resourcesGroup
+            anthropicCredit
+        }
+    }
+
+    // MARK: Hero
+
+    private var heroCard: some View {
+        MacHero(
+            title: "Dimmy \(versionString)",
+            subtitle: "Voice dictation that stays out of your way.\nReleased \(buildDateString).",
+            actions: AnyView(
+                HStack(spacing: 8) {
+                    Button {
+                        if let url = URL(string: "https://dimmy.app/download") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    } label: {
+                        Label("Check for updates…", systemImage: "arrow.down.circle.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Button {
+                        if let url = URL(string: "https://github.com/KonradDallaOrg/dimmy/releases") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    } label: {
+                        Label("View release notes", systemImage: "doc.text")
+                    }
+                }
+            )
+        ) {
+            ZStack {
+                if let icon = NSImage(named: NSImage.applicationIconName) {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 88, height: 88)
+                        .shadow(color: Color.accentColor.opacity(0.35),
+                                radius: 12, x: 0, y: 6)
+                } else {
+                    Image(systemName: "waveform.circle.fill")
+                        .font(.system(size: 88))
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+            .frame(width: 200, height: 96)
+        }
+    }
+
+    // MARK: Updates
+
+    private var updatesGroup: some View {
+        Group {
+            MacGroupLabel(text: "Updates")
+            MacTile {
+                MacRow(
+                    "Automatic updates",
+                    description: "Get new versions as they ship"
+                ) {
+                    // macOS Sparkle wiring is a future task — read-only.
+                    Toggle("", isOn: .constant(true))
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                        .disabled(true)
+                }
+                MacRow(
+                    "Update channel",
+                    description: "Stable releases or early previews",
+                    showsDivider: false
+                ) {
+                    Picker("", selection: .constant("stable")) {
+                        Text("Stable").tag("stable")
+                        Text("Beta").tag("beta")
+                    }
+                    .labelsHidden()
+                    .frame(width: 140)
+                    .disabled(true)
+                }
+            }
+        }
+    }
+
+    // MARK: Resources
+
+    private var resourcesGroup: some View {
+        Group {
+            MacGroupLabel(text: "Resources")
+            MacTile {
+                MacRow(
+                    "Documentation",
+                    description: "Guides, shortcuts, troubleshooting",
+                    icon: "globe",
+                    iconBackground: Color(red: 0.04, green: 0.52, blue: 1.00)
+                ) {
+                    Link(destination: URL(string: "https://dimmy.app/docs")!) {
+                        Text("dimmy.app/docs ›")
+                            .font(.system(size: 12))
+                    }
+                }
+                MacRow(
+                    "GitHub repository",
+                    description: "Source, issues, releases",
+                    icon: "chevron.left.forwardslash.chevron.right",
+                    iconBackground: Color(red: 0.11, green: 0.11, blue: 0.12)
+                ) {
+                    Link(destination: URL(string: "https://github.com/KonradDallaOrg/dimmy")!) {
+                        Text("github.com ›")
+                            .font(.system(size: 12))
+                    }
+                }
+                MacRow(
+                    "License",
+                    description: "Open source, free to fork",
+                    icon: "doc.text.fill",
+                    iconBackground: Color.gray,
+                    showsDivider: false
+                ) {
+                    Link(destination: URL(string: "https://github.com/KonradDallaOrg/dimmy/blob/main/LICENSE")!) {
+                        Text("View ›").font(.system(size: 12))
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: Footer credit
+
+    private var anthropicCredit: some View {
+        HStack(spacing: 6) {
+            Text("Made with")
+                .font(.system(size: 12))
+                .foregroundStyle(Color.macTextTertiary)
+            // Anthropic 4-arm starburst — same Path data as Windows v3.
+            anthropicMark
+                .foregroundStyle(Color(red: 0.85, green: 0.46, blue: 0.34))
+                .frame(width: 14, height: 14)
+            Text("Claude Code")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.macTextSecondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 24)
+        .padding(.bottom, 4)
+    }
+
+    private var anthropicMark: some View {
+        // Hand-traced 4-pointed Anthropic glyph; renders crisply at 14px.
+        Path { path in
+            let points: [(CGFloat, CGFloat)] = [
+                (50, 0), (58, 42), (100, 50), (58, 58),
+                (50, 100), (42, 58), (0, 50), (42, 42),
+            ]
+            path.move(to: CGPoint(x: points[0].0, y: points[0].1))
+            for p in points.dropFirst() {
+                path.addLine(to: CGPoint(x: p.0, y: p.1))
+            }
+            path.closeSubpath()
+        }
+        .scale(0.14)
+    }
+
+    // MARK: Helpers
+
+    private var versionString: String {
+        let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        return v ?? "0.0.0"
+    }
+
+    private var buildDateString: String {
+        if let infoPath = Bundle.main.path(forResource: "Info", ofType: "plist"),
+           let attrs = try? FileManager.default.attributesOfItem(atPath: infoPath),
+           let date = attrs[.creationDate] as? Date {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "MMMM d, yyyy"
+            return formatter.string(from: date)
+        }
+        return "this build"
+    }
+}
