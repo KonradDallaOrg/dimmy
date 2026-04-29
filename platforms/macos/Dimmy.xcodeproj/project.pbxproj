@@ -63,6 +63,7 @@
 		AA000208 /* MacAboutPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000208 /* MacAboutPage.swift */; };
 		AA000209 /* MacAdvancedPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000209 /* MacAdvancedPage.swift */; };
 		AA000210 /* MacRulesPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000210 /* MacRulesPage.swift */; };
+		AA000211 /* MacPermissionsPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000211 /* MacPermissionsPage.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -124,6 +125,7 @@
 		AB000208 /* MacAboutPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAboutPage.swift; sourceTree = "<group>"; };
 		AB000209 /* MacAdvancedPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAdvancedPage.swift; sourceTree = "<group>"; };
 		AB000210 /* MacRulesPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacRulesPage.swift; sourceTree = "<group>"; };
+		AB000211 /* MacPermissionsPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPermissionsPage.swift; sourceTree = "<group>"; };
 		AB000099 /* Dimmy.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Dimmy.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -253,6 +255,7 @@
 				AB000208 /* MacAboutPage.swift */,
 				AB000209 /* MacAdvancedPage.swift */,
 				AB000210 /* MacRulesPage.swift */,
+				AB000211 /* MacPermissionsPage.swift */,
 			);
 			path = Settings;
 			sourceTree = "<group>";
@@ -404,6 +407,7 @@
 				AA000208 /* MacAboutPage.swift in Sources */,
 				AA000209 /* MacAdvancedPage.swift in Sources */,
 				AA000210 /* MacRulesPage.swift in Sources */,
+				AA000211 /* MacPermissionsPage.swift in Sources */,
 				AA000030 /* DimmyCore.swift in Sources */,
 				AA000041 /* SelfTests.swift in Sources */,
 				AA000042 /* RecordingSimulator.swift in Sources */,

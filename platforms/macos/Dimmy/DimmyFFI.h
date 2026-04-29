@@ -132,4 +132,50 @@ int32_t dimmy_history_delete(int32_t id);
 /// Get history stats as JSON. Returns bytes written, or -1 on error.
 int32_t dimmy_history_stats(char * _Nonnull out_buf, int32_t buf_len);
 
+// ── Telemetry ──────────────────────────────────────────────────────
+
+/// Submit user feedback through the telemetry pipeline. Best-effort:
+/// returns 0 on success (queued) or empty input, -1 on precondition error.
+/// Empty messages are silent no-ops.
+int32_t dimmy_telemetry_capture_feedback(const char * _Nullable kind,
+                                         const char * _Nullable message,
+                                         const char * _Nullable email);
+
+/// 1 = analytics on, 0 = off. Reflects the user toggle (PostHog).
+int32_t dimmy_telemetry_is_enabled(void);
+int32_t dimmy_telemetry_set_enabled(int32_t enabled);
+
+/// 1 = crash reporting on, 0 = off. Reflects the user toggle (Sentry).
+int32_t dimmy_telemetry_is_crash_enabled(void);
+int32_t dimmy_telemetry_set_crash_enabled(int32_t enabled);
+
+/// Anonymous distinct_id used by PostHog. Returns bytes written, or -1.
+int32_t dimmy_telemetry_anonymous_id(char * _Nonnull out_buf, int32_t buf_len);
+
+/// Wipe + regenerate the anonymous_id (used by "Reset analytics ID").
+int32_t dimmy_telemetry_reset_anonymous_id(void);
+
+/// Full telemetry status as JSON. Returns bytes written, or -1.
+int32_t dimmy_telemetry_status(char * _Nonnull out_buf, int32_t buf_len);
+
+// ── Autostart ──────────────────────────────────────────────────────
+
+int32_t dimmy_autostart_is_enabled(void);
+int32_t dimmy_autostart_set_enabled(int32_t enabled);
+
+// ── Diagnostics / GPU ──────────────────────────────────────────────
+
+/// Probe default input device + record a few ms of audio to flag issues.
+/// Returns bytes written to a JSON status report, or -1 on error.
+int32_t dimmy_check_audio_health(char * _Nonnull out_buf, int32_t buf_len);
+
+/// Build version (CARGO_PKG_VERSION). Returns bytes written, or -1.
+int32_t dimmy_get_version(char * _Nonnull out_buf, int32_t buf_len);
+
+/// GPU known-bad marker status as JSON. Returns bytes written, or -1.
+int32_t dimmy_gpu_get_status(char * _Nonnull out_buf, int32_t buf_len);
+
+/// Clear the known-bad GPU marker so we re-probe Metal next launch.
+int32_t dimmy_gpu_clear_known_bad(void);
+
 #endif /* DimmyFFI_h */

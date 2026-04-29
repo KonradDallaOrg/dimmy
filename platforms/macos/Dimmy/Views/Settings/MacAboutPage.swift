@@ -46,12 +46,15 @@ struct MacAboutPage: View {
             )
         ) {
             ZStack {
+                // Use the macOS app icon (the same dimmy-logo source as
+                // Windows, but rendered with the system squircle so it
+                // matches the Dock representation users already see).
                 if let icon = NSImage(named: NSImage.applicationIconName) {
                     Image(nsImage: icon)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
-                        .frame(width: 88, height: 88)
-                        .shadow(color: Color.accentColor.opacity(0.35),
+                        .frame(width: 96, height: 96)
+                        .shadow(color: Color.accentColor.opacity(0.30),
                                 radius: 12, x: 0, y: 6)
                 } else {
                     Image(systemName: "waveform.circle.fill")
@@ -59,7 +62,7 @@ struct MacAboutPage: View {
                         .foregroundStyle(Color.accentColor)
                 }
             }
-            .frame(width: 200, height: 96)
+            .frame(width: 200, height: 110)
         }
     }
 
@@ -146,9 +149,11 @@ struct MacAboutPage: View {
             Text("Made with")
                 .font(.system(size: 12))
                 .foregroundStyle(Color.macTextTertiary)
-            // Anthropic 4-arm starburst — same Path data as Windows v3.
-            anthropicMark
-                .foregroundStyle(Color(red: 0.85, green: 0.46, blue: 0.34))
+            // Same SVG path data as Windows About panel — bundled as a
+            // vector asset so it stays crisp at any size.
+            Image("ClaudeMark")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
                 .frame(width: 14, height: 14)
             Text("Claude Code")
                 .font(.system(size: 12, weight: .semibold))
@@ -157,22 +162,6 @@ struct MacAboutPage: View {
         .frame(maxWidth: .infinity)
         .padding(.top, 24)
         .padding(.bottom, 4)
-    }
-
-    private var anthropicMark: some View {
-        // Hand-traced 4-pointed Anthropic glyph; renders crisply at 14px.
-        Path { path in
-            let points: [(CGFloat, CGFloat)] = [
-                (50, 0), (58, 42), (100, 50), (58, 58),
-                (50, 100), (42, 58), (0, 50), (42, 42),
-            ]
-            path.move(to: CGPoint(x: points[0].0, y: points[0].1))
-            for p in points.dropFirst() {
-                path.addLine(to: CGPoint(x: p.0, y: p.1))
-            }
-            path.closeSubpath()
-        }
-        .scale(0.14)
     }
 
     // MARK: Helpers

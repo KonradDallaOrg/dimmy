@@ -38,25 +38,27 @@ struct MacPrivacyPage: View {
                     "Send anonymous usage data",
                     description: "\"app started\", \"transcription completed in 2.3s\". No content, no identifiers."
                 ) {
-                    // macOS doesn't currently surface a telemetry toggle —
-                    // shipping disabled by default. Read-only for now.
-                    Toggle("", isOn: .constant(false))
-                        .toggleStyle(.switch)
-                        .labelsHidden()
-                        .disabled(true)
+                    Toggle("", isOn: Binding(
+                        get: { DimmyCore.shared.telemetryEnabled },
+                        set: { DimmyCore.shared.telemetryEnabled = $0 }
+                    ))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
                 }
                 MacRow(
                     "Send crash reports",
                     description: "Stack trace only — no environment, no usernames in paths.",
                     showsDivider: false
                 ) {
-                    Toggle("", isOn: .constant(false))
-                        .toggleStyle(.switch)
-                        .labelsHidden()
-                        .disabled(true)
+                    Toggle("", isOn: Binding(
+                        get: { DimmyCore.shared.crashReportingEnabled },
+                        set: { DimmyCore.shared.crashReportingEnabled = $0 }
+                    ))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
                 }
             }
-            MacGroupFooter(text: "Telemetry on macOS is currently disabled in the binary. The Windows build has it wired through PostHog; macOS parity is on the roadmap.")
+            MacGroupFooter(text: "Same pipeline as the Windows build — PostHog + Sentry, both gated by the toggles above. Off by default.")
         }
     }
 
@@ -68,26 +70,27 @@ struct MacPrivacyPage: View {
             MacTile {
                 MacRow(
                     "Local ID",
-                    description: "Random, generated on first launch. Resetting takes effect after restart.",
+                    description: "Random, generated on first launch. Resetting takes effect immediately.",
                     showsDivider: false
                 ) {
                     Text(anonymousIdText)
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(Color.macTextSecondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: 200)
                     Button("Reset") {
-                        // Placeholder until macOS telemetry FFI ships.
+                        DimmyCore.shared.resetTelemetryAnonymousId()
                     }
                     .controlSize(.small)
-                    .disabled(true)
                 }
             }
         }
     }
 
     private var anonymousIdText: String {
-        // Stand-in. Once macOS telemetry lands, read from
-        // DimmyCore.shared.getAnonymousId().
-        "—"
+        let id = DimmyCore.shared.telemetryAnonymousId
+        return id.isEmpty ? "—" : id
     }
 
     // MARK: Feedback
@@ -132,13 +135,12 @@ struct MacPrivacyPage: View {
 
                     HStack(spacing: 12) {
                         Button {
-                            // Phase 6: FFI to dimmy_telemetry_capture_feedback.
-                            feedbackStatus = "Feedback sending isn't wired on macOS yet."
+                            sendFeedback()
                         } label: {
                             Label("Send", systemImage: "paperplane.fill")
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(feedbackText.isEmpty)
+                        .disabled(feedbackText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
                         if !feedbackStatus.isEmpty {
                             Text(feedbackStatus)
@@ -149,6 +151,24 @@ struct MacPrivacyPage: View {
                 }
                 .padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14))
             }
+        }
+    }
+
+    private func sendFeedback() {
+        let trimmed = feedbackText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let trimmedEmail = feedbackEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+        let ok = DimmyCore.shared.captureFeedback(
+            kind: feedbackKind,
+            message: trimmed,
+            email: trimmedEmail.isEmpty ? nil : trimmedEmail
+        )
+        if ok {
+            feedbackStatus = "Thanks! Feedback sent."
+            feedbackText = ""
+            feedbackEmail = ""
+        } else {
+            feedbackStatus = "Couldn't send right now. Try again later."
         }
     }
 

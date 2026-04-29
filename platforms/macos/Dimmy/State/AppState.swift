@@ -543,6 +543,13 @@ final class AppState: ObservableObject {
         didSet { UserDefaults.standard.set(useTahoeSettings, forKey: "useTahoeSettings") }
     }
 
+    /// User preference for whether the floating pill is visible. Off by
+    /// preference for users who already have the menubar item — toggled
+    /// from the menubar popover. Persists across launches.
+    @Published var pillVisible: Bool = UserDefaults.standard.object(forKey: "pillVisible") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(pillVisible, forKey: "pillVisible") }
+    }
+
     // MARK: - Appearance Config
 
     @Published var borderStyle: String = "Rainbow"

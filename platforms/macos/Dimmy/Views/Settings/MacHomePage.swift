@@ -14,6 +14,10 @@ struct MacHomePage: View {
     @ObservedObject var appState: AppState
     let onTabChange: (MacSettingsTab) -> Void
 
+    @State private var micTestRunning = false
+    @State private var micTestResult: String? = nil  // nil = idle, "" = success
+    @State private var micTestResetTask: Task<Void, Never>? = nil
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             hero
@@ -54,8 +58,7 @@ struct MacHomePage: View {
                     description: appState.preferredMode == .pushToTalk
                                     ? "Push-to-talk" : "Toggle recording",
                     icon: "keyboard.fill",
-                    iconBackground: Color(red: 0.04, green: 0.52, blue: 1.00),
-                    showsDivider: false
+                    iconBackground: Color(red: 0.04, green: 0.52, blue: 1.00)
                 ) {
                     HStack(spacing: 4) {
                         ForEach(shortcutKeycaps, id: \.self) { glyph in
@@ -63,7 +66,39 @@ struct MacHomePage: View {
                         }
                     }
                 }
+
+                MacRow(
+                    "Appearance",
+                    description: "Dimmy follows the system theme by default.",
+                    icon: "paintpalette.fill",
+                    iconBackground: Color(red: 0.69, green: 0.32, blue: 0.87),
+                    showsDivider: false
+                ) {
+                    Picker("", selection: Binding(
+                        get: { appState.theme },
+                        set: { newValue in
+                            appState.theme = newValue
+                            applyTheme(newValue)
+                        }
+                    )) {
+                        ForEach(AppTheme.allCases, id: \.self) { theme in
+                            Text(theme.rawValue).tag(theme)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 110)
+                }
             }
+        }
+    }
+
+    /// Theme is a UI-only preference (no Rust round-trip) — directly flips
+    /// the NSApp.appearance to follow / force light / force dark.
+    private func applyTheme(_ theme: AppTheme) {
+        switch theme {
+        case .auto:  NSApp.appearance = nil
+        case .light: NSApp.appearance = NSAppearance(named: .aqua)
+        case .dark:  NSApp.appearance = NSAppearance(named: .darkAqua)
         }
     }
 
@@ -101,17 +136,62 @@ struct MacHomePage: View {
     private var heroActions: some View {
         HStack(spacing: 8) {
             Button {
-                // Phase 2: wire to dimmy_check_audio_health.
-                // For now, navigate to Voice input where Input level meter lives.
-                onTabChange(.voice)
+                runMicTest()
             } label: {
-                Label("Test microphone", systemImage: "mic.fill")
+                if micTestRunning {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small).scaleEffect(0.7)
+                        Text("Testing…")
+                    }
+                } else {
+                    Label("Test microphone", systemImage: "mic.fill")
+                }
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.regular)
+            .disabled(micTestRunning)
 
             Button("Change shortcut…") { onTabChange(.shortcut) }
                 .controlSize(.regular)
+
+            if let result = micTestResult {
+                Text(result.isEmpty ? "✓ Microphone OK" : result)
+                    .font(.system(size: 11))
+                    .foregroundStyle(result.isEmpty ? Color.green : Color.orange)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// Trigger the Rust core's audio probe. Blocking 1-2s call so we run
+    /// it on a background queue. The result string is nil while idle,
+    /// `""` after a successful probe, or an error message on failure.
+    private func runMicTest() {
+        guard !micTestRunning, DimmyCore.shared.isInitialized else { return }
+        micTestRunning = true
+        micTestResult = nil
+        micTestResetTask?.cancel()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let report = DimmyCore.shared.checkAudioHealth()
+            DispatchQueue.main.async {
+                micTestRunning = false
+                if let report {
+                    let ok = (report["ok"] as? Bool) ?? false
+                    if ok {
+                        micTestResult = ""
+                    } else {
+                        let err = (report["error"] as? String) ?? "Microphone unavailable"
+                        micTestResult = err
+                    }
+                } else {
+                    micTestResult = "Couldn't read mic status"
+                }
+                micTestResetTask = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 6_000_000_000)
+                    if !Task.isCancelled { micTestResult = nil }
+                }
+            }
         }
     }
 

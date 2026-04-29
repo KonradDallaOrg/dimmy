@@ -8,6 +8,13 @@ import SwiftUI
 struct MacOutputPage: View {
     @ObservedObject var appState: AppState
 
+    @State private var llmKeyInput: String = ""
+    @State private var showLlmKeyField: Bool = false
+
+    @State private var localLlmExists: Bool = false
+    @State private var llmDownloadInFlight: Bool = false
+    @State private var llmDownloadFailed: String? = nil
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             rewriteStyleGroup
@@ -116,7 +123,7 @@ struct MacOutputPage: View {
                         MacRow(
                             "LLM API key",
                             description: "Encrypted locally. Used when not sharing with STT.",
-                            showsDivider: false
+                            showsDivider: showLlmKeyField
                         ) {
                             if appState.hasLlmKey {
                                 HStack(spacing: 4) {
@@ -127,21 +134,30 @@ struct MacOutputPage: View {
                                         .foregroundStyle(.green)
                                 }
                             }
-                            Button("Replace…") {}
-                                .controlSize(.small)
+                            Button(appState.hasLlmKey ? (showLlmKeyField ? "Cancel" : "Replace…")
+                                                      : (showLlmKeyField ? "Cancel" : "Add key…")) {
+                                showLlmKeyField.toggle()
+                                if !showLlmKeyField { llmKeyInput = "" }
+                            }
+                            .controlSize(.small)
+                        }
+
+                        if showLlmKeyField {
+                            llmKeyEntryRow
                         }
                     }
                 } else {
                     MacRow(
                         "Local model",
                         description: "Runs entirely on your device",
-                        showsDivider: false
+                        showsDivider: !localLlmExists || llmDownloadInFlight
                     ) {
                         Picker("", selection: Binding(
                             get: { appState.localLlmModel },
                             set: { newValue in
                                 appState.localLlmModel = newValue
                                 persistConfig()
+                                refreshLocalLlmStatus()
                             }
                         )) {
                             Text("Gemma 4 E2B-it (Q4)").tag("gemma-4-E2B-it-Q4_K_M.gguf")
@@ -150,8 +166,96 @@ struct MacOutputPage: View {
                         .labelsHidden()
                         .frame(width: 220)
                     }
+
+                    if llmDownloadInFlight {
+                        MacRow("Downloading \(appState.localLlmModel)…", showsDivider: false) {
+                            HStack(spacing: 8) {
+                                ProgressView(value: appState.llmModelDownloadProgress)
+                                    .frame(width: 160)
+                                Text(String(format: "%.0f%%", appState.llmModelDownloadProgress * 100))
+                                    .font(.system(size: 12, design: .monospaced))
+                                    .foregroundStyle(Color.macTextSecondary)
+                                    .frame(width: 40, alignment: .trailing)
+                            }
+                        }
+                    } else if !localLlmExists {
+                        MacRow(
+                            "Download",
+                            description: llmDownloadFailed ?? "This model isn't on disk yet.",
+                            showsDivider: false
+                        ) {
+                            Button("Download model") { startLlmDownload() }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+                        }
+                    }
                 }
             }
+        }
+        .onAppear { refreshLocalLlmStatus() }
+    }
+
+    private func refreshLocalLlmStatus() {
+        guard DimmyCore.shared.isInitialized else {
+            localLlmExists = false
+            return
+        }
+        // Check via the listLLMModels payload — each entry has `downloaded`.
+        if let arr = DimmyCore.shared.listLLMModels() {
+            let me = arr.first(where: {
+                ($0["filename"] as? String) == appState.localLlmModel
+            })
+            localLlmExists = (me?["downloaded"] as? Bool) ?? false
+        } else {
+            localLlmExists = false
+        }
+        llmDownloadFailed = nil
+    }
+
+    private func startLlmDownload() {
+        guard !llmDownloadInFlight, DimmyCore.shared.isInitialized else { return }
+        let target = appState.localLlmModel
+        llmDownloadInFlight = true
+        llmDownloadFailed = nil
+        appState.llmModelDownloadProgress = 0
+        DispatchQueue.global(qos: .userInitiated).async {
+            let ok = DimmyCore.shared.downloadLLMModel(target)
+            DispatchQueue.main.async {
+                llmDownloadInFlight = false
+                if ok {
+                    refreshLocalLlmStatus()
+                } else {
+                    llmDownloadFailed = "Download failed. Check your connection and try again."
+                }
+            }
+        }
+    }
+
+    /// Inline SecureField revealed under "LLM API key" when the user opts in.
+    /// Writes `llm_api_key` (separate from STT `api_key`) and re-reads config
+    /// to refresh `hasLlmKey`.
+    private var llmKeyEntryRow: some View {
+        MacRow("Paste key", showsDivider: false) {
+            SecureField("sk-…", text: $llmKeyInput)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 240)
+                .onSubmit { saveLlmKey() }
+            Button("Save") { saveLlmKey() }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(llmKeyInput.isEmpty)
+        }
+    }
+
+    private func saveLlmKey() {
+        guard !llmKeyInput.isEmpty else { return }
+        var config = appState.toRustConfig()
+        config["llm_api_key"] = llmKeyInput
+        DimmyCore.shared.setConfig(config)
+        llmKeyInput = ""
+        showLlmKeyField = false
+        if let cfg = DimmyCore.shared.getConfig() {
+            appState.loadFromRustConfig(cfg)
         }
     }
 

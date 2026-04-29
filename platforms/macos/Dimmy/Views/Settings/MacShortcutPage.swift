@@ -18,9 +18,23 @@ struct MacShortcutPage: View {
             // Phase 4: dedicated capture sheet. For now jump back to the
             // legacy ShortcutSettingsView in a sheet so users can still
             // record a new combo without leaving the Tahoe Settings.
-            ShortcutSettingsView(appState: appState)
-                .frame(minWidth: 480, minHeight: 360)
-                .padding()
+            // The legacy view has no Close button of its own — wrap it
+            // with a header so the sheet is dismissible.
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Text("Change shortcut")
+                        .font(.system(size: 15, weight: .semibold))
+                    Spacer()
+                    Button("Done") { showRecorder = false }
+                        .keyboardShortcut(.defaultAction)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                Divider()
+                ShortcutSettingsView(appState: appState)
+                    .padding(16)
+            }
+            .frame(minWidth: 480, minHeight: 360)
         }
     }
 

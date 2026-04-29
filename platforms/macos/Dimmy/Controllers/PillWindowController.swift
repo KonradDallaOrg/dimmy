@@ -23,8 +23,10 @@ final class PillWindowController {
     /// Flag to prevent didMove observer from writing back during programmatic repositioning
     private var isRepositioning = false
 
-    // Extra padding around the pill so glow/shadow isn't clipped
-    static let glowPadding: CGFloat = 20
+    // Extra padding around the pill so glow/shadow isn't clipped — and so
+    // the scroll-cycle popover (renders below the pill) has room to breathe
+    // without being clipped by the panel bounds.
+    static let glowPadding: CGFloat = 32
     private let panelWidth: CGFloat = 280 + glowPadding * 2
     private let panelHeight: CGFloat = 56 + glowPadding * 2
 
@@ -67,7 +69,11 @@ final class PillWindowController {
         self.panel = panel
     }
 
+    /// Show the pill, but only if the user hasn't hidden it via the
+    /// menubar toggle. Callers (onboarding completion, intro nudge) just
+    /// request "show" — the pillVisible preference vetoes when off.
     func show() {
+        guard appState.pillVisible else { return }
         panel?.orderFront(nil)
     }
 
@@ -77,10 +83,14 @@ final class PillWindowController {
 
     // MARK: - Positioning
 
-    /// Position the panel at the given point, or default to top-right of screen.
+    /// Position the panel at the given point, or — when no explicit point is
+    /// provided — at the corner / edge described by `appState.overlayPosition`.
+    /// This honours the 3×2 grid in Settings → Pill overlay → Position.
     private func positionPanel(_ panel: NSPanel, at position: CGPoint?) {
         guard let screen = NSScreen.main else { return }
-        let screenFrame = screen.visibleFrame
+        let frame = screen.visibleFrame
+        let margin: CGFloat = 20
+
         let x: CGFloat
         let y: CGFloat
 
@@ -88,12 +98,45 @@ final class PillWindowController {
             x = pos.x
             y = pos.y
         } else {
-            // Default: top-right area
-            x = screenFrame.maxX - panelWidth - 100
-            y = screenFrame.maxY - panelHeight - 100
+            (x, y) = Self.defaultOrigin(
+                for: appState.overlayPosition,
+                frame: frame,
+                panelSize: NSSize(width: panelWidth, height: panelHeight),
+                margin: margin
+            )
         }
 
         panel.setFrame(NSRect(x: x, y: y, width: panelWidth, height: panelHeight), display: true)
+    }
+
+    /// Map the user-facing position label to a screen-space origin.
+    /// The panel is wider/taller than the visible pill by `2 * glowPadding`
+    /// on each axis so shadows/glow don't get clipped. We compensate by
+    /// subtracting `glowPadding` so the *visible* pill — not the invisible
+    /// transparent gutter — ends up `margin` pt from the screen edge.
+    /// Matches Windows' `WindowHelper.PositionByPreset` (margin = 20).
+    private static func defaultOrigin(
+        for label: String,
+        frame: NSRect,
+        panelSize: NSSize,
+        margin: CGFloat
+    ) -> (CGFloat, CGFloat) {
+        let glow = glowPadding
+        let leftX   = frame.minX + margin - glow
+        let centerX = frame.midX - panelSize.width / 2
+        let rightX  = frame.maxX - panelSize.width - margin + glow
+        let bottomY = frame.minY + margin - glow
+        let topY    = frame.maxY - panelSize.height - margin + glow
+
+        switch label {
+        case "Top Left":      return (leftX, topY)
+        case "Top Center":    return (centerX, topY)
+        case "Top Right":     return (rightX, topY)
+        case "Bottom Left":   return (leftX, bottomY)
+        case "Bottom Center": return (centerX, bottomY)
+        case "Bottom Right":  return (rightX, bottomY)
+        default:              return (rightX, bottomY)  // safe fallback
+        }
     }
 
     /// Move pill to default position (called by "Reset Position" in settings)
@@ -113,6 +156,10 @@ final class PillWindowController {
         settingsItem.target = self
         menu.addItem(settingsItem)
 
+        let hideItem = NSMenuItem(title: "Hide pill", action: #selector(hidePillAction), keyEquivalent: "")
+        hideItem.target = self
+        menu.addItem(hideItem)
+
         menu.addItem(.separator())
 
         let quitItem = NSMenuItem(title: "Quit Dimmy", action: #selector(quitAction), keyEquivalent: "q")
@@ -124,6 +171,10 @@ final class PillWindowController {
 
     @objc private func settingsAction() {
         AppDelegate.shared?.openSettings()
+    }
+
+    @objc private func hidePillAction() {
+        appState.pillVisible = false
     }
 
     @objc private func quitAction() {
@@ -154,12 +205,35 @@ final class PillWindowController {
             }
             .store(in: &cancellables)
 
+        // Watch for the user picking a new corner in Settings → Pill →
+        // Position. Drop the explicit drag-position so the panel snaps
+        // to the chosen corner immediately.
+        appState.$overlayPosition
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.appState.pillPosition = nil
+                self.resetToDefaultPosition()
+            }
+            .store(in: &cancellables)
+
         appState.$isOnboardingComplete
             .receive(on: DispatchQueue.main)
             .sink { [weak self] complete in
                 if complete {
                     self?.show()
                 }
+            }
+            .store(in: &cancellables)
+
+        // React to the menubar "Hide pill" toggle. Skip the initial value —
+        // visibility on launch is owned by AppDelegate / onboarding flow.
+        appState.$pillVisible
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] visible in
+                if visible { self?.show() } else { self?.hide() }
             }
             .store(in: &cancellables)
 

@@ -35,6 +35,16 @@ struct MenuBarPopover: View {
 
             Divider()
 
+            // Pill visibility — colleagues with the menubar present often
+            // don't want the floating pill on top of everything. Toggling
+            // here flips AppState.pillVisible, which PillWindowController
+            // observes.
+            Button(appState.pillVisible ? "Hide pill" : "Show pill") {
+                appState.pillVisible.toggle()
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 13))
+
             // Settings
             Button("Settings...") {
                 AppDelegate.shared?.openSettings()

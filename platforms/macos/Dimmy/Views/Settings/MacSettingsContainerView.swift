@@ -13,50 +13,53 @@ import SwiftUI
 // reserves space at the top so visual alignment matches.
 
 enum MacSettingsTab: String, CaseIterable, Identifiable {
-    case home, voice, output, rules, pill, shortcut, privacy, about, advanced
+    case home, voice, output, rules, pill, shortcut, permissions, privacy, about, advanced
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
-        case .home:     return "Home"
-        case .voice:    return "Voice input"
-        case .output:   return "Output"
-        case .rules:    return "App rules"
-        case .pill:     return "Pill overlay"
-        case .shortcut: return "Shortcut"
-        case .privacy:  return "Privacy & data"
-        case .about:    return "About"
-        case .advanced: return "Advanced"
+        case .home:        return "Home"
+        case .voice:       return "Voice input"
+        case .output:      return "Output"
+        case .rules:       return "App rules"
+        case .pill:        return "Pill overlay"
+        case .shortcut:    return "Shortcut"
+        case .permissions: return "Permissions"
+        case .privacy:     return "Privacy & data"
+        case .about:       return "About"
+        case .advanced:    return "Advanced"
         }
     }
 
     var subtitle: String {
         switch self {
-        case .home:     return "Get a quick read on Dimmy and jump to what you need."
-        case .voice:    return "How Dimmy hears and transcribes your voice."
-        case .output:   return "How Dimmy rewrites and delivers your dictation."
-        case .rules:    return "Auto-switch the rewrite style based on the focused app."
-        case .pill:     return "The floating pill — where it lives and how it looks."
-        case .shortcut: return "The hotkey that starts and stops recording."
-        case .privacy:  return "What leaves your machine, and what doesn't."
-        case .about:    return "Version, updates, and resources."
-        case .advanced: return "Developer-leaning controls and diagnostics."
+        case .home:        return "Get a quick read on Dimmy and jump to what you need."
+        case .voice:       return "How Dimmy hears and transcribes your voice."
+        case .output:      return "How Dimmy rewrites and delivers your dictation."
+        case .rules:       return "Auto-switch the rewrite style based on the focused app."
+        case .pill:        return "The floating pill — where it lives and how it looks."
+        case .shortcut:    return "The hotkey that starts and stops recording."
+        case .permissions: return "macOS access Dimmy needs to record and paste."
+        case .privacy:     return "What leaves your machine, and what doesn't."
+        case .about:       return "Version, updates, and resources."
+        case .advanced:    return "Developer-leaning controls and diagnostics."
         }
     }
 
     /// SF Symbol for the squircle nav icon.
     var iconSystemName: String {
         switch self {
-        case .home:     return "house.fill"
-        case .voice:    return "mic.fill"
-        case .output:   return "text.bubble.fill"
-        case .rules:    return "rectangle.3.group.fill"
-        case .pill:     return "capsule.fill"
-        case .shortcut: return "keyboard.fill"
-        case .privacy:  return "lock.shield.fill"
-        case .about:    return "info.circle.fill"
-        case .advanced: return "wrench.and.screwdriver.fill"
+        case .home:        return "house.fill"
+        case .voice:       return "mic.fill"
+        case .output:      return "text.bubble.fill"
+        case .rules:       return "rectangle.3.group.fill"
+        case .pill:        return "capsule.fill"
+        case .shortcut:    return "keyboard.fill"
+        case .permissions: return "hand.raised.fill"
+        case .privacy:     return "lock.shield.fill"
+        case .about:       return "info.circle.fill"
+        case .advanced:    return "wrench.and.screwdriver.fill"
         }
     }
 
@@ -64,15 +67,16 @@ enum MacSettingsTab: String, CaseIterable, Identifiable {
     /// per tab, matching the design's NAV_COLOR map.
     var iconColor: Color {
         switch self {
-        case .home:     return Color(red: 0.04, green: 0.52, blue: 1.00)  // blue
-        case .voice:    return Color(red: 1.00, green: 0.22, blue: 0.37)  // red/pink
-        case .output:   return Color(red: 1.00, green: 0.80, blue: 0.00)  // yellow
-        case .rules:    return Color(red: 0.20, green: 0.78, blue: 0.35)  // green
-        case .pill:     return Color(red: 0.69, green: 0.32, blue: 0.87)  // purple
-        case .shortcut: return Color(red: 0.04, green: 0.52, blue: 1.00)  // blue
-        case .privacy:  return Color(red: 0.11, green: 0.11, blue: 0.12)  // black
-        case .about:    return Color(red: 0.56, green: 0.56, blue: 0.58)  // grey
-        case .advanced: return Color(red: 1.00, green: 0.62, blue: 0.04)  // orange
+        case .home:        return Color(red: 0.04, green: 0.52, blue: 1.00)  // blue
+        case .voice:       return Color(red: 1.00, green: 0.22, blue: 0.37)  // red/pink
+        case .output:      return Color(red: 1.00, green: 0.80, blue: 0.00)  // yellow
+        case .rules:       return Color(red: 0.20, green: 0.78, blue: 0.35)  // green
+        case .pill:        return Color(red: 0.69, green: 0.32, blue: 0.87)  // purple
+        case .shortcut:    return Color(red: 0.04, green: 0.52, blue: 1.00)  // blue
+        case .permissions: return Color(red: 1.00, green: 0.45, blue: 0.20)  // orange/red
+        case .privacy:     return Color(red: 0.11, green: 0.11, blue: 0.12)  // black
+        case .about:       return Color(red: 0.56, green: 0.56, blue: 0.58)  // grey
+        case .advanced:    return Color(red: 1.00, green: 0.62, blue: 0.04)  // orange
         }
     }
 }
@@ -89,15 +93,21 @@ enum MacSettingsTab: String, CaseIterable, Identifiable {
 struct MacSettingsContainerView: View {
     @ObservedObject var appState: AppState
 
-    @State private var history: [MacSettingsTab] = [.home]
-    @State private var cursor: Int = 0
+    @State private var current: MacSettingsTab = .home
     @State private var search: String = ""
     @State private var savedPulse: Bool = false
     @State private var savedPulseTask: Task<Void, Never>?
 
-    private var current: MacSettingsTab { history[cursor] }
-    private var canGoBack: Bool { cursor > 0 }
-    private var canGoForward: Bool { cursor < history.count - 1 }
+    /// Chevrons walk the visible sidebar order (filtered by Advanced + search).
+    /// Disabled at the edges — no wraparound, matches macOS Settings.app.
+    private var canGoBack: Bool {
+        guard let i = filteredTabs.firstIndex(of: current) else { return false }
+        return i > 0
+    }
+    private var canGoForward: Bool {
+        guard let i = filteredTabs.firstIndex(of: current) else { return false }
+        return i < filteredTabs.count - 1
+    }
 
     /// Visible tabs filtered by search + Advanced toggle.
     private var filteredTabs: [MacSettingsTab] {
@@ -308,36 +318,34 @@ struct MacSettingsContainerView: View {
     @ViewBuilder
     private var page: some View {
         switch current {
-        case .home:     MacHomePage(appState: appState, onTabChange: goTo)
-        case .voice:    MacVoicePage(appState: appState)
-        case .output:   MacOutputPage(appState: appState)
-        case .rules:    MacRulesPage(appState: appState)
-        case .pill:     MacPillPage(appState: appState)
-        case .shortcut: MacShortcutPage(appState: appState)
-        case .privacy:  MacPrivacyPage(appState: appState)
-        case .about:    MacAboutPage(appState: appState)
-        case .advanced: MacAdvancedPage(appState: appState)
+        case .home:        MacHomePage(appState: appState, onTabChange: goTo)
+        case .voice:       MacVoicePage(appState: appState)
+        case .output:      MacOutputPage(appState: appState)
+        case .rules:       MacRulesPage(appState: appState)
+        case .pill:        MacPillPage(appState: appState)
+        case .shortcut:    MacShortcutPage(appState: appState)
+        case .permissions: MacPermissionsPage(appState: appState)
+        case .privacy:     MacPrivacyPage(appState: appState)
+        case .about:       MacAboutPage(appState: appState)
+        case .advanced:    MacAdvancedPage(appState: appState)
         }
     }
 
     // MARK: Navigation history
 
     private func goTo(_ tab: MacSettingsTab) {
-        guard tab != current else { return }
-        // Truncate forward history when navigating to a new tab from a
-        // mid-history position — same model as a browser.
-        history = Array(history.prefix(cursor + 1)) + [tab]
-        cursor = history.count - 1
+        current = tab
     }
 
     private func goBack() {
-        guard cursor > 0 else { return }
-        cursor -= 1
+        guard let i = filteredTabs.firstIndex(of: current), i > 0 else { return }
+        current = filteredTabs[i - 1]
     }
 
     private func goForward() {
-        guard cursor < history.count - 1 else { return }
-        cursor += 1
+        guard let i = filteredTabs.firstIndex(of: current),
+              i < filteredTabs.count - 1 else { return }
+        current = filteredTabs[i + 1]
     }
 
     // MARK: Saved-pulse trigger

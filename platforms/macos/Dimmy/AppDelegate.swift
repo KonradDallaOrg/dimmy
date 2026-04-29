@@ -61,10 +61,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         hkLog("[AppDelegate] isOnboardingComplete=\(appState.isOnboardingComplete) perms=\(permissionsGranted())")
         if appState.isOnboardingComplete {
             pillWindowController?.show()
+            // Reopen onboarding at the Permissions step when access is
+            // missing — useful for Release users who revoked a permission
+            // and need a reminder. Skipped in Debug because Xcode rebuilds
+            // produce a fresh ad-hoc signature, invalidating prior TCC
+            // grants and causing an infinite reopen loop on every launch.
+            // The yellow badge on the menubar icon plus Settings →
+            // Permissions still surface the missing perm in Debug.
+            #if !DEBUG
             if !permissionsGranted() {
                 hkLog("[AppDelegate] onboarding complete but permissions missing — reopening Permissions step")
                 showOnboarding(startStep: 1)
             }
+            #else
+            if !permissionsGranted() {
+                hkLog("[AppDelegate] perms missing in Debug — skipping auto-reopen (use Settings → Permissions)")
+            }
+            #endif
         } else {
             hkLog("[AppDelegate] showing onboarding")
             showOnboarding()
@@ -149,8 +162,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func openSettings() {
-        // Refresh config from Rust before showing settings
-        if let config = DimmyCore.shared.getConfig() {
+        // Only refresh config from Rust if the core has been initialized.
+        // Without this guard, opening Settings before the Rust core comes up
+        // (e.g. permissions still pending) panics inside dimmy_get_config_json.
+        if DimmyCore.shared.isInitialized, let config = DimmyCore.shared.getConfig() {
             appState.loadFromRustConfig(config)
         }
 
@@ -160,17 +175,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return
         }
 
-        let settingsView = SettingsContainerView(appState: appState)
+        let useTahoe = appState.useTahoeSettings
+        let rootView: AnyView = useTahoe
+            ? AnyView(MacSettingsContainerView(appState: appState))
+            : AnyView(SettingsContainerView(appState: appState))
+
+        let initialSize: NSSize = useTahoe
+            ? NSSize(width: 1000, height: 740)
+            : NSSize(width: 620, height: 500)
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 620, height: 500),
+            contentRect: NSRect(origin: .zero, size: initialSize),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.center()
         window.title = "Dimmy Settings"
-        window.contentView = NSHostingView(rootView: settingsView)
+        window.contentView = NSHostingView(rootView: rootView)
         window.isReleasedWhenClosed = false
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)

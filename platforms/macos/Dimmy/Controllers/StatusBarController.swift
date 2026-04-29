@@ -59,12 +59,11 @@ final class StatusBarController: NSObject {
         guard let button = statusItem?.button else { return }
         let size = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
 
-        // Hotkey health overrides idle icon so users see the problem at a glance.
+        // Hotkey health overlays a small yellow badge on top of the regular
+        // Dimmy icon — keeps the brand recognisable in the menubar instead
+        // of replacing it with a generic warning triangle.
         if case .idle = state, hotkey != .installed {
-            let warn = size.applying(NSImage.SymbolConfiguration(paletteColors: [.systemOrange]))
-            button.image = NSImage(systemSymbolName: "exclamationmark.triangle.fill",
-                                   accessibilityDescription: "Dimmy - Hotkey disabled")?
-                .withSymbolConfiguration(warn)
+            button.image = Self.makeWarningBadgedIcon()
             button.image?.isTemplate = false
             button.toolTip = Self.tooltip(for: hotkey)
             return
@@ -98,6 +97,44 @@ final class StatusBarController: NSObject {
                 .withSymbolConfiguration(config)
             button.image?.isTemplate = false
         }
+    }
+
+    /// Compose the steady Dimmy waveform icon with a small yellow
+    /// exclamation badge at the bottom-right. The base symbol is tinted
+    /// with `NSColor.labelColor` so it reads in both light and dark
+    /// menubars; the badge keeps its yellow palette colour.
+    /// Returned as non-template (it's deliberately multi-colour).
+    private static func makeWarningBadgedIcon() -> NSImage? {
+        let basePalette = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
+            .applying(NSImage.SymbolConfiguration(paletteColors: [NSColor.labelColor]))
+        guard let base = NSImage(systemSymbolName: "waveform.circle",
+                                 accessibilityDescription: "Dimmy - Hotkey disabled")?
+                .withSymbolConfiguration(basePalette) else { return nil }
+
+        let badgePalette = NSImage.SymbolConfiguration(pointSize: 9, weight: .bold)
+            .applying(NSImage.SymbolConfiguration(paletteColors: [NSColor.systemYellow]))
+        let badge = NSImage(systemSymbolName: "exclamationmark.circle.fill",
+                            accessibilityDescription: nil)?
+            .withSymbolConfiguration(badgePalette)
+
+        let size = NSSize(width: 18, height: 18)
+        let composed = NSImage(size: size, flipped: false) { _ in
+            let baseSize = base.size
+            let baseOrigin = NSPoint(x: (size.width - baseSize.width) / 2,
+                                     y: (size.height - baseSize.height) / 2)
+            base.draw(in: NSRect(origin: baseOrigin, size: baseSize),
+                      from: .zero, operation: .sourceOver, fraction: 1.0)
+
+            if let badge {
+                let badgeSize = NSSize(width: 10, height: 10)
+                let origin = NSPoint(x: size.width - badgeSize.width,
+                                     y: 0)
+                badge.draw(in: NSRect(origin: origin, size: badgeSize),
+                           from: .zero, operation: .sourceOver, fraction: 1.0)
+            }
+            return true
+        }
+        return composed
     }
 
     private static func tooltip(for hotkey: HotkeyStatus) -> String {

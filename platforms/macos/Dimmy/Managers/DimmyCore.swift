@@ -15,6 +15,12 @@ final class DimmyCore {
 
     private init() {}
 
+    /// True once `initialize()` has returned success. FFI calls panic
+    /// in Rust if invoked before `dimmy_init()`; callers gate on this
+    /// flag when the core may not yet be ready (e.g. permissions still
+    /// pending so `initializeCoreAsync` hasn't fired).
+    private(set) var isInitialized: Bool = false
+
     // MARK: - Lifecycle
 
     /// Initialize the Rust core. Call once at app launch.
@@ -23,6 +29,7 @@ final class DimmyCore {
     func initialize() -> Bool {
         let result = dimmy_init()
         if result == 0 {
+            isInitialized = true
             registerEventCallback()
             print("[DimmyCore] initialized successfully")
         } else {
@@ -191,6 +198,114 @@ final class DimmyCore {
     @discardableResult
     func updateStats(words: Int32, speakingSecs: Double) -> Bool {
         dimmy_update_stats(words, speakingSecs) == 0
+    }
+
+    // MARK: - Telemetry
+
+    /// Whether PostHog analytics emission is currently enabled.
+    var telemetryEnabled: Bool {
+        get { dimmy_telemetry_is_enabled() == 1 }
+        set { _ = dimmy_telemetry_set_enabled(newValue ? 1 : 0) }
+    }
+
+    /// Whether Sentry crash reporting is currently enabled.
+    var crashReportingEnabled: Bool {
+        get { dimmy_telemetry_is_crash_enabled() == 1 }
+        set { _ = dimmy_telemetry_set_crash_enabled(newValue ? 1 : 0) }
+    }
+
+    /// Anonymous distinct_id (UUID) reported to PostHog. Empty if telemetry off.
+    var telemetryAnonymousId: String {
+        let bufLen = Self.bufferSize
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+        let written = dimmy_telemetry_anonymous_id(buffer, bufLen)
+        guard written > 0 else { return "" }
+        return String(cString: buffer)
+    }
+
+    /// Wipe + regenerate the anonymous_id (the "Reset analytics ID" button).
+    func resetTelemetryAnonymousId() {
+        _ = dimmy_telemetry_reset_anonymous_id()
+    }
+
+    /// Full telemetry status as a parsed JSON dict.
+    func telemetryStatus() -> [String: Any]? {
+        let bufLen = Self.bufferSize
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+        let written = dimmy_telemetry_status(buffer, bufLen)
+        guard written > 0 else { return nil }
+        let jsonStr = String(cString: buffer)
+        guard let data = jsonStr.data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return dict
+    }
+
+    /// Send a user feedback message through the Rust telemetry pipeline.
+    /// Best-effort: returns true if the FFI accepted the call (queued for
+    /// send), false on a precondition error. Empty messages are no-ops.
+    @discardableResult
+    func captureFeedback(kind: String, message: String, email: String?) -> Bool {
+        guard !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return true  // matches Rust: empty feedback = silent no-op
+        }
+        let result = kind.withCString { kindPtr in
+            message.withCString { msgPtr in
+                if let email, !email.isEmpty {
+                    return email.withCString { emailPtr in
+                        dimmy_telemetry_capture_feedback(kindPtr, msgPtr, emailPtr)
+                    }
+                }
+                return dimmy_telemetry_capture_feedback(kindPtr, msgPtr, nil)
+            }
+        }
+        return result == 0
+    }
+
+    // MARK: - Autostart
+
+    /// Whether Dimmy is registered to launch at login (auto-launch).
+    var autostartEnabled: Bool {
+        get { dimmy_autostart_is_enabled() == 1 }
+        set { _ = dimmy_autostart_set_enabled(newValue ? 1 : 0) }
+    }
+
+    // MARK: - Diagnostics (audio probe lives at line 144 above)
+
+    /// Build version reported by the Rust core (CARGO_PKG_VERSION).
+    var coreVersion: String {
+        let bufLen: Int32 = 64
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+        let written = dimmy_get_version(buffer, bufLen)
+        guard written > 0 else { return "" }
+        return String(cString: buffer)
+    }
+
+    /// GPU known-bad status as parsed JSON. `enabled` indicates whether
+    /// the marker is currently set (forcing CPU fallback).
+    func gpuStatus() -> [String: Any]? {
+        let bufLen: Int32 = 4096
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+        let written = dimmy_gpu_get_status(buffer, bufLen)
+        guard written > 0 else { return nil }
+        let jsonStr = String(cString: buffer)
+        guard let data = jsonStr.data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return dict
+    }
+
+    /// Clear the GPU known-bad marker so Metal is re-probed next launch.
+    func gpuClearKnownBad() {
+        _ = dimmy_gpu_clear_known_bad()
     }
 
     // MARK: - Utility
@@ -403,6 +518,13 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
     case "transcript_ready":
         if let text = payload["text"] as? String {
             appState.lastTranscript = text
+        }
+        // Re-read config so the cumulative word/speaking-time counters
+        // shown in Home stay in sync after every successful transcription.
+        // The Rust core writes the updated stats to config inside
+        // `dimmy_stop_recording`; we just pull them back into AppState.
+        if let cfg = DimmyCore.shared.getConfig() {
+            appState.loadFromRustConfig(cfg)
         }
 
     case "style_changed":

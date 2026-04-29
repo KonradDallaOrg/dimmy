@@ -7,6 +7,13 @@ import SwiftUI
 struct MacVoicePage: View {
     @ObservedObject var appState: AppState
 
+    @State private var apiKeyInput: String = ""
+    @State private var showKeyField: Bool = false
+
+    @State private var localModelExists: Bool = false
+    @State private var downloadInFlight: Bool = false
+    @State private var downloadFailed: String? = nil
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             speechRecognitionGroup
@@ -57,7 +64,8 @@ struct MacVoicePage: View {
 
                     MacRow(
                         "API key",
-                        description: "Stored in your Keychain · AES-256-GCM"
+                        description: "Stored locally · AES-256-GCM",
+                        showsDivider: showKeyField
                     ) {
                         if appState.hasKey {
                             HStack(spacing: 4) {
@@ -68,24 +76,29 @@ struct MacVoicePage: View {
                                     .foregroundStyle(.green)
                             }
                         }
-                        Button("Replace…") {
-                            // Phase 4: dedicated Replace flow. Today the
-                            // legacy GeneralSettingsView owns the password
-                            // entry — wiring deferred until that view's
-                            // input is ported into the Tahoe flow.
+                        Button(appState.hasKey ? (showKeyField ? "Cancel" : "Replace…")
+                                               : (showKeyField ? "Cancel" : "Add key…")) {
+                            showKeyField.toggle()
+                            if !showKeyField { apiKeyInput = "" }
                         }
                         .controlSize(.small)
+                    }
+
+                    if showKeyField {
+                        apiKeyEntryRow
                     }
                 } else {
                     MacRow(
                         "Local model",
-                        description: "Whisper, runs entirely offline"
+                        description: "Whisper, runs entirely offline",
+                        showsDivider: !localModelExists || downloadInFlight
                     ) {
                         Picker("", selection: Binding(
                             get: { appState.localModel },
                             set: { newValue in
                                 appState.localModel = newValue
                                 persistConfig()
+                                refreshLocalModelStatus()
                             }
                         )) {
                             Text("Tiny · 78 MB").tag("ggml-tiny-q8_0.bin")
@@ -95,6 +108,23 @@ struct MacVoicePage: View {
                         }
                         .labelsHidden()
                         .frame(width: 200)
+                    }
+
+                    if downloadInFlight {
+                        modelProgressRow(
+                            progress: appState.modelDownloadProgress,
+                            label: "Downloading \(appState.localModel)…"
+                        )
+                    } else if !localModelExists {
+                        MacRow(
+                            "Download",
+                            description: downloadFailed ?? "This model isn't on disk yet.",
+                            showsDivider: false
+                        ) {
+                            Button("Download model") { startSttDownload() }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+                        }
                     }
                 }
 
@@ -115,6 +145,76 @@ struct MacVoicePage: View {
                 }
             }
             MacGroupFooter(text: "Helps the model with rare words and names. Auto-detect identifies the language from your first sentence — but tends to misfire on clips shorter than two seconds.")
+        }
+        .onAppear { refreshLocalModelStatus() }
+    }
+
+    private func refreshLocalModelStatus() {
+        // FFI sync call, but cheap (just stat() on the file).
+        let exists = DimmyCore.shared.isInitialized
+            && DimmyCore.shared.modelExists(appState.localModel)
+        localModelExists = exists
+        downloadFailed = nil
+    }
+
+    private func startSttDownload() {
+        guard !downloadInFlight, DimmyCore.shared.isInitialized else { return }
+        let target = appState.localModel
+        downloadInFlight = true
+        downloadFailed = nil
+        appState.modelDownloadProgress = 0
+        DispatchQueue.global(qos: .userInitiated).async {
+            let ok = DimmyCore.shared.downloadModel(target)
+            DispatchQueue.main.async {
+                downloadInFlight = false
+                if ok {
+                    refreshLocalModelStatus()
+                } else {
+                    downloadFailed = "Download failed. Check your connection and try again."
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func modelProgressRow(progress: Double, label: String) -> some View {
+        MacRow(label, showsDivider: false) {
+            HStack(spacing: 8) {
+                ProgressView(value: progress)
+                    .frame(width: 160)
+                Text(String(format: "%.0f%%", progress * 100))
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(Color.macTextSecondary)
+                    .frame(width: 40, alignment: .trailing)
+            }
+        }
+    }
+
+    /// SecureField row revealed under "API key" when the user opts in via the
+    /// Add/Replace button. Submitting (or pressing Save) writes `api_key`
+    /// to the Rust core, then re-reads the config so `hasKey` flips.
+    private var apiKeyEntryRow: some View {
+        MacRow("Paste key", showsDivider: false) {
+            SecureField("sk-…", text: $apiKeyInput)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 240)
+                .onSubmit { saveApiKey() }
+            Button("Save") { saveApiKey() }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(apiKeyInput.isEmpty)
+        }
+    }
+
+    private func saveApiKey() {
+        guard !apiKeyInput.isEmpty else { return }
+        var config = appState.toRustConfig()
+        config["api_key"] = apiKeyInput
+        DimmyCore.shared.setConfig(config)
+        apiKeyInput = ""
+        showKeyField = false
+        if let cfg = DimmyCore.shared.getConfig() {
+            appState.loadFromRustConfig(cfg)
         }
     }
 
