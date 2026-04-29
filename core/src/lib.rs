@@ -1,3 +1,4 @@
+pub mod app_rules;
 pub mod audio;
 pub mod autostart;
 pub mod error;
@@ -270,6 +271,13 @@ pub struct AppConfig {
     // KPI stats — cumulative across sessions
     pub stats_total_words: u64,
     pub stats_total_speaking_secs: f64,
+    /// Per-app context rules. The platform layer captures the foreground
+    /// app's identifier at hotkey-down; if any rule matches, the matched
+    /// rule's `llm_style` / `llm_translate_to` overrides the user's defaults
+    /// for that single transcription. Empty list = no rules, default
+    /// behavior preserved. Save/load JSON glue lives in `save_config_file`
+    /// and `load_config_file` — `AppConfig` is not derive-Serde.
+    pub app_rules: Vec<app_rules::AppRule>,
 }
 
 impl Default for AppConfig {
@@ -320,6 +328,7 @@ impl Default for AppConfig {
             window_anchor_bottom: None,
             stats_total_words: 0,
             stats_total_speaking_secs: 0.0,
+            app_rules: Vec::new(),
         }
     }
 }
@@ -388,6 +397,12 @@ pub fn save_config_file(cfg: &AppConfig) {
             "stats_total_words": cfg.stats_total_words,
             "stats_total_speaking_secs": cfg.stats_total_speaking_secs,
         });
+        // app_rules / selected_device / anchors set outside the json! macro:
+        // adding more fields to the macro pushes it past its
+        // recursion-expansion limit.
+        if let Ok(v) = serde_json::to_value(&cfg.app_rules) {
+            json["app_rules"] = v;
+        }
         if let Some(ref dev) = cfg.selected_device {
             json["selected_device"] = serde_json::json!(dev);
         }
@@ -506,6 +521,7 @@ pub fn load_config_file() -> AppConfig {
                     stats_total_speaking_secs: v["stats_total_speaking_secs"]
                         .as_f64()
                         .unwrap_or(0.0),
+                    app_rules: serde_json::from_value(v["app_rules"].clone()).unwrap_or_default(),
                 };
             }
         }
@@ -722,6 +738,13 @@ pub struct AppState {
     // KPI stats
     pub stats_total_words: Mutex<u64>,
     pub stats_total_speaking_secs: Mutex<f64>,
+    // App-context rules (loaded at startup, mutated via FFI setter)
+    pub app_rules: Mutex<Vec<crate::app_rules::AppRule>>,
+    /// Snapshot of the foreground app at the most recent hotkey-down. The
+    /// platform layer writes this via FFI before recording begins; the LLM
+    /// post-process step reads it to resolve `app_rules`. Cleared after each
+    /// transcription so a stale snapshot can't bleed into the next.
+    pub current_app_context: Mutex<crate::app_rules::AppContext>,
     // Transcription history (SQLite-backed)
     pub history_store: Mutex<Option<crate::history::HistoryStore>>,
 }
@@ -819,6 +842,8 @@ impl AppState {
             ),
             stats_total_words: Mutex::new(file_cfg.stats_total_words),
             stats_total_speaking_secs: Mutex::new(file_cfg.stats_total_speaking_secs),
+            app_rules: Mutex::new(file_cfg.app_rules.clone()),
+            current_app_context: Mutex::new(crate::app_rules::AppContext::default()),
             history_store: Mutex::new({
                 let history_db = crate::config_dir_path()
                     .map(|p| p.join("history.db"))
@@ -956,6 +981,7 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
             .stats_total_speaking_secs
             .lock()
             .map_err(|e| e.to_string())?,
+        app_rules: state.app_rules.lock().map_err(|e| e.to_string())?.clone(),
     })
 }
 

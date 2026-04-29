@@ -227,6 +227,8 @@ fn dimmy_init_inner() -> c_int {
         window_anchor: Mutex::new(None),
         stats_total_words: Mutex::new(file_cfg.stats_total_words),
         stats_total_speaking_secs: Mutex::new(file_cfg.stats_total_speaking_secs),
+        app_rules: Mutex::new(file_cfg.app_rules.clone()),
+        current_app_context: Mutex::new(crate::app_rules::AppContext::default()),
         history_store: Mutex::new({
             let history_db = crate::config_dir_path()
                 .map(|p| p.join("history.db"))
@@ -849,7 +851,7 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
     let has_stt_key = st.api_key.lock().map(|k| k.is_some()).unwrap_or(false);
     let has_llm_key = st.llm_api_key.lock().map(|k| k.is_some()).unwrap_or(false);
 
-    let json = serde_json::json!({
+    let mut json = serde_json::json!({
         "has_key": has_stt_key,
         "api_url": *st.api_url.lock().unwrap_or_else(|e| e.into_inner()),
         "api_model": *st.api_model.lock().unwrap_or_else(|e| e.into_inner()),
@@ -893,6 +895,15 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "has_deepgram_key": st.key_store.has_key(KeyringScope::Stt(Provider::Deepgram), use_kr),
         "has_custom_key": st.key_store.has_key(KeyringScope::Stt(Provider::Custom), use_kr),
     });
+
+    // app_rules added outside the json! macro — including it inline pushes
+    // the macro past its expansion-recursion limit (the json! macro is
+    // recursive and we've accreted ~50 fields). Mutate the Value directly.
+    if let Ok(rules) = st.app_rules.lock() {
+        if let Ok(v) = serde_json::to_value(&*rules) {
+            json["app_rules"] = v;
+        }
+    }
 
     let s = serde_json::to_string(&json).unwrap_or_else(|_| "{}".to_string());
     write_to_buf(&s, out_buf, buf_len)
@@ -1164,6 +1175,17 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
         st.input_gain
             .store(gain.to_bits(), std::sync::atomic::Ordering::Relaxed);
         log(&format!("[Config] input_gain set to {:.2}", gain));
+    }
+    if !v["app_rules"].is_null() {
+        if let Ok(rules) =
+            serde_json::from_value::<Vec<crate::app_rules::AppRule>>(v["app_rules"].clone())
+        {
+            if let Ok(mut slot) = st.app_rules.lock() {
+                let count = rules.len();
+                *slot = rules;
+                log(&format!("[Config] app_rules set ({} rules)", count));
+            }
+        }
     }
 
     if let Some(b) = v["use_keyring"].as_bool() {
@@ -2155,6 +2177,60 @@ pub unsafe extern "C" fn dimmy_hotkey_set(combo_ptr: *const c_char) {
     }
 }
 
+/// Snapshot the foreground app at hotkey-down. Called by the platform layer
+/// (C# / Swift / GTK) before recording begins; the LLM post-process step
+/// reads this snapshot when applying `app_rules`. Pass empty/null strings
+/// for fields that don't apply on the current OS.
+///
+/// JSON payload format:
+///   `{"process_name": "slack.exe", "bundle_id": "", "wm_class": ""}`
+///
+/// Returns 0 on success, non-zero on parse error.
+///
+/// # Safety
+/// `json_ptr` must be a valid null-terminated UTF-8 C string, or null.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_set_app_context(json_ptr: *const c_char) -> c_int {
+    if json_ptr.is_null() {
+        return 1;
+    }
+    let json_str = match CStr::from_ptr(json_ptr).to_str() {
+        Ok(s) => s,
+        Err(_) => return 2,
+    };
+    let v: serde_json::Value = match serde_json::from_str(json_str) {
+        Ok(v) => v,
+        Err(_) => return 3,
+    };
+    let ctx = crate::app_rules::AppContext {
+        process_name: v["process_name"].as_str().unwrap_or("").to_string(),
+        bundle_id: v["bundle_id"].as_str().unwrap_or("").to_string(),
+        wm_class: v["wm_class"].as_str().unwrap_or("").to_string(),
+    };
+    let st = match GLOBAL_STATE.get() {
+        Some(s) => s,
+        None => return 4,
+    };
+    if let Ok(mut slot) = st.current_app_context.lock() {
+        *slot = ctx;
+    }
+    0
+}
+
+/// Clear the foreground-app snapshot. Called after transcription completes
+/// so a stale snapshot can't bleed into the next recording.
+///
+/// # Safety
+/// Safe to call from any thread once `dimmy_init` has run.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_clear_app_context() {
+    if let Some(st) = GLOBAL_STATE.get() {
+        if let Ok(mut slot) = st.current_app_context.lock() {
+            *slot = crate::app_rules::AppContext::default();
+        }
+    }
+}
+
 /// Poll for hotkey events. Returns:
 /// - 0 = no event
 /// - 1 = pressed (all keys in combo are down)
@@ -2675,6 +2751,8 @@ mod tests {
                 window_anchor: Mutex::new(None),
                 stats_total_words: Mutex::new(100),
                 stats_total_speaking_secs: Mutex::new(60.0),
+                app_rules: Mutex::new(Vec::new()),
+                current_app_context: Mutex::new(crate::app_rules::AppContext::default()),
                 history_store: Mutex::new(
                     crate::history::HistoryStore::new(std::path::Path::new(":memory:")).ok(),
                 ),
