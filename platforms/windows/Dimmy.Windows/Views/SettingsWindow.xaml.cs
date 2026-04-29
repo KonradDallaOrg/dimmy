@@ -634,8 +634,6 @@ public sealed partial class SettingsWindow : Window
     private void Save_Click(object sender, RoutedEventArgs e)
     {
         // Pull password values from PasswordBoxes into ViewModel before serializing
-        if (!string.IsNullOrEmpty(ApiKeyBox.Password))
-            ViewModel.ApiKey = ApiKeyBox.Password;
         if (!string.IsNullOrEmpty(CloudApiKeyBox.Password))
             ViewModel.ApiKey = CloudApiKeyBox.Password;
         if (!string.IsNullOrEmpty(LlmApiKeyBox.Password))
@@ -670,20 +668,213 @@ public sealed partial class SettingsWindow : Window
 
     private void BorderStyle_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_loaded && sender is ComboBox cb && cb.SelectedItem is string style)
+        if (_loaded && sender is ComboBox cb && cb.SelectedItem is string)
+        {
             App.Instance?.ApplySettings(ViewModel);
+            RenderPreview();
+        }
     }
 
     private void WaveformStyle_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_loaded && sender is ComboBox cb && cb.SelectedItem is string style)
+        if (_loaded && sender is ComboBox cb && cb.SelectedItem is string)
+        {
             App.Instance?.ApplySettings(ViewModel);
+            RenderPreview();
+        }
     }
 
     private void OverlayPosition_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_loaded && sender is ComboBox cb && cb.SelectedItem is string pos)
             App.Instance?.ApplySettings(ViewModel);
+    }
+
+    private void OverlayPositionCell_Checked(object sender, RoutedEventArgs e)
+    {
+        // Position grid cells: each RadioButton's Tag is the canonical
+        // position string. The Tag→ViewModel write happens via the TwoWay
+        // binding on IsChecked + StringEqualityConverter; this handler
+        // just notifies the live overlay so the pill jumps immediately.
+        if (_loaded) App.Instance?.ApplySettings(ViewModel);
+    }
+
+    private static Microsoft.UI.Xaml.Media.LinearGradientBrush BuildRainbowBrush()
+    {
+        var brush = new Microsoft.UI.Xaml.Media.LinearGradientBrush
+        {
+            StartPoint = new global::Windows.Foundation.Point(0, 0),
+            EndPoint = new global::Windows.Foundation.Point(1, 1),
+        };
+        brush.GradientStops.Add(new Microsoft.UI.Xaml.Media.GradientStop
+        { Offset = 0.0, Color = Microsoft.UI.ColorHelper.FromArgb(0xFF, 0x6E, 0xE7, 0xB7) });
+        brush.GradientStops.Add(new Microsoft.UI.Xaml.Media.GradientStop
+        { Offset = 0.33, Color = Microsoft.UI.ColorHelper.FromArgb(0xFF, 0x60, 0xA5, 0xFA) });
+        brush.GradientStops.Add(new Microsoft.UI.Xaml.Media.GradientStop
+        { Offset = 0.66, Color = Microsoft.UI.ColorHelper.FromArgb(0xFF, 0xF4, 0x72, 0xB6) });
+        brush.GradientStops.Add(new Microsoft.UI.Xaml.Media.GradientStop
+        { Offset = 1.0, Color = Microsoft.UI.ColorHelper.FromArgb(0xFF, 0xFB, 0xBF, 0x24) });
+        return brush;
+    }
+
+    private static Microsoft.UI.Xaml.Media.SolidColorBrush PreviewSolid(byte r, byte g, byte b) =>
+        new(Microsoft.UI.ColorHelper.FromArgb(0xFF, r, g, b));
+
+    private string _currentPreviewState = "idle";
+
+    /// <summary>Map a BorderStyle config string ("Rainbow", "Blue", "Green",
+    /// "Purple", "Orange", "None") to the brush used on the preview pill.</summary>
+    private static Microsoft.UI.Xaml.Media.Brush BorderStyleBrush(string style) => style switch
+    {
+        "Rainbow" => BuildRainbowBrush(),
+        "Blue" => PreviewSolid(0x60, 0xA5, 0xFA),
+        "Green" => PreviewSolid(0x4A, 0xDE, 0x80),
+        "Purple" => PreviewSolid(0xA8, 0x78, 0xFA),
+        "Orange" => PreviewSolid(0xFB, 0xBF, 0x24),
+        "None" => PreviewSolid(0x33, 0x41, 0x55),
+        _ => BuildRainbowBrush(),
+    };
+
+    /// <summary>Build the inner waveform shape based on WaveformStyle.</summary>
+    private static UIElement BuildWaveformContent(string style)
+    {
+        var heights = new double[] { 10, 18, 24, 14, 22, 12, 20 };
+
+        switch (style)
+        {
+            case "Line":
+                // Single sinuous polyline.
+                var line = new Microsoft.UI.Xaml.Shapes.Polyline
+                {
+                    Stroke = PreviewSolid(0x9C, 0xA3, 0xAF),
+                    StrokeThickness = 1.5,
+                    StrokeLineJoin = Microsoft.UI.Xaml.Media.PenLineJoin.Round,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                for (int i = 0; i < 20; i++)
+                {
+                    double y = (i % 2 == 0 ? -1 : 1) * (4 + (i % 5));
+                    line.Points.Add(new global::Windows.Foundation.Point(i * 5, y));
+                }
+                return line;
+            case "Dots":
+                // Row of circles, varying sizes.
+                var dotPanel = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 4,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                var sizes = new double[] { 4, 6, 8, 5, 7, 4, 6 };
+                foreach (var s in sizes)
+                {
+                    dotPanel.Children.Add(new Microsoft.UI.Xaml.Shapes.Ellipse
+                    {
+                        Width = s,
+                        Height = s,
+                        Fill = PreviewSolid(0x9C, 0xA3, 0xAF),
+                        VerticalAlignment = VerticalAlignment.Center,
+                    });
+                }
+                return dotPanel;
+            default:
+                // Bars / Bars Center / Bars Round
+                var align = style == "Bars Center" ? VerticalAlignment.Center : VerticalAlignment.Bottom;
+                var radius = style == "Bars Round" ? 1.5 : 0.5;
+                var barPanel = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 3,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = align,
+                };
+                foreach (var h in heights)
+                {
+                    barPanel.Children.Add(new Microsoft.UI.Xaml.Shapes.Rectangle
+                    {
+                        Width = 3,
+                        Height = h,
+                        Fill = PreviewSolid(0x9C, 0xA3, 0xAF),
+                        RadiusX = radius,
+                        RadiusY = radius,
+                        VerticalAlignment = align,
+                    });
+                }
+                return barPanel;
+        }
+    }
+
+    /// <summary>Re-render the preview using the latest state + ViewModel
+    /// values. Called on state change AND on BorderStyle/WaveformStyle change.</summary>
+    private void RenderPreview()
+    {
+        if (PreviewContentHost == null || PreviewGlyph == null
+            || PreviewCaption == null || PreviewPill == null) return;
+
+        var state = _currentPreviewState;
+        var borderStyle = ViewModel?.BorderStyle ?? "Rainbow";
+        var waveformStyle = ViewModel?.WaveformStyle ?? "Bars";
+
+        // Border: idle uses BorderStyle if not None; recording uses BorderStyle;
+        // other states use semantic colors.
+        PreviewPill.BorderBrush = state switch
+        {
+            "recording" => BorderStyleBrush(borderStyle),
+            "transcribing" => PreviewSolid(0x60, 0xA5, 0xFA),
+            "done" => PreviewSolid(0x4A, 0xDE, 0x80),
+            "error" => PreviewSolid(0xF4, 0x72, 0x6E),
+            _ => borderStyle == "None"
+                    ? PreviewSolid(0x33, 0x41, 0x55)
+                    : BorderStyleBrush(borderStyle),
+        };
+
+        PreviewContentHost.Children.Clear();
+        bool showBars = state == "recording" || state == "transcribing";
+        if (showBars)
+        {
+            PreviewContentHost.Children.Add(BuildWaveformContent(waveformStyle));
+            PreviewGlyph.Visibility = Visibility.Collapsed;
+        }
+        else
+        {
+            PreviewGlyph.Visibility = Visibility.Visible;
+        }
+
+        PreviewCaption.Text = $"Preview · {state}";
+    }
+
+    private void PreviewState_Checked(object sender, RoutedEventArgs e)
+    {
+        if (sender is not RadioButton rb || rb.Tag is not string state) return;
+        _currentPreviewState = state;
+        if (PreviewGlyph == null || PreviewCaption == null || PreviewPill == null) return;
+        SetPreviewGlyphForState(state);
+        RenderPreview();
+    }
+
+    /// <summary>Glyph + colour for the non-bars preview states. Kept in a
+    /// helper so the Unicode codepoints stay isolated from the rest of the
+    /// rendering logic.</summary>
+    private void SetPreviewGlyphForState(string state)
+    {
+        // E720 = microphone, E73E = checkmark, E783 = error/warning.
+        switch (state)
+        {
+            case "idle":
+                PreviewGlyph.Glyph = "";
+                PreviewGlyph.Foreground = PreviewSolid(0x94, 0xA3, 0xB8);
+                break;
+            case "done":
+                PreviewGlyph.Glyph = "";
+                PreviewGlyph.Foreground = PreviewSolid(0x4A, 0xDE, 0x80);
+                break;
+            case "error":
+                PreviewGlyph.Glyph = "";
+                PreviewGlyph.Foreground = PreviewSolid(0xF4, 0x72, 0x6E);
+                break;
+        }
     }
 
     private void ResetPosition_Click(object sender, RoutedEventArgs e)
@@ -731,7 +922,28 @@ public sealed partial class SettingsWindow : Window
     {
         _currentVersion = DimmyNative.ReadBuffer(DimmyNative.dimmy_get_version, 64) ?? "0.0.0";
         VersionText.Text = $"v{_currentVersion}";
+        HeroTitleText.Text = $"Dimmy {_currentVersion}";
+        HeroSubText.Text = $"Version {_currentVersion}";
         _ = CheckForUpdateAsync();
+    }
+
+    private async void CheckUpdates_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            await global::Windows.System.Launcher.LaunchUriAsync(new Uri("https://dimmy.app/download"));
+        }
+        catch { }
+    }
+
+    private async void ReleaseNotes_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            await global::Windows.System.Launcher.LaunchUriAsync(
+                new Uri("https://github.com/KonradDallaOrg/dimmy/releases"));
+        }
+        catch { }
     }
 
     private async Task CheckForUpdateAsync()

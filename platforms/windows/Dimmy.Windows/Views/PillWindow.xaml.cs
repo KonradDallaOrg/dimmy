@@ -788,10 +788,14 @@ public sealed partial class PillWindow : Window
             RootGrid.Opacity = 0.95;
             // Pill language label = output TRANSLATION target, NOT STT input.
             // Native (input) language is configured in Settings → General.
-            LanguageLabel.Text = string.IsNullOrEmpty(_vm.LlmTranslateTo) ? "" : _vm.LlmTranslateTo.ToUpperInvariant();
+            // When no translation is set, show an em-dash so the scroll-wheel
+            // hit target stays visible — otherwise users have nothing to roll
+            // over to switch translation back on.
+            LanguageLabel.Text = string.IsNullOrEmpty(_vm.LlmTranslateTo)
+                ? "—"
+                : _vm.LlmTranslateTo.ToUpperInvariant();
             ShortcutLabel.Text = _vm.Shortcut;
-            if (!string.IsNullOrEmpty(LanguageLabel.Text))
-                LanguageLabel.Visibility = Visibility.Visible;
+            LanguageLabel.Visibility = Visibility.Visible;
             ShortcutLabel.Visibility = Visibility.Visible;
             IdleContent.Margin = new Thickness(7, 0, 7, 0);
             // Hover keeps same transparent border — just animate size
@@ -841,7 +845,10 @@ public sealed partial class PillWindow : Window
 
     // ── Scroll to cycle settings ────────────────────────────────────
     private static readonly string[] LlmStyles = ViewModels.SettingsViewModel.LlmStyles;
-    private static readonly System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<string, string>> LangList = ViewModels.SettingsViewModel.Languages;
+    // Pill's scroll-wheel cycles `llm_translate_to`. The list MUST include
+    // "" → "No translation" so users can scroll back to "off" — without it
+    // the pill becomes a one-way ticket once translation is engaged.
+    private static readonly System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<string, string>> LangList = ViewModels.SettingsViewModel.TranslateTargets;
 
     private DateTime _lastScrollTime; // debounce for touchpad rapid-fire scroll
     private DispatcherTimer? _tooltipTimer;
@@ -909,7 +916,9 @@ public sealed partial class PillWindow : Window
         if (idx < 0) idx = 0;
         idx = (idx + (delta > 0 ? -1 : 1) + LangList.Count) % LangList.Count;
         _vm.LlmTranslateTo = LangList[idx].Key;
-        LanguageLabel.Text = _vm.LlmTranslateTo.ToUpperInvariant();
+        LanguageLabel.Text = string.IsNullOrEmpty(_vm.LlmTranslateTo)
+            ? "—"
+            : _vm.LlmTranslateTo.ToUpperInvariant();
         ShowScrollTooltip($"Translate to: {LangList[idx].Value}");
         // Single writer: only FFI, Rust saves to disk
         DimmyNative.dimmy_set_config_json(System.Text.Json.JsonSerializer.Serialize(

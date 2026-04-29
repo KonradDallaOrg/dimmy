@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="Dimmy.Windows.Views.Controls.SettingCard"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!--
+    Win11 Settings card pattern — replicates `.scard` from the design bundle.
+
+    Layout:
+      [icon 24px] [label                              ] [control]
+                  [description (optional, smaller)  ]
+
+    - Min height 64 px (per design tokens).
+    - Border 1 px hairline, corner radius 4 px.
+    - Background card-bg theme resource.
+    - Icon column fixed width 24 px so cards line up vertically.
+
+    Public properties (set from XAML or code):
+    - Glyph (string)        — Segoe Fluent codepoint, e.g. "&#xE720;"
+    - Label (string)        — primary line
+    - Description (string)  — secondary line, hidden when empty
+    - Control (object)      — the right-side control (default Content slot)
+  -->
+
+  <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+          BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+          BorderThickness="1" CornerRadius="4"
+          MinHeight="64" Padding="16,12">
+    <Grid ColumnSpacing="16" VerticalAlignment="Center">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="Auto" />
+        <ColumnDefinition Width="*" />
+        <ColumnDefinition Width="Auto" />
+      </Grid.ColumnDefinitions>
+
+      <!-- Icon column. Visibility set from code-behind when Glyph changes. -->
+      <FontIcon Grid.Column="0"
+                x:Name="GlyphIcon"
+                FontSize="16"
+                Width="24" Height="24"
+                Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+
+      <!-- Meta: label + optional description -->
+      <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+        <TextBlock x:Name="LabelText"
+                   FontSize="14"
+                   Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+        <TextBlock x:Name="DescriptionText"
+                   FontSize="12"
+                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                   TextWrapping="Wrap" />
+      </StackPanel>
+
+      <!-- Control column — caller-provided element via Content slot -->
+      <ContentPresenter Grid.Column="2"
+                        x:Name="ControlPresenter"
+                        VerticalAlignment="Center" />
+    </Grid>
+  </Border>
+</UserControl>

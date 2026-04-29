@@ -65,8 +65,8 @@ public partial class SettingsViewModel : ObservableObject
     /// used a parallel list with uppercase codes ("EN", "IT", "none")
     /// which mismatched the pill (lowercase) and required runtime
     /// normalisation in core. Now both UIs share this single list.</summary>
-    public List<KeyValuePair<string, string>> TranslateToItems => _translateToItems;
-    private static readonly List<KeyValuePair<string, string>> _translateToItems = new()
+    public List<KeyValuePair<string, string>> TranslateToItems => TranslateTargets;
+    public static readonly List<KeyValuePair<string, string>> TranslateTargets = new()
     {
         new("", "No translation"),
         new("it", "Italiano"),
@@ -208,10 +208,33 @@ public partial class SettingsViewModel : ObservableObject
         }
     }
 
+    /// <summary>Human-friendly total speaking time for the Home stats card.
+    /// Reads `stats_total_speaking_secs` accumulated by Rust on each
+    /// successful transcription.</summary>
+    public string SpeakingTimeDisplay
+    {
+        get
+        {
+            var seconds = StatsTotalSpeakingSecs;
+            if (seconds < 1) return "—";
+            if (seconds < 60) return $"{(int)seconds}s";
+            var minutes = (int)(seconds / 60);
+            if (minutes < 60) return $"{minutes}m";
+            var hours = minutes / 60;
+            var rem = minutes % 60;
+            return rem == 0 ? $"{hours}h" : $"{hours}h {rem}m";
+        }
+    }
+
     partial void OnStatsTotalWordsChanged(long value)
     {
         OnPropertyChanged(nameof(TimeSavedEstimate));
         OnPropertyChanged(nameof(TimeSavedDisplay));
+    }
+
+    partial void OnStatsTotalSpeakingSecsChanged(double value)
+    {
+        OnPropertyChanged(nameof(SpeakingTimeDisplay));
     }
 
     private string _snapshotJson = "";

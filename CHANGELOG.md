@@ -4,6 +4,63 @@ All notable changes to Dimmy are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.24] - 2026-04-29
+
+### Added
+- **Settings UI redesign — `.scard` Win11 pattern across all panels.**
+  Each setting is its own `SettingCard` (icon + label + description +
+  control), grouped under uppercase section headers (LANGUAGE,
+  SPEECH-TO-TEXT, TELEMETRY, UPDATES, GPU ACCELERATION, …). Replaces
+  the v2 redesign which only repositioned controls inside Border
+  wrappers — the new pattern matches the design bundle's `.scard`
+  semantic the user originally asked for.
+- **Home dashboard — three-tile stats card.** Words transcribed,
+  total speaking time, and time saved vs typing. ViewModel now exposes
+  `SpeakingTimeDisplay` derived from `stats_total_speaking_secs` so the
+  middle tile reacts to Rust-side counter updates in real time.
+- **About panel — proper Dimmy logo + Anthropic mark.** Bundled
+  `Assets/dimmy-logo.png` (the chat-bubble waveform) on the right of
+  the hero, paired with a version chip + action buttons. Footer reads
+  *"Made with [Anthropic logo] Claude Code"* using the official
+  Anthropic SVG path.
+- **Pill overlay — LIVE PREVIEW with state switching.** Mock pill that
+  reflects the current BorderStyle and WaveformStyle in real time;
+  state chips (idle / recording / transcribing / done / error) swap the
+  border colour and inner content (bars / line / dots / glyph) so users
+  can see what they're configuring without dragging the real pill.
+- **Pill overlay — compact 3×2 position grid embedded in SettingCard.**
+  Replaces the dropdown with a wallpaper-position-picker style cell
+  selector. Now includes **Top Center** (6 positions, was 5) — handled
+  in `WindowHelper.PositionByPreset`.
+- **Output Style picker — coloured swatch per style.** Each LLM style
+  in the combo (off / correct / professional / genz / imbruttito / …)
+  gets a distinct dot via `StyleToColorBrushConverter`, so users can
+  scan options visually without reading every label.
+
+### Fixed
+- **Pill scroll-wheel could orphan the user with no off-state.** The
+  pill's translation-cycle list (`LangList`) was sourced from
+  `Languages` (6 entries: it/en/es/fr/de/pt) without the "" → "No
+  translation" entry. Once translation was engaged, scrolling could
+  never bring it back to off. Switched to `TranslateTargets` (now
+  public) which includes "" as the first entry.
+- **Pill translation indicator vanished when no language selected.**
+  On hover, when `llm_translate_to` was empty the language label was
+  hidden — leaving the user with no scroll-wheel hit target. Now shows
+  an em-dash (`—`) so the area stays clickable / scrollable.
+- **Voice input duplicate STT API key field.** The v2 redesign briefly
+  shipped two API-key SettingCards (one unconditional in
+  SPEECH-TO-TEXT + one inside the Cloud sub-panel). Removed the
+  unconditional one; the in-panel card is the only one wired to
+  `CloudApiKeyBox` — local mode no longer shows an irrelevant key
+  input.
+
+### Changed
+- **Settings panel container is now responsive.** Was `MaxWidth=760`
+  with `HorizontalAlignment=Left`; now `MaxWidth=1100` with
+  `HorizontalAlignment=Stretch` so cards grow with the window up to a
+  readable cap on ultrawides.
+
 ## [0.6.20] - 2026-04-20
 
 ### Fixed
