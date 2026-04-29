@@ -94,13 +94,14 @@ private struct ScrollWheelCatcher: NSViewRepresentable {
             }
         }
 
+        /// Be transparent to *every* event type except scrollWheel. Without
+        /// this the catcher would steal mouseEntered/Exited and SwiftUI's
+        /// `.onHover` would oscillate, making the pill jitter while the
+        /// user tries to land a scroll on the small dot.
         override func hitTest(_ point: NSPoint) -> NSView? {
-            // Only intercept scroll — let clicks through to the SwiftUI layer.
-            self
+            guard NSApp.currentEvent?.type == .scrollWheel else { return nil }
+            return self
         }
-
-        override func mouseDown(with event: NSEvent) { nextResponder?.mouseDown(with: event) }
-        override func rightMouseDown(with event: NSEvent) { nextResponder?.rightMouseDown(with: event) }
     }
 }
 
@@ -118,6 +119,11 @@ struct PillView: View {
     /// Throttle scroll-cycle events so a single trackpad swipe doesn't
     /// blow through 5 languages in one gesture (matches Windows 250ms).
     @State private var lastScrollAt: Date = .distantPast
+    /// Debounce hover-out: SwiftUI's `.onHover` reports `false` for a
+    /// single frame on every mouse-move while the cursor is still inside
+    /// the pill — buffering the false for ~80 ms collapses those blips
+    /// into no-ops while keeping a genuine exit feeling instant.
+    @State private var hoverExitTask: Task<Void, Never>? = nil
 
     private let pillHeight: CGFloat = 36
 
@@ -134,6 +140,15 @@ struct PillView: View {
     /// is only as wide as its content. If we let it center inside the panel
     /// it visually drifts away from the chosen screen corner. Aligning the
     /// pill body to the matching corner pulls it flush against the edge.
+    /// Tooltip flips above the pill when the user parked it at the bottom
+    /// of the screen — otherwise the bubble would render off-screen.
+    private var tooltipBelowPill: Bool {
+        switch appState.overlayPosition {
+        case "Bottom Left", "Bottom Center", "Bottom Right": return false
+        default: return true
+        }
+    }
+
     private var pillAlignment: Alignment {
         switch appState.overlayPosition {
         case "Top Left":      return .topLeading
@@ -165,28 +180,6 @@ struct PillView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // Floating tooltip shown briefly after scroll-cycle on the language
-        // or style indicator. Renders below the pill (most users keep the
-        // pill near the top of the screen) so it doesn't get clipped by the
-        // panel's glow padding budget. The fixedSize lets the bubble grow
-        // wider than the pill itself when the language name is long.
-        .overlay(alignment: .bottom) {
-            if let text = scrollTooltip {
-                Text(text)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.white)
-                    .lineLimit(1)
-                    .fixedSize()
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(
-                        Capsule().fill(Color.black.opacity(0.82))
-                    )
-                    .offset(y: 32)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-                    .allowsHitTesting(false)
-            }
-        }
         // Context menu is handled by PillHostingView (NSMenu) — not SwiftUI .contextMenu
         // which doesn't work on borderless NSPanel
         .onChange(of: appState.showPillIntro) { _, show in
@@ -208,19 +201,26 @@ struct PillView: View {
     // MARK: - Idle State
 
     private var idleView: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: isHovering ? 8 : 0) {
             styleDot
+            // Always present in the layout, but width-collapsed and
+            // hidden when not hovered — keeps the HStack rect free of
+            // the mid-animation hit-test gaps that an `if` block creates.
             languageLabel
-            // Waveform icon hidden in idle — only meaningful while we're
-            // actually capturing audio. Recording state has the live bars.
-            if isHovering {
-                Text(appState.shortcut.displayString)
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundColor(.secondary)
-            }
+                .frame(width: isHovering ? nil : 0)
+                .opacity(isHovering ? 1 : 0)
+                .clipped()
+            Text(appState.shortcut.displayString)
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+                .fixedSize()
+                .frame(width: isHovering ? nil : 0)
+                .opacity(isHovering ? 1 : 0)
+                .clipped()
         }
         .frame(height: pillHeight)
-        .padding(.horizontal, isHovering ? 16 : 14)
+        .padding(.horizontal, 14)
         // Warning badge sits on the pill itself (not on the larger panel),
         // so it follows the pill wherever the position grid moves it.
         // Borderless: just the orange triangle, no black backdrop.
@@ -231,6 +231,27 @@ struct PillView: View {
                     .foregroundColor(.orange)
                     .offset(x: 2, y: -2)
                     .help(Self.warningText(for: appState.hotkeyStatus))
+            }
+        }
+        // Scroll-cycle tooltip: anchored to the pill (not the panel) so it
+        // stays close regardless of where the position grid puts the pill.
+        // Flips above the pill when the user has parked it at the bottom
+        // of the screen so the bubble stays on-screen.
+        .overlay(alignment: tooltipBelowPill ? .bottom : .top) {
+            if let text = scrollTooltip {
+                Text(text)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(
+                        Capsule().fill(Color.black.opacity(0.82))
+                    )
+                    .offset(y: tooltipBelowPill ? 26 : -26)
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
             }
         }
         .background(
@@ -249,9 +270,23 @@ struct PillView: View {
         .shadow(color: appState.showPillIntro ? phaseGlowColor(phase: introPhase, offset: 0.0) : .clear, radius: 12)
         .shadow(color: appState.showPillIntro ? phaseGlowColor(phase: introPhase, offset: 0.3) : .clear, radius: 8)
         .shadow(color: appState.showPillIntro ? phaseGlowColor(phase: introPhase, offset: 0.6) : .clear, radius: 4)
+        // Drive the size animation off the published value, NOT off the
+        // toggle site — `withAnimation(...) { isHovering = … }` snapshots
+        // the layout mid-flight and forced a re-hit-test that could clear
+        // hover. Decoupling animation from the hover signal keeps SwiftUI's
+        // hit-testing reading the final size, not the interpolated one.
+        .animation(.easeInOut(duration: 0.18), value: isHovering)
         .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.2)) {
-                isHovering = hovering
+            if hovering {
+                hoverExitTask?.cancel()
+                hoverExitTask = nil
+                isHovering = true
+            } else {
+                hoverExitTask?.cancel()
+                hoverExitTask = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 80_000_000)
+                    if !Task.isCancelled { isHovering = false }
+                }
             }
         }
     }
@@ -264,28 +299,30 @@ struct PillView: View {
     private var styleDot: some View {
         let active = appState.llmEnabled && appState.llmStyleEnum != .off
         let color = active ? appState.llmStyleEnum.color : Color.secondary.opacity(0.5)
+        // Visible dot 8 pt, hit area 22 pt — enough buffer to land a
+        // scroll without bloating the collapsed pill.
         return Circle()
             .fill(active ? color : Color.clear)
             .overlay(
                 Circle().stroke(color, lineWidth: active ? 0 : 1.2)
             )
             .frame(width: 8, height: 8)
+            .frame(width: 22, height: 22)
+            .contentShape(Rectangle())
             .overlay(
                 ScrollWheelCatcher { delta in cycleStyle(delta: delta) }
-                    .frame(width: 22, height: 22)
             )
             .help(currentStyleDisplayName)
     }
 
-    /// Always-visible "translate to" indicator. Empty translation shows
-    /// `—` (matches Windows) so there's always a hit target to scroll
-    /// from when re-enabling translation. Borderless — sits flush in the
-    /// pill body.
+    /// Translate-to indicator visible only when the pill is expanded.
+    /// `—` when no translation, so scrolling can re-enable it.
     private var languageLabel: some View {
         Text(currentLanguageShort)
             .font(.system(size: 11, weight: .semibold, design: .rounded))
             .foregroundColor(.primary)
-            .frame(minWidth: 18)
+            .frame(minWidth: 18, minHeight: 20)
+            .contentShape(Rectangle())
             .overlay(
                 ScrollWheelCatcher { delta in cycleLanguage(delta: delta) }
             )
