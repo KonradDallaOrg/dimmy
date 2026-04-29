@@ -534,6 +534,15 @@ final class AppState: ObservableObject {
     @Published var showAdvanced: Bool = false
     @Published var useKeyring: Bool = false
 
+    /// Feature flag for the Tahoe-redesign Settings UI. Defaults to ON
+    /// during the redesign sprint so internal builds get the new look;
+    /// flip to false in the Settings scene to fall back to the legacy
+    /// `SettingsContainerView` if a regression turns up. Persisted in
+    /// UserDefaults so QA can pin one or the other across launches.
+    @Published var useTahoeSettings: Bool = UserDefaults.standard.object(forKey: "useTahoeSettings") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(useTahoeSettings, forKey: "useTahoeSettings") }
+    }
+
     // MARK: - Appearance Config
 
     @Published var borderStyle: String = "Rainbow"

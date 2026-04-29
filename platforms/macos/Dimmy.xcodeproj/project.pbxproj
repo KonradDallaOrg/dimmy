@@ -52,6 +52,9 @@
 		AA000044 /* ModelSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000044 /* ModelSettingsView.swift */; };
 		AA000045 /* ModelDownloadStepView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000045 /* ModelDownloadStepView.swift */; };
 		AA000046 /* LLMModelSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000046 /* LLMModelSettingsView.swift */; };
+		AA000200 /* MacAtoms.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000200 /* MacAtoms.swift */; };
+		AA000201 /* MacSettingsContainerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000201 /* MacSettingsContainerView.swift */; };
+		AA000202 /* MacHomePage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000202 /* MacHomePage.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -102,6 +105,9 @@
 		AB000044 /* ModelSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelSettingsView.swift; sourceTree = "<group>"; };
 		AB000045 /* ModelDownloadStepView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelDownloadStepView.swift; sourceTree = "<group>"; };
 		AB000046 /* LLMModelSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMModelSettingsView.swift; sourceTree = "<group>"; };
+		AB000200 /* MacAtoms.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAtoms.swift; sourceTree = "<group>"; };
+		AB000201 /* MacSettingsContainerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSettingsContainerView.swift; sourceTree = "<group>"; };
+		AB000202 /* MacHomePage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacHomePage.swift; sourceTree = "<group>"; };
 		AB000099 /* Dimmy.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Dimmy.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -220,6 +226,9 @@
 				AB000046 /* LLMModelSettingsView.swift */,
 				AB000028 /* StatsSettingsView.swift */,
 				AB000040 /* DebugSettingsView.swift */,
+				AB000200 /* MacAtoms.swift */,
+				AB000201 /* MacSettingsContainerView.swift */,
+				AB000202 /* MacHomePage.swift */,
 			);
 			path = Settings;
 			sourceTree = "<group>";
@@ -360,6 +369,9 @@
 				AA000043 /* HistorySettingsView.swift in Sources */,
 				AA000044 /* ModelSettingsView.swift in Sources */,
 				AA000046 /* LLMModelSettingsView.swift in Sources */,
+				AA000200 /* MacAtoms.swift in Sources */,
+				AA000201 /* MacSettingsContainerView.swift in Sources */,
+				AA000202 /* MacHomePage.swift in Sources */,
 				AA000030 /* DimmyCore.swift in Sources */,
 				AA000041 /* SelfTests.swift in Sources */,
 				AA000042 /* RecordingSimulator.swift in Sources */,
