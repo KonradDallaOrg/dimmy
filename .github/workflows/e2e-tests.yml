@@ -31,11 +31,13 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: core
-          # Bumped to v2 (2026-04-25) to evict a stale Swatinem cache that
+          # Bumped to v3 (2026-04-29) to evict a stale Swatinem cache that
           # contained a whisper.cpp object file built on a runner with a
           # different CPU instruction set, causing SIGILL on ubuntu-22.04
-          # runners during whisper_model_load. Bump again if SIGILL recurs.
-          shared-key: e2e-v2-${{ matrix.os }}
+          # runners during whisper_model_load. GGML_NATIVE=OFF in the test
+          # step env prevents recurrence — whisper.cpp now targets generic
+          # x86-64 baseline instead of the compile-host's CPU.
+          shared-key: e2e-v3-${{ matrix.os }}
 
       - name: Cache test fixtures (jfk.wav + ggml-tiny.en-q8_0.bin)
         uses: actions/cache@v4
@@ -63,6 +65,11 @@ jobs:
           DIMMY_FORCE_CPU: "1"
           # Rust backtrace on panic for easier CI debugging
           RUST_BACKTRACE: "1"
+          # Disable native CPU optimizations in whisper.cpp/ggml cmake build.
+          # Without this, whisper-rs-sys compiles with -march=native on the
+          # compile host; if a different runner replays the cached object the
+          # binary executes instructions it doesn't support (SIGILL).
+          GGML_NATIVE: "OFF"
         # --release: debug-mode whisper.cpp on windows-2025 crashes with
         # STATUS_ILLEGAL_INSTRUCTION (CPU-feature mismatch on the runner).
         # Release mode uses safer codegen + runtime CPU detection paths.
