@@ -199,11 +199,15 @@ mod tests {
     fn process_name_matches_case_insensitive_with_or_without_exe() {
         let rules = [rule("slack", MatchType::ProcessName, "casual")];
         assert_eq!(
-            resolve(&rules, &ctx_process("Slack.exe")).llm_style.as_deref(),
+            resolve(&rules, &ctx_process("Slack.exe"))
+                .llm_style
+                .as_deref(),
             Some("casual")
         );
         assert_eq!(
-            resolve(&rules, &ctx_process("slack.exe")).llm_style.as_deref(),
+            resolve(&rules, &ctx_process("slack.exe"))
+                .llm_style
+                .as_deref(),
             Some("casual")
         );
         assert_eq!(
@@ -243,11 +247,7 @@ mod tests {
 
     #[test]
     fn bundle_id_match_is_case_sensitive() {
-        let r = rule(
-            "com.tinyspeck.slackmacgap",
-            MatchType::BundleId,
-            "casual",
-        );
+        let r = rule("com.tinyspeck.slackmacgap", MatchType::BundleId, "casual");
         let mut ctx = AppContext::default();
         ctx.bundle_id = "com.tinyspeck.slackmacgap".to_string();
         assert!(!resolve(&[r.clone()], &ctx).is_empty());

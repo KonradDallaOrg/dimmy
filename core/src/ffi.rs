@@ -886,7 +886,6 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "input_gain": f32::from_bits(st.input_gain.load(std::sync::atomic::Ordering::Relaxed)),
         "stats_total_words": *st.stats_total_words.lock().unwrap_or_else(|e| e.into_inner()),
         "stats_total_speaking_secs": *st.stats_total_speaking_secs.lock().unwrap_or_else(|e| e.into_inner()),
-        "app_rules": *st.app_rules.lock().unwrap_or_else(|e| e.into_inner()),
         // Per-provider key flags
         "has_groq_key": st.key_store.has_key(KeyringScope::Stt(Provider::Groq), use_kr),
         "has_openai_key": st.key_store.has_key(KeyringScope::Stt(Provider::OpenAI), use_kr),
@@ -894,6 +893,15 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "has_deepgram_key": st.key_store.has_key(KeyringScope::Stt(Provider::Deepgram), use_kr),
         "has_custom_key": st.key_store.has_key(KeyringScope::Stt(Provider::Custom), use_kr),
     });
+
+    // app_rules added outside the json! macro — including it inline pushes
+    // the macro past its expansion-recursion limit (the json! macro is
+    // recursive and we've accreted ~50 fields). Mutate the Value directly.
+    if let Ok(rules) = st.app_rules.lock() {
+        if let Ok(v) = serde_json::to_value(&*rules) {
+            json["app_rules"] = v;
+        }
+    }
 
     let s = serde_json::to_string(&json).unwrap_or_else(|_| "{}".to_string());
     write_to_buf(&s, out_buf, buf_len)

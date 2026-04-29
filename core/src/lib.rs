@@ -396,8 +396,13 @@ pub fn save_config_file(cfg: &AppConfig) {
             "input_gain": cfg.input_gain,
             "stats_total_words": cfg.stats_total_words,
             "stats_total_speaking_secs": cfg.stats_total_speaking_secs,
-            "app_rules": cfg.app_rules,
         });
+        // app_rules / selected_device / anchors set outside the json! macro:
+        // adding more fields to the macro pushes it past its
+        // recursion-expansion limit.
+        if let Ok(v) = serde_json::to_value(&cfg.app_rules) {
+            json["app_rules"] = v;
+        }
         if let Some(ref dev) = cfg.selected_device {
             json["selected_device"] = serde_json::json!(dev);
         }
@@ -516,8 +521,7 @@ pub fn load_config_file() -> AppConfig {
                     stats_total_speaking_secs: v["stats_total_speaking_secs"]
                         .as_f64()
                         .unwrap_or(0.0),
-                    app_rules: serde_json::from_value(v["app_rules"].clone())
-                        .unwrap_or_default(),
+                    app_rules: serde_json::from_value(v["app_rules"].clone()).unwrap_or_default(),
                 };
             }
         }
