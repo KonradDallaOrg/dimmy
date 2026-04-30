@@ -1,19 +1,44 @@
 import AppKit
-import SwiftUI
 import Combine
 
+/// Status-bar (menu-bar) controller. Owns the NSStatusItem and the
+/// NSMenu that appears when the user clicks the icon in the macOS
+/// menu bar (top-right of the screen).
+///
+/// We use a native `NSMenu` (not a SwiftUI popover) so the user gets:
+///   - real macOS submenus for "Translate to" and "Style" — pick a value
+///     in two clicks without opening Settings or scrolling on the pill,
+///   - keyboard navigation, Voice Control, accessibility for free,
+///   - an idiomatic "this app lives in the menu bar" UX.
+///
+/// `NSMenuDelegate.menuNeedsUpdate` rebuilds the menu on every open, so
+/// the checkmarks (current Translate-to / Style / state) are always
+/// fresh — no need to wire the entire menu to Combine publishers.
 @MainActor
-final class StatusBarController: NSObject {
+final class StatusBarController: NSObject, NSMenuDelegate {
     private var statusItem: NSStatusItem?
-    private var popover: NSPopover?
     private var appState: AppState
     private var cancellables = Set<AnyCancellable>()
+
+    /// Translate-target options surfaced in the menu. Mirrors
+    /// `TranslateTargets` in Windows' `SettingsViewModel.cs` so the two
+    /// platforms stay in sync. The empty-string code means "no
+    /// translation" (transcript stays in source language) — matches the
+    /// Rust core convention.
+    private static let translateTargets: [(code: String, label: String)] = [
+        ("", "No translation"),
+        ("it", "Italiano"),
+        ("en", "English"),
+        ("es", "Español"),
+        ("fr", "Français"),
+        ("de", "Deutsch"),
+        ("pt", "Português"),
+    ]
 
     init(appState: AppState) {
         self.appState = appState
         super.init()
         setupStatusItem()
-        setupPopover()
         observeState()
     }
 
@@ -25,18 +50,13 @@ final class StatusBarController: NSObject {
         button.image = NSImage(systemSymbolName: "waveform.circle", accessibilityDescription: "Dimmy")?
             .withSymbolConfiguration(config)
         button.image?.isTemplate = true
-        button.action = #selector(togglePopover)
-        button.target = self
-    }
 
-    private func setupPopover() {
-        popover = NSPopover()
-        popover?.contentSize = NSSize(width: 220, height: 260)
-        popover?.behavior = .transient
-        popover?.animates = true
-        popover?.contentViewController = NSHostingController(
-            rootView: MenuBarPopover(appState: appState)
-        )
+        // Assigning .menu (instead of .action) makes the status item
+        // open the menu on click — and the menuNeedsUpdate delegate
+        // method below rebuilds it dynamically before every open.
+        let menu = NSMenu()
+        menu.delegate = self
+        statusItem?.menu = menu
     }
 
     private func observeState() {
@@ -146,13 +166,117 @@ final class StatusBarController: NSObject {
         }
     }
 
-    @objc private func togglePopover() {
-        guard let popover, let button = statusItem?.button else { return }
-        if popover.isShown {
-            popover.performClose(nil)
-        } else {
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            popover.contentViewController?.view.window?.makeKey()
+    // MARK: - NSMenuDelegate
+
+    /// Rebuild the menu just before it appears so checkmarks and
+    /// disabled-row labels reflect current `appState`.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+
+        // Status row (disabled label).
+        let statusItem = NSMenuItem(title: statusText, action: nil, keyEquivalent: "")
+        statusItem.isEnabled = false
+        menu.addItem(statusItem)
+        menu.addItem(NSMenuItem.separator())
+
+        // Native input language (read-only — STT setting, lives in
+        // Settings → Voice). Distinct from "Translate to" which is the
+        // LLM output target.
+        let nativeLang = appState.selectedLanguage.isEmpty ? "(auto)" : appState.selectedLanguage
+        let nativeItem = NSMenuItem(title: "Native: \(nativeLang)", action: nil, keyEquivalent: "")
+        nativeItem.isEnabled = false
+        menu.addItem(nativeItem)
+
+        // Translate-to submenu.
+        let translateLabel = appState.llmTranslateTo.isEmpty || appState.llmTranslateTo == "none"
+            ? "(none)"
+            : appState.llmTranslateTo
+        let translateItem = NSMenuItem(title: "Translate to: \(translateLabel)", action: nil, keyEquivalent: "")
+        translateItem.submenu = buildTranslateToSubmenu()
+        menu.addItem(translateItem)
+
+        // Style submenu.
+        let styleLabel = appState.llmStyleEnum.displayName
+        let styleItem = NSMenuItem(title: "Style: \(styleLabel)", action: nil, keyEquivalent: "")
+        styleItem.submenu = buildStyleSubmenu()
+        menu.addItem(styleItem)
+
+        // Shortcut (read-only).
+        let shortcutItem = NSMenuItem(title: "Shortcut: \(appState.shortcut.displayString)",
+                                      action: nil, keyEquivalent: "")
+        shortcutItem.isEnabled = false
+        menu.addItem(shortcutItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        // Actions.
+        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
+
+        let quitItem = NSMenuItem(title: "Quit Dimmy", action: #selector(quitApp), keyEquivalent: "q")
+        quitItem.target = self
+        menu.addItem(quitItem)
+    }
+
+    private func buildTranslateToSubmenu() -> NSMenu {
+        let submenu = NSMenu()
+        // Treat both legacy "none" and empty as the no-translation state.
+        let current = (appState.llmTranslateTo == "none") ? "" : appState.llmTranslateTo
+        for target in Self.translateTargets {
+            let item = NSMenuItem(title: target.label,
+                                  action: #selector(handleTranslateTo(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.representedObject = target.code
+            item.state = (target.code == current) ? .on : .off
+            submenu.addItem(item)
+        }
+        return submenu
+    }
+
+    private func buildStyleSubmenu() -> NSMenu {
+        let submenu = NSMenu()
+        for style in LlmStyle.allCases {
+            let item = NSMenuItem(title: style.displayName,
+                                  action: #selector(handleStyle(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.representedObject = style.rawValue
+            item.state = (style == appState.llmStyleEnum) ? .on : .off
+            submenu.addItem(item)
+        }
+        return submenu
+    }
+
+    @objc private func handleTranslateTo(_ sender: NSMenuItem) {
+        guard let code = sender.representedObject as? String else { return }
+        appState.llmTranslateTo = code
+        DimmyCore.shared.setConfig(appState.toRustConfig())
+    }
+
+    @objc private func handleStyle(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String else { return }
+        appState.llmStyle = raw
+        DimmyCore.shared.setConfig(appState.toRustConfig())
+    }
+
+    @objc private func openSettings() {
+        AppDelegate.shared?.openSettings()
+    }
+
+    @objc private func quitApp() {
+        NSApplication.shared.terminate(nil)
+    }
+
+    private var statusText: String {
+        switch appState.recordingState {
+        case .idle: return "● Ready"
+        case .recording(.pushToTalk): return "● Recording (hold)…"
+        case .recording(.toggle): return "● Recording…"
+        case .transcribing: return "● Transcribing…"
+        case .processing: return "● Processing…"
+        case .completing: return "● Done"
         }
     }
 }

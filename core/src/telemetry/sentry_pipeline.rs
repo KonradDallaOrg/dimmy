@@ -189,37 +189,159 @@ pub fn capture_error(_category: &str, _message: &str) {}
 /// `kind` is one of `bug`, `feature`, `general`. `message` is the user's
 /// text. `email` is optional and only included if the user explicitly
 /// provided it (UI must not auto-fill).
+///
+/// Submitted as a Sentry **User Feedback v2 envelope** (item type
+/// `feedback`) — not as a regular event. This lands in the project's
+/// dedicated Feedback tab, not in Issues. Each call has a fresh
+/// `event_id`, so feedback never collapses into a single grouped issue.
+///
+/// The envelope is POSTed directly to the DSN's envelope endpoint with
+/// DSN-key auth (the `sentry_key` is public, safe to ship in the
+/// client). The embedded `sentry` crate has no native feedback API in
+/// 0.47, so we build the envelope by hand to avoid waiting on SDK
+/// support; once the SDK gains `capture_feedback`, this can be
+/// simplified.
 #[cfg(feature = "telemetry-sentry")]
 pub fn capture_feedback(kind: &str, message: &str, email: Option<&str>) {
     if !is_enabled() || !has_compiled_dsn() {
         return;
     }
-
-    // We send feedback as a tagged message rather than a Sentry
-    // "user feedback" object, because the latter is tied to a specific
-    // event ID. Plain message + tag is simpler and shows up in the
-    // same project inbox.
     let scrubbed = scrub_message(message);
-    sentry::with_scope(
-        |scope| {
-            scope.set_tag("feedback_kind", kind);
-            if let Some(email) = email {
-                if !email.trim().is_empty() {
-                    scope.set_extra(
-                        "user_email",
-                        sentry::protocol::Value::String(email.to_string()),
-                    );
-                }
-            }
-        },
-        || {
-            sentry::capture_message(&scrubbed, sentry::Level::Info);
-        },
+
+    let dsn: sentry::types::Dsn = match SENTRY_DSN.parse() {
+        Ok(d) => d,
+        Err(e) => {
+            crate::log(&format!("[sentry-feedback] DSN parse failed: {}", e));
+            return;
+        }
+    };
+
+    // Sentry expects event_id as 32 hex chars with no dashes.
+    let event_id = crate::telemetry::identity::new_uuid_v4().replace('-', "");
+    let now = chrono::Utc::now();
+    let envelope = build_feedback_envelope(&event_id, now, kind, &scrubbed, email);
+
+    let url = dsn.envelope_api_url().to_string();
+    let auth = format!(
+        "Sentry sentry_version=7, sentry_key={}, sentry_client=dimmy/{}",
+        dsn.public_key(),
+        env!("CARGO_PKG_VERSION"),
     );
+    spawn_envelope_send(url, auth, envelope);
 }
 
 #[cfg(not(feature = "telemetry-sentry"))]
 pub fn capture_feedback(_kind: &str, _message: &str, _email: Option<&str>) {}
+
+/// Build a Sentry envelope (3 newline-separated JSON lines) carrying a
+/// single User Feedback v2 item. Mirrors what the JS browser SDK's
+/// `Sentry.captureFeedback` ships.
+#[cfg(feature = "telemetry-sentry")]
+fn build_feedback_envelope(
+    event_id: &str,
+    now: chrono::DateTime<chrono::Utc>,
+    kind: &str,
+    message: &str,
+    email: Option<&str>,
+) -> String {
+    let mut feedback_ctx = serde_json::Map::new();
+    feedback_ctx.insert(
+        "message".into(),
+        serde_json::Value::String(message.to_string()),
+    );
+    if let Some(e) = email {
+        let trimmed = e.trim();
+        if !trimmed.is_empty() {
+            feedback_ctx.insert(
+                "contact_email".into(),
+                serde_json::Value::String(trimmed.to_string()),
+            );
+        }
+    }
+
+    let event = serde_json::json!({
+        "event_id": event_id,
+        "timestamp": now.timestamp(),
+        "platform": "native",
+        "level": "info",
+        "release": env!("CARGO_PKG_VERSION"),
+        "environment": detect_environment(),
+        "tags": {
+            "feedback_kind": kind,
+            "os": crate::telemetry::events::os_name(),
+            "arch": crate::telemetry::events::arch_name(),
+        },
+        "user": { "id": crate::telemetry::anonymous_id() },
+        "contexts": { "feedback": serde_json::Value::Object(feedback_ctx) },
+    });
+    let item_payload = event.to_string();
+
+    let envelope_header = serde_json::json!({
+        "event_id": event_id,
+        "sent_at": now.to_rfc3339(),
+    });
+    let item_header = serde_json::json!({
+        "type": "feedback",
+        "content_type": "application/json",
+        "length": item_payload.len(),
+    });
+
+    format!("{}\n{}\n{}\n", envelope_header, item_header, item_payload)
+}
+
+/// Dedicated tokio runtime for Sentry feedback sends. Same pattern as
+/// `telemetry::client` — feedback is best-effort and must never block
+/// the FFI caller.
+#[cfg(feature = "telemetry-sentry")]
+fn feedback_runtime() -> Option<&'static tokio::runtime::Runtime> {
+    static RT: std::sync::OnceLock<Option<tokio::runtime::Runtime>> = std::sync::OnceLock::new();
+    RT.get_or_init(|| {
+        match tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_name("dimmy-sentry-feedback")
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => Some(rt),
+            Err(e) => {
+                crate::log(&format!(
+                    "[sentry-feedback] failed to build runtime: {}, dropping feedback",
+                    e
+                ));
+                None
+            }
+        }
+    })
+    .as_ref()
+}
+
+#[cfg(feature = "telemetry-sentry")]
+fn spawn_envelope_send(url: String, auth: String, body: String) {
+    let Some(rt) = feedback_runtime() else {
+        return;
+    };
+    rt.spawn(async move {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .user_agent(concat!("Dimmy/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+        match client
+            .post(&url)
+            .header("X-Sentry-Auth", auth)
+            .header("Content-Type", "application/x-sentry-envelope")
+            .body(body)
+            .send()
+            .await
+        {
+            Ok(r) => crate::log(&format!(
+                "[sentry-feedback] sent, status={}",
+                r.status().as_u16()
+            )),
+            Err(e) => crate::log(&format!("[sentry-feedback] send failed: {}", e)),
+        }
+    });
+}
 
 /// Compose the Sentry environment tag from cargo profile and CI
 /// indicators. Lets us segregate "actual user" from "internal CI".
@@ -343,6 +465,76 @@ mod tests {
             "realistic 16-digit-project-id Sentry DSN should parse, got {:?}",
             parsed.err()
         );
+    }
+
+    /// The User Feedback v2 envelope we POST to Sentry must be three
+    /// newline-separated JSON lines (envelope header, item header, item
+    /// payload). The item header MUST declare `type: feedback` so the
+    /// event lands in the project's Feedback tab, not in Issues — that
+    /// was the regression that buried the dashboard's "real" feedback
+    /// inbox in v0.6.24.
+    #[test]
+    fn build_feedback_envelope_emits_well_formed_three_line_envelope() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-04-30T10:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let env = build_feedback_envelope(
+            "98151cdf9ed34fb8bd00f7997e85fc71",
+            now,
+            "bug",
+            "the pill freezes after 30 minutes",
+            Some("user@example.com"),
+        );
+        let lines: Vec<&str> = env.trim_end().split('\n').collect();
+        assert_eq!(
+            lines.len(),
+            3,
+            "envelope must be header + item header + payload"
+        );
+
+        let header: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(header["event_id"], "98151cdf9ed34fb8bd00f7997e85fc71");
+        assert!(header["sent_at"].is_string());
+
+        let item_header: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(item_header["type"], "feedback");
+        assert_eq!(item_header["content_type"], "application/json");
+
+        let payload: serde_json::Value = serde_json::from_str(lines[2]).unwrap();
+        assert_eq!(payload["event_id"], "98151cdf9ed34fb8bd00f7997e85fc71");
+        assert_eq!(payload["platform"], "native");
+        assert_eq!(payload["tags"]["feedback_kind"], "bug");
+        assert_eq!(
+            payload["contexts"]["feedback"]["message"],
+            "the pill freezes after 30 minutes"
+        );
+        assert_eq!(
+            payload["contexts"]["feedback"]["contact_email"],
+            "user@example.com"
+        );
+    }
+
+    /// Email is optional. When the user doesn't provide one, the
+    /// `contact_email` field MUST be absent from the payload — never
+    /// "" or null — so Sentry shows the feedback as truly anonymous.
+    #[test]
+    fn build_feedback_envelope_omits_contact_email_when_absent() {
+        let now = chrono::Utc::now();
+        let env = build_feedback_envelope(&"0".repeat(32), now, "feature", "no email", None);
+        let payload_line = env.trim_end().split('\n').nth(2).unwrap();
+        let payload: serde_json::Value = serde_json::from_str(payload_line).unwrap();
+        assert!(payload["contexts"]["feedback"]["contact_email"].is_null());
+    }
+
+    /// Whitespace-only emails must be treated as "no email", not as a
+    /// stray contact_email value that PII-scrubs would have to catch.
+    #[test]
+    fn build_feedback_envelope_omits_whitespace_only_email() {
+        let now = chrono::Utc::now();
+        let env = build_feedback_envelope(&"0".repeat(32), now, "general", "msg", Some("   "));
+        let payload_line = env.trim_end().split('\n').nth(2).unwrap();
+        let payload: serde_json::Value = serde_json::from_str(payload_line).unwrap();
+        assert!(payload["contexts"]["feedback"]["contact_email"].is_null());
     }
 
     /// Pin the exact failure mode that bit production: a DSN with a
