@@ -88,6 +88,13 @@ public sealed partial class SettingsWindow : Window
         if (!string.IsNullOrEmpty(fileJson))
             ViewModel.LoadFromJson(fileJson);
 
+        // Win-only UI prefs live outside config.json (CLAUDE.md
+        // single-writer rule). Pull them in so the toggles in the Pill
+        // section reflect the on-disk state.
+        var uiPrefs = Services.UiPreferences.Load();
+        ViewModel.PillShowOnStartup = uiPrefs.PillShowOnStartup;
+        ViewModel.PillShowOnHotkey = uiPrefs.PillShowOnHotkey;
+
         // Also read from FFI for runtime-only fields (has_key, has_llm_key, devices)
         // that are NOT in config.json (Rust computes them from keystore)
         try
@@ -648,6 +655,17 @@ public sealed partial class SettingsWindow : Window
         App.Instance?.ReloadConfig();
         App.Instance?.ApplySettings(ViewModel);
         this.Close();
+    }
+
+    /// <summary>Apply the pill-visibility prefs immediately on toggle
+    /// so the user sees the effect (next hotkey press / next launch)
+    /// without having to click Save. Persistence to ui_prefs.json is
+    /// triggered indirectly through App.Instance.ApplySettings →
+    /// AppViewModel.PropertyChanged → OnUiPrefsRelevantPropertyChanged.</summary>
+    private void PillVisibilityToggle_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (!_loaded) return;
+        App.Instance?.ApplySettings(ViewModel);
     }
 
     private void Theme_Checked(object sender, RoutedEventArgs e)
