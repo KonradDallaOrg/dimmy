@@ -955,13 +955,17 @@ public sealed partial class PillWindow : Window
         menu.Items.Add(statusItem);
         menu.Items.Add(new MenuFlyoutSeparator());
 
-        // Info lines (read-only)
+        // Native input lang stays read-only (it's an STT setting, lives in Settings → Voice).
         var nativeLang = string.IsNullOrEmpty(_vm.Language) ? "(auto)" : _vm.Language;
         menu.Items.Add(new MenuFlyoutItem { Text = $"Native: {nativeLang}", IsEnabled = false });
-        var translateTo = string.IsNullOrEmpty(_vm.LlmTranslateTo) ? "(none)" : _vm.LlmTranslateTo;
-        menu.Items.Add(new MenuFlyoutItem { Text = $"Translate to: {translateTo}", IsEnabled = false });
-        var style = _vm.LlmStyle == "off" ? "off" : _vm.LlmStyle;
-        menu.Items.Add(new MenuFlyoutItem { Text = $"Style: {style}", IsEnabled = false });
+
+        // Translate-to and Style become submenus so the user can change
+        // them without opening the pill, scrolling the wheel, or going
+        // to Settings. Same persistence path as the scroll handlers
+        // (single writer: dimmy_set_config_json → Rust saves to disk).
+        menu.Items.Add(BuildTranslateToSubmenu());
+        menu.Items.Add(BuildStyleSubmenu());
+
         menu.Items.Add(new MenuFlyoutItem { Text = $"Shortcut: {_vm.Shortcut}", IsEnabled = false });
         menu.Items.Add(new MenuFlyoutSeparator());
 
@@ -985,6 +989,58 @@ public sealed partial class PillWindow : Window
         var pos = position ?? new global::Windows.Foundation.Point(
             target.ActualWidth / 2, target.ActualHeight / 2);
         menu.ShowAt(target, pos);
+    }
+
+    private MenuFlyoutSubItem BuildTranslateToSubmenu()
+    {
+        var translateTo = string.IsNullOrEmpty(_vm.LlmTranslateTo) ? "(none)" : _vm.LlmTranslateTo;
+        var sub = new MenuFlyoutSubItem { Text = $"Translate to: {translateTo}" };
+        foreach (var kv in LangList)
+        {
+            var item = new ToggleMenuFlyoutItem
+            {
+                Text = string.IsNullOrEmpty(kv.Key) ? kv.Value : $"{kv.Value}",
+                IsChecked = kv.Key == _vm.LlmTranslateTo,
+            };
+            var code = kv.Key;
+            item.Click += (_, _) =>
+            {
+                _vm.LlmTranslateTo = code;
+                LanguageLabel.Text = string.IsNullOrEmpty(code) ? "—" : code.ToUpperInvariant();
+                DimmyNative.dimmy_set_config_json(System.Text.Json.JsonSerializer.Serialize(
+                    new System.Collections.Generic.Dictionary<string, string> { ["llm_translate_to"] = code }));
+            };
+            sub.Items.Add(item);
+        }
+        return sub;
+    }
+
+    private MenuFlyoutSubItem BuildStyleSubmenu()
+    {
+        var style = _vm.LlmStyle == "off" ? "off" : _vm.LlmStyle;
+        var sub = new MenuFlyoutSubItem { Text = $"Style: {style}" };
+        foreach (var s in LlmStyles)
+        {
+            var item = new ToggleMenuFlyoutItem
+            {
+                Text = s,
+                IsChecked = s == _vm.LlmStyle,
+            };
+            var styleValue = s;
+            item.Click += (_, _) =>
+            {
+                _vm.LlmStyle = styleValue;
+                StyleDot.Fill = new SolidColorBrush(ParseColor(_vm.LlmStyleColor));
+                DimmyNative.dimmy_set_config_json(System.Text.Json.JsonSerializer.Serialize(
+                    new System.Collections.Generic.Dictionary<string, object>
+                    {
+                        ["llm_style"] = styleValue,
+                        ["llm_enabled"] = styleValue != "off"
+                    }));
+            };
+            sub.Items.Add(item);
+        }
+        return sub;
     }
 
     private async void Stop_Click(object sender, RoutedEventArgs e)
