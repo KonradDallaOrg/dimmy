@@ -38,11 +38,14 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     init(appState: AppState) {
         self.appState = appState
         super.init()
-        setupStatusItem()
+        if appState.showInMenuBar {
+            setupStatusItem()
+        }
         observeState()
     }
 
     private func setupStatusItem() {
+        guard statusItem == nil else { return }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         guard let button = statusItem?.button else { return }
@@ -57,6 +60,15 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         let menu = NSMenu()
         menu.delegate = self
         statusItem?.menu = menu
+
+        // Refresh icon to reflect current state.
+        updateIcon(for: appState.recordingState, hotkey: appState.hotkeyStatus)
+    }
+
+    private func teardownStatusItem() {
+        guard let item = statusItem else { return }
+        NSStatusBar.system.removeStatusItem(item)
+        statusItem = nil
     }
 
     private func observeState() {
@@ -71,6 +83,18 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] status in
                 self?.updateIcon(for: self?.appState.recordingState ?? .idle, hotkey: status)
+            }
+            .store(in: &cancellables)
+
+        appState.$showInMenuBar
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] visible in
+                guard let self else { return }
+                if visible {
+                    self.setupStatusItem()
+                } else {
+                    self.teardownStatusItem()
+                }
             }
             .store(in: &cancellables)
     }
@@ -173,8 +197,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
 
-        // Status row (disabled label).
-        let statusItem = NSMenuItem(title: statusText, action: nil, keyEquivalent: "")
+        // Status row (disabled label) — leading "●" is colored to match
+        // the state (mirrors the colors used on the menu-bar icon).
+        let statusItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        statusItem.attributedTitle = makeStatusAttributedTitle()
         statusItem.isEnabled = false
         menu.addItem(statusItem)
         menu.addItem(NSMenuItem.separator())
@@ -207,6 +233,16 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         shortcutItem.isEnabled = false
         menu.addItem(shortcutItem)
 
+        // Show/hide pill toggle. Title flips with state — same wording as
+        // the Dock menu, kept distinct from system "Hide Dimmy" by saying
+        // "Pill Overlay".
+        let pillTitle = appState.pillVisible ? "Hide Pill Overlay" : "Show Pill Overlay"
+        let pillItem = NSMenuItem(title: pillTitle,
+                                  action: #selector(togglePillVisibility),
+                                  keyEquivalent: "")
+        pillItem.target = self
+        menu.addItem(pillItem)
+
         menu.addItem(NSMenuItem.separator())
 
         // Actions.
@@ -219,7 +255,9 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         menu.addItem(quitItem)
     }
 
-    private func buildTranslateToSubmenu() -> NSMenu {
+    /// Public so AppDelegate can reuse it inside `applicationDockMenu(_:)`,
+    /// keeping the menu-bar and Dock right-click menus in sync.
+    func buildTranslateToSubmenu() -> NSMenu {
         let submenu = NSMenu()
         // Treat both legacy "none" and empty as the no-translation state.
         let current = (appState.llmTranslateTo == "none") ? "" : appState.llmTranslateTo
@@ -235,7 +273,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         return submenu
     }
 
-    private func buildStyleSubmenu() -> NSMenu {
+    func buildStyleSubmenu() -> NSMenu {
         let submenu = NSMenu()
         for style in LlmStyle.allCases {
             let item = NSMenuItem(title: style.displayName,
@@ -261,6 +299,11 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         DimmyCore.shared.setConfig(appState.toRustConfig())
     }
 
+    @objc func togglePillVisibility() {
+        hkLog("[StatusBar] togglePillVisibility — was=\(appState.pillVisible)")
+        appState.pillVisible.toggle()
+    }
+
     @objc private func openSettings() {
         AppDelegate.shared?.openSettings()
     }
@@ -269,14 +312,48 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         NSApplication.shared.terminate(nil)
     }
 
-    private var statusText: String {
+    private var statusLabel: String {
         switch appState.recordingState {
-        case .idle: return "● Ready"
-        case .recording(.pushToTalk): return "● Recording (hold)…"
-        case .recording(.toggle): return "● Recording…"
-        case .transcribing: return "● Transcribing…"
-        case .processing: return "● Processing…"
-        case .completing: return "● Done"
+        case .idle:
+            return appState.hotkeyStatus == .installed ? "Ready" : "Hotkey disabled"
+        case .recording(.pushToTalk): return "Recording (hold)…"
+        case .recording(.toggle): return "Recording…"
+        case .transcribing: return "Transcribing…"
+        case .processing: return "Processing…"
+        case .completing: return "Done"
         }
+    }
+
+    private var statusDotColor: NSColor {
+        switch appState.recordingState {
+        case .idle:
+            return appState.hotkeyStatus == .installed ? .systemGreen : .systemYellow
+        case .recording: return .systemRed
+        case .transcribing: return .systemBlue
+        case .processing: return .systemPurple
+        case .completing: return .systemGreen
+        }
+    }
+
+    private func makeStatusAttributedTitle() -> NSAttributedString {
+        let result = NSMutableAttributedString()
+        let dotFont = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        let dot = NSAttributedString(
+            string: "● ",
+            attributes: [
+                .foregroundColor: statusDotColor,
+                .font: dotFont,
+            ]
+        )
+        let label = NSAttributedString(
+            string: statusLabel,
+            attributes: [
+                .foregroundColor: NSColor.labelColor,
+                .font: dotFont,
+            ]
+        )
+        result.append(dot)
+        result.append(label)
+        return result
     }
 }

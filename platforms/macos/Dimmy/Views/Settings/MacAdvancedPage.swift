@@ -29,10 +29,18 @@ struct MacAdvancedPage: View {
             MacTile {
                 MacRow(
                     "Show in Dock",
-                    description: "When off, Dimmy lives only in the menu bar (no Dock icon, hidden from Cmd-Tab)",
-                    showsDivider: false
+                    description: "When off, Dimmy is hidden from the Dock and Cmd-Tab"
                 ) {
                     Toggle("", isOn: $appState.showInDock)
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                }
+                MacRow(
+                    "Show in menu bar",
+                    description: "When off, the icon at the top-right disappears. At least one of Dock or menu bar must stay on",
+                    showsDivider: false
+                ) {
+                    Toggle("", isOn: $appState.showInMenuBar)
                         .toggleStyle(.switch)
                         .labelsHidden()
                 }

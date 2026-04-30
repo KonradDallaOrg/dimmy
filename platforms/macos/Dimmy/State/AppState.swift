@@ -458,7 +458,22 @@ final class AppState: ObservableObject {
     /// can find it again after clicking away to System Settings. This preference
     /// controls the post-onboarding steady state only.
     @Published var showInDock: Bool {
-        didSet { UserDefaults.standard.set(showInDock, forKey: "showInDock") }
+        didSet {
+            UserDefaults.standard.set(showInDock, forKey: "showInDock")
+            // Safety: never let both Dock and menu-bar disappear, the user
+            // would lose every entry point to the app.
+            if !showInDock && !showInMenuBar { showInMenuBar = true }
+        }
+    }
+    /// Whether the menu-bar (NSStatusItem) icon is visible. Off-by-default
+    /// is unsafe — the user could hide both Dock and menu bar and lose
+    /// access to the app — so the setter on either property forces the
+    /// other to stay on if it would result in zero visibility.
+    @Published var showInMenuBar: Bool {
+        didSet {
+            UserDefaults.standard.set(showInMenuBar, forKey: "showInMenuBar")
+            if !showInMenuBar && !showInDock { showInDock = true }
+        }
     }
     @Published var theme: AppTheme = .auto
     @Published var shortcut: ModifierShortcut {
@@ -527,7 +542,7 @@ final class AppState: ObservableObject {
     @Published var preprocessingEnabled: Bool = true
     @Published var chunkStreamingEnabled: Bool = false
     @Published var audioDebugEnabled: Bool = false
-    @Published var inputGain: Float = 1.0
+    @Published var inputGain: Float = 0.5
 
     // MARK: - UI State
 
@@ -597,6 +612,9 @@ final class AppState: ObservableObject {
     private init() {
         self.isOnboardingComplete = UserDefaults.standard.bool(forKey: "isOnboardingComplete")
         self.showInDock = UserDefaults.standard.bool(forKey: "showInDock")
+        // Default true: a fresh user sees the menu-bar icon, so they can
+        // always find the app even if Dock is hidden.
+        self.showInMenuBar = UserDefaults.standard.object(forKey: "showInMenuBar") as? Bool ?? true
         let savedX = UserDefaults.standard.double(forKey: "pillX")
         let savedY = UserDefaults.standard.double(forKey: "pillY")
         if savedX != 0 || savedY != 0 {

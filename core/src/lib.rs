@@ -323,7 +323,7 @@ impl Default for AppConfig {
             waveform_style: "Bars".to_string(),
             overlay_position: "Bottom Right".to_string(),
             keep_in_clipboard: false,
-            input_gain: 1.0,
+            input_gain: 0.5,
             window_anchor_right: None,
             window_anchor_bottom: None,
             stats_total_words: 0,
@@ -514,7 +514,10 @@ pub fn load_config_file() -> AppConfig {
                         .unwrap_or("Bottom Right")
                         .to_string(),
                     keep_in_clipboard: v["keep_in_clipboard"].as_bool().unwrap_or(false),
-                    input_gain: v["input_gain"].as_f64().unwrap_or(1.0) as f32,
+                    input_gain: v["input_gain"]
+                        .as_f64()
+                        .unwrap_or(defaults.input_gain as f64)
+                        as f32,
                     window_anchor_right: v["window_anchor_right"].as_f64(),
                     window_anchor_bottom: v["window_anchor_bottom"].as_f64(),
                     stats_total_words: v["stats_total_words"].as_u64().unwrap_or(0),
@@ -1299,11 +1302,11 @@ mod tests {
     // ── input_gain / UI field tests ──────────────────────────────────
 
     #[test]
-    fn default_config_input_gain_is_one() {
+    fn default_config_input_gain_is_half() {
         let cfg = AppConfig::default();
         assert!(
-            (cfg.input_gain - 1.0).abs() < f32::EPSILON,
-            "Default input_gain should be 1.0, got {}",
+            (cfg.input_gain - 0.5).abs() < f32::EPSILON,
+            "Default input_gain should be 0.5, got {}",
             cfg.input_gain
         );
     }

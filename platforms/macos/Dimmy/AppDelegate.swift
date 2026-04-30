@@ -151,6 +151,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         onboardingWindow?.makeKeyAndOrderFront(nil)
     }
 
+    /// Right-click menu on the Dock icon. Mirrors the Translate-to and Style
+    /// submenus from the menu-bar NSMenu so users get the same quick switchers
+    /// regardless of which entry point they prefer. Rebuilt by AppKit on every
+    /// right-click, so checkmarks always reflect the current state.
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        guard let sbc = statusBarController else { return nil }
+        hkLog("[AppDelegate] applicationDockMenu rebuilt — pillVisible=\(appState.pillVisible)")
+        let menu = NSMenu()
+        // AppKit's auto-validation can silently disable items in the dock
+        // context (the dock-menu responder chain doesn't include this
+        // delegate the way the menubar one does). Disable auto-validation
+        // and own enable/disable explicitly via isEnabled below.
+        menu.autoenablesItems = false
+
+        let translateLabel = appState.llmTranslateTo.isEmpty || appState.llmTranslateTo == "none"
+            ? "(none)"
+            : appState.llmTranslateTo
+        let translateItem = NSMenuItem(title: "Translate to: \(translateLabel)",
+                                       action: nil, keyEquivalent: "")
+        translateItem.submenu = sbc.buildTranslateToSubmenu()
+        menu.addItem(translateItem)
+
+        let styleItem = NSMenuItem(title: "Style: \(appState.llmStyleEnum.displayName)",
+                                   action: nil, keyEquivalent: "")
+        styleItem.submenu = sbc.buildStyleSubmenu()
+        menu.addItem(styleItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        // Toggle pill visibility (independent from system "Hide Dimmy",
+        // which hides the whole app). Checkmark is rebuilt by AppKit on
+        // every right-click, so it always reflects appState.pillVisible.
+        // Dynamic title (no checkmark) — checkmarks on Dock items behave
+        // oddly in macOS Tahoe (state=.off items silently swallow clicks
+        // without invoking the action). Plain title-flipping avoids the
+        // whole state machinery and reads better to the user anyway.
+        // "Pill Overlay" disambiguates from the system "Hide Dimmy" item
+        // that AppKit always appends below — that one is Cmd+H (hides
+        // the whole app), this one only toggles the floating pill.
+        let pillTitle = appState.pillVisible ? "Hide Pill Overlay" : "Show Pill Overlay"
+        let pillItem = NSMenuItem(title: pillTitle,
+                                  action: #selector(toggleDockPillVisibility),
+                                  keyEquivalent: "")
+        pillItem.target = self
+        pillItem.isEnabled = true
+        menu.addItem(pillItem)
+
+        return menu
+    }
+
+    @objc func toggleDockPillVisibility() {
+        hkLog("[AppDelegate] dock menu: toggle pill visibility (was=\(appState.pillVisible))")
+        appState.pillVisible.toggle()
+    }
+
     /// Fires when the user clicks the Dock icon while the app is running but has no
     /// visible windows (e.g., closed the onboarding red X). Re-open onboarding if it's
     /// still pending so users don't get stuck with a silent Dock icon.
