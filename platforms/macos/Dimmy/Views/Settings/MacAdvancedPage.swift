@@ -16,9 +16,27 @@ struct MacAdvancedPage: View {
             )
             .padding(.bottom, 8)
 
+            appearanceGroup
             performanceGroup
             diagnosticsGroup
             resetGroup
+        }
+    }
+
+    private var appearanceGroup: some View {
+        Group {
+            MacGroupLabel(text: "Appearance")
+            MacTile {
+                MacRow(
+                    "Show in Dock",
+                    description: "When off, Dimmy lives only in the menu bar (no Dock icon, hidden from Cmd-Tab)",
+                    showsDivider: false
+                ) {
+                    Toggle("", isOn: $appState.showInDock)
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                }
+            }
         }
     }
 
