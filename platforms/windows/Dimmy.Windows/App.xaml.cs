@@ -28,6 +28,8 @@ public partial class App : Application
     private TrayService? _trayService;
     private TaskbarAnchorWindow? _taskbarAnchor;
     private TaskbarService? _taskbarService;
+    private CommandPipeServer? _commandPipe;
+    private UiPreferences _uiPrefs = new();
     private DispatcherQueue? _dispatcherQueue;
 
     // Must be stored as a field to prevent GC collection of the delegate
@@ -88,10 +90,43 @@ public partial class App : Application
             _appViewModel.OverlayPosition = settings.OverlayPosition;
             RepositionPill();
         }
+
+        // Win-only pill visibility prefs — copy back into the live
+        // AppViewModel so the next hotkey press / startup honours the
+        // new value. The PropertyChanged handler in OnLaunched persists
+        // them to ui_prefs.json automatically.
+        _appViewModel.PillShowOnStartup = settings.PillShowOnStartup;
+        _appViewModel.PillShowOnHotkey = settings.PillShowOnHotkey;
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
+        // Set the AppUserModelID FIRST. Windows derives taskbar
+        // grouping + jump-list ownership from the AUMI of the process
+        // at the moment a window first registers in the taskbar; if
+        // we set it later, the jump list we register doesn't bind to
+        // our taskbar entry and right-click shows nothing custom.
+        JumpListService.SetProcessAumi();
+
+        // Ensure a Start-menu shortcut with the matching AUMI exists.
+        // Velopack creates one in production; in dev we make a "Dimmy
+        // (Dev).lnk" so Windows 11 is willing to display the custom
+        // jump-list entries on the taskbar button right-click.
+        JumpListService.EnsureStartMenuShortcut();
+
+        // Forward jump-list shortcuts BEFORE the single-instance guard.
+        // Each jump-list entry re-launches Dimmy.Windows.exe with
+        // `--command <name>`; we forward to the running instance via
+        // named pipe and exit immediately, so the user sees no second
+        // window flash.
+        var pipeCommand = TryGetPipeCommandFromArgs();
+        if (pipeCommand is not null)
+        {
+            CommandPipeServer.TrySendCommand(pipeCommand);
+            Environment.Exit(0);
+            return;
+        }
+
         // Single-instance guard: exit immediately if another Dimmy is already running
         _singleInstanceMutex = new Mutex(true, @"Global\DimmySingleInstance", out bool createdNew);
         if (!createdNew)
@@ -122,6 +157,12 @@ public partial class App : Application
 
             // 3. Load config into ViewModel
             LoadConfigIntoViewModel();
+
+            // 3b. Load Win-only UI prefs (pill visibility toggles)
+            _uiPrefs = UiPreferences.Load();
+            _appViewModel.PillShowOnHotkey = _uiPrefs.PillShowOnHotkey;
+            _appViewModel.PillShowOnStartup = _uiPrefs.PillShowOnStartup;
+            _appViewModel.PropertyChanged += OnUiPrefsRelevantPropertyChanged;
 
 
 
@@ -172,6 +213,14 @@ public partial class App : Application
         // Force hide from taskbar — belt-and-suspenders with EnableTransparency's TOOLWINDOW
         WindowHelper.SetTaskbarVisibility(hwnd, false);
 
+        // Respect the user's "taskbar-only" choice: if they've turned
+        // off PillShowOnStartup, hide the pill immediately after we've
+        // registered it. We can't skip creation entirely because the
+        // hotkey + transcription flow still needs the pill object —
+        // we just keep its window invisible.
+        if (!_appViewModel.PillShowOnStartup)
+            HidePill();
+
         _hotkeyService = new HotkeyService(_dispatcherQueue!);
         _hotkeyService.HotkeyPressed += OnHotkeyPressed;
         _hotkeyService.HotkeyReleased += OnHotkeyReleased;
@@ -205,6 +254,100 @@ public partial class App : Application
         }
 
         InitTaskbarAnchor();
+        InitCommandPipeAndJumpList();
+    }
+
+    /// <summary>
+    /// Stand up the named-pipe server that listens for forwarded
+    /// jump-list commands, and (re)register the Windows jump list so
+    /// the user gets right-click access on the taskbar icon to:
+    /// toggle pill, open settings, switch style, switch translate-to,
+    /// quit.
+    ///
+    /// The two pieces are coupled: the jump-list shortcuts re-launch
+    /// our EXE with `--command X`, and OnLaunched (above) forwards
+    /// that to the running instance via this pipe. So the pipe must
+    /// be up before the jump list goes live, but in practice the user
+    /// can't click an entry that fast — order is purely defensive.
+    /// </summary>
+    private void InitCommandPipeAndJumpList()
+    {
+        try
+        {
+            _commandPipe = new CommandPipeServer(HandleForwardedCommand);
+            _commandPipe.Start();
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[App] CommandPipe start failed: {ex.Message}");
+        }
+
+        try { JumpListService.Register(); }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[App] JumpList register failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>Dispatcher for the line received over the command
+    /// pipe (sent by a transient `--command X` instance). Always
+    /// marshals onto the UI thread before touching view-models or
+    /// FFI — pipe callbacks fire on a thread-pool worker.</summary>
+    private void HandleForwardedCommand(string command)
+    {
+        _dispatcherQueue?.TryEnqueue(() =>
+        {
+            try
+            {
+                if (command == "toggle-pill") { TogglePill(); return; }
+                if (command == "open-settings") { OpenSettings(); return; }
+                if (command == "quit") { Quit(); return; }
+                if (command.StartsWith("set-style:", StringComparison.Ordinal))
+                {
+                    var style = command["set-style:".Length..];
+                    _appViewModel.LlmStyle = style;
+                    DimmyNative.dimmy_set_config_json(System.Text.Json.JsonSerializer.Serialize(
+                        new System.Collections.Generic.Dictionary<string, object>
+                        {
+                            ["llm_style"] = style,
+                            ["llm_enabled"] = style != "off",
+                        }));
+                    return;
+                }
+                if (command.StartsWith("set-translate:", StringComparison.Ordinal))
+                {
+                    var code = command["set-translate:".Length..];
+                    _appViewModel.LlmTranslateTo = code;
+                    DimmyNative.dimmy_set_config_json(System.Text.Json.JsonSerializer.Serialize(
+                        new System.Collections.Generic.Dictionary<string, string>
+                        {
+                            ["llm_translate_to"] = code,
+                        }));
+                    return;
+                }
+                System.Diagnostics.Debug.WriteLine($"[App] unknown forwarded command: {command}");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[App] HandleForwardedCommand: {ex.Message}");
+            }
+        });
+    }
+
+    /// <summary>Parse `--command <name>` from the process command line.
+    /// Returns null if the flag isn't present (= normal launch).
+    /// `Environment.GetCommandLineArgs()` is the only reliable source
+    /// for WinUI 3 packaged apps — `LaunchActivatedEventArgs` strips
+    /// args in some shell-launch paths.</summary>
+    private static string? TryGetPipeCommandFromArgs()
+    {
+        var args = Environment.GetCommandLineArgs();
+        for (int i = 1; i < args.Length - 1; i++)
+        {
+            if (args[i] == "--command")
+                return args[i + 1];
+        }
+        return null;
     }
 
     /// <summary>
@@ -221,6 +364,11 @@ public partial class App : Application
         {
             _taskbarAnchor = new TaskbarAnchorWindow();
             _taskbarAnchor.TaskbarClicked += OnTaskbarAnchorClicked;
+            // Stamp our AUMI on the anchor window's property store so
+            // Windows 11 binds the jump list to this taskbar entry.
+            // The process-wide AUMI alone (set in OnLaunched) is
+            // sometimes insufficient on Win11 for unpackaged apps.
+            JumpListService.SetWindowAumi(_taskbarAnchor.Hwnd);
             _taskbarAnchor.ActivateAnchor();
 
             _taskbarService = new TaskbarService(_taskbarAnchor.Hwnd);
@@ -250,6 +398,20 @@ public partial class App : Application
         // The taskbar button was clicked — toggle pill visibility, just
         // like the tray icon does on left-click.
         _dispatcherQueue?.TryEnqueue(TogglePill);
+    }
+
+    /// <summary>Persist the UI-only Windows preferences (pill
+    /// visibility toggles) on every change. Cheap — single small JSON
+    /// file write under %APPDATA%\dimmy\.</summary>
+    private void OnUiPrefsRelevantPropertyChanged(object? sender,
+        System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(AppViewModel.PillShowOnHotkey)
+            && e.PropertyName != nameof(AppViewModel.PillShowOnStartup))
+            return;
+        _uiPrefs.PillShowOnHotkey = _appViewModel.PillShowOnHotkey;
+        _uiPrefs.PillShowOnStartup = _appViewModel.PillShowOnStartup;
+        _uiPrefs.Save();
     }
 
     private void OnboardingWindow_Closed(object sender, WindowEventArgs args)
@@ -332,8 +494,12 @@ public partial class App : Application
     {
         _dispatcherQueue?.TryEnqueue(async () =>
         {
-            // Show pill if hidden — hotkey should always bring it back
-            if (!IsPillVisible())
+            // Show pill if hidden — but only if the user hasn't opted
+            // into "taskbar-only" mode. With PillShowOnHotkey=false the
+            // recording status is conveyed exclusively via the taskbar
+            // overlay icon (red dot + amplitude bar) and the pill is
+            // never auto-resurrected.
+            if (!IsPillVisible() && _appViewModel.PillShowOnHotkey)
                 ShowPill();
 
             if (_appViewModel.ShortcutMode == "hold")
@@ -552,6 +718,7 @@ public partial class App : Application
     {
         _hotkeyService?.Dispose();
         _trayService?.Dispose();
+        _commandPipe?.Dispose();
         _appViewModel.PropertyChanged -= OnAppViewModelPropertyChangedForTaskbar;
         _taskbarService?.Dispose();
         try { _taskbarAnchor?.Close(); } catch { }
