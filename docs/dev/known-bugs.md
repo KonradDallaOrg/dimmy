@@ -31,6 +31,18 @@ Check this file before touching audio preprocessing, macOS FFI, or Windows trans
 - **Fix**: Must be `static ... : [u8; 0]` not `u8`, use `.as_ptr()` for correct symbol address
 - **Files**: `hotkey.rs`
 
+## WIN-002: jump-list customisations dropped on Win11 unpackaged without matching Start-menu shortcut + per-window AUMI
+- **Symptom**: `JumpListService.Register()` succeeds (logs `CommitList ok`), but right-clicking the taskbar icon still shows only system defaults (Pin / Close window). No custom Tasks / Style / Translate sections appear.
+- **Root cause**: Windows 11 looks up the running process's AUMI, then matches it against AUMIs on Start-menu shortcuts. If no shortcut with the matching AUMI exists, the OS silently drops any `ICustomDestinationList` registration. Process-wide AUMI alone (`SetCurrentProcessExplicitAppUserModelID`) is necessary but not sufficient on Win11 — Velopack production installs DO have a matching shortcut, but dev builds running the EXE directly don't.
+- **Fixes layered**:
+  1. `SetCurrentProcessExplicitAppUserModelID("Dimmy")` in `App.OnLaunched` BEFORE any window is created.
+  2. `SHGetPropertyStoreForWindow` + `PKEY_AppUserModel.ID` set on the anchor window's HWND right after creation (Win11 needs both process AND per-window AUMI for unpackaged apps).
+  3. `JumpListService.EnsureStartMenuShortcut()` writes `Dimmy (Dev).lnk` pointing at the running EXE in `%APPDATA%\Microsoft\Windows\Start Menu\Programs\` — idempotent, recreates if EXE path changes. Velopack's installed `Dimmy.lnk` already carries the matching AUMI in production.
+  4. `cdl.SetAppID("Dimmy")` before `BeginList` — binds the destination list to our AUMI in Explorer's view.
+- **Diagnostic**: `%TEMP%\dimmy_jumplist.log` — every step logged.
+- **Also pinned**: `Marshal.ReleaseComObject` on a QI'd interface (`(IPropertyStore)link`) tears down the shared RCW and invalidates the original `link` handle. Releasing happens once, in the AddCategory loop, on the original `IShellLinkW` reference — never on intermediate cast targets.
+- **Files**: `JumpListService.cs`, `App.xaml.cs`
+
 ## WIN-001: DwmExtendFrameIntoClientArea makes transparency worse
 - **Symptom**: Glass blur/shadow added to window borders on Windows 11
 - **Root cause**: Using `DwmExtendFrameIntoClientArea` with margins -1 adds glass effect

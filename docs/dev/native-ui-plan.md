@@ -32,65 +32,21 @@ Direct FFI — compile Rust core as `cdylib`, expose C API, call from Swift/C#/G
 3. **Phase 2** — macOS native (SwiftUI) — IMPLEMENTED (builds & runs)
 4. **Phase 3** — Linux native (GTK4+libadwaita) — IMPLEMENTED (builds on CI, AppImage available)
 
-## SwiftUI Mockup (in `mockup/dimmy-new/`)
+## Current state per platform
 
-### What's production-ready (60%):
-- AppState (ObservableObject, all published properties)
-- Menu bar (NSStatusItem + NSPopover with status/settings)
-- Pill overlay (NSPanel, borderless, floating, transparent, draggable)
-- Pill animations (rainbow gradient border, pulsing glow, waveform bars)
-- Hotkey detection (global + local NSEvent monitors, double-tap logic)
-- Push-to-talk vs Toggle mode (visual distinction: blue pulsing vs green steady + stop button)
-- 4-step onboarding (Welcome → Permissions → Shortcut → Try It)
-- Settings (6 tabs: General, Shortcut, Output, Overlay, Permissions, About)
-- Text injection (clipboard save/restore + CGEvent Cmd+V simulation)
-- Dark/light mode (NSVisualEffectView + .hudWindow material)
-- Position persistence (UserDefaults)
+All three platforms are shipping with their own first-class native UI. For the per-platform tour, see the platform READMEs — those are the source of truth for what's there and how it's wired. This file is just the cross-platform map.
 
-### What's placeholder (40%):
-- Audio recording → replaced by AudioSimulator (fake waveform + funny Italian text)
-- STT transcription → no provider integration
-- LLM post-processing → no integration
-- Some settings toggles hardcoded (Launch at login, Show in Dock, Overlay opacity/style)
-- Preference persistence incomplete (only shortcut + position saved)
+| Surface | Windows | macOS | Linux |
+|---|---|---|---|
+| Pill overlay | WinUI 3 `PillWindow` (transparent, topmost, tool window) | SwiftUI panel (transparent, draggable) | GTK4 keep-above window |
+| System tray (right of clock) | `Shell_NotifyIcon` + WinUI `MenuFlyout` with submenus | `NSStatusItem` + native `NSMenu` with submenus | StatusNotifierItem (DBus) |
+| Taskbar / Dock presence | Anchor window + `ITaskbarList3` overlay icon + amplitude bar + jump list | Dock toggle (`showInDock` → `NSApp.setActivationPolicy`) + LSUIElement | (n/a — Linux has no Dock concept) |
+| Settings UI | WinUI 3 `SettingsWindow` (NavigationView) | SwiftUI **Tahoe v3** (`MacSettingsContainerView`, 9 pages, default ON) | GTK4 `Adw.PreferencesWindow` |
+| Onboarding | WinUI 3 `OnboardingWindow` | SwiftUI `OnboardingContainerView` (4-step) | GTK4 onboarding |
+| Cross-platform UI prefs | `ui_prefs.json` + `config.json` | `UserDefaults` + `config.json` | gsettings + `config.json` |
+| Update mechanism | Velopack (auto-update + delta) | DMG (manual) | AppImage (manual) |
 
-### Key design specs:
-- Pill sizes: Idle 120×36pt (30% opacity) → Recording 200-220×44pt (100%, rainbow border)
-- Waveform: 7 bars, 12fps update, smooth interpolation
-- Completion: green checkmark, spring animation, 1.0s
-- Global scale factor: 1.15× (all UI elements 15% larger than default)
-- Menu bar: dynamic icon (outline idle, filled+red recording, check+green completing)
-
-## Critical Gaps (SwiftUI mockup vs WebView production)
-
-**Tier 1 — Missing core functionality (must fix before replacing WebView):**
-1. Provider/model selector (Groq 3, OpenAI 3, Deepgram 2, Gemini 2, Custom) — users can't change STT provider
-2. API key management in settings — only onboarding has key entry
-3. Full LLM styles (13 vs only 3 in mockup) + tone + translate + custom prompt
-4. LLM provider/endpoint/model/key management
-5. Audio device selector
-6. Chunk streaming UI + chunk dots progress
-7. Transcription prompt field
-8. Stats display (words, time, saved)
-9. Pill states: transcribing, LLM processing, error (only idle/recording/completing in mockup)
-10. Pill elements: dot colors (13 per style), timer, device name, status text
-
-**Tier 2 — UI gaps:**
-- Compact mode toggle, keyring toggle, realtime preview, audio debug, LLM logging
-- Onboarding skips provider/key/language/style setup (only 4 steps vs WebView 6)
-- i18n (hardcoded English in mockup)
-
-**New in mockup (not in WebView — keep these):**
-- Launch at login toggle
-- Show in Dock toggle
-- Post-processing toggles (filler words, punctuation, capitalization)
-- Clipboard restore toggle
-- Paste method selector (Cmd+V vs keystrokes)
-- Idle opacity selector
-- Border animation style selector (Rainbow, Blue pulse, Green, None)
-- Waveform style selector (Bars, Line, Dots)
-- Reset position button
-- Pill intro rainbow glow during onboarding
+The "all features must work cross-platform" rule from CLAUDE.md applies to **functionality**. Each platform may surface that functionality through idiomatic native chrome (NSMenu vs MenuFlyout vs popover menu), but no feature is exclusive to one OS.
 
 ## Platform Equivalents
 
