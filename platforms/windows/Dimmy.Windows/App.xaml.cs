@@ -26,6 +26,8 @@ public partial class App : Application
     private OnboardingWindow? _onboardingWindow;
     private HotkeyService? _hotkeyService;
     private TrayService? _trayService;
+    private TaskbarAnchorWindow? _taskbarAnchor;
+    private TaskbarService? _taskbarService;
     private DispatcherQueue? _dispatcherQueue;
 
     // Must be stored as a field to prevent GC collection of the delegate
@@ -201,6 +203,53 @@ public partial class App : Application
             _trayService.SetMenuCallback(() =>
                 _dispatcherQueue?.TryEnqueue(() => pill?.ShowContextMenu()));
         }
+
+        InitTaskbarAnchor();
+    }
+
+    /// <summary>
+    /// Stand up the off-screen anchor window + ITaskbarList3 service
+    /// so the Windows taskbar gets a Dimmy button with state-colored
+    /// overlay dots — the closest Windows analogue to the macOS menu
+    /// bar status icon. Subscribes to AppViewModel.CurrentState so the
+    /// overlay updates in realtime as recording transitions through
+    /// the pipeline.
+    /// </summary>
+    private void InitTaskbarAnchor()
+    {
+        try
+        {
+            _taskbarAnchor = new TaskbarAnchorWindow();
+            _taskbarAnchor.TaskbarClicked += OnTaskbarAnchorClicked;
+            _taskbarAnchor.ActivateAnchor();
+
+            _taskbarService = new TaskbarService(_taskbarAnchor.Hwnd);
+            // Reflect any state we already have (Idle on first launch).
+            _taskbarService.UpdateState(_appViewModel.CurrentState);
+
+            _appViewModel.PropertyChanged += OnAppViewModelPropertyChangedForTaskbar;
+        }
+        catch (Exception ex)
+        {
+            // Taskbar polish — never let a failure here take down the
+            // app. Tray + pill keep working without it.
+            System.Diagnostics.Debug.WriteLine($"[App] InitTaskbarAnchor failed: {ex.Message}");
+        }
+    }
+
+    private void OnAppViewModelPropertyChangedForTaskbar(object? sender,
+        System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(AppViewModel.CurrentState)) return;
+        var state = _appViewModel.CurrentState;
+        _dispatcherQueue?.TryEnqueue(() => _taskbarService?.UpdateState(state));
+    }
+
+    private void OnTaskbarAnchorClicked()
+    {
+        // The taskbar button was clicked — toggle pill visibility, just
+        // like the tray icon does on left-click.
+        _dispatcherQueue?.TryEnqueue(TogglePill);
     }
 
     private void OnboardingWindow_Closed(object sender, WindowEventArgs args)
@@ -503,6 +552,9 @@ public partial class App : Application
     {
         _hotkeyService?.Dispose();
         _trayService?.Dispose();
+        _appViewModel.PropertyChanged -= OnAppViewModelPropertyChangedForTaskbar;
+        _taskbarService?.Dispose();
+        try { _taskbarAnchor?.Close(); } catch { }
 
         // Cancel any active recording before shutdown to release microphone
         try
