@@ -120,6 +120,19 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _llmLogEnabled;
     [ObservableProperty] private bool _audioDebugEnabled;
     [ObservableProperty] private bool _ggmlDebugLogging;
+
+    /// <summary>If true, the floating pill is shown immediately at app
+    /// startup. If false, Dimmy boots in "taskbar-only" mode — the
+    /// pill stays hidden, recording state is surfaced only via the
+    /// taskbar overlay icon (red dot + amplitude bar). Persisted in
+    /// `ui_prefs.json`, not in Rust core's config.json.</summary>
+    [ObservableProperty] private bool _pillShowOnStartup = true;
+
+    /// <summary>If true, pressing the global hotkey while the pill is
+    /// hidden re-shows it. If false, the hotkey records but the pill
+    /// stays hidden — only the taskbar overlay reflects state.</summary>
+    [ObservableProperty] private bool _pillShowOnHotkey = true;
+
     // Telemetry — runtime-only for now (no persistence in config.json yet).
     // Initialised from DimmyNative state on viewmodel load; the on-change
     // partials forward toggles to the Rust core. Persistence is a separate

@@ -58,6 +58,17 @@ public partial class AppViewModel : ObservableObject
     [ObservableProperty] private bool _keepInClipboard;
     [ObservableProperty] private bool _showInTaskbar;
 
+    /// <summary>If true, pressing the global hotkey while the pill is
+    /// hidden re-shows it. If false, the pill stays hidden — recording
+    /// status is shown only via the taskbar overlay icon. Default true
+    /// (legacy behavior). Persisted in UiPreferences.</summary>
+    [ObservableProperty] private bool _pillShowOnHotkey = true;
+
+    /// <summary>If true, the pill appears as soon as the app finishes
+    /// startup. If false, the app boots in "taskbar only" mode.
+    /// Default true. Persisted in UiPreferences.</summary>
+    [ObservableProperty] private bool _pillShowOnStartup = true;
+
     public string LlmStyleColor =>
         StyleColors.TryGetValue(LlmStyle, out var color) ? color : "#41B0B1";
 

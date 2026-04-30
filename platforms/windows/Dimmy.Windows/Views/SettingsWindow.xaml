@@ -639,6 +639,23 @@
                              Checked="PreviewState_Checked" />
               </StackPanel>
 
+              <TextBlock Text="VISIBILITY"
+                         FontSize="12" FontWeight="SemiBold"
+                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                         CharacterSpacing="40" Margin="2,20,0,8" />
+              <controls:SettingCard Glyph="&#xE7E8;"
+                                    Label="Show pill on app start"
+                                    Description="When off, Dimmy boots in 'taskbar only' mode — the pill stays hidden and recording status is shown only on the taskbar icon.">
+                <ToggleSwitch IsOn="{Binding PillShowOnStartup, Mode=TwoWay}"
+                              Toggled="PillVisibilityToggle_Toggled" />
+              </controls:SettingCard>
+              <controls:SettingCard Glyph="&#xE9F5;"
+                                    Label="Show pill when recording"
+                                    Description="When off, pressing the global hotkey while the pill is hidden does NOT bring it back. Status lives only on the taskbar overlay icon (red dot + amplitude bar).">
+                <ToggleSwitch IsOn="{Binding PillShowOnHotkey, Mode=TwoWay}"
+                              Toggled="PillVisibilityToggle_Toggled" />
+              </controls:SettingCard>
+
               <TextBlock Text="POSITION"
                          FontSize="12" FontWeight="SemiBold"
                          Foreground="{ThemeResource TextFillColorSecondaryBrush}"
