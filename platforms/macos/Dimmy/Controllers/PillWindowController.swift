@@ -73,11 +73,13 @@ final class PillWindowController {
     /// menubar toggle. Callers (onboarding completion, intro nudge) just
     /// request "show" — the pillVisible preference vetoes when off.
     func show() {
+        hkLog("[PillWindow] show() — pillVisible=\(appState.pillVisible) panel=\(panel != nil)")
         guard appState.pillVisible else { return }
         panel?.orderFront(nil)
     }
 
     func hide() {
+        hkLog("[PillWindow] hide() — panel=\(panel != nil)")
         panel?.orderOut(nil)
     }
 
@@ -233,6 +235,7 @@ final class PillWindowController {
             .dropFirst()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] visible in
+                hkLog("[PillWindow] pillVisible changed → \(visible)")
                 if visible { self?.show() } else { self?.hide() }
             }
             .store(in: &cancellables)
