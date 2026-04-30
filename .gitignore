@@ -23,3 +23,11 @@ mockup/build/
 *.swp
 *.swo
 platforms/macos/build/
+
+# Licensing PoC — runtime data (keypair + SQLite) is per-machine,
+# never commit it.
+data/licensing/
+core/data/
+licensing-data/
+**/dimmy_jumplist.log
+**/dimmy_startup.log

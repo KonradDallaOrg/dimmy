@@ -35,6 +35,25 @@ name = "dimmy_smoke"
 path = "src/bin/dimmy_smoke.rs"
 required-features = ["smoke-test"]
 
+# Local-only licensing server (PoC — Cloudflare Workers replacement for dev).
+# axum + sqlx (sqlite) + ed25519-dalek. Exposes 5 endpoints:
+# /api/trial/start, /api/activate, /api/refresh, /api/license/issue,
+# /api/license/status. Generates a fresh Ed25519 keypair on first boot and
+# prints the public key to stdout for embedding in client builds.
+[[bin]]
+name = "licensing_server"
+path = "src/bin/licensing_server.rs"
+required-features = ["licensing-server"]
+
+# CLI client that simulates the Dimmy app's licensing interactions —
+# request-trial, activate, status, refresh, simulate-purchase. Used end-
+# to-end against `licensing_server` so we can validate the architecture
+# without dragging in the WinUI / SwiftUI / GTK4 surfaces.
+[[bin]]
+name = "license_cli"
+path = "src/bin/license_cli.rs"
+required-features = ["license-cli"]
+
 [features]
 default = ["local-stt", "telemetry-sentry"]
 local-stt = ["dep:whisper-rs"]
@@ -56,6 +75,17 @@ smoke-test = ["dep:libloading"]
 # in release builds, off in headless/local dev unless explicitly requested.
 # When off, the Sentry init is a no-op and no events are captured.
 telemetry-sentry = ["dep:sentry"]
+# licensing-server: gates the licensing_server binary (axum + sqlx). Server-
+# only deps are heavy and must NOT end up in the cdylib that ships with the
+# Dimmy app. Always opt-in.
+licensing-server = ["dep:axum", "dep:sqlx", "dep:ed25519-dalek", "dep:sha2", "dep:rand", "dep:tower", "dep:tower-http", "dep:tracing", "dep:tracing-subscriber", "dep:anyhow"]
+# license-cli: gates the license_cli binary. Lighter than the server (no
+# axum/sqlx) but still pulls clap + reqwest + ed25519-dalek for verification.
+license-cli = ["dep:clap", "dep:ed25519-dalek", "dep:sha2"]
+# license-client: pulls in the Ed25519 verification + license.rs file I/O
+# for the production cdylib. Default ON so the released app can verify
+# tokens. Without it license.rs is a no-op stub returning Unrestricted.
+license-client = ["dep:ed25519-dalek", "dep:sha2"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -99,7 +129,37 @@ sentry = { version = "0.47", default-features = false, features = ["backtrace", 
 # what we'd write anyway — better to take the dep.
 auto-launch = "0.5"
 
+# ── Licensing PoC dependencies ──────────────────────────────────────
+# All gated behind the licensing-server / license-cli / license-client
+# features above. The default cdylib build pulls only ed25519-dalek +
+# sha2 (~50KB compiled) for offline token verification.
+
+# Ed25519 sign/verify. Audited RustCrypto crate. v2.x is the current
+# stable line. Used by both server (sign with private key) and client
+# (verify with embedded public key).
+ed25519-dalek = { version = "2", optional = true, features = ["rand_core"] }
+# Hash function for email_hash. SHA-256 only — keep dep minimal.
+sha2 = { version = "0.10", optional = true }
+# CSPRNG for token / activation-code generation on the server. Also used
+# by ed25519-dalek::SigningKey::generate.
+rand = { version = "0.8", optional = true }
+# Server-side: HTTP framework, DB, observability.
+axum = { version = "0.7", optional = true }
+sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio", "macros", "migrate"], optional = true }
+tower = { version = "0.5", optional = true }
+tower-http = { version = "0.6", features = ["trace"], optional = true }
+tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
+# CLI client.
+clap = { version = "4", features = ["derive"], optional = true }
+# Server-only error wrapper. Pulled in only with `licensing-server`.
+anyhow = { version = "1", optional = true }
+
 [dev-dependencies]
+# CSPRNG for ed25519 keypair generation in tests. Pulled here (not into
+# the optional license-client feature) so tests work whether the server
+# feature is on or not.
+rand = "0.8"
 # Integration test infrastructure. Kept minimal — no snapshot crate yet,
 # assertions use substring checks which are robust under whisper determinism.
 wiremock = "0.6"

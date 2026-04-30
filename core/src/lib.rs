@@ -11,6 +11,12 @@ pub mod gpu_health;
 pub mod history;
 mod hotkey;
 pub mod keystore;
+/// Licensing — local-server PoC for the v2 architecture (see
+/// `docs/dev/licensing-poc.md`). Always-available types + file I/O +
+/// HTTP client; Ed25519 verify is gated behind `license-client`.
+pub mod license;
+#[cfg(feature = "licensing-server")]
+pub mod license_server;
 pub mod llm;
 pub mod local_llm;
 pub mod local_stt;
