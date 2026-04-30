@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
+using Dimmy.Windows.Interop;
 using Dimmy.Windows.ViewModels;
+using Microsoft.UI.Xaml;
 
 namespace Dimmy.Windows.Services;
 
@@ -89,6 +91,15 @@ public sealed class TaskbarService : IDisposable
     private readonly Dictionary<AppState, IntPtr> _hicons = new();
     private bool _disposed;
 
+    // Amplitude-driven progress bar during Recording. The Rust core
+    // exposes the current peak via `dimmy_get_amplitude` (already
+    // polled by the pill at 12 Hz for its waveform). We mirror the
+    // same cadence here so the taskbar bar pulses with the user's
+    // voice — a free VU meter that's visible even when the pill is
+    // hidden.
+    private DispatcherTimer? _ampTimer;
+    private float _ampDisplayPeak = 0.05f;
+
     public TaskbarService(IntPtr anchorHwnd)
     {
         _hwnd = anchorHwnd;
@@ -126,26 +137,81 @@ public sealed class TaskbarService : IDisposable
         try { _taskbar.SetProgressState(_hwnd, ProgressFor(state)); }
         catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[TaskbarService] SetProgressState: {ex.Message}"); }
 
-        // Completing state shows a full progress bar so the user gets a
-        // tiny green flash before the bar disappears on the next state
-        // transition. Recording / Transcribing / Processing use
-        // INDETERMINATE which animates on its own.
-        if (state == AppState.Completing)
+        // State-specific progress-value handling:
+        // - Recording: amplitude-driven VU meter (timer polls at 12 Hz)
+        // - Transcribing / Processing: indeterminate animation owned by Windows
+        // - Completing: solid full bar — momentary green flash before
+        //   the next transition clears it
+        // - Idle / Error: no value (state alone tells the story)
+        if (state == AppState.Recording)
         {
-            try { _taskbar.SetProgressValue(_hwnd, 100, 100); }
-            catch { }
+            _ampDisplayPeak = 0.05f; // reset display AGC at recording start
+            StartAmplitudeTimer();
+        }
+        else
+        {
+            StopAmplitudeTimer();
+            if (state == AppState.Completing)
+            {
+                try { _taskbar.SetProgressValue(_hwnd, 100, 100); }
+                catch { }
+            }
         }
     }
 
     private static TBPF ProgressFor(AppState s) => s switch
     {
-        AppState.Recording => TBPF.INDETERMINATE,
+        // Recording uses NORMAL (deterministic green bar) so we can
+        // drive the value from amplitude. INDETERMINATE would ignore
+        // SetProgressValue and play Windows' default sweep instead.
+        AppState.Recording => TBPF.NORMAL,
         AppState.Transcribing => TBPF.INDETERMINATE,
         AppState.Processing => TBPF.INDETERMINATE,
         AppState.Completing => TBPF.NORMAL,
         AppState.Error => TBPF.ERROR,
         _ => TBPF.NOPROGRESS,
     };
+
+    private void StartAmplitudeTimer()
+    {
+        if (_ampTimer is null)
+        {
+            _ampTimer = new DispatcherTimer
+            {
+                // 12 Hz mirrors the pill's amplitude poll so both
+                // surfaces stay perceptually in sync. Higher rates
+                // burn CPU on no visible benefit at this bar's
+                // resolution (Windows 11 taskbar updates at 60 Hz max).
+                Interval = TimeSpan.FromMilliseconds(1000.0 / 12),
+            };
+            _ampTimer.Tick += AmpTimerTick;
+        }
+        _ampTimer.Start();
+    }
+
+    private void StopAmplitudeTimer() => _ampTimer?.Stop();
+
+    private void AmpTimerTick(object? sender, object e)
+    {
+        if (_taskbar is null || _disposed) return;
+        float amp;
+        try { amp = DimmyNative.dimmy_get_amplitude(); }
+        catch { return; }
+
+        // Display AGC — same algorithm the pill's waveform uses.
+        // Fast attack so peaks land immediately; slow release so quiet
+        // speech keeps the bar alive instead of pumping.
+        if (amp > _ampDisplayPeak)
+            _ampDisplayPeak += (amp - _ampDisplayPeak) * 0.3f;
+        else
+            _ampDisplayPeak *= 0.995f;
+        if (_ampDisplayPeak < 0.01f) _ampDisplayPeak = 0.01f;
+
+        var normalized = Math.Clamp(amp / _ampDisplayPeak, 0f, 1f);
+        var value = (ulong)(normalized * 100.0);
+        try { _taskbar.SetProgressValue(_hwnd, value, 100); }
+        catch { }
+    }
 
     private static string DescribeState(AppState s) => s switch
     {
@@ -159,13 +225,17 @@ public sealed class TaskbarService : IDisposable
 
     // ── HICON generation ─────────────────────────────────────────────
 
-    /// <summary>Generate (or load cached) state icons. Each is a 16×16
-    /// ICO with a solid color circle — no anti-aliasing needed at this
-    /// size, the Windows taskbar overlay slot is tiny and renders crisp
-    /// pixel circles fine.</summary>
+    /// <summary>Generate (or load cached) state icons. Renders at 32×32
+    /// with 4×4 super-sampled anti-aliasing — Windows downscales the
+    /// 32×32 alpha-blended source to the taskbar's 16×16 overlay slot
+    /// with clean bilinear filtering, so the dot reads as a genuine
+    /// circle (and not a hexagon, which is what 16×16 rasterised
+    /// without AA gives you).</summary>
     private void EnsureStateIcons()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "dimmy_taskbar_icons");
+        // Bumped dir name to v2 so existing temp ICOs from the previous
+        // (jagged) implementation get regenerated on first launch.
+        var dir = Path.Combine(Path.GetTempPath(), "dimmy_taskbar_icons_v2");
         try { Directory.CreateDirectory(dir); } catch { return; }
 
         // (state, BGR color triplet) — NB: Windows ICO is BGRA, not RGBA.
@@ -179,14 +249,18 @@ public sealed class TaskbarService : IDisposable
             (AppState.Error,       0x15, 0xCC, 0xFA), // #FACC15 yellow
         };
 
+        const int RenderSize = 32;
         foreach (var (state, b, g, r) in palette)
         {
             var path = Path.Combine(dir, $"state_{state}.ico");
             try
             {
                 if (!File.Exists(path))
-                    File.WriteAllBytes(path, BuildCircleIco(16, b, g, r));
-                var hIcon = LoadImage(IntPtr.Zero, path, IMAGE_ICON, 16, 16,
+                    File.WriteAllBytes(path, BuildCircleIco(RenderSize, b, g, r));
+                // Load at 32×32 — Windows scales to the actual overlay
+                // slot size (typically 16×16) using bilinear filtering
+                // on the alpha channel, which gives a clean round dot.
+                var hIcon = LoadImage(IntPtr.Zero, path, IMAGE_ICON, RenderSize, RenderSize,
                     LR_LOADFROMFILE | LR_DEFAULTSIZE);
                 if (hIcon != IntPtr.Zero) _hicons[state] = hIcon;
             }
@@ -197,32 +271,48 @@ public sealed class TaskbarService : IDisposable
         }
     }
 
-    /// <summary>Build a tiny ICO file in memory: a colored anti-circle
-    /// on transparent background. Returns the raw bytes ready to write.
-    /// The ICO format is well-documented (header + 1 ICONDIRENTRY + 1
-    /// BITMAPINFOHEADER + pixel data); no external image library needed.
-    /// </summary>
+    /// <summary>Build a tiny ICO file in memory: an anti-aliased
+    /// colored circle on transparent background. Uses 4×4 super-
+    /// sampling — for each output pixel we count how many of 16
+    /// sub-pixel positions land inside the circle and use that as the
+    /// alpha. The result is a smooth round dot that survives the 32→16
+    /// downscale Windows applies for the overlay slot.</summary>
     private static byte[] BuildCircleIco(int size, byte b, byte g, byte r)
     {
         var pixels = new byte[size * size * 4];
-        double cx = (size - 1) / 2.0, cy = (size - 1) / 2.0;
-        // Slightly under (size/2) so the circle has 1px breathing room
-        // from the icon edge — important so the overlay doesn't get
-        // clipped at the corners of the taskbar's overlay slot.
-        double rad = size / 2.0 - 0.5;
+        double cx = size / 2.0, cy = size / 2.0;
+        // Slightly under (size/2) so the dot has ~1px breathing room
+        // — at 32×32 this is invisible, but it keeps the AA edge from
+        // hitting the icon boundary and getting clipped on downscale.
+        double rad = size / 2.0 - 1.0;
+        double radSq = rad * rad;
+
+        const int Samples = 4; // 4×4 = 16 subpixel samples per pixel
         for (int y = 0; y < size; y++)
         {
             for (int x = 0; x < size; x++)
             {
-                double dx = x - cx, dy = y - cy;
-                if (dx * dx + dy * dy <= rad * rad)
+                int hits = 0;
+                for (int sy = 0; sy < Samples; sy++)
                 {
-                    int i = (y * size + x) * 4;
-                    pixels[i] = b;
-                    pixels[i + 1] = g;
-                    pixels[i + 2] = r;
-                    pixels[i + 3] = 255;
+                    for (int sx = 0; sx < Samples; sx++)
+                    {
+                        double px = x + (sx + 0.5) / Samples - cx;
+                        double py = y + (sy + 0.5) / Samples - cy;
+                        if (px * px + py * py <= radSq) hits++;
+                    }
                 }
+                if (hits == 0) continue;
+                int i = (y * size + x) * 4;
+                // Pre-multiplied alpha — Windows expects RGB scaled by
+                // alpha for 32-bpp icons, otherwise the AA edge can
+                // show as bright halos when blended over dark
+                // backgrounds.
+                int alpha = (hits * 255) / (Samples * Samples);
+                pixels[i] = (byte)(b * alpha / 255);
+                pixels[i + 1] = (byte)(g * alpha / 255);
+                pixels[i + 2] = (byte)(r * alpha / 255);
+                pixels[i + 3] = (byte)alpha;
             }
         }
 
@@ -261,6 +351,10 @@ public sealed class TaskbarService : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+
+        StopAmplitudeTimer();
+        if (_ampTimer is not null) _ampTimer.Tick -= AmpTimerTick;
+        _ampTimer = null;
 
         // Clear overlay before releasing the COM ref so the next launch
         // doesn't inherit a stale state icon if Windows kept the

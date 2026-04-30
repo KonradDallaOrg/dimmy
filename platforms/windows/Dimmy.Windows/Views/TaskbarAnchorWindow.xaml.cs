@@ -7,14 +7,19 @@ using Microsoft.UI.Xaml;
 namespace Dimmy.Windows.Views;
 
 /// <summary>
-/// An invisible 1×1 window positioned off-screen whose only purpose
-/// is to register an HWND in the Windows taskbar. The taskbar button
-/// it produces:
+/// An always-minimized 1×1 window whose only purpose is to register
+/// an HWND in the Windows taskbar. The taskbar button it produces:
 ///   - is the visual anchor for `ITaskbarList3.SetOverlayIcon` (state
 ///     dot) and `SetProgressState` (colored bar) — see TaskbarService,
 ///   - lets the user pin Dimmy to the taskbar (right-click → Pin),
-///   - forwards left-click activations back to App.TogglePill so the
-///     button behaves like the macOS Dock icon.
+///   - forwards left-clicks back to App.TogglePill so the button
+///     behaves like the macOS Dock icon.
+///
+/// We start the window with `SW_SHOWMINNOACTIVE` (no focus steal, no
+/// flash) and intercept `WM_SYSCOMMAND/SC_RESTORE` in the subclass
+/// proc so the user clicking the taskbar button never actually
+/// un-minimizes us — the window stays invisible, only the click event
+/// reaches App.
 ///
 /// The actual UI for the app stays in PillWindow + SettingsWindow;
 /// this is purely a presence tile.
@@ -32,8 +37,15 @@ public sealed partial class TaskbarAnchorWindow : Window
     // Window subclass — must be retained as a field to prevent GC of the delegate.
     private readonly WndProcDelegate? _wndProcDelegate;
 
-    private const uint WM_ACTIVATE = 0x0006;
-    private const int WA_INACTIVE = 0;
+    private const uint WM_SYSCOMMAND = 0x0112;
+    private const int SC_RESTORE = 0xF120;
+
+    [DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    private const int SW_SHOWMINNOACTIVE = 7;
+    private const int SW_HIDE = 0;
+    private const int SW_MINIMIZE = 6;
 
     private delegate IntPtr WndProcDelegate(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
@@ -68,20 +80,17 @@ public sealed partial class TaskbarAnchorWindow : Window
         Title = "Dimmy";
         Hwnd = WindowHelper.GetHwnd(this);
 
-        // Park off-screen at a guaranteed-not-visible coordinate. The
-        // taskbar entry stays even though the window itself is never
-        // user-visible — Windows registers the entry on window create,
-        // not on first paint.
+        // Shrink to 1×1. We don't move off-screen because Windows 11
+        // treats extreme negative coords as "hidden" and may suppress
+        // the taskbar entry — minimization is a stronger signal that
+        // gives us the taskbar button reliably.
         var aw = WindowHelper.GetAppWindow(this);
         if (aw is not null)
-        {
             aw.Resize(new global::Windows.Graphics.SizeInt32(1, 1));
-            aw.Move(new global::Windows.Graphics.PointInt32(-32000, -32000));
-        }
 
-        // Force the taskbar to show this window (in case any platform
-        // default suppresses it). Without WS_EX_APPWINDOW the chrome-
-        // less WinUI 3 windows can be elided from the taskbar.
+        // Force WS_EX_APPWINDOW so even if WinUI 3 default style would
+        // hide us (e.g. tool window heuristics), we end up in the
+        // taskbar.
         WindowHelper.SetTaskbarVisibility(Hwnd, true);
 
         TrySetWindowIcon();
@@ -96,26 +105,38 @@ public sealed partial class TaskbarAnchorWindow : Window
         };
     }
 
-    /// <summary>Show the window so its taskbar entry appears, but
-    /// without stealing focus from whatever the user is doing.</summary>
-    public void ActivateAnchor() => WindowHelper.ShowWithoutActivating(this);
+    /// <summary>Show the window minimized so its taskbar entry appears
+    /// without ever flashing on screen and without stealing focus.</summary>
+    public void ActivateAnchor()
+    {
+        // SW_SHOWMINNOACTIVE = 7: shows window minimized, does not
+        // activate it. This is the canonical Win32 way to "register
+        // a window in the taskbar without disrupting the user."
+        ShowWindow(Hwnd, SW_SHOWMINNOACTIVE);
+    }
 
     private IntPtr AnchorWndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
-        // WM_ACTIVATE fires when the user clicks the taskbar button
-        // (Windows tries to activate our window). We capture it,
-        // forward to App.TogglePill via the event, and let the
-        // default proc finish so Windows doesn't get confused.
-        if (msg == WM_ACTIVATE)
+        // When the user clicks our taskbar button, Windows sends
+        // WM_SYSCOMMAND/SC_RESTORE to un-minimize us. We intercept
+        // that, fire TaskbarClicked, and return 0 to suppress the
+        // default restore — the window stays invisible.
+        if (msg == WM_SYSCOMMAND)
         {
-            int activeFlag = (int)(wParam.ToInt64() & 0xFFFF);
-            if (activeFlag != WA_INACTIVE)
+            // Low 4 bits are reserved; mask before comparing.
+            int sc = (int)(wParam.ToInt64() & 0xFFF0);
+            if (sc == SC_RESTORE)
             {
                 try { TaskbarClicked?.Invoke(); }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[TaskbarAnchor] TaskbarClicked handler threw: {ex.Message}");
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[TaskbarAnchor] TaskbarClicked handler threw: {ex.Message}");
                 }
+                // Re-minimize defensively in case some Explorer
+                // version still tries to show us anyway.
+                ShowWindow(Hwnd, SW_MINIMIZE);
+                return IntPtr.Zero;
             }
         }
         return DefSubclassProc(hWnd, msg, wParam, lParam);
