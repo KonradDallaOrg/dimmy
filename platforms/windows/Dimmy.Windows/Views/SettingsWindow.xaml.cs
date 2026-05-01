@@ -637,6 +637,13 @@ public sealed partial class SettingsWindow : Window
             };
             LicenseStatusHeadline.Text = head;
             LicenseStatusDetail.Text = detail;
+
+            // Tier pill + trailing days + tinted border — mirrors the
+            // statusHero design from macOS MacLicensePage.swift. Drives
+            // four signals at a glance: state (color), tier (badge text),
+            // remaining time (trailing number), category (border tint).
+            ApplyLicenseHero(s);
+
             // Stripe Customer Portal button — only meaningful for paid
             // licenses. Trials and source-build have no Stripe billing
             // attached. Lifetime DOES — the portal still surfaces
@@ -661,6 +668,83 @@ public sealed partial class SettingsWindow : Window
         {
             LicenseStatusHeadline.Text = "Status check failed";
             LicenseStatusDetail.Text = ex.Message;
+        }
+    }
+
+    /// <summary>
+    /// Compute and render the "status hero" decorations: tier pill text +
+    /// color, trailing days counter, tinted border around the whole card.
+    /// Mirrors macOS MacLicensePage statusHero so both platforms feel
+    /// identical at a glance.
+    /// </summary>
+    private void ApplyLicenseHero(LicenseService.Status s)
+    {
+        // ── Tint per state ─────────────────────────────────────────────
+        // Same five colors as MacLicensePage.statusTint:
+        // TrialActive=orange, Active=green, Unrestricted=purple,
+        // Expired/Invalid=red, Suspended=amber, default=gray.
+        Windows.UI.Color tint = s.Kind switch
+        {
+            "TrialActive"                            => Windows.UI.Color.FromArgb(0xFF, 0xFF, 0x9F, 0x0A),
+            "Active"                                 => Windows.UI.Color.FromArgb(0xFF, 0x34, 0xC7, 0x59),
+            "Unrestricted"                           => Windows.UI.Color.FromArgb(0xFF, 0x9C, 0x5B, 0xFF),
+            "TrialExpired" or "Expired" or "Invalid" => Windows.UI.Color.FromArgb(0xFF, 0xFF, 0x3B, 0x30),
+            "Suspended"                              => Windows.UI.Color.FromArgb(0xFF, 0xF5, 0xA6, 0x23),
+            _                                        => Windows.UI.Color.FromArgb(0xFF, 0x90, 0x90, 0x99),
+        };
+
+        // ── Badge text ─────────────────────────────────────────────────
+        // Active branches by tier so a paying user sees the SKU, not just
+        // a generic "PRO". Trial / Suspended / Expired collapse to the
+        // state name.
+        string badge = s.Kind switch
+        {
+            "Unrestricted" => "DEV",
+            "TrialActive" or "TrialExpired" => "TRIAL",
+            "Active" => s.Tier switch
+            {
+                "monthly"  => "PRO • MONTHLY",
+                "annual"   => "PRO • ANNUAL",
+                "lifetime" => "PRO • LIFETIME",
+                _          => "PRO",
+            },
+            "Expired"   => "EXPIRED",
+            "Suspended" => "SUSPENDED",
+            "Invalid"   => "INVALID",
+            "NotFound"  => "INACTIVE",
+            _           => s.Kind?.ToUpperInvariant() ?? "INACTIVE",
+        };
+        LicenseTierBadge.Text = badge;
+        LicenseTierBadgeBorder.Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(tint);
+        LicenseTierBadgeBorder.Visibility = Visibility.Visible;
+
+        // ── Border + tinted background of the whole hero card ─────────
+        // 8% fill alpha + 60% border alpha — readable on both light & dark.
+        var fillTint = tint;
+        fillTint.A = 0x14; // ~8%
+        var strokeTint = tint;
+        strokeTint.A = 0x99; // ~60%
+        LicenseStatusBorder.Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(fillTint);
+        LicenseStatusBorder.BorderBrush = new Microsoft.UI.Xaml.Media.SolidColorBrush(strokeTint);
+
+        // ── Trailing big-number ───────────────────────────────────────
+        // TrialActive / Active → days remaining. Suspended → days offline.
+        // Everything else → no trailing column.
+        if (s.Kind is "TrialActive" or "Active" && s.DaysRemaining is long d)
+        {
+            LicenseTrailingValue.Text = d.ToString();
+            LicenseTrailingLabel.Text = d == 1 ? "DAY LEFT" : "DAYS LEFT";
+            LicenseTrailingPanel.Visibility = Visibility.Visible;
+        }
+        else if (s.Kind == "Suspended" && s.DaysOffline is int o)
+        {
+            LicenseTrailingValue.Text = o.ToString();
+            LicenseTrailingLabel.Text = o == 1 ? "DAY OFFLINE" : "DAYS OFFLINE";
+            LicenseTrailingPanel.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            LicenseTrailingPanel.Visibility = Visibility.Collapsed;
         }
     }
 

@@ -1015,18 +1015,54 @@
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
               </StackPanel>
 
-              <!-- Status card -->
-              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="4" Padding="20,16" Margin="0,0,0,16">
-                <StackPanel Spacing="6">
-                  <TextBlock x:Name="LicenseStatusHeadline" FontSize="20" FontWeight="SemiBold"
-                             Text="Loading…" />
-                  <TextBlock x:Name="LicenseStatusDetail" FontSize="13"
-                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                             TextWrapping="Wrap"
-                             Text="Fetching status from the licensing module…" />
-                  <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,8,0,0">
+              <!-- Status hero card. Mirrors macOS MacLicensePage statusHero:
+                   tier pill (color-coded) + headline/detail + trailing
+                   days counter. Tint = statusTint for the current state;
+                   border pulls a 35%-opacity stroke from the same color. -->
+              <Border x:Name="LicenseStatusBorder"
+                      BorderThickness="1" CornerRadius="6" Padding="18,16" Margin="0,0,0,16">
+                <StackPanel Spacing="10">
+                  <Grid ColumnSpacing="14">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="Auto" />
+                      <ColumnDefinition Width="*" />
+                      <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <!-- Tier pill — populated by RefreshLicenseStatus.
+                         Empty by default so the layout doesn't shift while
+                         we wait for the first FFI call. -->
+                    <Border Grid.Column="0" x:Name="LicenseTierBadgeBorder"
+                            CornerRadius="999" Padding="10,5"
+                            VerticalAlignment="Center"
+                            Visibility="Collapsed">
+                      <TextBlock x:Name="LicenseTierBadge"
+                                 FontSize="11" FontWeight="Bold"
+                                 Foreground="White"
+                                 Text="" />
+                    </Border>
+                    <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+                      <TextBlock x:Name="LicenseStatusHeadline" FontSize="18" FontWeight="SemiBold"
+                                 Text="Loading…" />
+                      <TextBlock x:Name="LicenseStatusDetail" FontSize="12"
+                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                 TextWrapping="Wrap"
+                                 Text="Fetching status from the licensing module…" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2" x:Name="LicenseTrailingPanel"
+                                Spacing="0" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                Visibility="Collapsed">
+                      <TextBlock x:Name="LicenseTrailingValue"
+                                 FontSize="22" FontWeight="SemiBold"
+                                 HorizontalAlignment="Right"
+                                 Text="" />
+                      <TextBlock x:Name="LicenseTrailingLabel"
+                                 FontSize="10" FontWeight="Medium"
+                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                 HorizontalAlignment="Right"
+                                 Text="" />
+                    </StackPanel>
+                  </Grid>
+                  <StackPanel Orientation="Horizontal" Spacing="8">
                     <Button Content="Refresh now" Click="License_Refresh_Click" />
                     <Button Content="Sign out / clear" Click="License_Clear_Click" />
                     <Button x:Name="LicenseManageSubButton"
