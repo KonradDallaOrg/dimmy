@@ -12,13 +12,7 @@ import {
   findLicenseById,
 } from "../db";
 import { signToken, verifyTokenWithPub, type Claims } from "../crypto";
-import { SCOPES_FOR_TIER, type Tier } from "../scopes";
-
-const MAX_OFFLINE: Record<Tier, number> = {
-  trial: 30,
-  annual: 30,
-  "3year": 1095,
-};
+import { MAX_OFFLINE_DAYS, SCOPES_FOR_TIER, type Tier } from "../scopes";
 
 export async function handleRefresh(
   req: Request,
@@ -62,7 +56,7 @@ export async function handleRefresh(
     tier: lic.tier,
     iat: now,
     exp: lic.valid_until,
-    max_offline: MAX_OFFLINE[lic.tier as Tier],
+    max_offline: MAX_OFFLINE_DAYS[lic.tier as Tier],
     did: claims.did,
     // Re-issue from the tier table, not from the inbound claim — keeps the
     // mapping authoritative on the server (rotated mappings propagate on

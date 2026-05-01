@@ -83,32 +83,25 @@ npx wrangler deploy   # ridistribuisci con il PUBLIC_URL aggiornato
 
 ---
 
-## ☐ 3. Stripe (15 min)
+## ☐ 3. Stripe (15 min — i prodotti li crea Claude via MCP)
 
-In **Stripe Dashboard → Products**:
+**Tier model finale (deciso 2026-05-01)**:
 
-- ☐ Crea prodotto "**Dimmy — Annual License**"
-  - Prezzo: €19 EUR, **one-time** (non recurring)
-  - Copia il `price_…` ID
-- ☐ Crea prodotto "**Dimmy — 3-Year License**"
-  - Prezzo: €39 EUR, **one-time**
-  - Copia il `price_…` ID
+| Tier | Prezzo | Stripe mode | Validity |
+|---|---|---|---|
+| Monthly | €4.99/mese | recurring sub | rolls forward su `invoice.paid` |
+| Annual  | €39/anno   | recurring sub | rolls forward su `invoice.paid` |
+| Lifetime | €99 one-time | one-time payment | 3 anni date-based |
 
 In **Stripe Dashboard → Settings → Tax**:
 
 - ☐ Enable Stripe Tax
 - ☐ Registra business location: Italy (IT)
 
-In **Stripe Dashboard → Payment Links** (uno per prodotto):
-
-- ☐ Crea Payment Link annual → settings: collect email (required), collect address (required for VAT)
-- ☐ Crea Payment Link 3-year → idem
-- ☐ Copia entrambi gli URL `https://buy.stripe.com/…` (vanno sul sito marketing)
-
 In **Stripe Dashboard → Developers → Webhooks → Add endpoint**:
 
 - ☐ URL: `https://license.dimmy.app/api/stripe/webhook`
-- ☐ Events to send: `checkout.session.completed`, `charge.refunded`
+- ☐ Events to send: `checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`, `charge.refunded`
 - ☐ Copia il signing secret (`whsec_…`)
 
 Aggiorna Cloudflare secret:
@@ -116,15 +109,15 @@ Aggiorna Cloudflare secret:
 echo "whsec_..." | npx wrangler secret put STRIPE_WEBHOOK_SECRET
 ```
 
-Aggiorna `backend/wrangler.toml`:
-```toml
-STRIPE_PRICE_ANNUAL = "price_..."
-STRIPE_PRICE_3YEAR  = "price_..."
-```
+I 3 prodotti + Payment Links li crea Claude via Stripe MCP (con metadata `tier` settato sui PL così il webhook li riconosce senza chiamate API extra).
 
-```bash
-npx wrangler deploy
+Output che ti tornerà:
+```toml
+STRIPE_PRICE_MONTHLY  = "price_..."
+STRIPE_PRICE_ANNUAL   = "price_..."
+STRIPE_PRICE_LIFETIME = "price_..."
 ```
+Lo metto io in `backend/wrangler.toml` e fai `npx wrangler deploy`.
 
 **Test in modalità Stripe Test**: usa carta `4242 4242 4242 4242` su un Payment Link → verifica che la mail di attivazione arrivi (per ora va su stdout del Worker se step 4 non ancora fatto — `npx wrangler tail` per vedere).
 
@@ -202,11 +195,14 @@ Hai completato il rollout quando:
 
 1. ☐ `curl https://license.dimmy.app/api/health` → `{"status":"ok"}`
 2. ☐ Trial email arriva inbox (non spam) e magic link attiva il Dimmy installato
-3. ☐ Pagamento Stripe test mode (carta `4242…`) → mail con magic link → activation OK → token salvato
-4. ☐ La prossima `git tag v0.6.27 && git push --tags` builda con licensing enforcement attivo
-5. ☐ Sito marketing live su `https://dimmy.app` con i pulsanti Buy funzionanti
+3. ☐ Pagamento Stripe test mode `lifetime` (carta `4242…`) → mail → activation OK → token saved
+4. ☐ Pagamento Stripe test mode `monthly` → primo `invoice.paid` estende validity → license `current_period_end` aggiornato
+5. ☐ Annulla subscription in Stripe → `customer.subscription.deleted` → status='revoked' nella D1
+6. ☐ Carta declinata in Stripe test → `invoice.payment_failed` → status='past_due' (validity intatta)
+7. ☐ La prossima `git tag v0.6.27 && git push --tags` builda con licensing enforcement attivo
+8. ☐ Sito marketing live su `https://dimmy.app` con i pulsanti Buy funzionanti
 
-Quando tutti e 5 ✅, sei in produzione.
+Quando tutti ✅, sei in produzione.
 
 ---
 

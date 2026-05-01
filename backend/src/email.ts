@@ -21,7 +21,7 @@ export async function sendActivationEmail(opts: {
   to: string;
   magicLink: string;
   activationCode: string;
-  tier: "trial" | "annual" | "3year";
+  tier: "trial" | "monthly" | "annual" | "lifetime";
   apiKey: string;
   from: string;
 }): Promise<void> {
@@ -59,14 +59,20 @@ export async function sendActivationEmail(opts: {
 function renderActivation(opts: {
   magicLink: string;
   activationCode: string;
-  tier: "trial" | "annual" | "3year";
+  tier: "trial" | "monthly" | "annual" | "lifetime";
 }): { subject: string; html: string; text: string } {
-  const tierName =
-    opts.tier === "trial"
-      ? "your 14-day free trial"
-      : opts.tier === "annual"
-      ? "your annual license"
-      : "your 3-year license";
+  const tierName = (() => {
+    switch (opts.tier) {
+      case "trial":
+        return "your 14-day free trial";
+      case "monthly":
+        return "your monthly subscription";
+      case "annual":
+        return "your annual subscription";
+      case "lifetime":
+        return "your lifetime license";
+    }
+  })();
 
   const subject =
     opts.tier === "trial"

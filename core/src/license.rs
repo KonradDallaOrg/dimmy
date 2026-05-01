@@ -60,17 +60,22 @@ pub const EMBEDDED_PUBKEY_B64: &str = match option_env!("DIMMY_LICENSE_PUBKEY") 
 /// Tier of a license — controls expiry semantics + bundled scopes.
 ///
 /// `Trial` is short-lived (14 days) with full scopes for evaluation.
-/// `Annual` and `ThreeYear` are paid; the only differences are token
-/// `exp` and `max_offline` so the 3-year tier doesn't need a refresh
-/// during its lifetime.
+/// `Monthly` / `Annual` are recurring Stripe subscriptions; the
+/// `valid_until` claim is bumped on each `invoice.paid` webhook so
+/// active subscribers never see expiry. `Lifetime` is a one-time
+/// purchase priced at ~2.5x annual; semantics today are 3 years
+/// date-based ("max(3y, next major release)" was rejected during
+/// design — too ambiguous to communicate).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Tier {
     #[serde(rename = "trial")]
     Trial,
+    #[serde(rename = "monthly")]
+    Monthly,
     #[serde(rename = "annual")]
     Annual,
-    #[serde(rename = "3year")]
-    ThreeYear,
+    #[serde(rename = "lifetime")]
+    Lifetime,
 }
 
 impl Tier {
@@ -81,12 +86,16 @@ impl Tier {
             // Trial users are by definition new — 30 days is plenty,
             // and if they go offline that long they're not engaged.
             Tier::Trial => 30,
+            // Monthly subscribers should notice degradation quickly if
+            // their card stops working — 14 days catches the lapse
+            // before they've used a full month of unpaid service.
+            Tier::Monthly => 14,
             // Annual subscriptions need periodic refresh so we can
             // detect cancellations / chargebacks within ~6 weeks.
             Tier::Annual => 30,
-            // Multi-year prepay should "just work" offline for the
-            // entire prepay window — the user paid in full upfront.
-            Tier::ThreeYear => 1095,
+            // Lifetime (3-year prepay) should "just work" offline for
+            // the entire prepay window — the user paid upfront.
+            Tier::Lifetime => 1095,
         }
     }
 }
@@ -190,8 +199,9 @@ impl LicenseStatus {
     pub fn has_scope(&self, name: &str) -> bool {
         match self {
             LicenseStatus::Unrestricted => true,
-            LicenseStatus::TrialActive { scopes, .. }
-            | LicenseStatus::Active { scopes, .. } => scopes.iter().any(|s| s == name),
+            LicenseStatus::TrialActive { scopes, .. } | LicenseStatus::Active { scopes, .. } => {
+                scopes.iter().any(|s| s == name)
+            }
             // NotFound / Invalid / Expired / TrialExpired / Suspended → no scope.
             _ => false,
         }
@@ -209,8 +219,9 @@ impl LicenseStatus {
                 scopes::HISTORY_SYNC.into(),
                 scopes::PREMIUM_STYLES.into(),
             ],
-            LicenseStatus::TrialActive { scopes, .. }
-            | LicenseStatus::Active { scopes, .. } => scopes.clone(),
+            LicenseStatus::TrialActive { scopes, .. } | LicenseStatus::Active { scopes, .. } => {
+                scopes.clone()
+            }
             _ => Vec::new(),
         }
     }
@@ -763,10 +774,13 @@ mod tests {
     #[test]
     fn tier_default_max_offline_is_strict_for_subscriptions() {
         assert_eq!(Tier::Trial.default_max_offline_days(), 30);
+        // Monthly is the strictest — 14 days catches a lapsed card
+        // before a full month of unpaid service has elapsed.
+        assert_eq!(Tier::Monthly.default_max_offline_days(), 14);
         assert_eq!(Tier::Annual.default_max_offline_days(), 30);
-        // 3-year prepay must work offline for the entire prepay window
-        // — 3 years ≈ 1095 days.
-        assert_eq!(Tier::ThreeYear.default_max_offline_days(), 1095);
+        // Lifetime (3-year prepay) must work offline for the entire
+        // prepay window — 3 years ≈ 1095 days.
+        assert_eq!(Tier::Lifetime.default_max_offline_days(), 1095);
     }
 
     #[cfg(feature = "license-client")]

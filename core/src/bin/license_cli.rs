@@ -77,16 +77,17 @@ mod cli {
 
     #[derive(Copy, Clone, ValueEnum)]
     enum TierArg {
+        Monthly,
         Annual,
-        #[clap(name = "3year")]
-        ThreeYear,
+        Lifetime,
     }
 
     impl TierArg {
         fn as_wire(self) -> &'static str {
             match self {
+                TierArg::Monthly => "monthly",
                 TierArg::Annual => "annual",
-                TierArg::ThreeYear => "3year",
+                TierArg::Lifetime => "lifetime",
             }
         }
     }

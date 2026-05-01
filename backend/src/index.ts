@@ -19,8 +19,9 @@ export interface Env {
   // Public, set in [vars] in wrangler.toml.
   PUBLIC_URL: string;
   EMAIL_FROM: string;
+  STRIPE_PRICE_MONTHLY: string;
   STRIPE_PRICE_ANNUAL: string;
-  STRIPE_PRICE_3YEAR: string;
+  STRIPE_PRICE_LIFETIME: string;
 
   // Secrets, set via `wrangler secret put NAME`.
   DIMMY_LICENSE_PRIVKEY: string; // base64url(32-byte ed25519 private)

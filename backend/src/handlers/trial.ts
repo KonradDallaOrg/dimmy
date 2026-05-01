@@ -100,7 +100,11 @@ export async function handleTrialStart(
     to: email,
     magicLink,
     activationCode: code,
-    tier: existing?.tier ?? "trial",
+    tier: (existing?.tier ?? "trial") as
+      | "trial"
+      | "monthly"
+      | "annual"
+      | "lifetime",
     apiKey: env.RESEND_API_KEY ?? "",
     from: env.EMAIL_FROM,
   });

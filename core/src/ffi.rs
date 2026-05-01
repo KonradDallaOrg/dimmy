@@ -2547,8 +2547,9 @@ fn write_license_err(buf: *mut c_char, buf_len: c_int, msg: &str) -> c_int {
 fn tier_str(t: Tier) -> &'static str {
     match t {
         Tier::Trial => "trial",
+        Tier::Monthly => "monthly",
         Tier::Annual => "annual",
-        Tier::ThreeYear => "3year",
+        Tier::Lifetime => "lifetime",
     }
 }
 
@@ -2575,9 +2576,7 @@ impl From<LicenseStatus> for LicenseStatusWire {
             LicenseStatus::Unrestricted => ("Unrestricted", None, None, None, None),
             LicenseStatus::NotFound => ("NotFound", None, None, None, None),
             LicenseStatus::Invalid(e) => ("Invalid", None, None, None, Some(e)),
-            LicenseStatus::TrialActive {
-                days_remaining, ..
-            } => (
+            LicenseStatus::TrialActive { days_remaining, .. } => (
                 "TrialActive",
                 Some("trial"),
                 Some(days_remaining as i64),
@@ -2632,8 +2631,8 @@ pub extern "C" fn dimmy_license_set_server_url(url_ptr: *const c_char) -> c_int 
     if url.trim().is_empty() {
         return -1;
     }
-    let cell = LICENSING_SERVER_URL
-        .get_or_init(|| Mutex::new(license::DEFAULT_SERVER_URL.to_string()));
+    let cell =
+        LICENSING_SERVER_URL.get_or_init(|| Mutex::new(license::DEFAULT_SERVER_URL.to_string()));
     match cell.lock() {
         Ok(mut g) => {
             *g = url;
@@ -2648,7 +2647,7 @@ pub extern "C" fn dimmy_license_set_server_url(url_ptr: *const c_char) -> c_int 
 /// ```json
 /// {
 ///   "kind": "Unrestricted|NotFound|Invalid|TrialActive|TrialExpired|Active|Expired|Suspended",
-///   "tier": "trial|annual|3year" | null,
+///   "tier": "trial|monthly|annual|lifetime" | null,
 ///   "days_remaining": number | null,
 ///   "days_offline": number | null,
 ///   "error": string | null,
@@ -2742,17 +2741,23 @@ pub extern "C" fn dimmy_license_redeem(
                     .map(|d| d.as_secs() as i64)
                     .unwrap_or(0);
                 let _ = license::set_last_online_check(now);
-                track(Event::LicenseActivated { tier: tier_str_from_token() });
+                track(Event::LicenseActivated {
+                    tier: tier_str_from_token(),
+                });
                 serde_json::json!({"ok": true})
             }
             Err(e) => {
-                track(Event::LicenseActivationFailed { error_category: "disk" });
+                track(Event::LicenseActivationFailed {
+                    error_category: "disk",
+                });
                 serde_json::json!({"ok": false, "error": format!("save: {}", e)})
             }
         },
         Err(e) => {
             let cat = license_error_category(&e);
-            track(Event::LicenseActivationFailed { error_category: cat });
+            track(Event::LicenseActivationFailed {
+                error_category: cat,
+            });
             serde_json::json!({"ok": false, "error": format!("{}", e)})
         }
     };
@@ -2782,16 +2787,22 @@ pub extern "C" fn dimmy_license_refresh(buf: *mut c_char, buf_len: c_int) -> c_i
                     .map(|d| d.as_secs() as i64)
                     .unwrap_or(0);
                 let _ = license::set_last_online_check(now);
-                track(Event::LicenseRefreshed { tier: tier_str_from_token() });
+                track(Event::LicenseRefreshed {
+                    tier: tier_str_from_token(),
+                });
                 serde_json::json!({"ok": true})
             }
             Err(e) => {
-                track(Event::LicenseRefreshFailed { error_category: "disk" });
+                track(Event::LicenseRefreshFailed {
+                    error_category: "disk",
+                });
                 serde_json::json!({"ok": false, "error": format!("save: {}", e)})
             }
         },
         Err(e) => {
-            track(Event::LicenseRefreshFailed { error_category: license_error_category(&e) });
+            track(Event::LicenseRefreshFailed {
+                error_category: license_error_category(&e),
+            });
             serde_json::json!({"ok": false, "error": format!("{}", e)})
         }
     };

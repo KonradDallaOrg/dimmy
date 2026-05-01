@@ -9,13 +9,16 @@
 export interface LicenseRow {
   license_id: string;
   email_hash: string;
-  tier: "trial" | "annual" | "3year";
+  tier: "trial" | "monthly" | "annual" | "lifetime";
   issued_at: number;
   valid_until: number;
   max_devices: number;
-  status: "active" | "revoked" | "deleted";
+  status: "active" | "past_due" | "revoked" | "deleted";
   stripe_session_id: string | null;
   stripe_customer_id: string | null;
+  stripe_subscription_id: string | null;
+  current_period_end: number | null;
+  cancel_at_period_end: number;
 }
 
 export interface DeviceRow {
@@ -36,7 +39,7 @@ export interface ActivationCodeRow {
 }
 
 const COLS_LIC =
-  "license_id, email_hash, tier, issued_at, valid_until, max_devices, status, stripe_session_id, stripe_customer_id";
+  "license_id, email_hash, tier, issued_at, valid_until, max_devices, status, stripe_session_id, stripe_customer_id, stripe_subscription_id, current_period_end, cancel_at_period_end";
 
 // ── licenses ────────────────────────────────────────────────────────
 
@@ -77,11 +80,13 @@ export async function findLicenseByStripeSession(
 export interface CreateLicenseInput {
   license_id: string;
   email_hash: string;
-  tier: "trial" | "annual" | "3year";
+  tier: "trial" | "monthly" | "annual" | "lifetime";
   issued_at: number;
   valid_until: number;
   stripe_session_id?: string | null;
   stripe_customer_id?: string | null;
+  stripe_subscription_id?: string | null;
+  current_period_end?: number | null;
 }
 
 export async function insertLicense(
@@ -92,8 +97,9 @@ export async function insertLicense(
     .prepare(
       `INSERT INTO licenses (
          license_id, email_hash, tier, issued_at, valid_until,
-         max_devices, status, stripe_session_id, stripe_customer_id
-       ) VALUES (?1, ?2, ?3, ?4, ?5, 5, 'active', ?6, ?7)`
+         max_devices, status, stripe_session_id, stripe_customer_id,
+         stripe_subscription_id, current_period_end, cancel_at_period_end
+       ) VALUES (?1, ?2, ?3, ?4, ?5, 5, 'active', ?6, ?7, ?8, ?9, 0)`
     )
     .bind(
       lic.license_id,
@@ -102,7 +108,9 @@ export async function insertLicense(
       lic.issued_at,
       lic.valid_until,
       lic.stripe_session_id ?? null,
-      lic.stripe_customer_id ?? null
+      lic.stripe_customer_id ?? null,
+      lic.stripe_subscription_id ?? null,
+      lic.current_period_end ?? null
     )
     .run();
 }
@@ -110,12 +118,63 @@ export async function insertLicense(
 export async function setLicenseStatus(
   db: D1Database,
   licenseId: string,
-  status: "active" | "revoked" | "deleted"
+  status: "active" | "past_due" | "revoked" | "deleted"
 ): Promise<void> {
   await db
     .prepare(`UPDATE licenses SET status = ?1 WHERE license_id = ?2`)
     .bind(status, licenseId)
     .run();
+}
+
+/// Look up a license by Stripe subscription ID. Used by every
+/// `customer.subscription.*` and `invoice.*` webhook handler to find
+/// the row to mutate.
+export async function findLicenseBySubscription(
+  db: D1Database,
+  subscriptionId: string
+): Promise<LicenseRow | null> {
+  return db
+    .prepare(
+      `SELECT ${COLS_LIC} FROM licenses WHERE stripe_subscription_id = ?1`
+    )
+    .bind(subscriptionId)
+    .first<LicenseRow>();
+}
+
+/// Apply a subscription state change in one atomic UPDATE.
+/// Used by `customer.subscription.updated` (period end + cancel flag)
+/// and by `invoice.paid` (extends validity to the new period end).
+///
+/// Pass `null` for fields you don't want to touch — `COALESCE` keeps
+/// the existing value.
+export async function updateLicenseFromSubscription(
+  db: D1Database,
+  subscriptionId: string,
+  patch: {
+    valid_until?: number | null;
+    current_period_end?: number | null;
+    cancel_at_period_end?: number | null;
+    status?: "active" | "past_due" | "revoked" | null;
+  }
+): Promise<number> {
+  const r = await db
+    .prepare(
+      `UPDATE licenses SET
+         valid_until         = COALESCE(?1, valid_until),
+         current_period_end  = COALESCE(?2, current_period_end),
+         cancel_at_period_end= COALESCE(?3, cancel_at_period_end),
+         status              = COALESCE(?4, status)
+       WHERE stripe_subscription_id = ?5`
+    )
+    .bind(
+      patch.valid_until ?? null,
+      patch.current_period_end ?? null,
+      patch.cancel_at_period_end ?? null,
+      patch.status ?? null,
+      subscriptionId
+    )
+    .run();
+  return r.meta.changes ?? 0;
 }
 
 // ── devices ─────────────────────────────────────────────────────────

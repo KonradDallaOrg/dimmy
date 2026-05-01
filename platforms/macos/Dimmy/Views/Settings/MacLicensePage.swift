@@ -129,9 +129,10 @@ struct MacLicensePage: View {
         case "TrialActive", "TrialExpired": return "TRIAL"
         case "Active":
             switch status.tier {
-            case "annual": return "PRO • ANNUAL"
-            case "3year":  return "PRO • 3-YEAR"
-            default:       return "PRO"
+            case "monthly":  return "PRO • MONTHLY"
+            case "annual":   return "PRO • ANNUAL"
+            case "lifetime": return "PRO • LIFETIME"
+            default:         return "PRO"
             }
         case "Expired":   return "EXPIRED"
         case "Suspended": return "SUSPENDED"
@@ -176,9 +177,10 @@ struct MacLicensePage: View {
         case "TrialExpired":  return "Trial ended"
         case "Active":
             switch status.tier {
-            case "annual": return "Pro license — Annual"
-            case "3year":  return "Pro license — 3-year"
-            default:       return "Pro license"
+            case "monthly":  return "Pro license — Monthly"
+            case "annual":   return "Pro license — Annual"
+            case "lifetime": return "Pro license — Lifetime (3y)"
+            default:         return "Pro license"
             }
         case "Expired":   return "License expired"
         case "Suspended": return "License suspended"

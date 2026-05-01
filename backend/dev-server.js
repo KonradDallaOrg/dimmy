@@ -22,8 +22,8 @@ const STATE_FILE = path.join(DATA_DIR, 'state.json');
 const PORT       = Number(process.env.DIMMY_LICENSING_PORT || 8787);
 const PUBLIC_URL = process.env.DIMMY_LICENSING_PUBLIC_URL || `http://127.0.0.1:${PORT}`;
 
-const TIER_VALIDITY  = { trial: 14*86400, annual: 365*86400, '3year': 1095*86400 };
-const TIER_MAX_OFFLINE = { trial: 30, annual: 30, '3year': 1095 };
+const TIER_VALIDITY  = { trial: 14*86400, monthly: 31*86400, annual: 366*86400, lifetime: 1095*86400 };
+const TIER_MAX_OFFLINE = { trial: 30, monthly: 14, annual: 30, lifetime: 1095 };
 const ACTIVATION_TTL = 600; // 10 min
 
 // Capability-based scopes. Server-driven so we can change tier→scope
@@ -36,9 +36,10 @@ const SCOPES = {
     PREMIUM_STYLES: 'premium_styles',
 };
 const SCOPES_FOR_TIER = {
-    trial:   [SCOPES.MANAGED_STT, SCOPES.MANAGED_LLM, SCOPES.AUTO_UPDATE, SCOPES.HISTORY_SYNC, SCOPES.PREMIUM_STYLES],
-    annual:  [SCOPES.MANAGED_STT, SCOPES.MANAGED_LLM, SCOPES.AUTO_UPDATE, SCOPES.PREMIUM_STYLES],
-    '3year': [SCOPES.MANAGED_STT, SCOPES.MANAGED_LLM, SCOPES.AUTO_UPDATE, SCOPES.HISTORY_SYNC, SCOPES.PREMIUM_STYLES],
+    trial:    [SCOPES.MANAGED_STT, SCOPES.MANAGED_LLM, SCOPES.AUTO_UPDATE, SCOPES.HISTORY_SYNC, SCOPES.PREMIUM_STYLES],
+    monthly:  [SCOPES.MANAGED_STT, SCOPES.MANAGED_LLM, SCOPES.AUTO_UPDATE, SCOPES.PREMIUM_STYLES],
+    annual:   [SCOPES.MANAGED_STT, SCOPES.MANAGED_LLM, SCOPES.AUTO_UPDATE, SCOPES.HISTORY_SYNC, SCOPES.PREMIUM_STYLES],
+    lifetime: [SCOPES.MANAGED_STT, SCOPES.MANAGED_LLM, SCOPES.AUTO_UPDATE, SCOPES.HISTORY_SYNC, SCOPES.PREMIUM_STYLES],
 };
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -184,7 +185,7 @@ const handlers = {
         const email = (body.email || '').trim().toLowerCase();
         const tier = body.tier;
         if (!email || !email.includes('@')) return err(400, 'email required');
-        if (tier !== 'annual' && tier !== '3year') return err(400, '/issue is for paid tiers');
+        if (tier !== 'monthly' && tier !== 'annual' && tier !== 'lifetime') return err(400, '/issue is for paid tiers');
         const lic = { license_id: ulid(), email_hash: eHash(email), tier,
                        issued_at: now(), valid_until: now() + TIER_VALIDITY[tier],
                        max_devices: 5, status: 'active' };

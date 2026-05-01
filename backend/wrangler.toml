@@ -39,10 +39,12 @@ PUBLIC_URL = "https://dimmy-licensing.<your-account>.workers.dev"
 EMAIL_FROM = "Dimmy <hello@dimmy.app>"
 
 # Stripe price IDs — produced when you create the products in Stripe
-# Dashboard. Format: `price_…`. Used to map paid checkout events to
-# our internal Tier enum.
-STRIPE_PRICE_ANNUAL = "TODO_price_..."
-STRIPE_PRICE_3YEAR  = "TODO_price_..."
+# Dashboard (or via the Stripe MCP from this assistant). Format:
+# `price_…`. Used as a fallback to map checkout events to our internal
+# Tier enum when `metadata.tier` is missing on a session.
+STRIPE_PRICE_MONTHLY  = "TODO_price_..."
+STRIPE_PRICE_ANNUAL   = "TODO_price_..."
+STRIPE_PRICE_LIFETIME = "TODO_price_..."
 
 # ── Secrets (set via `wrangler secret put`, NOT in this file) ────────
 # DIMMY_LICENSE_PRIVKEY      base64url(32-byte Ed25519 private key)

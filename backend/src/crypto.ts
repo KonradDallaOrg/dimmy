@@ -49,7 +49,7 @@ export interface Claims {
   v: number;
   lid: string;
   eh: string;
-  tier: "trial" | "annual" | "3year";
+  tier: "trial" | "monthly" | "annual" | "lifetime";
   iat: number;
   exp: number;
   max_offline: number;
