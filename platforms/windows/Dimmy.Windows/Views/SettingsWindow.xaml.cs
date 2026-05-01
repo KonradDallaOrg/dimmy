@@ -637,6 +637,15 @@ public sealed partial class SettingsWindow : Window
             };
             LicenseStatusHeadline.Text = head;
             LicenseStatusDetail.Text = detail;
+            // Stripe Customer Portal button — only meaningful for paid
+            // licenses. Trials and source-build have no Stripe billing
+            // attached. Lifetime DOES — the portal still surfaces
+            // invoices and lets the user update their payment method
+            // for future purchases on the same Stripe customer.
+            LicenseManageSubButton.Visibility =
+                s.Kind == "Active" && s.Tier is "monthly" or "annual" or "lifetime"
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
             PopulateScopeGrid(s);
             // Devices are server-side data — refresh asynchronously, only when
             // we actually have a license to query against.
@@ -882,6 +891,113 @@ public sealed partial class SettingsWindow : Window
     {
         LicenseService.Clear();
         RefreshLicenseStatus();
+    }
+
+    /// <summary>
+    /// "Manage subscription" — POST /api/billing-portal with the on-disk
+    /// token, open the returned Stripe Customer Portal URL in the
+    /// system browser. Read the token directly from the license file
+    /// rather than going through FFI: this is a one-shot operation
+    /// (no need for the Rust HTTP wrapper) and keeps the rebuild
+    /// surface to a UI-only change.
+    /// </summary>
+    private async void License_ManageSubscription_Click(object sender, RoutedEventArgs e)
+    {
+        // Production licensing endpoint — single source of truth shared
+        // with the macOS counterpart. When DNS for license.dimmy.app is
+        // wired up, change here + MacLicensePage.licensingServerURL.
+        const string LICENSING_SERVER = "https://dimmy-licensing.konrad-dalla.workers.dev";
+
+        LicenseManageSubButton.IsEnabled = false;
+        try
+        {
+            // Same path the Rust core writes to (see core/src/license.rs).
+            // %APPDATA%\dimmy\license.json on Windows.
+            var configDir = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            var licensePath = System.IO.Path.Combine(configDir, "dimmy", "license.json");
+            if (!System.IO.File.Exists(licensePath))
+            {
+                ShowInfoBar(LicenseManageSubInfoBar, InfoBarSeverity.Warning,
+                    "No active license — activate first.");
+                return;
+            }
+
+            string token;
+            try
+            {
+                using var fs = System.IO.File.OpenRead(licensePath);
+                using var doc = await System.Text.Json.JsonDocument.ParseAsync(fs);
+                if (!doc.RootElement.TryGetProperty("token", out var tokenEl) ||
+                    tokenEl.ValueKind != System.Text.Json.JsonValueKind.String)
+                {
+                    ShowInfoBar(LicenseManageSubInfoBar, InfoBarSeverity.Error,
+                        "License file is malformed.");
+                    return;
+                }
+                token = tokenEl.GetString() ?? string.Empty;
+            }
+            catch (Exception readEx)
+            {
+                ShowInfoBar(LicenseManageSubInfoBar, InfoBarSeverity.Error,
+                    $"Cannot read license file: {readEx.Message}");
+                return;
+            }
+
+            using var http = new System.Net.Http.HttpClient
+            {
+                Timeout = TimeSpan.FromSeconds(15),
+            };
+            var payload = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                token,
+                // Stripe accepts custom URL schemes — this returns the
+                // user to the app once they're done in the portal.
+                return_url = "dimmy://license",
+            });
+            var content = new System.Net.Http.StringContent(
+                payload, System.Text.Encoding.UTF8, "application/json");
+            var resp = await http.PostAsync($"{LICENSING_SERVER}/api/billing-portal", content);
+            var bodyStr = await resp.Content.ReadAsStringAsync();
+            if (!resp.IsSuccessStatusCode)
+            {
+                // Best-effort error extraction from { "error": "..." } envelope.
+                string msg = $"HTTP {(int)resp.StatusCode}";
+                try
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(bodyStr);
+                    if (doc.RootElement.TryGetProperty("error", out var errEl))
+                        msg = errEl.GetString() ?? msg;
+                }
+                catch { /* fall through with default msg */ }
+                ShowInfoBar(LicenseManageSubInfoBar, InfoBarSeverity.Error,
+                    $"Cannot open portal: {msg}");
+                return;
+            }
+
+            string? portalUrl;
+            using (var doc = System.Text.Json.JsonDocument.Parse(bodyStr))
+            {
+                portalUrl = doc.RootElement.TryGetProperty("url", out var urlEl)
+                    ? urlEl.GetString() : null;
+            }
+            if (string.IsNullOrEmpty(portalUrl))
+            {
+                ShowInfoBar(LicenseManageSubInfoBar, InfoBarSeverity.Error,
+                    "Portal response missing URL.");
+                return;
+            }
+
+            await Windows.System.Launcher.LaunchUriAsync(new Uri(portalUrl));
+        }
+        catch (Exception ex)
+        {
+            ShowInfoBar(LicenseManageSubInfoBar, InfoBarSeverity.Error,
+                $"Cannot open portal: {ex.Message}");
+        }
+        finally
+        {
+            LicenseManageSubButton.IsEnabled = true;
+        }
     }
 
     private async void License_DevicesReload_Click(object sender, RoutedEventArgs e)

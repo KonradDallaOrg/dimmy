@@ -6,11 +6,13 @@
 
 import { handleTrialStart } from "./handlers/trial";
 import { handleActivate } from "./handlers/activate";
+import { handleActivateRedirect } from "./handlers/activate-redirect";
 import { handleRefresh } from "./handlers/refresh";
 import { handleStripeWebhook } from "./handlers/stripe";
 import { handleStatusDebug } from "./handlers/status";
 import { handleAccountDelete } from "./handlers/delete";
 import { handleDevicesList, handleDeviceDeactivate } from "./handlers/devices";
+import { handleBillingPortal } from "./handlers/billing-portal";
 
 /// Bindings injected by Cloudflare. Names must match wrangler.toml.
 export interface Env {
@@ -27,6 +29,7 @@ export interface Env {
   DIMMY_LICENSE_PRIVKEY: string; // base64url(32-byte ed25519 private)
   DIMMY_LICENSE_PUBKEY: string;  // base64url(32-byte ed25519 public)
   STRIPE_WEBHOOK_SECRET: string;
+  STRIPE_SECRET_KEY: string;     // sk_test_… or sk_live_…
   RESEND_API_KEY: string;
 }
 
@@ -46,6 +49,13 @@ export default {
       if (method === "GET" && path === "/api/activate") {
         return await handleActivate(req, env, ctx);
       }
+      // Email-friendly HTTPS bridge to the dimmy:// scheme. Most email
+      // clients strip custom schemes from links — this lets us send an
+      // https://license.dimmy.app/activate?code=… URL that any email
+      // client treats as clickable.
+      if (method === "GET" && path === "/activate") {
+        return await handleActivateRedirect(req, env, ctx);
+      }
       if (method === "POST" && path === "/api/refresh") {
         return await handleRefresh(req, env, ctx);
       }
@@ -63,6 +73,9 @@ export default {
       }
       if (method === "POST" && path === "/api/devices/deactivate") {
         return await handleDeviceDeactivate(req, env, ctx);
+      }
+      if (method === "POST" && path === "/api/billing-portal") {
+        return await handleBillingPortal(req, env, ctx);
       }
       return json({ error: "not found" }, 404);
     } catch (err) {

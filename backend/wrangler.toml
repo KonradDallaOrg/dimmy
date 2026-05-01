@@ -21,30 +21,32 @@ compatibility_date = "2025-04-01"
 workers_dev = true
 
 # ── D1 binding (SQLite-compatible serverless DB) ─────────────────────
-# Replace `database_id` with the value `wrangler d1 create` printed.
+# Created 2026-05-01 in WEUR (Western Europe — best latency for EU users).
 [[d1_databases]]
 binding = "DB"
 database_name = "dimmy-licensing"
-database_id = "TODO_REPLACE_WITH_REAL_D1_ID"
+database_id = "06a210a1-2e3b-4142-9d21-0eef9ee517de"
 
 # ── Public (non-secret) env vars ─────────────────────────────────────
 [vars]
 # The fully-qualified URL the Worker is reachable at — used to build
 # magic-link URLs in email bodies. Override with prod custom domain
 # (e.g. https://license.dimmy.app) once DNS is set up.
-PUBLIC_URL = "https://dimmy-licensing.<your-account>.workers.dev"
+PUBLIC_URL = "https://dimmy-licensing.konrad-dalla.workers.dev"
 
 # Sender address for activation emails. MUST be on a verified Resend
 # domain. The local-part can be anything.
 EMAIL_FROM = "Dimmy <hello@dimmy.app>"
 
-# Stripe price IDs — produced when you create the products in Stripe
-# Dashboard (or via the Stripe MCP from this assistant). Format:
-# `price_…`. Used as a fallback to map checkout events to our internal
-# Tier enum when `metadata.tier` is missing on a session.
-STRIPE_PRICE_MONTHLY  = "TODO_price_..."
-STRIPE_PRICE_ANNUAL   = "TODO_price_..."
-STRIPE_PRICE_LIFETIME = "TODO_price_..."
+# Stripe price IDs (TEST MODE — created via MCP 2026-05-01).
+# Used as a fallback to map checkout events to tier when `metadata.tier`
+# is missing on a session. The Payment Links created alongside these
+# prices DO set `metadata.tier`, so the fallback is belt-and-braces.
+# When switching to live mode: re-create the same products + prices in
+# live, paste the new price_… IDs here, redeploy.
+STRIPE_PRICE_MONTHLY  = "price_1TSKE8HxRNDPFvsZegNx8slR"
+STRIPE_PRICE_ANNUAL   = "price_1TSKE9HxRNDPFvsZv4T1Ampf"
+STRIPE_PRICE_LIFETIME = "price_1TSKEAHxRNDPFvsZvcQOWqbr"
 
 # ── Secrets (set via `wrangler secret put`, NOT in this file) ────────
 # DIMMY_LICENSE_PRIVKEY      base64url(32-byte Ed25519 private key)

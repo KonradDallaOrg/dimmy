@@ -37,27 +37,21 @@ DIMMY_LICENSE_PRIVKEY=04669UEz1QcUoGqe2909y_e6jOBx4LFUtB60gjABAws
 
 ---
 
-## ☐ 2. Cloudflare deploy (10 min)
+## ☐ 2. Cloudflare deploy (5 min — D1 già creato)
+
+D1 `dimmy-licensing` (ID `06a210a1-2e3b-4142-9d21-0eef9ee517de`) è stato creato in WEUR via MCP — già in `wrangler.toml`.
 
 ```bash
 cd backend
-npm install
-npx wrangler login
+npm install   # installa wrangler + vitest
 
-# 2a. Crea D1 database — copia "database_id" dall'output.
-npx wrangler d1 create dimmy-licensing
-```
-
-Apri `backend/wrangler.toml` e sostituisci `TODO_REPLACE_WITH_REAL_D1_ID` con l'ID stampato.
-
-```bash
-# 2b. Setta i secret. PRIV e PUB dallo step 1.
+# 2a. Setta i secret. PRIV e PUB dallo step 1.
 echo "<priv-from-step-1>" | npx wrangler secret put DIMMY_LICENSE_PRIVKEY
 echo "<pub-from-step-1>"  | npx wrangler secret put DIMMY_LICENSE_PUBKEY
 echo "PLACEHOLDER" | npx wrangler secret put STRIPE_WEBHOOK_SECRET   # finiremo nello step 3
 echo "PLACEHOLDER" | npx wrangler secret put RESEND_API_KEY          # finiremo nello step 4
 
-# 2c. Migra schema + deploy.
+# 2b. Migra schema + deploy.
 npx wrangler d1 migrations apply dimmy-licensing --remote
 npx wrangler deploy
 # → output: "https://dimmy-licensing.<your-account>.workers.dev"
@@ -87,11 +81,16 @@ npx wrangler deploy   # ridistribuisci con il PUBLIC_URL aggiornato
 
 **Tier model finale (deciso 2026-05-01)**:
 
-| Tier | Prezzo | Stripe mode | Validity |
-|---|---|---|---|
-| Monthly | €4.99/mese | recurring sub | rolls forward su `invoice.paid` |
-| Annual  | €39/anno   | recurring sub | rolls forward su `invoice.paid` |
-| Lifetime | €99 one-time | one-time payment | 3 anni date-based |
+| Tier | Prezzo | Stripe mode | Validity | Test Payment Link |
+|---|---|---|---|---|
+| Monthly | €4.99/mese | recurring sub | rolls forward su `invoice.paid` | https://buy.stripe.com/test_fZu7sLbxn6Ea5K32CF4Rq00 |
+| Annual  | €39/anno   | recurring sub | rolls forward su `invoice.paid` | https://buy.stripe.com/test_6oUcN5gRH1jQegz4KN4Rq01 |
+| Lifetime | €99 one-time | one-time payment | 3 anni date-based | https://buy.stripe.com/test_9B68wP6d35A62xR5OR4Rq02 |
+
+Stripe price IDs (test mode, già in wrangler.toml):
+- Monthly:  `price_1TSKE8HxRNDPFvsZegNx8slR`
+- Annual:   `price_1TSKE9HxRNDPFvsZv4T1Ampf`
+- Lifetime: `price_1TSKEAHxRNDPFvsZvcQOWqbr`
 
 In **Stripe Dashboard → Settings → Tax**:
 

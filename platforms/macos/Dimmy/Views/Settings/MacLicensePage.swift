@@ -29,6 +29,14 @@ struct MacLicensePage: View {
 
     @State private var serverUrl: String = "http://127.0.0.1:8787"
 
+    @State private var manageBusy: Bool = false
+    @State private var manageError: String? = nil
+
+    // Production licensing endpoint. Single source of truth for both the
+    // billing-portal POST and the eventual DNS swap to license.dimmy.app
+    // (when that's set up, change here + the matching C# constant on Win).
+    private let licensingServerURL = "https://dimmy-licensing.konrad-dalla.workers.dev"
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             statusHero
@@ -100,9 +108,22 @@ struct MacLicensePage: View {
                     DimmyCore.shared.licenseClear()
                     refreshStatus()
                 }
+                if isManageableTier {
+                    Button(manageBusy ? "Opening…" : "Manage subscription") {
+                        Task { await openBillingPortal() }
+                    }
+                    .disabled(manageBusy)
+                }
                 Spacer()
             }
-            .padding(.bottom, 16)
+            .padding(.bottom, 4)
+            if let err = manageError {
+                Text(err)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .padding(.bottom, 8)
+            }
+            Spacer().frame(height: 8)
         }
     }
 
@@ -370,6 +391,90 @@ struct MacLicensePage: View {
 
     private func refreshStatus() {
         status = DimmyCore.shared.licenseStatus()
+    }
+
+    // MARK: Manage subscription (Stripe Customer Portal)
+
+    /// Show the "Manage subscription" button only for paid tiers that
+    /// have a Stripe billing relationship attached. Trials don't, and
+    /// Unrestricted (source build) doesn't. Lifetime DOES — even if it
+    /// can't be cancelled, the portal lets the user view the invoice
+    /// and update payment method for future purchases.
+    private var isManageableTier: Bool {
+        guard status.kind == "Active" else { return false }
+        switch status.tier {
+        case "monthly", "annual", "lifetime": return true
+        default: return false
+        }
+    }
+
+    private struct LicenseFileEnvelope: Decodable {
+        let token: String
+    }
+    private struct BillingPortalResponse: Decodable {
+        let url: String?
+        let error: String?
+    }
+
+    /// Read the on-disk token, POST to /api/billing-portal, and open
+    /// the returned Stripe URL in the system browser. The portal page
+    /// is single-tab + ~5 min lifetime; we never store the URL.
+    private func openBillingPortal() async {
+        await MainActor.run {
+            manageBusy = true
+            manageError = nil
+        }
+        defer {
+            Task { @MainActor in manageBusy = false }
+        }
+
+        // Same path the Rust core writes to (see core/src/license.rs::license_path).
+        let path = "\(NSHomeDirectory())/.config/dimmy/license.json"
+        let envelope: LicenseFileEnvelope
+        do {
+            let data = try Data(contentsOf: URL(fileURLWithPath: path))
+            envelope = try JSONDecoder().decode(LicenseFileEnvelope.self, from: data)
+        } catch {
+            await MainActor.run {
+                manageError = "No active license — activate first."
+            }
+            return
+        }
+
+        guard let url = URL(string: "\(licensingServerURL)/api/billing-portal") else {
+            await MainActor.run { manageError = "Internal: bad server URL" }
+            return
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 15
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: String] = [
+            "token": envelope.token,
+            // dimmy:// return brings the user back into the app once
+            // they're done in the portal — Stripe accepts custom schemes.
+            "return_url": "dimmy://license",
+        ]
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        do {
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            let parsed = try JSONDecoder().decode(BillingPortalResponse.self, from: data)
+            let httpStatus = (resp as? HTTPURLResponse)?.statusCode ?? 0
+
+            if httpStatus == 200, let urlString = parsed.url, let portalURL = URL(string: urlString) {
+                NSWorkspace.shared.open(portalURL)
+            } else {
+                let msg = parsed.error ?? "HTTP \(httpStatus)"
+                await MainActor.run {
+                    manageError = "Cannot open portal: \(msg)"
+                }
+            }
+        } catch {
+            await MainActor.run {
+                manageError = "Network error: \(error.localizedDescription)"
+            }
+        }
     }
 
     private func refreshDevices() async {

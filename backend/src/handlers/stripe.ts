@@ -197,7 +197,7 @@ async function handleCheckoutCompleted(
     created_at: now,
     expires_at: now + ACTIVATION_TTL_SECS,
   });
-  const magicLink = `dimmy://activate?code=${encodeURIComponent(code)}`;
+  const magicLink = `${env.PUBLIC_URL}/activate?code=${encodeURIComponent(code)}`;
 
   await sendActivationEmail({
     to: customerEmail,
