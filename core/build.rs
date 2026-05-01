@@ -44,8 +44,7 @@ fn main() {
     // adds explicit `rerun-if-env-changed` so a changed secret on
     // re-run invalidates the cached license.rs compilation even when
     // `option_env!` cache tracking is unreliable across actions/cache.
-    let license_pubkey =
-        sanitize_secret(std::env::var("DIMMY_LICENSE_PUBKEY").unwrap_or_default());
+    let license_pubkey = sanitize_secret(std::env::var("DIMMY_LICENSE_PUBKEY").unwrap_or_default());
 
     // Build-time sanity checks. Non-fatal — emit `cargo:warning` so the
     // CI log surfaces "secret looks bad" without breaking the build. A
