@@ -2621,7 +2621,7 @@ impl From<LicenseStatus> for LicenseStatusWire {
 /// `http://127.0.0.1:8787`) or staging without rebuilding the cdylib.
 /// Returns 0 on success, -1 on null/empty input, -2 on mutex poisoning.
 #[no_mangle]
-pub extern "C" fn dimmy_license_set_server_url(url_ptr: *const c_char) -> c_int {
+pub unsafe extern "C" fn dimmy_license_set_server_url(url_ptr: *const c_char) -> c_int {
     if url_ptr.is_null() {
         return -1;
     }
@@ -2669,7 +2669,7 @@ pub extern "C" fn dimmy_license_status_json(buf: *mut c_char, buf_len: c_int) ->
 /// `POST /api/trial/start` via FFI. Writes JSON `{ok, magic_link?, error?}` to buf.
 /// Sync-blocking on a fresh tokio runtime.
 #[no_mangle]
-pub extern "C" fn dimmy_license_request_trial(
+pub unsafe extern "C" fn dimmy_license_request_trial(
     email_ptr: *const c_char,
     buf: *mut c_char,
     buf_len: c_int,
@@ -2700,7 +2700,7 @@ pub extern "C" fn dimmy_license_request_trial(
 /// returned token to `~/.config/dimmy/license.json` and stamps last_online_check.
 /// Writes JSON `{ok, error?}` to buf.
 #[no_mangle]
-pub extern "C" fn dimmy_license_redeem(
+pub unsafe extern "C" fn dimmy_license_redeem(
     code_ptr: *const c_char,
     label_ptr: *const c_char,
     buf: *mut c_char,
@@ -2841,7 +2841,7 @@ pub extern "C" fn dimmy_license_devices_list(buf: *mut c_char, buf_len: c_int) -
 /// Writes JSON `{ok, error?}` to buf. On self-deactivate success, also clears
 /// the local license file so the UI flips back to NotFound.
 #[no_mangle]
-pub extern "C" fn dimmy_license_device_deactivate(
+pub unsafe extern "C" fn dimmy_license_device_deactivate(
     device_id_ptr: *const c_char,
     buf: *mut c_char,
     buf_len: c_int,
@@ -2892,7 +2892,7 @@ pub extern "C" fn dimmy_license_device_deactivate(
 /// Returns 1 = yes, 0 = no, -1 on null input. Source builds (no embedded
 /// pubkey) report 1 for every scope.
 #[no_mangle]
-pub extern "C" fn dimmy_license_has_scope(scope_ptr: *const c_char) -> c_int {
+pub unsafe extern "C" fn dimmy_license_has_scope(scope_ptr: *const c_char) -> c_int {
     if scope_ptr.is_null() {
         return -1;
     }
@@ -2934,10 +2934,8 @@ pub extern "C" fn dimmy_license_clear() -> c_int {
         Some(p) => p,
         None => return -1,
     };
-    if path.exists() {
-        if std::fs::remove_file(&path).is_err() {
-            return -1;
-        }
+    if path.exists() && std::fs::remove_file(&path).is_err() {
+        return -1;
     }
     0
 }
