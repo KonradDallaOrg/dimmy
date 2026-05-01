@@ -155,6 +155,7 @@ jobs:
           # the cdylib under WindowsAppSDK + Velopack (V3 / V8).
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY }}
         run: |
           echo "CMake: $(cmake --version | head -1)"
           echo "Xcode CLT: $(xcode-select -p)"
@@ -369,6 +370,7 @@ jobs:
           # Diagnostic build (see macOS step for the rationale).
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY }}
         run: |
           REM Activate VS 2026 MSVC for this step only — PATH, INCLUDE,
           REM LIB point at the 14.50+ toolchain. Subsequent steps inherit
@@ -539,6 +541,7 @@ jobs:
           # Diagnostic build (see macOS step for the rationale).
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY }}
         run: cargo build --release
 
       - name: Package AppImage

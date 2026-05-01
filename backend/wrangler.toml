@@ -1,0 +1,50 @@
+# Dimmy licensing backend — Cloudflare Workers config.
+#
+# This is the production deployment of the PoC validated in
+# core/src/license_server.rs. Same wire shapes, same DB schema,
+# different runtime (Workers + D1 instead of axum + SQLite).
+#
+# To deploy:
+#   cd backend
+#   npm install
+#   wrangler login
+#   wrangler d1 create dimmy-licensing            # one-time, copy id below
+#   wrangler d1 migrations apply dimmy-licensing  # runs migrations/*.sql
+#   wrangler secret put DIMMY_LICENSE_PRIVKEY     # base64url 32-byte ed25519 priv
+#   wrangler secret put STRIPE_WEBHOOK_SECRET     # whsec_… from Stripe dashboard
+#   wrangler secret put RESEND_API_KEY            # re_… from Resend dashboard
+#   wrangler deploy
+
+name = "dimmy-licensing"
+main = "src/index.ts"
+compatibility_date = "2025-04-01"
+workers_dev = true
+
+# ── D1 binding (SQLite-compatible serverless DB) ─────────────────────
+# Replace `database_id` with the value `wrangler d1 create` printed.
+[[d1_databases]]
+binding = "DB"
+database_name = "dimmy-licensing"
+database_id = "TODO_REPLACE_WITH_REAL_D1_ID"
+
+# ── Public (non-secret) env vars ─────────────────────────────────────
+[vars]
+# The fully-qualified URL the Worker is reachable at — used to build
+# magic-link URLs in email bodies. Override with prod custom domain
+# (e.g. https://license.dimmy.app) once DNS is set up.
+PUBLIC_URL = "https://dimmy-licensing.<your-account>.workers.dev"
+
+# Sender address for activation emails. MUST be on a verified Resend
+# domain. The local-part can be anything.
+EMAIL_FROM = "Dimmy <hello@dimmy.app>"
+
+# Stripe price IDs — produced when you create the products in Stripe
+# Dashboard. Format: `price_…`. Used to map paid checkout events to
+# our internal Tier enum.
+STRIPE_PRICE_ANNUAL = "TODO_price_..."
+STRIPE_PRICE_3YEAR  = "TODO_price_..."
+
+# ── Secrets (set via `wrangler secret put`, NOT in this file) ────────
+# DIMMY_LICENSE_PRIVKEY      base64url(32-byte Ed25519 private key)
+# STRIPE_WEBHOOK_SECRET      whsec_… (verify Stripe-Signature header)
+# RESEND_API_KEY             re_… (Resend transactional email)

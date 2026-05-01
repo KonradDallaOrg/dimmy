@@ -272,6 +272,28 @@ The PoC is structured so the migration is mechanical:
 
 Estimated migration: **1 day of work** once the PoC architecture is signed off.
 
+## Paste-token fallback
+
+The CLI's `activate` subcommand accepts EITHER a full magic-link URL OR the bare activation code:
+
+```bash
+# both work:
+license_cli activate "http://0.0.0.0:8787/api/activate?code=ABC123"
+license_cli activate "ABC123"
+```
+
+For email clients that mangle custom URL schemes (Outlook on managed corp boxes, some web-mail filters that strip `dimmy://`), the email also includes the bare code in a copy-pastable code block:
+
+```
+Or paste this code in Dimmy → Settings → License:
+
+  ABC123XY...
+```
+
+The future Settings → License page (C# / Swift) will have a "Paste activation code" textbox that hits the same `/api/activate?code=…` endpoint as the magic link. From the server's perspective both paths are identical.
+
+The custom URL scheme also accepts a full pre-signed token via `dimmy://activate?token=eyJhbGc…` (used for some corner cases like restoring a license token from a backup) — also handled in `core/src/license.rs::activate` flow.
+
 ## Out of scope for this PoC
 
 - Resend / email delivery (mocked via stdout)

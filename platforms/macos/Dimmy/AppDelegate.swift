@@ -151,6 +151,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         onboardingWindow?.makeKeyAndOrderFront(nil)
     }
 
+    /// Handle `dimmy://` URLs delivered by the OS (clicking the magic
+    /// link in the activation email opens this scheme — see
+    /// CFBundleURLTypes in Info.plist).
+    ///
+    /// Today this just logs the URL — the actual redemption (HTTP POST
+    /// → server → save license file) lands when the licensing FFI
+    /// ships. Wiring the rest is tracked in `docs/dev/licensing-prod.md`.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            guard url.scheme?.lowercased() == "dimmy" else { continue }
+            hkLog("[AppDelegate] custom-URL received: \(url.absoluteString)")
+
+            // Expected forms:
+            //   dimmy://activate?code=ABC123…           (magic link)
+            //   dimmy://activate?token=eyJhbGc…          (paste-token fallback)
+            guard let comps = URLComponents(url: url, resolvingAgainstBaseURL: false),
+                  comps.host?.lowercased() == "activate" else {
+                hkLog("[AppDelegate] unrecognised URL host: \(url)")
+                continue
+            }
+            let code = comps.queryItems?.first { $0.name == "code" }?.value
+            let token = comps.queryItems?.first { $0.name == "token" }?.value
+            if let code = code {
+                hkLog("[AppDelegate] activation code received (len=\(code.count))")
+                // TODO: DimmyCore.shared.activateWithCode(code) once licensing FFI lands.
+            } else if token != nil {
+                hkLog("[AppDelegate] activation token (paste fallback) received")
+                // TODO: DimmyCore.shared.activateWithToken(token) once licensing FFI lands.
+            } else {
+                hkLog("[AppDelegate] activate URL missing both code and token")
+            }
+        }
+    }
+
     /// Right-click menu on the Dock icon. Mirrors the Translate-to and Style
     /// submenus from the menu-bar NSMenu so users get the same quick switchers
     /// regardless of which entry point they prefer. Rebuilt by AppKit on every

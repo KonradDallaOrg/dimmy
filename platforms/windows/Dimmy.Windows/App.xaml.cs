@@ -32,6 +32,11 @@ public partial class App : Application
     private UiPreferences _uiPrefs = new();
     private DispatcherQueue? _dispatcherQueue;
 
+    /// <summary>Set on launch if `dimmy://activate?…` was the trigger
+    /// AND no running instance was reachable to forward to. Picked up
+    /// inside StartNormalMode after the pipe server is online.</summary>
+    private string? _pendingActivationPayload;
+
     // Must be stored as a field to prevent GC collection of the delegate
     private DimmyNative.EventCallback? _eventCallbackDelegate;
 
@@ -107,6 +112,30 @@ public partial class App : Application
         // we set it later, the jump list we register doesn't bind to
         // our taskbar entry and right-click shows nothing custom.
         JumpListService.SetProcessAumi();
+
+        // Register the dimmy:// custom URL scheme in HKCU\Classes so
+        // activation magic-link emails can deep-link into the app.
+        // No admin needed; idempotent.
+        UrlSchemeRegistrar.EnsureRegistered();
+
+        // If launched via a `dimmy://activate?…` URL, normalise to a
+        // pipe command and either:
+        //   (a) forward to a running Dimmy via the command pipe and
+        //       exit (so the user doesn't see a second window flash),
+        //   (b) keep the payload on our process so the still-to-be-
+        //       constructed Dimmy can dispatch it once StartNormalMode
+        //       brings the pipe + UI online.
+        var activationPayload = TryGetActivationPipeCommand();
+        if (activationPayload is not null
+            && CommandPipeServer.TrySendCommand(activationPayload))
+        {
+            Environment.Exit(0);
+            return;
+        }
+        // If a payload exists but we couldn't forward (no running
+        // instance), stash it for HandleForwardedCommand to pick up
+        // after StartNormalMode initialises the pipe server.
+        _pendingActivationPayload = activationPayload;
 
         // Ensure a Start-menu shortcut with the matching AUMI exists.
         // Velopack creates one in production; in dev we make a "Dimmy
@@ -255,6 +284,16 @@ public partial class App : Application
 
         InitTaskbarAnchor();
         InitCommandPipeAndJumpList();
+
+        // If the launch came from a `dimmy://activate?…` URL but no
+        // running instance was around to handle it, we stashed the
+        // payload pre-mutex. Dispatch it now that the pipe server
+        // (and the rest of the UI) is up.
+        if (_pendingActivationPayload is not null)
+        {
+            HandleForwardedCommand(_pendingActivationPayload);
+            _pendingActivationPayload = null;
+        }
     }
 
     /// <summary>
@@ -325,6 +364,24 @@ public partial class App : Application
                         }));
                     return;
                 }
+                if (command.StartsWith("activate-code:", StringComparison.Ordinal))
+                {
+                    var code = command["activate-code:".Length..];
+                    PttLog($"[license] activate-code received (len={code.Length})");
+                    // TODO: wire to licensing FFI:
+                    //   DimmyNative.dimmy_license_activate_code(code);
+                    // For now just log; the C# Settings → License page
+                    // (planned) will expose the same activate flow via
+                    // a textbox + button as the paste-token fallback.
+                    return;
+                }
+                if (command.StartsWith("activate-token:", StringComparison.Ordinal))
+                {
+                    var token = command["activate-token:".Length..];
+                    PttLog($"[license] activate-token received (len={token.Length})");
+                    // TODO: DimmyNative.dimmy_license_save_token(token);
+                    return;
+                }
                 System.Diagnostics.Debug.WriteLine($"[App] unknown forwarded command: {command}");
             }
             catch (Exception ex)
@@ -346,6 +403,26 @@ public partial class App : Application
         {
             if (args[i] == "--command")
                 return args[i + 1];
+        }
+        return null;
+    }
+
+    /// <summary>Walk the command-line args looking for a `dimmy://`
+    /// URL (Windows passes the URL as a single argv entry per the
+    /// `"%1"` registered command). Convert to a pipe-command payload
+    /// so the rest of the dispatch flow (HandleForwardedCommand)
+    /// doesn't have to know about URL parsing.</summary>
+    private static string? TryGetActivationPipeCommand()
+    {
+        var args = Environment.GetCommandLineArgs();
+        for (int i = 1; i < args.Length; i++)
+        {
+            var raw = args[i];
+            if (string.IsNullOrEmpty(raw)) continue;
+            if (!raw.StartsWith("dimmy://", StringComparison.OrdinalIgnoreCase)) continue;
+            var (code, token) = UrlSchemeRegistrar.ParseActivationUrl(raw);
+            if (code is not null) return $"activate-code:{code}";
+            if (token is not null) return $"activate-token:{token}";
         }
         return null;
     }

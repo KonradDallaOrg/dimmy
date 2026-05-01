@@ -8,5 +8,24 @@
 	<string>Dimmy needs microphone access to transcribe your voice.</string>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Dimmy uses Apple Events to paste transcribed text into the active application.</string>
+	<!--
+	Custom URL scheme `dimmy://` so activation magic-link emails can
+	deep-link into the app. AppDelegate.application(_:open:options:)
+	receives the URL and calls into the licensing layer to redeem the
+	activation code. See docs/dev/licensing-prod.md.
+	-->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>app.dimmy.activation</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>dimmy</string>
+			</array>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+		</dict>
+	</array>
 </dict>
 </plist>
