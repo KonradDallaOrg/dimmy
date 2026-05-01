@@ -212,7 +212,9 @@ const handlers = {
         try { claims = verifyToken(body.token); } catch (e) { return err(400, `invalid token: ${e.message}`); }
         const lic = state.licenses.find(l => l.license_id === claims.lid);
         if (!lic) return err(404, 'license not found');
-        const devices = state.devices.filter(d => d.license_id === lic.license_id).map(d => ({
+        const devices = state.devices
+            .filter(d => d.license_id === lic.license_id && d.status === 'active')
+            .map(d => ({
             device_id: d.device_id,
             label: d.device_label,
             issued_at: d.issued_at,

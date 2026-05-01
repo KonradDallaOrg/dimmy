@@ -14,7 +14,7 @@ import {
   audit,
   deactivateDeviceById,
   findLicenseById,
-  listAllDevices,
+  listActiveDevices,
 } from "../db";
 import { verifyTokenWithPub, type Claims } from "../crypto";
 
@@ -29,7 +29,7 @@ export async function handleDevicesList(
   const lic = await findLicenseById(env.DB, claims.lid);
   if (!lic) return json({ error: "license not found" }, 404);
 
-  const rows = await listAllDevices(env.DB, lic.license_id);
+  const rows = await listActiveDevices(env.DB, lic.license_id);
   const devices = rows.map((d) => ({
     device_id: d.device_id,
     label: d.device_label,
