@@ -168,6 +168,18 @@ function execRun(
     lic.status = bound[0];
     return { meta: { changes: 1 } };
   }
+  // GDPR delete handler: anonymise license_id row by replacing email_hash
+  // with a 'deleted-<ulid>' placeholder + flipping status='deleted'.
+  if (
+    sql.includes("UPDATE licenses SET status = 'deleted'") &&
+    sql.includes("email_hash = ?1")
+  ) {
+    const lic = state.licenses.get(bound[1] as string);
+    if (!lic) return { meta: { changes: 0 } };
+    lic.status = "deleted";
+    lic.email_hash = bound[0];
+    return { meta: { changes: 1 } };
+  }
   if (sql.includes("UPDATE licenses SET")) {
     // updateLicenseFromSubscription — COALESCE patch.
     const subId = bound[4] as string;
