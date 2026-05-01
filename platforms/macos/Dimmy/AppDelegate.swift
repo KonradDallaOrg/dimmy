@@ -155,9 +155,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// link in the activation email opens this scheme — see
     /// CFBundleURLTypes in Info.plist).
     ///
-    /// Today this just logs the URL — the actual redemption (HTTP POST
-    /// → server → save license file) lands when the licensing FFI
-    /// ships. Wiring the rest is tracked in `docs/dev/licensing-prod.md`.
+    /// On `dimmy://activate?code=…` we redeem the code via the licensing
+    /// FFI in the background, then post `.dimmyLicenseChanged` so any
+    /// open Settings → License view refreshes its status without polling.
+    /// On success we also surface Settings to the foreground so the user
+    /// gets a visible confirmation that activation completed.
     func application(_ application: NSApplication, open urls: [URL]) {
         for url in urls {
             guard url.scheme?.lowercased() == "dimmy" else { continue }
@@ -165,7 +167,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
             // Expected forms:
             //   dimmy://activate?code=ABC123…           (magic link)
-            //   dimmy://activate?token=eyJhbGc…          (paste-token fallback)
+            //   dimmy://activate?token=eyJhbGc…          (paste-token fallback — TBD)
             guard let comps = URLComponents(url: url, resolvingAgainstBaseURL: false),
                   comps.host?.lowercased() == "activate" else {
                 hkLog("[AppDelegate] unrecognised URL host: \(url)")
@@ -173,15 +175,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
             let code = comps.queryItems?.first { $0.name == "code" }?.value
             let token = comps.queryItems?.first { $0.name == "token" }?.value
-            if let code = code {
+            if let code = code, !code.isEmpty {
                 hkLog("[AppDelegate] activation code received (len=\(code.count))")
-                // TODO: DimmyCore.shared.activateWithCode(code) once licensing FFI lands.
+                let label = Host.current().localizedName ?? "Mac"
+                Task.detached { [weak self] in
+                    let result = await DimmyCore.shared.licenseRedeem(code: code, deviceLabel: label)
+                    if result.ok {
+                        hkLog("[AppDelegate] licensed activated via dimmy:// scheme")
+                    } else {
+                        hkLog("[AppDelegate] license activation failed: \(result.error ?? "unknown")")
+                    }
+                    await MainActor.run {
+                        NotificationCenter.default.post(name: .dimmyLicenseChanged, object: nil)
+                        if result.ok {
+                            // Bring Settings to the front so the user sees the
+                            // confirmation. NSApp.activate is reliable here
+                            // because we're responding to a user-initiated
+                            // open-URL event (focus stealing is allowed).
+                            self?.openSettingsToLicense()
+                        }
+                    }
+                }
             } else if token != nil {
-                hkLog("[AppDelegate] activation token (paste fallback) received")
-                // TODO: DimmyCore.shared.activateWithToken(token) once licensing FFI lands.
+                hkLog("[AppDelegate] activation token (paste fallback) received — not yet wired")
             } else {
                 hkLog("[AppDelegate] activate URL missing both code and token")
             }
+        }
+    }
+
+    /// Bring the Settings window to the front (creating it if needed) and
+    /// scroll to the License page. Called from the dimmy:// dispatch so
+    /// successful activation has a visible end-state. The container view
+    /// observes `dimmyOpenLicenseTab` to handle the cross-component nav.
+    private func openSettingsToLicense() {
+        NSApp.activate(ignoringOtherApps: true)
+        openSettings()
+        // Slight delay to let the window finish materialising — without
+        // this the listener may not yet be subscribed on first open.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            NotificationCenter.default.post(name: .dimmyOpenLicenseTab, object: nil)
         }
     }
 

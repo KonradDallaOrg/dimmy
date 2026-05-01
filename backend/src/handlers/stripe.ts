@@ -182,9 +182,11 @@ async function handleCheckoutCompleted(
     expires_at: now + ACTIVATION_TTL_SECS,
   });
 
-  const magicLink = `${env.PUBLIC_URL.replace(/\/+$/, "")}/api/activate?code=${encodeURIComponent(
-    code
-  )}`;
+  // Custom-scheme magic link — same flow as /api/trial/start. The
+  // user clicks from their email, the OS dispatches dimmy:// to the
+  // installed Dimmy, the Rust FFI redeems the code, license file is
+  // written. No HTTP browser hop.
+  const magicLink = `dimmy://activate?code=${encodeURIComponent(code)}`;
 
   await sendActivationEmail({
     to: customerEmail,

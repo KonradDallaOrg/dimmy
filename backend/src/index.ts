@@ -10,6 +10,7 @@ import { handleRefresh } from "./handlers/refresh";
 import { handleStripeWebhook } from "./handlers/stripe";
 import { handleStatusDebug } from "./handlers/status";
 import { handleAccountDelete } from "./handlers/delete";
+import { handleDevicesList, handleDeviceDeactivate } from "./handlers/devices";
 
 /// Bindings injected by Cloudflare. Names must match wrangler.toml.
 export interface Env {
@@ -55,6 +56,12 @@ export default {
       }
       if (method === "POST" && path === "/api/account/delete") {
         return await handleAccountDelete(req, env, ctx);
+      }
+      if (method === "POST" && path === "/api/devices/list") {
+        return await handleDevicesList(req, env, ctx);
+      }
+      if (method === "POST" && path === "/api/devices/deactivate") {
+        return await handleDeviceDeactivate(req, env, ctx);
       }
       return json({ error: "not found" }, 404);
     } catch (err) {

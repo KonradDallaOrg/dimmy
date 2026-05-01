@@ -294,6 +294,30 @@ public partial class App : Application
             HandleForwardedCommand(_pendingActivationPayload);
             _pendingActivationPayload = null;
         }
+
+        // Best-effort refresh — if we have a license, bump last_online_check
+        // server-side so the soft-suspend grace clock stays accurate. Errors
+        // are silent (offline / server unreachable / no license) — the
+        // existing on-disk token continues to work either way.
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var s = Dimmy.Windows.Services.LicenseService.GetStatus();
+                if (s.Kind is "TrialActive" or "Active" or "Suspended")
+                {
+                    var r = await Dimmy.Windows.Services.LicenseService.RefreshAsync();
+                    if (!r.Ok)
+                        PttLog($"[license] launch refresh: {r.Error}");
+                    else
+                        PttLog("[license] launch refresh ok");
+                }
+            }
+            catch (Exception ex)
+            {
+                PttLog($"[license] launch refresh error: {ex.Message}");
+            }
+        });
     }
 
     /// <summary>
@@ -368,18 +392,47 @@ public partial class App : Application
                 {
                     var code = command["activate-code:".Length..];
                     PttLog($"[license] activate-code received (len={code.Length})");
-                    // TODO: wire to licensing FFI:
-                    //   DimmyNative.dimmy_license_activate_code(code);
-                    // For now just log; the C# Settings → License page
-                    // (planned) will expose the same activate flow via
-                    // a textbox + button as the paste-token fallback.
+                    _ = Task.Run(async () =>
+                    {
+                        bool ok = false;
+                        try
+                        {
+                            var r = await Dimmy.Windows.Services.LicenseService
+                                .RedeemAsync(code, Environment.MachineName);
+                            ok = r.Ok;
+                            PttLog(r.Ok
+                                ? "[license] activated via dimmy:// scheme"
+                                : $"[license] activation failed: {r.Error}");
+                        }
+                        catch (Exception ex)
+                        {
+                            PttLog($"[license] activate-code error: {ex.Message}");
+                        }
+                        finally
+                        {
+                            Dimmy.Windows.Services.LicenseService.NotifyChanged();
+                            // Surface confirmation: pop Settings → License so the user
+                            // sees the result. Without this, activation is silent and
+                            // they don't know whether the magic-link click landed.
+                            if (ok)
+                            {
+                                _dispatcherQueue?.TryEnqueue(() =>
+                                {
+                                    try { OpenSettingsWindowAt("license"); }
+                                    catch (Exception ex)
+                                    {
+                                        PttLog($"[license] OpenSettingsWindowAt failed: {ex.Message}");
+                                    }
+                                });
+                            }
+                        }
+                    });
                     return;
                 }
                 if (command.StartsWith("activate-token:", StringComparison.Ordinal))
                 {
                     var token = command["activate-token:".Length..];
-                    PttLog($"[license] activate-token received (len={token.Length})");
-                    // TODO: DimmyNative.dimmy_license_save_token(token);
+                    PttLog($"[license] activate-token received (len={token.Length}) — pre-signed token paste not yet supported");
                     return;
                 }
                 System.Diagnostics.Debug.WriteLine($"[App] unknown forwarded command: {command}");
@@ -737,6 +790,15 @@ public partial class App : Application
     private SettingsWindow? _settingsWindow;
 
     public void OpenSettingsWindow() => OpenSettings();
+
+    /// Open Settings and navigate to the named nav tag (e.g. "license").
+    /// Used post-activation to surface confirmation without forcing the
+    /// user to find the License panel manually.
+    public void OpenSettingsWindowAt(string tag)
+    {
+        OpenSettings();
+        _settingsWindow?.NavigateToTag(tag);
+    }
 
     private void OpenSettings()
     {

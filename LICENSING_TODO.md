@@ -8,33 +8,32 @@ Per il dettaglio architetturale + perché fare le cose in questo ordine, vedi [`
 
 ---
 
-## ☐ 1. Generate Ed25519 keypair (5 min, security-critical)
+## ☐ 1. Generate Ed25519 keypair (2 min, security-critical)
 
 Una sola volta. La chiave privata non deve mai uscire dal Cloudflare secret store + un backup cifrato in 1Password.
 
 ```bash
-cd core
-DIMMY_LICENSING_DATA=/tmp/dimmy-prod-keygen \
-  cargo run --bin licensing_server --features licensing-server &
-sleep 3
-
-# 1a. Server stampa il pubkey su stdout. Cerca questa riga:
-#     DIMMY_LICENSE_PUBKEY=<base64url>
-# Copia il valore.
-
-# 1b. Esporta anche il privkey:
-xxd -p -c 32 /tmp/dimmy-prod-keygen/keys.bin | python3 -c \
-  'import sys,base64;print(base64.urlsafe_b64encode(bytes.fromhex(sys.stdin.read().strip())).rstrip(b"=").decode())'
-
-# Copia il PRIV in 1Password (entry "Dimmy License Privkey — rotate-only").
-
-# 1c. Stop server + cancellazione sicura.
-kill %1
-shred -u /tmp/dimmy-prod-keygen/keys.bin
-rm -rf /tmp/dimmy-prod-keygen
+node -e '
+const c = require("crypto");
+const { publicKey, privateKey } = c.generateKeyPairSync("ed25519");
+const priv = privateKey.export({ format: "jwk" }).d;
+const pub  = publicKey.export({ format: "jwk" }).x;
+console.log("DIMMY_LICENSE_PUBKEY=" + pub);
+console.log("DIMMY_LICENSE_PRIVKEY=" + priv);
+'
 ```
 
-**Tieni a portata di mano** PUB e PRIV per i prossimi step.
+L'output è qualcosa tipo:
+
+```
+DIMMY_LICENSE_PUBKEY=zxC3U7wfleoTiADAaqbhTnbBepysOiohApSShfcPJXY
+DIMMY_LICENSE_PRIVKEY=04669UEz1QcUoGqe2909y_e6jOBx4LFUtB60gjABAws
+```
+
+- **Copia PUB** in un blocco note temporaneo — serve negli step 2, 5.
+- **Copia PRIV** subito in 1Password (entry "Dimmy License Privkey — rotate-only"). Poi `clear` o Ctrl+L per pulire il terminale.
+
+⚠️ Il PRIV viene generato e mostrato per pochi secondi. Non tocca disco — perfetto. Se chiudi il terminale prima di copiarlo, rifai il comando (genera una nuova coppia, riparti dallo step 1).
 
 ---
 

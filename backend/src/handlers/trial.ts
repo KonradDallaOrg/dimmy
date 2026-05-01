@@ -87,9 +87,13 @@ export async function handleTrialStart(
     expires_at: now + ACTIVATION_TTL_SECS,
   });
 
-  const magicLink = `${env.PUBLIC_URL.replace(/\/+$/, "")}/api/activate?code=${encodeURIComponent(
-    code
-  )}`;
+  // Custom-scheme magic link — clicking from email opens the registered
+  // dimmy:// handler on the user's machine and the redeem happens via
+  // the Rust FFI. The HTTPS PUBLIC_URL fallback page (rendered by an
+  // optional Cloudflare Pages site) is what email clients that strip
+  // dimmy:// schemes can render — that page just re-emits the same URL
+  // as a button labelled "Open in Dimmy".
+  const magicLink = `dimmy://activate?code=${encodeURIComponent(code)}`;
 
   // Send email (Resend) — falls back to console.log when no API key.
   await sendActivationEmail({
@@ -101,5 +105,5 @@ export async function handleTrialStart(
     from: env.EMAIL_FROM,
   });
 
-  return json({ magic_link: magicLink });
+  return json({ magic_link: magicLink, code });
 }

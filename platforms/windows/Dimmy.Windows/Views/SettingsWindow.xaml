@@ -42,6 +42,9 @@
         <NavigationViewItem Content="Privacy &amp; data" Tag="privacy">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE72E;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
+        <NavigationViewItem Content="License" Tag="license">
+          <NavigationViewItem.Icon><FontIcon Glyph="&#xE192;" /></NavigationViewItem.Icon>
+        </NavigationViewItem>
         <NavigationViewItem Content="About" Tag="about">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE946;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
@@ -1001,6 +1004,138 @@
                 <HyperlinkButton Content="Open"
                                  NavigateUri="https://dimmy.app/privacy#data" />
               </controls:SettingCard>
+            </StackPanel>
+
+            <!-- ═══ License ═══ -->
+            <StackPanel x:Name="LicensePanel" Spacing="4" Visibility="Collapsed">
+              <StackPanel Spacing="2" Margin="0,0,0,16">
+                <TextBlock Text="License" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="Activate Dimmy, manage your trial, or paste an activation code from email."
+                           FontSize="13"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+              </StackPanel>
+
+              <!-- Status card -->
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="4" Padding="20,16" Margin="0,0,0,16">
+                <StackPanel Spacing="6">
+                  <TextBlock x:Name="LicenseStatusHeadline" FontSize="20" FontWeight="SemiBold"
+                             Text="Loading…" />
+                  <TextBlock x:Name="LicenseStatusDetail" FontSize="13"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                             TextWrapping="Wrap"
+                             Text="Fetching status from the licensing module…" />
+                  <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,8,0,0">
+                    <Button Content="Refresh now" Click="License_Refresh_Click" />
+                    <Button Content="Sign out / clear" Click="License_Clear_Click" />
+                  </StackPanel>
+                </StackPanel>
+              </Border>
+
+              <!-- Devices on this license — list + per-row "Sign out". -->
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="4" Padding="20,16" Margin="0,0,0,16">
+                <StackPanel Spacing="10">
+                  <Grid>
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="*" />
+                      <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Spacing="2">
+                      <TextBlock Text="Devices" FontSize="16" FontWeight="SemiBold" />
+                      <TextBlock x:Name="LicenseDeviceCountLabel" FontSize="11"
+                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                 Text="…" />
+                    </StackPanel>
+                    <Button Grid.Column="1" Content="Reload" Click="License_DevicesReload_Click" />
+                  </Grid>
+                  <StackPanel x:Name="LicenseDevicesList" Spacing="6" />
+                </StackPanel>
+              </Border>
+
+              <!-- Capabilities grid — populated by RefreshLicenseStatus.
+                   Each row = one entry in LicenseService.ScopeNames.All. -->
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="4" Padding="20,16" Margin="0,0,0,16">
+                <StackPanel Spacing="10">
+                  <TextBlock Text="Included with your license" FontSize="16" FontWeight="SemiBold" />
+                  <TextBlock FontSize="12"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                             TextWrapping="Wrap"
+                             Text="Local features (BYOK STT/LLM, history, hotkey, paste) are always free. The capabilities below are unlocked by an active license." />
+                  <StackPanel x:Name="LicenseScopeGrid" Spacing="6" />
+                </StackPanel>
+              </Border>
+
+              <!-- Activate / Start trial — primary path -->
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="4" Padding="20,16" Margin="0,0,0,16">
+                <StackPanel Spacing="10">
+                  <TextBlock Text="Activate Dimmy" FontSize="16" FontWeight="SemiBold" />
+                  <TextBlock FontSize="12"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                             TextWrapping="Wrap"
+                             Text="Enter your email. We'll send you a magic link — clicking it opens Dimmy and activates the license automatically. New device on the same email? Same flow, the device joins your existing license." />
+                  <Grid ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="*" />
+                      <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBox Grid.Column="0" x:Name="LicenseTrialEmailBox"
+                             PlaceholderText="you@example.com" />
+                    <Button Grid.Column="1" x:Name="LicenseTrialButton" Content="Activate"
+                            Click="License_StartTrial_Click"
+                            Style="{ThemeResource AccentButtonStyle}" />
+                  </Grid>
+                  <InfoBar x:Name="LicenseTrialInfoBar" IsOpen="False" IsClosable="True"
+                           Severity="Informational" Message="" />
+                </StackPanel>
+              </Border>
+
+              <!-- Fallback: paste activation code (collapsed by default).
+                   Used when the magic link didn't auto-activate (corp email
+                   that strips dimmy:// schemes, copy-paste from another box). -->
+              <Expander Header="Activation didn't open Dimmy? Paste the code"
+                        HorizontalAlignment="Stretch" Margin="0,0,0,16">
+                <StackPanel Spacing="10">
+                  <TextBlock FontSize="12"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                             TextWrapping="Wrap"
+                             Text="Some email clients (especially corporate) strip custom URL schemes. Paste the bare code or full magic-link URL from your email here." />
+                  <TextBox x:Name="LicenseCodeBox" AcceptsReturn="False"
+                           PlaceholderText="32-char activation code or magic-link URL" />
+                  <TextBox x:Name="LicenseDeviceLabelBox"
+                           PlaceholderText="Device label (optional)" />
+                  <Button Content="Activate from code" Click="License_Activate_Click" />
+                  <InfoBar x:Name="LicenseActivateInfoBar" IsOpen="False" IsClosable="True"
+                           Severity="Informational" Message="" />
+                </StackPanel>
+              </Expander>
+
+              <!-- Server URL override (dev) -->
+              <Expander Header="Advanced — server URL" HorizontalAlignment="Stretch"
+                        Margin="0,0,0,16">
+                <StackPanel Spacing="8">
+                  <TextBlock FontSize="12"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                             TextWrapping="Wrap"
+                             Text="Override the licensing server. Default points at the local Node mock (http://127.0.0.1:8787). Production will point at https://license.dimmy.app." />
+                  <Grid ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="*" />
+                      <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBox Grid.Column="0" x:Name="LicenseServerUrlBox"
+                             Text="http://127.0.0.1:8787" />
+                    <Button Grid.Column="1" Content="Apply"
+                            Click="License_ApplyServerUrl_Click" />
+                  </Grid>
+                </StackPanel>
+              </Expander>
             </StackPanel>
 
             <!-- Orphan Stats panel — kept so existing code-behind that writes

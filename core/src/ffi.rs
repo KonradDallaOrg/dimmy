@@ -2483,6 +2483,454 @@ pub extern "C" fn dimmy_history_stats(buf: *mut c_char, buf_len: c_int) -> c_int
     }
 }
 
+// ── Licensing ───────────────────────────────────────────────────────
+//
+// Native UI surface over license::*. The module is always compiled; with
+// `license-client` off, status calls return `Unrestricted` and HTTP calls
+// still work (server returns tokens we just can't verify) — UI should
+// branch on the embedded pubkey emptiness if it cares about the difference.
+
+use crate::license::{self, LicenseStatus, Tier};
+use crate::telemetry::{events::Event, track};
+
+/// Bucket a reqwest::Error into a small set of categorical strings so we
+/// can emit telemetry without leaking the URL or full error chain. The
+/// raw `reqwest::Error` Display impl can include the request URL which
+/// in turn contains the activation code — that's PII. This helper keeps
+/// the cardinality bounded.
+fn license_error_category(e: &reqwest::Error) -> &'static str {
+    if e.is_timeout() {
+        "timeout"
+    } else if e.is_connect() {
+        "network"
+    } else if let Some(s) = e.status() {
+        if s.is_client_error() {
+            "server_4xx"
+        } else if s.is_server_error() {
+            "server_5xx"
+        } else {
+            "server_other"
+        }
+    } else {
+        "unknown"
+    }
+}
+
+fn tier_str_from_token() -> &'static str {
+    // After save, the disk file holds the new token. Decode the tier
+    // off the persisted state so the event tier matches what was written
+    // (rather than what the caller passed in, which they didn't here).
+    match license::check_status() {
+        LicenseStatus::Active { tier, .. } => tier_str(tier),
+        LicenseStatus::TrialActive { .. } => "trial",
+        _ => "unknown",
+    }
+}
+
+/// Server URL for /api/* calls. Mutable at runtime so the UI can point
+/// at a dev server without recompiling. Defaults to the PoC localhost.
+static LICENSING_SERVER_URL: OnceLock<Mutex<String>> = OnceLock::new();
+
+fn licensing_server_url() -> String {
+    LICENSING_SERVER_URL
+        .get_or_init(|| Mutex::new(license::DEFAULT_SERVER_URL.to_string()))
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or_else(|_| license::DEFAULT_SERVER_URL.to_string())
+}
+
+fn write_license_err(buf: *mut c_char, buf_len: c_int, msg: &str) -> c_int {
+    let json = serde_json::json!({"ok": false, "error": msg}).to_string();
+    write_to_buf(&json, buf, buf_len)
+}
+
+fn tier_str(t: Tier) -> &'static str {
+    match t {
+        Tier::Trial => "trial",
+        Tier::Annual => "annual",
+        Tier::ThreeYear => "3year",
+    }
+}
+
+#[derive(serde::Serialize)]
+struct LicenseStatusWire {
+    kind: &'static str,
+    tier: Option<&'static str>,
+    days_remaining: Option<i64>,
+    days_offline: Option<u32>,
+    error: Option<String>,
+    cloud_enabled: bool,
+    updates_enabled: bool,
+    /// Active scope list — drives the per-feature ✅/❌ grid in UI.
+    /// Empty for non-active states; full vocabulary for Unrestricted.
+    scopes: Vec<String>,
+}
+
+impl From<LicenseStatus> for LicenseStatusWire {
+    fn from(s: LicenseStatus) -> Self {
+        let cloud_enabled = s.cloud_enabled();
+        let updates_enabled = s.updates_enabled();
+        let scopes = s.scopes();
+        let (kind, tier, days_remaining, days_offline, error) = match s {
+            LicenseStatus::Unrestricted => ("Unrestricted", None, None, None, None),
+            LicenseStatus::NotFound => ("NotFound", None, None, None, None),
+            LicenseStatus::Invalid(e) => ("Invalid", None, None, None, Some(e)),
+            LicenseStatus::TrialActive {
+                days_remaining, ..
+            } => (
+                "TrialActive",
+                Some("trial"),
+                Some(days_remaining as i64),
+                None,
+                None,
+            ),
+            LicenseStatus::TrialExpired => ("TrialExpired", Some("trial"), None, None, None),
+            LicenseStatus::Active {
+                tier,
+                days_remaining,
+                ..
+            } => (
+                "Active",
+                Some(tier_str(tier)),
+                Some(days_remaining),
+                None,
+                None,
+            ),
+            LicenseStatus::Expired => ("Expired", None, None, None, None),
+            LicenseStatus::Suspended { tier, days_offline } => (
+                "Suspended",
+                Some(tier_str(tier)),
+                None,
+                Some(days_offline),
+                None,
+            ),
+        };
+        Self {
+            kind,
+            tier,
+            days_remaining,
+            days_offline,
+            error,
+            cloud_enabled,
+            updates_enabled,
+            scopes,
+        }
+    }
+}
+
+/// Override the licensing server URL at runtime. Useful for dev (point at
+/// `http://127.0.0.1:8787`) or staging without rebuilding the cdylib.
+/// Returns 0 on success, -1 on null/empty input, -2 on mutex poisoning.
+#[no_mangle]
+pub extern "C" fn dimmy_license_set_server_url(url_ptr: *const c_char) -> c_int {
+    if url_ptr.is_null() {
+        return -1;
+    }
+    let url = unsafe { CStr::from_ptr(url_ptr) }
+        .to_string_lossy()
+        .into_owned();
+    if url.trim().is_empty() {
+        return -1;
+    }
+    let cell = LICENSING_SERVER_URL
+        .get_or_init(|| Mutex::new(license::DEFAULT_SERVER_URL.to_string()));
+    match cell.lock() {
+        Ok(mut g) => {
+            *g = url;
+            0
+        }
+        Err(_) => -2,
+    }
+}
+
+/// Return the current license status as a JSON object. Schema:
+///
+/// ```json
+/// {
+///   "kind": "Unrestricted|NotFound|Invalid|TrialActive|TrialExpired|Active|Expired|Suspended",
+///   "tier": "trial|annual|3year" | null,
+///   "days_remaining": number | null,
+///   "days_offline": number | null,
+///   "error": string | null,
+///   "cloud_enabled": bool,
+///   "updates_enabled": bool
+/// }
+/// ```
+///
+/// Returns the number of bytes written to `buf` (excluding null), or -1 on bad args.
+#[no_mangle]
+pub extern "C" fn dimmy_license_status_json(buf: *mut c_char, buf_len: c_int) -> c_int {
+    let status = license::check_status();
+    let wire: LicenseStatusWire = status.into();
+    let json = serde_json::to_string(&wire)
+        .unwrap_or_else(|_| r#"{"kind":"Invalid","error":"serialize"}"#.to_string());
+    write_to_buf(&json, buf, buf_len)
+}
+
+/// `POST /api/trial/start` via FFI. Writes JSON `{ok, magic_link?, error?}` to buf.
+/// Sync-blocking on a fresh tokio runtime.
+#[no_mangle]
+pub extern "C" fn dimmy_license_request_trial(
+    email_ptr: *const c_char,
+    buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if email_ptr.is_null() {
+        return write_license_err(buf, buf_len, "email required");
+    }
+    let email = unsafe { CStr::from_ptr(email_ptr) }
+        .to_string_lossy()
+        .into_owned();
+    if email.trim().is_empty() {
+        return write_license_err(buf, buf_len, "email required");
+    }
+    let server = licensing_server_url();
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(r) => r,
+        Err(e) => return write_license_err(buf, buf_len, &format!("runtime: {}", e)),
+    };
+    let result = rt.block_on(license::request_trial(&server, &email));
+    let json = match result {
+        Ok(r) => serde_json::json!({"ok": true, "magic_link": r.magic_link}),
+        Err(e) => serde_json::json!({"ok": false, "error": format!("{}", e)}),
+    };
+    write_to_buf(&json.to_string(), buf, buf_len)
+}
+
+/// `GET /api/activate?code=…&device_label=…` via FFI. On success, persists the
+/// returned token to `~/.config/dimmy/license.json` and stamps last_online_check.
+/// Writes JSON `{ok, error?}` to buf.
+#[no_mangle]
+pub extern "C" fn dimmy_license_redeem(
+    code_ptr: *const c_char,
+    label_ptr: *const c_char,
+    buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if code_ptr.is_null() {
+        return write_license_err(buf, buf_len, "code required");
+    }
+    let code = unsafe { CStr::from_ptr(code_ptr) }
+        .to_string_lossy()
+        .into_owned();
+    if code.trim().is_empty() {
+        return write_license_err(buf, buf_len, "code required");
+    }
+    let label = if label_ptr.is_null() {
+        "Unknown device".to_string()
+    } else {
+        let s = unsafe { CStr::from_ptr(label_ptr) }
+            .to_string_lossy()
+            .into_owned();
+        if s.trim().is_empty() {
+            "Unknown device".to_string()
+        } else {
+            s
+        }
+    };
+    let server = licensing_server_url();
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(r) => r,
+        Err(e) => return write_license_err(buf, buf_len, &format!("runtime: {}", e)),
+    };
+    let result = rt.block_on(license::redeem_activation_code(&server, &code, &label));
+    let json = match result {
+        Ok(r) => match license::save_license_file(&r.token) {
+            Ok(()) => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                let _ = license::set_last_online_check(now);
+                track(Event::LicenseActivated { tier: tier_str_from_token() });
+                serde_json::json!({"ok": true})
+            }
+            Err(e) => {
+                track(Event::LicenseActivationFailed { error_category: "disk" });
+                serde_json::json!({"ok": false, "error": format!("save: {}", e)})
+            }
+        },
+        Err(e) => {
+            let cat = license_error_category(&e);
+            track(Event::LicenseActivationFailed { error_category: cat });
+            serde_json::json!({"ok": false, "error": format!("{}", e)})
+        }
+    };
+    write_to_buf(&json.to_string(), buf, buf_len)
+}
+
+/// `POST /api/refresh` via FFI. Reads the current token from disk, posts it,
+/// writes back the rotated one. Writes JSON `{ok, error?}` to buf.
+#[no_mangle]
+pub extern "C" fn dimmy_license_refresh(buf: *mut c_char, buf_len: c_int) -> c_int {
+    let token = match license::load_license_file() {
+        Ok(Some(t)) => t,
+        Ok(None) => return write_license_err(buf, buf_len, "no license file"),
+        Err(e) => return write_license_err(buf, buf_len, &format!("load: {}", e)),
+    };
+    let server = licensing_server_url();
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(r) => r,
+        Err(e) => return write_license_err(buf, buf_len, &format!("runtime: {}", e)),
+    };
+    let result = rt.block_on(license::refresh_token(&server, &token));
+    let json = match result {
+        Ok(r) => match license::save_license_file(&r.token) {
+            Ok(()) => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                let _ = license::set_last_online_check(now);
+                track(Event::LicenseRefreshed { tier: tier_str_from_token() });
+                serde_json::json!({"ok": true})
+            }
+            Err(e) => {
+                track(Event::LicenseRefreshFailed { error_category: "disk" });
+                serde_json::json!({"ok": false, "error": format!("save: {}", e)})
+            }
+        },
+        Err(e) => {
+            track(Event::LicenseRefreshFailed { error_category: license_error_category(&e) });
+            serde_json::json!({"ok": false, "error": format!("{}", e)})
+        }
+    };
+    write_to_buf(&json.to_string(), buf, buf_len)
+}
+
+/// `POST /api/devices/list { token }` via FFI. Reads token from disk,
+/// returns JSON `{ok, license_id, tier, max_devices, devices: [...], error?}`.
+#[no_mangle]
+pub extern "C" fn dimmy_license_devices_list(buf: *mut c_char, buf_len: c_int) -> c_int {
+    let token = match license::load_license_file() {
+        Ok(Some(t)) => t,
+        Ok(None) => return write_license_err(buf, buf_len, "no license file"),
+        Err(e) => return write_license_err(buf, buf_len, &format!("load: {}", e)),
+    };
+    let server = licensing_server_url();
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(r) => r,
+        Err(e) => return write_license_err(buf, buf_len, &format!("runtime: {}", e)),
+    };
+    let json = match rt.block_on(license::list_devices(&server, &token)) {
+        Ok(r) => serde_json::json!({
+            "ok": true,
+            "license_id": r.license_id,
+            "tier": r.tier,
+            "max_devices": r.max_devices,
+            "devices": r.devices,
+        }),
+        Err(e) => serde_json::json!({"ok": false, "error": format!("{}", e)}),
+    };
+    write_to_buf(&json.to_string(), buf, buf_len)
+}
+
+/// `POST /api/devices/deactivate { token, device_id? }` via FFI.
+/// `device_id_ptr` may be null to self-deactivate (sign out the current device).
+/// Writes JSON `{ok, error?}` to buf. On self-deactivate success, also clears
+/// the local license file so the UI flips back to NotFound.
+#[no_mangle]
+pub extern "C" fn dimmy_license_device_deactivate(
+    device_id_ptr: *const c_char,
+    buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    let token = match license::load_license_file() {
+        Ok(Some(t)) => t,
+        Ok(None) => return write_license_err(buf, buf_len, "no license file"),
+        Err(e) => return write_license_err(buf, buf_len, &format!("load: {}", e)),
+    };
+    let device_id = if device_id_ptr.is_null() {
+        None
+    } else {
+        let s = unsafe { CStr::from_ptr(device_id_ptr) }
+            .to_string_lossy()
+            .into_owned();
+        if s.trim().is_empty() {
+            None
+        } else {
+            Some(s)
+        }
+    };
+    let is_self = device_id.is_none();
+    let server = licensing_server_url();
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(r) => r,
+        Err(e) => return write_license_err(buf, buf_len, &format!("runtime: {}", e)),
+    };
+    let json = match rt.block_on(license::deactivate_device(
+        &server,
+        &token,
+        device_id.as_deref(),
+    )) {
+        Ok(()) => {
+            if is_self {
+                if let Some(path) = license::license_path() {
+                    let _ = std::fs::remove_file(&path);
+                }
+            }
+            track(Event::LicenseDeviceDeactivated { is_self });
+            serde_json::json!({"ok": true})
+        }
+        Err(e) => serde_json::json!({"ok": false, "error": format!("{}", e)}),
+    };
+    write_to_buf(&json.to_string(), buf, buf_len)
+}
+
+/// Capability check — does the active license carry the named scope?
+/// Returns 1 = yes, 0 = no, -1 on null input. Source builds (no embedded
+/// pubkey) report 1 for every scope.
+#[no_mangle]
+pub extern "C" fn dimmy_license_has_scope(scope_ptr: *const c_char) -> c_int {
+    if scope_ptr.is_null() {
+        return -1;
+    }
+    let scope = unsafe { CStr::from_ptr(scope_ptr) }
+        .to_string_lossy()
+        .into_owned();
+    if scope.is_empty() {
+        return -1;
+    }
+    let granted = license::has_scope(&scope);
+    if !granted {
+        // Categorical scope name only — never the user. Match against the
+        // known vocab; unknown scopes don't get logged so we can't blow up
+        // PostHog cardinality with attacker-controlled strings.
+        let categorical: Option<&'static str> = match scope.as_str() {
+            "managed_stt" => Some("managed_stt"),
+            "managed_llm" => Some("managed_llm"),
+            "auto_update" => Some("auto_update"),
+            "history_sync" => Some("history_sync"),
+            "premium_styles" => Some("premium_styles"),
+            _ => None,
+        };
+        if let Some(s) = categorical {
+            track(Event::LicenseScopeDenied { scope: s });
+        }
+    }
+    if granted {
+        1
+    } else {
+        0
+    }
+}
+
+/// Delete the on-disk license file. Useful for "Sign out" / dev reset.
+/// Returns 0 on success (or no-op if missing), -1 on error.
+#[no_mangle]
+pub extern "C" fn dimmy_license_clear() -> c_int {
+    let path = match license::license_path() {
+        Some(p) => p,
+        None => return -1,
+    };
+    if path.exists() {
+        if std::fs::remove_file(&path).is_err() {
+            return -1;
+        }
+    }
+    0
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // Test-only FFI — compiled ONLY when `--features test-ffi` is set.
 // Never reaches release binaries. Used by integration tests in core/tests/.

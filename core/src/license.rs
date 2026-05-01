@@ -28,6 +28,24 @@ use std::path::PathBuf;
 #[cfg(feature = "license-client")]
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Capability vocabulary. Tokens carry an explicit list of these in `scope`;
+/// the client gates pro-only features by querying `LicenseStatus::has_scope`.
+/// New scopes are server-driven — adding one means updating the server's
+/// tier→scope table, no client release required (clients that don't know
+/// the new scope just ignore it).
+pub mod scopes {
+    /// Use Dimmy-hosted STT (no BYOK key). Free tier uses BYOK; pro proxies via Dimmy.
+    pub const MANAGED_STT: &str = "managed_stt";
+    /// Use Dimmy-hosted LLM. Same shape as MANAGED_STT.
+    pub const MANAGED_LLM: &str = "managed_llm";
+    /// In-app auto-update via Velopack. Without this scope the client never checks.
+    pub const AUTO_UPDATE: &str = "auto_update";
+    /// Cross-device history sync (future feature).
+    pub const HISTORY_SYNC: &str = "history_sync";
+    /// Premium LLM styles / curated prompts beyond the defaults.
+    pub const PREMIUM_STYLES: &str = "premium_styles";
+}
+
 /// Build-time–embedded Ed25519 public key (32 bytes, base64url-encoded).
 ///
 /// Empty / unset → "unrestricted" mode (no licensing enforcement). This
@@ -122,12 +140,19 @@ pub enum LicenseStatus {
     /// or claims couldn't be parsed). Treat as "needs re-activation".
     Invalid(String),
     /// Trial in progress.
-    TrialActive { days_remaining: u32 },
+    TrialActive {
+        days_remaining: u32,
+        scopes: Vec<String>,
+    },
     /// Trial ended (token expired). Local features stay on; cloud /
     /// updates gated.
     TrialExpired,
     /// Paid license active.
-    Active { tier: Tier, days_remaining: i64 },
+    Active {
+        tier: Tier,
+        days_remaining: i64,
+        scopes: Vec<String>,
+    },
     /// Paid license expired (sub lapsed, prepay window ended). Local
     /// features stay on; cloud / updates gated.
     Expired,
@@ -142,20 +167,58 @@ impl LicenseStatus {
     /// available. BYOK + local features are NEVER gated by this method
     /// (see CLAUDE.md / docs/dev/licensing-poc.md for the rationale).
     pub fn cloud_enabled(&self) -> bool {
-        matches!(
-            self,
-            LicenseStatus::Unrestricted
-                | LicenseStatus::TrialActive { .. }
-                | LicenseStatus::Active { .. }
-        )
+        // Source build → always enabled. Anything granting at least one
+        // managed-* scope qualifies. Keeps semantic backward compat with
+        // the old binary `cloud_enabled / updates_enabled` interface.
+        match self {
+            LicenseStatus::Unrestricted => true,
+            _ => self.has_scope(scopes::MANAGED_STT) || self.has_scope(scopes::MANAGED_LLM),
+        }
     }
 
     /// True when in-app auto-update is allowed.
     pub fn updates_enabled(&self) -> bool {
-        // Same gating as cloud for now. Could diverge in the future
-        // (e.g. allow security-only updates even on expired licenses).
-        self.cloud_enabled()
+        match self {
+            LicenseStatus::Unrestricted => true,
+            _ => self.has_scope(scopes::AUTO_UPDATE),
+        }
     }
+
+    /// True if the active license carries the named scope. `Unrestricted`
+    /// (source build) returns true unconditionally — open-source contributors
+    /// get every capability for free.
+    pub fn has_scope(&self, name: &str) -> bool {
+        match self {
+            LicenseStatus::Unrestricted => true,
+            LicenseStatus::TrialActive { scopes, .. }
+            | LicenseStatus::Active { scopes, .. } => scopes.iter().any(|s| s == name),
+            // NotFound / Invalid / Expired / TrialExpired / Suspended → no scope.
+            _ => false,
+        }
+    }
+
+    /// Returns the active scope list, or empty for non-active states.
+    /// `Unrestricted` reports the full vocabulary so UI can render "all on"
+    /// without special-casing source builds.
+    pub fn scopes(&self) -> Vec<String> {
+        match self {
+            LicenseStatus::Unrestricted => vec![
+                scopes::MANAGED_STT.into(),
+                scopes::MANAGED_LLM.into(),
+                scopes::AUTO_UPDATE.into(),
+                scopes::HISTORY_SYNC.into(),
+                scopes::PREMIUM_STYLES.into(),
+            ],
+            LicenseStatus::TrialActive { scopes, .. }
+            | LicenseStatus::Active { scopes, .. } => scopes.clone(),
+            _ => Vec::new(),
+        }
+    }
+}
+
+/// Convenience for call sites — equivalent to `check_status().has_scope(name)`.
+pub fn has_scope(name: &str) -> bool {
+    check_status().has_scope(name)
 }
 
 /// Resolve `~/.config/dimmy/license.json` (or the platform-specific
@@ -399,15 +462,21 @@ pub fn check_status() -> LicenseStatus {
             };
         }
 
+        // Ceiling division: "23h 59m left" → 1 day, not 0. The token was
+        // issued moments after the license started, so floor-div on a fresh
+        // 14-day trial would render "13 days" the entire first day. Users
+        // would think their trial is already shrinking before they used it.
         let secs_remaining = claims.exp - now;
-        let days_remaining = (secs_remaining / 86_400).max(0);
+        let days_remaining = (secs_remaining + 86_399) / 86_400;
         match claims.tier {
             Tier::Trial => LicenseStatus::TrialActive {
                 days_remaining: days_remaining as u32,
+                scopes: claims.scope.clone(),
             },
             tier => LicenseStatus::Active {
                 tier,
                 days_remaining,
+                scopes: claims.scope.clone(),
             },
         }
     }
@@ -525,6 +594,74 @@ pub async fn refresh_token(server: &str, token: &str) -> Result<TokenResponse, r
         .await
 }
 
+/// One device under a license. Returned by `/api/devices/list`.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct DeviceInfo {
+    pub device_id: String,
+    pub label: String,
+    pub issued_at: i64,
+    pub last_seen: i64,
+    pub status: String,
+    pub is_self: bool,
+}
+
+/// Wire shape of `/api/devices/list` response.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DevicesListResponse {
+    pub license_id: String,
+    pub tier: String,
+    pub max_devices: u32,
+    pub devices: Vec<DeviceInfo>,
+}
+
+/// `POST /api/devices/list { token }` — list all devices under the license
+/// the caller's token belongs to. Auth is the token signature.
+pub async fn list_devices(
+    server: &str,
+    token: &str,
+) -> Result<DevicesListResponse, reqwest::Error> {
+    assert!(!server.is_empty(), "server URL required");
+    assert!(!token.is_empty(), "token required");
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    let url = format!("{}/api/devices/list", server.trim_end_matches('/'));
+    client
+        .post(&url)
+        .json(&serde_json::json!({ "token": token }))
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<DevicesListResponse>()
+        .await
+}
+
+/// `POST /api/devices/deactivate { token, device_id? }` — mark a device
+/// as deactivated. `None` = self-sign-out (frees the calling device's slot).
+pub async fn deactivate_device(
+    server: &str,
+    token: &str,
+    device_id: Option<&str>,
+) -> Result<(), reqwest::Error> {
+    assert!(!server.is_empty(), "server URL required");
+    assert!(!token.is_empty(), "token required");
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    let url = format!("{}/api/devices/deactivate", server.trim_end_matches('/'));
+    let mut payload = serde_json::json!({ "token": token });
+    if let Some(did) = device_id {
+        payload["device_id"] = serde_json::Value::String(did.to_string());
+    }
+    client
+        .post(&url)
+        .json(&payload)
+        .send()
+        .await?
+        .error_for_status()?;
+    Ok(())
+}
+
 /// Tiny URL-encoding helper. The server endpoints accept activation
 /// codes that are always URL-safe (we generate them via `rand::Alphanumeric`
 /// + `_-`), but `device_label` may have spaces — encode just to be safe.
@@ -558,10 +695,23 @@ mod tests {
     #[test]
     fn cloud_enabled_for_active_states_only() {
         assert!(LicenseStatus::Unrestricted.cloud_enabled());
-        assert!(LicenseStatus::TrialActive { days_remaining: 7 }.cloud_enabled());
+        assert!(LicenseStatus::TrialActive {
+            days_remaining: 7,
+            scopes: vec!["managed_stt".into(), "managed_llm".into()],
+        }
+        .cloud_enabled());
         assert!(LicenseStatus::Active {
             tier: Tier::Annual,
-            days_remaining: 100
+            days_remaining: 100,
+            scopes: vec!["managed_stt".into()],
+        }
+        .cloud_enabled());
+
+        // Active state without managed_* scopes → cloud is gated.
+        assert!(!LicenseStatus::Active {
+            tier: Tier::Annual,
+            days_remaining: 100,
+            scopes: vec![],
         }
         .cloud_enabled());
 
@@ -574,6 +724,40 @@ mod tests {
             days_offline: 60
         }
         .cloud_enabled());
+    }
+
+    #[test]
+    fn has_scope_unrestricted_grants_everything() {
+        let s = LicenseStatus::Unrestricted;
+        assert!(s.has_scope(scopes::MANAGED_STT));
+        assert!(s.has_scope(scopes::AUTO_UPDATE));
+        assert!(s.has_scope("anything-future-too"));
+    }
+
+    #[test]
+    fn has_scope_only_grants_what_token_says() {
+        let s = LicenseStatus::Active {
+            tier: Tier::Annual,
+            days_remaining: 100,
+            scopes: vec![scopes::MANAGED_STT.into(), scopes::AUTO_UPDATE.into()],
+        };
+        assert!(s.has_scope(scopes::MANAGED_STT));
+        assert!(s.has_scope(scopes::AUTO_UPDATE));
+        assert!(!s.has_scope(scopes::MANAGED_LLM));
+        assert!(!s.has_scope(scopes::HISTORY_SYNC));
+    }
+
+    #[test]
+    fn has_scope_denies_when_expired_or_invalid() {
+        assert!(!LicenseStatus::TrialExpired.has_scope(scopes::MANAGED_STT));
+        assert!(!LicenseStatus::Expired.has_scope(scopes::MANAGED_STT));
+        assert!(!LicenseStatus::NotFound.has_scope(scopes::MANAGED_STT));
+        assert!(!LicenseStatus::Invalid("e".into()).has_scope(scopes::MANAGED_STT));
+        assert!(!LicenseStatus::Suspended {
+            tier: Tier::Trial,
+            days_offline: 50,
+        }
+        .has_scope(scopes::MANAGED_STT));
     }
 
     #[test]

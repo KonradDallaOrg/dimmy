@@ -178,4 +178,45 @@ int32_t dimmy_gpu_get_status(char * _Nonnull out_buf, int32_t buf_len);
 /// Clear the known-bad GPU marker so we re-probe Metal next launch.
 int32_t dimmy_gpu_clear_known_bad(void);
 
+// ── Licensing ──────────────────────────────────────────────────────
+
+/// Override the licensing server URL at runtime. Use for dev (point at
+/// http://127.0.0.1:8787) or staging without rebuilding the dylib.
+/// Returns 0=ok, -1=null/empty, -2=mutex poisoned.
+int32_t dimmy_license_set_server_url(const char * _Nonnull url);
+
+/// Current license status as JSON. Schema:
+///   { kind, tier?, days_remaining?, days_offline?, error?,
+///     cloud_enabled, updates_enabled, scopes: [...] }
+int32_t dimmy_license_status_json(char * _Nonnull out_buf, int32_t buf_len);
+
+/// POST /api/trial/start { email }. Writes JSON {ok, magic_link?, error?}.
+int32_t dimmy_license_request_trial(const char * _Nonnull email,
+                                    char * _Nonnull out_buf,
+                                    int32_t buf_len);
+
+/// GET /api/activate?code=...&device_label=... — on success persists the
+/// returned token to ~/.config/dimmy/license.json.
+int32_t dimmy_license_redeem(const char * _Nonnull code,
+                             const char * _Nullable device_label,
+                             char * _Nonnull out_buf,
+                             int32_t buf_len);
+
+/// POST /api/refresh — bumps last_seen + rotates token.
+int32_t dimmy_license_refresh(char * _Nonnull out_buf, int32_t buf_len);
+
+/// Delete the on-disk license file. Useful for "Sign out". Returns 0=ok.
+int32_t dimmy_license_clear(void);
+
+/// Capability check: 1=scope present, 0=denied, -1=null input.
+int32_t dimmy_license_has_scope(const char * _Nonnull scope_name);
+
+/// POST /api/devices/list — JSON {ok, license_id, tier, max_devices, devices: [...]}.
+int32_t dimmy_license_devices_list(char * _Nonnull out_buf, int32_t buf_len);
+
+/// POST /api/devices/deactivate { device_id? }. Pass NULL to self-sign-out.
+int32_t dimmy_license_device_deactivate(const char * _Nullable device_id,
+                                        char * _Nonnull out_buf,
+                                        int32_t buf_len);
+
 #endif /* DimmyFFI_h */

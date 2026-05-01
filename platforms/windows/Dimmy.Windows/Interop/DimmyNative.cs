@@ -268,4 +268,41 @@ public static class DimmyNative
                     $"Failed to set autostart to {value} (return code {rc})");
         }
     }
+
+    // ── Licensing ────────────────────────────────────────────────
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_license_status_json(byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_license_set_server_url(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string url);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_license_request_trial(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string email,
+        byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_license_redeem(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string code,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string deviceLabel,
+        byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_license_refresh(byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_license_clear();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_license_has_scope(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string scopeName);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_license_devices_list(byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_license_device_deactivate(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? deviceId,
+        byte[] outBuf, int bufLen);
 }

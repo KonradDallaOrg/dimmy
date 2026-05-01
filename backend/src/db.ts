@@ -149,6 +149,41 @@ export async function listActiveDevices(
   return res.results;
 }
 
+/// All devices for a license, regardless of status. UI Settings → License
+/// shows them all so the user can see their device history (and reactivate
+/// a previously-revoked one if they want — by reusing the same machine).
+export async function listAllDevices(
+  db: D1Database,
+  licenseId: string
+): Promise<DeviceRow[]> {
+  const res = await db
+    .prepare(
+      `SELECT device_id, license_id, device_label, issued_at, last_seen, status
+       FROM devices WHERE license_id = ?1
+       ORDER BY issued_at`
+    )
+    .bind(licenseId)
+    .all<DeviceRow>();
+  return res.results;
+}
+
+/// Mark a device revoked. Idempotent — if already revoked, no-op.
+/// Returns the number of rows affected (0 = already revoked or unknown).
+export async function deactivateDeviceById(
+  db: D1Database,
+  deviceId: string,
+  licenseId: string
+): Promise<number> {
+  const res = await db
+    .prepare(
+      `UPDATE devices SET status = 'revoked'
+       WHERE device_id = ?1 AND license_id = ?2 AND status = 'active'`
+    )
+    .bind(deviceId, licenseId)
+    .run();
+  return res.meta.changes ?? 0;
+}
+
 export async function insertDevice(
   db: D1Database,
   d: {

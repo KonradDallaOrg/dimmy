@@ -15,8 +15,6 @@ pub mod keystore;
 /// `docs/dev/licensing-poc.md`). Always-available types + file I/O +
 /// HTTP client; Ed25519 verify is gated behind `license-client`.
 pub mod license;
-#[cfg(feature = "licensing-server")]
-pub mod license_server;
 pub mod llm;
 pub mod local_llm;
 pub mod local_stt;

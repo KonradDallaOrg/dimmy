@@ -15,10 +15,11 @@ import {
   listActiveDevices,
 } from "../db";
 import { signToken, ulid, type Claims } from "../crypto";
+import { SCOPES_FOR_TIER, type Tier } from "../scopes";
 
 // Tier → max-offline-days mapping. Keep in sync with Rust
 // `Tier::default_max_offline_days` in core/src/license.rs.
-const MAX_OFFLINE: Record<"trial" | "annual" | "3year", number> = {
+const MAX_OFFLINE: Record<Tier, number> = {
   trial: 30,
   annual: 30,
   "3year": 1095,
@@ -89,7 +90,7 @@ export async function handleActivate(
     exp: lic.valid_until,
     max_offline: MAX_OFFLINE[lic.tier],
     did: deviceId,
-    scope: ["cloud", "updates"],
+    scope: SCOPES_FOR_TIER[lic.tier as Tier] ?? [],
   };
   const token = await signToken(claims, env.DIMMY_LICENSE_PRIVKEY);
 

@@ -28,6 +28,7 @@ platforms/macos/build/
 # never commit it.
 data/licensing/
 core/data/
+backend/.dev-data/
 licensing-data/
 **/dimmy_jumplist.log
 **/dimmy_startup.log

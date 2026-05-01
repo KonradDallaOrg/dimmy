@@ -8,6 +8,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Dimmy.Windows.Helpers;
 using Dimmy.Windows.Interop;
+using Dimmy.Windows.Services;
 using Dimmy.Windows.ViewModels;
 
 namespace Dimmy.Windows.Views;
@@ -42,6 +43,13 @@ public sealed partial class SettingsWindow : Window
                 appWindow?.SetIcon(iconPath);
         }
         catch { }
+
+        // Refresh License page when the running Dimmy redeems via dimmy:// URL.
+        // The URL-scheme dispatch hits App.xaml.cs which calls LicenseService.RedeemAsync
+        // off-thread; firing LicenseChanged lets us update the visible status card
+        // without polling. We marshal back to UI thread via DispatcherQueue.
+        LicenseService.LicenseChanged += OnLicenseChangedExternal;
+        this.Closed += (_, __) => LicenseService.LicenseChanged -= OnLicenseChangedExternal;
 
         LoadConfig();
         ViewModel.LoadGpuStatus();
@@ -568,6 +576,7 @@ public sealed partial class SettingsWindow : Window
             RulesPanel.Visibility = Visibility.Collapsed;
             AboutPanel.Visibility = Visibility.Collapsed;
             PrivacyPanel.Visibility = Visibility.Collapsed;
+            LicensePanel.Visibility = Visibility.Collapsed;
             StatsPanel.Visibility = Visibility.Collapsed;
             DebugPanel.Visibility = Visibility.Collapsed;
 
@@ -580,6 +589,7 @@ public sealed partial class SettingsWindow : Window
                 "rules" => RulesPanel,
                 "shortcut" => ShortcutPanel,
                 "privacy" => PrivacyPanel,
+                "license" => LicensePanel,
                 "about" => AboutPanel,
                 "advanced" or "debug" => DebugPanel,
                 "stats" => StatsPanel,
@@ -591,7 +601,428 @@ public sealed partial class SettingsWindow : Window
             {
                 RefreshAnonymousIdText();
             }
+            else if (tag == "license")
+            {
+                RefreshLicenseStatus();
+            }
         }
+    }
+
+    // ── License ────────────────────────────────────────────────────────
+
+    private void RefreshLicenseStatus()
+    {
+        try
+        {
+            var s = LicenseService.GetStatus();
+            (string head, string detail) = s.Kind switch
+            {
+                "Unrestricted" => ("Source build — no licensing",
+                                    "This binary was built without a licensing public key. All features are unlocked."),
+                "NotFound"     => ("No license on this device",
+                                    "Start a trial below or paste an activation code from your email."),
+                "TrialActive"  => ($"Trial — {s.DaysRemaining} day(s) left",
+                                    "You're in your free 14-day trial. Cloud + auto-update are enabled."),
+                "TrialExpired" => ("Trial expired",
+                                    "Your trial has ended. Cloud features are paused. Purchase a license to continue."),
+                "Active"       => ($"Active — {s.Tier} ({s.DaysRemaining} day(s) left)",
+                                    "Thanks for supporting Dimmy. All cloud features are enabled."),
+                "Expired"      => ("License expired",
+                                    "Renew to re-enable cloud features."),
+                "Suspended"    => ($"Suspended — offline {s.DaysOffline} day(s)",
+                                    "Reconnect this device to refresh your license."),
+                "Invalid"      => ("License file invalid",
+                                    s.Error ?? "Re-activate this device."),
+                _              => (s.Kind, s.Error ?? string.Empty),
+            };
+            LicenseStatusHeadline.Text = head;
+            LicenseStatusDetail.Text = detail;
+            PopulateScopeGrid(s);
+            // Devices are server-side data — refresh asynchronously, only when
+            // we actually have a license to query against.
+            if (s.Kind is "TrialActive" or "Active" or "Suspended")
+                _ = RefreshDevicesAsync();
+            else
+            {
+                LicenseDevicesList.Children.Clear();
+                LicenseDeviceCountLabel.Text = string.Empty;
+            }
+        }
+        catch (Exception ex)
+        {
+            LicenseStatusHeadline.Text = "Status check failed";
+            LicenseStatusDetail.Text = ex.Message;
+        }
+    }
+
+    private void PopulateScopeGrid(LicenseService.Status s)
+    {
+        LicenseScopeGrid.Children.Clear();
+        var active = new System.Collections.Generic.HashSet<string>(s.Scopes,
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, display, descr) in LicenseService.ScopeNames.All)
+        {
+            bool granted = active.Contains(key);
+
+            // One row per capability. Three columns: glyph, name + description, status.
+            var row = new Grid { ColumnSpacing = 12 };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var glyph = new FontIcon
+            {
+                Glyph = granted ? "" : "", // CheckMark vs Cancel
+                FontSize = 16,
+                Foreground = granted
+                    ? (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["SystemFillColorSuccessBrush"]
+                    : (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorTertiaryBrush"],
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0, 2, 0, 0),
+            };
+            Grid.SetColumn(glyph, 0);
+
+            var labelStack = new StackPanel { Spacing = 1 };
+            labelStack.Children.Add(new TextBlock
+            {
+                Text = display,
+                FontSize = 13,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            });
+            labelStack.Children.Add(new TextBlock
+            {
+                Text = descr,
+                FontSize = 11,
+                Foreground = (Microsoft.UI.Xaml.Media.Brush)
+                    Application.Current.Resources["TextFillColorSecondaryBrush"],
+                TextWrapping = TextWrapping.Wrap,
+            });
+            Grid.SetColumn(labelStack, 1);
+
+            var statusText = new TextBlock
+            {
+                Text = granted ? "Included" : "Not included",
+                FontSize = 11,
+                Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
+                    granted ? "TextFillColorSecondaryBrush" : "TextFillColorTertiaryBrush"],
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0, 4, 0, 0),
+            };
+            Grid.SetColumn(statusText, 2);
+
+            row.Children.Add(glyph);
+            row.Children.Add(labelStack);
+            row.Children.Add(statusText);
+            LicenseScopeGrid.Children.Add(row);
+        }
+    }
+
+    private async void License_StartTrial_Click(object sender, RoutedEventArgs e)
+    {
+        var email = (LicenseTrialEmailBox.Text ?? string.Empty).Trim();
+        if (string.IsNullOrEmpty(email) || !email.Contains('@'))
+        {
+            ShowInfoBar(LicenseTrialInfoBar, InfoBarSeverity.Error, "Enter a valid email address.");
+            return;
+        }
+        LicenseTrialButton.IsEnabled = false;
+        try
+        {
+            ShowInfoBar(LicenseTrialInfoBar, InfoBarSeverity.Informational, "Requesting magic link…");
+            var r = await LicenseService.RequestTrialAsync(email);
+            if (!r.Ok)
+            {
+                ShowInfoBar(LicenseTrialInfoBar, InfoBarSeverity.Error, r.Error ?? "Request failed.");
+                return;
+            }
+
+            // Production: server emails the magic link, UI shows "check your inbox".
+            // Dev (local server): server returns the link directly — we open it via the
+            // OS to exercise the same dimmy:// path the email click would trigger.
+            var link = r.MagicLink;
+            if (string.IsNullOrEmpty(link))
+            {
+                ShowInfoBar(LicenseTrialInfoBar, InfoBarSeverity.Success,
+                    "Check your email. Click the magic link from the device you want to activate.");
+                return;
+            }
+
+            if (link.StartsWith("dimmy://", StringComparison.OrdinalIgnoreCase))
+            {
+                ShowInfoBar(LicenseTrialInfoBar, InfoBarSeverity.Informational,
+                    "Activating via magic link…");
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(link)
+                {
+                    UseShellExecute = true,
+                });
+
+                // Poll status — the URL-scheme dispatch hands the code to the
+                // running Dimmy via named pipe; redeem completes asynchronously.
+                if (await WaitForActivationAsync(TimeSpan.FromSeconds(8)))
+                {
+                    RefreshLicenseStatus();
+                    ShowInfoBar(LicenseTrialInfoBar, InfoBarSeverity.Success, "Activated. Welcome to Dimmy.");
+                }
+                else
+                {
+                    var fallback = r.Code ?? ExtractCode(link) ?? string.Empty;
+                    ShowInfoBar(LicenseTrialInfoBar, InfoBarSeverity.Warning,
+                        "Auto-activation didn't complete. Open the fallback below and paste this code: " + fallback);
+                }
+            }
+            else
+            {
+                // Production case — server returned an HTTPS link (e.g. license.dimmy.app/m/...).
+                // Email is the canonical delivery; just confirm.
+                ShowInfoBar(LicenseTrialInfoBar, InfoBarSeverity.Success,
+                    "Magic link sent to " + email + ". Click it from this device to activate.");
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowInfoBar(LicenseTrialInfoBar, InfoBarSeverity.Error, ex.Message);
+        }
+        finally
+        {
+            LicenseTrialButton.IsEnabled = true;
+        }
+    }
+
+    private void OnLicenseChangedExternal()
+    {
+        // Marshal to UI thread — LicenseChanged may fire from a worker.
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (_currentTag == "license")
+                RefreshLicenseStatus();
+        });
+    }
+
+    /// Navigate the SettingsWindow's NavigationView to the given tag.
+    /// Called by App.xaml.cs after a successful URL-scheme activation so
+    /// the user lands on the License page with the post-redeem status.
+    public void NavigateToTag(string tag)
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            foreach (var item in NavView.MenuItems)
+            {
+                if (item is NavigationViewItem nv && nv.Tag is string t && t == tag)
+                {
+                    NavView.SelectedItem = nv;
+                    return;
+                }
+            }
+        });
+    }
+
+    /// Poll dimmy_license_status until kind transitions into TrialActive/Active,
+    /// or timeout. Used right after triggering a dimmy:// magic link to surface
+    /// the activation result inline instead of forcing the user to click Refresh.
+    private static async Task<bool> WaitForActivationAsync(TimeSpan budget)
+    {
+        var start = DateTime.UtcNow;
+        while (DateTime.UtcNow - start < budget)
+        {
+            await Task.Delay(400);
+            var s = LicenseService.GetStatus();
+            if (s.Kind == "TrialActive" || s.Kind == "Active") return true;
+        }
+        return false;
+    }
+
+    private async void License_Activate_Click(object sender, RoutedEventArgs e)
+    {
+        var raw = (LicenseCodeBox.Text ?? string.Empty).Trim();
+        if (string.IsNullOrEmpty(raw))
+        {
+            ShowInfoBar(LicenseActivateInfoBar, InfoBarSeverity.Error, "Paste a code or magic-link URL.");
+            return;
+        }
+        var code = ExtractCode(raw) ?? raw;
+        var label = (LicenseDeviceLabelBox.Text ?? string.Empty).Trim();
+        if (string.IsNullOrEmpty(label)) label = Environment.MachineName;
+        try
+        {
+            ShowInfoBar(LicenseActivateInfoBar, InfoBarSeverity.Informational, "Activating…");
+            var r = await LicenseService.RedeemAsync(code, label);
+            if (r.Ok)
+            {
+                ShowInfoBar(LicenseActivateInfoBar, InfoBarSeverity.Success, "Activated. Welcome to Dimmy.");
+                RefreshLicenseStatus();
+            }
+            else
+            {
+                ShowInfoBar(LicenseActivateInfoBar, InfoBarSeverity.Error, r.Error ?? "Activation failed.");
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowInfoBar(LicenseActivateInfoBar, InfoBarSeverity.Error, ex.Message);
+        }
+    }
+
+    private async void License_Refresh_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var r = await LicenseService.RefreshAsync();
+            // Status either way — the user wants to see the result.
+            RefreshLicenseStatus();
+            if (!r.Ok)
+                ShowInfoBar(LicenseActivateInfoBar, InfoBarSeverity.Warning, r.Error ?? "Refresh failed.");
+        }
+        catch (Exception ex)
+        {
+            ShowInfoBar(LicenseActivateInfoBar, InfoBarSeverity.Error, ex.Message);
+        }
+    }
+
+    private void License_Clear_Click(object sender, RoutedEventArgs e)
+    {
+        LicenseService.Clear();
+        RefreshLicenseStatus();
+    }
+
+    private async void License_DevicesReload_Click(object sender, RoutedEventArgs e)
+    {
+        await RefreshDevicesAsync();
+    }
+
+    private async Task RefreshDevicesAsync()
+    {
+        try
+        {
+            LicenseDeviceCountLabel.Text = "Loading…";
+            var list = await LicenseService.ListDevicesAsync();
+            if (!list.Ok)
+            {
+                LicenseDeviceCountLabel.Text = list.Error ?? "Failed to fetch devices";
+                LicenseDevicesList.Children.Clear();
+                return;
+            }
+            int activeCount = list.Devices.Count(d => d.Status == "active");
+            LicenseDeviceCountLabel.Text =
+                $"{activeCount} active / {list.MaxDevices} max";
+            LicenseDevicesList.Children.Clear();
+            foreach (var d in list.Devices)
+            {
+                LicenseDevicesList.Children.Add(BuildDeviceRow(d));
+            }
+        }
+        catch (Exception ex)
+        {
+            LicenseDeviceCountLabel.Text = ex.Message;
+        }
+    }
+
+    private FrameworkElement BuildDeviceRow(LicenseService.DeviceInfo d)
+    {
+        bool active = d.Status == "active";
+        var row = new Border
+        {
+            Padding = new Thickness(12, 8, 12, 8),
+            CornerRadius = new CornerRadius(4),
+            Background = (Microsoft.UI.Xaml.Media.Brush)
+                Application.Current.Resources["SubtleFillColorSecondaryBrush"],
+        };
+        var grid = new Grid { ColumnSpacing = 12 };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var labelStack = new StackPanel { Spacing = 1 };
+        var nameRun = new TextBlock
+        {
+            Text = string.IsNullOrEmpty(d.Label) ? "(unnamed device)" : d.Label,
+            FontSize = 13,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+        };
+        if (d.IsSelf)
+        {
+            nameRun.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run
+            {
+                Text = "  · this device",
+                FontWeight = Microsoft.UI.Text.FontWeights.Normal,
+                Foreground = (Microsoft.UI.Xaml.Media.Brush)
+                    Application.Current.Resources["TextFillColorTertiaryBrush"],
+            });
+        }
+        labelStack.Children.Add(nameRun);
+        labelStack.Children.Add(new TextBlock
+        {
+            Text = active
+                ? $"Last seen: {DateTimeOffset.FromUnixTimeSeconds(d.LastSeen).LocalDateTime:g}"
+                : $"Status: {d.Status}",
+            FontSize = 11,
+            Foreground = (Microsoft.UI.Xaml.Media.Brush)
+                Application.Current.Resources["TextFillColorSecondaryBrush"],
+        });
+        Grid.SetColumn(labelStack, 0);
+
+        var btn = new Button
+        {
+            Content = d.IsSelf ? "Sign out this device" : "Sign out",
+            IsEnabled = active,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        btn.Click += async (_, _) => await DeactivateDeviceAsync(d);
+        Grid.SetColumn(btn, 1);
+
+        grid.Children.Add(labelStack);
+        grid.Children.Add(btn);
+        row.Child = grid;
+        return row;
+    }
+
+    private async Task DeactivateDeviceAsync(LicenseService.DeviceInfo d)
+    {
+        try
+        {
+            var r = await LicenseService.DeactivateDeviceAsync(d.IsSelf ? null : d.DeviceId);
+            if (!r.Ok)
+            {
+                LicenseDeviceCountLabel.Text = r.Error ?? "Deactivation failed";
+                return;
+            }
+            // Self-sign-out clears the local license file; refresh status will
+            // flip the page back to NotFound. Otherwise just reload the list.
+            RefreshLicenseStatus();
+        }
+        catch (Exception ex)
+        {
+            LicenseDeviceCountLabel.Text = ex.Message;
+        }
+    }
+
+    private void License_ApplyServerUrl_Click(object sender, RoutedEventArgs e)
+    {
+        var url = (LicenseServerUrlBox.Text ?? string.Empty).Trim();
+        try
+        {
+            LicenseService.SetServerUrl(url);
+            ShowInfoBar(LicenseTrialInfoBar, InfoBarSeverity.Success, $"Server set to {url}");
+        }
+        catch (Exception ex)
+        {
+            ShowInfoBar(LicenseTrialInfoBar, InfoBarSeverity.Error, ex.Message);
+        }
+    }
+
+    private static string? ExtractCode(string? input)
+    {
+        if (string.IsNullOrEmpty(input)) return null;
+        var idx = input.IndexOf("code=", StringComparison.OrdinalIgnoreCase);
+        if (idx < 0) return input.Trim();
+        var rest = input.Substring(idx + 5);
+        var amp = rest.IndexOf('&');
+        return amp >= 0 ? rest.Substring(0, amp) : rest;
+    }
+
+    private static void ShowInfoBar(InfoBar bar, InfoBarSeverity sev, string msg)
+    {
+        bar.Severity = sev;
+        bar.Message = msg;
+        bar.IsOpen = true;
     }
 
     /// <summary>

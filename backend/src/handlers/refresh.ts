@@ -12,8 +12,9 @@ import {
   findLicenseById,
 } from "../db";
 import { signToken, verifyTokenWithPub, type Claims } from "../crypto";
+import { SCOPES_FOR_TIER, type Tier } from "../scopes";
 
-const MAX_OFFLINE: Record<"trial" | "annual" | "3year", number> = {
+const MAX_OFFLINE: Record<Tier, number> = {
   trial: 30,
   annual: 30,
   "3year": 1095,
@@ -61,9 +62,12 @@ export async function handleRefresh(
     tier: lic.tier,
     iat: now,
     exp: lic.valid_until,
-    max_offline: MAX_OFFLINE[lic.tier],
+    max_offline: MAX_OFFLINE[lic.tier as Tier],
     did: claims.did,
-    scope: claims.scope,
+    // Re-issue from the tier table, not from the inbound claim — keeps the
+    // mapping authoritative on the server (rotated mappings propagate on
+    // next refresh without client release).
+    scope: SCOPES_FOR_TIER[lic.tier as Tier] ?? claims.scope,
   };
   const newToken = await signToken(newClaims, env.DIMMY_LICENSE_PRIVKEY);
   return json({ token: newToken });
