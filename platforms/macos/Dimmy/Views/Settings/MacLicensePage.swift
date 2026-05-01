@@ -436,17 +436,27 @@ struct MacLicensePage: View {
         let r = await DimmyCore.shared.licenseRedeem(
             code: code,
             deviceLabel: label.isEmpty ? Host.current().localizedName ?? "Mac" : label)
+        // The dimmy:// URL handler in AppDelegate may have consumed this
+        // same code first (when the user opened the magic link in a browser
+        // AND pasted the code here). The server then 409s the second redeem
+        // with "code already consumed". If the local file is now active,
+        // treat it as success — the device is licensed regardless of which
+        // call won the race.
+        let postStatus = DimmyCore.shared.licenseStatus()
+        let alreadyActive = postStatus.kind == "TrialActive" || postStatus.kind == "Active"
         await MainActor.run {
-            if r.ok {
+            if r.ok || alreadyActive {
                 pasteIsError = false
-                pasteStatus = "Activated. Welcome to Dimmy."
-                refreshStatus()
+                pasteStatus = r.ok
+                    ? "Activated. Welcome to Dimmy."
+                    : "Already activated on this device."
+                status = postStatus
             } else {
                 pasteIsError = true
                 pasteStatus = r.error ?? "Activation failed."
             }
         }
-        if r.ok { await refreshDevices() }
+        if r.ok || alreadyActive { await refreshDevices() }
     }
 
     private func deactivate(_ d: DimmyCore.LicenseDeviceInfo) async {
