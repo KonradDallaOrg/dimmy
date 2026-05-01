@@ -52,12 +52,42 @@ struct MacLicensePage: View {
 
     private var statusHero: some View {
         Group {
-            MacNote(
-                title: statusHeadline,
-                message: statusDetail,
-                systemImage: statusIcon
+            HStack(alignment: .center, spacing: 14) {
+                tierBadge
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(statusHeadline)
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.primary)
+                    Text(statusDetail)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.macTextSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 12)
+                if let trailing = statusTrailing {
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text(trailing.value)
+                            .font(.system(size: 22, weight: .semibold, design: .rounded))
+                            .foregroundStyle(statusTint)
+                            .monospacedDigit()
+                        Text(trailing.label)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(Color.macTextSecondary)
+                            .textCase(.uppercase)
+                            .tracking(0.5)
+                    }
+                }
+            }
+            .padding(EdgeInsets(top: 18, leading: 18, bottom: 18, trailing: 18))
+            .background(
+                RoundedRectangle(cornerRadius: MacTheme.tileCornerRadius, style: .continuous)
+                    .fill(statusTint.opacity(0.08))
             )
-            .padding(.bottom, 8)
+            .overlay(
+                RoundedRectangle(cornerRadius: MacTheme.tileCornerRadius, style: .continuous)
+                    .stroke(statusTint.opacity(0.35), lineWidth: 0.8)
+            )
+            .padding(.bottom, 10)
 
             HStack(spacing: 8) {
                 Button("Refresh now") {
@@ -76,17 +106,84 @@ struct MacLicensePage: View {
         }
     }
 
+    private var tierBadge: some View {
+        Text(tierBadgeText)
+            .font(.system(size: 11, weight: .bold, design: .rounded))
+            .tracking(0.8)
+            .foregroundStyle(.white)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                Capsule(style: .continuous).fill(statusTint)
+            )
+            .overlay(
+                Capsule(style: .continuous)
+                    .stroke(Color.white.opacity(0.15), lineWidth: 0.5)
+            )
+            .shadow(color: statusTint.opacity(0.35), radius: 3, x: 0, y: 1)
+    }
+
+    private var tierBadgeText: String {
+        switch status.kind {
+        case "Unrestricted":  return "DEV"
+        case "TrialActive", "TrialExpired": return "TRIAL"
+        case "Active":
+            switch status.tier {
+            case "annual": return "PRO • ANNUAL"
+            case "3year":  return "PRO • 3-YEAR"
+            default:       return "PRO"
+            }
+        case "Expired":   return "EXPIRED"
+        case "Suspended": return "SUSPENDED"
+        case "Invalid":   return "INVALID"
+        default:          return "INACTIVE"
+        }
+    }
+
+    private var statusTint: Color {
+        switch status.kind {
+        case "TrialActive":   return Color(red: 1.00, green: 0.62, blue: 0.04)   // orange
+        case "Active":        return Color(red: 0.20, green: 0.74, blue: 0.40)   // green
+        case "Unrestricted":  return Color(red: 0.55, green: 0.40, blue: 0.95)   // purple (dev)
+        case "TrialExpired", "Expired", "Invalid":
+            return Color(red: 0.92, green: 0.30, blue: 0.30)                     // red
+        case "Suspended":     return Color(red: 0.95, green: 0.65, blue: 0.10)   // amber
+        default:              return Color.secondary                             // gray (NotFound)
+        }
+    }
+
+    private var statusTrailing: (value: String, label: String)? {
+        switch status.kind {
+        case "TrialActive":
+            let d = status.daysRemaining ?? 0
+            return ("\(d)", d == 1 ? "day left" : "days left")
+        case "Active":
+            let d = status.daysRemaining ?? 0
+            return ("\(d)", d == 1 ? "day left" : "days left")
+        case "Suspended":
+            let d = status.daysOffline ?? 0
+            return ("\(d)", d == 1 ? "day offline" : "days offline")
+        default:
+            return nil
+        }
+    }
+
     private var statusHeadline: String {
         switch status.kind {
-        case "Unrestricted":  return "Source build — no licensing"
+        case "Unrestricted":  return "Source build — licensing disabled"
         case "NotFound":      return "No license on this device"
-        case "TrialActive":   return "Trial — \(status.daysRemaining ?? 0) day(s) left"
-        case "TrialExpired":  return "Trial expired"
-        case "Active":        return "Active — \(status.tier ?? "?") (\(status.daysRemaining ?? 0) day(s) left)"
-        case "Expired":       return "License expired"
-        case "Suspended":     return "Suspended — offline \(status.daysOffline ?? 0) day(s)"
-        case "Invalid":       return "License file invalid"
-        default:              return status.kind
+        case "TrialActive":   return "Trial active"
+        case "TrialExpired":  return "Trial ended"
+        case "Active":
+            switch status.tier {
+            case "annual": return "Pro license — Annual"
+            case "3year":  return "Pro license — 3-year"
+            default:       return "Pro license"
+            }
+        case "Expired":   return "License expired"
+        case "Suspended": return "License suspended"
+        case "Invalid":   return "License file invalid"
+        default:          return status.kind
         }
     }
 
@@ -97,7 +194,7 @@ struct MacLicensePage: View {
         case "NotFound":
             return "Activate Dimmy with your email, or paste an activation code from email."
         case "TrialActive":
-            return "Your free 14-day trial is active. Cloud + auto-update are enabled."
+            return "Your free 14-day trial is running. Cloud STT/LLM and auto-update are enabled."
         case "TrialExpired":
             return "Your trial has ended. Cloud features are paused. Purchase a license to continue."
         case "Active":
@@ -105,19 +202,11 @@ struct MacLicensePage: View {
         case "Expired":
             return "Renew to re-enable cloud features."
         case "Suspended":
-            return "Reconnect this device to refresh your license."
+            return "Reconnect this device online to refresh your license."
         case "Invalid":
             return status.error ?? "Re-activate this device."
         default:
             return status.error ?? ""
-        }
-    }
-
-    private var statusIcon: String {
-        switch status.kind {
-        case "Active", "TrialActive", "Unrestricted": return "checkmark.seal.fill"
-        case "TrialExpired", "Expired", "Invalid", "Suspended": return "exclamationmark.triangle.fill"
-        default: return "key.fill"
         }
     }
 
