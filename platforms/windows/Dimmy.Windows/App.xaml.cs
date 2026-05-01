@@ -774,7 +774,7 @@ public partial class App : Application
         _trayService?.UpdateState("Dimmy — Ready", "");
     }
 
-    private bool IsPillVisible()
+    public bool IsPillVisible()
     {
         if (_pillWindow == null) return false;
         var appWindow = WindowHelper.GetAppWindow(_pillWindow);

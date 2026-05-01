@@ -267,8 +267,82 @@ public class TrayService : IDisposable
 
     private void ShowContextMenu()
     {
-        // Delegate to PillWindow's WinUI 3 MenuFlyout for modern look
-        _onShowMenu?.Invoke();
+        // The WinUI 3 MenuFlyout the pill window builds is prettier
+        // and matches the right-click-on-pill UX, but it requires a
+        // FrameworkElement target with non-zero ActualWidth/Height
+        // mounted in a live XamlRoot. When the user has hidden the
+        // pill (taskbar-only mode → AppWindow.Hide()), ColorBorder
+        // exists but is not laid out, so MenuFlyout.ShowAt silently
+        // does nothing. Falling back to a native Win32 popup menu in
+        // that case gives the user a working tray right-click without
+        // having to first un-hide the pill.
+        bool pillVisible = App.Instance?.IsPillVisible() ?? false;
+        if (pillVisible)
+        {
+            _onShowMenu?.Invoke();
+        }
+        else
+        {
+            ShowWin32ContextMenu();
+        }
+    }
+
+    /// <summary>
+    /// Native Win32 popup menu — used as a fallback when the pill window
+    /// is hidden so the user always has a working tray right-click. Less
+    /// pretty than the WinUI 3 MenuFlyout (no glyphs, no submenus, no
+    /// dark-mode accent) but always functional regardless of XamlRoot
+    /// state. Delegates the menu commands back to the same callbacks
+    /// the pill MenuFlyout invokes.
+    /// </summary>
+    private void ShowWin32ContextMenu()
+    {
+        var menu = CreatePopupMenu();
+        if (menu == IntPtr.Zero) return;
+
+        try
+        {
+            // Status line — disabled (informational), no command id
+            // collision possible because IDM_STATUS is unique to this
+            // entry. Bullet glyph is ASCII-safe so no font fallback
+            // surprises in legacy GDI text rendering.
+            string statusLabel = _vm.IsRecording ? "● Recording…" : "● Ready";
+            AppendMenu(menu, MF_STRING | MF_GRAYED, (nuint)IDM_STATUS, statusLabel);
+            AppendMenu(menu, MF_SEPARATOR, 0, null);
+
+            // The pill is hidden when this code path runs, so the
+            // toggle action will SHOW it. Phrase the label that way
+            // — "Show Pill" reads better than "Show/Hide" when only
+            // one direction is meaningful right now.
+            AppendMenu(menu, MF_STRING, (nuint)IDM_TOGGLE, "Show Pill");
+            AppendMenu(menu, MF_STRING, (nuint)IDM_SETTINGS, "Settings…");
+            AppendMenu(menu, MF_SEPARATOR, 0, null);
+            AppendMenu(menu, MF_STRING, (nuint)IDM_QUIT, "Quit Dimmy");
+
+            // Microsoft-recommended tray menu UX: SetForegroundWindow
+            // before TrackPopupMenu so the menu has focus and dismisses
+            // on click-outside. Without it the menu stays sticky.
+            GetCursorPos(out var p);
+            SetForegroundWindow(_hwnd);
+
+            int cmd = TrackPopupMenu(
+                menu,
+                TPM_LEFTALIGN | TPM_BOTTOMALIGN | TPM_RETURNCMD,
+                p.X, p.Y, 0, _hwnd, IntPtr.Zero);
+
+            switch (cmd)
+            {
+                case IDM_TOGGLE:   _onTogglePill();   break;
+                case IDM_SETTINGS: _onSettingsClick(); break;
+                case IDM_QUIT:     _onQuitClick();    break;
+                // 0 = dismissed without selection. IDM_STATUS is
+                // grayed and never returnable here.
+            }
+        }
+        finally
+        {
+            DestroyMenu(menu);
+        }
     }
 
     private IntPtr LoadTrayIcon()
