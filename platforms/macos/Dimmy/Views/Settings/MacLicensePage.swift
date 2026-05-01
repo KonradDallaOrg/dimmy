@@ -32,10 +32,11 @@ struct MacLicensePage: View {
     @State private var manageBusy: Bool = false
     @State private var manageError: String? = nil
 
-    // Production licensing endpoint. Single source of truth for both the
-    // billing-portal POST and the eventual DNS swap to license.dimmy.app
-    // (when that's set up, change here + the matching C# constant on Win).
-    private let licensingServerURL = "https://dimmy-licensing.konrad-dalla.workers.dev"
+    // Production licensing endpoint. Custom domain attached to the
+    // dimmy-licensing Worker via wrangler.toml [[routes]]. Single
+    // source of truth shared with the C# Win counterpart in
+    // SettingsWindow.xaml.cs::License_ManageSubscription_Click.
+    private let licensingServerURL = "https://license.dimmy.app"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {

@@ -37,6 +37,15 @@ fn main() {
     // consumer downstream sees a clean string.
     let posthog_key = sanitize_secret(std::env::var("POSTHOG_API_KEY").unwrap_or_default());
     let sentry_dsn = sanitize_secret(std::env::var("SENTRY_DSN").unwrap_or_default());
+    // Same sanitize+rerun pattern for the licensing public key so a
+    // GitHub Secret that copy-pasted with a trailing newline (the most
+    // common foot-gun) doesn't end up in the binary as `uut9…\n`,
+    // which `verify_token` then rejects as a malformed pubkey. Also
+    // adds explicit `rerun-if-env-changed` so a changed secret on
+    // re-run invalidates the cached license.rs compilation even when
+    // `option_env!` cache tracking is unreliable across actions/cache.
+    let license_pubkey =
+        sanitize_secret(std::env::var("DIMMY_LICENSE_PUBKEY").unwrap_or_default());
 
     // Build-time sanity checks. Non-fatal — emit `cargo:warning` so the
     // CI log surfaces "secret looks bad" without breaking the build. A
@@ -68,10 +77,28 @@ fn main() {
         );
     }
 
+    if !license_pubkey.is_empty() {
+        // Ed25519 base64url-no-pad of 32 bytes = 43 ASCII chars. Anything
+        // else means the secret was truncated, padded, or copy-paste-
+        // mangled. Warn loud — license verify will fail at runtime.
+        if license_pubkey.len() != 43 {
+            println!(
+                "cargo:warning=DIMMY_LICENSE_PUBKEY is {} chars; expected 43 (base64url \
+                of a 32-byte Ed25519 public key, no padding). License verify will fail.",
+                license_pubkey.len()
+            );
+        }
+    }
+
     println!("cargo:rustc-env=DIMMY_POSTHOG_API_KEY={}", posthog_key);
     println!("cargo:rustc-env=DIMMY_SENTRY_DSN={}", sentry_dsn);
+    // Re-emit DIMMY_LICENSE_PUBKEY itself (sanitized) so `option_env!`
+    // in core/src/license.rs picks up the cleaned value, not the raw
+    // env that may carry trailing whitespace.
+    println!("cargo:rustc-env=DIMMY_LICENSE_PUBKEY={}", license_pubkey);
     println!("cargo:rerun-if-env-changed=POSTHOG_API_KEY");
     println!("cargo:rerun-if-env-changed=SENTRY_DSN");
+    println!("cargo:rerun-if-env-changed=DIMMY_LICENSE_PUBKEY");
 }
 
 /// Strip leading UTF-8 BOM, then ASCII-trim. Returns owned String so

@@ -987,10 +987,11 @@ public sealed partial class SettingsWindow : Window
     /// </summary>
     private async void License_ManageSubscription_Click(object sender, RoutedEventArgs e)
     {
-        // Production licensing endpoint — single source of truth shared
-        // with the macOS counterpart. When DNS for license.dimmy.app is
-        // wired up, change here + MacLicensePage.licensingServerURL.
-        const string LICENSING_SERVER = "https://dimmy-licensing.konrad-dalla.workers.dev";
+        // Production licensing endpoint. Custom domain attached to the
+        // dimmy-licensing Worker via wrangler.toml [[routes]]. Single
+        // source of truth shared with the macOS counterpart in
+        // MacLicensePage.swift::licensingServerURL.
+        const string LICENSING_SERVER = "https://license.dimmy.app";
 
         LicenseManageSubButton.IsEnabled = false;
         try

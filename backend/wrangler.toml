@@ -20,6 +20,14 @@ main = "src/index.ts"
 compatibility_date = "2025-04-01"
 workers_dev = true
 
+# Custom domain — Cloudflare attaches the Worker to license.dimmy.app
+# on deploy (also auto-creates the DNS record + provisions the SSL
+# cert via the existing dimmy.app zone). The workers.dev URL stays
+# live as a fallback while DNS propagates / for emergency rollback.
+[[routes]]
+pattern = "license.dimmy.app"
+custom_domain = true
+
 # ── D1 binding (SQLite-compatible serverless DB) ─────────────────────
 # Created 2026-05-01 in WEUR (Western Europe — best latency for EU users).
 [[d1_databases]]
@@ -30,9 +38,8 @@ database_id = "06a210a1-2e3b-4142-9d21-0eef9ee517de"
 # ── Public (non-secret) env vars ─────────────────────────────────────
 [vars]
 # The fully-qualified URL the Worker is reachable at — used to build
-# magic-link URLs in email bodies. Override with prod custom domain
-# (e.g. https://license.dimmy.app) once DNS is set up.
-PUBLIC_URL = "https://dimmy-licensing.konrad-dalla.workers.dev"
+# magic-link URLs in email bodies. Pinned to the custom domain.
+PUBLIC_URL = "https://license.dimmy.app"
 
 # Sender address for activation emails. MUST be on a verified Resend
 # domain. The local-part can be anything.
