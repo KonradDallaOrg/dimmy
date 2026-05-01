@@ -380,6 +380,97 @@ describe("/api/stripe/webhook", () => {
     expect(state.licenses.size).toBe(0);
   });
 
+  test("customer.subscription.updated UNCANCEL clears cancel_at_period_end flag", async () => {
+    // User changes their mind: cancels then reactivates from Customer
+    // Portal. Stripe fires subscription.updated again with cancel_at_
+    // period_end: false. Our COALESCE-based UPDATE writes the new 0
+    // (not NULL), so the flag clears + UI subtitle disappears next refresh.
+    const state = emptyState();
+    state.licenses.set("lic_uncxl", {
+      license_id: "lic_uncxl", email_hash: "eh", tier: "annual",
+      issued_at: 1000, valid_until: 1000 + 366 * 86400,
+      max_devices: 5, status: "active",
+      stripe_session_id: "cs", stripe_customer_id: "cus",
+      stripe_subscription_id: "sub_uncxl",
+      current_period_end: 1000 + 366 * 86400,
+      cancel_at_period_end: 1, // previously cancelled
+    });
+    const body = JSON.stringify({
+      id: "evt_uncxl",
+      type: "customer.subscription.updated",
+      data: {
+        object: {
+          id: "sub_uncxl",
+          status: "active",
+          current_period_end: 1000 + 366 * 86400,
+          cancel_at_period_end: false, // uncancel
+        },
+      },
+    });
+    const resp = await handleStripeWebhook(
+      await signedRequest(body), makeEnv(state), ctx
+    );
+    expect(resp.status).toBe(200);
+    const lic = state.licenses.get("lic_uncxl")!;
+    expect(lic.cancel_at_period_end).toBe(0);
+    expect(lic.status).toBe("active");
+  });
+
+  test("subscription.updated past_due → active recovers status", async () => {
+    // Card fails → past_due. Card succeeds on retry → back to active.
+    const state = emptyState();
+    state.licenses.set("lic_recover", {
+      license_id: "lic_recover", email_hash: "eh", tier: "monthly",
+      issued_at: 1000, valid_until: 1000 + 30 * 86400,
+      max_devices: 5, status: "past_due",
+      stripe_session_id: "cs", stripe_customer_id: "cus",
+      stripe_subscription_id: "sub_rec",
+      current_period_end: 1000 + 30 * 86400,
+      cancel_at_period_end: 0,
+    });
+    const body = JSON.stringify({
+      id: "evt_rec",
+      type: "customer.subscription.updated",
+      data: {
+        object: {
+          id: "sub_rec",
+          status: "active", // back from past_due
+          current_period_end: 1000 + 30 * 86400,
+          cancel_at_period_end: false,
+        },
+      },
+    });
+    const resp = await handleStripeWebhook(
+      await signedRequest(body), makeEnv(state), ctx
+    );
+    expect(resp.status).toBe(200);
+    expect(state.licenses.get("lic_recover")!.status).toBe("active");
+  });
+
+  test("subscription.updated for unknown sub_id → 200 (self-heals on next event)", async () => {
+    // Stripe occasionally fires subscription.updated before our
+    // checkout.session.completed handler has had a chance to insert
+    // the license. We log + 200 so Stripe doesn't retry to oblivion;
+    // the next event after the license exists will reconcile.
+    const state = emptyState();
+    const body = JSON.stringify({
+      id: "evt_orphan_sub",
+      type: "customer.subscription.updated",
+      data: {
+        object: {
+          id: "sub_does_not_exist",
+          status: "active",
+          current_period_end: 1234567890,
+          cancel_at_period_end: false,
+        },
+      },
+    });
+    const resp = await handleStripeWebhook(
+      await signedRequest(body), makeEnv(state), ctx
+    );
+    expect(resp.status).toBe(200);
+  });
+
   test("charge.refunded full → license revoked + audit logged", async () => {
     const state = emptyState();
     state.licenses.set("lic_full_refund", {
