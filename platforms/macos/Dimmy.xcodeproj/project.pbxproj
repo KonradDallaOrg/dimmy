@@ -54,6 +54,8 @@
 		AA000046 /* LLMModelSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000046 /* LLMModelSettingsView.swift */; };
 		AA000200 /* MacAtoms.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000200 /* MacAtoms.swift */; };
 		AA000201 /* MacSettingsContainerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000201 /* MacSettingsContainerView.swift */; };
+		AA000300 /* DimmyCore+License.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000300 /* DimmyCore+License.swift */; };
+		AA000301 /* MacLicensePage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000301 /* MacLicensePage.swift */; };
 		AA000202 /* MacHomePage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000202 /* MacHomePage.swift */; };
 		AA000203 /* MacVoicePage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000203 /* MacVoicePage.swift */; };
 		AA000204 /* MacOutputPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000204 /* MacOutputPage.swift */; };
@@ -116,6 +118,8 @@
 		AB000046 /* LLMModelSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMModelSettingsView.swift; sourceTree = "<group>"; };
 		AB000200 /* MacAtoms.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAtoms.swift; sourceTree = "<group>"; };
 		AB000201 /* MacSettingsContainerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSettingsContainerView.swift; sourceTree = "<group>"; };
+		AB000300 /* DimmyCore+License.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DimmyCore+License.swift"; sourceTree = "<group>"; };
+		AB000301 /* MacLicensePage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacLicensePage.swift; sourceTree = "<group>"; };
 		AB000202 /* MacHomePage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacHomePage.swift; sourceTree = "<group>"; };
 		AB000203 /* MacVoicePage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacVoicePage.swift; sourceTree = "<group>"; };
 		AB000204 /* MacOutputPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacOutputPage.swift; sourceTree = "<group>"; };
@@ -199,6 +203,7 @@
 				AB000007 /* AudioSimulator.swift */,
 				AB000008 /* TextInjector.swift */,
 				AB000030 /* DimmyCore.swift */,
+				AB000300 /* DimmyCore+License.swift */,
 			);
 			path = Managers;
 			sourceTree = "<group>";
@@ -256,6 +261,7 @@
 				AB000209 /* MacAdvancedPage.swift */,
 				AB000210 /* MacRulesPage.swift */,
 				AB000211 /* MacPermissionsPage.swift */,
+				AB000301 /* MacLicensePage.swift */,
 			);
 			path = Settings;
 			sourceTree = "<group>";
@@ -409,6 +415,8 @@
 				AA000210 /* MacRulesPage.swift in Sources */,
 				AA000211 /* MacPermissionsPage.swift in Sources */,
 				AA000030 /* DimmyCore.swift in Sources */,
+				AA000300 /* DimmyCore+License.swift in Sources */,
+				AA000301 /* MacLicensePage.swift in Sources */,
 				AA000041 /* SelfTests.swift in Sources */,
 				AA000042 /* RecordingSimulator.swift in Sources */,
 			);
