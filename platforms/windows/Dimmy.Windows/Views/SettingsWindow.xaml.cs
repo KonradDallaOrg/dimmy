@@ -683,14 +683,14 @@ public sealed partial class SettingsWindow : Window
         // Same five colors as MacLicensePage.statusTint:
         // TrialActive=orange, Active=green, Unrestricted=purple,
         // Expired/Invalid=red, Suspended=amber, default=gray.
-        Windows.UI.Color tint = s.Kind switch
+        global::Windows.UI.Color tint = s.Kind switch
         {
-            "TrialActive"                            => Windows.UI.Color.FromArgb(0xFF, 0xFF, 0x9F, 0x0A),
-            "Active"                                 => Windows.UI.Color.FromArgb(0xFF, 0x34, 0xC7, 0x59),
-            "Unrestricted"                           => Windows.UI.Color.FromArgb(0xFF, 0x9C, 0x5B, 0xFF),
-            "TrialExpired" or "Expired" or "Invalid" => Windows.UI.Color.FromArgb(0xFF, 0xFF, 0x3B, 0x30),
-            "Suspended"                              => Windows.UI.Color.FromArgb(0xFF, 0xF5, 0xA6, 0x23),
-            _                                        => Windows.UI.Color.FromArgb(0xFF, 0x90, 0x90, 0x99),
+            "TrialActive"                            => global::Windows.UI.Color.FromArgb(0xFF, 0xFF, 0x9F, 0x0A),
+            "Active"                                 => global::Windows.UI.Color.FromArgb(0xFF, 0x34, 0xC7, 0x59),
+            "Unrestricted"                           => global::Windows.UI.Color.FromArgb(0xFF, 0x9C, 0x5B, 0xFF),
+            "TrialExpired" or "Expired" or "Invalid" => global::Windows.UI.Color.FromArgb(0xFF, 0xFF, 0x3B, 0x30),
+            "Suspended"                              => global::Windows.UI.Color.FromArgb(0xFF, 0xF5, 0xA6, 0x23),
+            _                                        => global::Windows.UI.Color.FromArgb(0xFF, 0x90, 0x90, 0x99),
         };
 
         // ── Badge text ─────────────────────────────────────────────────
@@ -1071,7 +1071,7 @@ public sealed partial class SettingsWindow : Window
                 return;
             }
 
-            await Windows.System.Launcher.LaunchUriAsync(new Uri(portalUrl));
+            await global::Windows.System.Launcher.LaunchUriAsync(new Uri(portalUrl));
         }
         catch (Exception ex)
         {
