@@ -76,17 +76,35 @@ fn main() {
         );
     }
 
-    if !license_pubkey.is_empty() {
-        // Ed25519 base64url-no-pad of 32 bytes = 43 ASCII chars. Anything
-        // else means the secret was truncated, padded, or copy-paste-
-        // mangled. Warn loud — license verify will fail at runtime.
-        if license_pubkey.len() != 43 {
-            println!(
-                "cargo:warning=DIMMY_LICENSE_PUBKEY is {} chars; expected 43 (base64url \
-                of a 32-byte Ed25519 public key, no padding). License verify will fail.",
-                license_pubkey.len()
-            );
-        }
+    // Loud diagnostic on every build so a misconfigured secret surfaces
+    // in the CI log instead of producing a "source build" binary
+    // silently. We log only the length (and a short prefix hash so two
+    // different valid 43-char keys are distinguishable in the log) —
+    // never the full key, never a token-like substring that would let
+    // somebody reading logs reconstruct the secret.
+    if license_pubkey.is_empty() {
+        println!(
+            "cargo:warning=DIMMY_LICENSE_PUBKEY env var is EMPTY at build.rs read \
+            time. The shipped binary will run in source-build (Unrestricted) \
+            mode. Verify the GitHub Secret is set + propagated to this step's \
+            `env:` block."
+        );
+    } else if license_pubkey.len() != 43 {
+        println!(
+            "cargo:warning=DIMMY_LICENSE_PUBKEY is {} chars; expected 43 (base64url \
+            of a 32-byte Ed25519 public key, no padding). License verify will fail.",
+            license_pubkey.len()
+        );
+    } else {
+        // Length-only confirmation — proves end-to-end env propagation
+        // worked without leaking the value. Two-char prefix is enough
+        // to spot-check we got the key we meant to ship.
+        let prefix2: String = license_pubkey.chars().take(2).collect();
+        println!(
+            "cargo:warning=DIMMY_LICENSE_PUBKEY embedded ok ({} chars, prefix={}…)",
+            license_pubkey.len(),
+            prefix2
+        );
     }
 
     println!("cargo:rustc-env=DIMMY_POSTHOG_API_KEY={}", posthog_key);
