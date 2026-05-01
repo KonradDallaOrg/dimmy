@@ -186,13 +186,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                         hkLog("[AppDelegate] license activation failed: \(result.error ?? "unknown")")
                     }
                     await MainActor.run {
-                        NotificationCenter.default.post(name: .dimmyLicenseChanged, object: nil)
                         if result.ok {
-                            // Bring Settings to the front so the user sees the
-                            // confirmation. NSApp.activate is reliable here
-                            // because we're responding to a user-initiated
-                            // open-URL event (focus stealing is allowed).
+                            // Post the change notification AFTER opening the
+                            // License tab so the freshly-mounted page is
+                            // already subscribed. Posting before the tab
+                            // switch raced with view materialisation and
+                            // left the License page showing stale state.
+                            // Bring Settings to the front so the user sees
+                            // the confirmation. NSApp.activate is reliable
+                            // here because we're responding to a user-
+                            // initiated open-URL event.
                             self?.openSettingsToLicense()
+                        } else {
+                            // On failure the License page may already be
+                            // visible — let it refresh to surface the error.
+                            NotificationCenter.default.post(name: .dimmyLicenseChanged, object: nil)
                         }
                     }
                 }
@@ -211,10 +219,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func openSettingsToLicense() {
         NSApp.activate(ignoringOtherApps: true)
         openSettings()
-        // Slight delay to let the window finish materialising — without
-        // this the listener may not yet be subscribed on first open.
+        // Two-stage signal: switch tab first so MacLicensePage is mounted,
+        // THEN nudge it to refresh. .onAppear already calls refreshStatus
+        // on first mount, but the explicit dimmyLicenseChanged also covers
+        // the path where the page was already mounted (Settings open on
+        // License tab before the URL fired) and SwiftUI is short-circuiting
+        // the re-mount.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
             NotificationCenter.default.post(name: .dimmyOpenLicenseTab, object: nil)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                NotificationCenter.default.post(name: .dimmyLicenseChanged, object: nil)
+            }
         }
     }
 
