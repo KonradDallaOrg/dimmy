@@ -141,6 +141,25 @@ export async function findLicenseBySubscription(
     .first<LicenseRow>();
 }
 
+/// Look up the most recently issued license tied to a Stripe customer.
+/// Used by `charge.refunded` (the charge object carries `customer` but
+/// not `checkout_session_id` directly). Returns the latest active row;
+/// historical rows for the same customer (renewals, re-purchases) are
+/// preserved but ignored here.
+export async function findActiveLicenseByStripeCustomer(
+  db: D1Database,
+  customerId: string
+): Promise<LicenseRow | null> {
+  return db
+    .prepare(
+      `SELECT ${COLS_LIC} FROM licenses
+       WHERE stripe_customer_id = ?1 AND status = 'active'
+       ORDER BY issued_at DESC LIMIT 1`
+    )
+    .bind(customerId)
+    .first<LicenseRow>();
+}
+
 /// Apply a subscription state change in one atomic UPDATE.
 /// Used by `customer.subscription.updated` (period end + cancel flag)
 /// and by `invoice.paid` (extends validity to the new period end).

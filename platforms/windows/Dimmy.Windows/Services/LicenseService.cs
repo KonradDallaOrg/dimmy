@@ -167,6 +167,44 @@ public static class LicenseService
             return ParseOp(buf, n);
         });
 
+    public sealed record UrlResult(bool Ok, string? Url, string? Error);
+
+    /// POST /api/checkout/create — returns Stripe Checkout URL for the chosen tier.
+    /// Caller opens the URL in the system browser; webhook handles the rest.
+    public static Task<UrlResult> CreateCheckoutAsync(string tier) =>
+        Task.Run(() =>
+        {
+            var buf = new byte[2048];
+            int n = DimmyNative.dimmy_license_checkout_url(tier, buf, buf.Length);
+            return ParseUrl(buf, n);
+        });
+
+    /// POST /api/billing-portal — returns Stripe Customer Portal URL.
+    /// Only valid for licenses with stripe_customer_id (paid).
+    public static Task<UrlResult> BillingPortalUrlAsync() =>
+        Task.Run(() =>
+        {
+            var buf = new byte[2048];
+            int n = DimmyNative.dimmy_license_billing_portal_url(buf, buf.Length);
+            return ParseUrl(buf, n);
+        });
+
+    private static UrlResult ParseUrl(byte[] buf, int n)
+    {
+        if (n < 0) return new UrlResult(false, null, "FFI returned " + n);
+        var json = Encoding.UTF8.GetString(buf, 0, n);
+        var w = JsonSerializer.Deserialize<UrlWire>(json, JsonOpts);
+        if (w is null) return new UrlResult(false, null, "deserialize");
+        return new UrlResult(w.Ok, w.Url, w.Error);
+    }
+
+    private sealed class UrlWire
+    {
+        [JsonPropertyName("ok")]    public bool Ok { get; set; }
+        [JsonPropertyName("url")]   public string? Url { get; set; }
+        [JsonPropertyName("error")] public string? Error { get; set; }
+    }
+
     private static OpResult ParseOp(byte[] buf, int n)
     {
         if (n < 0) return new OpResult(false, "FFI returned " + n, null, null);

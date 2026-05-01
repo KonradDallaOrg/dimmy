@@ -13,6 +13,7 @@ import { handleStatusDebug } from "./handlers/status";
 import { handleAccountDelete } from "./handlers/delete";
 import { handleDevicesList, handleDeviceDeactivate } from "./handlers/devices";
 import { handleBillingPortal } from "./handlers/billing-portal";
+import { handleCheckoutCreate } from "./handlers/checkout";
 
 /// Bindings injected by Cloudflare. Names must match wrangler.toml.
 export interface Env {
@@ -77,6 +78,16 @@ export default {
       if (method === "POST" && path === "/api/billing-portal") {
         return await handleBillingPortal(req, env, ctx);
       }
+      if (method === "POST" && path === "/api/checkout/create") {
+        return await handleCheckoutCreate(req, env, ctx);
+      }
+      // Stripe Checkout success / cancel landing pages. Stripe redirects
+      // the user here after the hosted Checkout. The webhook fires async
+      // in parallel — we don't depend on this hit for license creation;
+      // it's purely UX confirmation that lets the user open Dimmy back.
+      if (method === "GET" && (path === "/checkout/success" || path === "/checkout/cancel")) {
+        return checkoutLandingPage(path === "/checkout/success");
+      }
       return json({ error: "not found" }, 404);
     } catch (err) {
       // Last-ditch: never let an unhandled error bubble to a 500 with
@@ -88,6 +99,47 @@ export default {
     }
   },
 } satisfies ExportedHandler<Env>;
+
+/// Minimal post-checkout landing page. Stripe-side payment is settled
+/// by the time the user lands here; the webhook creates the license
+/// in parallel + Resend sends the activation magic-link email.
+function checkoutLandingPage(success: boolean): Response {
+  const title = success ? "Payment received — check your inbox" : "Payment cancelled";
+  const heading = success
+    ? "Thanks! Your payment is confirmed."
+    : "No charge was made.";
+  const body = success
+    ? `We've emailed an activation link to the address you used at checkout.
+       Click it from the device you want to license — Dimmy will open and
+       activate automatically. The link is valid for 10 minutes.`
+    : `You can return to Dimmy and try again anytime.`;
+  const html = `<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>${title}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root { color-scheme: light dark; }
+body { font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+       max-width: 480px; margin: 8vh auto; padding: 0 24px; }
+h1 { font-size: 22px; margin: 0 0 8px; }
+p  { color: #555; }
+.cta { display: inline-block; margin-top: 18px; padding: 10px 18px;
+       background: #1a73e8; color: white; border-radius: 8px;
+       text-decoration: none; font-weight: 600; }
+.cta:hover { opacity: 0.9; }
+.muted { font-size: 12px; color: #888; margin-top: 24px; }
+</style></head><body>
+<h1>${heading}</h1>
+<p>${body}</p>
+<a class="cta" href="dimmy://license">Open Dimmy</a>
+<p class="muted">You can close this tab.</p>
+</body></html>`;
+  return new Response(html, {
+    status: 200,
+    headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
+  });
+}
 
 /// JSON response helper. Always sets the `application/json` Content-Type
 /// and a no-cache header so middleboxes don't cache license responses.

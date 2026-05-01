@@ -305,4 +305,12 @@ public static class DimmyNative
     public static extern int dimmy_license_device_deactivate(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? deviceId,
         byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_license_checkout_url(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string tier,
+        byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_license_billing_portal_url(byte[] outBuf, int bufLen);
 }

@@ -379,4 +379,134 @@ describe("/api/stripe/webhook", () => {
     );
     expect(state.licenses.size).toBe(0);
   });
+
+  test("charge.refunded full → license revoked + audit logged", async () => {
+    const state = emptyState();
+    state.licenses.set("lic_full_refund", {
+      license_id: "lic_full_refund",
+      email_hash: "eh",
+      tier: "lifetime",
+      issued_at: 1000,
+      valid_until: 1000 + 1095 * 86400,
+      max_devices: 5,
+      status: "active",
+      stripe_session_id: "cs_full",
+      stripe_customer_id: "cus_full",
+      stripe_subscription_id: null,
+      current_period_end: null,
+      cancel_at_period_end: 0,
+    });
+    const body = JSON.stringify({
+      id: "evt_full_refund",
+      type: "charge.refunded",
+      data: {
+        object: {
+          id: "ch_full",
+          customer: "cus_full",
+          amount: 3900,
+          amount_refunded: 3900,
+        },
+      },
+    });
+    const resp = await handleStripeWebhook(
+      await signedRequest(body),
+      makeEnv(state),
+      ctx
+    );
+    expect(resp.status).toBe(200);
+    expect(state.licenses.get("lic_full_refund")!.status).toBe("revoked");
+    // Audit row was written.
+    expect(state.audit_log.length).toBeGreaterThan(0);
+    const lastAudit = state.audit_log[state.audit_log.length - 1];
+    expect(lastAudit.event_type).toBe("license_revoked_refund");
+  });
+
+  test("charge.refunded partial → license stays active, audit logs partial", async () => {
+    // SaaS partial refunds are usually goodwill credits — entitlement
+    // remains. Operator can manually revoke if intent was different.
+    const state = emptyState();
+    state.licenses.set("lic_partial", {
+      license_id: "lic_partial",
+      email_hash: "eh",
+      tier: "annual",
+      issued_at: 1000,
+      valid_until: 1000 + 366 * 86400,
+      max_devices: 5,
+      status: "active",
+      stripe_session_id: "cs_p",
+      stripe_customer_id: "cus_p",
+      stripe_subscription_id: "sub_p",
+      current_period_end: 1000 + 366 * 86400,
+      cancel_at_period_end: 0,
+    });
+    const body = JSON.stringify({
+      id: "evt_partial",
+      type: "charge.refunded",
+      data: {
+        object: {
+          id: "ch_p",
+          customer: "cus_p",
+          amount: 1900, // €19 in cents
+          amount_refunded: 500, // €5 partial credit
+        },
+      },
+    });
+    const resp = await handleStripeWebhook(
+      await signedRequest(body),
+      makeEnv(state),
+      ctx
+    );
+    expect(resp.status).toBe(200);
+    // License must remain active.
+    expect(state.licenses.get("lic_partial")!.status).toBe("active");
+    // Partial audit was written.
+    const partialAudits = state.audit_log.filter(
+      (a) => a.event_type === "license_partial_refund"
+    );
+    expect(partialAudits.length).toBe(1);
+  });
+
+  test("charge.refunded for unknown customer → no-op (logged warning)", async () => {
+    // Stripe occasionally fires charge.refunded for orphaned / migrated
+    // accounts. We tolerate by no-op'ing rather than throwing — the
+    // event has been logged already and a 500 here would just trigger
+    // pointless Stripe retries.
+    const state = emptyState();
+    const body = JSON.stringify({
+      id: "evt_orphan",
+      type: "charge.refunded",
+      data: {
+        object: {
+          id: "ch_orphan",
+          customer: "cus_does_not_exist",
+          amount: 1000,
+          amount_refunded: 1000,
+        },
+      },
+    });
+    const resp = await handleStripeWebhook(
+      await signedRequest(body),
+      makeEnv(state),
+      ctx
+    );
+    expect(resp.status).toBe(200);
+    expect(state.licenses.size).toBe(0);
+  });
+
+  test("charge.refunded missing customer → no-op (logged warning)", async () => {
+    const state = emptyState();
+    const body = JSON.stringify({
+      id: "evt_no_customer",
+      type: "charge.refunded",
+      data: {
+        object: { id: "ch_x", amount: 100, amount_refunded: 100 },
+      },
+    });
+    const resp = await handleStripeWebhook(
+      await signedRequest(body),
+      makeEnv(state),
+      ctx
+    );
+    expect(resp.status).toBe(200);
+  });
 });

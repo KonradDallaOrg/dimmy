@@ -653,6 +653,7 @@ public sealed partial class SettingsWindow : Window
                 s.Kind == "Active" && s.Tier is "monthly" or "annual" or "lifetime"
                     ? Visibility.Visible
                     : Visibility.Collapsed;
+            ApplyBuyCardForStatus(s);
             PopulateScopeGrid(s);
             // Devices are server-side data — refresh asynchronously, only when
             // we actually have a license to query against.
@@ -715,17 +716,26 @@ public sealed partial class SettingsWindow : Window
             _           => s.Kind?.ToUpperInvariant() ?? "INACTIVE",
         };
         LicenseTierBadge.Text = badge;
-        LicenseTierBadgeBorder.Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(tint);
+        // Win11 Fluent badge: 14% tinted fill, 35% tinted stroke, matching
+        // tint-colored text. Subtler than the prior solid fill + white
+        // text, matches the visual weight of native InfoBadge / accent
+        // pills in Settings / Edge / Store.
+        var badgeFill = tint;   badgeFill.A   = 0x24; // ~14%
+        var badgeStroke = tint; badgeStroke.A = 0x59; // ~35%
+        LicenseTierBadgeBorder.Background  = new Microsoft.UI.Xaml.Media.SolidColorBrush(badgeFill);
+        LicenseTierBadgeBorder.BorderBrush = new Microsoft.UI.Xaml.Media.SolidColorBrush(badgeStroke);
+        LicenseTierBadge.Foreground        = new Microsoft.UI.Xaml.Media.SolidColorBrush(tint);
         LicenseTierBadgeBorder.Visibility = Visibility.Visible;
 
-        // ── Border + tinted background of the whole hero card ─────────
-        // 8% fill alpha + 60% border alpha — readable on both light & dark.
-        var fillTint = tint;
-        fillTint.A = 0x14; // ~8%
-        var strokeTint = tint;
-        strokeTint.A = 0x99; // ~60%
-        LicenseStatusBorder.Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(fillTint);
-        LicenseStatusBorder.BorderBrush = new Microsoft.UI.Xaml.Media.SolidColorBrush(strokeTint);
+        // ── Hero card ─────────────────────────────────────────────────
+        // Fluent prefers theme-aware surfaces over saturated colored
+        // borders. We use a faint 5% tint background and the standard
+        // ControlStrokeColorDefaultBrush for the border — the colored
+        // accent stays in the badge + trailing days counter.
+        var heroFill = tint; heroFill.A = 0x0D; // ~5%
+        LicenseStatusBorder.Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(heroFill);
+        LicenseStatusBorder.BorderBrush =
+            (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["ControlStrokeColorDefaultBrush"];
 
         // ── Trailing big-number ───────────────────────────────────────
         // TrialActive / Active → days remaining. Suspended → days offline.
@@ -987,92 +997,22 @@ public sealed partial class SettingsWindow : Window
     /// </summary>
     private async void License_ManageSubscription_Click(object sender, RoutedEventArgs e)
     {
-        // Production licensing endpoint. Custom domain attached to the
-        // dimmy-licensing Worker via wrangler.toml [[routes]]. Single
-        // source of truth shared with the macOS counterpart in
-        // MacLicensePage.swift::licensingServerURL.
-        const string LICENSING_SERVER = "https://license.dimmy.app";
-
+        // Goes through the licensing FFI so the call respects whatever
+        // server URL the user set via dimmy_license_set_server_url
+        // (dev → http://127.0.0.1:8787, prod → https://license.dimmy.app).
+        // The earlier hardcoded prod URL would 404 in dev because the
+        // license lives in the local D1, not the prod one.
         LicenseManageSubButton.IsEnabled = false;
         try
         {
-            // Same path the Rust core writes to (see core/src/license.rs).
-            // %APPDATA%\dimmy\license.json on Windows.
-            var configDir = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            var licensePath = System.IO.Path.Combine(configDir, "dimmy", "license.json");
-            if (!System.IO.File.Exists(licensePath))
-            {
-                ShowInfoBar(LicenseManageSubInfoBar, InfoBarSeverity.Warning,
-                    "No active license — activate first.");
-                return;
-            }
-
-            string token;
-            try
-            {
-                using var fs = System.IO.File.OpenRead(licensePath);
-                using var doc = await System.Text.Json.JsonDocument.ParseAsync(fs);
-                if (!doc.RootElement.TryGetProperty("token", out var tokenEl) ||
-                    tokenEl.ValueKind != System.Text.Json.JsonValueKind.String)
-                {
-                    ShowInfoBar(LicenseManageSubInfoBar, InfoBarSeverity.Error,
-                        "License file is malformed.");
-                    return;
-                }
-                token = tokenEl.GetString() ?? string.Empty;
-            }
-            catch (Exception readEx)
+            var r = await LicenseService.BillingPortalUrlAsync();
+            if (!r.Ok || string.IsNullOrEmpty(r.Url))
             {
                 ShowInfoBar(LicenseManageSubInfoBar, InfoBarSeverity.Error,
-                    $"Cannot read license file: {readEx.Message}");
+                    r.Error ?? "Portal response missing URL.");
                 return;
             }
-
-            using var http = new System.Net.Http.HttpClient
-            {
-                Timeout = TimeSpan.FromSeconds(15),
-            };
-            var payload = System.Text.Json.JsonSerializer.Serialize(new
-            {
-                token,
-                // Stripe accepts custom URL schemes — this returns the
-                // user to the app once they're done in the portal.
-                return_url = "dimmy://license",
-            });
-            var content = new System.Net.Http.StringContent(
-                payload, System.Text.Encoding.UTF8, "application/json");
-            var resp = await http.PostAsync($"{LICENSING_SERVER}/api/billing-portal", content);
-            var bodyStr = await resp.Content.ReadAsStringAsync();
-            if (!resp.IsSuccessStatusCode)
-            {
-                // Best-effort error extraction from { "error": "..." } envelope.
-                string msg = $"HTTP {(int)resp.StatusCode}";
-                try
-                {
-                    using var doc = System.Text.Json.JsonDocument.Parse(bodyStr);
-                    if (doc.RootElement.TryGetProperty("error", out var errEl))
-                        msg = errEl.GetString() ?? msg;
-                }
-                catch { /* fall through with default msg */ }
-                ShowInfoBar(LicenseManageSubInfoBar, InfoBarSeverity.Error,
-                    $"Cannot open portal: {msg}");
-                return;
-            }
-
-            string? portalUrl;
-            using (var doc = System.Text.Json.JsonDocument.Parse(bodyStr))
-            {
-                portalUrl = doc.RootElement.TryGetProperty("url", out var urlEl)
-                    ? urlEl.GetString() : null;
-            }
-            if (string.IsNullOrEmpty(portalUrl))
-            {
-                ShowInfoBar(LicenseManageSubInfoBar, InfoBarSeverity.Error,
-                    "Portal response missing URL.");
-                return;
-            }
-
-            await global::Windows.System.Launcher.LaunchUriAsync(new Uri(portalUrl));
+            await global::Windows.System.Launcher.LaunchUriAsync(new Uri(r.Url));
         }
         catch (Exception ex)
         {
@@ -1088,6 +1028,77 @@ public sealed partial class SettingsWindow : Window
     private async void License_DevicesReload_Click(object sender, RoutedEventArgs e)
     {
         await RefreshDevicesAsync();
+    }
+
+    /// Show / hide + relabel the Buy card based on the current status.
+    /// Kind matrix: NotFound → "Buy a license"; TrialActive → "Upgrade to
+    /// Pro"; TrialExpired → "Buy to continue"; Expired → "Renew"; Active /
+    /// Suspended / Unrestricted / Invalid → hidden.
+    private void ApplyBuyCardForStatus(LicenseService.Status s)
+    {
+        (string headline, string detail, bool show) = s.Kind switch
+        {
+            "NotFound" => (
+                "Buy a license",
+                "Pick a plan and Stripe will email you a magic link to activate immediately. No trial required.",
+                true),
+            "TrialActive" => (
+                "Upgrade to Pro",
+                "Skip the trial and unlock cloud features without interruption.",
+                true),
+            "TrialExpired" => (
+                "Trial ended — buy to continue",
+                "Cloud features are paused. Pick a plan to re-activate. Local + BYOK keep working free either way.",
+                true),
+            "Expired" => (
+                "Renew your license",
+                "Cloud features are paused. Pick a plan to re-activate.",
+                true),
+            _ => (string.Empty, string.Empty, false),
+        };
+        LicenseBuyCard.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        if (show)
+        {
+            LicenseBuyHeadline.Text = headline;
+            LicenseBuyDetail.Text = detail;
+        }
+    }
+
+    private void License_BuyMonthly_Click(object sender, RoutedEventArgs e) => _ = BuyTierAsync("monthly");
+    private void License_BuyAnnual_Click(object sender, RoutedEventArgs e)  => _ = BuyTierAsync("annual");
+    private void License_BuyLifetime_Click(object sender, RoutedEventArgs e) => _ = BuyTierAsync("lifetime");
+
+    private async Task BuyTierAsync(string tier)
+    {
+        try
+        {
+            ShowInfoBar(LicenseBuyInfoBar, InfoBarSeverity.Informational, $"Opening Stripe checkout for {tier}…");
+            DisableBuyButtons(true);
+            var r = await LicenseService.CreateCheckoutAsync(tier);
+            if (!r.Ok || string.IsNullOrEmpty(r.Url))
+            {
+                ShowInfoBar(LicenseBuyInfoBar, InfoBarSeverity.Error, r.Error ?? "Could not start checkout.");
+                return;
+            }
+            await global::Windows.System.Launcher.LaunchUriAsync(new Uri(r.Url));
+            ShowInfoBar(LicenseBuyInfoBar, InfoBarSeverity.Success,
+                "Checkout opened in your browser. After payment, check your email for the magic link to activate.");
+        }
+        catch (Exception ex)
+        {
+            ShowInfoBar(LicenseBuyInfoBar, InfoBarSeverity.Error, ex.Message);
+        }
+        finally
+        {
+            DisableBuyButtons(false);
+        }
+    }
+
+    private void DisableBuyButtons(bool disabled)
+    {
+        LicenseBuyMonthlyButton.IsEnabled = !disabled;
+        LicenseBuyAnnualButton.IsEnabled = !disabled;
+        LicenseBuyLifetimeButton.IsEnabled = !disabled;
     }
 
     private async Task RefreshDevicesAsync()

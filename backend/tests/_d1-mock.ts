@@ -84,6 +84,17 @@ function execFirst<T>(state: MockState, sql: string, bound: unknown[]): T | null
       ) as T
     ) ?? null);
   }
+  if (
+    sql.includes("FROM licenses") &&
+    sql.includes("WHERE stripe_customer_id = ?1") &&
+    sql.includes("AND status = 'active'")
+  ) {
+    const cust = bound[0] as string;
+    const matches = [...state.licenses.values()]
+      .filter((l) => l.stripe_customer_id === cust && l.status === "active")
+      .sort((a, b) => b.issued_at - a.issued_at);
+    return ((matches[0] as T) ?? null);
+  }
   if (sql.includes("SELECT COUNT(*) as n FROM devices")) {
     const lid = bound[0] as string;
     const n = [...state.devices.values()].filter(

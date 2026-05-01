@@ -23,6 +23,7 @@ import type { Env } from "../index";
 import { json } from "../index";
 import {
   audit,
+  findActiveLicenseByStripeCustomer,
   findLicenseByStripeSession,
   findLicenseBySubscription,
   insertActivationCode,
@@ -428,30 +429,67 @@ async function handleInvoicePaymentFailed(
 // ─── charge.refunded ────────────────────────────────────────────────
 //
 // Most relevant for one-time purchases (`lifetime`). For subscriptions
-// a refund is rarer (Stripe disputes / chargebacks) but if it fires we
-// still revoke. The session_id metadata is set on the Payment Link
-// configuration (see step F3 in LICENSING_TODO.md).
+// a refund is rarer (Stripe disputes / chargebacks) but if it fires for
+// the full amount we still revoke.
+//
+// Partial refunds (amount_refunded < amount) are a no-op: a partial
+// refund on a SaaS subscription is usually a goodwill credit, not a
+// cancellation — the customer keeps their entitlement. We log + audit
+// so the admin can manually revoke if intent was different.
+//
+// We look up the license by `charge.customer` since the charge object
+// doesn't carry checkout_session_id. The customer-id linkage was set
+// during handleCheckoutCompleted from session.customer.
 async function handleChargeRefunded(
   env: Env,
   charge: Record<string, unknown>,
   now: number
 ): Promise<void> {
-  const sessionId =
-    (charge.metadata as Record<string, unknown> | undefined)?.checkout_session_id ??
-    null;
+  const customerId = charge.customer as string | undefined;
+  const chargeId = charge.id as string | undefined;
+  const amount = (charge.amount as number | undefined) ?? 0;
+  const amountRefunded = (charge.amount_refunded as number | undefined) ?? 0;
+  const isFullRefund = amount > 0 && amountRefunded >= amount;
 
-  if (typeof sessionId !== "string") {
+  if (typeof customerId !== "string" || customerId.length === 0) {
     console.warn(
-      "[stripe] charge.refunded without checkout_session_id metadata — manual revoke required"
+      `[stripe] charge.refunded missing customer id (charge=${chargeId}) — manual revoke required`
     );
     return;
   }
 
-  const lic = await findLicenseByStripeSession(env.DB, sessionId);
+  const lic = await findActiveLicenseByStripeCustomer(env.DB, customerId);
   if (!lic) {
-    console.warn(`[stripe] charge.refunded: no license for session ${sessionId}`);
+    console.warn(
+      `[stripe] charge.refunded: no active license for customer ${customerId}`
+    );
     return;
   }
+
+  if (!isFullRefund) {
+    // Partial refund — log + audit, but DO NOT revoke. Operator decides.
+    console.log(
+      `[stripe] partial refund on charge ${chargeId} (refunded ${amountRefunded}/${amount}) — license ${lic.license_id} kept active`
+    );
+    await audit(
+      env.DB,
+      {
+        event_type: "license_partial_refund",
+        email_hash: lic.email_hash,
+        license_id: lic.license_id,
+        details: {
+          charge_id: chargeId ?? null,
+          customer_id: customerId,
+          amount,
+          amount_refunded: amountRefunded,
+        },
+      },
+      now
+    );
+    return;
+  }
+
+  // Full refund → revoke.
   await setLicenseStatus(env.DB, lic.license_id, "revoked");
   await audit(
     env.DB,
@@ -459,7 +497,12 @@ async function handleChargeRefunded(
       event_type: "license_revoked_refund",
       email_hash: lic.email_hash,
       license_id: lic.license_id,
-      details: { charge_id: charge.id, stripe_session_id: sessionId },
+      details: {
+        charge_id: chargeId ?? null,
+        customer_id: customerId,
+        amount,
+        amount_refunded: amountRefunded,
+      },
     },
     now
   );

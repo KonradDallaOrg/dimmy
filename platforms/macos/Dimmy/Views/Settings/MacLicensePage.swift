@@ -38,9 +38,14 @@ struct MacLicensePage: View {
     // SettingsWindow.xaml.cs::License_ManageSubscription_Click.
     private let licensingServerURL = "https://license.dimmy.app"
 
+    @State private var buyBusy: Bool = false
+    @State private var buyStatus: String? = nil
+    @State private var buyIsError: Bool = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             statusHero
+            buyGroup
             activationGroup
             capabilityGroup
             devicesGroup
@@ -232,6 +237,104 @@ struct MacLicensePage: View {
         default:
             return status.error ?? ""
         }
+    }
+
+    // MARK: Buy / Upgrade — three-tier picker shown for NotFound,
+    // TrialActive, TrialExpired, Expired. Hidden when Active (the user
+    // already has a license — they go to "Manage subscription") or in
+    // dev/Suspended/Invalid states.
+
+    @ViewBuilder
+    private var buyGroup: some View {
+        if buyVisible {
+            MacGroupLabel(text: buyHeadline)
+            MacTile {
+                MacRow(
+                    buyDetail,
+                    description: "Stripe handles payment + tax. We email you a magic link the moment payment clears.",
+                    showsDivider: false
+                ) {
+                    HStack(spacing: 8) {
+                        Button { Task { await buy(tier: "monthly") } } label: {
+                            VStack(spacing: 1) {
+                                Text("Monthly").bold()
+                                Text("recurring").font(.system(size: 9))
+                                    .foregroundStyle(Color.macTextSecondary)
+                            }.frame(minWidth: 64)
+                        }
+                        .disabled(buyBusy)
+                        Button { Task { await buy(tier: "annual") } } label: {
+                            VStack(spacing: 1) {
+                                Text("Annual").bold()
+                                Text("best value").font(.system(size: 9))
+                            }.frame(minWidth: 64)
+                        }
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(buyBusy)
+                        Button { Task { await buy(tier: "lifetime") } } label: {
+                            VStack(spacing: 1) {
+                                Text("Lifetime").bold()
+                                Text("one-time").font(.system(size: 9))
+                                    .foregroundStyle(Color.macTextSecondary)
+                            }.frame(minWidth: 64)
+                        }
+                        .disabled(buyBusy)
+                    }
+                }
+                if let msg = buyStatus {
+                    MacRow(msg, description: "", showsDivider: false) {
+                        Image(systemName: buyIsError ? "exclamationmark.octagon.fill" : "checkmark.circle.fill")
+                            .foregroundStyle(buyIsError ? .red : .green)
+                    }
+                }
+            }
+        }
+    }
+
+    private var buyVisible: Bool {
+        switch status.kind {
+        case "NotFound", "TrialActive", "TrialExpired", "Expired": return true
+        default: return false
+        }
+    }
+
+    private var buyHeadline: String {
+        switch status.kind {
+        case "NotFound":     return "Buy a license"
+        case "TrialActive":  return "Upgrade to Pro"
+        case "TrialExpired": return "Trial ended — buy to continue"
+        case "Expired":      return "Renew your license"
+        default:             return "Buy a license"
+        }
+    }
+
+    private var buyDetail: String {
+        switch status.kind {
+        case "TrialActive":
+            return "Skip the trial and unlock cloud features without interruption."
+        case "TrialExpired":
+            return "Cloud features are paused. Pick a plan to re-activate."
+        case "Expired":
+            return "Cloud features are paused. Pick a plan to re-activate."
+        default:
+            return "Pick a plan and we'll email you a magic link to activate."
+        }
+    }
+
+    private func buy(tier: String) async {
+        buyBusy = true
+        defer { buyBusy = false }
+        buyStatus = "Opening Stripe checkout for \(tier)…"
+        buyIsError = false
+        let r = await DimmyCore.shared.licenseCheckoutUrl(tier: tier)
+        guard r.ok, let urlStr = r.url, let url = URL(string: urlStr) else {
+            buyIsError = true
+            buyStatus = r.error ?? "Could not start checkout."
+            return
+        }
+        NSWorkspace.shared.open(url)
+        buyIsError = false
+        buyStatus = "Checkout opened. After payment, check your email for the magic link."
     }
 
     // MARK: Activate

@@ -2821,6 +2821,70 @@ pub extern "C" fn dimmy_license_refresh(buf: *mut c_char, buf_len: c_int) -> c_i
     write_to_buf(&json.to_string(), buf, buf_len)
 }
 
+/// `POST /api/checkout/create { tier, token? }` via FFI. Token is read
+/// from disk if present (carries email_hash for trial→paid linkage,
+/// otherwise anonymous purchase from the NotFound state). Writes JSON
+/// `{ok, url?, error?}` to buf — caller opens `url` in the system browser.
+///
+/// # Safety
+/// `tier_ptr` must be a valid null-terminated UTF-8 C string.
+/// `buf` must point to at least `buf_len` bytes of writable memory.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_license_checkout_url(
+    tier_ptr: *const c_char,
+    buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if tier_ptr.is_null() {
+        return write_license_err(buf, buf_len, "tier required");
+    }
+    let tier = unsafe { CStr::from_ptr(tier_ptr) }
+        .to_string_lossy()
+        .into_owned();
+    if !matches!(tier.as_str(), "monthly" | "annual" | "lifetime") {
+        return write_license_err(buf, buf_len, "tier must be monthly, annual, or lifetime");
+    }
+    let token = license::load_license_file().ok().flatten();
+    let server = licensing_server_url();
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(r) => r,
+        Err(e) => return write_license_err(buf, buf_len, &format!("runtime: {}", e)),
+    };
+    let json = match rt.block_on(license::create_checkout(&server, &tier, token.as_deref())) {
+        Ok(url) if !url.is_empty() => serde_json::json!({"ok": true, "url": url}),
+        Ok(_) => serde_json::json!({"ok": false, "error": "empty URL from server"}),
+        Err(e) => serde_json::json!({"ok": false, "error": format!("{}", e)}),
+    };
+    write_to_buf(&json.to_string(), buf, buf_len)
+}
+
+/// `POST /api/billing-portal { token }` via FFI. Reads token from disk;
+/// trials and source-builds get an error from the server (only paid
+/// licenses with a `stripe_customer_id` can manage subscriptions).
+/// Writes JSON `{ok, url?, error?}` to buf.
+#[no_mangle]
+pub extern "C" fn dimmy_license_billing_portal_url(
+    buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    let token = match license::load_license_file() {
+        Ok(Some(t)) => t,
+        Ok(None) => return write_license_err(buf, buf_len, "no license file"),
+        Err(e) => return write_license_err(buf, buf_len, &format!("load: {}", e)),
+    };
+    let server = licensing_server_url();
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(r) => r,
+        Err(e) => return write_license_err(buf, buf_len, &format!("runtime: {}", e)),
+    };
+    let json = match rt.block_on(license::billing_portal_url(&server, &token)) {
+        Ok(url) if !url.is_empty() => serde_json::json!({"ok": true, "url": url}),
+        Ok(_) => serde_json::json!({"ok": false, "error": "empty URL from server"}),
+        Err(e) => serde_json::json!({"ok": false, "error": format!("{}", e)}),
+    };
+    write_to_buf(&json.to_string(), buf, buf_len)
+}
+
 /// `POST /api/devices/list { token }` via FFI. Reads token from disk,
 /// returns JSON `{ok, license_id, tier, max_devices, devices: [...], error?}`.
 #[no_mangle]

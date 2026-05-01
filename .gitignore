@@ -29,6 +29,9 @@ platforms/macos/build/
 data/licensing/
 core/data/
 backend/.dev-data/
+# Wrangler dev runtime — secrets in plain text, MUST never reach git.
+backend/.dev.vars
+backend/.wrangler/
 licensing-data/
 **/dimmy_jumplist.log
 **/dimmy_startup.log

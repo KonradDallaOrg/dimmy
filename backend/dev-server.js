@@ -204,6 +204,60 @@ const handlers = {
         return ok(licenses.map(l => ({ ...l, devices: state.devices.filter(d => d.license_id === l.license_id) })));
     },
 
+    'POST /api/checkout/create': ({ body }) => {
+        // Dev mock — short-circuits Stripe entirely. Creates the paid
+        // license + activation code locally and returns a dimmy://
+        // magic link, simulating the post-payment webhook flow:
+        //   Stripe Checkout success → webhook → create license → email
+        //   user the dimmy:// magic link → user clicks → activated
+        // The UI's `LaunchUriAsync(url)` dispatches the dimmy:// scheme
+        // straight to the running Dimmy via the OS handler, mirroring
+        // the email-click path. Production handler in handlers/checkout.ts
+        // returns a real https://buy.stripe.com URL instead.
+        const tier = body.tier;
+        if (tier !== 'monthly' && tier !== 'annual' && tier !== 'lifetime') {
+            return err(400, 'tier must be monthly, annual, or lifetime');
+        }
+        // Carry email_hash from the trial token if present (trial→paid
+        // upgrade). Anonymous purchase uses a synthetic email hash so
+        // the new license has a stable identity.
+        let eh;
+        if (body.token) {
+            try {
+                const claims = verifyToken(body.token);
+                eh = claims.eh;
+            } catch { /* invalid token — anonymous flow */ }
+        }
+        if (!eh) {
+            // Anonymous purchase — synthesise a hash. Realistic shape
+            // (hex sha256), unique per click, stable for the session.
+            eh = sha256(`dev-anon-${Date.now()}-${tier}`);
+        }
+        const lic = {
+            license_id: ulid(), email_hash: eh, tier,
+            issued_at: now(), valid_until: now() + TIER_VALIDITY[tier],
+            max_devices: 5, status: 'active',
+        };
+        state.licenses.push(lic);
+        const code = mintCode(lic.license_id);
+        const url = `dimmy://activate?code=${code}`;
+        log(`[checkout-mock] tier=${tier} eh=${eh.slice(0,8)}… → ${url}`);
+        return ok({ url, tier });
+    },
+
+    'POST /api/billing-portal': ({ body }) => {
+        // Dev mock — verify token then echo a debug URL instead of
+        // calling Stripe. Production handler in handlers/billing-portal.ts.
+        if (!body.token) return err(400, 'token required');
+        let claims;
+        try { claims = verifyToken(body.token); } catch (e) { return err(400, `invalid token: ${e.message}`); }
+        const lic = state.licenses.find(l => l.license_id === claims.lid);
+        if (!lic) return err(404, 'license not found');
+        const url = `${PUBLIC_URL}/portal/dev-mock?lid=${claims.lid.slice(0,8)}&t=${Date.now()}`;
+        log(`[billing-portal-mock] lid=${claims.lid.slice(0,8)} → ${url}`);
+        return ok({ url });
+    },
+
     'POST /api/devices/list': ({ body }) => {
         // Auth: caller proves identity by sending its current token.
         // Server verifies the signature, looks up the license, returns

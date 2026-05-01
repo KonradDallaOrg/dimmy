@@ -647,6 +647,69 @@ pub async fn list_devices(
         .await
 }
 
+/// `POST /api/checkout/create { tier, token? }` — generate a Stripe
+/// Checkout Session URL for the chosen paid tier. Pass the current
+/// token to carry email_hash across as Stripe `client_reference_id`
+/// (so trial→paid linkage survives), or `None` for an anonymous
+/// purchase (NotFound state).
+pub async fn create_checkout(
+    server: &str,
+    tier: &str,
+    token: Option<&str>,
+) -> Result<String, reqwest::Error> {
+    assert!(!server.is_empty(), "server URL required");
+    assert!(!tier.is_empty(), "tier required");
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    let url = format!("{}/api/checkout/create", server.trim_end_matches('/'));
+    let mut payload = serde_json::json!({ "tier": tier });
+    if let Some(t) = token {
+        payload["token"] = serde_json::Value::String(t.to_string());
+    }
+    let resp: serde_json::Value = client
+        .post(&url)
+        .json(&payload)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    Ok(resp
+        .get("url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string())
+}
+
+/// `POST /api/billing-portal { token }` — generate a Stripe Customer
+/// Portal session URL. Only valid for paid licenses (those with a
+/// `stripe_customer_id`). Trials get a 409 from the server.
+pub async fn billing_portal_url(
+    server: &str,
+    token: &str,
+) -> Result<String, reqwest::Error> {
+    assert!(!server.is_empty(), "server URL required");
+    assert!(!token.is_empty(), "token required");
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    let url = format!("{}/api/billing-portal", server.trim_end_matches('/'));
+    let resp: serde_json::Value = client
+        .post(&url)
+        .json(&serde_json::json!({ "token": token }))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    Ok(resp
+        .get("url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string())
+}
+
 /// `POST /api/devices/deactivate { token, device_id? }` — mark a device
 /// as deactivated. `None` = self-sign-out (frees the calling device's slot).
 pub async fn deactivate_device(

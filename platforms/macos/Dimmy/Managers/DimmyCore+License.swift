@@ -193,6 +193,52 @@ extension DimmyCore {
         }.value
     }
 
+    public struct LicenseUrlResult {
+        public let ok: Bool
+        public let url: String?
+        public let error: String?
+    }
+
+    /// POST /api/checkout/create — returns Stripe Checkout URL for the
+    /// chosen tier. Caller opens it via NSWorkspace.shared.open. The
+    /// webhook back on the server creates the license + sends the magic
+    /// link email when the user pays.
+    public func licenseCheckoutUrl(tier: String) async -> LicenseUrlResult {
+        await Task.detached(priority: .userInitiated) { [self] in
+            let buf = UnsafeMutablePointer<CChar>.allocate(capacity: 2048)
+            defer { buf.deallocate() }
+            buf[0] = 0
+            let n = tier.withCString { dimmy_license_checkout_url($0, buf, 2048) }
+            return parseLicenseUrl(buf: buf, n: n)
+        }.value
+    }
+
+    /// POST /api/billing-portal — returns Stripe Customer Portal URL.
+    /// Only valid for paid licenses (those with a stripe_customer_id).
+    /// Trials and source-builds get an error from the server.
+    public func licenseBillingPortalUrl() async -> LicenseUrlResult {
+        await Task.detached(priority: .userInitiated) { [self] in
+            let buf = UnsafeMutablePointer<CChar>.allocate(capacity: 2048)
+            defer { buf.deallocate() }
+            buf[0] = 0
+            let n = dimmy_license_billing_portal_url(buf, 2048)
+            return parseLicenseUrl(buf: buf, n: n)
+        }.value
+    }
+
+    private func parseLicenseUrl(buf: UnsafePointer<CChar>, n: Int32) -> LicenseUrlResult {
+        guard n > 0,
+              let data = String(cString: buf).data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return LicenseUrlResult(ok: false, url: nil, error: "FFI returned \(n)")
+        }
+        return LicenseUrlResult(
+            ok: dict["ok"] as? Bool ?? false,
+            url: dict["url"] as? String,
+            error: dict["error"] as? String)
+    }
+
     public func licenseDeactivateDevice(deviceId: String?) async -> LicenseOpResult {
         await Task.detached(priority: .userInitiated) { [self] in
             let buf = UnsafeMutablePointer<CChar>.allocate(capacity: 1024)

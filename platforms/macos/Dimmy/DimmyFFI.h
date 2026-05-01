@@ -219,4 +219,14 @@ int32_t dimmy_license_device_deactivate(const char * _Nullable device_id,
                                         char * _Nonnull out_buf,
                                         int32_t buf_len);
 
+/// POST /api/checkout/create — returns Stripe Checkout URL.
+/// `tier` must be "monthly" | "annual" | "lifetime".
+int32_t dimmy_license_checkout_url(const char * _Nonnull tier,
+                                   char * _Nonnull out_buf,
+                                   int32_t buf_len);
+
+/// POST /api/billing-portal — returns Stripe Customer Portal URL.
+/// Only valid for paid licenses.
+int32_t dimmy_license_billing_portal_url(char * _Nonnull out_buf, int32_t buf_len);
+
 #endif /* DimmyFFI_h */

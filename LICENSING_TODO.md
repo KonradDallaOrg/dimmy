@@ -8,6 +8,28 @@ Per il dettaglio architetturale + perché fare le cose in questo ordine, vedi [`
 
 ---
 
+## Canonical keypairs (reference)
+
+> **Public keys are not secret** — published here so any future Claude
+> session knows the exact bytes the client builds embed. Private keys
+> live ONLY in Cloudflare secrets + 1Password ("Dimmy License Privkey
+> — rotate-only"). Never document or log a privkey.
+
+| Keypair | Pubkey (`DIMMY_LICENSE_PUBKEY`) | Used by |
+|---|---|---|
+| **dev** | `FvIwxXaU49zV0Czz87rHs1uQe90KRYefrFN17zhOMhY` | Local dev: `wrangler dev` + `dev-server.js` + Win/Mac dev binaries. Throwaway. |
+| **prod** | `uut9CwgkhU-Q76gguvGJID4D48xAQc4h1LAG829hacE` | Cloudflare Worker at `license.dimmy.app` + every shipped binary built from CI with this pubkey injected. Rotate-only via Step 1 below. |
+
+When deploying client builds for **internal testing against prod**, build with:
+```
+DIMMY_LICENSE_PUBKEY=uut9CwgkhU-Q76gguvGJID4D48xAQc4h1LAG829hacE \
+  cargo build --release --lib --features license-client
+```
+
+Output goes in `core/target/release-prod/` (parallel path, doesn't clobber dev).
+
+---
+
 ## ☐ 1. Generate Ed25519 keypair (2 min, security-critical)
 
 Una sola volta. La chiave privata non deve mai uscire dal Cloudflare secret store + un backup cifrato in 1Password.
