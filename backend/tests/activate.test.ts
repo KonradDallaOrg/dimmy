@@ -233,4 +233,35 @@ describe("/api/activate", () => {
     const claims = await verifyTokenWithPub(body.token, env.DIMMY_LICENSE_PUBKEY);
     expect(claims.exp).toBe(9999999);
   });
+
+  test("cancels_at populated when subscription scheduled to cancel", async () => {
+    // After the user clicks "Cancel" in Stripe Customer Portal, Stripe
+    // fires customer.subscription.updated with cancel_at_period_end=true
+    // and the Worker mirrors both into the licenses row. The next
+    // activate (or refresh) should embed cancels_at = current_period_end
+    // in claims so the client can render "Cancels on YYYY-MM-DD".
+    const state = emptyState();
+    seedActiveLicense(state, "lic_cxl", "annual");
+    state.licenses.get("lic_cxl")!.cancel_at_period_end = 1;
+    state.licenses.get("lic_cxl")!.current_period_end = 1234567890;
+    seedActivationCode(state, "c_cxl", "lic_cxl");
+    const env = await makeEnv(state);
+    const resp = await handleActivate(makeReq("c_cxl"), env, ctx);
+    expect(resp.status).toBe(200);
+    const body = await resp.json() as { token: string };
+    const claims = await verifyTokenWithPub(body.token, env.DIMMY_LICENSE_PUBKEY);
+    expect(claims.cancels_at).toBe(1234567890);
+  });
+
+  test("cancels_at omitted when subscription is healthy (default state)", async () => {
+    const state = emptyState();
+    seedActiveLicense(state, "lic_h", "annual");
+    seedActivationCode(state, "c_h", "lic_h");
+    const env = await makeEnv(state);
+    const resp = await handleActivate(makeReq("c_h"), env, ctx);
+    expect(resp.status).toBe(200);
+    const body = await resp.json() as { token: string };
+    const claims = await verifyTokenWithPub(body.token, env.DIMMY_LICENSE_PUBKEY);
+    expect(claims.cancels_at).toBeUndefined();
+  });
 });

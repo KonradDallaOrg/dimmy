@@ -168,6 +168,28 @@ describe("/api/refresh", () => {
     expect(state.devices.get("did_h")!.last_seen).toBeGreaterThan(1000);
   });
 
+  test("cancels_at populated on refresh when license has cancel flag set", async () => {
+    const kp = await makeKeypair();
+    const state = emptyState();
+    seedLicense(state, "lic_cxl", "active");
+    state.licenses.get("lic_cxl")!.cancel_at_period_end = 1;
+    state.licenses.get("lic_cxl")!.current_period_end = 1888888888;
+    seedDevice(state, "did_cxl", "lic_cxl");
+    const env = await makeEnv(state, kp);
+    const claims: Claims = {
+      v: 1, lid: "lic_cxl", eh: "eh", tier: "annual",
+      iat: 1000, exp: 100_000_000, max_offline: 30,
+      did: "did_cxl", scope: ["managed_stt"],
+    };
+    const token = await signToken(claims, kp.priv);
+    const resp = await handleRefresh(makeReq({ token }), env, ctx);
+    expect(resp.status).toBe(200);
+    const fresh = await verifyTokenWithPub(
+      ((await resp.json()) as { token: string }).token, kp.pub
+    );
+    expect(fresh.cancels_at).toBe(1888888888);
+  });
+
   test("scope refresh from server tier table, not from inbound claim", async () => {
     // Server-side tier→scope is the authoritative mapping. If the
     // operator adds a scope to a tier, the next refresh propagates it

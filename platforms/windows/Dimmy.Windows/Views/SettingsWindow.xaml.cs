@@ -626,7 +626,9 @@ public sealed partial class SettingsWindow : Window
                 "TrialExpired" => ("Trial expired",
                                     "Your trial has ended. Cloud features are paused. Purchase a license to continue."),
                 "Active"       => ($"Active — {s.Tier} ({s.DaysRemaining} day(s) left)",
-                                    "Thanks for supporting Dimmy. All cloud features are enabled."),
+                                    s.CancelsAt is long ca
+                                        ? $"Subscription scheduled to cancel on {DateTimeOffset.FromUnixTimeSeconds(ca).LocalDateTime:MMM d, yyyy}. You keep cloud features until then."
+                                        : "Thanks for supporting Dimmy. All cloud features are enabled."),
                 "Expired"      => ("License expired",
                                     "Renew to re-enable cloud features."),
                 "Suspended"    => ($"Suspended — offline {s.DaysOffline} day(s)",

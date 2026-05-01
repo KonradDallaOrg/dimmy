@@ -124,6 +124,14 @@ pub struct Claims {
     /// Scope of capabilities ("cloud", "updates"). Forward-compat for
     /// future per-feature gating.
     pub scope: Vec<String>,
+    /// Unix epoch seconds at which a cancelled subscription will lapse.
+    /// Set when the user has clicked "Cancel" in Stripe Customer Portal
+    /// and Stripe fired customer.subscription.updated with
+    /// cancel_at_period_end=true. The license stays valid until this
+    /// timestamp; UI surfaces "Cancels on …" so the user knows.
+    /// Omitted when the subscription is healthy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cancels_at: Option<i64>,
 }
 
 /// Wire format of the license file on disk. We wrap the raw token in a
@@ -156,11 +164,14 @@ pub enum LicenseStatus {
     /// Trial ended (token expired). Local features stay on; cloud /
     /// updates gated.
     TrialExpired,
-    /// Paid license active.
+    /// Paid license active. `cancels_at` is set when the subscription
+    /// is scheduled to cancel at period end (user clicked Cancel in
+    /// Customer Portal); UI shows "Cancels on …" subtitle.
     Active {
         tier: Tier,
         days_remaining: i64,
         scopes: Vec<String>,
+        cancels_at: Option<i64>,
     },
     /// Paid license expired (sub lapsed, prepay window ended). Local
     /// features stay on; cloud / updates gated.
@@ -488,6 +499,7 @@ pub fn check_status() -> LicenseStatus {
                 tier,
                 days_remaining,
                 scopes: claims.scope.clone(),
+                cancels_at: claims.cancels_at,
             },
         }
     }
@@ -778,6 +790,7 @@ mod tests {
             tier: Tier::Annual,
             days_remaining: 100,
             scopes: vec!["managed_stt".into()],
+            cancels_at: None,
         }
         .cloud_enabled());
 
@@ -786,6 +799,7 @@ mod tests {
             tier: Tier::Annual,
             days_remaining: 100,
             scopes: vec![],
+            cancels_at: None,
         }
         .cloud_enabled());
 
@@ -814,11 +828,69 @@ mod tests {
             tier: Tier::Annual,
             days_remaining: 100,
             scopes: vec![scopes::MANAGED_STT.into(), scopes::AUTO_UPDATE.into()],
+            cancels_at: None,
         };
         assert!(s.has_scope(scopes::MANAGED_STT));
         assert!(s.has_scope(scopes::AUTO_UPDATE));
         assert!(!s.has_scope(scopes::MANAGED_LLM));
         assert!(!s.has_scope(scopes::HISTORY_SYNC));
+    }
+
+    #[test]
+    fn active_with_cancels_at_still_grants_scopes() {
+        // The user has clicked Cancel in Customer Portal but the period
+        // hasn't ended yet. Until exp passes, the scopes are still
+        // granted — we don't pre-emptively gate.
+        let s = LicenseStatus::Active {
+            tier: Tier::Annual,
+            days_remaining: 30,
+            scopes: vec![scopes::MANAGED_STT.into(), scopes::AUTO_UPDATE.into()],
+            cancels_at: Some(2_000_000_000),
+        };
+        assert!(s.has_scope(scopes::MANAGED_STT));
+        assert!(s.cloud_enabled());
+    }
+
+    #[test]
+    fn claims_serde_round_trip_preserves_cancels_at() {
+        let claims = Claims {
+            v: 1,
+            lid: "lid".into(),
+            eh: "eh".into(),
+            tier: Tier::Annual,
+            iat: 1,
+            exp: 2,
+            max_offline: 30,
+            did: "did".into(),
+            scope: vec!["s".into()],
+            cancels_at: Some(1_888_888_888),
+        };
+        let json = serde_json::to_string(&claims).unwrap();
+        let back: Claims = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.cancels_at, Some(1_888_888_888));
+    }
+
+    #[test]
+    fn claims_serde_omits_cancels_at_when_none() {
+        // Critical: the field must be ABSENT from the JSON when None,
+        // not serialized as `null`. Old clients (pre-cancels_at field)
+        // would deserialize `null` into None already (serde tolerates
+        // missing field), but absent keeps the token byte-stable across
+        // the schema bump.
+        let claims = Claims {
+            v: 1,
+            lid: "lid".into(),
+            eh: "eh".into(),
+            tier: Tier::Annual,
+            iat: 1,
+            exp: 2,
+            max_offline: 30,
+            did: "did".into(),
+            scope: vec!["s".into()],
+            cancels_at: None,
+        };
+        let json = serde_json::to_string(&claims).unwrap();
+        assert!(!json.contains("cancels_at"), "got: {}", json);
     }
 
     #[test]
@@ -906,6 +978,7 @@ mod tests {
             max_offline: 30,
             did: "01HKD".into(),
             scope: vec!["cloud".into()],
+            cancels_at: None,
         };
         let payload_bytes = serde_json::to_vec(&claims).unwrap();
         let payload_b64 = b64_encode(&payload_bytes);
@@ -948,6 +1021,7 @@ mod tests {
             max_offline: 30,
             did: "01HKD".into(),
             scope: vec![],
+            cancels_at: None,
         };
         let payload_b64 = b64_encode(&serde_json::to_vec(&claims).unwrap());
         let signing_input = format!("{}.{}", header_b64, payload_b64);

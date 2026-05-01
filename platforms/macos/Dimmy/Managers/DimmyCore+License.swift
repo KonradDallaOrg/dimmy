@@ -20,6 +20,10 @@ extension DimmyCore {
         public let cloudEnabled: Bool
         public let updatesEnabled: Bool
         public let scopes: [String]
+        /// Unix epoch when an Active subscription with cancel-at-period-end
+        /// will lapse. Set when the user clicked Cancel in Customer Portal;
+        /// nil otherwise. UI renders "Cancels on …" subtitle.
+        public let cancelsAt: Int64?
     }
 
     public struct LicenseOpResult {
@@ -92,7 +96,7 @@ extension DimmyCore {
             return LicenseStatus(
                 kind: "Invalid", tier: nil, daysRemaining: nil, daysOffline: nil,
                 error: "FFI status returned \(n)", cloudEnabled: false, updatesEnabled: false,
-                scopes: [])
+                scopes: [], cancelsAt: nil)
         }
         return LicenseStatus(
             kind: dict["kind"] as? String ?? "Invalid",
@@ -102,7 +106,8 @@ extension DimmyCore {
             error: dict["error"] as? String,
             cloudEnabled: dict["cloud_enabled"] as? Bool ?? false,
             updatesEnabled: dict["updates_enabled"] as? Bool ?? false,
-            scopes: dict["scopes"] as? [String] ?? [])
+            scopes: dict["scopes"] as? [String] ?? [],
+            cancelsAt: (dict["cancels_at"] as? NSNumber)?.int64Value)
     }
 
     public func licenseHasScope(_ scope: LicenseScope) -> Bool {

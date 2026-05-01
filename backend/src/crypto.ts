@@ -55,6 +55,11 @@ export interface Claims {
   max_offline: number;
   did: string;
   scope: string[];
+  /// Unix epoch seconds at which the subscription will cancel (= the
+  /// current_period_end at the moment cancel_at_period_end was set).
+  /// Omitted when not cancelled. Lets the client render
+  /// "Cancels on Mar 1, 2027" without an extra round-trip.
+  cancels_at?: number;
 }
 
 /// Import a 32-byte raw Ed25519 private key into the Web Crypto API.

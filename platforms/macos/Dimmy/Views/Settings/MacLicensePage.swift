@@ -227,6 +227,13 @@ struct MacLicensePage: View {
         case "TrialExpired":
             return "Your trial has ended. Cloud features are paused. Purchase a license to continue."
         case "Active":
+            if let ca = status.cancelsAt {
+                let fmt = DateFormatter()
+                fmt.dateStyle = .medium
+                fmt.timeStyle = .none
+                let date = Date(timeIntervalSince1970: TimeInterval(ca))
+                return "Subscription scheduled to cancel on \(fmt.string(from: date)). You keep cloud features until then."
+            }
             return "Thanks for supporting Dimmy. All cloud features are enabled."
         case "Expired":
             return "Renew to re-enable cloud features."
@@ -512,17 +519,11 @@ struct MacLicensePage: View {
         }
     }
 
-    private struct LicenseFileEnvelope: Decodable {
-        let token: String
-    }
-    private struct BillingPortalResponse: Decodable {
-        let url: String?
-        let error: String?
-    }
-
-    /// Read the on-disk token, POST to /api/billing-portal, and open
-    /// the returned Stripe URL in the system browser. The portal page
-    /// is single-tab + ~5 min lifetime; we never store the URL.
+    /// Open Stripe Customer Portal via the licensing FFI. Goes through
+    /// the same server URL the rest of the FFI uses (default
+    /// localhost:8787 in dev, license.dimmy.app in prod) — no hardcoded
+    /// URL, no manual file I/O for the token. The portal session is
+    /// single-tab + ~5 min lifetime; we never store the URL.
     private func openBillingPortal() async {
         await MainActor.run {
             manageBusy = true
@@ -531,54 +532,14 @@ struct MacLicensePage: View {
         defer {
             Task { @MainActor in manageBusy = false }
         }
-
-        // Same path the Rust core writes to (see core/src/license.rs::license_path).
-        let path = "\(NSHomeDirectory())/.config/dimmy/license.json"
-        let envelope: LicenseFileEnvelope
-        do {
-            let data = try Data(contentsOf: URL(fileURLWithPath: path))
-            envelope = try JSONDecoder().decode(LicenseFileEnvelope.self, from: data)
-        } catch {
+        let r = await DimmyCore.shared.licenseBillingPortalUrl()
+        guard r.ok, let urlStr = r.url, let url = URL(string: urlStr) else {
             await MainActor.run {
-                manageError = "No active license — activate first."
+                manageError = r.error ?? "Cannot open portal."
             }
             return
         }
-
-        guard let url = URL(string: "\(licensingServerURL)/api/billing-portal") else {
-            await MainActor.run { manageError = "Internal: bad server URL" }
-            return
-        }
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.timeoutInterval = 15
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body: [String: String] = [
-            "token": envelope.token,
-            // dimmy:// return brings the user back into the app once
-            // they're done in the portal — Stripe accepts custom schemes.
-            "return_url": "dimmy://license",
-        ]
-        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-
-        do {
-            let (data, resp) = try await URLSession.shared.data(for: req)
-            let parsed = try JSONDecoder().decode(BillingPortalResponse.self, from: data)
-            let httpStatus = (resp as? HTTPURLResponse)?.statusCode ?? 0
-
-            if httpStatus == 200, let urlString = parsed.url, let portalURL = URL(string: urlString) {
-                NSWorkspace.shared.open(portalURL)
-            } else {
-                let msg = parsed.error ?? "HTTP \(httpStatus)"
-                await MainActor.run {
-                    manageError = "Cannot open portal: \(msg)"
-                }
-            }
-        } catch {
-            await MainActor.run {
-                manageError = "Network error: \(error.localizedDescription)"
-            }
-        }
+        NSWorkspace.shared.open(url)
     }
 
     private func refreshDevices() async {

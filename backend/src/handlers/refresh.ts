@@ -63,6 +63,9 @@ export async function handleRefresh(
     // next refresh without client release).
     scope: SCOPES_FOR_TIER[lic.tier as Tier] ?? claims.scope,
   };
+  if (lic.cancel_at_period_end && lic.current_period_end) {
+    newClaims.cancels_at = lic.current_period_end;
+  }
   const newToken = await signToken(newClaims, env.DIMMY_LICENSE_PRIVKEY);
   return json({ token: newToken });
 }

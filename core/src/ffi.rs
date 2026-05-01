@@ -2565,6 +2565,10 @@ struct LicenseStatusWire {
     /// Active scope list — drives the per-feature ✅/❌ grid in UI.
     /// Empty for non-active states; full vocabulary for Unrestricted.
     scopes: Vec<String>,
+    /// Unix epoch seconds when an Active subscription with cancel-at-
+    /// period-end will lapse. UI renders "Cancels on YYYY-MM-DD" subtitle.
+    /// `null` for everything except Active state with cancel scheduled.
+    cancels_at: Option<i64>,
 }
 
 impl From<LicenseStatus> for LicenseStatusWire {
@@ -2572,6 +2576,7 @@ impl From<LicenseStatus> for LicenseStatusWire {
         let cloud_enabled = s.cloud_enabled();
         let updates_enabled = s.updates_enabled();
         let scopes = s.scopes();
+        let mut cancels_at: Option<i64> = None;
         let (kind, tier, days_remaining, days_offline, error) = match s {
             LicenseStatus::Unrestricted => ("Unrestricted", None, None, None, None),
             LicenseStatus::NotFound => ("NotFound", None, None, None, None),
@@ -2587,14 +2592,18 @@ impl From<LicenseStatus> for LicenseStatusWire {
             LicenseStatus::Active {
                 tier,
                 days_remaining,
+                cancels_at: ca,
                 ..
-            } => (
-                "Active",
-                Some(tier_str(tier)),
-                Some(days_remaining),
-                None,
-                None,
-            ),
+            } => {
+                cancels_at = ca;
+                (
+                    "Active",
+                    Some(tier_str(tier)),
+                    Some(days_remaining),
+                    None,
+                    None,
+                )
+            }
             LicenseStatus::Expired => ("Expired", None, None, None, None),
             LicenseStatus::Suspended { tier, days_offline } => (
                 "Suspended",
@@ -2613,6 +2622,7 @@ impl From<LicenseStatus> for LicenseStatusWire {
             cloud_enabled,
             updates_enabled,
             scopes,
+            cancels_at,
         }
     }
 }

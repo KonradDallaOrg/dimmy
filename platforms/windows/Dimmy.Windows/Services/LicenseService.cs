@@ -26,7 +26,8 @@ public static class LicenseService
         string? Error,
         bool CloudEnabled,
         bool UpdatesEnabled,
-        IReadOnlyList<string> Scopes);
+        IReadOnlyList<string> Scopes,
+        long? CancelsAt);
 
     public static class ScopeNames
     {
@@ -76,11 +77,11 @@ public static class LicenseService
         var buf = new byte[Buf];
         int n = DimmyNative.dimmy_license_status_json(buf, buf.Length);
         if (n < 0)
-            return new Status("Invalid", null, null, null, "FFI returned " + n, false, false, Array.Empty<string>());
+            return new Status("Invalid", null, null, null, "FFI returned " + n, false, false, Array.Empty<string>(), null);
         var json = Encoding.UTF8.GetString(buf, 0, n);
         var w = JsonSerializer.Deserialize<StatusWire>(json, JsonOpts);
         if (w is null)
-            return new Status("Invalid", null, null, null, "deserialize", false, false, Array.Empty<string>());
+            return new Status("Invalid", null, null, null, "deserialize", false, false, Array.Empty<string>(), null);
         return new Status(
             w.Kind ?? "Invalid",
             w.Tier,
@@ -89,7 +90,8 @@ public static class LicenseService
             w.Error,
             w.CloudEnabled,
             w.UpdatesEnabled,
-            (IReadOnlyList<string>?)w.Scopes ?? Array.Empty<string>());
+            (IReadOnlyList<string>?)w.Scopes ?? Array.Empty<string>(),
+            w.CancelsAt);
     }
 
     /// True if the active license carries the named scope. Source builds
@@ -230,6 +232,7 @@ public static class LicenseService
         [JsonPropertyName("cloud_enabled")]  public bool CloudEnabled { get; set; }
         [JsonPropertyName("updates_enabled")] public bool UpdatesEnabled { get; set; }
         [JsonPropertyName("scopes")]         public List<string>? Scopes { get; set; }
+        [JsonPropertyName("cancels_at")]     public long? CancelsAt { get; set; }
     }
 
     private sealed class OpWire

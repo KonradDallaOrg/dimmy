@@ -84,6 +84,13 @@ export async function handleActivate(
     did: deviceId,
     scope: SCOPES_FOR_TIER[lic.tier as Tier] ?? [],
   };
+  // When the user has clicked "Cancel" in Customer Portal, surface the
+  // effective cancellation date so the client can render "Cancels on …"
+  // without polling. Stripe sets cancel_at_period_end=1 + leaves
+  // current_period_end intact until the period actually ends.
+  if (lic.cancel_at_period_end && lic.current_period_end) {
+    claims.cancels_at = lic.current_period_end;
+  }
   const token = await signToken(claims, env.DIMMY_LICENSE_PRIVKEY);
 
   await audit(
