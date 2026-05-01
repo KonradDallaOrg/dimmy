@@ -2620,6 +2620,9 @@ impl From<LicenseStatus> for LicenseStatusWire {
 /// Override the licensing server URL at runtime. Useful for dev (point at
 /// `http://127.0.0.1:8787`) or staging without rebuilding the cdylib.
 /// Returns 0 on success, -1 on null/empty input, -2 on mutex poisoning.
+///
+/// # Safety
+/// `url_ptr` must be a valid null-terminated UTF-8 C string.
 #[no_mangle]
 pub unsafe extern "C" fn dimmy_license_set_server_url(url_ptr: *const c_char) -> c_int {
     if url_ptr.is_null() {
@@ -2668,6 +2671,10 @@ pub extern "C" fn dimmy_license_status_json(buf: *mut c_char, buf_len: c_int) ->
 
 /// `POST /api/trial/start` via FFI. Writes JSON `{ok, magic_link?, error?}` to buf.
 /// Sync-blocking on a fresh tokio runtime.
+///
+/// # Safety
+/// `email_ptr` must be a valid null-terminated UTF-8 C string. `buf` must
+/// point to at least `buf_len` writable bytes.
 #[no_mangle]
 pub unsafe extern "C" fn dimmy_license_request_trial(
     email_ptr: *const c_char,
@@ -2699,6 +2706,11 @@ pub unsafe extern "C" fn dimmy_license_request_trial(
 /// `GET /api/activate?code=…&device_label=…` via FFI. On success, persists the
 /// returned token to `~/.config/dimmy/license.json` and stamps last_online_check.
 /// Writes JSON `{ok, error?}` to buf.
+///
+/// # Safety
+/// `code_ptr` and `label_ptr` must be valid null-terminated UTF-8 C strings
+/// (`label_ptr` may be null — falls back to a generic device label). `buf`
+/// must point to at least `buf_len` writable bytes.
 #[no_mangle]
 pub unsafe extern "C" fn dimmy_license_redeem(
     code_ptr: *const c_char,
@@ -2840,6 +2852,10 @@ pub extern "C" fn dimmy_license_devices_list(buf: *mut c_char, buf_len: c_int) -
 /// `device_id_ptr` may be null to self-deactivate (sign out the current device).
 /// Writes JSON `{ok, error?}` to buf. On self-deactivate success, also clears
 /// the local license file so the UI flips back to NotFound.
+///
+/// # Safety
+/// `device_id_ptr` may be null. If non-null, must be a valid null-terminated
+/// UTF-8 C string. `buf` must point to at least `buf_len` writable bytes.
 #[no_mangle]
 pub unsafe extern "C" fn dimmy_license_device_deactivate(
     device_id_ptr: *const c_char,
@@ -2891,6 +2907,9 @@ pub unsafe extern "C" fn dimmy_license_device_deactivate(
 /// Capability check — does the active license carry the named scope?
 /// Returns 1 = yes, 0 = no, -1 on null input. Source builds (no embedded
 /// pubkey) report 1 for every scope.
+///
+/// # Safety
+/// `scope_ptr` must be a valid null-terminated UTF-8 C string.
 #[no_mangle]
 pub unsafe extern "C" fn dimmy_license_has_scope(scope_ptr: *const c_char) -> c_int {
     if scope_ptr.is_null() {
