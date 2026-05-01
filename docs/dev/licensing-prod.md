@@ -206,6 +206,102 @@ Do them in this order so each step is independently testable:
 6. **GitHub Actions release** — push a no-op tag (e.g. v0.6.27-rc1), verify the release-build embeds the pubkey (`Get-Content` the EXE strings | grep for the pubkey prefix).
 7. **Soft launch** — enable purchase on the marketing site. Watch Stripe + Worker logs for the first 24h.
 
+## From test mode to live mode (when you're ready to take real money)
+
+Test mode setup is the rehearsal — same code path, fake card numbers,
+zero risk. Live mode is the same Worker pointed at the live half of
+the same Stripe account. Sequence (~30 min total):
+
+### 1. Stripe — clone products into live mode
+
+In Stripe Dashboard, top-right toggle "Test mode" → OFF (= live).
+The 3 test products + Payment Links you already have don't carry
+over automatically. Two options:
+
+- **Manual** (3 min): repeat the F3 step in `LICENSING_TODO.md` from
+  the live dashboard — same 3 products, same prices, same
+  `metadata.tier`. Copy the new `price_…` IDs and Payment Link URLs.
+- **CLI** (5 min): use `stripe-cli` to clone:
+  ```bash
+  stripe --api-key <test_key> products list
+  # then for each product:
+  stripe --api-key <live_key> products create --name "..." --description "..."
+  stripe --api-key <live_key> prices create --product prod_… --unit-amount … --currency eur
+  stripe --api-key <live_key> payment_links create --line-items[0].price=price_… --metadata.tier=…
+  ```
+
+In live mode, also:
+- Enable **Stripe Tax** (Settings → Tax → Italy). 0.5% / transaction
+  but legally required for EU B2C.
+- Enable **fraud rules** (Radar): default settings are sane; only
+  tighten if you see fraudulent disputes.
+
+### 2. Live webhook endpoint
+
+Live mode has a separate webhook list. Add an endpoint with the
+**same** URL (`https://license.dimmy.app/api/stripe/webhook`) but
+the live signing secret will be a fresh `whsec_…`. Subscribe to
+the same 6 events.
+
+### 3. Swap Worker secrets
+
+```bash
+cd backend
+echo "sk_live_…"  | npx wrangler secret put STRIPE_SECRET_KEY
+echo "whsec_…"    | npx wrangler secret put STRIPE_WEBHOOK_SECRET
+```
+
+The Resend API key + license keypair (PRIV/PUB) stay the same — they
+have no notion of test vs live.
+
+### 4. Update wrangler.toml with live price IDs
+
+The 3 `STRIPE_PRICE_{MONTHLY,ANNUAL,LIFETIME}` env vars are the
+fallback when `metadata.tier` is missing. Update to the live IDs:
+
+```toml
+STRIPE_PRICE_MONTHLY  = "price_<live>"
+STRIPE_PRICE_ANNUAL   = "price_<live>"
+STRIPE_PRICE_LIFETIME = "price_<live>"
+```
+
+```bash
+npx wrangler deploy
+```
+
+### 5. Smoke test live, low risk
+
+Use a real card with a tiny amount (Stripe accepts €1 minimum). Do
+the full checkout for `monthly` (lowest commitment). Verify in D1:
+
+```bash
+npx wrangler d1 execute dimmy-licensing --remote \
+  --command "SELECT license_id, tier, status, stripe_customer_id FROM licenses ORDER BY issued_at DESC LIMIT 1"
+```
+
+Then refund yourself from the Stripe dashboard (charge → Refund) and
+verify the license flips to `revoked` via the `charge.refunded`
+webhook. ~€1 spent on a real card to validate the live pipeline end-
+to-end. Worth it.
+
+### 6. Re-build binaries (new pubkey is the same — no code change)
+
+The pubkey embedded in current binaries works in both test and live
+mode (it's the cryptographic verifier, agnostic to which Stripe is
+talking). No rebuild required for the toggle. Only when you ROTATE
+the keypair would you need to rebuild + redistribute.
+
+### 7. Marketing site → live Payment Links
+
+Replace any `https://buy.stripe.com/test_…` links on the marketing
+site with the live equivalents from step 1.
+
+### 8. (Optional) Disable test mode endpoint
+
+Keep the test webhook endpoint disabled but not deleted in case you
+need to repro a bug from a test transaction later. Stripe doesn't
+charge for inactive endpoints.
+
 ## Rollback plan
 
 If anything goes catastrophically wrong post-launch:

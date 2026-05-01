@@ -1,0 +1,16 @@
+# Pin Rust toolchain to 1.94 — the last stable before 1.95 promoted
+# clippy lints (not_unsafe_ptr_arg_deref, missing_safety_doc,
+# collapsible_if) from `warn` to `deny` by default. Without the pin,
+# every `rustup default stable` on a fresh CI runner picks up the new
+# default-deny set and breaks on FFI signatures + 3rd-party crate
+# patterns we treated as warnings on the original CI baseline.
+#
+# To bump intentionally: change the channel here, run `cargo clippy
+# -- -D warnings` locally, fix new errors, and only then commit. This
+# pin file lives in `core/` (the workspace root) so all crates inside
+# the Cargo workspace pick it up automatically.
+
+[toolchain]
+channel = "1.94"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
