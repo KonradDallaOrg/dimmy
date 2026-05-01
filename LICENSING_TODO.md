@@ -3,8 +3,58 @@
 > Cose che **devi fare tu** per portare il licensing v2 da PR #43 in produzione live. ~70 min totali (più ~30 min VAT-OSS, più qualche ora per il sito marketing). Tutto il resto è già in codice (vedi PR #43).
 
 Per il dettaglio architetturale + perché fare le cose in questo ordine, vedi [`docs/dev/licensing-prod.md`](docs/dev/licensing-prod.md).
+Per il setup di test **in test mode contro il Worker prod**, vedi [`docs/dev/prod-test-setup.md`](docs/dev/prod-test-setup.md).
 
 ⚠️ **Ordine importante**: ogni step si testa prima del successivo. Fare in disordine = rifare lavoro.
+
+---
+
+## Status @ 2026-05-02 (overnight session)
+
+**Coverage tests**: 133 Worker + 362 Rust core, **tutti verdi**. Dettaglio:
+
+| Suite | Tests | Cosa copre |
+|---|---|---|
+| `crypto.test.ts` | 12 | base64url, ULID, activation code entropy, sign/verify round-trip, tampered-payload reject, schema-version reject |
+| `scopes.test.ts` | 9 | tier→scope mapping, max_offline values, parità con Rust |
+| `stripe-signature.test.ts` | 7 | HMAC verify, tolerance window, rotation, header parse |
+| `stripe-webhook.test.ts` | 19 | checkout.session.completed (lifetime/subscription, fallback), invoice paid/failed, sub deleted/updated/uncancel/recovery, charge.refunded full/partial/orphan, idempotency replay, signature reject |
+| `billing-portal.test.ts` | 8 | auth, no-customer-id 409, return_url sanitize, Stripe 5xx → 502 |
+| `checkout.test.ts` | 19 | tier validation, real Stripe form-body shape, mode mapping, token email_hash carry, return_url sanitize |
+| `activate.test.ts` | 13 | code validation, device limit, suspended licence, cancels_at population, scope-from-tier, exp from license |
+| `refresh.test.ts` | 9 | token verify, license/device gates, last_seen bump, scope refresh, cancels_at on update |
+| `devices.test.ts` | 9 | list (active only), self-deactivate, deactivate other, audit, replay |
+| `trial.test.ts` | 8 | email validation, idempotent re-issuance (scenario #7), expired-trial 409 |
+| `delete.test.ts` | 9 | GDPR 2-step OTP, anonymisation (not delete), cross-account defence, replay reject |
+| `html-pages.test.ts` | 8 | /checkout/success/cancel, /activate?code= bridge HTML, security headers |
+| **Rust core** | 362 | tutti i moduli + 15 license-specific (cancels_at serde, has_scope per state, claims integrity) |
+
+**Feature shipped tonight**:
+- ✅ Buy / Upgrade / Renew CTAs (state-aware, Win + Mac)
+- ✅ Manage subscription button via FFI (Win + Mac, dev URL respected)
+- ✅ /api/checkout/create endpoint with `metadata.tier` (deterministic webhook routing)
+- ✅ /api/billing-portal endpoint via Customer Portal API
+- ✅ /checkout/success + /checkout/cancel landing pages
+- ✅ charge.refunded full vs partial distinction
+- ✅ subscription.updated UNCANCEL handling
+- ✅ cancels_at end-to-end: token claim → LicenseStatus → FFI JSON → Win + Mac UI subtitle "Subscription scheduled to cancel on …"
+- ✅ Build prod-test DLL Windows con prod pubkey embedded (`bin/Release-prod/.../dimmy_lib.dll`)
+- ✅ Stripe CLI installed + listen forwarding to localhost:8787
+- ✅ wrangler dev runtime up with .dev.vars (gitignored — secrets, prices, prod-test config)
+- ✅ Documentazione setup test prod su Mac → `docs/dev/prod-test-setup.md`
+
+**Per domani mattina (Mac side)**:
+1. `git pull` sul Mac
+2. `cargo build --target aarch64-apple-darwin --release --lib --features local-stt-metal,local-llm-metal,license-client` con `DIMMY_LICENSE_PUBKEY=uut9...`
+3. Build app via Xcode
+4. Esegui i 12 step del playbook in `docs/dev/prod-test-setup.md`
+5. Se qualcosa rompe, leggi i log del Worker `wrangler tail` (deve essere già deployato in prod) o lancia tu `wrangler dev` localmente
+
+**Bloccante per il go-live live**:
+- VAT-OSS Italia (step 6 di questo file) — obbligatorio per legge prima della prima vendita B2C
+- Resend domain verification + production API key
+- Stripe LIVE prodotti + webhook signing secret separati dai test
+- GitHub Action secret `DIMMY_LICENSE_PUBKEY` con la prod pubkey — **solo dopo** test e2e verde
 
 ---
 
