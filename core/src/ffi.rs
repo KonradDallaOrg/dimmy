@@ -2873,10 +2873,7 @@ pub unsafe extern "C" fn dimmy_license_checkout_url(
 /// licenses with a `stripe_customer_id` can manage subscriptions).
 /// Writes JSON `{ok, url?, error?}` to buf.
 #[no_mangle]
-pub extern "C" fn dimmy_license_billing_portal_url(
-    buf: *mut c_char,
-    buf_len: c_int,
-) -> c_int {
+pub extern "C" fn dimmy_license_billing_portal_url(buf: *mut c_char, buf_len: c_int) -> c_int {
     let token = match license::load_license_file() {
         Ok(Some(t)) => t,
         Ok(None) => return write_license_err(buf, buf_len, "no license file"),

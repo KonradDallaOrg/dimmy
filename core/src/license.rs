@@ -697,10 +697,7 @@ pub async fn create_checkout(
 /// `POST /api/billing-portal { token }` — generate a Stripe Customer
 /// Portal session URL. Only valid for paid licenses (those with a
 /// `stripe_customer_id`). Trials get a 409 from the server.
-pub async fn billing_portal_url(
-    server: &str,
-    token: &str,
-) -> Result<String, reqwest::Error> {
+pub async fn billing_portal_url(server: &str, token: &str) -> Result<String, reqwest::Error> {
     assert!(!server.is_empty(), "server URL required");
     assert!(!token.is_empty(), "token required");
     let client = reqwest::Client::builder()
