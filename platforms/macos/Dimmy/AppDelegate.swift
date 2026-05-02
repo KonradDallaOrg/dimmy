@@ -18,6 +18,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         hkLog("[AppDelegate] applicationDidFinishLaunching ENTER")
+
+        // Single-instance guard. macOS deduplicates by bundle path, not
+        // bundle ID — so a Release in /Applications and a Debug build in
+        // ~/Library/Developer/Xcode/DerivedData with the same
+        // CFBundleIdentifier can both run at once. Two Dimmys means two
+        // global hotkey monitors fighting over Cmd+Shift+Space, two pill
+        // windows, two licensing FFI sessions writing the same
+        // license.json. Detect any other process advertising our bundle
+        // ID and bail out — let the existing instance keep running.
+        let myBundleID = Bundle.main.bundleIdentifier ?? ""
+        let myPID = ProcessInfo.processInfo.processIdentifier
+        let others = NSRunningApplication
+            .runningApplications(withBundleIdentifier: myBundleID)
+            .filter { $0.processIdentifier != myPID }
+        if let existing = others.first {
+            hkLog("[AppDelegate] another Dimmy already running (pid=\(existing.processIdentifier)) — activating it and quitting")
+            existing.activate(options: [.activateIgnoringOtherApps])
+            NSApp.terminate(nil)
+            return
+        }
+
         AppDelegate.shared = self
 
         SelfTests.runAll()
