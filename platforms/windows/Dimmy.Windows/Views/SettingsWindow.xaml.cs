@@ -683,17 +683,19 @@ public sealed partial class SettingsWindow : Window
     private void ApplyLicenseHero(LicenseService.Status s)
     {
         // ── Tint per state ─────────────────────────────────────────────
-        // Same five colors as MacLicensePage.statusTint:
-        // TrialActive=orange, Active=green, Unrestricted=purple,
-        // Expired/Invalid=red, Suspended=amber, default=gray.
+        // Color is reserved for *positive* state. TrialActive=orange
+        // ("act soon"), Active=green ("you're paid"), Unrestricted=purple
+        // ("dev"). Everything else (NotFound, TrialExpired, Expired,
+        // Invalid, Suspended) collapses to neutral gray — a license
+        // problem isn't an error to alarm about, it's just a state.
+        // Red was reading as "something is broken", wrong vibe for a
+        // user who simply hasn't activated yet.
         global::Windows.UI.Color tint = s.Kind switch
         {
-            "TrialActive"                            => global::Windows.UI.Color.FromArgb(0xFF, 0xFF, 0x9F, 0x0A),
-            "Active"                                 => global::Windows.UI.Color.FromArgb(0xFF, 0x34, 0xC7, 0x59),
-            "Unrestricted"                           => global::Windows.UI.Color.FromArgb(0xFF, 0x9C, 0x5B, 0xFF),
-            "TrialExpired" or "Expired" or "Invalid" => global::Windows.UI.Color.FromArgb(0xFF, 0xFF, 0x3B, 0x30),
-            "Suspended"                              => global::Windows.UI.Color.FromArgb(0xFF, 0xF5, 0xA6, 0x23),
-            _                                        => global::Windows.UI.Color.FromArgb(0xFF, 0x90, 0x90, 0x99),
+            "TrialActive"  => global::Windows.UI.Color.FromArgb(0xFF, 0xFF, 0x9F, 0x0A),
+            "Active"       => global::Windows.UI.Color.FromArgb(0xFF, 0x34, 0xC7, 0x59),
+            "Unrestricted" => global::Windows.UI.Color.FromArgb(0xFF, 0x9C, 0x5B, 0xFF),
+            _              => global::Windows.UI.Color.FromArgb(0xFF, 0x90, 0x90, 0x99),
         };
 
         // ── Badge text ─────────────────────────────────────────────────

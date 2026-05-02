@@ -515,9 +515,18 @@ fn now_secs() -> i64 {
 
 // ── HTTP client (talks to the licensing server) ──────────────────────
 
-/// Default server URL for the local PoC. Production builds will override
-/// this via env var when the Cloudflare Workers endpoint is live.
-pub const DEFAULT_SERVER_URL: &str = "http://localhost:8787";
+/// Default server URL. When the binary ships with an embedded license
+/// public key (`DIMMY_LICENSE_PUBKEY` set at build time), it talks to
+/// the production Cloudflare Worker by default. Source builds with no
+/// pubkey embedded fall back to the local Node mock at `localhost:8787`
+/// so `cargo run` keeps working without spinning up the prod server.
+/// UIs can still override at runtime via `dimmy_license_set_server_url`
+/// (Settings → License → Advanced).
+pub const DEFAULT_SERVER_URL: &str = if EMBEDDED_PUBKEY_B64.is_empty() {
+    "http://localhost:8787"
+} else {
+    "https://license.dimmy.app"
+};
 
 /// Wire-shape of `POST /api/trial/start`.
 #[derive(Debug, Serialize)]

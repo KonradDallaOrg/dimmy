@@ -45,10 +45,10 @@ struct MacLicensePage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             statusHero
-            buyGroup
-            activationGroup
-            capabilityGroup
             devicesGroup
+            buyGroup
+            capabilityGroup
+            activationGroup
             fallbackGroup
             advancedGroup
         }
@@ -82,7 +82,7 @@ struct MacLicensePage: View {
                     VStack(alignment: .trailing, spacing: 2) {
                         Text(trailing.value)
                             .font(.system(size: 22, weight: .semibold, design: .rounded))
-                            .foregroundStyle(statusTint)
+                            .foregroundStyle(.primary)
                             .monospacedDigit()
                         Text(trailing.label)
                             .font(.system(size: 11, weight: .medium))
@@ -95,32 +95,34 @@ struct MacLicensePage: View {
             .padding(EdgeInsets(top: 18, leading: 18, bottom: 18, trailing: 18))
             .background(
                 RoundedRectangle(cornerRadius: MacTheme.tileCornerRadius, style: .continuous)
-                    .fill(statusTint.opacity(0.08))
+                    .fill(statusTint.opacity(0.05))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: MacTheme.tileCornerRadius, style: .continuous)
-                    .stroke(statusTint.opacity(0.35), lineWidth: 0.8)
+                    .stroke(Color.primary.opacity(MacTheme.hairlineOpacity), lineWidth: 0.8)
             )
             .padding(.bottom, 10)
 
             HStack(spacing: 8) {
+                if isManageableTier {
+                    Button(manageBusy ? "Opening…" : "Manage subscription") {
+                        Task { await openBillingPortal() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(manageBusy)
+                }
                 Button("Refresh now") {
                     Task {
                         _ = await DimmyCore.shared.licenseRefresh()
                         refreshStatus()
                     }
                 }
+                Spacer()
                 Button("Sign out / clear") {
                     DimmyCore.shared.licenseClear()
                     refreshStatus()
                 }
-                if isManageableTier {
-                    Button(manageBusy ? "Opening…" : "Manage subscription") {
-                        Task { await openBillingPortal() }
-                    }
-                    .disabled(manageBusy)
-                }
-                Spacer()
+                .tint(.red)
             }
             .padding(.bottom, 4)
             if let err = manageError {
@@ -134,20 +136,24 @@ struct MacLicensePage: View {
     }
 
     private var tierBadge: some View {
+        // Win11 Fluent badge style: subtle tinted fill (~14%), matching
+        // 35% tinted stroke, tint-colored text. Same recipe as
+        // SettingsWindow.xaml.cs::ApplyLicenseHero so both platforms
+        // read at identical visual weight — no saturated solid pills.
         Text(tierBadgeText)
-            .font(.system(size: 11, weight: .bold, design: .rounded))
-            .tracking(0.8)
-            .foregroundStyle(.white)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .font(.system(size: 11, weight: .semibold, design: .rounded))
+            .tracking(0.6)
+            .foregroundStyle(statusTint)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
             .background(
-                Capsule(style: .continuous).fill(statusTint)
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(statusTint.opacity(0.14))
             )
             .overlay(
-                Capsule(style: .continuous)
-                    .stroke(Color.white.opacity(0.15), lineWidth: 0.5)
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .stroke(statusTint.opacity(0.35), lineWidth: 0.8)
             )
-            .shadow(color: statusTint.opacity(0.35), radius: 3, x: 0, y: 1)
     }
 
     private var tierBadgeText: String {
@@ -169,14 +175,17 @@ struct MacLicensePage: View {
     }
 
     private var statusTint: Color {
+        // Color is reserved for *positive* state — TrialActive (orange,
+        // "act soon") and Active (green, "you're paid"). Everything else
+        // (NotFound, TrialExpired, Expired, Invalid, Suspended) shows as
+        // neutral gray: a license problem isn't an error to alarm about,
+        // it's just a state. Red was reading as "something is broken" —
+        // exactly the wrong vibe for a user who simply hasn't activated.
         switch status.kind {
         case "TrialActive":   return Color(red: 1.00, green: 0.62, blue: 0.04)   // orange
         case "Active":        return Color(red: 0.20, green: 0.74, blue: 0.40)   // green
         case "Unrestricted":  return Color(red: 0.55, green: 0.40, blue: 0.95)   // purple (dev)
-        case "TrialExpired", "Expired", "Invalid":
-            return Color(red: 0.92, green: 0.30, blue: 0.30)                     // red
-        case "Suspended":     return Color(red: 0.95, green: 0.65, blue: 0.10)   // amber
-        default:              return Color.secondary                             // gray (NotFound)
+        default:              return Color.secondary                             // gray (everything else)
         }
     }
 
@@ -274,8 +283,10 @@ struct MacLicensePage: View {
                             VStack(spacing: 1) {
                                 Text("Annual").bold()
                                 Text("best value").font(.system(size: 9))
+                                    .foregroundStyle(.white.opacity(0.85))
                             }.frame(minWidth: 64)
                         }
+                        .buttonStyle(.borderedProminent)
                         .keyboardShortcut(.defaultAction)
                         .disabled(buyBusy)
                         Button { Task { await buy(tier: "lifetime") } } label: {
@@ -479,13 +490,13 @@ struct MacLicensePage: View {
     // MARK: Advanced (server URL)
 
     private var advancedGroup: some View {
-        DisclosureGroup("Advanced — server URL") {
+        DisclosureGroup("Advanced") {
             MacTile {
                 MacRow("Licensing server",
-                       description: "Override the licensing endpoint. Default points at the local Node mock.",
+                       description: "Override the licensing endpoint. Leave blank to use the built-in default.",
                        showsDivider: false) {
                     HStack(spacing: 8) {
-                        TextField("http://127.0.0.1:8787", text: $serverUrl)
+                        TextField("custom server URL", text: $serverUrl)
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 280)
                         Button("Apply") {

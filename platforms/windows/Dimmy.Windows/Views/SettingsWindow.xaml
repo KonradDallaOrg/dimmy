@@ -1220,20 +1220,20 @@
               </Expander>
 
               <!-- Server URL override (dev) -->
-              <Expander Header="Advanced — server URL" HorizontalAlignment="Stretch"
+              <Expander Header="Advanced" HorizontalAlignment="Stretch"
                         Margin="0,0,0,16">
                 <StackPanel Spacing="8">
                   <TextBlock FontSize="12"
                              Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                              TextWrapping="Wrap"
-                             Text="Override the licensing server. Default points at the local Node mock (http://127.0.0.1:8787). Production will point at https://license.dimmy.app." />
+                             Text="Override the licensing server. Leave blank to use the built-in default." />
                   <Grid ColumnSpacing="8">
                     <Grid.ColumnDefinitions>
                       <ColumnDefinition Width="*" />
                       <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <TextBox Grid.Column="0" x:Name="LicenseServerUrlBox"
-                             Text="http://127.0.0.1:8787" />
+                             PlaceholderText="custom server URL" />
                     <Button Grid.Column="1" Content="Apply"
                             Click="License_ApplyServerUrl_Click" />
                   </Grid>
