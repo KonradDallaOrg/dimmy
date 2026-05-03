@@ -847,8 +847,31 @@ public partial class App : Application
                     var result = DimmyNative.dimmy_start_recording();
                     if (result == -1)
                         _appViewModel.SetError("No API key configured");
+                    else if (result == -2)
+                    {
+                        // Race: Rust thinks it's already recording (a previous
+                        // start that we initiated is still spinning up the
+                        // audio stream and hasn't fired recording_started yet
+                        // → ViewModel still shows IsRecording=false → we
+                        // mistook this press as a "start" instead of "stop").
+                        // Auto-recover: treat as the intended stop. This is
+                        // the difference between a frustrating "Recording
+                        // failed (-2)" toast and the user's intent.
+                        PttLog("Toggle race: dimmy_start_recording returned -2 (already recording) — treating as stop");
+                        await StopAndProcess();
+                    }
                     else if (result < 0)
                         _appViewModel.SetError($"Recording failed ({result})");
+                    else
+                    {
+                        // Optimistic state update: Rust is now recording, but
+                        // the recording_started event roundtrip can take ~1s
+                        // (audio stream build time). Without this, a quick
+                        // second toggle press during the build window would
+                        // see IsRecording=false and try to start AGAIN — the
+                        // -2 race above. Setting state here closes the gap.
+                        _appViewModel.SetState(AppState.Recording);
+                    }
                 }
             }
         });
