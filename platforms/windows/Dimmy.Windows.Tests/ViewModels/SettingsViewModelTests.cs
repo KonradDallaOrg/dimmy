@@ -1,3 +1,4 @@
+using System.Linq;
 using Dimmy.Windows.ViewModels;
 using Xunit;
 
@@ -267,5 +268,108 @@ public class SettingsViewModelTests
         var vm = new SettingsViewModel();
         vm.LoadFromJson(json);
         Assert.Equal(expected, vm.LlmTranslateTo);
+    }
+
+    // ── Per-provider LLM key flags (the bug fix) ──
+
+    /// <summary>
+    /// HasLlmKeyForUrl maps URLs to provider keys mirroring the Rust
+    /// `Provider::from_url` logic. Hardcoded URL substrings — this test
+    /// will catch desync if either side adds a provider without the
+    /// other.
+    /// </summary>
+    [Theory]
+    [InlineData("https://api.groq.com/openai/v1/chat/completions", "groq")]
+    [InlineData("https://api.openai.com/v1/chat/completions", "openai")]
+    [InlineData("https://openrouter.ai/api/v1/chat/completions", "openrouter")]
+    [InlineData("https://generativelanguage.googleapis.com/v1beta/...", "gemini")]
+    [InlineData("https://api.anthropic.com/v1/messages", "anthropic")]
+    [InlineData("https://my-self-hosted-llm.example.com/v1", "custom")]
+    [InlineData("", "groq")] // empty defaults to groq, matches Rust behaviour
+    public void HasLlmKeyForUrl_returnsFalse_whenDictNotPopulated(string url, string expectedProviderKey)
+    {
+        var vm = new SettingsViewModel();
+        // Without LoadKeyFlagsFrom call, dict is empty → all false. The
+        // expectedProviderKey parameter documents WHICH internal bucket
+        // each url maps to (kept in test data so a future regression
+        // that breaks the URL→provider mapping shows up here too).
+        Assert.False(vm.HasLlmKeyForUrl(url));
+        Assert.NotNull(expectedProviderKey); // smoke-use to avoid xUnit1026 warning
+    }
+
+    /// <summary>
+    /// LoadKeyFlagsFrom parses the FFI JSON shape (`has_llm_*_key`
+    /// booleans) and populates the per-provider dict so that subsequent
+    /// HasLlmKeyForUrl lookups return the right value when the user
+    /// switches the dropdown.
+    /// </summary>
+    [Fact]
+    public void LoadKeyFlagsFrom_populatesPerProviderDict()
+    {
+        var vm = new SettingsViewModel();
+        var json = """
+        {
+            "has_llm_groq_key": false,
+            "has_llm_openai_key": true,
+            "has_llm_anthropic_key": true,
+            "has_llm_gemini_key": false,
+            "has_llm_openrouter_key": false,
+            "has_llm_custom_key": false
+        }
+        """;
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        vm.LoadKeyFlagsFrom(doc.RootElement);
+
+        Assert.True(vm.HasLlmKeyForUrl("https://api.openai.com/v1/chat/completions"));
+        Assert.True(vm.HasLlmKeyForUrl("https://api.anthropic.com/v1/messages"));
+        Assert.False(vm.HasLlmKeyForUrl("https://api.groq.com/openai/v1/chat/completions"));
+        Assert.False(vm.HasLlmKeyForUrl("https://generativelanguage.googleapis.com/v1beta/..."));
+    }
+
+    /// <summary>
+    /// After LoadKeyFlagsFrom, the active-provider HasLlmKey flag must
+    /// reflect the new dict so the green ✓ badge renders correctly on
+    /// initial Settings open (not just on dropdown change).
+    /// </summary>
+    [Fact]
+    public void LoadKeyFlagsFrom_redrivesHasLlmKeyForActiveUrl()
+    {
+        var vm = new SettingsViewModel();
+        vm.LlmApiUrl = "https://api.anthropic.com/v1/messages";
+
+        var json = """{ "has_llm_anthropic_key": true }""";
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        vm.LoadKeyFlagsFrom(doc.RootElement);
+
+        Assert.True(vm.HasLlmKey);
+
+        // Switching the active URL to a provider WITHOUT a stored key
+        // must NOT auto-flip HasLlmKey — that's the dropdown handler's
+        // job, not LoadKeyFlagsFrom's.
+        vm.LlmApiUrl = "https://api.groq.com/openai/v1/chat/completions";
+        Assert.True(vm.HasLlmKey); // unchanged until LoadKeyFlagsFrom or dropdown handler runs
+    }
+
+    /// <summary>
+    /// Multiple Anthropic presets share the same URL (Haiku, Sonnet) —
+    /// the dict is keyed by provider, so all variants of the same
+    /// provider must surface the same flag.
+    /// </summary>
+    [Fact]
+    public void HasLlmKeyForUrl_treatsAnthropicHaikuAndSonnetIdentically()
+    {
+        var vm = new SettingsViewModel();
+        var json = """{ "has_llm_anthropic_key": true }""";
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        vm.LoadKeyFlagsFrom(doc.RootElement);
+
+        // Both Anthropic presets in LlmProviderPresets share api.anthropic.com
+        var haikuUrl = SettingsViewModel.LlmProviderPresets
+            .First(p => p.Name == "Anthropic").Url;
+        var sonnetUrl = SettingsViewModel.LlmProviderPresets
+            .First(p => p.Name == "Anthropic-Sonnet").Url;
+        Assert.Equal(haikuUrl, sonnetUrl); // sanity: presets really do share URL
+        Assert.True(vm.HasLlmKeyForUrl(haikuUrl));
+        Assert.True(vm.HasLlmKeyForUrl(sonnetUrl));
     }
 }

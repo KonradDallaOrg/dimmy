@@ -265,8 +265,9 @@
                 <controls:SettingCard Glyph="&#xE192;"
                                       Label="Cloud STT API key"
                                       Description="Encrypted locally. The provider receives only audio + key, never anything else.">
-                  <StackPanel Orientation="Horizontal" Spacing="8">
-                    <PasswordBox x:Name="CloudApiKeyBox" MinWidth="240"
+                  <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                    <PasswordBox x:Name="CloudApiKeyBox" Width="240"
+                                 VerticalAlignment="Center"
                                  PlaceholderText="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}" />
                     <FontIcon Glyph="&#xE73E;" FontSize="16" Foreground="#4ade80"
                               VerticalAlignment="Center"
@@ -500,8 +501,9 @@
                                       Label="LLM API key"
                                       Description="Encrypted locally. Used when not sharing with STT."
                                       Visibility="{Binding LlmUseSameKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Invert}">
-                  <StackPanel Orientation="Horizontal" Spacing="8">
-                    <PasswordBox x:Name="LlmApiKeyBox" MinWidth="240"
+                  <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                    <PasswordBox x:Name="LlmApiKeyBox" Width="240"
+                                 VerticalAlignment="Center"
                                  PlaceholderText="{Binding HasLlmKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}" />
                     <FontIcon Glyph="&#xE73E;" FontSize="16" Foreground="#4ade80"
                               VerticalAlignment="Center"

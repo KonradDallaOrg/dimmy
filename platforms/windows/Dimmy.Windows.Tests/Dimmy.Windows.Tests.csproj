@@ -22,6 +22,7 @@
     <Compile Include="..\Dimmy.Windows\ViewModels\OnboardingViewModel.cs" Link="ViewModels\OnboardingViewModel.cs" />
     <Compile Include="..\Dimmy.Windows\Services\HotkeyParser.cs" Link="Services\HotkeyParser.cs" />
     <Compile Include="..\Dimmy.Windows\Services\TranscriptionService.cs" Link="Services\TranscriptionService.cs" />
+    <Compile Include="..\Dimmy.Windows\Services\AppContextCapture.cs" Link="Services\AppContextCapture.cs" />
     <Compile Include="..\Dimmy.Windows\Interop\DimmyNative.cs" Link="Interop\DimmyNative.cs" />
   </ItemGroup>
 </Project>
