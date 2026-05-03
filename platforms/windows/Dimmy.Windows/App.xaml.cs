@@ -43,6 +43,15 @@ public partial class App : Application
     // Toggle debounce: ignore presses within 300ms of last action
     private long _lastToggleMs;
 
+    // Foreground-app snapshot taken at hotkey-press. Two consumers:
+    //   - Diagnostic for the Notepad++ paste bug — compared against
+    //     GetForegroundWindow() at paste time to detect focus drift
+    //     (Win+Alt menu activation, Game Bar overlay, etc.).
+    //   - Feature: process_name pushed to Rust core via
+    //     `dimmy_set_app_context` so app_rules can apply per-app
+    //     LLM style overrides on the next enhance call.
+    private AppContextCapture.CapturedTargetContext? _targetContext;
+
     private static readonly string PttLogPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "dimmy", "ptt.log");
 
@@ -492,6 +501,27 @@ public partial class App : Application
 
     private void OnHotkeyPressed()
     {
+        // Snapshot foreground app BEFORE doing anything else — must run
+        // before we show the pill (which can briefly steal focus on some
+        // composition setups) and before dispatcher-enqueue (the press
+        // handler is already on the main thread, the snapshot is
+        // microsecond-cheap, and we want the snapshot to reflect the
+        // user's intent at the exact moment they pressed the key).
+        try
+        {
+            _targetContext = AppContextCapture.SnapshotForeground();
+            PttLog($"PRESS target: {_targetContext.ToLogString()}");
+            // Push to Rust core for app_rules matcher. Best-effort —
+            // recording must not break if the FFI call fails.
+            try { DimmyNative.dimmy_set_app_context(_targetContext.ToCoreJson()); }
+            catch (Exception fx) { PttLog($"dimmy_set_app_context failed: {fx.Message}"); }
+        }
+        catch (Exception ex)
+        {
+            PttLog($"AppContextCapture failed: {ex.Message}");
+            _targetContext = null;
+        }
+
         _dispatcherQueue?.TryEnqueue(async () =>
         {
             // Show pill if hidden — but only if the user hasn't opted
@@ -597,6 +627,26 @@ public partial class App : Application
             if (result.IsSuccess)
             {
                 PttLog($"StopAndProcess: pasting text ({result.Text!.Length} chars)");
+                // Diagnostic: compare current foreground to the target
+                // captured at hotkey-press. If different, focus drifted
+                // between recording and paste — known suspects on Win+Alt
+                // combos: ALT-up activating the menu bar in legacy Win32
+                // apps (Notepad++), Win-up triggering Start menu, Game
+                // Bar overlay. This log feeds the bug investigation
+                // without changing paste behavior yet.
+                try
+                {
+                    var prePaste = AppContextCapture.SnapshotForeground();
+                    var target = _targetContext;
+                    if (target == null || target.IsEmpty)
+                        PttLog($"PASTE pre: no target snapshot recorded; current fg={prePaste.ToLogString()}");
+                    else if (prePaste.Hwnd != target.Hwnd)
+                        PttLog($"PASTE pre: FOCUS DRIFT — target was 0x{target.Hwnd.ToInt64():X} '{target.WindowTitle}', now 0x{prePaste.Hwnd.ToInt64():X} '{prePaste.WindowTitle}' (proc='{prePaste.ProcessName}')");
+                    else
+                        PttLog($"PASTE pre: foreground unchanged ({prePaste.ToLogString()})");
+                }
+                catch (Exception ex) { PttLog($"PASTE pre snapshot failed: {ex.Message}"); }
+
                 await TextInjectionService.PasteText(result.Text!, _appViewModel.KeepInClipboard);
                 // Show completing state (checkmark) AFTER paste — PillWindow timer returns to Idle
                 _appViewModel.SetState(AppState.Completing);

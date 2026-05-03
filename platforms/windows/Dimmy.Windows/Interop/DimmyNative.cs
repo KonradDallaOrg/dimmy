@@ -268,4 +268,15 @@ public static class DimmyNative
                     $"Failed to set autostart to {value} (return code {rc})");
         }
     }
+
+    // ── App context (foreground app capture for app_rules) ────────
+    /// <summary>
+    /// Push the foreground app snapshot to the Rust core so the LLM
+    /// dispatch can resolve `app_rules` against it. Called from
+    /// `OnHotkeyPressed` BEFORE `dimmy_start_recording`. JSON shape:
+    /// `{"process_name":"slack.exe","bundle_id":"","wm_class":""}`.
+    /// </summary>
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_set_app_context(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string json);
 }
