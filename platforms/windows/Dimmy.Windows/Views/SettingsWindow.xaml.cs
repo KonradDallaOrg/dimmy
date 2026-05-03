@@ -194,6 +194,10 @@ public sealed partial class SettingsWindow : Window
             {
                 ViewModel.LlmApiUrl = preset.Url;
                 ViewModel.LlmApiModel = preset.DefaultModel;
+                // Refresh the green ✓ for the newly-picked provider — without
+                // this the badge shows the previous provider's state until the
+                // user clicks Save (and Rust echoes back a fresh config).
+                ViewModel.HasLlmKey = ViewModel.HasLlmKeyForUrl(preset.Url);
                 LlmCustomUrlBox.Visibility = Visibility.Collapsed;
                 LlmCustomModelBox.Visibility = Visibility.Collapsed;
             }
@@ -201,6 +205,7 @@ public sealed partial class SettingsWindow : Window
             {
                 LlmCustomUrlBox.Visibility = Visibility.Visible;
                 LlmCustomModelBox.Visibility = Visibility.Visible;
+                ViewModel.HasLlmKey = ViewModel.HasLlmKeyForUrl(ViewModel.LlmApiUrl);
             }
         }
     }

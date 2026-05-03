@@ -700,6 +700,20 @@ impl KeyStore {
             *cache = load_local_store(&self.machine_key);
         }
     }
+
+    /// Replace the in-memory cache with a known set of (scope, key) pairs.
+    /// Disk file is NOT touched. FOR TESTS ONLY — production code uses
+    /// `save_key`. Lets unit tests seed deterministic state without
+    /// polluting the developer's real `~/.config/dimmy/keys.enc`.
+    #[cfg(test)]
+    pub(crate) fn replace_cache_for_testing(&self, entries: &[(KeyringScope, &str)]) {
+        if let Ok(mut cache) = self.local_cache.lock() {
+            cache.clear();
+            for (scope, key) in entries {
+                cache.insert(scope.entry_name(), key.to_string());
+            }
+        }
+    }
 }
 
 // ── Tests ───────────────────────────────────────────────────────────

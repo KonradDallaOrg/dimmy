@@ -888,7 +888,7 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "input_gain": f32::from_bits(st.input_gain.load(std::sync::atomic::Ordering::Relaxed)),
         "stats_total_words": *st.stats_total_words.lock().unwrap_or_else(|e| e.into_inner()),
         "stats_total_speaking_secs": *st.stats_total_speaking_secs.lock().unwrap_or_else(|e| e.into_inner()),
-        // Per-provider key flags
+        // Per-provider key flags — STT
         "has_groq_key": st.key_store.has_key(KeyringScope::Stt(Provider::Groq), use_kr),
         "has_openai_key": st.key_store.has_key(KeyringScope::Stt(Provider::OpenAI), use_kr),
         "has_gemini_key": st.key_store.has_key(KeyringScope::Stt(Provider::Gemini), use_kr),
@@ -904,6 +904,24 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
             json["app_rules"] = v;
         }
     }
+
+    // Per-provider LLM key flags — same recursion-limit reason as app_rules
+    // above. These drive the green ✓ badge in Settings when the user picks
+    // a provider in the dropdown, before they hit Save. Without them the
+    // C# layer can't tell whether switching to Anthropic would surface a
+    // stored key or require typing a fresh one.
+    json["has_llm_groq_key"] =
+        st.key_store.has_key(KeyringScope::Llm(Provider::Groq), use_kr).into();
+    json["has_llm_openai_key"] =
+        st.key_store.has_key(KeyringScope::Llm(Provider::OpenAI), use_kr).into();
+    json["has_llm_anthropic_key"] =
+        st.key_store.has_key(KeyringScope::Llm(Provider::Anthropic), use_kr).into();
+    json["has_llm_gemini_key"] =
+        st.key_store.has_key(KeyringScope::Llm(Provider::Gemini), use_kr).into();
+    json["has_llm_openrouter_key"] =
+        st.key_store.has_key(KeyringScope::Llm(Provider::OpenRouter), use_kr).into();
+    json["has_llm_custom_key"] =
+        st.key_store.has_key(KeyringScope::Llm(Provider::Custom), use_kr).into();
 
     let s = serde_json::to_string(&json).unwrap_or_else(|_| "{}".to_string());
     write_to_buf(&s, out_buf, buf_len)
@@ -3002,6 +3020,175 @@ mod tests {
         let bad = CString::new("not json at all {{{").unwrap();
         let result = unsafe { dimmy_set_config_json(bad.as_ptr()) };
         assert_eq!(result, -1, "malformed JSON must return -1");
+    }
+
+    // ── LLM key reload + per-provider preservation tests ────────────
+    //
+    // These tests pin the contract the user complained about:
+    //   1) Switching LLM provider in the UI must surface the key already
+    //      stored for that provider, not "lose" it.
+    //   2) Toggling `llm_use_same_key` must NEVER delete a per-provider
+    //      key from the keystore — it only changes which key the dispatch
+    //      uses at runtime.
+    //   3) `get_config_json` must report `has_llm_<provider>_key` for each
+    //      provider so the UI can update the green badge on dropdown
+    //      change without saving first.
+    //
+    // The keystore is seeded via `replace_cache_for_testing` which
+    // bypasses disk writes — running the test suite must not touch the
+    // developer's real `~/.config/dimmy/keys.enc`.
+
+    const ANTHROPIC_URL: &str = "https://api.anthropic.com/v1/messages";
+    const OPENAI_URL: &str = "https://api.openai.com/v1/chat/completions";
+
+    #[test]
+    fn set_config_json_reloads_llm_key_when_provider_url_changes() {
+        ensure_test_state();
+        // Seed: Anthropic LLM key in keystore, no OpenAI LLM key.
+        state().key_store.replace_cache_for_testing(&[(
+            KeyringScope::Llm(Provider::Anthropic),
+            "sk-ant-seeded-test",
+        )]);
+        // Reset in-memory state so the reload is observable.
+        if let Ok(mut k) = state().llm_api_key.lock() {
+            *k = None;
+        }
+        if let Ok(mut u) = state().llm_api_url.lock() {
+            *u = OPENAI_URL.to_string();
+        }
+
+        // UI sends the URL change without a key (PasswordBox empty).
+        let json = format!(
+            r#"{{"llm_api_url":"{}"}}"#,
+            ANTHROPIC_URL
+        );
+        let c = CString::new(json).unwrap();
+        let rc = unsafe { dimmy_set_config_json(c.as_ptr()) };
+        assert_eq!(rc, 0, "valid JSON should return 0");
+
+        let loaded = state().llm_api_key.lock().unwrap().clone();
+        assert_eq!(
+            loaded.as_deref(),
+            Some("sk-ant-seeded-test"),
+            "switching to Anthropic URL must reload the stored Anthropic key"
+        );
+    }
+
+    #[test]
+    fn set_config_json_use_same_key_toggle_does_not_delete_stored_llm_key() {
+        ensure_test_state();
+        // Seed Anthropic key + point state at Anthropic.
+        state().key_store.replace_cache_for_testing(&[(
+            KeyringScope::Llm(Provider::Anthropic),
+            "sk-ant-must-survive",
+        )]);
+        if let Ok(mut u) = state().llm_api_url.lock() {
+            *u = ANTHROPIC_URL.to_string();
+        }
+
+        // Toggle use_same_key=true (PasswordBox hidden in UI → no key sent).
+        let json = format!(
+            r#"{{"llm_use_same_key":true,"llm_api_url":"{}"}}"#,
+            ANTHROPIC_URL
+        );
+        let c = CString::new(json).unwrap();
+        let rc = unsafe { dimmy_set_config_json(c.as_ptr()) };
+        assert_eq!(rc, 0);
+
+        // Anthropic key must STILL be in keystore (not deleted by toggle).
+        assert!(
+            state()
+                .key_store
+                .has_key(KeyringScope::Llm(Provider::Anthropic), false),
+            "use_same_key=true must NOT delete the Anthropic LLM key"
+        );
+
+        // Now toggle back off — key should still load when revisiting URL.
+        let json2 = format!(
+            r#"{{"llm_use_same_key":false,"llm_api_url":"{}"}}"#,
+            ANTHROPIC_URL
+        );
+        let c2 = CString::new(json2).unwrap();
+        let rc2 = unsafe { dimmy_set_config_json(c2.as_ptr()) };
+        assert_eq!(rc2, 0);
+
+        let loaded = state().llm_api_key.lock().unwrap().clone();
+        assert_eq!(
+            loaded.as_deref(),
+            Some("sk-ant-must-survive"),
+            "toggling use_same_key off and re-applying URL must restore the per-provider key"
+        );
+    }
+
+    #[test]
+    fn set_config_json_switching_providers_preserves_each_key() {
+        ensure_test_state();
+        state().key_store.replace_cache_for_testing(&[
+            (KeyringScope::Llm(Provider::Anthropic), "sk-ant-aaa"),
+            (KeyringScope::Llm(Provider::OpenAI), "sk-oai-bbb"),
+        ]);
+
+        // Anthropic → OpenAI → Anthropic round-trip; each step must
+        // surface the right key, neither overwrite the other.
+        for (url, expected) in &[
+            (ANTHROPIC_URL, "sk-ant-aaa"),
+            (OPENAI_URL, "sk-oai-bbb"),
+            (ANTHROPIC_URL, "sk-ant-aaa"),
+        ] {
+            let json = format!(r#"{{"llm_api_url":"{}"}}"#, url);
+            let c = CString::new(json).unwrap();
+            let rc = unsafe { dimmy_set_config_json(c.as_ptr()) };
+            assert_eq!(rc, 0, "set_config_json must succeed for {}", url);
+
+            let loaded = state().llm_api_key.lock().unwrap().clone();
+            assert_eq!(
+                loaded.as_deref(),
+                Some(*expected),
+                "switching to {} should surface {}",
+                url,
+                expected
+            );
+        }
+
+        // Both keystore entries still intact at the end.
+        assert!(state()
+            .key_store
+            .has_key(KeyringScope::Llm(Provider::Anthropic), false));
+        assert!(state()
+            .key_store
+            .has_key(KeyringScope::Llm(Provider::OpenAI), false));
+    }
+
+    #[test]
+    fn get_config_json_reports_per_provider_has_llm_keys() {
+        ensure_test_state();
+        // Seed: only Anthropic LLM has a key.
+        state().key_store.replace_cache_for_testing(&[(
+            KeyringScope::Llm(Provider::Anthropic),
+            "sk-ant-only",
+        )]);
+
+        let mut buf = vec![0u8; 8192];
+        let ptr = buf.as_mut_ptr() as *mut c_char;
+        let len = dimmy_get_config_json(ptr, 8192);
+        assert!(len > 0, "get_config_json should produce output");
+
+        let json_str = unsafe { CStr::from_ptr(ptr).to_str().unwrap() };
+        let v: serde_json::Value =
+            serde_json::from_str(json_str).expect("config JSON must parse");
+
+        assert_eq!(
+            v["has_llm_anthropic_key"], true,
+            "Anthropic LLM seeded → should report true"
+        );
+        assert_eq!(
+            v["has_llm_openai_key"], false,
+            "OpenAI LLM not seeded → should report false"
+        );
+        assert_eq!(v["has_llm_groq_key"], false);
+        assert_eq!(v["has_llm_gemini_key"], false);
+        assert_eq!(v["has_llm_openrouter_key"], false);
+        assert_eq!(v["has_llm_custom_key"], false);
     }
 
     // ── dimmy_list_devices_json tests ───────────────────────────────
