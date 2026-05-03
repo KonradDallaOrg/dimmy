@@ -863,6 +863,219 @@ describe("/api/stripe/webhook — duplicate-purchase gate", () => {
     expect(purchasedAudit).toBeDefined();
   });
 
+  test("refund.created (succeeded, full) → license revoked, audit notes source=refund.created", async () => {
+    // Modern refund event. Worker fetches the parent charge from
+    // Stripe API to learn full vs partial; mock that fetch.
+    const state = emptyState();
+    const eh = await emailHash("refunded@example.com");
+    state.licenses.set("lic_to_refund", {
+      license_id: "lic_to_refund",
+      email_hash: eh,
+      tier: "lifetime",
+      issued_at: 1000,
+      valid_until: 1000 + 1095 * 86400,
+      max_devices: 5,
+      status: "active",
+      stripe_session_id: "cs_lt",
+      stripe_customer_id: "cus_refund",
+      stripe_subscription_id: null,
+      current_period_end: null,
+      cancel_at_period_end: 0,
+    });
+
+    // First (and only) fetch is the charge lookup. Stub a full-refund
+    // shape: amount === amount_refunded.
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          id: "ch_lt",
+          amount: 9900,
+          amount_refunded: 9900,
+          customer: "cus_refund",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+
+    const body = JSON.stringify({
+      id: "evt_refund_full",
+      type: "refund.created",
+      data: {
+        object: {
+          id: "re_full",
+          charge: "ch_lt",
+          customer: "cus_refund",
+          status: "succeeded",
+          amount: 9900,
+        },
+      },
+    });
+    const env = makeEnv(state, { stripeSecret: "sk_test_xxx" });
+    const resp = await handleStripeWebhook(await signedRequest(body), env, ctx);
+    expect(resp.status).toBe(200);
+
+    // License revoked.
+    const lic = state.licenses.get("lic_to_refund")!;
+    expect(lic.status).toBe("revoked");
+
+    // Stripe API was called to fetch the charge (one call, the GET).
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://api.stripe.com/v1/charges/ch_lt");
+    // No method on a GET RequestInit → undefined is OK.
+    expect((init as RequestInit | undefined)?.method ?? "GET").toBe("GET");
+
+    // Audit row carries the modern source marker.
+    const audit = state.audit_log.find(
+      (a) => a.event_type === "license_revoked_refund"
+    );
+    expect(audit).toBeDefined();
+    const details = JSON.parse(audit!.details as string);
+    expect(details.source).toBe("refund.created");
+    expect(details.refund_id).toBe("re_full");
+  });
+
+  test("refund.created (succeeded, partial) → license stays active, partial-refund audit only", async () => {
+    const state = emptyState();
+    const eh = await emailHash("partial@example.com");
+    state.licenses.set("lic_partial", {
+      license_id: "lic_partial",
+      email_hash: eh,
+      tier: "annual",
+      issued_at: 1000,
+      valid_until: 1000 + 366 * 86400,
+      max_devices: 5,
+      status: "active",
+      stripe_session_id: "cs_an",
+      stripe_customer_id: "cus_partial",
+      stripe_subscription_id: "sub_an",
+      current_period_end: 1000 + 366 * 86400,
+      cancel_at_period_end: 0,
+    });
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          id: "ch_an",
+          amount: 3900,
+          amount_refunded: 1000, // partial
+          customer: "cus_partial",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+
+    const body = JSON.stringify({
+      id: "evt_refund_partial",
+      type: "refund.created",
+      data: {
+        object: {
+          id: "re_partial",
+          charge: "ch_an",
+          customer: "cus_partial",
+          status: "succeeded",
+          amount: 1000,
+        },
+      },
+    });
+    const env = makeEnv(state, { stripeSecret: "sk_test_xxx" });
+    const resp = await handleStripeWebhook(await signedRequest(body), env, ctx);
+    expect(resp.status).toBe(200);
+
+    // License unchanged.
+    expect(state.licenses.get("lic_partial")!.status).toBe("active");
+
+    // Partial-refund audit recorded.
+    const audit = state.audit_log.find(
+      (a) => a.event_type === "license_partial_refund"
+    );
+    expect(audit).toBeDefined();
+    const details = JSON.parse(audit!.details as string);
+    expect(details.source).toBe("refund.created");
+    expect(details.this_refund_amount).toBe(1000);
+  });
+
+  test("refund.created status=pending → no fetch, no DB mutation", async () => {
+    const state = emptyState();
+    state.licenses.set("lic_pending", {
+      license_id: "lic_pending",
+      email_hash: "irrelevant",
+      tier: "monthly",
+      issued_at: 1000,
+      valid_until: 1000 + 31 * 86400,
+      max_devices: 5,
+      status: "active",
+      stripe_session_id: "cs",
+      stripe_customer_id: "cus_pending",
+      stripe_subscription_id: "sub_p",
+      current_period_end: 1000 + 31 * 86400,
+      cancel_at_period_end: 0,
+    });
+
+    const body = JSON.stringify({
+      id: "evt_refund_pending",
+      type: "refund.created",
+      data: {
+        object: {
+          id: "re_pending",
+          charge: "ch_p",
+          customer: "cus_pending",
+          status: "pending",
+          amount: 500,
+        },
+      },
+    });
+    const env = makeEnv(state, { stripeSecret: "sk_test_xxx" });
+    const resp = await handleStripeWebhook(await signedRequest(body), env, ctx);
+    expect(resp.status).toBe(200);
+
+    // No charge fetch (status filter dropped it before).
+    expect(fetchMock).not.toHaveBeenCalled();
+    // License unchanged.
+    expect(state.licenses.get("lic_pending")!.status).toBe("active");
+  });
+
+  test("refund.created without STRIPE_SECRET_KEY → cannot fetch charge, license untouched (defensive)", async () => {
+    const state = emptyState();
+    state.licenses.set("lic_unfetched", {
+      license_id: "lic_unfetched",
+      email_hash: "x",
+      tier: "lifetime",
+      issued_at: 1000,
+      valid_until: 1000 + 1095 * 86400,
+      max_devices: 5,
+      status: "active",
+      stripe_session_id: "cs",
+      stripe_customer_id: "cus_x",
+      stripe_subscription_id: null,
+      current_period_end: null,
+      cancel_at_period_end: 0,
+    });
+
+    const body = JSON.stringify({
+      id: "evt_refund_no_secret",
+      type: "refund.created",
+      data: {
+        object: {
+          id: "re_no_secret",
+          charge: "ch_x",
+          customer: "cus_x",
+          status: "succeeded",
+          amount: 9900,
+        },
+      },
+    });
+    // No stripeSecret → fetch is blocked at the helper.
+    const env = makeEnv(state);
+    const resp = await handleStripeWebhook(await signedRequest(body), env, ctx);
+    expect(resp.status).toBe(200);
+
+    // No fetch attempted because STRIPE_SECRET_KEY was empty.
+    expect(fetchMock).not.toHaveBeenCalled();
+    // License left untouched — better to stay active than to revoke
+    // without confirming full vs partial.
+    expect(state.licenses.get("lic_unfetched")!.status).toBe("active");
+  });
+
   test("duplicate without STRIPE_SECRET_KEY → still blocks insert + sends magic link, but logs cancel-skipped", async () => {
     // Defensive: if the operator forgot to set the secret, we must not
     // create a duplicate license row. The cancel-sub call is a separate

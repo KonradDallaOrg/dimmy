@@ -121,6 +121,15 @@ export async function handleStripeWebhook(
       await handleInvoicePaymentFailed(env, event.data.object, now);
       return json({ status: "invoice_payment_failed" });
 
+    case "refund.created":
+      // Modern refund event (2024+). Stripe is nudging integrations off
+      // `charge.refunded` toward `refund.created` for refund signals.
+      // Adopt now so we're aligned with where Stripe is going; keep
+      // the legacy handler below as defense until refund.created has a
+      // few weeks of clean prod runs.
+      await handleRefundCreated(env, event.data.object, now);
+      return json({ status: "license_revoked" });
+
     case "charge.refunded":
       await handleChargeRefunded(env, event.data.object, now);
       return json({ status: "license_revoked" });
@@ -605,6 +614,165 @@ async function handleChargeRefunded(
     },
     now
   );
+}
+
+// ─── refund.created (modern refund event) ───────────────────────────
+//
+// Refund object payload carries `id`, `amount` (THIS refund's amount),
+// `currency`, `charge` (charge id), `customer`, and `status`. We need
+// to know whether this refund completes the charge (full → revoke) or
+// is a partial-credit (no-op, audit only). The refund event itself
+// only tells us about THIS refund chunk; we have to fetch the parent
+// charge from the Stripe API to compare `charge.amount` to the
+// post-refund `charge.amount_refunded`.
+//
+// One Stripe API call per refund is acceptable: refunds are rare and
+// the call latency is ~50ms. STRIPE_SECRET_KEY required (already
+// required by the duplicate-purchase gate).
+async function handleRefundCreated(
+  env: Env,
+  refund: Record<string, unknown>,
+  now: number
+): Promise<void> {
+  const refundId = refund.id as string | undefined;
+  const chargeId = refund.charge as string | undefined;
+  const refundCustomer = refund.customer as string | undefined;
+  const refundStatus = refund.status as string | undefined;
+  const refundAmount = (refund.amount as number | undefined) ?? 0;
+
+  // Pending / failed / canceled refunds aren't actually money returned.
+  // We only act on succeeded.
+  if (refundStatus !== "succeeded") {
+    console.log(
+      `[stripe] refund.created ${refundId} status=${refundStatus} — no action`
+    );
+    return;
+  }
+  if (typeof chargeId !== "string" || chargeId.length === 0) {
+    console.warn(
+      `[stripe] refund.created ${refundId} missing charge id — manual revoke required`
+    );
+    return;
+  }
+
+  // Fetch the parent charge to learn full vs partial.
+  const charge = await fetchStripeCharge(env, chargeId);
+  if (!charge) {
+    // Couldn't fetch — defensive: log loudly. Operator can replay the
+    // event from the Stripe dashboard once STRIPE_SECRET_KEY is set or
+    // the network blip clears.
+    console.error(
+      `[stripe] refund.created ${refundId}: could not fetch charge ${chargeId} — license NOT touched`
+    );
+    return;
+  }
+  const totalAmount = (charge.amount as number | undefined) ?? 0;
+  const amountRefunded = (charge.amount_refunded as number | undefined) ?? 0;
+  const isFullRefund = totalAmount > 0 && amountRefunded >= totalAmount;
+
+  // Customer linkage: refund.customer is the most direct, but Stripe
+  // sometimes omits it on Refund objects. Fall back to charge.customer.
+  const customerId =
+    refundCustomer ?? (charge.customer as string | undefined);
+  if (typeof customerId !== "string" || customerId.length === 0) {
+    console.warn(
+      `[stripe] refund.created ${refundId}: no customer linkage on refund or charge`
+    );
+    return;
+  }
+
+  const lic = await findActiveLicenseByStripeCustomer(env.DB, customerId);
+  if (!lic) {
+    // Possibly the legacy charge.refunded handler already revoked it
+    // (status is now != 'active'). In that case this is the second
+    // half of a Stripe-emits-both pair and we no-op cleanly. Nothing
+    // to do, no log noise.
+    console.log(
+      `[stripe] refund.created ${refundId}: no active license for customer ${customerId} (already revoked or never linked)`
+    );
+    return;
+  }
+
+  if (!isFullRefund) {
+    console.log(
+      `[stripe] refund.created ${refundId}: partial (${amountRefunded}/${totalAmount}) — license ${lic.license_id} kept active`
+    );
+    await audit(
+      env.DB,
+      {
+        event_type: "license_partial_refund",
+        email_hash: lic.email_hash,
+        license_id: lic.license_id,
+        details: {
+          refund_id: refundId ?? null,
+          charge_id: chargeId,
+          customer_id: customerId,
+          amount: totalAmount,
+          amount_refunded: amountRefunded,
+          this_refund_amount: refundAmount,
+          source: "refund.created",
+        },
+      },
+      now
+    );
+    return;
+  }
+
+  await setLicenseStatus(env.DB, lic.license_id, "revoked");
+  await audit(
+    env.DB,
+    {
+      event_type: "license_revoked_refund",
+      email_hash: lic.email_hash,
+      license_id: lic.license_id,
+      details: {
+        refund_id: refundId ?? null,
+        charge_id: chargeId,
+        customer_id: customerId,
+        amount: totalAmount,
+        amount_refunded: amountRefunded,
+        this_refund_amount: refundAmount,
+        source: "refund.created",
+      },
+    },
+    now
+  );
+}
+
+/// GET /v1/charges/:id from Stripe API. Returns the parsed charge
+/// object on success or null on any error (network, auth, missing
+/// secret, non-2xx). Errors are logged so the operator sees missing
+/// STRIPE_SECRET_KEY as the obvious cause.
+async function fetchStripeCharge(
+  env: Env,
+  chargeId: string
+): Promise<Record<string, unknown> | null> {
+  if (!env.STRIPE_SECRET_KEY) {
+    console.error(
+      `[stripe] cannot fetch charge ${chargeId} — STRIPE_SECRET_KEY env var missing. ` +
+      `Set it with \`wrangler secret put STRIPE_SECRET_KEY --env <env>\`.`
+    );
+    return null;
+  }
+  try {
+    const r = await fetch(
+      `https://api.stripe.com/v1/charges/${encodeURIComponent(chargeId)}`,
+      {
+        headers: { Authorization: `Bearer ${env.STRIPE_SECRET_KEY}` },
+      }
+    );
+    if (!r.ok) {
+      const body = await r.text();
+      console.error(
+        `[stripe] fetch charge ${chargeId} failed: HTTP ${r.status} body=${body.slice(0, 200)}`
+      );
+      return null;
+    }
+    return (await r.json()) as Record<string, unknown>;
+  } catch (e) {
+    console.error(`[stripe] fetch charge ${chargeId} threw:`, e);
+    return null;
+  }
 }
 
 // ─── duplicate-purchase gate helpers ────────────────────────────────
