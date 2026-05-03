@@ -106,8 +106,13 @@ public sealed partial class SettingsWindow : Window
                 var r = doc.RootElement;
                 if (r.TryGetProperty("has_key", out var hk))
                     ViewModel.HasApiKey = hk.GetBoolean();
-                if (r.TryGetProperty("has_llm_key", out var hlk))
-                    ViewModel.HasLlmKey = hlk.GetBoolean();
+                // Pull the per-provider LLM key flags too — these are
+                // runtime-computed (keystore-backed) and absent from
+                // `config.json`, so loading from the disk file leaves
+                // the dict empty and the green badge would never appear
+                // for any provider on dropdown change. Side-effect: this
+                // also re-derives HasLlmKey for the current LLM URL.
+                ViewModel.LoadKeyFlagsFrom(r);
                 if (r.TryGetProperty("devices", out var devArr) &&
                     devArr.ValueKind == System.Text.Json.JsonValueKind.Array)
                 {

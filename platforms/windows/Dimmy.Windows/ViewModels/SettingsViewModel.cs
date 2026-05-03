@@ -141,6 +141,27 @@ public partial class SettingsViewModel : ObservableObject
         if (url.Contains("anthropic.com")) return "anthropic";
         return "custom";
     }
+
+    /// Populate the per-provider LLM key flags from a fresh FFI JSON element.
+    /// Called by SettingsWindow after `dimmy_get_config_json` because those
+    /// flags are runtime-computed (keystore-backed) and NOT present in the
+    /// on-disk `config.json` that `LoadFromJson` consumes.
+    public void LoadKeyFlagsFrom(JsonElement r)
+    {
+        _llmHasKeyByProvider = new Dictionary<string, bool>
+        {
+            ["groq"] = r.TryGetProperty("has_llm_groq_key", out var hlg) && hlg.GetBoolean(),
+            ["openai"] = r.TryGetProperty("has_llm_openai_key", out var hlo) && hlo.GetBoolean(),
+            ["anthropic"] = r.TryGetProperty("has_llm_anthropic_key", out var hla) && hla.GetBoolean(),
+            ["gemini"] = r.TryGetProperty("has_llm_gemini_key", out var hlge) && hlge.GetBoolean(),
+            ["openrouter"] = r.TryGetProperty("has_llm_openrouter_key", out var hlor) && hlor.GetBoolean(),
+            ["custom"] = r.TryGetProperty("has_llm_custom_key", out var hlc) && hlc.GetBoolean(),
+        };
+        // Re-derive the single HasLlmKey flag for the CURRENTLY-active LLM
+        // provider URL — this is what the green badge binds to until the
+        // user changes the dropdown.
+        HasLlmKey = HasLlmKeyForUrl(LlmApiUrl);
+    }
     [ObservableProperty] private string _llmCustomPrompt = "";
     [ObservableProperty] private string _llmTranslateTo = "";
     [ObservableProperty] private bool _llmLogEnabled;
