@@ -180,10 +180,10 @@ int32_t dimmy_gpu_clear_known_bad(void);
 
 // ── Licensing ──────────────────────────────────────────────────────
 
-/// Override the licensing server URL at runtime. Use for dev (point at
-/// http://127.0.0.1:8787) or staging without rebuilding the dylib.
-/// Returns 0=ok, -1=null/empty, -2=mutex poisoned.
-int32_t dimmy_license_set_server_url(const char * _Nonnull url);
+// dimmy_license_set_server_url removed from the public ABI. The Rust
+// implementation is now gated behind cfg(debug_assertions) and the
+// Mac Settings UI that called it has been deleted. Release dylibs
+// embed the URL via DIMMY_LICENSE_SERVER_URL at compile time.
 
 /// Current license status as JSON. Schema:
 ///   { kind, tier?, days_remaining?, days_offline?, error?,

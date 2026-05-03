@@ -27,8 +27,6 @@ struct MacLicensePage: View {
     @State private var pasteStatus: String? = nil
     @State private var pasteIsError: Bool = false
 
-    @State private var serverUrl: String = "http://127.0.0.1:8787"
-
     @State private var manageBusy: Bool = false
     @State private var manageError: String? = nil
 
@@ -50,7 +48,6 @@ struct MacLicensePage: View {
             capabilityGroup
             activationGroup
             fallbackGroup
-            advancedGroup
         }
         .onAppear {
             refreshStatus()
@@ -485,28 +482,6 @@ struct MacLicensePage: View {
             }
             .padding(.vertical, 4)
         }
-    }
-
-    // MARK: Advanced (server URL)
-
-    private var advancedGroup: some View {
-        DisclosureGroup("Advanced") {
-            MacTile {
-                MacRow("Licensing server",
-                       description: "Override the licensing endpoint. Leave blank to use the built-in default.",
-                       showsDivider: false) {
-                    HStack(spacing: 8) {
-                        TextField("custom server URL", text: $serverUrl)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 280)
-                        Button("Apply") {
-                            DimmyCore.shared.licenseSetServerUrl(serverUrl)
-                        }
-                    }
-                }
-            }
-        }
-        .padding(.vertical, 4)
     }
 
     // MARK: Actions

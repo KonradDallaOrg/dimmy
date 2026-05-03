@@ -114,12 +114,12 @@ extension DimmyCore {
         return scope.rawValue.withCString { dimmy_license_has_scope($0) == 1 }
     }
 
-    // MARK: - Server URL override (dev)
-
-    public func licenseSetServerUrl(_ url: String) {
-        guard !url.isEmpty else { return }
-        _ = url.withCString { dimmy_license_set_server_url($0) }
-    }
+    // licenseSetServerUrl(_:) removed. The FFI is now debug-only on the
+    // Rust side and the Mac Settings UI override has been deleted.
+    // Release dylibs embed the server URL via DIMMY_LICENSE_SERVER_URL
+    // at compile time and refuse to be re-pointed at runtime — this
+    // closes the path where a staging-keyed build could be flipped to
+    // hit prod (or vice-versa) by typing a URL.
 
     // MARK: - Operations (network-bound)
 

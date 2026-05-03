@@ -59,3 +59,55 @@ STRIPE_PRICE_LIFETIME = "price_1TSKEAHxRNDPFvsZvcQOWqbr"
 # DIMMY_LICENSE_PRIVKEY      base64url(32-byte Ed25519 private key)
 # STRIPE_WEBHOOK_SECRET      whsec_… (verify Stripe-Signature header)
 # RESEND_API_KEY             re_… (Resend transactional email)
+
+# ─────────────────────────────────────────────────────────────────────
+#  STAGING environment
+# ─────────────────────────────────────────────────────────────────────
+# Sibling Worker for development + Stripe-TEST integration tests.
+# Same source code (src/index.ts), separate D1 + separate keypair +
+# separate Stripe webhook secret + separate FROM email so a mistake on
+# staging cannot leak into prod tokens or prod customer state.
+#
+# Deploy from WSL:
+#   wrangler d1 create dimmy-licensing-staging          # one-time, paste id below
+#   wrangler d1 migrations apply dimmy-licensing-staging --remote --env staging
+#   wrangler secret put DIMMY_LICENSE_PRIVKEY --env staging
+#   wrangler secret put DIMMY_LICENSE_PUBKEY  --env staging
+#   wrangler secret put STRIPE_WEBHOOK_SECRET --env staging   # Stripe TEST whsec
+#   wrangler secret put RESEND_API_KEY        --env staging   # same prod key OK
+#   wrangler deploy --env staging
+#
+# After deploy, in Stripe TEST dashboard:
+#   - REMOVE the webhook pointing at license.dimmy.app
+#   - ADD a webhook to https://license-staging.dimmy.app/api/stripe/webhook
+#     with the same event list as prod (checkout.session.completed,
+#     customer.subscription.{updated,deleted}, invoice.{paid,payment_failed},
+#     charge.refunded). Copy the new whsec into the secret above.
+# Outcome: prod Worker stops receiving Stripe TEST events; only staging does.
+
+[env.staging]
+name = "dimmy-licensing-staging"
+
+[[env.staging.routes]]
+pattern = "license-staging.dimmy.app"
+custom_domain = true
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "dimmy-licensing-staging"
+# TODO(konrad, WSL): paste the database_id printed by `wrangler d1 create`
+database_id = "REPLACE_WITH_STAGING_D1_ID"
+
+[env.staging.vars]
+PUBLIC_URL = "https://license-staging.dimmy.app"
+# Distinct FROM so a staging activation mail in your inbox is impossible
+# to confuse with prod. Resend treats `staging@dimmy.app` as a normal
+# address on the verified `dimmy.app` domain — no extra domain setup.
+EMAIL_FROM = "Dimmy Staging <staging@dimmy.app>"
+# Stripe price IDs (TEST mode — same as the legacy default block above
+# while prod still mixes test secrets in. After staging is up and the
+# Stripe TEST webhook has been moved here, prod's STRIPE_PRICE_* will
+# eventually be re-pinned to LIVE IDs and these stay TEST forever.)
+STRIPE_PRICE_MONTHLY  = "price_1TSKE8HxRNDPFvsZegNx8slR"
+STRIPE_PRICE_ANNUAL   = "price_1TSKE9HxRNDPFvsZv4T1Ampf"
+STRIPE_PRICE_LIFETIME = "price_1TSKEAHxRNDPFvsZvcQOWqbr"

@@ -13,6 +13,9 @@ dist/
 .env
 .env.*
 !.env.example
+# .env.staging holds only PUBLIC values (Ed25519 pubkey + HTTPS URL).
+# Matching private key lives in Cloudflare staging secrets + 1Password.
+!.env.staging
 tests/test_audio.wav
 tests/audio/
 tests/results/

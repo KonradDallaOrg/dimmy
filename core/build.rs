@@ -45,6 +45,13 @@ fn main() {
     // re-run invalidates the cached license.rs compilation even when
     // `option_env!` cache tracking is unreliable across actions/cache.
     let license_pubkey = sanitize_secret(std::env::var("DIMMY_LICENSE_PUBKEY").unwrap_or_default());
+    // Server URL is paired with the pubkey at build time. We refuse to
+    // default a non-empty pubkey to a hardcoded prod URL — that's how a
+    // staging-keyed build accidentally hits prod, the exact failure
+    // mode we're locking down. Pubkey + URL move together or not at
+    // all. Source-builds (both empty) fall back to the localhost mock.
+    let license_server_url =
+        sanitize_secret(std::env::var("DIMMY_LICENSE_SERVER_URL").unwrap_or_default());
 
     // Build-time sanity checks. Non-fatal — emit `cargo:warning` so the
     // CI log surfaces "secret looks bad" without breaking the build. A
@@ -76,6 +83,45 @@ fn main() {
         );
     }
 
+    // ── Hard validation: refuse misconfigured release builds ──────────
+    //
+    // Two failure modes we lock down at compile time so a slip in CI
+    // can't ship a binary that runs free or hits the wrong backend:
+    //
+    //   1. Release build + license-client feature ON + empty pubkey.
+    //      Pre-fix: `cargo:warning` and binary ships as Unrestricted
+    //      (free for everyone). Post-fix: build aborts.
+    //
+    //   2. Pubkey set but server URL empty. Pre-fix: code defaulted to
+    //      `https://license.dimmy.app` regardless of which keypair the
+    //      pubkey came from — so a staging-keyed build silently hit
+    //      prod. Post-fix: pubkey and URL must be set together.
+    //
+    // PROFILE is set by Cargo to "debug" or "release". CARGO_FEATURE_*
+    // env vars are present iff that feature is active for this build.
+    let is_release = std::env::var("PROFILE").unwrap_or_default() == "release";
+    let license_client_on = std::env::var("CARGO_FEATURE_LICENSE_CLIENT").is_ok();
+    if is_release && license_client_on && license_pubkey.is_empty() {
+        panic!(
+            "DIMMY_LICENSE_PUBKEY is empty but this is a release build with \
+            license-client feature on. Refusing to ship a binary that would \
+            run in Unrestricted mode for every user. Set the env var (CI: \
+            via release.yml `env:` block from GitHub Secrets) or build \
+            without --features license-client for source-build."
+        );
+    }
+    if !license_pubkey.is_empty() && license_server_url.is_empty() {
+        panic!(
+            "DIMMY_LICENSE_PUBKEY is set ({} chars) but DIMMY_LICENSE_SERVER_URL \
+            is empty. Refusing to fall back to a hardcoded prod URL — the \
+            previous behavior shipped staging-keyed builds that talked to \
+            prod by accident. Set BOTH env vars to the matching pair (staging \
+            pubkey → staging URL, prod pubkey → prod URL) or unset BOTH for a \
+            source-build / mock-server local run.",
+            license_pubkey.len()
+        );
+    }
+
     // Loud diagnostic on every build so a misconfigured secret surfaces
     // in the CI log instead of producing a "source build" binary
     // silently. We log only the length (and a short prefix hash so two
@@ -84,10 +130,9 @@ fn main() {
     // somebody reading logs reconstruct the secret.
     if license_pubkey.is_empty() {
         println!(
-            "cargo:warning=DIMMY_LICENSE_PUBKEY env var is EMPTY at build.rs read \
-            time. The shipped binary will run in source-build (Unrestricted) \
-            mode. Verify the GitHub Secret is set + propagated to this step's \
-            `env:` block."
+            "cargo:warning=DIMMY_LICENSE_PUBKEY empty — source-build / debug \
+            run, licensing disabled. (Release builds with license-client \
+            feature would have aborted earlier.)"
         );
     } else if license_pubkey.len() != 43 {
         println!(
@@ -113,9 +158,14 @@ fn main() {
     // in core/src/license.rs picks up the cleaned value, not the raw
     // env that may carry trailing whitespace.
     println!("cargo:rustc-env=DIMMY_LICENSE_PUBKEY={}", license_pubkey);
+    println!(
+        "cargo:rustc-env=DIMMY_LICENSE_SERVER_URL={}",
+        license_server_url
+    );
     println!("cargo:rerun-if-env-changed=POSTHOG_API_KEY");
     println!("cargo:rerun-if-env-changed=SENTRY_DSN");
     println!("cargo:rerun-if-env-changed=DIMMY_LICENSE_PUBKEY");
+    println!("cargo:rerun-if-env-changed=DIMMY_LICENSE_SERVER_URL");
 }
 
 /// Strip leading UTF-8 BOM, then ASCII-trim. Returns owned String so

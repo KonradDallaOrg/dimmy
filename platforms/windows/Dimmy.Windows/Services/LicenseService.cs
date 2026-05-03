@@ -102,14 +102,6 @@ public static class LicenseService
         return DimmyNative.dimmy_license_has_scope(scopeName) == 1;
     }
 
-    public static void SetServerUrl(string url)
-    {
-        if (string.IsNullOrWhiteSpace(url)) return;
-        int rc = DimmyNative.dimmy_license_set_server_url(url);
-        if (rc != 0)
-            throw new InvalidOperationException($"set_server_url failed: rc={rc}");
-    }
-
     public static Task<OpResult> RequestTrialAsync(string email) =>
         Task.Run(() =>
         {

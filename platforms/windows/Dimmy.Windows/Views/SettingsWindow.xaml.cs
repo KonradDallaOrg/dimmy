@@ -1001,11 +1001,12 @@ public sealed partial class SettingsWindow : Window
     /// </summary>
     private async void License_ManageSubscription_Click(object sender, RoutedEventArgs e)
     {
-        // Goes through the licensing FFI so the call respects whatever
-        // server URL the user set via dimmy_license_set_server_url
-        // (dev → http://127.0.0.1:8787, prod → https://license.dimmy.app).
-        // The earlier hardcoded prod URL would 404 in dev because the
-        // license lives in the local D1, not the prod one.
+        // Goes through the licensing FFI so the call hits whichever
+        // server URL was embedded at build time via
+        // DIMMY_LICENSE_SERVER_URL (staging → license-staging.dimmy.app,
+        // prod → license.dimmy.app, debug → localhost mock). The
+        // runtime override that used to live behind a Settings text
+        // box has been removed for safety.
         LicenseManageSubButton.IsEnabled = false;
         try
         {
@@ -1207,20 +1208,6 @@ public sealed partial class SettingsWindow : Window
         catch (Exception ex)
         {
             LicenseDeviceCountLabel.Text = ex.Message;
-        }
-    }
-
-    private void License_ApplyServerUrl_Click(object sender, RoutedEventArgs e)
-    {
-        var url = (LicenseServerUrlBox.Text ?? string.Empty).Trim();
-        try
-        {
-            LicenseService.SetServerUrl(url);
-            ShowInfoBar(LicenseTrialInfoBar, InfoBarSeverity.Success, $"Server set to {url}");
-        }
-        catch (Exception ex)
-        {
-            ShowInfoBar(LicenseTrialInfoBar, InfoBarSeverity.Error, ex.Message);
         }
     }
 

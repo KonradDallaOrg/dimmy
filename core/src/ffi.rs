@@ -2627,12 +2627,21 @@ impl From<LicenseStatus> for LicenseStatusWire {
     }
 }
 
-/// Override the licensing server URL at runtime. Useful for dev (point at
-/// `http://127.0.0.1:8787`) or staging without rebuilding the cdylib.
+/// Override the licensing server URL at runtime. **Debug-only** — gated
+/// behind `cfg(debug_assertions)` so release binaries simply do not
+/// export the symbol. Used only by scripted local tests that point a
+/// debug build at an alternative endpoint (e.g. a `wrangler dev` mock
+/// running on a different port). Release builds embed the URL via
+/// `DIMMY_LICENSE_SERVER_URL` at compile time and refuse to be
+/// re-pointed at runtime — the previous "Settings → Advanced → server
+/// URL" UI is gone for the same reason: any production user able to
+/// flip endpoint is one click from talking to a server we don't
+/// control with a token they didn't earn.
 /// Returns 0 on success, -1 on null/empty input, -2 on mutex poisoning.
 ///
 /// # Safety
 /// `url_ptr` must be a valid null-terminated UTF-8 C string.
+#[cfg(debug_assertions)]
 #[no_mangle]
 pub unsafe extern "C" fn dimmy_license_set_server_url(url_ptr: *const c_char) -> c_int {
     if url_ptr.is_null() {

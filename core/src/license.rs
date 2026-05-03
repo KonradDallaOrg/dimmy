@@ -57,6 +57,15 @@ pub const EMBEDDED_PUBKEY_B64: &str = match option_env!("DIMMY_LICENSE_PUBKEY") 
     None => "",
 };
 
+/// Build-time–embedded server URL, paired with `EMBEDDED_PUBKEY_B64`.
+/// `build.rs` enforces the invariant that pubkey and URL are set
+/// together — a non-empty pubkey with empty URL is a build-time
+/// error. So at runtime: empty here ⇔ empty pubkey ⇔ source build.
+const EMBEDDED_SERVER_URL: &str = match option_env!("DIMMY_LICENSE_SERVER_URL") {
+    Some(s) => s,
+    None => "",
+};
+
 /// Tier of a license — controls expiry semantics + bundled scopes.
 ///
 /// `Trial` is short-lived (14 days) with full scopes for evaluation.
@@ -515,17 +524,20 @@ fn now_secs() -> i64 {
 
 // ── HTTP client (talks to the licensing server) ──────────────────────
 
-/// Default server URL. When the binary ships with an embedded license
-/// public key (`DIMMY_LICENSE_PUBKEY` set at build time), it talks to
-/// the production Cloudflare Worker by default. Source builds with no
-/// pubkey embedded fall back to the local Node mock at `localhost:8787`
-/// so `cargo run` keeps working without spinning up the prod server.
-/// UIs can still override at runtime via `dimmy_license_set_server_url`
-/// (Settings → License → Advanced).
-pub const DEFAULT_SERVER_URL: &str = if EMBEDDED_PUBKEY_B64.is_empty() {
+/// Default server URL — the binary talks to the URL embedded at build
+/// time alongside the pubkey, full stop. No fallback to a hardcoded
+/// prod URL: that path used to ship staging-keyed builds that hit
+/// prod. Source builds (both env vars empty by build.rs invariant)
+/// fall back to the local Node mock at `localhost:8787` so `cargo run`
+/// works without spinning up a server.
+///
+/// Runtime override is debug-only (`dimmy_license_set_server_url`,
+/// gated behind `cfg(debug_assertions)`) for scripted local tests
+/// against alternative endpoints; release builds ignore the FFI.
+pub const DEFAULT_SERVER_URL: &str = if EMBEDDED_SERVER_URL.is_empty() {
     "http://localhost:8787"
 } else {
-    "https://license.dimmy.app"
+    EMBEDDED_SERVER_URL
 };
 
 /// Wire-shape of `POST /api/trial/start`.

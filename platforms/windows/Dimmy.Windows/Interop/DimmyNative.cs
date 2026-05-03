@@ -273,9 +273,13 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_license_status_json(byte[] outBuf, int bufLen);
 
-    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
-    public static extern int dimmy_license_set_server_url(
-        [MarshalAs(UnmanagedType.LPUTF8Str)] string url);
+    // dimmy_license_set_server_url removed: the FFI is now debug-only on
+    // the Rust side (gated behind cfg(debug_assertions)) and the
+    // Settings UI override that called it has been deleted. Release
+    // builds embed the URL via DIMMY_LICENSE_SERVER_URL at compile
+    // time and refuse to be re-pointed. Local debug runs that need a
+    // custom endpoint should use a debug DLL and call the FFI directly
+    // from a test harness — never from shipped UI code.
 
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_license_request_trial(
