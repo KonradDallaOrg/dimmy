@@ -1119,7 +1119,7 @@
                              Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                              TextWrapping="Wrap"
                              Text="Pick a plan. Stripe handles payment + tax; we email you a magic link the moment payment clears." />
-                  <Grid ColumnSpacing="8">
+                  <Grid x:Name="LicenseBuyButtonsGrid" ColumnSpacing="8">
                     <Grid.ColumnDefinitions>
                       <ColumnDefinition Width="*" />
                       <ColumnDefinition Width="*" />
@@ -1129,7 +1129,7 @@
                             Click="License_BuyMonthly_Click"
                             HorizontalAlignment="Stretch">
                       <StackPanel Spacing="2">
-                        <TextBlock Text="Monthly" FontWeight="SemiBold" />
+                        <TextBlock x:Name="LicenseBuyMonthlyLabel" Text="Monthly" FontWeight="SemiBold" />
                         <TextBlock Text="recurring" FontSize="10"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                       </StackPanel>
@@ -1139,7 +1139,7 @@
                             HorizontalAlignment="Stretch"
                             Style="{ThemeResource AccentButtonStyle}">
                       <StackPanel Spacing="2">
-                        <TextBlock Text="Annual" FontWeight="SemiBold" />
+                        <TextBlock x:Name="LicenseBuyAnnualLabel" Text="Annual" FontWeight="SemiBold" />
                         <TextBlock Text="best value" FontSize="10" Opacity="0.85" />
                       </StackPanel>
                     </Button>
@@ -1147,12 +1147,23 @@
                             Click="License_BuyLifetime_Click"
                             HorizontalAlignment="Stretch">
                       <StackPanel Spacing="2">
-                        <TextBlock Text="Lifetime" FontWeight="SemiBold" />
+                        <TextBlock x:Name="LicenseBuyLifetimeLabel" Text="Lifetime" FontWeight="SemiBold" />
                         <TextBlock Text="one-time" FontSize="10"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                       </StackPanel>
                     </Button>
                   </Grid>
+                  <!-- Visible only on Active{Monthly|Annual}: nudges the
+                       user toward the Stripe Customer Portal for plan
+                       changes (downgrade, cancel, payment method) so
+                       they don't accidentally double-purchase by hitting
+                       a Buy button thinking it switches plans. -->
+                  <TextBlock x:Name="LicenseBuyPortalHint"
+                             FontSize="11"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                             TextWrapping="Wrap"
+                             Visibility="Collapsed"
+                             Text="Need to downgrade, cancel, or update payment? Use the &quot;Manage subscription&quot; button above — it opens the secure Stripe billing portal." />
                   <InfoBar x:Name="LicenseBuyInfoBar" IsOpen="False" IsClosable="True"
                            Severity="Informational" Message="" />
                 </StackPanel>

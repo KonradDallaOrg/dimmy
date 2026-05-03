@@ -268,32 +268,45 @@ struct MacLicensePage: View {
                     showsDivider: false
                 ) {
                     HStack(spacing: 8) {
-                        Button { Task { await buy(tier: "monthly") } } label: {
-                            VStack(spacing: 1) {
-                                Text("Monthly").bold()
-                                Text("recurring").font(.system(size: 9))
-                                    .foregroundStyle(Color.macTextSecondary)
-                            }.frame(minWidth: 64)
+                        if showMonthlyButton {
+                            Button { Task { await buy(tier: "monthly") } } label: {
+                                VStack(spacing: 1) {
+                                    Text(monthlyLabel).bold()
+                                    Text("recurring").font(.system(size: 9))
+                                        .foregroundStyle(Color.macTextSecondary)
+                                }.frame(minWidth: 64)
+                            }
+                            .disabled(buyBusy)
                         }
-                        .disabled(buyBusy)
-                        Button { Task { await buy(tier: "annual") } } label: {
-                            VStack(spacing: 1) {
-                                Text("Annual").bold()
-                                Text("best value").font(.system(size: 9))
-                                    .foregroundStyle(.white.opacity(0.85))
-                            }.frame(minWidth: 64)
+                        if showAnnualButton {
+                            Button { Task { await buy(tier: "annual") } } label: {
+                                VStack(spacing: 1) {
+                                    Text(annualLabel).bold()
+                                    Text("best value").font(.system(size: 9))
+                                        .foregroundStyle(.white.opacity(0.85))
+                                }.frame(minWidth: 64)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .keyboardShortcut(.defaultAction)
+                            .disabled(buyBusy)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .keyboardShortcut(.defaultAction)
-                        .disabled(buyBusy)
-                        Button { Task { await buy(tier: "lifetime") } } label: {
-                            VStack(spacing: 1) {
-                                Text("Lifetime").bold()
-                                Text("one-time").font(.system(size: 9))
-                                    .foregroundStyle(Color.macTextSecondary)
-                            }.frame(minWidth: 64)
+                        if showLifetimeButton {
+                            Button { Task { await buy(tier: "lifetime") } } label: {
+                                VStack(spacing: 1) {
+                                    Text(lifetimeLabel).bold()
+                                    Text("one-time").font(.system(size: 9))
+                                        .foregroundStyle(Color.macTextSecondary)
+                                }.frame(minWidth: 64)
+                            }
+                            .disabled(buyBusy)
                         }
-                        .disabled(buyBusy)
+                    }
+                }
+                if showPortalHint {
+                    MacRow("Need to downgrade, cancel, or update payment? Use the “Manage subscription” button above — it opens the secure Stripe billing portal.",
+                           description: "",
+                           showsDivider: false) {
+                        EmptyView()
                     }
                 }
                 if let msg = buyStatus {
@@ -306,11 +319,58 @@ struct MacLicensePage: View {
         }
     }
 
+    /// Tier-aware visibility — see Win counterpart in
+    /// SettingsWindow.xaml.cs::ApplyBuyCardForStatus for the matrix.
+    /// Active{lifetime} hides everything (lifetime is the ceiling).
+    /// Active{monthly} hides Monthly. Active{annual} hides Monthly + Annual.
+    /// Trial / NotFound / TrialExpired / Expired / Suspended → all three.
     private var buyVisible: Bool {
         switch status.kind {
-        case "NotFound", "TrialActive", "TrialExpired", "Expired": return true
-        default: return false
+        case "NotFound", "TrialActive", "TrialExpired", "Expired", "Suspended":
+            return true
+        case "Active":
+            switch status.tier?.lowercased() {
+            case "monthly", "annual": return true
+            default: return false // lifetime + unknown
+            }
+        default:
+            return false
         }
+    }
+
+    private var showMonthlyButton: Bool {
+        // Hidden on any Active state (no point re-purchasing same or downgrading via Buy).
+        status.kind != "Active"
+    }
+
+    private var showAnnualButton: Bool {
+        // Hidden only when already on Annual.
+        !(status.kind == "Active" && (status.tier?.lowercased() == "annual"))
+    }
+
+    private var showLifetimeButton: Bool {
+        // Hidden only when already on Lifetime (which buyVisible already
+        // catches by hiding the whole group, but defensive).
+        !(status.kind == "Active" && (status.tier?.lowercased() == "lifetime"))
+    }
+
+    private var showPortalHint: Bool {
+        // Visible only on Active monthly/annual where downgrade/cancel
+        // path lives in the Stripe Customer Portal.
+        status.kind == "Active"
+            && (status.tier?.lowercased() == "monthly"
+                || status.tier?.lowercased() == "annual")
+    }
+
+    private var monthlyLabel: String { "Monthly" }
+    private var annualLabel: String {
+        status.kind == "Active" && status.tier?.lowercased() == "monthly"
+            ? "Switch to Annual" : "Annual"
+    }
+    private var lifetimeLabel: String {
+        status.kind == "Active"
+            && (status.tier?.lowercased() == "monthly" || status.tier?.lowercased() == "annual")
+            ? "Upgrade to Lifetime" : "Lifetime"
     }
 
     private var buyHeadline: String {
@@ -319,6 +379,13 @@ struct MacLicensePage: View {
         case "TrialActive":  return "Upgrade to Pro"
         case "TrialExpired": return "Trial ended — buy to continue"
         case "Expired":      return "Renew your license"
+        case "Suspended":    return "Resume your license"
+        case "Active":
+            switch status.tier?.lowercased() {
+            case "monthly": return "Upgrade your plan"
+            case "annual":  return "Upgrade to Lifetime"
+            default:        return "Buy a license"
+            }
         default:             return "Buy a license"
         }
     }
@@ -327,10 +394,19 @@ struct MacLicensePage: View {
         switch status.kind {
         case "TrialActive":
             return "Skip the trial and unlock cloud features without interruption."
-        case "TrialExpired":
+        case "TrialExpired", "Expired":
             return "Cloud features are paused. Pick a plan to re-activate."
-        case "Expired":
-            return "Cloud features are paused. Pick a plan to re-activate."
+        case "Suspended":
+            return "Pick a plan to restore cloud features."
+        case "Active":
+            switch status.tier?.lowercased() {
+            case "monthly":
+                return "Switch to Annual for the best value, or Lifetime to skip renewals entirely."
+            case "annual":
+                return "One payment, three years of access — never another renewal email."
+            default:
+                return "Pick a plan and we'll email you a magic link to activate."
+            }
         default:
             return "Pick a plan and we'll email you a magic link to activate."
         }
