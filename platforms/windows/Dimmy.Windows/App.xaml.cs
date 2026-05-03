@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
@@ -126,11 +127,34 @@ public partial class App : Application
         //       constructed Dimmy can dispatch it once StartNormalMode
         //       brings the pipe + UI online.
         var activationPayload = TryGetActivationPipeCommand();
-        if (activationPayload is not null
-            && CommandPipeServer.TrySendCommand(activationPayload))
+        if (activationPayload is not null)
         {
-            Environment.Exit(0);
-            return;
+            // Hand off foreground rights to the running instance BEFORE
+            // forwarding the pipe command. Without this, the running
+            // instance's SetForegroundWindow call (post-activation,
+            // when popping Settings → License) silently no-ops because
+            // Windows only lets the *currently foreground* process
+            // promote arbitrary windows. We are foreground briefly here
+            // (this transient instance was launched by the OS in
+            // response to the dimmy:// click), so we transfer the
+            // promote-window right to the running PID, then exit.
+            try
+            {
+                var running = System.Diagnostics.Process
+                    .GetProcessesByName("Dimmy.Windows")
+                    .FirstOrDefault(p => p.Id != Environment.ProcessId);
+                if (running is not null)
+                {
+                    AllowSetForegroundWindow((uint)running.Id);
+                }
+            }
+            catch { /* best-effort handoff; activation still works without it */ }
+
+            if (CommandPipeServer.TrySendCommand(activationPayload))
+            {
+                Environment.Exit(0);
+                return;
+            }
         }
         // If a payload exists but we couldn't forward (no running
         // instance), stash it for HandleForwardedCommand to pick up
@@ -798,6 +822,7 @@ public partial class App : Application
     {
         OpenSettings();
         _settingsWindow?.NavigateToTag(tag);
+        ForegroundSettingsWindow();
     }
 
     private void OpenSettings()
@@ -812,6 +837,59 @@ public partial class App : Application
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         _settingsWindow.Activate();
     }
+
+    /// <summary>
+    /// Force the Settings window to the foreground via Win32 — `Activate()`
+    /// alone is unreliable when the calling process isn't the current
+    /// foreground process (typical for our case: dimmy:// URL clicked in
+    /// browser, browser is foreground, our running instance receives the
+    /// command via pipe and tries to surface).
+    ///
+    /// The trick is the topmost-toggle pattern: briefly mark the window
+    /// HWND_TOPMOST then immediately undo to NOTOPMOST. SetForegroundWindow
+    /// is paired with the AllowSetForegroundWindow handoff that the
+    /// transient (URL-launched) instance issues before forwarding via pipe
+    /// — see TryGetActivationPipeCommand path below.
+    /// </summary>
+    private void ForegroundSettingsWindow()
+    {
+        if (_settingsWindow is null) return;
+        try
+        {
+            var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(_settingsWindow);
+            // Restore if minimised, then promote.
+            ShowWindow(hwnd, SW_RESTORE);
+            SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            SetForegroundWindow(hwnd);
+        }
+        catch (Exception ex)
+        {
+            PttLog($"[license] ForegroundSettingsWindow failed: {ex.Message}");
+        }
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter,
+        int X, int Y, int cx, int cy, uint uFlags);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+    private static extern bool AllowSetForegroundWindow(uint dwProcessId);
+
+    private const int SW_RESTORE = 9;
+    private static readonly IntPtr HWND_TOPMOST = new(-1);
+    private static readonly IntPtr HWND_NOTOPMOST = new(-2);
+    private const uint SWP_NOMOVE = 0x0002;
+    private const uint SWP_NOSIZE = 0x0001;
+    private const uint SWP_NOACTIVATE = 0x0010;
 
     private void CheckAudioHealth()
     {

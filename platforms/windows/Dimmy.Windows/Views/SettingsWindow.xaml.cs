@@ -897,17 +897,27 @@ public sealed partial class SettingsWindow : Window
 
     private void OnLicenseChangedExternal()
     {
-        // Marshal to UI thread — LicenseChanged may fire from a worker.
-        DispatcherQueue.TryEnqueue(() =>
-        {
-            if (_currentTag == "license")
-                RefreshLicenseStatus();
-        });
+        // Always refresh, regardless of which tab is currently visible.
+        // Pre-fix the check was `_currentTag == "license"` — that
+        // skipped the refresh whenever the dimmy:// activate flow fired
+        // NotifyChanged BEFORE NavigateToTag had set the tag to
+        // "license" (the order in App.xaml.cs HandleForwardedCommand:
+        // NotifyChanged → OpenSettingsWindowAt → NavigateToTag). The
+        // user landed on the License page with stale "NotFound" data
+        // and concluded activation hadn't worked.
+        // RefreshLicenseStatus is cheap (one FFI call + a few bindings)
+        // so always-running it on any LicenseChanged notification is
+        // correct and idempotent.
+        DispatcherQueue.TryEnqueue(RefreshLicenseStatus);
     }
 
     /// Navigate the SettingsWindow's NavigationView to the given tag.
     /// Called by App.xaml.cs after a successful URL-scheme activation so
     /// the user lands on the License page with the post-redeem status.
+    /// When navigating to "license" we also force-refresh the status
+    /// view so the badge reflects whatever the most recent activate /
+    /// refresh wrote to disk — even if the LicenseChanged event raced
+    /// past the page before this navigation completed.
     public void NavigateToTag(string tag)
     {
         DispatcherQueue.TryEnqueue(() =>
@@ -917,6 +927,11 @@ public sealed partial class SettingsWindow : Window
                 if (item is NavigationViewItem nv && nv.Tag is string t && t == tag)
                 {
                     NavView.SelectedItem = nv;
+                    if (tag == "license")
+                    {
+                        try { RefreshLicenseStatus(); }
+                        catch { /* page bindings might not be ready yet */ }
+                    }
                     return;
                 }
             }
@@ -1035,38 +1050,113 @@ public sealed partial class SettingsWindow : Window
         await RefreshDevicesAsync();
     }
 
-    /// Show / hide + relabel the Buy card based on the current status.
-    /// Kind matrix: NotFound → "Buy a license"; TrialActive → "Upgrade to
-    /// Pro"; TrialExpired → "Buy to continue"; Expired → "Renew"; Active /
-    /// Suspended / Unrestricted / Invalid → hidden.
+    /// Show / hide + relabel the Buy card and individual tier buttons
+    /// based on the current status. Tier-aware: hide buttons at-or-below
+    /// the active tier so an Active{Monthly} user only sees Annual +
+    /// Lifetime as upgrade options, an Active{Annual} user only sees
+    /// Lifetime, and an Active{Lifetime} user sees no Buy at all
+    /// (lifetime is the ceiling). Trial → all three (legitimate
+    /// trial→paid). NotFound / TrialExpired / Expired / Suspended → all
+    /// three (first purchase or repurchase). Unrestricted / Invalid →
+    /// the whole card stays hidden.
+    ///
+    /// Plan-change for active users (downgrade, cancel) goes through
+    /// the Stripe Customer Portal, NOT through these Buy buttons —
+    /// the portal hint TextBlock surfaces this when relevant so the
+    /// user doesn't accidentally start a duplicate subscription.
     private void ApplyBuyCardForStatus(LicenseService.Status s)
     {
-        (string headline, string detail, bool show) = s.Kind switch
+        string headline = string.Empty;
+        string detail = string.Empty;
+        bool show = false;
+        bool showMonthly = true, showAnnual = true, showLifetime = true;
+        string monthlyLabel = "Monthly";
+        string annualLabel = "Annual";
+        string lifetimeLabel = "Lifetime";
+        bool showPortalHint = false;
+
+        switch (s.Kind)
         {
-            "NotFound" => (
-                "Buy a license",
-                "Pick a plan and Stripe will email you a magic link to activate immediately. No trial required.",
-                true),
-            "TrialActive" => (
-                "Upgrade to Pro",
-                "Skip the trial and unlock cloud features without interruption.",
-                true),
-            "TrialExpired" => (
-                "Trial ended — buy to continue",
-                "Cloud features are paused. Pick a plan to re-activate. Local + BYOK keep working free either way.",
-                true),
-            "Expired" => (
-                "Renew your license",
-                "Cloud features are paused. Pick a plan to re-activate.",
-                true),
-            _ => (string.Empty, string.Empty, false),
-        };
-        LicenseBuyCard.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
-        if (show)
-        {
-            LicenseBuyHeadline.Text = headline;
-            LicenseBuyDetail.Text = detail;
+            case "NotFound":
+                headline = "Buy a license";
+                detail = "Pick a plan and Stripe will email you a magic link to activate immediately. No trial required.";
+                show = true;
+                break;
+            case "TrialActive":
+                headline = "Upgrade to Pro";
+                detail = "Skip the trial and unlock cloud features without interruption.";
+                show = true;
+                break;
+            case "TrialExpired":
+                headline = "Trial ended — buy to continue";
+                detail = "Cloud features are paused. Pick a plan to re-activate. Local + BYOK keep working free either way.";
+                show = true;
+                break;
+            case "Expired":
+                headline = "Renew your license";
+                detail = "Cloud features are paused. Pick a plan to re-activate.";
+                show = true;
+                break;
+            case "Suspended":
+                headline = "Resume your license";
+                detail = "Pick a plan to restore cloud features.";
+                show = true;
+                break;
+            case "Active":
+                switch (s.Tier?.ToLowerInvariant())
+                {
+                    case "monthly":
+                        headline = "Upgrade your plan";
+                        detail = "Switch to Annual for the best value, or Lifetime to skip renewals entirely.";
+                        show = true;
+                        showMonthly = false;
+                        annualLabel = "Switch to Annual";
+                        lifetimeLabel = "Upgrade to Lifetime";
+                        showPortalHint = true;
+                        break;
+                    case "annual":
+                        headline = "Upgrade to Lifetime";
+                        detail = "One payment, three years of access — never another renewal email.";
+                        show = true;
+                        showMonthly = false;
+                        showAnnual = false;
+                        lifetimeLabel = "Upgrade to Lifetime";
+                        showPortalHint = true;
+                        break;
+                    case "lifetime":
+                        // Ceiling tier — nothing above it.
+                        show = false;
+                        break;
+                    default:
+                        // Unknown tier (future-proof): stay hidden,
+                        // operator decides via portal.
+                        show = false;
+                        break;
+                }
+                break;
+            // Unrestricted, Invalid, anything else → hidden.
         }
+
+        LicenseBuyCard.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        if (!show) return;
+
+        LicenseBuyHeadline.Text = headline;
+        LicenseBuyDetail.Text = detail;
+        LicenseBuyMonthlyButton.Visibility = showMonthly ? Visibility.Visible : Visibility.Collapsed;
+        LicenseBuyAnnualButton.Visibility = showAnnual ? Visibility.Visible : Visibility.Collapsed;
+        LicenseBuyLifetimeButton.Visibility = showLifetime ? Visibility.Visible : Visibility.Collapsed;
+        // Collapse the column too so a hidden button doesn't leave a
+        // gap in the row layout.
+        LicenseBuyButtonsGrid.ColumnDefinitions[0].Width =
+            showMonthly ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
+        LicenseBuyButtonsGrid.ColumnDefinitions[1].Width =
+            showAnnual ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
+        LicenseBuyButtonsGrid.ColumnDefinitions[2].Width =
+            showLifetime ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
+        LicenseBuyMonthlyLabel.Text = monthlyLabel;
+        LicenseBuyAnnualLabel.Text = annualLabel;
+        LicenseBuyLifetimeLabel.Text = lifetimeLabel;
+        LicenseBuyPortalHint.Visibility = showPortalHint ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void License_BuyMonthly_Click(object sender, RoutedEventArgs e) => _ = BuyTierAsync("monthly");
