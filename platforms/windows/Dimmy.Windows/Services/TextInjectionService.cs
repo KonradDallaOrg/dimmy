@@ -10,6 +10,12 @@ public static class TextInjectionService
     private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
 
     [DllImport("user32.dll")]
+    private static extern uint MapVirtualKey(uint uCode, uint uMapType);
+
+    /// MAPVK_VK_TO_VSC — translate a virtual key to a scan code.
+    private const uint MAPVK_VK_TO_VSC = 0;
+
+    [DllImport("user32.dll")]
     private static extern bool OpenClipboard(IntPtr hWndNewOwner);
 
     [DllImport("user32.dll")]
@@ -128,7 +134,20 @@ public static class TextInjectionService
             MakeKeyUp(VK_CONTROL),
         };
         uint sent = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
-        System.Diagnostics.Debug.WriteLine($"SendInput sent {sent} of {inputs.Length} events, struct size={Marshal.SizeOf<INPUT>()}");
+        var lastErr = sent < inputs.Length ? Marshal.GetLastWin32Error() : 0;
+        // Mirror to ptt.log so the diagnostic is visible in the same
+        // file as PRESS/PASTE markers (Debug output is invisible without
+        // a debugger attached).
+        try
+        {
+            var line = $"[{DateTime.Now:HH:mm:ss.fff}] [PTT] SendInput Ctrl+V: sent={sent}/{inputs.Length}" +
+                       (lastErr != 0 ? $" lastError={lastErr}" : "");
+            var path = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "dimmy", "ptt.log");
+            System.IO.File.AppendAllText(path, line + Environment.NewLine);
+        }
+        catch { }
 
         // Restore after 150ms (only if keepInClipboard is false)
         if (!keepInClipboard)
@@ -166,15 +185,34 @@ public static class TextInjectionService
         finally { CloseClipboard(); }
     }
 
+    /// <summary>
+    /// Build a synthetic key event with BOTH virtual-key code and scan
+    /// code populated. Sending only `wVk` (no `wScan`) is silently
+    /// dropped by some apps that filter "fake" injected events:
+    /// Electron-based (VS Code, Slack, Discord), Chrome/Edge with raw
+    /// input enabled, several IME-aware apps. The hardware-driver
+    /// pathway always sets BOTH fields, so doing the same maximises
+    /// compatibility. Setting only one was the root cause of the
+    /// "paste fails in random apps" bug.
+    /// </summary>
     private static INPUT MakeKeyDown(ushort vk) => new()
     {
         type = (uint)INPUT_KEYBOARD,
-        u = new INPUTUNION { ki = new KEYBDINPUT { wVk = vk } }
+        u = new INPUTUNION { ki = new KEYBDINPUT
+        {
+            wVk = vk,
+            wScan = (ushort)MapVirtualKey(vk, MAPVK_VK_TO_VSC),
+        }}
     };
 
     private static INPUT MakeKeyUp(ushort vk) => new()
     {
         type = (uint)INPUT_KEYBOARD,
-        u = new INPUTUNION { ki = new KEYBDINPUT { wVk = vk, dwFlags = KEYEVENTF_KEYUP } }
+        u = new INPUTUNION { ki = new KEYBDINPUT
+        {
+            wVk = vk,
+            wScan = (ushort)MapVirtualKey(vk, MAPVK_VK_TO_VSC),
+            dwFlags = KEYEVENTF_KEYUP,
+        }}
     };
 }
