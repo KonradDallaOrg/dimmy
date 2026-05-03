@@ -95,8 +95,8 @@ custom_domain = true
 [[env.staging.d1_databases]]
 binding = "DB"
 database_name = "dimmy-licensing-staging"
-# TODO(konrad, WSL): paste the database_id printed by `wrangler d1 create`
-database_id = "REPLACE_WITH_STAGING_D1_ID"
+# Created 2026-05-03 in WEUR (same region as prod for migration parity).
+database_id = "18117e7f-582a-4079-8a58-177daad2aa26"
 
 [env.staging.vars]
 PUBLIC_URL = "https://license-staging.dimmy.app"
