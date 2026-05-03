@@ -115,6 +115,48 @@ export async function insertLicense(
     .run();
 }
 
+/// In-place "lifetime wins" upgrade: bumps an existing monthly/annual
+/// license to lifetime tier, extends `valid_until` to the new lifetime
+/// horizon, drops the recurring-subscription bookkeeping (which the
+/// caller has just cancelled via the Stripe API), and re-pins
+/// `stripe_session_id` to the lifetime checkout that triggered the
+/// upgrade so subsequent webhook retries find this row by session id
+/// and idempotency-skip.
+///
+/// `stripe_customer_id` is updated only when the new value is non-null
+/// (Stripe usually reuses the same Customer for the same email — keep
+/// the existing one if Stripe didn't echo a new one).
+export async function upgradeLicenseToLifetime(
+  db: D1Database,
+  licenseId: string,
+  patch: {
+    new_valid_until: number;
+    new_session_id: string;
+    new_customer_id: string | null;
+  }
+): Promise<number> {
+  const r = await db
+    .prepare(
+      `UPDATE licenses SET
+         tier                  = 'lifetime',
+         valid_until           = ?1,
+         current_period_end    = NULL,
+         cancel_at_period_end  = 0,
+         stripe_subscription_id= NULL,
+         stripe_session_id     = ?2,
+         stripe_customer_id    = COALESCE(?3, stripe_customer_id)
+       WHERE license_id = ?4`
+    )
+    .bind(
+      patch.new_valid_until,
+      patch.new_session_id,
+      patch.new_customer_id ?? null,
+      licenseId
+    )
+    .run();
+  return r.meta.changes ?? 0;
+}
+
 export async function setLicenseStatus(
   db: D1Database,
   licenseId: string,

@@ -23,6 +23,7 @@ import type { Env } from "../index";
 import { json } from "../index";
 import {
   audit,
+  findActiveLicenseByEmail,
   findActiveLicenseByStripeCustomer,
   findLicenseByStripeSession,
   findLicenseBySubscription,
@@ -31,6 +32,8 @@ import {
   recordStripeEvent,
   setLicenseStatus,
   updateLicenseFromSubscription,
+  upgradeLicenseToLifetime,
+  type LicenseRow,
 } from "../db";
 import { activationCode, emailHash, ulid } from "../crypto";
 import { sendActivationEmail } from "../email";
@@ -172,6 +175,102 @@ async function handleCheckoutCompleted(
     console.log(
       `[stripe] session ${sessionId} already has license ${existing.license_id}, skipping`
     );
+    return;
+  }
+
+  // ── Duplicate-purchase gate ────────────────────────────────────────
+  //
+  // Same email already has an active *paid* license. Three outcomes,
+  // depending on the relation between existing and new tier:
+  //
+  //   existing=lifetime           → BLOCK (lifetime is the ceiling).
+  //   existing=monthly|annual,
+  //     new=lifetime              → IN-PLACE UPGRADE (lifetime "wins":
+  //                                  cancel old sub, mutate row to
+  //                                  lifetime, send magic link).
+  //   existing=monthly|annual,
+  //     new=monthly|annual        → BLOCK (duplicate purchase — user
+  //                                  re-clicked Buy after a webhook
+  //                                  hiccup or used a bookmarked
+  //                                  Payment Link).
+  //
+  // existing=trial → fall through to the create path below: paying any
+  // tier while on trial is the legitimate trial→paid upgrade flow.
+  //
+  // BLOCK = cancel the new Stripe subscription via the API (refund
+  // automatic if Stripe is within the immediate-refund window), send a
+  // magic link for the EXISTING license so the user can activate this
+  // device, audit the event. License row count stays at one per email.
+  const existingForEmail = await findActiveLicenseByEmail(env.DB, eh);
+  if (existingForEmail && existingForEmail.tier !== "trial") {
+    const existingTier = existingForEmail.tier as PaidTier;
+
+    if (existingTier === "lifetime") {
+      await blockDuplicatePurchase(env, {
+        eh,
+        customerEmail,
+        attemptedTier: tier,
+        attemptedSessionId: sessionId,
+        attemptedSubscriptionId: subscriptionId,
+        existingLicense: existingForEmail,
+        reason: "lifetime_already_active",
+        now,
+      });
+      return;
+    }
+
+    if (tier === "lifetime") {
+      // Lifetime supersedes the active sub. Cancel the recurring sub
+      // (best-effort), mutate the existing license row, send a magic
+      // link so the client picks up a token signed with tier=lifetime.
+      if (existingForEmail.stripe_subscription_id) {
+        await cancelStripeSubscriptionSafe(
+          env,
+          existingForEmail.stripe_subscription_id,
+          "superseded by lifetime purchase"
+        );
+      }
+      const lifetimeValidUntil = now + TIER_VALIDITY_SECS.lifetime;
+      await upgradeLicenseToLifetime(env.DB, existingForEmail.license_id, {
+        new_valid_until: lifetimeValidUntil,
+        new_session_id: sessionId,
+        new_customer_id: customerId,
+      });
+      await sendDuplicatePurchaseMagicLink(env, {
+        licenseId: existingForEmail.license_id,
+        customerEmail,
+        tier: "lifetime",
+        now,
+      });
+      await audit(
+        env.DB,
+        {
+          event_type: "license_upgraded_to_lifetime",
+          email_hash: eh,
+          license_id: existingForEmail.license_id,
+          details: {
+            previous_tier: existingTier,
+            new_session_id: sessionId,
+            old_subscription_cancelled: !!existingForEmail.stripe_subscription_id,
+          },
+        },
+        now
+      );
+      return;
+    }
+
+    // Monthly/annual + monthly/annual = duplicate. Cancel the new sub
+    // (the existing sub stays — that's the one the user already has).
+    await blockDuplicatePurchase(env, {
+      eh,
+      customerEmail,
+      attemptedTier: tier,
+      attemptedSessionId: sessionId,
+      attemptedSubscriptionId: subscriptionId,
+      existingLicense: existingForEmail,
+      reason: "duplicate_subscription",
+      now,
+    });
     return;
   }
 
@@ -506,6 +605,145 @@ async function handleChargeRefunded(
     },
     now
   );
+}
+
+// ─── duplicate-purchase gate helpers ────────────────────────────────
+
+/// Common path for both "lifetime already exists" and "duplicate sub"
+/// blocks. Cancels the new Stripe subscription via the API (best-effort
+/// — refund is automatic if Stripe is within the immediate-refund
+/// window), sends the user a magic link for their EXISTING license so
+/// they can activate the device they probably meant to add, audit logs.
+async function blockDuplicatePurchase(
+  env: Env,
+  args: {
+    eh: string;
+    customerEmail: string;
+    attemptedTier: PaidTier;
+    attemptedSessionId: string;
+    attemptedSubscriptionId: string | null;
+    existingLicense: LicenseRow;
+    reason: "lifetime_already_active" | "duplicate_subscription";
+    now: number;
+  }
+): Promise<void> {
+  let cancelled = false;
+  if (args.attemptedSubscriptionId) {
+    cancelled = await cancelStripeSubscriptionSafe(
+      env,
+      args.attemptedSubscriptionId,
+      `duplicate purchase blocked: ${args.reason}`
+    );
+  }
+  // Lifetime is one-time — no sub to cancel. We log and still send the
+  // magic link, but a manual refund via Stripe dashboard may be needed.
+  // Surfaces in the audit row's `details.attempted_subscription_id`
+  // (null for lifetime).
+
+  await sendDuplicatePurchaseMagicLink(env, {
+    licenseId: args.existingLicense.license_id,
+    customerEmail: args.customerEmail,
+    tier: args.existingLicense.tier as PaidTier,
+    now: args.now,
+  });
+
+  await audit(
+    env.DB,
+    {
+      event_type: "duplicate_purchase_blocked",
+      email_hash: args.eh,
+      license_id: args.existingLicense.license_id,
+      details: {
+        reason: args.reason,
+        attempted_session_id: args.attemptedSessionId,
+        attempted_tier: args.attemptedTier,
+        attempted_subscription_id: args.attemptedSubscriptionId,
+        existing_tier: args.existingLicense.tier,
+        cancelled_attempted_subscription: cancelled,
+      },
+    },
+    args.now
+  );
+}
+
+/// Mint an activation code for an existing license + send the magic
+/// link via Resend. Used by the duplicate-purchase gate to give the
+/// user a working path forward (activate this device on the license
+/// they already have) instead of leaving them confused.
+async function sendDuplicatePurchaseMagicLink(
+  env: Env,
+  args: {
+    licenseId: string;
+    customerEmail: string;
+    tier: PaidTier;
+    now: number;
+  }
+): Promise<void> {
+  const code = activationCode();
+  await insertActivationCode(env.DB, {
+    code,
+    license_id: args.licenseId,
+    created_at: args.now,
+    expires_at: args.now + ACTIVATION_TTL_SECS,
+  });
+  const magicLink = `${env.PUBLIC_URL}/activate?code=${encodeURIComponent(code)}`;
+  await sendActivationEmail({
+    to: args.customerEmail,
+    magicLink,
+    activationCode: code,
+    tier: args.tier,
+    apiKey: env.RESEND_API_KEY ?? "",
+    from: env.EMAIL_FROM,
+  });
+}
+
+/// Cancel a Stripe subscription via the REST API. Returns true on
+/// success, false on any error (network, auth, missing secret). Errors
+/// are logged loudly because a silent failure here means the user keeps
+/// being charged for a sub we promised to cancel.
+///
+/// Uses immediate cancellation (DELETE /v1/subscriptions/:id) rather
+/// than `cancel_at_period_end=true` because the duplicate is, by
+/// definition, money the user didn't intend to spend — they shouldn't
+/// have to wait until period end to stop paying.
+async function cancelStripeSubscriptionSafe(
+  env: Env,
+  subscriptionId: string,
+  reason: string
+): Promise<boolean> {
+  if (!env.STRIPE_SECRET_KEY) {
+    console.error(
+      `[stripe] CANNOT cancel ${subscriptionId} — STRIPE_SECRET_KEY env var missing. ` +
+      `User will keep being charged. Set the secret with ` +
+      `\`wrangler secret put STRIPE_SECRET_KEY --env <env>\`. Reason: ${reason}`
+    );
+    return false;
+  }
+  try {
+    const r = await fetch(
+      `https://api.stripe.com/v1/subscriptions/${encodeURIComponent(subscriptionId)}`,
+      {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${env.STRIPE_SECRET_KEY}`,
+        },
+      }
+    );
+    if (!r.ok) {
+      const body = await r.text();
+      console.error(
+        `[stripe] cancel ${subscriptionId} failed: HTTP ${r.status} body=${body.slice(0, 200)}`
+      );
+      return false;
+    }
+    console.log(
+      `[stripe] cancelled subscription ${subscriptionId} (reason: ${reason})`
+    );
+    return true;
+  } catch (e) {
+    console.error(`[stripe] cancel ${subscriptionId} threw:`, e);
+    return false;
+  }
 }
 
 // ─── helpers ────────────────────────────────────────────────────────

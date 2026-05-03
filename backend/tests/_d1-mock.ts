@@ -180,6 +180,27 @@ function execRun(
     lic.email_hash = bound[0];
     return { meta: { changes: 1 } };
   }
+  if (sql.includes("tier") && sql.includes("'lifetime'")) {
+    // upgradeLicenseToLifetime — bound = [valid_until, session_id, customer_id, license_id].
+    // Matches the in-place "lifetime wins" upgrade in db.ts. Distinct
+    // from updateLicenseFromSubscription below because its WHERE clause
+    // is on license_id, not stripe_subscription_id, and the SET list
+    // mutates tier (which the COALESCE patcher doesn't touch).
+    const newValidUntil = bound[0];
+    const newSessionId = bound[1];
+    const newCustomerId = bound[2];
+    const lid = bound[3] as string;
+    const lic = state.licenses.get(lid);
+    if (!lic) return { meta: { changes: 0 } };
+    lic.tier = "lifetime";
+    lic.valid_until = newValidUntil;
+    lic.current_period_end = null;
+    lic.cancel_at_period_end = 0;
+    lic.stripe_subscription_id = null;
+    lic.stripe_session_id = newSessionId;
+    if (newCustomerId !== null) lic.stripe_customer_id = newCustomerId;
+    return { meta: { changes: 1 } };
+  }
   if (sql.includes("UPDATE licenses SET")) {
     // updateLicenseFromSubscription — COALESCE patch.
     const subId = bound[4] as string;

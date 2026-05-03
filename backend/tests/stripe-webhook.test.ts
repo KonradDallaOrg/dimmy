@@ -2,14 +2,15 @@
 // Exercises the production stripe handler — same code path Stripe will
 // hit in production, with real HMAC sigs the handler verifies.
 
-import { describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { handleStripeWebhook } from "../src/handlers/stripe";
+import { emailHash } from "../src/crypto";
 import { emptyState, makeMockDB, type MockState } from "./_d1-mock";
 import type { Env } from "../src/index";
 
 const SECRET = "whsec_test_secret";
 
-function makeEnv(state: MockState): Env {
+function makeEnv(state: MockState, opts: { stripeSecret?: string } = {}): Env {
   return {
     DB: makeMockDB(state) as unknown as D1Database,
     PUBLIC_URL: "http://localhost:8787",
@@ -20,6 +21,9 @@ function makeEnv(state: MockState): Env {
     DIMMY_LICENSE_PRIVKEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     DIMMY_LICENSE_PUBKEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     STRIPE_WEBHOOK_SECRET: SECRET,
+    // Empty default keeps existing tests Stripe-API-free; gate tests
+    // override to assert cancel-sub fetch was issued.
+    STRIPE_SECRET_KEY: opts.stripeSecret ?? "",
     RESEND_API_KEY: "", // dev-fallback (console.log)
   };
 }
@@ -599,5 +603,298 @@ describe("/api/stripe/webhook", () => {
       ctx
     );
     expect(resp.status).toBe(200);
+  });
+});
+
+// ─── duplicate-purchase gate ─────────────────────────────────────────
+//
+// Same email_hash already has an active *paid* license. Three outcomes,
+// gated in handleCheckoutCompleted:
+//   - existing=lifetime           → BLOCK
+//   - existing=mo|an, new=lifetime → IN-PLACE UPGRADE (lifetime "wins")
+//   - existing=mo|an, new=mo|an    → BLOCK (duplicate sub)
+// Existing=trial always falls through (legitimate trial→paid flow).
+
+describe("/api/stripe/webhook — duplicate-purchase gate", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn().mockResolvedValue(
+      new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /// Helper — pre-populate state with one active paid license for `email`.
+  async function seedLicense(
+    state: MockState,
+    args: {
+      email: string;
+      tier: "monthly" | "annual" | "lifetime";
+      stripe_subscription_id?: string | null;
+    }
+  ): Promise<{ licenseId: string; eh: string }> {
+    const eh = await emailHash(args.email);
+    const licenseId = "lic_existing_" + args.tier;
+    state.licenses.set(licenseId, {
+      license_id: licenseId,
+      email_hash: eh,
+      tier: args.tier,
+      issued_at: 1000,
+      valid_until: 1000 + 366 * 86400,
+      max_devices: 5,
+      status: "active",
+      stripe_session_id: "cs_old_" + args.tier,
+      stripe_customer_id: "cus_old",
+      stripe_subscription_id:
+        args.stripe_subscription_id !== undefined
+          ? args.stripe_subscription_id
+          : args.tier === "lifetime"
+            ? null
+            : "sub_old_" + args.tier,
+      current_period_end: 1000 + 366 * 86400,
+      cancel_at_period_end: 0,
+    });
+    return { licenseId, eh };
+  }
+
+  function checkoutBody(args: {
+    eventId: string;
+    sessionId: string;
+    email: string;
+    tier: "monthly" | "annual" | "lifetime";
+    customer?: string;
+    subscription?: string | null;
+  }): string {
+    return JSON.stringify({
+      id: args.eventId,
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: args.sessionId,
+          mode: args.tier === "lifetime" ? "payment" : "subscription",
+          customer: args.customer ?? "cus_new",
+          subscription:
+            args.subscription !== undefined
+              ? args.subscription
+              : args.tier === "lifetime"
+                ? null
+                : "sub_new",
+          customer_details: { email: args.email },
+          metadata: { tier: args.tier },
+        },
+      },
+    });
+  }
+
+  test("monthly + monthly (same email) → blocks duplicate, no second license, magic link issued, new sub cancelled via Stripe API", async () => {
+    const state = emptyState();
+    const { eh } = await seedLicense(state, { email: "dup@example.com", tier: "monthly" });
+
+    const body = checkoutBody({
+      eventId: "evt_dup_mo_mo",
+      sessionId: "cs_new_mo",
+      email: "dup@example.com",
+      tier: "monthly",
+      subscription: "sub_brand_new",
+    });
+    const env = makeEnv(state, { stripeSecret: "sk_test_xxx" });
+    const resp = await handleStripeWebhook(await signedRequest(body), env, ctx);
+    expect(resp.status).toBe(200);
+
+    // No second license created.
+    expect(state.licenses.size).toBe(1);
+
+    // Magic link issued for the EXISTING license.
+    expect(state.activation_codes.size).toBe(1);
+    const code = [...state.activation_codes.values()][0];
+    expect(code.license_id).toBe("lic_existing_monthly");
+
+    // Stripe DELETE called for the new subscription.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://api.stripe.com/v1/subscriptions/sub_brand_new");
+    expect((init as RequestInit).method).toBe("DELETE");
+    expect(((init as RequestInit).headers as Record<string, string>).Authorization).toBe(
+      "Bearer sk_test_xxx"
+    );
+
+    // Audit row recorded.
+    const audit = state.audit_log.find(
+      (a) => a.event_type === "duplicate_purchase_blocked"
+    );
+    expect(audit).toBeDefined();
+    expect(audit?.email_hash).toBe(eh);
+  });
+
+  test("annual + lifetime (same email) → in-place upgrade to lifetime, old sub cancelled, license_id preserved", async () => {
+    const state = emptyState();
+    const { licenseId } = await seedLicense(state, {
+      email: "upgrade@example.com",
+      tier: "annual",
+      stripe_subscription_id: "sub_old_annual_xyz",
+    });
+
+    const body = checkoutBody({
+      eventId: "evt_an_to_lt",
+      sessionId: "cs_lt_new",
+      email: "upgrade@example.com",
+      tier: "lifetime",
+      subscription: null,
+    });
+    const env = makeEnv(state, { stripeSecret: "sk_test_xxx" });
+    const resp = await handleStripeWebhook(await signedRequest(body), env, ctx);
+    expect(resp.status).toBe(200);
+
+    // Same single license row, mutated in place.
+    expect(state.licenses.size).toBe(1);
+    const lic = state.licenses.get(licenseId)!;
+    expect(lic.tier).toBe("lifetime");
+    expect(lic.stripe_subscription_id).toBeNull();
+    expect(lic.stripe_session_id).toBe("cs_lt_new");
+    // Validity window jumped to ≈ 1095 days (lifetime horizon).
+    const validFor =
+      (lic.valid_until as number) - Math.floor(Date.now() / 1000);
+    expect(validFor).toBeGreaterThan(1090 * 86400);
+
+    // Old recurring subscription was cancelled via Stripe API.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://api.stripe.com/v1/subscriptions/sub_old_annual_xyz");
+
+    // Magic link minted for the (upgraded) license so the client can
+    // pick up a fresh token signed with tier=lifetime.
+    expect(state.activation_codes.size).toBe(1);
+    const code = [...state.activation_codes.values()][0];
+    expect(code.license_id).toBe(licenseId);
+
+    // Audit row recorded with the upgrade event type.
+    const audit = state.audit_log.find(
+      (a) => a.event_type === "license_upgraded_to_lifetime"
+    );
+    expect(audit).toBeDefined();
+  });
+
+  test("lifetime + monthly (same email) → blocks, no upgrade, no new license, sub cancelled", async () => {
+    const state = emptyState();
+    await seedLicense(state, { email: "lt@example.com", tier: "lifetime" });
+
+    const body = checkoutBody({
+      eventId: "evt_lt_blocks_mo",
+      sessionId: "cs_attempt",
+      email: "lt@example.com",
+      tier: "monthly",
+      subscription: "sub_attempted",
+    });
+    const env = makeEnv(state, { stripeSecret: "sk_test_xxx" });
+    const resp = await handleStripeWebhook(await signedRequest(body), env, ctx);
+    expect(resp.status).toBe(200);
+
+    // Lifetime license stays exactly as it was.
+    expect(state.licenses.size).toBe(1);
+    const lic = state.licenses.get("lic_existing_lifetime")!;
+    expect(lic.tier).toBe("lifetime");
+
+    // Attempted sub cancelled.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "https://api.stripe.com/v1/subscriptions/sub_attempted"
+    );
+
+    // Audit row carries the right reason.
+    const audit = state.audit_log.find(
+      (a) => a.event_type === "duplicate_purchase_blocked"
+    );
+    expect(audit).toBeDefined();
+    const details = JSON.parse(audit!.details as string);
+    expect(details.reason).toBe("lifetime_already_active");
+  });
+
+  test("trial + annual (same email) → falls through to normal create (legitimate trial→paid upgrade)", async () => {
+    const state = emptyState();
+    const eh = await emailHash("trialer@example.com");
+    state.licenses.set("lic_trial", {
+      license_id: "lic_trial",
+      email_hash: eh,
+      tier: "trial",
+      issued_at: 1000,
+      valid_until: 1000 + 14 * 86400,
+      max_devices: 5,
+      status: "active",
+      stripe_session_id: null,
+      stripe_customer_id: null,
+      stripe_subscription_id: null,
+      current_period_end: null,
+      cancel_at_period_end: 0,
+    });
+
+    const body = checkoutBody({
+      eventId: "evt_trial_upgrade",
+      sessionId: "cs_first_paid",
+      email: "trialer@example.com",
+      tier: "annual",
+      subscription: "sub_first",
+    });
+    const env = makeEnv(state, { stripeSecret: "sk_test_xxx" });
+    const resp = await handleStripeWebhook(await signedRequest(body), env, ctx);
+    expect(resp.status).toBe(200);
+
+    // New annual license created — gate did NOT block.
+    expect(state.licenses.size).toBe(2);
+    const annual = [...state.licenses.values()].find((l) => l.tier === "annual");
+    expect(annual).toBeDefined();
+    expect(annual?.stripe_subscription_id).toBe("sub_first");
+
+    // No Stripe cancel call (nothing to cancel).
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    // No duplicate audit, only license_purchased.
+    const dupAudit = state.audit_log.find(
+      (a) => a.event_type === "duplicate_purchase_blocked"
+    );
+    expect(dupAudit).toBeUndefined();
+    const purchasedAudit = state.audit_log.find(
+      (a) => a.event_type === "license_purchased"
+    );
+    expect(purchasedAudit).toBeDefined();
+  });
+
+  test("duplicate without STRIPE_SECRET_KEY → still blocks insert + sends magic link, but logs cancel-skipped", async () => {
+    // Defensive: if the operator forgot to set the secret, we must not
+    // create a duplicate license row. The cancel-sub call is a separate
+    // promise; failing it should never silently allow the duplicate to
+    // proceed.
+    const state = emptyState();
+    await seedLicense(state, { email: "nokey@example.com", tier: "monthly" });
+
+    const body = checkoutBody({
+      eventId: "evt_no_secret",
+      sessionId: "cs_no_secret",
+      email: "nokey@example.com",
+      tier: "monthly",
+      subscription: "sub_uncancellable",
+    });
+    // No stripeSecret in opts — env.STRIPE_SECRET_KEY = "".
+    const env = makeEnv(state);
+    const resp = await handleStripeWebhook(await signedRequest(body), env, ctx);
+    expect(resp.status).toBe(200);
+
+    // Still only one license — gate held.
+    expect(state.licenses.size).toBe(1);
+    // Magic link was still issued.
+    expect(state.activation_codes.size).toBe(1);
+    // Audit reflects sub was NOT cancelled.
+    const audit = state.audit_log.find(
+      (a) => a.event_type === "duplicate_purchase_blocked"
+    );
+    expect(audit).toBeDefined();
+    const details = JSON.parse(audit!.details as string);
+    expect(details.cancelled_attempted_subscription).toBe(false);
+    // No fetch attempted (no secret).
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
