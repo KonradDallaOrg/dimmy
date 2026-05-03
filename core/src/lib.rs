@@ -263,7 +263,10 @@ pub struct AppConfig {
     pub waveform_style: String,
     pub overlay_position: String,
     pub keep_in_clipboard: bool,
-    /// Input gain (0.0-2.0, default 1.0). Attenuate hot mics (e.g. BT headsets).
+    /// Input gain multiplier. Default 0.5 (50%) — chosen so a fresh install
+    /// attenuates hot mics by default; the user can crank up if needed. Bound
+    /// `[0.0, 2.0]` (allowing >1.0 amplification on macOS, where the slider
+    /// is 0..2x; Windows slider caps at 1.0). Asserted in `save_config_file`.
     pub input_gain: f32,
     // Window position — bottom-right anchor in logical pixels
     pub window_anchor_right: Option<f64>,

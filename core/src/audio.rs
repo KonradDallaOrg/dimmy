@@ -31,7 +31,7 @@ pub fn list_input_devices() -> Vec<String> {
 /// Spawn a dedicated audio capture thread.
 /// Returns a sender to control the thread.
 /// Captured samples are written to the shared buffer.
-/// `input_gain` is shared so it can be updated at runtime (0.0-2.0, default 1.0).
+/// `input_gain` is shared so it can be updated at runtime (0.0-2.0, default 0.5).
 pub fn spawn_audio_thread(
     buffer: Arc<Mutex<Vec<f32>>>,
     input_gain: Arc<std::sync::atomic::AtomicU32>,

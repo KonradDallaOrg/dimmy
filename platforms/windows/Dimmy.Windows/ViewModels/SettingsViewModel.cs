@@ -235,7 +235,7 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _overlayPosition = "Bottom Right";
     [ObservableProperty] private string _theme = "Default";
     [ObservableProperty] private bool _keepInClipboard;
-    [ObservableProperty] private int _inputGainPercent = 100;
+    [ObservableProperty] private int _inputGainPercent = 50;
     [ObservableProperty] private bool _showInTaskbar;
     [ObservableProperty] private string _sttMode = "cloud";
     [ObservableProperty] private string _localModel = "ggml-base-q8_0.bin";
@@ -369,7 +369,7 @@ public partial class SettingsViewModel : ObservableObject
             OverlayPosition = r.TryGetProperty("overlay_position", out var op) ? op.GetString() ?? "Bottom Right" : "Bottom Right";
             Theme = r.TryGetProperty("theme", out var pt) ? pt.GetString() ?? "Default" : "Default";
             KeepInClipboard = r.TryGetProperty("keep_in_clipboard", out var kc) && kc.GetBoolean();
-            InputGainPercent = r.TryGetProperty("input_gain", out var ig) ? (int)(ig.GetDouble() * 100) : 100;
+            InputGainPercent = r.TryGetProperty("input_gain", out var ig) ? (int)(ig.GetDouble() * 100) : 50;
             StatsTotalWords = r.TryGetProperty("stats_total_words", out var stw) ? stw.GetInt64() : 0;
             StatsTotalSpeakingSecs = r.TryGetProperty("stats_total_speaking_secs", out var sts) ? sts.GetDouble() : 0;
 

@@ -116,10 +116,14 @@ public class SettingsViewModelTests
     // ── Input Gain ──
 
     [Fact]
-    public void InputGainPercent_DefaultIs100()
+    public void InputGainPercent_DefaultIs50()
     {
+        // Matches Rust AppConfig::default().input_gain = 0.5 (lib.rs).
+        // The two layers must agree: Rust persists 0.5 on first run, C# falls
+        // back to 50 when input_gain is missing from JSON. If you change one,
+        // change both — see also LoadFromJson_MissingInputGain_DefaultsTo50.
         var vm = new SettingsViewModel();
-        Assert.Equal(100, vm.InputGainPercent);
+        Assert.Equal(50, vm.InputGainPercent);
     }
 
     [Fact]
@@ -131,11 +135,11 @@ public class SettingsViewModelTests
     }
 
     [Fact]
-    public void LoadFromJson_MissingInputGain_DefaultsTo100()
+    public void LoadFromJson_MissingInputGain_DefaultsTo50()
     {
         var vm = new SettingsViewModel();
         vm.LoadFromJson("{\"language\": \"en\"}");
-        Assert.Equal(100, vm.InputGainPercent);
+        Assert.Equal(50, vm.InputGainPercent);
     }
 
     [Fact]
