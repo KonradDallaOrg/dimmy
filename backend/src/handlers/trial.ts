@@ -9,6 +9,7 @@ import { json } from "../index";
 import {
   audit,
   findActiveLicenseByEmail,
+  findRecentUnconsumedActivationCode,
   insertActivationCode,
   insertLicense,
 } from "../db";
@@ -17,6 +18,14 @@ import { sendActivationEmail } from "../email";
 
 const TRIAL_VALIDITY_SECS = 14 * 86_400;
 const ACTIVATION_TTL_SECS = 600; // 10 minutes
+/// Magic-link dedup window: if an unconsumed code for THIS license was
+/// minted within the last MAGIC_LINK_DEDUP_SECS, return the same one
+/// instead of minting a new. Stops "I clicked Start trial twice" from
+/// flooding the user's inbox with two different magic links.
+/// 5 minutes ≈ half of ACTIVATION_TTL_SECS — long enough to catch a
+/// double-click + page reload, short enough that a deliberate "send
+/// me a fresh link" minutes later still gets a new one.
+const MAGIC_LINK_DEDUP_SECS = 300;
 
 export async function handleTrialStart(
   req: Request,
@@ -78,14 +87,22 @@ export async function handleTrialStart(
     );
   }
 
-  // Mint a fresh activation code (existing or new license).
-  const code = activationCode();
-  await insertActivationCode(env.DB, {
-    code,
-    license_id: licenseId,
-    created_at: now,
-    expires_at: now + ACTIVATION_TTL_SECS,
-  });
+  // Magic-link dedup: re-use a fresh unconsumed code if one was
+  // minted in the last MAGIC_LINK_DEDUP_SECS for this license.
+  const recent = await findRecentUnconsumedActivationCode(
+    env.DB,
+    licenseId,
+    now - MAGIC_LINK_DEDUP_SECS
+  );
+  const code = recent?.code ?? activationCode();
+  if (!recent) {
+    await insertActivationCode(env.DB, {
+      code,
+      license_id: licenseId,
+      created_at: now,
+      expires_at: now + ACTIVATION_TTL_SECS,
+    });
+  }
 
   // HTTPS bridge URL — the Worker's GET /activate page auto-redirects
   // to dimmy://activate?code=… while presenting a paste-code fallback.

@@ -27,6 +27,7 @@ import {
   findActiveLicenseByStripeCustomer,
   findLicenseByStripeSession,
   findLicenseBySubscription,
+  findRecentUnconsumedActivationCode,
   insertActivationCode,
   insertLicense,
   recordStripeEvent,
@@ -54,6 +55,11 @@ const TIER_VALIDITY_SECS: Record<"monthly" | "annual" | "lifetime", number> = {
 };
 
 const ACTIVATION_TTL_SECS = 600;
+/// Same dedup window as trial.ts — re-use an unconsumed code created
+/// within the last MAGIC_LINK_DEDUP_SECS for this license instead of
+/// minting a new one. Two webhook re-fires within 5 min (Stripe Smart
+/// Retry) shouldn't email the user twice with two different codes.
+const MAGIC_LINK_DEDUP_SECS = 300;
 
 interface StripeEvent {
   id: string;
@@ -847,13 +853,21 @@ async function sendDuplicatePurchaseMagicLink(
     now: number;
   }
 ): Promise<void> {
-  const code = activationCode();
-  await insertActivationCode(env.DB, {
-    code,
-    license_id: args.licenseId,
-    created_at: args.now,
-    expires_at: args.now + ACTIVATION_TTL_SECS,
-  });
+  // Dedup window — see MAGIC_LINK_DEDUP_SECS comment.
+  const recent = await findRecentUnconsumedActivationCode(
+    env.DB,
+    args.licenseId,
+    args.now - MAGIC_LINK_DEDUP_SECS
+  );
+  const code = recent?.code ?? activationCode();
+  if (!recent) {
+    await insertActivationCode(env.DB, {
+      code,
+      license_id: args.licenseId,
+      created_at: args.now,
+      expires_at: args.now + ACTIVATION_TTL_SECS,
+    });
+  }
   const magicLink = `${env.PUBLIC_URL}/activate?code=${encodeURIComponent(code)}`;
   await sendActivationEmail({
     to: args.customerEmail,

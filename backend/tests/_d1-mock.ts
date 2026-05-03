@@ -60,6 +60,20 @@ export function makeMockDB(state: MockState): {
 // ── query dispatch ─────────────────────────────────────────────────
 
 function execFirst<T>(state: MockState, sql: string, bound: unknown[]): T | null {
+  if (sql.includes("FROM activation_codes")
+      && sql.includes("license_id = ?1")
+      && sql.includes("consumed_at IS NULL")
+      && sql.includes("created_at > ?2")) {
+    // findRecentUnconsumedActivationCode — bound = [licenseId, sinceSecs]
+    const lid = bound[0];
+    const since = bound[1] as number;
+    const candidates = [...state.activation_codes.values()]
+      .filter((c) => c.license_id === lid
+                   && c.consumed_at == null
+                   && (c.created_at as number) > since)
+      .sort((a, b) => (b.created_at as number) - (a.created_at as number));
+    return (candidates[0] ?? null) as T | null;
+  }
   if (sql.includes("FROM licenses WHERE email_hash = ?1 AND status = 'active'")) {
     const eh = bound[0] as string;
     const rows = [...state.licenses.values()]

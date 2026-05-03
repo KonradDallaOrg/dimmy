@@ -380,6 +380,35 @@ export async function findActivationCode(
     .first<ActivationCodeRow>();
 }
 
+/// Most recent un-consumed activation code for a license, minted within
+/// the idempotency window. Used by trial/start and by the
+/// duplicate-purchase magic-link flow to dedup magic-link emails: if
+/// the user double-clicks "Start trial" or the page reloads twice
+/// within 5 minutes, we re-send the SAME code instead of minting a new
+/// one. Two emails arrive (Resend has its own dedup window we don't
+/// rely on) but BOTH carry the same code — clicking either works
+/// idempotently.
+///
+/// `since_secs` is the floor on `created_at` — pass `now - 300` for a
+/// 5-minute window.
+export async function findRecentUnconsumedActivationCode(
+  db: D1Database,
+  licenseId: string,
+  since_secs: number
+): Promise<ActivationCodeRow | null> {
+  return db
+    .prepare(
+      `SELECT code, license_id, created_at, expires_at, consumed_at
+       FROM activation_codes
+       WHERE license_id = ?1
+         AND consumed_at IS NULL
+         AND created_at > ?2
+       ORDER BY created_at DESC LIMIT 1`
+    )
+    .bind(licenseId, since_secs)
+    .first<ActivationCodeRow>();
+}
+
 export async function consumeActivationCode(
   db: D1Database,
   code: string,

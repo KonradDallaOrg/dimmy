@@ -84,33 +84,37 @@ describe("/api/trial/start", () => {
     expect(lic.email_hash).toBe(await emailHash("alice@dev.local"));
   });
 
-  test("idempotent: same email → same license_id, NEW activation code, valid_until UNCHANGED", async () => {
+  test("idempotent: same email → same license_id, valid_until UNCHANGED, code dedup'd within window", async () => {
+    // Pre-dedup behaviour: every call minted a fresh code. Post-dedup:
+    // within MAGIC_LINK_DEDUP_SECS (5 min), the unconsumed code is
+    // re-used so the user doesn't get two emails with two different
+    // codes. The license-level idempotency (same lid, same
+    // valid_until) is unchanged.
     const state = emptyState();
-    // First call creates license.
     const r1 = await handleTrialStart(
       makeReq({ email: "bob@dev.local" }), makeEnv(state), ctx
     );
     expect(r1.status).toBe(200);
+    const j1 = (await r1.json()) as { code: string };
     const lic1 = [...state.licenses.values()][0];
     const originalValidUntil = lic1.valid_until;
-    const code1Count = state.activation_codes.size;
 
-    // Wait a beat so created_at can differ if it changed.
     await new Promise((r) => setTimeout(r, 5));
 
-    // Second call from "another device" — should reuse the SAME license.
     const r2 = await handleTrialStart(
       makeReq({ email: "bob@dev.local" }), makeEnv(state), ctx
     );
     expect(r2.status).toBe(200);
+    const j2 = (await r2.json()) as { code: string };
 
     // Still exactly one license (not 2).
     expect(state.licenses.size).toBe(1);
     expect([...state.licenses.values()][0].license_id).toBe(lic1.license_id);
     // Validity NOT reset to a fresh 14 days.
     expect([...state.licenses.values()][0].valid_until).toBe(originalValidUntil);
-    // A second code was minted (different from the first).
-    expect(state.activation_codes.size).toBe(code1Count + 1);
+    // Same code re-issued (dedup), NOT a second row in activation_codes.
+    expect(j2.code).toBe(j1.code);
+    expect(state.activation_codes.size).toBe(1);
   });
 
   test("expired trial → 409 (cannot just delete file to reset)", async () => {
@@ -155,5 +159,60 @@ describe("/api/trial/start", () => {
     expect([...state.licenses.values()][0].tier).toBe("annual");
     // A code was minted for the paid license.
     expect([...state.activation_codes.values()][0].license_id).toBe("lic_paid");
+  });
+
+  test("magic-link dedup: two start-trial calls within 5 min reuse the same code", async () => {
+    // Catches the "user double-clicks Start Trial / page reloads twice"
+    // failure mode where each click would otherwise mint a fresh code +
+    // send a fresh email. Both arrive but with DIFFERENT codes — the
+    // user sees two emails, doesn't know which to click.
+    const state = emptyState();
+    const r1 = await handleTrialStart(
+      makeReq({ email: "dedup@example.com" }),
+      makeEnv(state),
+      ctx
+    );
+    expect(r1.status).toBe(200);
+    const j1 = (await r1.json()) as { code: string };
+    expect(state.activation_codes.size).toBe(1);
+
+    const r2 = await handleTrialStart(
+      makeReq({ email: "dedup@example.com" }),
+      makeEnv(state),
+      ctx
+    );
+    expect(r2.status).toBe(200);
+    const j2 = (await r2.json()) as { code: string };
+
+    // SAME code returned, no second activation_code row.
+    expect(j2.code).toBe(j1.code);
+    expect(state.activation_codes.size).toBe(1);
+    // Single license (idempotent on email).
+    expect(state.licenses.size).toBe(1);
+  });
+
+  test("magic-link dedup: a fresh code is minted after the first one is consumed", async () => {
+    // Once the user actually uses the code, future calls must mint a
+    // new one — the dedup window only protects against accidental
+    // double-issuance of UNCONSUMED codes.
+    const state = emptyState();
+    const r1 = await handleTrialStart(
+      makeReq({ email: "consumed@example.com" }),
+      makeEnv(state),
+      ctx
+    );
+    const j1 = (await r1.json()) as { code: string };
+    // Simulate consumption.
+    const c = [...state.activation_codes.values()][0];
+    c.consumed_at = Math.floor(Date.now() / 1000);
+
+    const r2 = await handleTrialStart(
+      makeReq({ email: "consumed@example.com" }),
+      makeEnv(state),
+      ctx
+    );
+    const j2 = (await r2.json()) as { code: string };
+    expect(j2.code).not.toBe(j1.code);
+    expect(state.activation_codes.size).toBe(2);
   });
 });
