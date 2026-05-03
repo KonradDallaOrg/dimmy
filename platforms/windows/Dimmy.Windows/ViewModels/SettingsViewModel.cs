@@ -141,6 +141,32 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _llmUseSameKey = true;
     [ObservableProperty] private string _llmApiKey = "";
     [ObservableProperty] private bool _hasLlmKey;
+
+    /// Per-provider snapshot of "is an LLM key already stored?" — sourced from
+    /// the `has_llm_*_key` fields of `dimmy_get_config_json`. Used by the
+    /// dropdown handler to refresh `HasLlmKey` (the green ✓ badge) without an
+    /// FFI roundtrip when the user picks a different provider before saving.
+    private Dictionary<string, bool> _llmHasKeyByProvider = new();
+
+    /// Returns whether the LLM keystore has a key for the given provider URL.
+    /// Mirrors `Provider::from_url` in `core/src/provider.rs` — keep in sync
+    /// when adding providers.
+    public bool HasLlmKeyForUrl(string url)
+    {
+        var key = LlmProviderKeyFromUrl(url);
+        return _llmHasKeyByProvider.TryGetValue(key, out var v) && v;
+    }
+
+    private static string LlmProviderKeyFromUrl(string url)
+    {
+        if (string.IsNullOrEmpty(url)) return "groq"; // matches Rust default
+        if (url.Contains("groq.com")) return "groq";
+        if (url.Contains("openai.com")) return "openai";
+        if (url.Contains("openrouter.ai")) return "openrouter";
+        if (url.Contains("googleapis.com")) return "gemini";
+        if (url.Contains("anthropic.com")) return "anthropic";
+        return "custom";
+    }
     [ObservableProperty] private string _llmCustomPrompt = "";
     [ObservableProperty] private string _llmTranslateTo = "";
     [ObservableProperty] private bool _llmLogEnabled;
@@ -310,6 +336,17 @@ public partial class SettingsViewModel : ObservableObject
             LlmApiModel = r.TryGetProperty("llm_api_model", out var lm) ? lm.GetString() ?? "" : "";
             LlmUseSameKey = !r.TryGetProperty("llm_use_same_key", out var lsk) || lsk.GetBoolean();
             HasLlmKey = r.TryGetProperty("has_llm_key", out var hlk) && hlk.GetBoolean();
+            // Per-provider snapshot — drives real-time green ✓ when user picks
+            // another LLM provider in the dropdown before saving.
+            _llmHasKeyByProvider = new Dictionary<string, bool>
+            {
+                ["groq"] = r.TryGetProperty("has_llm_groq_key", out var hlg) && hlg.GetBoolean(),
+                ["openai"] = r.TryGetProperty("has_llm_openai_key", out var hlo) && hlo.GetBoolean(),
+                ["anthropic"] = r.TryGetProperty("has_llm_anthropic_key", out var hla) && hla.GetBoolean(),
+                ["gemini"] = r.TryGetProperty("has_llm_gemini_key", out var hlge) && hlge.GetBoolean(),
+                ["openrouter"] = r.TryGetProperty("has_llm_openrouter_key", out var hlor) && hlor.GetBoolean(),
+                ["custom"] = r.TryGetProperty("has_llm_custom_key", out var hlc) && hlc.GetBoolean(),
+            };
             LlmCustomPrompt = r.TryGetProperty("llm_custom_prompt", out var lcp) ? lcp.GetString() ?? "" : "";
             // Normalise legacy values: pre-V19 the dropdown used uppercase
             // codes ("EN", "IT") plus the string "none"; the pill used
