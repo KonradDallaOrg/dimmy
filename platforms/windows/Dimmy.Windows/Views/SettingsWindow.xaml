@@ -311,19 +311,118 @@
                 <controls:SettingCard Glyph="&#xE968;"
                                       Label="Provider"
                                       Description="Choose the cloud STT model to send audio to.">
-                  <ComboBox x:Name="ProviderComboBox" MinWidth="280"
+                  <ComboBox x:Name="ProviderComboBox" MinWidth="320"
                             SelectionChanged="Provider_SelectionChanged">
-                    <ComboBoxItem Content="Groq — whisper-large-v3-turbo (free)" Tag="groq" />
-                    <ComboBoxItem Content="Groq — whisper-large-v3 (free)" Tag="groq-v3" />
-                    <ComboBoxItem Content="Groq — distil-whisper-en (free)" Tag="groq-distil" />
-                    <ComboBoxItem Content="OpenAI — whisper-1" Tag="openai" />
-                    <ComboBoxItem Content="OpenAI — gpt-4o-transcribe" Tag="openai-4o" />
-                    <ComboBoxItem Content="OpenAI — gpt-4o-mini-transcribe" Tag="openai-4o-mini" />
-                    <ComboBoxItem Content="Deepgram — nova-3" Tag="deepgram" />
-                    <ComboBoxItem Content="Deepgram — nova-2" Tag="deepgram-nova2" />
-                    <ComboBoxItem Content="Gemini — gemini-2.5-flash (free)" Tag="gemini" />
-                    <ComboBoxItem Content="Gemini — gemini-2.5-pro (free)" Tag="gemini-pro" />
-                    <ComboBoxItem Content="Custom endpoint" Tag="custom" />
+                    <ComboBoxItem Tag="groq">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/groq.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Groq · whisper-large-v3-turbo (free)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="groq-v3">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/groq.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Groq · whisper-large-v3 (free)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="groq-distil">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/groq.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Groq · distil-whisper-en (free)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="openai">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/openai.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="OpenAI · whisper-1" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="openai-4o">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/openai.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="OpenAI · gpt-4o-transcribe" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="openai-4o-mini">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/openai.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="OpenAI · gpt-4o-mini-transcribe" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="deepgram">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/deepgram.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Deepgram · nova-3" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="deepgram-nova2">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/deepgram.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Deepgram · nova-2" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="gemini">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Gemini · gemini-2.5-flash (free)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="gemini-pro">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Gemini · gemini-2.5-pro (free)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="fireworks">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/fireworks.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Fireworks · whisper-v3-turbo" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="together-parakeet">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/together.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Together · parakeet-tdt-0.6b-v3" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="together-whisper">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/together.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Together · whisper-large-v3" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="custom">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE71B;" FontSize="14" VerticalAlignment="Center"/>
+                        <TextBlock Text="Custom endpoint" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
                   </ComboBox>
                 </controls:SettingCard>
                 <controls:SettingCard x:Name="CustomUrlCard"
@@ -487,16 +586,94 @@
                 <controls:SettingCard Glyph="&#xE968;"
                                       Label="Cloud LLM provider"
                                       Description="Where the rewrite runs and which model.">
-                  <ComboBox x:Name="LlmProviderComboBox" MinWidth="280"
+                  <ComboBox x:Name="LlmProviderComboBox" MinWidth="320"
                             SelectionChanged="LlmProvider_SelectionChanged">
-                    <ComboBoxItem Content="Groq — llama-3.3-70b (free)" Tag="groq" />
-                    <ComboBoxItem Content="OpenAI — gpt-4o-mini" Tag="openai" />
-                    <ComboBoxItem Content="OpenRouter — llama-3.3-70b (free)" Tag="openrouter" />
-                    <ComboBoxItem Content="OpenRouter — DeepSeek R1 (free)" Tag="openrouter-deepseek" />
-                    <ComboBoxItem Content="Gemini — gemini-2.5-flash (free)" Tag="gemini" />
-                    <ComboBoxItem Content="Anthropic — claude-haiku-4.5" Tag="anthropic" />
-                    <ComboBoxItem Content="Anthropic — claude-sonnet-4" Tag="anthropic-sonnet" />
-                    <ComboBoxItem Content="Custom endpoint" Tag="custom" />
+                    <ComboBoxItem Tag="groq">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/groq.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Groq · llama-3.3-70b (free)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="openai">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/openai.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="OpenAI · gpt-4o-mini" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="openrouter">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/openrouter.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="OpenRouter · llama-3.3-70b (free)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="openrouter-deepseek">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/openrouter.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="OpenRouter · DeepSeek R1 (free)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="gemini">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Gemini · gemini-2.5-flash (free)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="anthropic">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/anthropic.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Anthropic · claude-haiku-4.5" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="anthropic-sonnet">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/anthropic.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Anthropic · claude-sonnet-4" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="fireworks">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/fireworks.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Fireworks · kimi-k2" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="together-llama">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/together.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Together · llama-3.3-70b" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="together-qwen">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/together.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Together · qwen-2.5-7b" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="custom">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE71B;" FontSize="14" VerticalAlignment="Center"/>
+                        <TextBlock Text="Custom endpoint" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
                   </ComboBox>
                 </controls:SettingCard>
                 <controls:SettingCard x:Name="LlmCustomUrlCard"

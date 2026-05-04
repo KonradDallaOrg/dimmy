@@ -66,7 +66,18 @@ struct GeneralSettingsView: View {
                     Section("STT Provider") {
                         Picker("Provider + Model", selection: $selectedSttPreset) {
                             ForEach(SttPreset.presets) { preset in
-                                Text(preset.displayName).tag(preset.id)
+                                Label {
+                                    Text(preset.displayName)
+                                } icon: {
+                                    if preset.iconAssetName.isEmpty {
+                                        Image(systemName: "gear")
+                                    } else {
+                                        Image(preset.iconAssetName)
+                                            .resizable()
+                                            .frame(width: 14, height: 14)
+                                    }
+                                }
+                                .tag(preset.id)
                             }
                         }
                         .onChange(of: selectedSttPreset) { _, newId in

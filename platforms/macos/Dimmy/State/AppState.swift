@@ -154,6 +154,20 @@ struct SttPreset: Identifiable, Hashable {
     let apiUrl: String
     let model: String
 
+    /// Asset Catalog imageset name in `Assets.xcassets/Providers/`. Empty
+    /// for `.custom` (the UI swaps in an SF Symbol fallback).
+    var iconAssetName: String {
+        switch provider {
+        case .groq: return "groq"
+        case .openai: return "openai"
+        case .deepgram: return "deepgram"
+        case .gemini: return "gemini"
+        case .fireworks: return "fireworks"
+        case .together: return "together"
+        case .custom: return ""
+        }
+    }
+
     static let presets: [SttPreset] = [
         SttPreset(id: "groq-whisper-turbo", displayName: "Groq \u{00B7} whisper-large-v3-turbo (free)", provider: .groq, apiUrl: "https://api.groq.com/openai/v1/audio/transcriptions", model: "whisper-large-v3-turbo"),
         SttPreset(id: "groq-whisper-v3", displayName: "Groq \u{00B7} whisper-large-v3 (free)", provider: .groq, apiUrl: "https://api.groq.com/openai/v1/audio/transcriptions", model: "whisper-large-v3"),
@@ -184,6 +198,20 @@ struct LlmPreset: Identifiable, Hashable {
     let displayName: String
     let apiUrl: String
     let model: String
+
+    /// Asset Catalog imageset name in `Assets.xcassets/Providers/`, derived
+    /// from the API URL host. Empty for unknown / custom URLs (the UI swaps
+    /// in an SF Symbol fallback).
+    var iconAssetName: String {
+        if apiUrl.contains("groq.com") { return "groq" }
+        if apiUrl.contains("openai.com") { return "openai" }
+        if apiUrl.contains("openrouter.ai") { return "openrouter" }
+        if apiUrl.contains("googleapis.com") { return "gemini" }
+        if apiUrl.contains("anthropic.com") { return "anthropic" }
+        if apiUrl.contains("fireworks.ai") { return "fireworks" }
+        if apiUrl.contains("together.xyz") || apiUrl.contains("together.ai") { return "together" }
+        return ""
+    }
 
     static let presets: [LlmPreset] = [
         LlmPreset(id: "groq-llama70b", displayName: "Groq \u{00B7} llama-3.3-70b (free)", apiUrl: "https://api.groq.com/openai/v1/chat/completions", model: "llama-3.3-70b-versatile"),
