@@ -357,6 +357,21 @@ async function handleCheckoutCompleted(
 // scheduled (cancel_at_period_end flips), reactivation (cancel flag
 // reset), plan change. We mirror the new state into our row; the
 // canonical source remains Stripe.
+/// Modern Stripe API moved `current_period_end` from the subscription
+/// object onto each subscription_item. Read it from items.data[0]
+/// first, fall back to the legacy top-level field for older payload
+/// versions. Without this, plan-change → annual leaves `valid_until`
+/// pinned to the monthly cycle's end (the '31 giorni' bug witnessed
+/// 2026-05-04 + reproduced via Stripe test_clock).
+function readSubPeriodEnd(sub: Record<string, unknown>): number | undefined {
+  const items = sub.items as { data?: Array<{ current_period_end?: number }> } | undefined;
+  const fromItem = items?.data?.[0]?.current_period_end;
+  if (typeof fromItem === "number") return fromItem;
+  return typeof sub.current_period_end === "number"
+    ? (sub.current_period_end as number)
+    : undefined;
+}
+
 async function handleSubscriptionUpdated(
   env: Env,
   sub: Record<string, unknown>,
@@ -365,7 +380,7 @@ async function handleSubscriptionUpdated(
   const subId = sub.id as string | undefined;
   if (!subId) return;
 
-  const periodEnd = sub.current_period_end as number | undefined;
+  const periodEnd = readSubPeriodEnd(sub);
   const cancelAt =
     typeof sub.cancel_at_period_end === "boolean"
       ? sub.cancel_at_period_end
