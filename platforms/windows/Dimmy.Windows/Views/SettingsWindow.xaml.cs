@@ -1243,6 +1243,9 @@ public sealed partial class SettingsWindow : Window
     private void License_BuyAnnual_Click(object sender, RoutedEventArgs e)  => _ = BuyTierAsync("annual");
     private void License_BuyLifetime_Click(object sender, RoutedEventArgs e) => _ = BuyTierAsync("lifetime");
 
+    private static string ToTitleCase(string s) =>
+        string.IsNullOrEmpty(s) ? s : char.ToUpperInvariant(s[0]) + s.Substring(1);
+
     private async Task BuyTierAsync(string tier)
     {
         // Distinguish "plan change" (Active monthly⇄annual) from "first
@@ -1263,6 +1266,33 @@ public sealed partial class SettingsWindow : Window
 
             if (isPlanChange)
             {
+                // Confirm dialog so the user knows the click mutates an
+                // existing sub (proration on next invoice, no second
+                // card prompt) rather than opening a fresh Checkout.
+                // Without it, the click 'flagga istantaneamente' the
+                // new tier and the silent UX feels off.
+                var confirmDialog = new ContentDialog
+                {
+                    Title = $"Switch plan to {ToTitleCase(tier)}?",
+                    Content =
+                        $"You're already subscribed (current: {ToTitleCase(status.Tier ?? "")}). " +
+                        $"Switching to {tier} mutates your existing subscription:\n\n" +
+                        "• No new payment now — Stripe reuses your saved card.\n" +
+                        "• Stripe issues a prorated invoice on the next billing date " +
+                        "(credit for unused days of the old plan, debit for the new one).\n" +
+                        "• No magic-link email — your license stays active, just the tier changes.",
+                    PrimaryButtonText = $"Switch to {ToTitleCase(tier)}",
+                    SecondaryButtonText = "Cancel",
+                    DefaultButton = ContentDialogButton.Primary,
+                    XamlRoot = this.Content?.XamlRoot,
+                };
+                var result = await confirmDialog.ShowAsync();
+                if (result != ContentDialogResult.Primary)
+                {
+                    ShowInfoBar(LicenseBuyInfoBar, InfoBarSeverity.Informational,
+                        "Plan change cancelled.");
+                    return;
+                }
                 ShowInfoBar(LicenseBuyInfoBar, InfoBarSeverity.Informational,
                     $"Switching plan to {tier}…");
                 var r = await LicenseService.PlanChangeAsync(tier);

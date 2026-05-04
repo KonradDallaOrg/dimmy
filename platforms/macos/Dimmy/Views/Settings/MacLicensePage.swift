@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 // License — Tahoe Settings page mirroring Windows v3 Settings → License.
 //
@@ -427,6 +428,33 @@ struct MacLicensePage: View {
             && (tier == "monthly" || tier == "annual")
 
         if isPlanChange {
+            // Confirm dialog so the user knows the click mutates an
+            // existing sub (proration on next invoice, no second card
+            // prompt) rather than opening a fresh Checkout. Without
+            // it the click 'flagga istantaneamente' the new tier and
+            // the silent UX feels off — same dialog also on Win.
+            let confirmed = await MainActor.run { () -> Bool in
+                let alert = NSAlert()
+                alert.messageText = "Switch plan to \(tier.capitalized)?"
+                alert.informativeText =
+                    "You're already subscribed (current: \(currentTier?.capitalized ?? "")).\n\n" +
+                    "Switching to \(tier.capitalized) mutates your existing subscription:\n\n" +
+                    "• No new payment now — Stripe reuses your saved card.\n" +
+                    "• Stripe issues a prorated invoice on the next billing date " +
+                    "(credit for unused days of the old plan, debit for the new one).\n" +
+                    "• No magic-link email — your license stays active, just the tier changes."
+                alert.alertStyle = .informational
+                alert.addButton(withTitle: "Switch to \(tier.capitalized)")
+                alert.addButton(withTitle: "Cancel")
+                return alert.runModal() == .alertFirstButtonReturn
+            }
+            guard confirmed else {
+                await MainActor.run {
+                    buyIsError = false
+                    buyStatus = "Plan change cancelled."
+                }
+                return
+            }
             buyStatus = "Switching plan to \(tier) (proration applies)…"
             let pc = await DimmyCore.shared.licensePlanChange(newTier: tier)
             guard pc.ok else {
