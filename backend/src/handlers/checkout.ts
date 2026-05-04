@@ -20,8 +20,8 @@
 
 import type { Env } from "../index";
 import { json } from "../index";
-import { verifyTokenWithPub, type Claims } from "../crypto";
-import { findLicenseById } from "../db";
+import { verifyTokenWithPub, emailHash, type Claims } from "../crypto";
+import { findLicenseById, findActiveLicenseByEmail } from "../db";
 
 type PaidTier = "monthly" | "annual" | "lifetime";
 
@@ -46,7 +46,7 @@ export async function handleCheckoutCreate(
     return json({ error: "checkout not configured" }, 500);
   }
 
-  let body: { tier?: unknown; token?: unknown; return_url?: unknown };
+  let body: { tier?: unknown; token?: unknown; email?: unknown; return_url?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -61,28 +61,36 @@ export async function handleCheckoutCreate(
     return json({ error: `${tier} price not configured server-side` }, 500);
   }
 
-  // Optional token — if present we verify it, look up the license, and
-  // gate the purchase BEFORE creating the Stripe Checkout session.
+  // Pre-checkout gate. Two sources of identity, in priority order:
   //
-  // Why server-side: the client UI already branches (plan-change vs
-  // checkout) based on tier, but a stale local status, a manually-typed
-  // URL, or a future bug could send users into Checkout when they
-  // already have a paid sub. Stripe charges first and fires the webhook
-  // after — the duplicate-purchase gate in stripe.ts can refund + cancel
-  // but only AFTER the user has been billed. Refusing to mint the
-  // Checkout URL up front means Stripe never charges, period.
+  //   1. Token (logged-in flow, claims.lid → DB lookup)
+  //   2. Email body field (post-sign-out flow — UI prompts for email
+  //      and passes it here so we can lookup by email_hash before
+  //      letting Stripe charge)
+  //
+  // Either source resolves to a license row; if it's an active paid
+  // license that conflicts with the requested tier, we 409 BEFORE
+  // creating a Stripe Checkout. This is the radical fix to the
+  // sign-out + re-buy bug witnessed live 2026-05-04: previously the
+  // anonymous Checkout went through, the webhook gate refunded after
+  // the fact, but the user briefly saw a charge on their card.
   //
   // Reject matrix:
-  //   • already on lifetime          → 409 (it's the ceiling, no purchase makes sense)
-  //   • already on monthly/annual    → 409 if buying monthly/annual (use /api/plan-change)
-  //                                    PASS if buying lifetime (legitimate sub→lifetime upgrade,
-  //                                    duplicate-purchase gate in stripe.ts handles it cleanly)
-  //   • on trial                     → PASS (legitimate trial→paid upgrade)
-  //   • license missing/expired/etc  → PASS (fresh purchase)
+  //   • already on lifetime          → 409 (ceiling)
+  //   • already on monthly/annual + buy m|a → 409 (use plan-change)
+  //   • already on monthly/annual + buy lifetime → PASS (sub→lifetime upgrade)
+  //   • trial / no license / expired → PASS (legitimate fresh path)
   //
-  // Invalid token = silent fall-through to anonymous-purchase path
-  // (no gate, no carry) — same shape as before this change.
+  // Stripe Customer dedup: if email is provided we pass it as
+  // customer_email to Checkout. Stripe matches against existing
+  // customer with same email; otherwise creates a new one. This
+  // prevents the "two customers per email" pattern that caused
+  // orphan refunds last cycle.
   let emailHashCarry: string | null = null;
+  let stripeCustomerEmail: string | null = null;
+  let existingActiveLicense: Awaited<ReturnType<typeof findLicenseById>> = null;
+
+  // Source 1: token (preferred — proves the caller has the license).
   if (typeof body.token === "string" && body.token.length > 0) {
     try {
       const claims: Claims = await verifyTokenWithPub(
@@ -90,33 +98,54 @@ export async function handleCheckoutCreate(
         env.DIMMY_LICENSE_PUBKEY
       );
       emailHashCarry = claims.eh;
-
-      const lic = await findLicenseById(env.DB, claims.lid);
-      if (lic && lic.status === "active") {
-        if (lic.tier === "lifetime") {
-          return json(
-            { error: "already on lifetime — no further purchase needed" },
-            409
-          );
-        }
-        if (
-          (lic.tier === "monthly" || lic.tier === "annual") &&
-          (tier === "monthly" || tier === "annual")
-        ) {
-          return json(
-            {
-              error:
-                "already on a paid subscription — use /api/plan-change to switch monthly⇄annual",
-              current_tier: lic.tier,
-              requested_tier: tier,
-            },
-            409
-          );
-        }
-      }
+      existingActiveLicense = await findLicenseById(env.DB, claims.lid);
     } catch {
+      // Invalid token = silent fall-through; try email next.
       emailHashCarry = null;
     }
+  }
+  // Source 2: email body field (post-sign-out / first-purchase flow).
+  // Only consulted if token didn't resolve a license — token is
+  // authoritative when present and valid.
+  if (!existingActiveLicense && typeof body.email === "string" && body.email.length > 0) {
+    const e = body.email.trim().toLowerCase();
+    if (e.includes("@") && e.length < 254) {
+      stripeCustomerEmail = e;
+      const eh = await emailHash(e);
+      emailHashCarry = emailHashCarry ?? eh;
+      existingActiveLicense = await findActiveLicenseByEmail(env.DB, eh);
+    }
+  }
+
+  // Apply the gate against whatever license we resolved.
+  if (existingActiveLicense && existingActiveLicense.status === "active") {
+    const lic = existingActiveLicense;
+    if (lic.tier === "lifetime") {
+      return json(
+        {
+          error: "already on lifetime — no further purchase needed",
+          current_tier: "lifetime",
+          requested_tier: tier,
+        },
+        409
+      );
+    }
+    if (
+      (lic.tier === "monthly" || lic.tier === "annual") &&
+      (tier === "monthly" || tier === "annual")
+    ) {
+      return json(
+        {
+          error:
+            "already on a paid subscription — use plan-change to switch monthly⇄annual, or activate this device with the magic-link flow",
+          current_tier: lic.tier,
+          requested_tier: tier,
+        },
+        409
+      );
+    }
+    // monthly|annual + buy lifetime falls through (sub→lifetime upgrade
+    // is legitimate; the webhook gate will mutate the license in place).
   }
 
   // return_url: where Stripe sends the user after success/cancel.
@@ -161,6 +190,13 @@ export async function handleCheckoutCreate(
   });
   if (emailHashCarry) {
     params.append("client_reference_id", emailHashCarry);
+  }
+  if (stripeCustomerEmail) {
+    // Pre-populate Stripe Checkout's email field. Stripe will dedupe
+    // against an existing Customer object with the same email rather
+    // than creating a fresh one — fixes the legacy "two customers per
+    // email" pattern that caused orphan charges before this change.
+    params.append("customer_email", stripeCustomerEmail);
   }
 
   const resp = await fetch("https://api.stripe.com/v1/checkout/sessions", {

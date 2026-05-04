@@ -161,15 +161,28 @@ public static class LicenseService
             return ParseOp(buf, n);
         });
 
-    public sealed record UrlResult(bool Ok, string? Url, string? Error);
+    public sealed record UrlResult(
+        bool Ok,
+        string? Url,
+        string? Error,
+        int? StatusCode = null,
+        string? CurrentTier = null,
+        string? RequestedTier = null);
 
-    /// POST /api/checkout/create — returns Stripe Checkout URL for the chosen tier.
-    /// Caller opens the URL in the system browser; webhook handles the rest.
-    public static Task<UrlResult> CreateCheckoutAsync(string tier) =>
+    /// POST /api/checkout/create — returns Stripe Checkout URL for the
+    /// chosen tier. Caller opens the URL in the system browser; webhook
+    /// handles the rest.
+    /// `email` is optional — when present it lets the server pre-gate
+    /// against an existing license (post-sign-out flow) and dedups the
+    /// Stripe customer object via customer_email. On 409 the response
+    /// carries CurrentTier / RequestedTier so the UI can show
+    /// "you already have <X>, send magic link instead" instead of a
+    /// generic checkout-failed error.
+    public static Task<UrlResult> CreateCheckoutAsync(string tier, string? email = null) =>
         Task.Run(() =>
         {
             var buf = new byte[2048];
-            int n = DimmyNative.dimmy_license_checkout_url(tier, buf, buf.Length);
+            int n = DimmyNative.dimmy_license_checkout_url(tier, email, buf, buf.Length);
             return ParseUrl(buf, n);
         });
 
@@ -204,14 +217,17 @@ public static class LicenseService
         var json = Encoding.UTF8.GetString(buf, 0, n);
         var w = JsonSerializer.Deserialize<UrlWire>(json, JsonOpts);
         if (w is null) return new UrlResult(false, null, "deserialize");
-        return new UrlResult(w.Ok, w.Url, w.Error);
+        return new UrlResult(w.Ok, w.Url, w.Error, w.Status, w.CurrentTier, w.RequestedTier);
     }
 
     private sealed class UrlWire
     {
-        [JsonPropertyName("ok")]    public bool Ok { get; set; }
-        [JsonPropertyName("url")]   public string? Url { get; set; }
-        [JsonPropertyName("error")] public string? Error { get; set; }
+        [JsonPropertyName("ok")]              public bool Ok { get; set; }
+        [JsonPropertyName("url")]             public string? Url { get; set; }
+        [JsonPropertyName("error")]           public string? Error { get; set; }
+        [JsonPropertyName("status")]          public int? Status { get; set; }
+        [JsonPropertyName("current_tier")]    public string? CurrentTier { get; set; }
+        [JsonPropertyName("requested_tier")]  public string? RequestedTier { get; set; }
     }
 
     private static OpResult ParseOp(byte[] buf, int n)

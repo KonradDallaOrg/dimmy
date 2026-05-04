@@ -321,6 +321,7 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_license_checkout_url(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string tier,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? email,
         byte[] outBuf, int bufLen);
 
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]

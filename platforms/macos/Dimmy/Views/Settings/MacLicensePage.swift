@@ -116,9 +116,21 @@ struct MacLicensePage: View {
                     }
                 }
                 Spacer()
-                Button("Sign out / clear") {
-                    DimmyCore.shared.licenseClear()
-                    refreshStatus()
+                Button("Sign out (this device)") {
+                    let alert = NSAlert()
+                    alert.messageText = "Sign out from this device?"
+                    alert.informativeText =
+                        "Your subscription on Stripe will stay active and will keep " +
+                        "billing on its renewal date. To cancel billing, use 'Manage subscription' instead.\n\n" +
+                        "If you sign out, your activation token on this device is removed. " +
+                        "You can sign in again from the same email — we'll resend the magic link."
+                    alert.alertStyle = .warning
+                    alert.addButton(withTitle: "Sign out")
+                    alert.addButton(withTitle: "Cancel")
+                    if alert.runModal() == .alertFirstButtonReturn {
+                        DimmyCore.shared.licenseClear()
+                        refreshStatus()
+                    }
                 }
                 .tint(.red)
             }
@@ -340,8 +352,16 @@ struct MacLicensePage: View {
     }
 
     private var showMonthlyButton: Bool {
-        // Hidden on any Active state (no point re-purchasing same or downgrading via Buy).
-        status.kind != "Active"
+        // Hidden when already on Monthly (no-op) and on Lifetime
+        // (Lifetime → Monthly downgrade is not a sensible flow). Visible
+        // on Active{annual} as 'Switch to Monthly' for in-app downgrade
+        // (matches Win behaviour); also visible on all non-Active states
+        // (NotFound, Trial, Expired, Suspended) as a fresh purchase.
+        if status.kind == "Active" {
+            let t = status.tier?.lowercased()
+            return !(t == "monthly" || t == "lifetime")
+        }
+        return true
     }
 
     private var showAnnualButton: Bool {
@@ -363,7 +383,10 @@ struct MacLicensePage: View {
                 || status.tier?.lowercased() == "annual")
     }
 
-    private var monthlyLabel: String { "Monthly" }
+    private var monthlyLabel: String {
+        status.kind == "Active" && status.tier?.lowercased() == "annual"
+            ? "Switch to Monthly" : "Monthly"
+    }
     private var annualLabel: String {
         status.kind == "Active" && status.tier?.lowercased() == "monthly"
             ? "Switch to Annual" : "Annual"
@@ -384,7 +407,7 @@ struct MacLicensePage: View {
         case "Active":
             switch status.tier?.lowercased() {
             case "monthly": return "Upgrade your plan"
-            case "annual":  return "Upgrade to Lifetime"
+            case "annual":  return "Change your plan"
             default:        return "Buy a license"
             }
         default:             return "Buy a license"
@@ -404,7 +427,7 @@ struct MacLicensePage: View {
             case "monthly":
                 return "Switch to Annual for the best value, or Lifetime to skip renewals entirely."
             case "annual":
-                return "One payment, three years of access — never another renewal email."
+                return "Drop to Monthly (you'll get a credit on the next invoice) or jump to Lifetime for one final payment."
             default:
                 return "Pick a plan and we'll email you a magic link to activate."
             }
@@ -475,11 +498,84 @@ struct MacLicensePage: View {
             return
         }
 
+        // Pre-checkout email gate: ask the user for their email before
+        // minting the Stripe Checkout URL. The server uses the email
+        // to look up an existing license and 409 BEFORE Stripe charges.
+        // Pre-fill with the previously-entered email (persisted in
+        // AppState; survives Sign out — UX convenience, no auth weight).
+        let prefilled = appState.buyerEmail ?? ""
+        let promptedEmail: String? = await MainActor.run { () -> String? in
+            let alert = NSAlert()
+            alert.messageText = "Continue to \(tier.capitalized) checkout"
+            alert.informativeText =
+                "Used to look up an existing license + match the Stripe customer. " +
+                "If you've bought before with this email, we'll resend the magic link " +
+                "instead of charging you again."
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "Continue")
+            alert.addButton(withTitle: "Cancel")
+            let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+            input.placeholderString = "you@example.com"
+            input.stringValue = prefilled
+            alert.accessoryView = input
+            // Force initial focus on the text field.
+            alert.window.initialFirstResponder = input
+            let res = alert.runModal()
+            if res != .alertFirstButtonReturn { return nil }
+            let trimmed = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return trimmed.contains("@") && trimmed.contains(".") && trimmed.count < 254 ? trimmed : nil
+        }
+        guard let email = promptedEmail else {
+            await MainActor.run {
+                buyIsError = false
+                buyStatus = "Purchase cancelled."
+            }
+            return
+        }
+        // Persist for next time.
+        await MainActor.run { appState.buyerEmail = email }
+
         buyStatus = "Opening Stripe checkout for \(tier)…"
-        let r = await DimmyCore.shared.licenseCheckoutUrl(tier: tier)
-        guard r.ok, let urlStr = r.url, let url = URL(string: urlStr) else {
+        let r = await DimmyCore.shared.licenseCheckoutUrl(tier: tier, email: email)
+        if !r.ok {
+            // 409 path → license already exists. Offer "send magic link"
+            // fallback (re-issue activation email instead of charging).
+            if r.statusCode == 409, let curTier = r.currentTier {
+                let confirmed: Bool = await MainActor.run {
+                    let alert = NSAlert()
+                    alert.messageText = "You already have a \(curTier) license"
+                    alert.informativeText =
+                        "The email \(email) is already linked to an active \(curTier) license. " +
+                        "We can resend the activation magic link for that license — " +
+                        "no new payment, no second sub."
+                    alert.alertStyle = .informational
+                    alert.addButton(withTitle: "Send magic link")
+                    alert.addButton(withTitle: "Cancel")
+                    return alert.runModal() == .alertFirstButtonReturn
+                }
+                if confirmed {
+                    let t = await DimmyCore.shared.licenseRequestTrial(email: email)
+                    await MainActor.run {
+                        buyIsError = !t.ok
+                        buyStatus = t.ok
+                            ? "Magic link sent to \(email). Check your inbox."
+                            : (t.error ?? "Could not resend magic link.")
+                    }
+                } else {
+                    await MainActor.run {
+                        buyIsError = false
+                        buyStatus = "Cancelled."
+                    }
+                }
+                return
+            }
             buyIsError = true
             buyStatus = r.error ?? "Could not start checkout."
+            return
+        }
+        guard let urlStr = r.url, let url = URL(string: urlStr) else {
+            buyIsError = true
+            buyStatus = "Stripe returned an empty URL."
             return
         }
         NSWorkspace.shared.open(url)

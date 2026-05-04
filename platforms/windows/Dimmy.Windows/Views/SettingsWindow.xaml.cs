@@ -1080,8 +1080,28 @@ public sealed partial class SettingsWindow : Window
         }
     }
 
-    private void License_Clear_Click(object sender, RoutedEventArgs e)
+    private async void License_Clear_Click(object sender, RoutedEventArgs e)
     {
+        // Confirm dialog with the message users keep missing: signing out
+        // removes the license from THIS device only — the Stripe sub
+        // stays alive and keeps billing. To stop billing, use Manage
+        // subscription. Without this dialog, users sign out then click
+        // Buy expecting to "start over" and end up with a duplicate
+        // charge that the server-side gate has to refund.
+        var dlg = new ContentDialog
+        {
+            Title = "Sign out from this device?",
+            Content =
+                "Your subscription on Stripe will stay active and will keep " +
+                "billing on its renewal date. To cancel billing, use 'Manage subscription' instead.\n\n" +
+                "If you sign out, your activation token on this device is removed. " +
+                "You can sign in again from the same email — we'll resend the magic link.",
+            PrimaryButtonText = "Sign out",
+            SecondaryButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Secondary,
+            XamlRoot = this.Content?.XamlRoot,
+        };
+        if ((await dlg.ShowAsync()) != ContentDialogResult.Primary) return;
         LicenseService.Clear();
         RefreshLicenseStatus();
     }
@@ -1195,11 +1215,12 @@ public sealed partial class SettingsWindow : Window
                         showPortalHint = true;
                         break;
                     case "annual":
-                        headline = "Upgrade to Lifetime";
-                        detail = "One payment, three years of access — never another renewal email.";
+                        headline = "Change your plan";
+                        detail = "Drop to Monthly (you'll get a credit on the next invoice) or jump to Lifetime for one final payment.";
                         show = true;
-                        showMonthly = false;
+                        showMonthly = true;          // ← reveal Switch to Monthly
                         showAnnual = false;
+                        monthlyLabel = "Switch to Monthly";
                         lifetimeLabel = "Upgrade to Lifetime";
                         showPortalHint = true;
                         break;
@@ -1245,6 +1266,63 @@ public sealed partial class SettingsWindow : Window
 
     private static string ToTitleCase(string s) =>
         string.IsNullOrEmpty(s) ? s : char.ToUpperInvariant(s[0]) + s.Substring(1);
+
+    /// <summary>
+    /// Modal asking the user for the email tied to their Stripe purchase.
+    /// Used by the pre-checkout gate to look up an existing license server-side
+    /// before spinning up a Checkout session — closes the post-sign-out
+    /// double-charge edge case. Returns the trimmed lowercase email on
+    /// confirm, or null on cancel.
+    /// </summary>
+    private async Task<string?> PromptBuyerEmailAsync(string prefilled, string tier)
+    {
+        var emailBox = new TextBox
+        {
+            PlaceholderText = "you@example.com",
+            Text = prefilled ?? string.Empty,
+            MinWidth = 280,
+        };
+        var helpText = new TextBlock
+        {
+            Text =
+                "Used to look up an existing license + match the Stripe customer. " +
+                "If you've bought before with this email, we'll resend the magic link " +
+                "instead of charging you again.",
+            FontSize = 12,
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = (Microsoft.UI.Xaml.Media.Brush)
+                Application.Current.Resources["TextFillColorSecondaryBrush"],
+            Margin = new Thickness(0, 8, 0, 0),
+        };
+        var stack = new StackPanel { Spacing = 4 };
+        stack.Children.Add(emailBox);
+        stack.Children.Add(helpText);
+
+        var dlg = new ContentDialog
+        {
+            Title = $"Continue to {ToTitleCase(tier)} checkout",
+            Content = stack,
+            PrimaryButtonText = "Continue",
+            SecondaryButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = this.Content?.XamlRoot,
+        };
+        // Disable Continue until the input looks like an email.
+        dlg.IsPrimaryButtonEnabled = LooksLikeEmail(emailBox.Text);
+        emailBox.TextChanged += (_, _) =>
+            dlg.IsPrimaryButtonEnabled = LooksLikeEmail(emailBox.Text);
+
+        var result = await dlg.ShowAsync();
+        if (result != ContentDialogResult.Primary) return null;
+        var trimmed = (emailBox.Text ?? string.Empty).Trim().ToLowerInvariant();
+        return LooksLikeEmail(trimmed) ? trimmed : null;
+    }
+
+    private static bool LooksLikeEmail(string s) =>
+        !string.IsNullOrWhiteSpace(s)
+        && s.Contains('@')
+        && s.Contains('.')
+        && s.Length < 254;
 
     private async Task BuyTierAsync(string tier)
     {
@@ -1321,10 +1399,63 @@ public sealed partial class SettingsWindow : Window
                 return;
             }
 
+            // Pre-checkout email gate: ask the user for their email
+            // before minting the Stripe Checkout URL. The server uses
+            // the email to look up an existing license and 409 BEFORE
+            // Stripe charges the card. Pre-fill with whatever we have
+            // saved in UiPreferences (survives Sign out — no auth, just
+            // UX convenience).
+            var prefs = Services.UiPreferences.Load();
+            var promptedEmail = await PromptBuyerEmailAsync(
+                prefilled: prefs.BuyerEmail ?? string.Empty,
+                tier: tier);
+            if (promptedEmail is null)
+            {
+                ShowInfoBar(LicenseBuyInfoBar, InfoBarSeverity.Informational,
+                    "Purchase cancelled.");
+                return;
+            }
+            // Persist for next time.
+            prefs.BuyerEmail = promptedEmail;
+            prefs.Save();
+
             ShowInfoBar(LicenseBuyInfoBar, InfoBarSeverity.Informational, $"Opening Stripe checkout for {tier}…");
-            var c = await LicenseService.CreateCheckoutAsync(tier);
+            var c = await LicenseService.CreateCheckoutAsync(tier, promptedEmail);
             if (!c.Ok || string.IsNullOrEmpty(c.Url))
             {
+                // 409 path → license already exists for this email. Offer
+                // 'Send magic link instead' fallback (re-issues activation
+                // email for the existing license via /api/trial/start).
+                if (c.StatusCode == 409 && !string.IsNullOrEmpty(c.CurrentTier))
+                {
+                    var dlg = new ContentDialog
+                    {
+                        Title = $"You already have a {c.CurrentTier} license",
+                        Content =
+                            $"The email {promptedEmail} is already linked to an active {c.CurrentTier} license. " +
+                            "We can resend the activation magic link for that license — " +
+                            "no new payment, no second sub.",
+                        PrimaryButtonText = "Send magic link",
+                        SecondaryButtonText = "Cancel",
+                        DefaultButton = ContentDialogButton.Primary,
+                        XamlRoot = this.Content?.XamlRoot,
+                    };
+                    if ((await dlg.ShowAsync()) == ContentDialogResult.Primary)
+                    {
+                        var t = await LicenseService.RequestTrialAsync(promptedEmail);
+                        ShowInfoBar(LicenseBuyInfoBar,
+                            t.Ok ? InfoBarSeverity.Success : InfoBarSeverity.Error,
+                            t.Ok
+                                ? $"Magic link sent to {promptedEmail}. Check your inbox to activate."
+                                : (t.Error ?? "Could not resend magic link."));
+                    }
+                    else
+                    {
+                        ShowInfoBar(LicenseBuyInfoBar, InfoBarSeverity.Informational,
+                            "Cancelled.");
+                    }
+                    return;
+                }
                 ShowInfoBar(LicenseBuyInfoBar, InfoBarSeverity.Error, c.Error ?? "Could not start checkout.");
                 return;
             }

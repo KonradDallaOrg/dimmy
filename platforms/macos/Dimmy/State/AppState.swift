@@ -527,6 +527,15 @@ final class AppState: ObservableObject {
     @Published var shortcut: ModifierShortcut {
         didSet { UserDefaults.standard.set(shortcut.encoded, forKey: "shortcutEncoded") }
     }
+
+    /// Last email entered in the pre-checkout / activate modal. Persisted
+    /// across Sign out so the user doesn't have to re-type it. Distinct
+    /// from license.json (which Sign out drops): this is just a UX
+    /// convenience pre-fill, no auth weight. Mirrors UiPreferences.BuyerEmail
+    /// on the Win side.
+    @Published var buyerEmail: String? {
+        didSet { UserDefaults.standard.set(buyerEmail, forKey: "buyerEmail") }
+    }
     @Published var pillPosition: CGPoint? {
         didSet {
             if let pos = pillPosition {
@@ -676,6 +685,7 @@ final class AppState: ObservableObject {
         } else {
             self.shortcut = .default
         }
+        self.buyerEmail = UserDefaults.standard.string(forKey: "buyerEmail")
     }
 
     // MARK: - Sync from Rust config JSON

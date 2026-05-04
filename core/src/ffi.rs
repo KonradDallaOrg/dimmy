@@ -2875,6 +2875,7 @@ pub extern "C" fn dimmy_license_refresh(buf: *mut c_char, buf_len: c_int) -> c_i
 #[no_mangle]
 pub unsafe extern "C" fn dimmy_license_checkout_url(
     tier_ptr: *const c_char,
+    email_ptr: *const c_char,
     buf: *mut c_char,
     buf_len: c_int,
 ) -> c_int {
@@ -2887,15 +2888,36 @@ pub unsafe extern "C" fn dimmy_license_checkout_url(
     if !matches!(tier.as_str(), "monthly" | "annual" | "lifetime") {
         return write_license_err(buf, buf_len, "tier must be monthly, annual, or lifetime");
     }
+    // Optional email — passed by the UI in post-sign-out flows so the
+    // server can gate against an existing license + dedup the Stripe
+    // customer object via customer_email. NULL is permitted (anonymous
+    // first-purchase / token-authenticated path).
+    let email = if email_ptr.is_null() {
+        None
+    } else {
+        let s = unsafe { CStr::from_ptr(email_ptr) }
+            .to_string_lossy()
+            .into_owned();
+        if s.is_empty() { None } else { Some(s) }
+    };
     let token = license::load_license_file().ok().flatten();
     let server = licensing_server_url();
     let rt = match tokio::runtime::Runtime::new() {
         Ok(r) => r,
         Err(e) => return write_license_err(buf, buf_len, &format!("runtime: {}", e)),
     };
-    let json = match rt.block_on(license::create_checkout(&server, &tier, token.as_deref())) {
-        Ok(url) if !url.is_empty() => serde_json::json!({"ok": true, "url": url}),
-        Ok(_) => serde_json::json!({"ok": false, "error": "empty URL from server"}),
+    // create_checkout now returns a richer JSON value:
+    //   { ok: true, url: "..." }                        → 2xx (caller opens browser)
+    //   { ok: false, status, error, current_tier?, requested_tier? } → 4xx/5xx
+    // We forward as-is so the UI can decide the fallback path (e.g.
+    // 409 with current_tier=annual → "send magic link instead").
+    let json = match rt.block_on(license::create_checkout(
+        &server,
+        &tier,
+        token.as_deref(),
+        email.as_deref(),
+    )) {
+        Ok(v) => v,
         Err(e) => serde_json::json!({"ok": false, "error": format!("{}", e)}),
     };
     write_to_buf(&json.to_string(), buf, buf_len)

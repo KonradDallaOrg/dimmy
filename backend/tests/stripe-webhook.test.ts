@@ -714,8 +714,9 @@ describe("/api/stripe/webhook — duplicate-purchase gate", () => {
     const code = [...state.activation_codes.values()][0];
     expect(code.license_id).toBe("lic_existing_monthly");
 
-    // Stripe DELETE called for the new subscription, then GET invoices
-    // (refund attempt — empty mock returns no charge so refund is a no-op).
+    // Stripe DELETE called for the new subscription, then GET sub
+    // (refund chain — default empty mock returns no customer so the
+    // refund early-returns with the 'no customer' branch).
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const [cancelUrl, cancelInit] = fetchMock.mock.calls[0];
     expect(cancelUrl).toBe("https://api.stripe.com/v1/subscriptions/sub_brand_new");
@@ -723,8 +724,7 @@ describe("/api/stripe/webhook — duplicate-purchase gate", () => {
     expect(((cancelInit as RequestInit).headers as Record<string, string>).Authorization).toBe(
       "Bearer sk_test_xxx"
     );
-    const [invUrl] = fetchMock.mock.calls[1];
-    expect(invUrl).toContain("v1/invoices?subscription=sub_brand_new");
+    expect(fetchMock.mock.calls[1][0]).toBe("https://api.stripe.com/v1/subscriptions/sub_brand_new");
 
     // Audit row recorded.
     const audit = state.audit_log.find(
@@ -802,15 +802,15 @@ describe("/api/stripe/webhook — duplicate-purchase gate", () => {
     const lic = state.licenses.get("lic_existing_lifetime")!;
     expect(lic.tier).toBe("lifetime");
 
-    // Attempted sub cancelled, then refund attempted via list-invoices
-    // (mock returns empty payload so the refund is a no-op — see the
-    // refundLatestSubscriptionChargeSafe early-return path).
+    // Attempted sub cancelled, then GET sub (refund chain — mock
+    // returns empty customer so refund early-returns).
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[0][0]).toBe(
       "https://api.stripe.com/v1/subscriptions/sub_attempted"
     );
-    expect(fetchMock.mock.calls[1][0] as string).toContain(
-      "v1/invoices?subscription=sub_attempted"
+    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe("DELETE");
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      "https://api.stripe.com/v1/subscriptions/sub_attempted"
     );
 
     // Audit row carries the right reason.
@@ -822,7 +822,7 @@ describe("/api/stripe/webhook — duplicate-purchase gate", () => {
     expect(details.reason).toBe("lifetime_already_active");
   });
 
-  test("duplicate purchase → cancel + refund both fire when invoice has a charge", async () => {
+  test("duplicate purchase → cancel + refund both fire (sub→customer→charges flow)", async () => {
     const state = emptyState();
     await seedLicense(state, { email: "dupref@example.com", tier: "monthly" });
 
@@ -835,13 +835,25 @@ describe("/api/stripe/webhook — duplicate-purchase gate", () => {
     });
     const env = makeEnv(state, { stripeSecret: "sk_test_xxx" });
 
-    // Per-call mock: cancel → list invoices (with a charge) → refund.
+    // Per-call mock matching the new chain:
+    //   1. DELETE subscription (cancel)
+    //   2. GET subscription (read customer for refund flow)
+    //   3. GET charges?customer=...
+    //   4. POST refunds
     fetchMock.mockReset();
     fetchMock.mockResolvedValueOnce(
       new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } })
     );
     fetchMock.mockResolvedValueOnce(
-      new Response(JSON.stringify({ data: [{ charge: "ch_abc123" }] }), {
+      new Response(JSON.stringify({ id: "sub_to_refund", customer: "cus_dup" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({
+        data: [{ id: "ch_abc123", status: "succeeded", refunded: false }],
+      }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       })
@@ -856,12 +868,13 @@ describe("/api/stripe/webhook — duplicate-purchase gate", () => {
     const resp = await handleStripeWebhook(await signedRequest(body), env, ctx);
     expect(resp.status).toBe(200);
 
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
     expect(fetchMock.mock.calls[0][0]).toBe("https://api.stripe.com/v1/subscriptions/sub_to_refund");
     expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe("DELETE");
-    expect(fetchMock.mock.calls[1][0] as string).toContain("v1/invoices?subscription=sub_to_refund");
-    expect(fetchMock.mock.calls[2][0]).toBe("https://api.stripe.com/v1/refunds");
-    const refundBody = (fetchMock.mock.calls[2][1] as RequestInit).body as string;
+    expect(fetchMock.mock.calls[1][0]).toBe("https://api.stripe.com/v1/subscriptions/sub_to_refund");
+    expect(fetchMock.mock.calls[2][0] as string).toContain("v1/charges?customer=cus_dup");
+    expect(fetchMock.mock.calls[3][0]).toBe("https://api.stripe.com/v1/refunds");
+    const refundBody = (fetchMock.mock.calls[3][1] as RequestInit).body as string;
     expect(refundBody).toContain("charge=ch_abc123");
     expect(refundBody).toContain("reason=duplicate");
 
@@ -873,6 +886,47 @@ describe("/api/stripe/webhook — duplicate-purchase gate", () => {
     const details = JSON.parse(audit!.details as string);
     expect(details.cancelled_attempted_subscription).toBe(true);
     expect(details.refunded_attempted_subscription).toBe(true);
+  });
+
+  test("refund returns false when latest charge is already refunded (no double refund)", async () => {
+    const state = emptyState();
+    await seedLicense(state, { email: "doublerefund@example.com", tier: "monthly" });
+
+    const body = checkoutBody({
+      eventId: "evt_dup_already_ref",
+      sessionId: "cs_dup_already",
+      email: "doublerefund@example.com",
+      tier: "monthly",
+      subscription: "sub_already_refunded",
+    });
+    const env = makeEnv(state, { stripeSecret: "sk_test_xxx" });
+
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValueOnce(
+      new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } })
+    );
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ id: "sub_already_refunded", customer: "cus_xx" }), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      })
+    );
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({
+        data: [{ id: "ch_already_refunded", status: "succeeded", refunded: true }],
+      }), { status: 200, headers: { "Content-Type": "application/json" } })
+    );
+
+    const resp = await handleStripeWebhook(await signedRequest(body), env, ctx);
+    expect(resp.status).toBe(200);
+
+    // Only 3 calls: cancel + sub + charges. POST /v1/refunds NOT called
+    // because the charge is already marked refunded.
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const audit = state.audit_log.find(
+      (a) => a.event_type === "duplicate_purchase_blocked"
+    );
+    const details = JSON.parse(audit!.details as string);
+    expect(details.refunded_attempted_subscription).toBe(false);
   });
 
   test("trial + annual (same email) → falls through to normal create (legitimate trial→paid upgrade)", async () => {

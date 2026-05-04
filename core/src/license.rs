@@ -685,11 +685,18 @@ pub async fn list_devices(
 /// token to carry email_hash across as Stripe `client_reference_id`
 /// (so trial→paid linkage survives), or `None` for an anonymous
 /// purchase (NotFound state).
+/// Outcome of `create_checkout`. The 409 path needs to surface a
+/// structured payload to the UI (the existing license tier + the
+/// requested tier) so the modal can offer the right fallback ("Activate
+/// instead"). We return a plain JSON value rather than a typed struct
+/// because the same FFI function ships values from multiple server
+/// endpoints — keeping it loose here keeps the surface narrow.
 pub async fn create_checkout(
     server: &str,
     tier: &str,
     token: Option<&str>,
-) -> Result<String, reqwest::Error> {
+    email: Option<&str>,
+) -> Result<serde_json::Value, reqwest::Error> {
     assert!(!server.is_empty(), "server URL required");
     assert!(!tier.is_empty(), "tier required");
     let client = reqwest::Client::builder()
@@ -700,19 +707,32 @@ pub async fn create_checkout(
     if let Some(t) = token {
         payload["token"] = serde_json::Value::String(t.to_string());
     }
-    let resp: serde_json::Value = client
-        .post(&url)
-        .json(&payload)
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
-    Ok(resp
-        .get("url")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string())
+    if let Some(e) = email {
+        if !e.is_empty() {
+            payload["email"] = serde_json::Value::String(e.to_string());
+        }
+    }
+    let resp = client.post(&url).json(&payload).send().await?;
+    let status = resp.status();
+    let body: serde_json::Value = resp.json().await.unwrap_or(serde_json::json!({}));
+    if status.is_success() {
+        Ok(serde_json::json!({
+            "ok": true,
+            "url": body.get("url").and_then(|v| v.as_str()).unwrap_or(""),
+        }))
+    } else {
+        // 409 (license conflict) is the interesting case. The server
+        // body carries `error`, `current_tier`, `requested_tier`. We
+        // forward all three so the UI can build a precise fallback
+        // dialog ("you already have <tier>, send magic link?").
+        Ok(serde_json::json!({
+            "ok": false,
+            "status": status.as_u16(),
+            "error": body.get("error").and_then(|v| v.as_str()).unwrap_or("checkout failed"),
+            "current_tier": body.get("current_tier"),
+            "requested_tier": body.get("requested_tier"),
+        }))
+    }
 }
 
 /// `POST /api/plan-change { token, new_tier }` — switch an existing

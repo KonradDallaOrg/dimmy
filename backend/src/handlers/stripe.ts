@@ -1018,24 +1018,54 @@ async function refundLatestSubscriptionChargeSafe(
     return false;
   }
   try {
-    // Find the latest invoice for this sub, then its charge.
-    const invResp = await fetch(
-      `https://api.stripe.com/v1/invoices?subscription=${encodeURIComponent(subscriptionId)}&limit=1`,
+    // Fetch the sub to read its `customer` id. Tried earlier with
+    // `GET /v1/invoices?subscription=…` then `data[0].charge`, but
+    // modern Stripe API leaves `invoice.charge` null on first issue
+    // (the charge is attached via payment_intent.latest_charge, not
+    // directly on the invoice) → we'd silently mis-report 'refunded'
+    // when in fact nothing happened. Hitting charges-by-customer is
+    // immediate and reliable.
+    const subResp = await fetch(
+      `https://api.stripe.com/v1/subscriptions/${encodeURIComponent(subscriptionId)}`,
       { headers: { Authorization: `Bearer ${env.STRIPE_SECRET_KEY}` } }
     );
-    if (!invResp.ok) {
-      const t = await invResp.text();
-      console.error(`[stripe] list invoices for ${subscriptionId} failed: ${invResp.status} ${t.slice(0, 200)}`);
+    if (!subResp.ok) {
+      const t = await subResp.text();
+      console.error(`[stripe] fetch sub ${subscriptionId} failed: ${subResp.status} ${t.slice(0, 200)}`);
       return false;
     }
-    const invJson = (await invResp.json()) as { data?: Array<{ charge?: string }> };
-    const chargeId = invJson.data?.[0]?.charge;
-    if (!chargeId) {
-      console.log(`[stripe] sub ${subscriptionId} has no charge yet — nothing to refund`);
-      return true;
+    const subJson = (await subResp.json()) as { customer?: string };
+    const customerId = subJson.customer;
+    if (!customerId) {
+      console.error(`[stripe] sub ${subscriptionId} has no customer — cannot refund`);
+      return false;
+    }
+    // Latest succeeded charge for this customer. The duplicate is, by
+    // definition, the only paid charge on this brand-new customer
+    // (each Stripe Checkout session creates a fresh customer when no
+    // customer_email is passed, which our checkout.ts does not).
+    const chgResp = await fetch(
+      `https://api.stripe.com/v1/charges?customer=${encodeURIComponent(customerId)}&limit=1`,
+      { headers: { Authorization: `Bearer ${env.STRIPE_SECRET_KEY}` } }
+    );
+    if (!chgResp.ok) {
+      const t = await chgResp.text();
+      console.error(`[stripe] list charges for ${customerId} failed: ${chgResp.status} ${t.slice(0, 200)}`);
+      return false;
+    }
+    const chgJson = (await chgResp.json()) as {
+      data?: Array<{ id?: string; status?: string; refunded?: boolean }>;
+    };
+    const ch = chgJson.data?.[0];
+    if (!ch?.id || ch.status !== "succeeded" || ch.refunded === true) {
+      console.log(
+        `[stripe] customer ${customerId} has no refundable charge ` +
+        `(latest: id=${ch?.id ?? "?"} status=${ch?.status ?? "?"} refunded=${ch?.refunded ?? "?"})`
+      );
+      return false;
     }
     // Issue the refund.
-    const params = new URLSearchParams({ charge: chargeId, reason: "duplicate" });
+    const params = new URLSearchParams({ charge: ch.id, reason: "duplicate" });
     const rfResp = await fetch("https://api.stripe.com/v1/refunds", {
       method: "POST",
       headers: {
@@ -1046,10 +1076,10 @@ async function refundLatestSubscriptionChargeSafe(
     });
     if (!rfResp.ok) {
       const t = await rfResp.text();
-      console.error(`[stripe] refund ${chargeId} failed: ${rfResp.status} ${t.slice(0, 200)}`);
+      console.error(`[stripe] refund ${ch.id} failed: ${rfResp.status} ${t.slice(0, 200)}`);
       return false;
     }
-    console.log(`[stripe] refunded ${chargeId} for sub ${subscriptionId} (reason: ${reason})`);
+    console.log(`[stripe] refunded ${ch.id} for sub ${subscriptionId} customer=${customerId} (reason: ${reason})`);
     return true;
   } catch (e) {
     console.error(`[stripe] refund for ${subscriptionId} threw:`, e);

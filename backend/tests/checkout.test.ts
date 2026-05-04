@@ -463,4 +463,115 @@ describe("/api/checkout/create", () => {
       expect(resp.status).toBe(200);
     });
   });
+
+  // ── Email-based pre-checkout gate (post-sign-out flow) ─────────────
+  // The user has a paid license in DB but their device-side license.json
+  // is gone (Sign out / clear). The client UI prompts for email before
+  // hitting Checkout; the server uses email_hash to find the license
+  // and 409s the request, telling the UI to fall back to the activate
+  // flow instead. Same matrix as the token path, just keyed by email.
+  describe("pre-checkout email gate (post-sign-out / first-purchase)", () => {
+    function seedLicenseRow(state: ReturnType<typeof emptyState>, email: string, tier: "monthly" | "annual" | "lifetime" | "trial", overrides: Partial<Record<string, unknown>> = {}) {
+      const eh = require("crypto").createHash("sha256").update(email.trim().toLowerCase()).digest("hex");
+      const lid = "01LID_" + tier.toUpperCase();
+      state.licenses.set(lid, {
+        license_id: lid,
+        email_hash: eh,
+        tier,
+        issued_at: 1,
+        valid_until: 9_999_999_999,
+        max_devices: 5,
+        status: "active",
+        stripe_session_id: "cs",
+        stripe_customer_id: "cus",
+        stripe_subscription_id: tier === "lifetime" ? null : "sub",
+        current_period_end: 9_999_999_999,
+        cancel_at_period_end: 0,
+        ...overrides,
+      });
+      return { lid, eh };
+    }
+
+    test("email belongs to active monthly + buy annual → 409 (no Stripe)", async () => {
+      const state = emptyState();
+      seedLicenseRow(state, "konrad@example.com", "monthly");
+      const env = makeEnv({}, state);
+      const resp = await handleCheckoutCreate(
+        makeReq({ tier: "annual", email: "konrad@example.com" }), env, ctx);
+      expect(resp.status).toBe(409);
+      expect(lastFetch).toBeNull();
+      const j = (await resp.json()) as { error: string; current_tier: string };
+      expect(j.current_tier).toBe("monthly");
+    });
+
+    test("email belongs to active lifetime + buy * → 409", async () => {
+      const state = emptyState();
+      seedLicenseRow(state, "ltime@example.com", "lifetime");
+      const env = makeEnv({}, state);
+      for (const tier of ["monthly", "annual", "lifetime"] as const) {
+        lastFetch = null;
+        const resp = await handleCheckoutCreate(
+          makeReq({ tier, email: "ltime@example.com" }), env, ctx);
+        expect(resp.status).toBe(409);
+        expect(lastFetch).toBeNull();
+      }
+    });
+
+    test("email belongs to active monthly + buy lifetime → PASS (sub→lifetime upgrade)", async () => {
+      const state = emptyState();
+      seedLicenseRow(state, "upgrade@example.com", "monthly");
+      const env = makeEnv({}, state);
+      const resp = await handleCheckoutCreate(
+        makeReq({ tier: "lifetime", email: "upgrade@example.com" }), env, ctx);
+      expect(resp.status).toBe(200);
+      // customer_email passed to Stripe → dedup the customer object.
+      const params = parseFormBody(lastFetch!.init);
+      expect(params.get("customer_email")).toBe("upgrade@example.com");
+    });
+
+    test("unknown email + any buy → PASS, customer_email forwarded to Stripe", async () => {
+      const state = emptyState();
+      const env = makeEnv({}, state);
+      const resp = await handleCheckoutCreate(
+        makeReq({ tier: "monthly", email: "fresh@example.com" }), env, ctx);
+      expect(resp.status).toBe(200);
+      const params = parseFormBody(lastFetch!.init);
+      expect(params.get("customer_email")).toBe("fresh@example.com");
+    });
+
+    test("malformed email is silently ignored (gate not applied, no customer_email)", async () => {
+      const state = emptyState();
+      const env = makeEnv({}, state);
+      const resp = await handleCheckoutCreate(
+        makeReq({ tier: "monthly", email: "not-an-email" }), env, ctx);
+      expect(resp.status).toBe(200);
+      const params = parseFormBody(lastFetch!.init);
+      expect(params.get("customer_email")).toBeNull();
+    });
+
+    test("token wins over email when both provided", async () => {
+      const { priv, pub } = await realKeypair();
+      const state = emptyState();
+      // Token's lid points at a lifetime license (block).
+      state.licenses.set("01LID_TOKEN", {
+        license_id: "01LID_TOKEN", email_hash: "tokenEh", tier: "lifetime",
+        issued_at: 1, valid_until: 9_999_999_999, max_devices: 5,
+        status: "active", stripe_session_id: null, stripe_customer_id: null,
+        stripe_subscription_id: null, current_period_end: null, cancel_at_period_end: 0,
+      });
+      // Email points at a different unrelated license that would PASS.
+      seedLicenseRow(state, "email@example.com", "trial");
+      const env = makeEnv(
+        { DIMMY_LICENSE_PRIVKEY: priv, DIMMY_LICENSE_PUBKEY: pub }, state);
+      const token = await signToken({
+        v: 1, lid: "01LID_TOKEN", eh: "tokenEh", tier: "lifetime",
+        iat: 1, exp: 9_999_999_999, max_offline: 30, did: "01D",
+        scope: ["managed_stt"],
+      } as any, priv);
+      const resp = await handleCheckoutCreate(
+        makeReq({ tier: "monthly", token, email: "email@example.com" }), env, ctx);
+      // Token's lifetime license blocks; email is irrelevant.
+      expect(resp.status).toBe(409);
+    });
+  });
 });

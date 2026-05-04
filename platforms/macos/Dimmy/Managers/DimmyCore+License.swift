@@ -202,18 +202,37 @@ extension DimmyCore {
         public let ok: Bool
         public let url: String?
         public let error: String?
+        /// HTTP status from the server when ok=false (e.g. 409 for the
+        /// license-conflict gate). nil for successful responses.
+        public let statusCode: Int?
+        /// On 409, the tier of the license already on file for this email.
+        /// Used by the UI to offer "send magic link instead" of charging.
+        public let currentTier: String?
+        /// Echo of the requested tier (handy for UI string interpolation).
+        public let requestedTier: String?
     }
 
     /// POST /api/checkout/create — returns Stripe Checkout URL for the
     /// chosen tier. Caller opens it via NSWorkspace.shared.open. The
     /// webhook back on the server creates the license + sends the magic
     /// link email when the user pays.
-    public func licenseCheckoutUrl(tier: String) async -> LicenseUrlResult {
+    /// `email` is optional — when present the server uses it to gate
+    /// against an existing license (post-sign-out flow) and dedup the
+    /// Stripe customer object. On 409 the result carries currentTier
+    /// so the UI can offer a "send magic link instead" fallback.
+    public func licenseCheckoutUrl(tier: String, email: String? = nil) async -> LicenseUrlResult {
         await Task.detached(priority: .userInitiated) { [self] in
             let buf = UnsafeMutablePointer<CChar>.allocate(capacity: 2048)
             defer { buf.deallocate() }
             buf[0] = 0
-            let n = tier.withCString { dimmy_license_checkout_url($0, buf, 2048) }
+            let n = tier.withCString { tierPtr in
+                if let em = email, !em.isEmpty {
+                    return em.withCString { emailPtr in
+                        dimmy_license_checkout_url(tierPtr, emailPtr, buf, 2048)
+                    }
+                }
+                return dimmy_license_checkout_url(tierPtr, nil, buf, 2048)
+            }
             return parseLicenseUrl(buf: buf, n: n)
         }.value
     }
@@ -251,12 +270,17 @@ extension DimmyCore {
               let data = String(cString: buf).data(using: .utf8),
               let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else {
-            return LicenseUrlResult(ok: false, url: nil, error: "FFI returned \(n)")
+            return LicenseUrlResult(
+                ok: false, url: nil, error: "FFI returned \(n)",
+                statusCode: nil, currentTier: nil, requestedTier: nil)
         }
         return LicenseUrlResult(
             ok: dict["ok"] as? Bool ?? false,
             url: dict["url"] as? String,
-            error: dict["error"] as? String)
+            error: dict["error"] as? String,
+            statusCode: dict["status"] as? Int,
+            currentTier: dict["current_tier"] as? String,
+            requestedTier: dict["requested_tier"] as? String)
     }
 
     public func licenseDeactivateDevice(deviceId: String?) async -> LicenseOpResult {

@@ -224,9 +224,12 @@ int32_t dimmy_license_device_deactivate(const char * _Nullable device_id,
                                         char * _Nonnull out_buf,
                                         int32_t buf_len);
 
-/// POST /api/checkout/create — returns Stripe Checkout URL.
+/// POST /api/checkout/create — returns Stripe Checkout URL (or 409
+/// with current_tier when the email already has an active license).
 /// `tier` must be "monthly" | "annual" | "lifetime".
+/// `email` is optional (NULL = anonymous / token-authenticated path).
 int32_t dimmy_license_checkout_url(const char * _Nonnull tier,
+                                   const char * _Nullable email,
                                    char * _Nonnull out_buf,
                                    int32_t buf_len);
 
