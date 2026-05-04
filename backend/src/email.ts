@@ -74,10 +74,19 @@ function renderActivation(opts: {
     }
   })();
 
+  // Unique-ish subject per email — Gmail (and Resend's own dedup heuristic)
+  // were silently dropping repeated identical-subject sends to the same
+  // recipient within a short window, observed live on 2026-05-04 when an
+  // in-place lifetime upgrade's magic link never reached the inbox after
+  // two prior identical-subject emails for the same license. Embed the
+  // last 6 chars of the activation code so each email gets a distinct
+  // subject string while staying readable. The code is single-use anyway,
+  // so this leaks nothing useful to anyone reading the inbox preview.
+  const codeTag = opts.activationCode.slice(-6);
   const subject =
     opts.tier === "trial"
-      ? "Activate your Dimmy trial"
-      : "Welcome to Dimmy — activate your license";
+      ? `Activate your Dimmy trial · ${codeTag}`
+      : `Activate your Dimmy ${opts.tier} license · ${codeTag}`;
 
   // Plain-text version — robust against email clients that strip HTML.
   // Activation code is shown separately so users on a different device
