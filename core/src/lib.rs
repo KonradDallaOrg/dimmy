@@ -1,3 +1,9 @@
+// `serde_json::json!{...}` in get_status grew past the default macro
+// recursion limit (128) once Fireworks + Together were added to the
+// provider matrix. Bump crate-wide so future provider additions don't
+// silently break the build.
+#![recursion_limit = "256"]
+
 pub mod app_rules;
 pub mod audio;
 pub mod autostart;
