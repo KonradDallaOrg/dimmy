@@ -850,8 +850,20 @@ async function blockDuplicatePurchase(
   }
 ): Promise<void> {
   let cancelled = false;
+  let refunded = false;
   if (args.attemptedSubscriptionId) {
     cancelled = await cancelStripeSubscriptionSafe(
+      env,
+      args.attemptedSubscriptionId,
+      `duplicate purchase blocked: ${args.reason}`
+    );
+    // Stripe's DELETE /v1/subscriptions does NOT auto-refund the
+    // already-collected initial invoice — a duplicate sub charge stays
+    // on the user's card unless we explicitly refund it. Issue the
+    // refund now so the user is whole. Best-effort: failure is logged
+    // and the audit row carries the result; a missing refund is far
+    // better than a missing cancel + missing refund.
+    refunded = await refundLatestSubscriptionChargeSafe(
       env,
       args.attemptedSubscriptionId,
       `duplicate purchase blocked: ${args.reason}`
@@ -882,6 +894,7 @@ async function blockDuplicatePurchase(
         attempted_subscription_id: args.attemptedSubscriptionId,
         existing_tier: args.existingLicense.tier,
         cancelled_attempted_subscription: cancelled,
+        refunded_attempted_subscription: refunded,
       },
     },
     args.now
@@ -977,6 +990,69 @@ async function cancelStripeSubscriptionSafe(
     return true;
   } catch (e) {
     console.error(`[stripe] cancel ${subscriptionId} threw:`, e);
+    return false;
+  }
+}
+
+/// Refund the latest `succeeded` charge attached to a subscription.
+/// Used after `cancelStripeSubscriptionSafe` in the duplicate-purchase
+/// gate so the user isn't left with a $4.99/$39 charge for the dup
+/// they accidentally clicked.
+///
+/// Why "latest" only: a duplicate purchase will only have a single
+/// invoice (the initial one). If somehow there's more, a manual review
+/// in Stripe Dashboard is the right next step — auto-refunding every
+/// charge ever seen on the sub is too aggressive.
+///
+/// Returns true on refund success (or no-charge-found, treated as
+/// best-effort done), false on any error. Logs loudly either way.
+async function refundLatestSubscriptionChargeSafe(
+  env: Env,
+  subscriptionId: string,
+  reason: string
+): Promise<boolean> {
+  if (!env.STRIPE_SECRET_KEY) {
+    console.error(
+      `[stripe] CANNOT refund charge for ${subscriptionId} — STRIPE_SECRET_KEY missing. Reason: ${reason}`
+    );
+    return false;
+  }
+  try {
+    // Find the latest invoice for this sub, then its charge.
+    const invResp = await fetch(
+      `https://api.stripe.com/v1/invoices?subscription=${encodeURIComponent(subscriptionId)}&limit=1`,
+      { headers: { Authorization: `Bearer ${env.STRIPE_SECRET_KEY}` } }
+    );
+    if (!invResp.ok) {
+      const t = await invResp.text();
+      console.error(`[stripe] list invoices for ${subscriptionId} failed: ${invResp.status} ${t.slice(0, 200)}`);
+      return false;
+    }
+    const invJson = (await invResp.json()) as { data?: Array<{ charge?: string }> };
+    const chargeId = invJson.data?.[0]?.charge;
+    if (!chargeId) {
+      console.log(`[stripe] sub ${subscriptionId} has no charge yet — nothing to refund`);
+      return true;
+    }
+    // Issue the refund.
+    const params = new URLSearchParams({ charge: chargeId, reason: "duplicate" });
+    const rfResp = await fetch("https://api.stripe.com/v1/refunds", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.STRIPE_SECRET_KEY}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: params.toString(),
+    });
+    if (!rfResp.ok) {
+      const t = await rfResp.text();
+      console.error(`[stripe] refund ${chargeId} failed: ${rfResp.status} ${t.slice(0, 200)}`);
+      return false;
+    }
+    console.log(`[stripe] refunded ${chargeId} for sub ${subscriptionId} (reason: ${reason})`);
+    return true;
+  } catch (e) {
+    console.error(`[stripe] refund for ${subscriptionId} threw:`, e);
     return false;
   }
 }
