@@ -11,6 +11,7 @@ export interface MockState {
   activation_codes: Map<string, Record<string, unknown>>;
   stripe_events: Map<string, Record<string, unknown>>;
   audit_log: Record<string, unknown>[];
+  rate_limits: Map<string, { window_start: number; count: number }>;
 }
 
 export function emptyState(): MockState {
@@ -20,6 +21,7 @@ export function emptyState(): MockState {
     activation_codes: new Map(),
     stripe_events: new Map(),
     audit_log: [],
+    rate_limits: new Map(),
   };
 }
 
@@ -126,6 +128,25 @@ function execFirst<T>(state: MockState, sql: string, bound: unknown[]): T | null
       (x) => x.device_id === did && x.license_id === lid
     );
     return (d ? ({ status: d.status } as unknown as T) : null);
+  }
+  // Rate-limiter UPSERT (returns count + window_start). Mirrors the
+  // single statement in src/rate-limit.ts::rateLimit.
+  if (sql.startsWith("INSERT INTO rate_limits") && sql.includes("RETURNING")) {
+    const bucket = bound[0] as string;
+    const now = bound[1] as number;
+    const windowCutoff = bound[2] as number;
+    const existing = state.rate_limits.get(bucket);
+    if (!existing) {
+      state.rate_limits.set(bucket, { window_start: now, count: 1 });
+      return ({ count: 1, window_start: now } as unknown as T);
+    }
+    if (existing.window_start < windowCutoff) {
+      existing.window_start = now;
+      existing.count = 1;
+    } else {
+      existing.count += 1;
+    }
+    return ({ count: existing.count, window_start: existing.window_start } as unknown as T);
   }
   throw new Error(`unhandled first() SQL: ${sql.slice(0, 80)}…`);
 }
