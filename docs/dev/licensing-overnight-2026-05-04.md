@@ -3,6 +3,35 @@
 Status drop for the morning. Branch `feat/licensing-poc`, all commits
 pushed and staging deployed.
 
+## ⚠ CRITICAL FIX (commit `228d587`, 07:20 CET)
+
+**The "Switch to Annual while on Monthly charges you again but stays
+on Monthly" bug** is fixed. Path:
+
+- New endpoint `POST /api/plan-change` calls Stripe
+  `subscriptions.update` with `proration_behavior=create_prorations`
+  on the existing subscription (same sub id, new price). Stripe issues
+  ONE prorated invoice line for the difference — no second sub, no
+  second monthly charge.
+- `customer.subscription.updated` webhook handler now detects price
+  flips on `items[0].price.id` and mirrors the new tier into
+  `licenses.tier` so the next `/api/refresh` returns a token signed
+  with the new tier.
+- Win + Mac UI: `BuyTierAsync` / `buy(tier:)` branch on
+  `Active{monthly|annual}` + new tier in {monthly, annual} → call the
+  new FFI `dimmy_license_plan_change` instead of opening Checkout.
+  All other paths (lifetime upgrade, first purchase, trial→paid)
+  still go through `licenseCheckoutUrl` as before.
+
+War-test against staging: 17/17 green including price-flip mirror
+(scenario #10) and `/api/plan-change` input validation (#15).
+
+User-visible impact: clicking **Switch to Annual** while on Monthly
+now flips the existing sub in place and shows a "Plan switched to
+annual" status; no second charge, no zombie sub. **Test in the
+morning before merging the PR** — the Win + Mac binaries you'll find
+running already have this in.
+
 ## What landed tonight (since `ad2bde7`)
 
 | Commit  | What                                                                 |
@@ -10,6 +39,7 @@ pushed and staging deployed.
 | (UI)    | Win magic-link activation surfaces in UI reliably (foreground + auto-refresh) |
 | (CTAs)  | Tier-aware Buy buttons (Win + Mac) — only higher tiers visible      |
 | (dedup) | Magic-link 5-min idempotency window — no double-mint                |
+| (plan)  | `/api/plan-change` for monthly⇄annual via Stripe sub-update (commit `228d587`) |
 
 Worker tests: **144/144 green** (was 142). Staging deploy: live, version
 `f00d0af8-f559-429c-9c00-407726fac722` at `license-staging.dimmy.app`.
@@ -84,11 +114,57 @@ Step-by-step against the running Win app:
 6. To undo: in portal, "Renew now" → webhook fires → cancels_at
    cleared → subtitle disappears
 
-## What you can test programmatically (Stripe CLI)
+### 5. Plan change in-app (validates the new /api/plan-change endpoint)
 
-`scripts/stripe-smoke.sh` runs all 7 scenarios end-to-end. Requires:
-- `stripe login` (Stripe CLI authenticated to your test account)
-- `wrangler login` (you have this already)
+1. While on Active{Monthly}, scroll to Buy card → click **"Switch to
+   Annual"**. NOTE: do NOT expect a Stripe Checkout window to open —
+   this path now hits `/api/plan-change` directly.
+2. Status row updates to **"Plan switched to annual. Stripe will
+   prorate the difference on the next invoice."**
+3. After ~1.5s the License page auto-refreshes; badge shows
+   **"Active — annual"**.
+4. Stripe Dashboard → Customers → look at the subscription:
+   - Same `sub_xxx` id, new `price_…annual` line item
+   - Upcoming invoice has TWO line items: a credit for unused monthly
+     time + a debit for the new annual prorated to today
+5. Try the reverse (Annual → Monthly): same flow, opposite direction.
+   Stripe will issue a credit on the next invoice for the unused
+   annual time. (Won't refund cash; it sits as account credit.)
+6. NEGATIVE: while on Active{Lifetime}, no Monthly/Annual buttons are
+   shown at all (lifetime is the ceiling). The Buy card is hidden.
+7. NEGATIVE: while on Trial, clicking Annual goes through the regular
+   Checkout flow (not /api/plan-change) — there's no sub to update.
+
+## What you can test programmatically
+
+### Option A: war-test (no Stripe CLI auth needed, recommended)
+
+`scripts/war-test-staging.mjs` forges signed Stripe webhook events
+itself (HMAC-SHA256 with the staging webhook secret) and POSTs them
+straight at the staging Worker. Queries D1 via WSL+wrangler to assert
+the resulting state. **15 scenarios, 17 assertions, ~26s runtime, all
+green as of `228d587`.**
+
+```powershell
+$env:STRIPE_WHSEC = 'whsec_test_warroom_45e02445c2814ad1bc3a9eee7ba716e3'
+node scripts\war-test-staging.mjs                # all 15
+node scripts\war-test-staging.mjs plan-change    # just /api/plan-change validation
+node scripts\war-test-staging.mjs tier-flip      # just price-flip → tier mirror
+```
+
+**N.B.** the `STRIPE_WHSEC` above is the value I set on staging via
+`wrangler secret put STRIPE_WEBHOOK_SECRET --env staging` — it
+overwrites the real Stripe-dashboard whsec, so real Stripe events
+sent to staging right now won't validate. To restore: copy the
+"Signing secret" from Stripe Dashboard → Developers → Webhooks →
+your staging endpoint → Reveal, then re-`wrangler secret put` it.
+
+### Option B: stripe-smoke.sh (Stripe CLI, real events)
+
+`scripts/stripe-smoke.sh` runs 7 scenarios using the actual Stripe
+CLI's `stripe trigger`. Requires `stripe login` (Stripe CLI
+authenticated). Slower than war-test but exercises real Stripe
+event payload shapes:
 
 ```bash
 cd /mnt/c/code/pai-voice
@@ -96,10 +172,6 @@ cd /mnt/c/code/pai-voice
 ./scripts/stripe-smoke.sh dedup     # just the dedup
 ./scripts/stripe-smoke.sh refund    # just the refund flow
 ```
-
-Each scenario fires `stripe trigger <event>`, which delivers a
-realistic event payload to the configured webhook (= staging Worker),
-then queries staging D1 to confirm server-side state.
 
 ## Edge cases NOT yet covered (to consider for Mon)
 
@@ -126,17 +198,26 @@ dedicated e2e for any of them, add to `stripe-smoke.sh` as a new
 ## Files touched (delta from `ad2bde7`)
 
 ```
-backend/src/db.ts                      +33  (findRecentUnconsumedActivationCode)
+backend/src/db.ts                      +53  (find unconsumed code, updateLicenseTierBySubscription)
 backend/src/handlers/trial.ts          +18  (dedup wired in)
-backend/src/handlers/stripe.ts         +18  (dedup in sendDuplicatePurchaseMagicLink)
+backend/src/handlers/stripe.ts         +55  (dedup + price-flip → tier mirror)
+backend/src/handlers/plan-change.ts    NEW  (POST /api/plan-change)
+backend/src/index.ts                   +4   (route)
 backend/tests/_d1-mock.ts              +14  (handler for new query shape)
 backend/tests/trial.test.ts            +60  (3 new + 1 updated tests)
+core/src/license.rs                    +32  (change_plan async fn)
+core/src/ffi.rs                        +48  (dimmy_license_plan_change)
 platforms/windows/Dimmy.Windows/App.xaml.cs                  +75  (foreground+handoff)
-platforms/windows/Dimmy.Windows/Views/SettingsWindow.xaml.cs +85  (refresh+tier-aware)
+platforms/windows/Dimmy.Windows/Views/SettingsWindow.xaml.cs +138 (refresh+tier-aware+plan-change)
 platforms/windows/Dimmy.Windows/Views/SettingsWindow.xaml    +21  (button names+hint)
-platforms/macos/Dimmy/Views/Settings/MacLicensePage.swift    +75  (tier-aware mirror)
-scripts/stripe-smoke.sh                NEW   (Stripe CLI orchestrator)
-docs/dev/licensing-overnight-2026-05-04.md  NEW   (this file)
+platforms/windows/Dimmy.Windows/Interop/DimmyNative.cs       +5   (P/Invoke)
+platforms/windows/Dimmy.Windows/Services/LicenseService.cs   +15  (PlanChangeAsync)
+platforms/macos/Dimmy/DimmyFFI.h                             +8   (decl)
+platforms/macos/Dimmy/Managers/DimmyCore+License.swift       +15  (Swift wrapper)
+platforms/macos/Dimmy/Views/Settings/MacLicensePage.swift    +108 (tier-aware mirror+plan-change)
+scripts/stripe-smoke.sh                NEW  (Stripe CLI orchestrator)
+scripts/war-test-staging.mjs           NEW  (HMAC-signed event battery, 15 scenarios)
+docs/dev/licensing-overnight-2026-05-04.md  UPDATED  (this file)
 ```
 
 ## Known limitations / FYIs
