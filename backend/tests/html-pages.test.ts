@@ -46,6 +46,54 @@ describe("/checkout/success", () => {
     const resp = await worker.fetch(req, makeEnv(), ctx);
     expect(resp.headers.get("Cache-Control")).toMatch(/no-store/);
   });
+
+  // The post-2026-05-04 page leads with "check your inbox" + webmail
+  // shortcuts. The dimmy:// link is a tertiary "already activated"
+  // affordance, not the primary CTA — at success-page time the email
+  // hasn't arrived yet, opening the app does nothing useful.
+  test("leads with 'Payment confirmed' headline (not 'Open Dimmy')", async () => {
+    const req = new Request("http://localhost/checkout/success");
+    const resp = await worker.fetch(req, makeEnv(), ctx);
+    const body = await resp.text();
+    const h1Match = body.match(/<h1[^>]*>(.*?)<\/h1>/i);
+    expect(h1Match).not.toBeNull();
+    expect(h1Match![1]).toMatch(/payment confirmed/i);
+  });
+
+  test("renders webmail shortcuts (Gmail, Outlook, iCloud, Yahoo)", async () => {
+    const req = new Request("http://localhost/checkout/success");
+    const resp = await worker.fetch(req, makeEnv(), ctx);
+    const body = await resp.text();
+    expect(body).toContain("mail.google.com");
+    expect(body).toContain("outlook.live.com");
+    expect(body).toContain("icloud.com/mail");
+    expect(body).toContain("mail.yahoo.com");
+  });
+
+  test("dimmy:// link is tertiary — labeled 'Already activated'", async () => {
+    const req = new Request("http://localhost/checkout/success");
+    const resp = await worker.fetch(req, makeEnv(), ctx);
+    const body = await resp.text();
+    // Find the <a href="dimmy://license"> link and verify its enclosing
+    // text talks about "already activated" rather than promoting it as
+    // the main action.
+    expect(body).toMatch(/already activated[^<]*<a[^>]*dimmy:\/\//i);
+  });
+
+  test("webmail links open in a new tab with rel=noopener", async () => {
+    const req = new Request("http://localhost/checkout/success");
+    const resp = await worker.fetch(req, makeEnv(), ctx);
+    const body = await resp.text();
+    // Each webmail anchor must carry target+rel — defence against the
+    // "tab-napping" pattern where the opener can rewrite our origin via
+    // window.opener.
+    const webmailAnchors = body.match(/<a[^>]*(?:gmail|outlook|icloud|yahoo)[^>]*>/g);
+    expect(webmailAnchors).not.toBeNull();
+    for (const a of webmailAnchors!) {
+      expect(a).toMatch(/target="_blank"/);
+      expect(a).toMatch(/rel="noopener"/);
+    }
+  });
 });
 
 describe("/checkout/cancel", () => {

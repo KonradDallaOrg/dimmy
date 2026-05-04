@@ -123,3 +123,26 @@ Uninstalling staging does NOT touch your prod install or its config.
 On Windows: Settings → Apps → "Dimmy Staging" → Uninstall.
 On macOS: drag `Dimmy Staging.app` to the bin and remove the config
 dir if you want a clean slate.
+
+## Rate limit (devs / QA running intensive smoke tests)
+
+The staging Worker rate-limits the public endpoints to stop trivial
+abuse:
+
+| Endpoint | Limit | Per |
+|---|---|---|
+| `/api/trial/start` | 5 / day | IP |
+| `/api/checkout/create` | 10 / hour | IP |
+| `/api/plan-change` | 5 / hour | license token |
+| `/api/billing-portal` | 10 / hour | license token |
+
+If you hammer the war-test or the UI buy flow more than that you'll
+hit `429 Too Many Requests`. Clear the staging counters with:
+
+```bash
+wsl bash -lc "cd /mnt/c/code/pai-voice/backend && \
+  wrangler d1 execute dimmy-licensing-staging --env staging --remote \
+  --command 'DELETE FROM rate_limits'"
+```
+
+(Staging only — never run this on prod.)
