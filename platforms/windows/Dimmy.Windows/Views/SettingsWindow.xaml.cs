@@ -781,9 +781,12 @@ public sealed partial class SettingsWindow : Window
             {
                 Glyph = granted ? "" : "", // CheckMark vs Cancel
                 FontSize = 16,
+                // Tertiary on the X was invisible in light theme (it's a
+                // hint brush). Secondary keeps the "subdued vs success
+                // green" contrast but stays readable on white backgrounds.
                 Foreground = granted
                     ? (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["SystemFillColorSuccessBrush"]
-                    : (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorTertiaryBrush"],
+                    : (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
                 VerticalAlignment = VerticalAlignment.Top,
                 Margin = new Thickness(0, 2, 0, 0),
             };
@@ -810,8 +813,11 @@ public sealed partial class SettingsWindow : Window
             {
                 Text = granted ? "Included" : "Not included",
                 FontSize = 11,
+                // Secondary in both states — tertiary "Not included" was
+                // unreadable on light backgrounds. Glyph + check carry
+                // the granted/not state visually; text just labels it.
                 Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
-                    granted ? "TextFillColorSecondaryBrush" : "TextFillColorTertiaryBrush"],
+                    "TextFillColorSecondaryBrush"],
                 VerticalAlignment = VerticalAlignment.Top,
                 Margin = new Thickness(0, 4, 0, 0),
             };
