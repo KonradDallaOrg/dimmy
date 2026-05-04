@@ -328,8 +328,13 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
+          # Velopack with --channel staging names artifacts
+          # `Dimmy-Staging-staging-Setup.exe` etc — channel name
+          # gets injected between packId and suffix, NOT the
+          # prod-style `Dimmy-Staging-win-Setup.exe`. Earlier version
+          # of this glob silently dropped the .exe upload.
           files: |
-            platforms/windows/velopack-output/Dimmy-Staging-win-Setup.exe
-            platforms/windows/velopack-output/Dimmy-Staging-win-Portable.zip
+            platforms/windows/velopack-output/Dimmy-Staging-staging-Setup.exe
+            platforms/windows/velopack-output/Dimmy-Staging-staging-Portable.zip
             platforms/windows/velopack-output/Dimmy-Staging-*-full.nupkg
-            platforms/windows/velopack-output/releases.staging.win.json
+            platforms/windows/velopack-output/releases.staging.json
