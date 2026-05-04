@@ -3,7 +3,13 @@ name: Release
 on:
   push:
     tags:
+      # Prod tags only. Staging tags use the `v*-staging*` shape and
+      # are handled by staging-release.yml — exclude them here so a
+      # staging tag doesn't accidentally fire BOTH pipelines (we hit
+      # this on 2026-05-04 with v0.6.27-staging.2: GitHub only honors
+      # the first pattern hit, but having both fire-able is brittle).
       - "v*"
+      - "!v*-staging*"
 
 permissions:
   contents: write
