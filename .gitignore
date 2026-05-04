@@ -38,3 +38,6 @@ backend/.wrangler/
 licensing-data/
 **/dimmy_jumplist.log
 **/dimmy_startup.log
+
+# Local-only licensing flow notes (kept on disk, not in repo).
+docs/dev/licensing-flow.md
