@@ -896,6 +896,18 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "has_fireworks_key": st.key_store.has_key(KeyringScope::Stt(Provider::Fireworks), use_kr),
         "has_together_key": st.key_store.has_key(KeyringScope::Stt(Provider::Together), use_kr),
         "has_custom_key": st.key_store.has_key(KeyringScope::Stt(Provider::Custom), use_kr),
+        // Per-LLM-provider key flags. Mirror of the STT block above so
+        // the UI can refresh the green-check on a provider dropdown
+        // change without first persisting config (which would force a
+        // round-trip + redraw with stale state).
+        "has_groq_llm_key": st.key_store.has_key(KeyringScope::Llm(Provider::Groq), use_kr),
+        "has_openai_llm_key": st.key_store.has_key(KeyringScope::Llm(Provider::OpenAI), use_kr),
+        "has_anthropic_llm_key": st.key_store.has_key(KeyringScope::Llm(Provider::Anthropic), use_kr),
+        "has_gemini_llm_key": st.key_store.has_key(KeyringScope::Llm(Provider::Gemini), use_kr),
+        "has_openrouter_llm_key": st.key_store.has_key(KeyringScope::Llm(Provider::OpenRouter), use_kr),
+        "has_fireworks_llm_key": st.key_store.has_key(KeyringScope::Llm(Provider::Fireworks), use_kr),
+        "has_together_llm_key": st.key_store.has_key(KeyringScope::Llm(Provider::Together), use_kr),
+        "has_custom_llm_key": st.key_store.has_key(KeyringScope::Llm(Provider::Custom), use_kr),
     });
 
     // app_rules added outside the json! macro — including it inline pushes

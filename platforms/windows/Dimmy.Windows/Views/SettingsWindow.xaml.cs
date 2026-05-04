@@ -104,7 +104,10 @@ public sealed partial class SettingsWindow : Window
         ViewModel.PillShowOnHotkey = uiPrefs.PillShowOnHotkey;
 
         // Also read from FFI for runtime-only fields (has_key, has_llm_key, devices)
-        // that are NOT in config.json (Rust computes them from keystore)
+        // that are NOT in config.json (Rust computes them from keystore).
+        // We also cache the per-provider has_*_key flags so a dropdown
+        // change can refresh the green-check without first persisting
+        // config + waiting for Rust to round-trip.
         try
         {
             var ffiJson = DimmyNative.ReadBuffer(DimmyNative.dimmy_get_config_json, 16384);
@@ -116,6 +119,9 @@ public sealed partial class SettingsWindow : Window
                     ViewModel.HasApiKey = hk.GetBoolean();
                 if (r.TryGetProperty("has_llm_key", out var hlk))
                     ViewModel.HasLlmKey = hlk.GetBoolean();
+                _sttKeyByProvider.Clear();
+                _llmKeyByProvider.Clear();
+                CacheProviderKeyFlags(r);
                 if (r.TryGetProperty("devices", out var devArr) &&
                     devArr.ValueKind == System.Text.Json.JsonValueKind.Array)
                 {
@@ -210,7 +216,66 @@ public sealed partial class SettingsWindow : Window
                 LlmCustomUrlBox.Visibility = Visibility.Visible;
                 LlmCustomModelBox.Visibility = Visibility.Visible;
             }
+            // Refresh the green-check badge for the newly-selected provider.
+            // Without this, switching to a provider with a saved key still
+            // showed "no key" until the user closed + reopened Settings.
+            ViewModel.HasLlmKey = LookupLlmKeyForTag(tag);
         }
+    }
+
+    // Per-provider has_key flags cached at Settings open. Maps the
+    // ComboBox tag (provider Name lowercased) to true/false. Filled by
+    // CacheProviderKeyFlags() on Settings load.
+    private readonly System.Collections.Generic.Dictionary<string, bool> _sttKeyByProvider = new(StringComparer.OrdinalIgnoreCase);
+    private readonly System.Collections.Generic.Dictionary<string, bool> _llmKeyByProvider = new(StringComparer.OrdinalIgnoreCase);
+
+    private void CacheProviderKeyFlags(System.Text.Json.JsonElement r)
+    {
+        // STT — `has_<provider>_key` flag set per Provider variant.
+        // The dropdown tag is the lowercase provider name; the ProviderPreset
+        // table holds the exact Tag→Name mapping. We hash both forms so a
+        // tag like "groq-v3" still resolves to has_groq_key.
+        foreach (var (key, prov) in new[] {
+            ("has_groq_key", "groq"),
+            ("has_openai_key", "openai"),
+            ("has_gemini_key", "gemini"),
+            ("has_deepgram_key", "deepgram"),
+            ("has_fireworks_key", "fireworks"),
+            ("has_together_key", "together"),
+            ("has_custom_key", "custom"),
+        })
+        {
+            if (r.TryGetProperty(key, out var v)) _sttKeyByProvider[prov] = v.GetBoolean();
+        }
+        foreach (var (key, prov) in new[] {
+            ("has_groq_llm_key", "groq"),
+            ("has_openai_llm_key", "openai"),
+            ("has_anthropic_llm_key", "anthropic"),
+            ("has_gemini_llm_key", "gemini"),
+            ("has_openrouter_llm_key", "openrouter"),
+            ("has_fireworks_llm_key", "fireworks"),
+            ("has_together_llm_key", "together"),
+            ("has_custom_llm_key", "custom"),
+        })
+        {
+            if (r.TryGetProperty(key, out var v)) _llmKeyByProvider[prov] = v.GetBoolean();
+        }
+    }
+
+    private bool LookupSttKeyForTag(string tag)
+    {
+        // Tags like "groq-v3" / "groq-distil" resolve to has_groq_key.
+        // Custom is the catch-all.
+        var baseProv = tag.Split('-')[0];
+        if (_sttKeyByProvider.TryGetValue(baseProv, out var v)) return v;
+        return _sttKeyByProvider.TryGetValue("custom", out var c) && c;
+    }
+
+    private bool LookupLlmKeyForTag(string tag)
+    {
+        var baseProv = tag.Split('-')[0];
+        if (_llmKeyByProvider.TryGetValue(baseProv, out var v)) return v;
+        return _llmKeyByProvider.TryGetValue("custom", out var c) && c;
     }
 
     private void SyncLanguageComboBox()
@@ -557,6 +622,10 @@ public sealed partial class SettingsWindow : Window
                 CustomUrlBox.Visibility = Visibility.Visible;
                 CustomModelBox.Visibility = Visibility.Visible;
             }
+            // Refresh the green-check badge for the newly-selected provider.
+            // Without this, switching to a provider with a saved key still
+            // showed "no key" until the user closed + reopened Settings.
+            ViewModel.HasApiKey = LookupSttKeyForTag(tag);
         }
     }
 

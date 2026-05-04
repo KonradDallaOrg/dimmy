@@ -833,12 +833,23 @@ public partial class App : Application
         // Only allow one settings window at a time
         if (_settingsWindow != null)
         {
-            try { _settingsWindow.Activate(); return; }
+            try
+            {
+                _settingsWindow.Activate();
+                // Activate() alone doesn't reliably bring the window to
+                // foreground when the calling process (tray icon thread,
+                // pipe IPC handler) isn't already the foreground process.
+                // The topmost-toggle in ForegroundSettingsWindow is the
+                // workaround pattern that does — apply it on every open.
+                ForegroundSettingsWindow();
+                return;
+            }
             catch { _settingsWindow = null; }
         }
         _settingsWindow = new SettingsWindow();
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         _settingsWindow.Activate();
+        ForegroundSettingsWindow();
     }
 
     /// <summary>
