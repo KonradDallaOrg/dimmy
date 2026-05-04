@@ -21,6 +21,10 @@ public partial class SettingsViewModel : ObservableObject
         new("Deepgram-Nova2", "https://api.deepgram.com/v1/listen", "nova-2"),
         new("Gemini", "https://generativelanguage.googleapis.com/v1beta/models", "gemini-2.5-flash"),
         new("Gemini-Pro", "https://generativelanguage.googleapis.com/v1beta/models", "gemini-2.5-pro"),
+        // Phase 1 cloud expansion (2026-05-04 benchmark drove the model picks)
+        new("Fireworks", "https://audio-turbo.api.fireworks.ai/v1/audio/transcriptions", "whisper-v3-turbo"),
+        new("Together-Parakeet", "https://api.together.xyz/v1/audio/transcriptions", "nvidia/parakeet-tdt-0.6b-v3"),
+        new("Together-Whisper", "https://api.together.xyz/v1/audio/transcriptions", "openai/whisper-large-v3"),
         new("Custom", "", ""),
     ];
 
@@ -33,6 +37,10 @@ public partial class SettingsViewModel : ObservableObject
         new("Gemini", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-2.5-flash"),
         new("Anthropic", "https://api.anthropic.com/v1/messages", "claude-haiku-4-5-20251001"),
         new("Anthropic-Sonnet", "https://api.anthropic.com/v1/messages", "claude-sonnet-4-20250514"),
+        // Phase 1 cloud expansion (2026-05-04, sensible model picks for filler-removal/smart-format)
+        new("Fireworks", "https://api.fireworks.ai/inference/v1/chat/completions", "accounts/fireworks/models/kimi-k2p6"),
+        new("Together-Llama", "https://api.together.xyz/v1/chat/completions", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
+        new("Together-Qwen", "https://api.together.xyz/v1/chat/completions", "Qwen/Qwen2.5-7B-Instruct-Turbo"),
         new("Custom", "", ""),
     ];
 

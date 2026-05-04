@@ -893,6 +893,8 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "has_openai_key": st.key_store.has_key(KeyringScope::Stt(Provider::OpenAI), use_kr),
         "has_gemini_key": st.key_store.has_key(KeyringScope::Stt(Provider::Gemini), use_kr),
         "has_deepgram_key": st.key_store.has_key(KeyringScope::Stt(Provider::Deepgram), use_kr),
+        "has_fireworks_key": st.key_store.has_key(KeyringScope::Stt(Provider::Fireworks), use_kr),
+        "has_together_key": st.key_store.has_key(KeyringScope::Stt(Provider::Together), use_kr),
         "has_custom_key": st.key_store.has_key(KeyringScope::Stt(Provider::Custom), use_kr),
     });
 

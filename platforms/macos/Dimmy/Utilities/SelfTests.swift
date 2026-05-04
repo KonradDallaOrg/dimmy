@@ -185,6 +185,10 @@ enum SelfTests {
         assert(SttProvider.from(url: "https://api.openai.com/v1/audio") == .openai, "openai")
         assert(SttProvider.from(url: "https://api.deepgram.com/v1/listen") == .deepgram, "deepgram")
         assert(SttProvider.from(url: "https://generativelanguage.googleapis.com/v1beta") == .gemini, "gemini")
+        assert(SttProvider.from(url: "https://audio-turbo.api.fireworks.ai/v1/audio/transcriptions") == .fireworks, "fireworks turbo")
+        assert(SttProvider.from(url: "https://api.fireworks.ai/inference/v1/chat/completions") == .fireworks, "fireworks chat")
+        assert(SttProvider.from(url: "https://api.together.xyz/v1/audio/transcriptions") == .together, "together xyz")
+        assert(SttProvider.from(url: "https://api.together.ai/v1/chat/completions") == .together, "together ai alias")
         assert(SttProvider.from(url: "https://custom.example.com/api") == .custom, "custom")
     }
 
