@@ -287,6 +287,22 @@ final class DimmyCore {
         return String(cString: buffer)
     }
 
+    /// Build flavor — "" (prod) or "staging". Drives the staging banner +
+    /// title suffix in the SwiftUI views so a side-by-side tester can't
+    /// confuse one flavor for the other. Mirrors Win BuildInfo.Flavor.
+    var buildFlavor: String {
+        let bufLen: Int32 = 64
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+        let written = dimmy_build_flavor(buffer, bufLen)
+        guard written > 0 else { return "" }
+        return String(cString: buffer)
+    }
+
+    /// True when this binary was built with `DIMMY_BUILD_FLAVOR=staging`.
+    var isStagingBuild: Bool { buildFlavor == "staging" }
+
     /// GPU known-bad status as parsed JSON. `enabled` indicates whether
     /// the marker is currently set (forcing CPU fallback).
     func gpuStatus() -> [String: Any]? {

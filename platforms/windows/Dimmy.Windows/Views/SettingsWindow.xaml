@@ -55,15 +55,37 @@
       </NavigationView.MenuItems>
 
       <NavigationView.PaneFooter>
-        <!-- Advanced mode toggle in the sidebar footer (Win11 native pattern,
-             matches the design bundle). Reveals the Advanced nav item for
-             developer-only diagnostics + debug toggles. -->
-        <Border Padding="14,8" BorderThickness="0,1,0,0"
-                BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}">
-          <ToggleSwitch Header="Advanced mode"
-                        IsOn="{Binding IsAdvanced, Mode=TwoWay}"
-                        OnContent="On" OffContent="Off" />
-        </Border>
+        <StackPanel>
+          <!-- Staging watermark — visible only on builds with
+               DIMMY_BUILD_FLAVOR=staging. Code-behind flips the
+               Visibility on Loaded based on BuildInfo.IsStaging. The
+               yellow stripe + emoji is intentional: a tester running
+               staging side-by-side with prod must spot the difference
+               at a glance even on a single screen. -->
+          <Border x:Name="StagingBanner" Visibility="Collapsed"
+                  Padding="14,10" BorderThickness="0,1,0,1"
+                  BorderBrush="#A86E00"
+                  Background="#3DFFB300">
+            <StackPanel Spacing="2">
+              <TextBlock Text="⚠ STAGING BUILD"
+                         FontWeight="SemiBold" FontSize="12"
+                         Foreground="#A86E00" />
+              <TextBlock Text="Test environment · Stripe TEST · payments simulated"
+                         FontSize="11" TextWrapping="Wrap"
+                         Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            </StackPanel>
+          </Border>
+
+          <!-- Advanced mode toggle in the sidebar footer (Win11 native pattern,
+               matches the design bundle). Reveals the Advanced nav item for
+               developer-only diagnostics + debug toggles. -->
+          <Border Padding="14,8" BorderThickness="0,1,0,0"
+                  BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}">
+            <ToggleSwitch Header="Advanced mode"
+                          IsOn="{Binding IsAdvanced, Mode=TwoWay}"
+                          OnContent="On" OffContent="Off" />
+          </Border>
+        </StackPanel>
       </NavigationView.PaneFooter>
 
       <ScrollViewer Padding="24,20,24,20">

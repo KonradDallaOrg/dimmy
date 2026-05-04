@@ -58,8 +58,34 @@ fn default_shortcut() -> &'static str {
     }
 }
 
+/// Build flavor — "" (prod, default) or "staging". Embedded at compile
+/// time via build.rs from the `DIMMY_BUILD_FLAVOR` env var. A staging
+/// build uses a distinct config dir, single-instance mutex name, and
+/// surfaces a "STAGING" badge in the UI so a tester running both
+/// flavors side-by-side never confuses one for the other.
+pub fn build_flavor() -> &'static str {
+    option_env!("DIMMY_BUILD_FLAVOR").unwrap_or("")
+}
+
+/// True iff this binary was built with `DIMMY_BUILD_FLAVOR=staging`.
+pub fn is_staging_build() -> bool {
+    build_flavor() == "staging"
+}
+
+/// Per-flavor config dir name. Prod = `dimmy`, staging = `dimmy-staging`.
+/// Splitting these names is what keeps a staging install from
+/// overwriting prod's `license.json` / `config.json` / `keys.enc` on
+/// the same machine.
+fn config_dir_name() -> &'static str {
+    if is_staging_build() {
+        "dimmy-staging"
+    } else {
+        "dimmy"
+    }
+}
+
 pub fn config_dir_path() -> Option<std::path::PathBuf> {
-    dirs::config_dir().map(|p| p.join("dimmy"))
+    dirs::config_dir().map(|p| p.join(config_dir_name()))
 }
 
 /// Marker file path for onboarding completion.

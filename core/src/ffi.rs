@@ -1834,6 +1834,16 @@ pub extern "C" fn dimmy_get_version(out_buf: *mut c_char, buf_len: c_int) -> c_i
     write_to_buf(env!("CARGO_PKG_VERSION"), out_buf, buf_len)
 }
 
+/// Build flavor — "" (prod) or "staging". Embedded at compile time via
+/// the `DIMMY_BUILD_FLAVOR` env var (build.rs). Native UIs read this on
+/// launch and surface a "STAGING" watermark so a side-by-side tester
+/// always knows which flavor they're looking at. Returns bytes written,
+/// or -1 on null buffer.
+#[no_mangle]
+pub extern "C" fn dimmy_build_flavor(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    write_to_buf(crate::build_flavor(), out_buf, buf_len)
+}
+
 /// Check if recording is active. Returns 1=yes, 0=no.
 #[no_mangle]
 pub extern "C" fn dimmy_is_recording() -> c_int {

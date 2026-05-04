@@ -172,6 +172,11 @@ int32_t dimmy_check_audio_health(char * _Nonnull out_buf, int32_t buf_len);
 /// Build version (CARGO_PKG_VERSION). Returns bytes written, or -1.
 int32_t dimmy_get_version(char * _Nonnull out_buf, int32_t buf_len);
 
+/// Build flavor — "" (prod) or "staging". Embedded at compile time
+/// via DIMMY_BUILD_FLAVOR. UIs surface a "STAGING" watermark on
+/// non-prod flavors. Returns bytes written, or -1 on null buffer.
+int32_t dimmy_build_flavor(char * _Nonnull out_buf, int32_t buf_len);
+
 /// GPU known-bad marker status as JSON. Returns bytes written, or -1.
 int32_t dimmy_gpu_get_status(char * _Nonnull out_buf, int32_t buf_len);
 

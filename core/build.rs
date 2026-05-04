@@ -53,6 +53,22 @@ fn main() {
     let license_server_url =
         sanitize_secret(std::env::var("DIMMY_LICENSE_SERVER_URL").unwrap_or_default());
 
+    // Build flavor — drives everything that needs to keep a staging
+    // build from colliding with a prod install on the same machine:
+    // config dir name (~/.config/dimmy vs ~/.config/dimmy-staging),
+    // single-instance mutex name on Windows, the "STAGING" watermark
+    // on the UI. Empty/unset = prod build (default). Only "staging"
+    // is accepted as the alternate value; anything else is a typo
+    // and we abort the build.
+    let build_flavor = sanitize_secret(std::env::var("DIMMY_BUILD_FLAVOR").unwrap_or_default());
+    if !build_flavor.is_empty() && build_flavor != "staging" {
+        panic!(
+            "DIMMY_BUILD_FLAVOR must be empty (prod) or 'staging' — got '{}'. \
+            Refusing to ship a binary with an unknown flavor.",
+            build_flavor
+        );
+    }
+
     // Build-time sanity checks. Non-fatal — emit `cargo:warning` so the
     // CI log surfaces "secret looks bad" without breaking the build. A
     // hard error would mean a typo in the GitHub Secret bricks every
@@ -162,10 +178,15 @@ fn main() {
         "cargo:rustc-env=DIMMY_LICENSE_SERVER_URL={}",
         license_server_url
     );
+    println!("cargo:rustc-env=DIMMY_BUILD_FLAVOR={}", build_flavor);
+    if build_flavor == "staging" {
+        println!("cargo:warning=DIMMY_BUILD_FLAVOR=staging — config dir will be 'dimmy-staging' and UI will show STAGING watermark");
+    }
     println!("cargo:rerun-if-env-changed=POSTHOG_API_KEY");
     println!("cargo:rerun-if-env-changed=SENTRY_DSN");
     println!("cargo:rerun-if-env-changed=DIMMY_LICENSE_PUBKEY");
     println!("cargo:rerun-if-env-changed=DIMMY_LICENSE_SERVER_URL");
+    println!("cargo:rerun-if-env-changed=DIMMY_BUILD_FLAVOR");
 }
 
 /// Strip leading UTF-8 BOM, then ASCII-trim. Returns owned String so

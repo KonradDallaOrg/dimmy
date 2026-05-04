@@ -1718,8 +1718,19 @@ public sealed partial class SettingsWindow : Window
     {
         _currentVersion = DimmyNative.ReadBuffer(DimmyNative.dimmy_get_version, 64) ?? "0.0.0";
         VersionText.Text = $"v{_currentVersion}";
-        HeroTitleText.Text = $"Dimmy {_currentVersion}";
-        HeroSubText.Text = $"Version {_currentVersion}";
+        // Append " · STAGING" suffix on staging builds. The sidebar banner
+        // already announces the flavor loudly; this just makes sure About
+        // page screenshots can never be mistaken for prod ones.
+        var flavorSuffix = BuildInfo.IsStaging ? " · STAGING" : string.Empty;
+        HeroTitleText.Text = $"Dimmy {_currentVersion}{flavorSuffix}";
+        HeroSubText.Text = $"Version {_currentVersion}{flavorSuffix}";
+        // Sidebar staging banner — flip on once we know the flavor. Done
+        // here (rather than in the constructor) because XAML elements
+        // are initialised lazily.
+        if (StagingBanner is not null)
+            StagingBanner.Visibility = BuildInfo.IsStaging
+                ? Microsoft.UI.Xaml.Visibility.Visible
+                : Microsoft.UI.Xaml.Visibility.Collapsed;
         _ = CheckForUpdateAsync();
     }
 

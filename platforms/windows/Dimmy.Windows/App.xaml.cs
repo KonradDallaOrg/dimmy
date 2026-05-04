@@ -180,8 +180,11 @@ public partial class App : Application
             return;
         }
 
-        // Single-instance guard: exit immediately if another Dimmy is already running
-        _singleInstanceMutex = new Mutex(true, @"Global\DimmySingleInstance", out bool createdNew);
+        // Single-instance guard: exit immediately if another Dimmy is already running.
+        // Mutex name is flavor-aware (BuildInfo.SingleInstanceMutexName) so a
+        // staging install can coexist with a prod install on the same machine
+        // without the second launcher exiting silently.
+        _singleInstanceMutex = new Mutex(true, BuildInfo.SingleInstanceMutexName, out bool createdNew);
         if (!createdNew)
         {
             // Another instance exists — just exit silently

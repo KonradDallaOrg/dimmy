@@ -182,6 +182,44 @@ struct MacSettingsContainerView: View {
 
             Divider().opacity(0.5)
 
+            // Staging watermark — visible only on builds with
+            // DIMMY_BUILD_FLAVOR=staging. Mirror of the Win sidebar
+            // banner (SettingsWindow.xaml::StagingBanner). The yellow
+            // stripe + warning glyph is intentional: a tester running
+            // staging side-by-side with a prod install must spot the
+            // difference at a glance.
+            if DimmyCore.shared.isStagingBuild {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Color(red: 0.66, green: 0.43, blue: 0.0))
+                        Text("STAGING BUILD")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Color(red: 0.66, green: 0.43, blue: 0.0))
+                    }
+                    Text("Test environment · Stripe TEST · payments simulated")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color.macTextSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(EdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 14))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.yellow.opacity(0.18))
+                .overlay(
+                    Rectangle()
+                        .fill(Color(red: 0.66, green: 0.43, blue: 0.0).opacity(0.4))
+                        .frame(height: 0.5),
+                    alignment: .top
+                )
+                .overlay(
+                    Rectangle()
+                        .fill(Color(red: 0.66, green: 0.43, blue: 0.0).opacity(0.4))
+                        .frame(height: 0.5),
+                    alignment: .bottom
+                )
+            }
+
             // Footer: version + Advanced toggle
             HStack {
                 HStack(spacing: 6) {
