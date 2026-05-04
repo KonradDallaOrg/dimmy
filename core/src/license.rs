@@ -721,11 +721,7 @@ pub async fn create_checkout(
 /// Returns Ok(()) on success. NOT for lifetime (server returns 409
 /// with a "use /api/checkout/create" message) and NOT for trial users
 /// (same 409 path).
-pub async fn change_plan(
-    server: &str,
-    token: &str,
-    new_tier: &str,
-) -> Result<(), reqwest::Error> {
+pub async fn change_plan(server: &str, token: &str, new_tier: &str) -> Result<(), reqwest::Error> {
     assert!(!server.is_empty(), "server URL required");
     assert!(!token.is_empty(), "token required");
     assert!(
