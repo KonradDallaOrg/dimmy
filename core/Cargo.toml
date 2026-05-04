@@ -50,6 +50,14 @@ local-stt = ["dep:whisper-rs"]
 local-stt-metal = ["local-stt", "whisper-rs/metal"]
 local-stt-cuda = ["local-stt", "whisper-rs/cuda"]
 local-stt-vulkan = ["local-stt", "whisper-rs/vulkan"]
+# Parakeet TDT v3 FP32 local STT via ONNX Runtime (ort crate). Bundle:
+# istupakov/parakeet-tdt-0.6b-v3-onnx (HuggingFace, ~2.5GB). The model
+# files (encoder, decoder_joint, mel-extractor, vocab) are downloaded
+# at first use into the dimmy config dir. CPU by default; CUDA on Win
+# and CoreML on Mac when the matching feature is enabled (build-time).
+local-stt-parakeet      = ["dep:ort", "dep:ndarray"]
+local-stt-parakeet-cuda = ["local-stt-parakeet", "ort/cuda"]
+local-stt-parakeet-coreml = ["local-stt-parakeet", "ort/coreml"]
 local-llm = ["dep:llama-cpp-4"]
 local-llm-metal = ["local-llm", "llama-cpp-4/metal", "llama-cpp-4/dynamic-link"]
 local-llm-cuda = ["local-llm", "llama-cpp-4/cuda"]
@@ -76,7 +84,7 @@ license-client = ["dep:ed25519-dalek", "dep:sha2"]
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.12", features = ["multipart", "json"] }
+reqwest = { version = "0.12", features = ["multipart", "json", "blocking"] }
 tokio = { version = "1", features = ["full"] }
 cpal = "0.15"
 hound = "3.5"
@@ -89,6 +97,13 @@ nnnoiseless = "0.5"
 biquad = "0.4"
 dagc = "0.1"
 whisper-rs = { version = "0.16", optional = true }
+# ONNX Runtime Rust bindings — used by the local-stt-parakeet path
+# to load Parakeet TDT v3 FP32 (encoder + decoder_joint + mel
+# extractor as 3 separate .onnx files). Native execution, no Python.
+# Build pulls a prebuilt onnxruntime dll/dylib for the host (~30MB);
+# CUDA / CoreML are opt-in via cargo features.
+ort = { version = "=2.0.0-rc.10", optional = true, default-features = false, features = ["std", "load-dynamic", "ndarray"] }
+ndarray = { version = "0.16", optional = true }
 llama-cpp-4 = { git = "https://github.com/KonradDallaOrg/llama-cpp-rs", optional = true, default-features = false }
 rusqlite = { version = "0.31", features = ["bundled"] }
 regex = "1"

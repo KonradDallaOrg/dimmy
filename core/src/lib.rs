@@ -24,6 +24,11 @@ pub mod license;
 pub mod llm;
 pub mod local_llm;
 pub mod local_stt;
+/// Parakeet TDT v3 FP32 local STT via ONNX Runtime. Inference gated
+/// behind `local-stt-parakeet`; the bundle download/presence helpers
+/// are always available so the UI can render the "needs download"
+/// state without a feature-gate dance.
+pub mod parakeet;
 pub mod preprocess;
 pub mod provider;
 pub mod telemetry;
