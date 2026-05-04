@@ -189,15 +189,20 @@ async function scenario_trial_dedup() {
 
 async function scenario_trial_expired_blocked() {
   section("05. expired trial → 409 (no fresh-trial issuance)");
-  // Use a deterministic, unique email per run; expire by license_id
-  // (returned by lookup) to avoid race with concurrent test rows.
+  // Use a deterministic, unique email + look up the license by its
+  // email_hash (NOT 'ORDER BY timestamp DESC LIMIT 1', which picks
+  // the wrong row when two trial_created entries land in the same
+  // second — the race we hit live on 2026-05-04).
   const email = `wartest-expired-${Date.now()}-${randomBytes(2).toString("hex")}@example.com`;
+  // Server-side hash uses sha256(email.lower()).hex — match it here.
+  const { createHash } = await import("node:crypto");
+  const eh = createHash("sha256").update(email.toLowerCase()).digest("hex");
   await postJSON("/api/trial/start", { email });
-  // Find THIS email's license id (need email_hash from server). Easier:
-  // join through audit_log which stores email_hash on trial_created.
-  const rows = d1(`SELECT license_id FROM audit_log WHERE event_type = 'trial_created' ORDER BY timestamp DESC LIMIT 1`);
+  const rows = d1(
+    `SELECT license_id FROM licenses WHERE email_hash = '${eh}' AND tier = 'trial'`
+  );
   if (!Array.isArray(rows) || !rows[0]?.license_id) {
-    fail("expired trial", `couldn't locate trial license_id from audit: ${JSON.stringify(rows).slice(0, 100)}`);
+    fail("expired trial", `couldn't locate trial license_id from email_hash: ${JSON.stringify(rows).slice(0, 100)}`);
     return;
   }
   d1(`UPDATE licenses SET valid_until = 1 WHERE license_id = '${rows[0].license_id}'`);
