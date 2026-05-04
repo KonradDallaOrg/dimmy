@@ -173,6 +173,21 @@ public static class LicenseService
             return ParseUrl(buf, n);
         });
 
+    /// POST /api/plan-change — switch an existing monthly⇄annual sub via
+    /// Stripe's subscription update API (proration handled server-side).
+    /// MUST NOT be called for first purchase or for upgrading to lifetime —
+    /// those go through CreateCheckoutAsync. Returns success / error;
+    /// after success the client should call RefreshAsync to pick up the
+    /// new tier (the customer.subscription.updated webhook updates D1
+    /// before the refresh hits the server).
+    public static Task<OpResult> PlanChangeAsync(string newTier) =>
+        Task.Run(() =>
+        {
+            var buf = new byte[Buf];
+            int n = DimmyNative.dimmy_license_plan_change(newTier, buf, buf.Length);
+            return ParseOp(buf, n);
+        });
+
     /// POST /api/billing-portal — returns Stripe Customer Portal URL.
     /// Only valid for licenses with stripe_customer_id (paid).
     public static Task<UrlResult> BillingPortalUrlAsync() =>

@@ -218,6 +218,21 @@ extension DimmyCore {
         }.value
     }
 
+    /// POST /api/plan-change — switch monthly⇄annual via Stripe's
+    /// subscription update API (server proration). MUST NOT be called
+    /// for first purchase or for upgrading to lifetime; those go
+    /// through licenseCheckoutUrl. After Ok, call licenseRefresh
+    /// to pick up the new tier in the local token.
+    public func licensePlanChange(newTier: String) async -> LicenseOpResult {
+        await Task.detached(priority: .userInitiated) { [self] in
+            let buf = UnsafeMutablePointer<CChar>.allocate(capacity: 1024)
+            defer { buf.deallocate() }
+            buf[0] = 0
+            let n = newTier.withCString { dimmy_license_plan_change($0, buf, 1024) }
+            return parseLicenseOp(buf: buf, n: n)
+        }.value
+    }
+
     /// POST /api/billing-portal — returns Stripe Customer Portal URL.
     /// Only valid for paid licenses (those with a stripe_customer_id).
     /// Trials and source-builds get an error from the server.

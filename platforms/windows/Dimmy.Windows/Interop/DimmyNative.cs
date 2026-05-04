@@ -273,6 +273,11 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_license_status_json(byte[] outBuf, int bufLen);
 
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_license_plan_change(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string newTier,
+        byte[] outBuf, int bufLen);
+
     // dimmy_license_set_server_url removed: the FFI is now debug-only on
     // the Rust side (gated behind cfg(debug_assertions)) and the
     // Settings UI override that called it has been deleted. Release

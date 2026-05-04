@@ -715,6 +715,38 @@ pub async fn create_checkout(
         .to_string())
 }
 
+/// `POST /api/plan-change { token, new_tier }` — switch an existing
+/// monthly⇄annual subscription to the other sub tier via the
+/// Stripe-side subscription update API. Server handles proration.
+/// Returns Ok(()) on success. NOT for lifetime (server returns 409
+/// with a "use /api/checkout/create" message) and NOT for trial users
+/// (same 409 path).
+pub async fn change_plan(
+    server: &str,
+    token: &str,
+    new_tier: &str,
+) -> Result<(), reqwest::Error> {
+    assert!(!server.is_empty(), "server URL required");
+    assert!(!token.is_empty(), "token required");
+    assert!(
+        new_tier == "monthly" || new_tier == "annual",
+        "change_plan only supports monthly|annual",
+    );
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()?;
+    let url = format!("{}/api/plan-change", server.trim_end_matches('/'));
+    let _resp: serde_json::Value = client
+        .post(&url)
+        .json(&serde_json::json!({ "token": token, "new_tier": new_tier }))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    Ok(())
+}
+
 /// `POST /api/billing-portal { token }` — generate a Stripe Customer
 /// Portal session URL. Only valid for paid licenses (those with a
 /// `stripe_customer_id`). Trials get a 409 from the server.

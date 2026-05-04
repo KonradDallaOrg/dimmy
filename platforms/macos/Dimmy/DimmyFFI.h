@@ -229,4 +229,12 @@ int32_t dimmy_license_checkout_url(const char * _Nonnull tier,
 /// Only valid for paid licenses.
 int32_t dimmy_license_billing_portal_url(char * _Nonnull out_buf, int32_t buf_len);
 
+/// POST /api/plan-change — switch monthly⇄annual via Stripe subscription
+/// update API (proration handled server-side). Reject path: lifetime tier
+/// or first-purchase. After success, callers should call dimmy_license_refresh
+/// to pick up the new tier in the local token.
+int32_t dimmy_license_plan_change(const char * _Nonnull new_tier,
+                                  char * _Nonnull out_buf,
+                                  int32_t buf_len);
+
 #endif /* DimmyFFI_h */

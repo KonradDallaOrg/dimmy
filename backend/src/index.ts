@@ -14,6 +14,7 @@ import { handleAccountDelete } from "./handlers/delete";
 import { handleDevicesList, handleDeviceDeactivate } from "./handlers/devices";
 import { handleBillingPortal } from "./handlers/billing-portal";
 import { handleCheckoutCreate } from "./handlers/checkout";
+import { handlePlanChange } from "./handlers/plan-change";
 
 /// Bindings injected by Cloudflare. Names must match wrangler.toml.
 export interface Env {
@@ -80,6 +81,9 @@ export default {
       }
       if (method === "POST" && path === "/api/checkout/create") {
         return await handleCheckoutCreate(req, env, ctx);
+      }
+      if (method === "POST" && path === "/api/plan-change") {
+        return await handlePlanChange(req, env, ctx);
       }
       // Stripe Checkout success / cancel landing pages. Stripe redirects
       // the user here after the hosted Checkout. The webhook fires async

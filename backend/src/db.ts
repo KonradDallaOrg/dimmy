@@ -115,6 +115,26 @@ export async function insertLicense(
     .run();
 }
 
+/// Sub-tier change in place — used by customer.subscription.updated
+/// when Stripe reports a different price on items[0]. Sets the tier
+/// only; valid_until/period_end/etc are touched separately by
+/// updateLicenseFromSubscription. Returns rows changed (0 = no row
+/// matches the sub id, > 0 = updated).
+export async function updateLicenseTierBySubscription(
+  db: D1Database,
+  subscriptionId: string,
+  newTier: "monthly" | "annual"
+): Promise<number> {
+  const r = await db
+    .prepare(
+      `UPDATE licenses SET tier = ?1
+       WHERE stripe_subscription_id = ?2 AND tier != ?1`
+    )
+    .bind(newTier, subscriptionId)
+    .run();
+  return r.meta.changes ?? 0;
+}
+
 /// In-place "lifetime wins" upgrade: bumps an existing monthly/annual
 /// license to lifetime tier, extends `valid_until` to the new lifetime
 /// horizon, drops the recurring-subscription bookkeeping (which the

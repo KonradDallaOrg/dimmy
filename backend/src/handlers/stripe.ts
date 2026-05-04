@@ -33,6 +33,7 @@ import {
   recordStripeEvent,
   setLicenseStatus,
   updateLicenseFromSubscription,
+  updateLicenseTierBySubscription,
   upgradeLicenseToLifetime,
   type LicenseRow,
 } from "../db";
@@ -394,6 +395,42 @@ async function handleSubscriptionUpdated(
       `[stripe] subscription.updated for ${subId} — no matching license yet (race with checkout.session.completed)`
     );
     return;
+  }
+
+  // Plan change: detect a price flip on items[0] and mirror the new
+  // tier into the license row. This is the path /api/plan-change uses
+  // — the worker calls Stripe to flip the price, Stripe fires
+  // subscription.updated with the new price, here we propagate the
+  // tier change to D1 so the next /api/refresh returns a token signed
+  // with the new tier.
+  const items = sub.items as { data?: Array<{ price?: { id?: string } }> } | undefined;
+  const newPriceId = items?.data?.[0]?.price?.id;
+  if (typeof newPriceId === "string" && newPriceId.length > 0) {
+    let newTier: "monthly" | "annual" | null = null;
+    if (newPriceId === env.STRIPE_PRICE_MONTHLY) newTier = "monthly";
+    else if (newPriceId === env.STRIPE_PRICE_ANNUAL) newTier = "annual";
+    // Lifetime is one-time, not a sub — would never appear here.
+    if (newTier) {
+      const tierChanged = await updateLicenseTierBySubscription(
+        env.DB,
+        subId,
+        newTier
+      );
+      if (tierChanged > 0) {
+        await audit(
+          env.DB,
+          {
+            event_type: "subscription_tier_changed",
+            details: {
+              stripe_subscription_id: subId,
+              new_tier: newTier,
+              new_price_id: newPriceId,
+            },
+          },
+          now
+        );
+      }
+    }
   }
 
   await audit(

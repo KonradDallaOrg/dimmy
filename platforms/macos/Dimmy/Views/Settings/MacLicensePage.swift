@@ -415,8 +415,39 @@ struct MacLicensePage: View {
     private func buy(tier: String) async {
         buyBusy = true
         defer { buyBusy = false }
-        buyStatus = "Opening Stripe checkout for \(tier)…"
         buyIsError = false
+
+        // monthly⇄annual on an Active sub is a Stripe subscription update
+        // (proration, no second charge for the period), NOT a new checkout.
+        // Sending users through Checkout for a tier-switch was billing them
+        // again while leaving the old sub running — see PR description.
+        let currentTier = status.tier?.lowercased()
+        let isPlanChange = status.kind == "Active"
+            && (currentTier == "monthly" || currentTier == "annual")
+            && (tier == "monthly" || tier == "annual")
+
+        if isPlanChange {
+            buyStatus = "Switching plan to \(tier) (proration applies)…"
+            let pc = await DimmyCore.shared.licensePlanChange(newTier: tier)
+            guard pc.ok else {
+                buyIsError = true
+                buyStatus = pc.error ?? "Plan change failed."
+                return
+            }
+            // Webhook customer.subscription.updated lands ~instantly; give
+            // the server a beat, then refresh the local token so the UI
+            // reflects the new tier.
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            _ = await DimmyCore.shared.licenseRefresh()
+            await MainActor.run {
+                refreshStatus()
+                buyIsError = false
+                buyStatus = "Plan switched to \(tier). Stripe will prorate the difference on the next invoice."
+            }
+            return
+        }
+
+        buyStatus = "Opening Stripe checkout for \(tier)…"
         let r = await DimmyCore.shared.licenseCheckoutUrl(tier: tier)
         guard r.ok, let urlStr = r.url, let url = URL(string: urlStr) else {
             buyIsError = true

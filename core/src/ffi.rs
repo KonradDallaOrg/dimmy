@@ -2877,6 +2877,54 @@ pub unsafe extern "C" fn dimmy_license_checkout_url(
     write_to_buf(&json.to_string(), buf, buf_len)
 }
 
+/// `POST /api/plan-change { token, new_tier }` via FFI. Plan-change is
+/// for switching between sub tiers (monthly ⇄ annual) via Stripe's
+/// subscription update API — proration is handled server-side. Use
+/// `dimmy_license_checkout_url` for first purchase or for upgrading a
+/// sub to lifetime; this fn rejects "lifetime" with an error.
+///
+/// Writes JSON `{ok, error?}` to buf. On success the next
+/// `dimmy_license_refresh` call picks up the new tier (the server's
+/// customer.subscription.updated webhook updates D1 first).
+///
+/// # Safety
+/// `new_tier_ptr` must be a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_license_plan_change(
+    new_tier_ptr: *const c_char,
+    buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if new_tier_ptr.is_null() {
+        return write_license_err(buf, buf_len, "new_tier required");
+    }
+    let new_tier = unsafe { CStr::from_ptr(new_tier_ptr) }
+        .to_string_lossy()
+        .into_owned();
+    if !matches!(new_tier.as_str(), "monthly" | "annual") {
+        return write_license_err(
+            buf,
+            buf_len,
+            "new_tier must be 'monthly' or 'annual' (lifetime via checkout)",
+        );
+    }
+    let token = match license::load_license_file() {
+        Ok(Some(t)) => t,
+        Ok(None) => return write_license_err(buf, buf_len, "no license file"),
+        Err(e) => return write_license_err(buf, buf_len, &format!("load: {}", e)),
+    };
+    let server = licensing_server_url();
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(r) => r,
+        Err(e) => return write_license_err(buf, buf_len, &format!("runtime: {}", e)),
+    };
+    let json = match rt.block_on(license::change_plan(&server, &token, &new_tier)) {
+        Ok(()) => serde_json::json!({"ok": true}),
+        Err(e) => serde_json::json!({"ok": false, "error": format!("{}", e)}),
+    };
+    write_to_buf(&json.to_string(), buf, buf_len)
+}
+
 /// `POST /api/billing-portal { token }` via FFI. Reads token from disk;
 /// trials and source-builds get an error from the server (only paid
 /// licenses with a `stripe_customer_id` can manage subscriptions).

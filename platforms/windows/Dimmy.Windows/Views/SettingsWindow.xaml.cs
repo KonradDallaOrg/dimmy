@@ -1165,17 +1165,60 @@ public sealed partial class SettingsWindow : Window
 
     private async Task BuyTierAsync(string tier)
     {
+        // Distinguish "plan change" (Active monthly⇄annual) from "first
+        // purchase / lifetime upgrade". Plan change goes through
+        // /api/plan-change (subscription update + proration) so the user
+        // is NOT charged a fresh full-price invoice on top of their
+        // existing sub. Anything else (first purchase, trial→paid,
+        // sub→lifetime, expired/suspended renew) goes through Stripe
+        // Checkout as before.
         try
         {
-            ShowInfoBar(LicenseBuyInfoBar, InfoBarSeverity.Informational, $"Opening Stripe checkout for {tier}…");
             DisableBuyButtons(true);
-            var r = await LicenseService.CreateCheckoutAsync(tier);
-            if (!r.Ok || string.IsNullOrEmpty(r.Url))
+            var status = LicenseService.GetStatus();
+            bool isPlanChange =
+                status.Kind == "Active" &&
+                (status.Tier == "monthly" || status.Tier == "annual") &&
+                (tier == "monthly" || tier == "annual");
+
+            if (isPlanChange)
             {
-                ShowInfoBar(LicenseBuyInfoBar, InfoBarSeverity.Error, r.Error ?? "Could not start checkout.");
+                ShowInfoBar(LicenseBuyInfoBar, InfoBarSeverity.Informational,
+                    $"Switching plan to {tier}…");
+                var r = await LicenseService.PlanChangeAsync(tier);
+                if (!r.Ok)
+                {
+                    ShowInfoBar(LicenseBuyInfoBar, InfoBarSeverity.Error,
+                        r.Error ?? "Plan change failed.");
+                    return;
+                }
+                // Stripe webhook will fire customer.subscription.updated;
+                // give it a beat, then refresh + re-render UI. The
+                // refresh-and-render loop also renames the badge.
+                await Task.Delay(1500);
+                var refresh = await LicenseService.RefreshAsync();
+                RefreshLicenseStatus();
+                if (refresh.Ok)
+                {
+                    ShowInfoBar(LicenseBuyInfoBar, InfoBarSeverity.Success,
+                        $"Plan switched to {tier}. Stripe will issue a prorated invoice automatically.");
+                }
+                else
+                {
+                    ShowInfoBar(LicenseBuyInfoBar, InfoBarSeverity.Informational,
+                        $"Plan switched to {tier}. Refresh in a moment to see the new badge.");
+                }
                 return;
             }
-            await global::Windows.System.Launcher.LaunchUriAsync(new Uri(r.Url));
+
+            ShowInfoBar(LicenseBuyInfoBar, InfoBarSeverity.Informational, $"Opening Stripe checkout for {tier}…");
+            var c = await LicenseService.CreateCheckoutAsync(tier);
+            if (!c.Ok || string.IsNullOrEmpty(c.Url))
+            {
+                ShowInfoBar(LicenseBuyInfoBar, InfoBarSeverity.Error, c.Error ?? "Could not start checkout.");
+                return;
+            }
+            await global::Windows.System.Launcher.LaunchUriAsync(new Uri(c.Url));
             ShowInfoBar(LicenseBuyInfoBar, InfoBarSeverity.Success,
                 "Checkout opened in your browser. After payment, check your email for the magic link to activate.");
         }
