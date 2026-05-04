@@ -112,18 +112,31 @@ export async function handleTrialStart(
   const magicLink = `${env.PUBLIC_URL}/activate?code=${encodeURIComponent(code)}`;
 
   // Send email (Resend) — falls back to console.log when no API key.
-  await sendActivationEmail({
-    to: email,
-    magicLink,
-    activationCode: code,
-    tier: (existing?.tier ?? "trial") as
-      | "trial"
-      | "monthly"
-      | "annual"
-      | "lifetime",
-    apiKey: env.RESEND_API_KEY ?? "",
-    from: env.EMAIL_FROM,
-  });
+  // We catch any Resend failure (transient 4xx/5xx, rate limit, domain
+  // not verified, etc.) and degrade gracefully: the magic_link + code
+  // are already in the response body, so the client can show a "paste
+  // this code" fallback instead of a hard 500. Logging the error means
+  // it surfaces in `wrangler tail` for diagnosis without breaking the
+  // user-facing flow.
+  let emailDelivered = true;
+  try {
+    await sendActivationEmail({
+      to: email,
+      magicLink,
+      activationCode: code,
+      tier: (existing?.tier ?? "trial") as
+        | "trial"
+        | "monthly"
+        | "annual"
+        | "lifetime",
+      apiKey: env.RESEND_API_KEY ?? "",
+      from: env.EMAIL_FROM,
+    });
+  } catch (err) {
+    emailDelivered = false;
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[trial] sendActivationEmail failed: ${msg}`);
+  }
 
-  return json({ magic_link: magicLink, code });
+  return json({ magic_link: magicLink, code, email_delivered: emailDelivered });
 }

@@ -315,14 +315,25 @@ async function handleCheckoutCompleted(
   });
   const magicLink = `${env.PUBLIC_URL}/activate?code=${encodeURIComponent(code)}`;
 
-  await sendActivationEmail({
-    to: customerEmail,
-    magicLink,
-    activationCode: code,
-    tier,
-    apiKey: env.RESEND_API_KEY ?? "",
-    from: env.EMAIL_FROM,
-  });
+  // Catch Resend failures so we still record the license + activation
+  // code in DB. Without this catch, a transient Resend error would
+  // throw 500 and the webhook handler aborts AFTER the row is written
+  // — Stripe retries, and our idempotency key blocks the retry, so
+  // the user keeps a paid license with no magic link to consume. With
+  // the catch, we log + continue; the user can re-issue from the app.
+  try {
+    await sendActivationEmail({
+      to: customerEmail,
+      magicLink,
+      activationCode: code,
+      tier,
+      apiKey: env.RESEND_API_KEY ?? "",
+      from: env.EMAIL_FROM,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[stripe] sendActivationEmail failed (license=${licenseId}): ${msg}`);
+  }
 
   await audit(
     env.DB,
@@ -906,14 +917,19 @@ async function sendDuplicatePurchaseMagicLink(
     });
   }
   const magicLink = `${env.PUBLIC_URL}/activate?code=${encodeURIComponent(code)}`;
-  await sendActivationEmail({
-    to: args.customerEmail,
-    magicLink,
-    activationCode: code,
-    tier: args.tier,
-    apiKey: env.RESEND_API_KEY ?? "",
-    from: env.EMAIL_FROM,
-  });
+  try {
+    await sendActivationEmail({
+      to: args.customerEmail,
+      magicLink,
+      activationCode: code,
+      tier: args.tier,
+      apiKey: env.RESEND_API_KEY ?? "",
+      from: env.EMAIL_FROM,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[stripe] dup-purchase magic-link send failed (license=${args.licenseId}): ${msg}`);
+  }
 }
 
 /// Cancel a Stripe subscription via the REST API. Returns true on
