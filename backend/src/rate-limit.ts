@@ -130,9 +130,37 @@ export function clientIp(req: Request): string {
 ///   • checkout:     a real user clicks Buy maybe 1-2x within an hour
 ///   • plan-change:  near-zero per real account; 5/h is a generous slack
 ///   • billing:      legit "Manage subscription" maybe 3x/h max
-export const RL = {
+const PROD = {
   trial: { namespace: "trial", limit: 5, periodSecs: 86_400 } as const,
   checkout: { namespace: "checkout", limit: 10, periodSecs: 3_600 } as const,
   planChange: { namespace: "plan_change", limit: 5, periodSecs: 3_600 } as const,
   billingPortal: { namespace: "billing_portal", limit: 10, periodSecs: 3_600 } as const,
 };
+
+/// Staging — 10x looser so a single tester running the full flow
+/// (trial, refund, plan change, retry, paste-code, etc.) doesn't hit
+/// the prod-tuned ceiling within minutes. Same shape, same TTLs,
+/// just bigger budgets. Detected via PUBLIC_URL hostname (any URL
+/// containing 'staging' or workers.dev counts as staging).
+const STAGING = {
+  trial: { namespace: "trial", limit: 50, periodSecs: 86_400 } as const,
+  checkout: { namespace: "checkout", limit: 100, periodSecs: 3_600 } as const,
+  planChange: { namespace: "plan_change", limit: 50, periodSecs: 3_600 } as const,
+  billingPortal: { namespace: "billing_portal", limit: 100, periodSecs: 3_600 } as const,
+};
+
+/// Returns the rate-limit configs appropriate for `env`. Prod by default;
+/// staging when the PUBLIC_URL hostname matches the staging marker. We
+/// avoid a separate `env.FLAVOR` var to keep wrangler.toml lean — the
+/// PUBLIC_URL is already segregated per-env so it's the natural switch.
+export function rlConfigsFor(publicUrl: string | undefined): typeof PROD {
+  if (publicUrl && (publicUrl.includes("staging") || publicUrl.includes("workers.dev"))) {
+    return STAGING;
+  }
+  return PROD;
+}
+
+/// Backwards-compatible export — kept so existing call sites that
+/// imported `RL` directly continue to work. New code should prefer
+/// `rlConfigsFor(env.PUBLIC_URL)` so the env-aware lookup runs.
+export const RL = PROD;

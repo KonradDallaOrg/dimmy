@@ -15,7 +15,7 @@ import { handleDevicesList, handleDeviceDeactivate } from "./handlers/devices";
 import { handleBillingPortal } from "./handlers/billing-portal";
 import { handleCheckoutCreate } from "./handlers/checkout";
 import { handlePlanChange } from "./handlers/plan-change";
-import { RL, rateLimit, rateLimitedResponse, clientIp } from "./rate-limit";
+import { rateLimit, rateLimitedResponse, clientIp, rlConfigsFor } from "./rate-limit";
 import { verifyTokenWithPub } from "./crypto";
 
 /// Bindings injected by Cloudflare. Names must match wrangler.toml.
@@ -49,6 +49,7 @@ export default {
       }
       if (method === "POST" && path === "/api/trial/start") {
         const now = Math.floor(Date.now() / 1000);
+        const RL = rlConfigsFor(env.PUBLIC_URL);
         const r = await rateLimit(env.DB, clientIp(req), RL.trial, now);
         if (!r.ok) return rateLimitedResponse(r, now);
         return await handleTrialStart(req, env, ctx);
@@ -83,6 +84,7 @@ export default {
       }
       if (method === "POST" && path === "/api/billing-portal") {
         const now = Math.floor(Date.now() / 1000);
+        const RL = rlConfigsFor(env.PUBLIC_URL);
         const id = (await tokenIdentity(req, env)) ?? clientIp(req);
         const r = await rateLimit(env.DB, id, RL.billingPortal, now);
         if (!r.ok) return rateLimitedResponse(r, now);
@@ -90,12 +92,14 @@ export default {
       }
       if (method === "POST" && path === "/api/checkout/create") {
         const now = Math.floor(Date.now() / 1000);
+        const RL = rlConfigsFor(env.PUBLIC_URL);
         const r = await rateLimit(env.DB, clientIp(req), RL.checkout, now);
         if (!r.ok) return rateLimitedResponse(r, now);
         return await handleCheckoutCreate(req, env, ctx);
       }
       if (method === "POST" && path === "/api/plan-change") {
         const now = Math.floor(Date.now() / 1000);
+        const RL = rlConfigsFor(env.PUBLIC_URL);
         const id = (await tokenIdentity(req, env)) ?? clientIp(req);
         const r = await rateLimit(env.DB, id, RL.planChange, now);
         if (!r.ok) return rateLimitedResponse(r, now);

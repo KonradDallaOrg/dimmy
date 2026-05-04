@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { rateLimit, rateLimitedResponse } from "../src/rate-limit";
+import { rateLimit, rateLimitedResponse, rlConfigsFor } from "../src/rate-limit";
 import { emptyState, makeMockDB } from "./_d1-mock";
 
 const cfg = { namespace: "test", limit: 3, periodSecs: 60 } as const;
@@ -89,5 +89,33 @@ describe("rateLimitedResponse", () => {
     const outcome = { ok: false, count: 999, limit: 3, resetAt: 999_999 };
     const resp = rateLimitedResponse(outcome, 1_000_000);
     expect(resp.headers.get("Retry-After")).toBe("1");
+  });
+});
+
+describe("rlConfigsFor", () => {
+  test("prod URL → tight prod limits (5/day trial, 10/h checkout)", () => {
+    const cfg = rlConfigsFor("https://license.dimmy.app");
+    expect(cfg.trial.limit).toBe(5);
+    expect(cfg.checkout.limit).toBe(10);
+    expect(cfg.planChange.limit).toBe(5);
+    expect(cfg.billingPortal.limit).toBe(10);
+  });
+
+  test("staging URL → loose staging limits (50/day trial, 100/h checkout)", () => {
+    const cfg = rlConfigsFor("https://license-staging.dimmy.app");
+    expect(cfg.trial.limit).toBe(50);
+    expect(cfg.checkout.limit).toBe(100);
+    expect(cfg.planChange.limit).toBe(50);
+    expect(cfg.billingPortal.limit).toBe(100);
+  });
+
+  test("workers.dev fallback URL also counts as staging", () => {
+    const cfg = rlConfigsFor("https://dimmy-licensing-staging.konrad-dalla.workers.dev");
+    expect(cfg.trial.limit).toBe(50);
+  });
+
+  test("undefined / empty PUBLIC_URL falls back to prod (fail-closed)", () => {
+    expect(rlConfigsFor(undefined).trial.limit).toBe(5);
+    expect(rlConfigsFor("").trial.limit).toBe(5);
   });
 });
