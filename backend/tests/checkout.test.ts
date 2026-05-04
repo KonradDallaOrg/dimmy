@@ -12,8 +12,7 @@ import type { Env } from "../src/index";
 const PRIV = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const PUB  = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
-function makeEnv(overrides: Partial<Env> = {}): Env {
-  const state = emptyState();
+function makeEnv(overrides: Partial<Env> = {}, state = emptyState()): Env {
   return {
     DB: makeMockDB(state) as unknown as D1Database,
     PUBLIC_URL: "http://localhost:8787",
@@ -28,6 +27,20 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
     RESEND_API_KEY: "",
     ...overrides,
   };
+}
+
+// Generate a real Ed25519 keypair so signToken/verifyTokenWithPub
+// round-trip in the gate tests below.
+async function realKeypair(): Promise<{ priv: string; pub: string }> {
+  const kp = (await crypto.subtle.generateKey(
+    { name: "Ed25519" } as EcKeyGenParams, true, ["sign", "verify"]
+  )) as CryptoKeyPair;
+  const pkcs8 = new Uint8Array(await crypto.subtle.exportKey("pkcs8", kp.privateKey));
+  const seed = pkcs8.slice(16, 48);
+  const spki = new Uint8Array(await crypto.subtle.exportKey("spki", kp.publicKey));
+  const pubRaw = spki.slice(12, 44);
+  const b64u = (b: Uint8Array) => Buffer.from(b).toString("base64url");
+  return { priv: b64u(seed), pub: b64u(pubRaw) };
 }
 
 const ctx = {} as ExecutionContext;
@@ -295,5 +308,159 @@ describe("/api/checkout/create", () => {
     });
     const resp = await handleCheckoutCreate(req, makeEnv(), ctx);
     expect(resp.status).toBe(400);
+  });
+
+  // ── Pre-checkout duplicate gate ──────────────────────────────────────
+  // These verify the reject-up-front behaviour: the handler refuses to
+  // even hit Stripe when the user already has an active paid license
+  // that would either duplicate-charge or should go through plan-change.
+  describe("pre-checkout duplicate gate (token + active license)", () => {
+    test("active monthly + buy annual → 409 'use plan-change' (no Stripe call)", async () => {
+      const { priv, pub } = await realKeypair();
+      const state = emptyState();
+      state.licenses.set("01LID_MO", {
+        license_id: "01LID_MO", email_hash: "eh1", tier: "monthly",
+        issued_at: 1, valid_until: 9_999_999_999, max_devices: 5,
+        status: "active", stripe_session_id: "cs", stripe_customer_id: "cus",
+        stripe_subscription_id: "sub", current_period_end: 9_999_999_999,
+        cancel_at_period_end: 0,
+      });
+      const env = makeEnv(
+        { DIMMY_LICENSE_PRIVKEY: priv, DIMMY_LICENSE_PUBKEY: pub }, state);
+      const token = await signToken({
+        v: 1, lid: "01LID_MO", eh: "eh1", tier: "monthly",
+        iat: 1, exp: 9_999_999_999, max_offline: 30, did: "01D",
+        scope: ["managed_stt"],
+      } as any, priv);
+      const resp = await handleCheckoutCreate(
+        makeReq({ tier: "annual", token }), env, ctx);
+      expect(resp.status).toBe(409);
+      const j = (await resp.json()) as { error: string; current_tier: string };
+      expect(j.error).toMatch(/plan-change/);
+      expect(j.current_tier).toBe("monthly");
+      // No Stripe call — gate ran before fetch.
+      expect(lastFetch).toBeNull();
+    });
+
+    test("active annual + buy monthly → 409 (no Stripe call)", async () => {
+      const { priv, pub } = await realKeypair();
+      const state = emptyState();
+      state.licenses.set("01LID_AN", {
+        license_id: "01LID_AN", email_hash: "eh2", tier: "annual",
+        issued_at: 1, valid_until: 9_999_999_999, max_devices: 5,
+        status: "active", stripe_session_id: "cs", stripe_customer_id: "cus",
+        stripe_subscription_id: "sub", current_period_end: 9_999_999_999,
+        cancel_at_period_end: 0,
+      });
+      const env = makeEnv(
+        { DIMMY_LICENSE_PRIVKEY: priv, DIMMY_LICENSE_PUBKEY: pub }, state);
+      const token = await signToken({
+        v: 1, lid: "01LID_AN", eh: "eh2", tier: "annual",
+        iat: 1, exp: 9_999_999_999, max_offline: 30, did: "01D",
+        scope: ["managed_stt"],
+      } as any, priv);
+      const resp = await handleCheckoutCreate(
+        makeReq({ tier: "monthly", token }), env, ctx);
+      expect(resp.status).toBe(409);
+      expect(lastFetch).toBeNull();
+    });
+
+    test("active lifetime + buy ANY → 409 (lifetime is the ceiling)", async () => {
+      const { priv, pub } = await realKeypair();
+      const state = emptyState();
+      state.licenses.set("01LID_LT", {
+        license_id: "01LID_LT", email_hash: "eh3", tier: "lifetime",
+        issued_at: 1, valid_until: 9_999_999_999, max_devices: 5,
+        status: "active", stripe_session_id: "cs", stripe_customer_id: "cus",
+        stripe_subscription_id: null, current_period_end: null,
+        cancel_at_period_end: 0,
+      });
+      const env = makeEnv(
+        { DIMMY_LICENSE_PRIVKEY: priv, DIMMY_LICENSE_PUBKEY: pub }, state);
+      const token = await signToken({
+        v: 1, lid: "01LID_LT", eh: "eh3", tier: "lifetime",
+        iat: 1, exp: 9_999_999_999, max_offline: 30, did: "01D",
+        scope: ["managed_stt"],
+      } as any, priv);
+      for (const buyTier of ["monthly", "annual", "lifetime"] as const) {
+        const resp = await handleCheckoutCreate(
+          makeReq({ tier: buyTier, token }), env, ctx);
+        expect(resp.status).toBe(409);
+        expect(lastFetch).toBeNull();
+      }
+    });
+
+    test("active monthly + buy lifetime → PASS (legitimate sub→lifetime upgrade)", async () => {
+      const { priv, pub } = await realKeypair();
+      const state = emptyState();
+      state.licenses.set("01LID_UP", {
+        license_id: "01LID_UP", email_hash: "ehUp", tier: "monthly",
+        issued_at: 1, valid_until: 9_999_999_999, max_devices: 5,
+        status: "active", stripe_session_id: "cs", stripe_customer_id: "cus",
+        stripe_subscription_id: "sub", current_period_end: 9_999_999_999,
+        cancel_at_period_end: 0,
+      });
+      const env = makeEnv(
+        { DIMMY_LICENSE_PRIVKEY: priv, DIMMY_LICENSE_PUBKEY: pub }, state);
+      const token = await signToken({
+        v: 1, lid: "01LID_UP", eh: "ehUp", tier: "monthly",
+        iat: 1, exp: 9_999_999_999, max_offline: 30, did: "01D",
+        scope: ["managed_stt"],
+      } as any, priv);
+      const resp = await handleCheckoutCreate(
+        makeReq({ tier: "lifetime", token }), env, ctx);
+      expect(resp.status).toBe(200);
+      // Stripe IS called for the lifetime upgrade path.
+      expect(lastFetch).not.toBeNull();
+      const params = parseFormBody(lastFetch!.init);
+      expect(params.get("metadata[tier]")).toBe("lifetime");
+    });
+
+    test("active trial + buy annual → PASS (trial→paid upgrade) + carries email_hash", async () => {
+      const { priv, pub } = await realKeypair();
+      const state = emptyState();
+      state.licenses.set("01LID_TR", {
+        license_id: "01LID_TR", email_hash: "ehTr", tier: "trial",
+        issued_at: 1, valid_until: 9_999_999_999, max_devices: 5,
+        status: "active", stripe_session_id: null, stripe_customer_id: null,
+        stripe_subscription_id: null, current_period_end: null,
+        cancel_at_period_end: 0,
+      });
+      const env = makeEnv(
+        { DIMMY_LICENSE_PRIVKEY: priv, DIMMY_LICENSE_PUBKEY: pub }, state);
+      const token = await signToken({
+        v: 1, lid: "01LID_TR", eh: "ehTr", tier: "trial",
+        iat: 1, exp: 9_999_999_999, max_offline: 30, did: "01D",
+        scope: ["managed_stt"],
+      } as any, priv);
+      const resp = await handleCheckoutCreate(
+        makeReq({ tier: "annual", token }), env, ctx);
+      expect(resp.status).toBe(200);
+      const params = parseFormBody(lastFetch!.init);
+      expect(params.get("client_reference_id")).toBe("ehTr");
+      expect(params.get("metadata[tier]")).toBe("annual");
+    });
+
+    test("revoked license in DB + buy annual → PASS (fresh purchase)", async () => {
+      const { priv, pub } = await realKeypair();
+      const state = emptyState();
+      state.licenses.set("01LID_RV", {
+        license_id: "01LID_RV", email_hash: "ehRv", tier: "annual",
+        issued_at: 1, valid_until: 9_999_999_999, max_devices: 5,
+        status: "revoked", stripe_session_id: "cs", stripe_customer_id: "cus",
+        stripe_subscription_id: "sub", current_period_end: null,
+        cancel_at_period_end: 0,
+      });
+      const env = makeEnv(
+        { DIMMY_LICENSE_PRIVKEY: priv, DIMMY_LICENSE_PUBKEY: pub }, state);
+      const token = await signToken({
+        v: 1, lid: "01LID_RV", eh: "ehRv", tier: "annual",
+        iat: 1, exp: 9_999_999_999, max_offline: 30, did: "01D",
+        scope: ["managed_stt"],
+      } as any, priv);
+      const resp = await handleCheckoutCreate(
+        makeReq({ tier: "annual", token }), env, ctx);
+      expect(resp.status).toBe(200);
+    });
   });
 });

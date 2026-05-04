@@ -781,12 +781,13 @@ public sealed partial class SettingsWindow : Window
             {
                 Glyph = granted ? "" : "", // CheckMark vs Cancel
                 FontSize = 16,
-                // Tertiary on the X was invisible in light theme (it's a
-                // hint brush). Secondary keeps the "subdued vs success
-                // green" contrast but stays readable on white backgrounds.
+                // System accent brushes are theme-aware AND high-contrast in
+                // both modes. Secondary at FontSize 16 was still rendering
+                // as ghost-faint on the LayerOnAcrylic light card. Critical
+                // (red) carries "missing/locked" without a wall of text.
                 Foreground = granted
                     ? (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["SystemFillColorSuccessBrush"]
-                    : (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+                    : (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["SystemFillColorCriticalBrush"],
                 VerticalAlignment = VerticalAlignment.Top,
                 Margin = new Thickness(0, 2, 0, 0),
             };
@@ -802,9 +803,13 @@ public sealed partial class SettingsWindow : Window
             labelStack.Children.Add(new TextBlock
             {
                 Text = descr,
-                FontSize = 11,
+                FontSize = 12,
+                // Per-row description was 11/Secondary which renders as
+                // ghost on the LayerOnAcrylic light card. Bump to 12 +
+                // Primary so it actually reads in light mode.
                 Foreground = (Microsoft.UI.Xaml.Media.Brush)
-                    Application.Current.Resources["TextFillColorSecondaryBrush"],
+                    Application.Current.Resources["TextFillColorPrimaryBrush"],
+                Opacity = 0.85,
                 TextWrapping = TextWrapping.Wrap,
             });
             Grid.SetColumn(labelStack, 1);
@@ -813,11 +818,11 @@ public sealed partial class SettingsWindow : Window
             {
                 Text = granted ? "Included" : "Not included",
                 FontSize = 11,
-                // Secondary in both states — tertiary "Not included" was
-                // unreadable on light backgrounds. Glyph + check carry
-                // the granted/not state visually; text just labels it.
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                // Match the glyph: green Success for Included, red Critical
+                // for missing. Plain Secondary was invisible in light theme.
                 Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
-                    "TextFillColorSecondaryBrush"],
+                    granted ? "SystemFillColorSuccessBrush" : "SystemFillColorCriticalBrush"],
                 VerticalAlignment = VerticalAlignment.Top,
                 Margin = new Thickness(0, 4, 0, 0),
             };

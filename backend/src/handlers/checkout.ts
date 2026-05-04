@@ -21,6 +21,7 @@
 import type { Env } from "../index";
 import { json } from "../index";
 import { verifyTokenWithPub, type Claims } from "../crypto";
+import { findLicenseById } from "../db";
 
 type PaidTier = "monthly" | "annual" | "lifetime";
 
@@ -60,10 +61,27 @@ export async function handleCheckoutCreate(
     return json({ error: `${tier} price not configured server-side` }, 500);
   }
 
-  // Optional token — if present we verify it and pass email_hash to
-  // Stripe as `client_reference_id` so the webhook can link the
-  // purchase to the trial license. Invalid token = silent fall-through
-  // to the anonymous-purchase path; never blocks the buy intent.
+  // Optional token — if present we verify it, look up the license, and
+  // gate the purchase BEFORE creating the Stripe Checkout session.
+  //
+  // Why server-side: the client UI already branches (plan-change vs
+  // checkout) based on tier, but a stale local status, a manually-typed
+  // URL, or a future bug could send users into Checkout when they
+  // already have a paid sub. Stripe charges first and fires the webhook
+  // after — the duplicate-purchase gate in stripe.ts can refund + cancel
+  // but only AFTER the user has been billed. Refusing to mint the
+  // Checkout URL up front means Stripe never charges, period.
+  //
+  // Reject matrix:
+  //   • already on lifetime          → 409 (it's the ceiling, no purchase makes sense)
+  //   • already on monthly/annual    → 409 if buying monthly/annual (use /api/plan-change)
+  //                                    PASS if buying lifetime (legitimate sub→lifetime upgrade,
+  //                                    duplicate-purchase gate in stripe.ts handles it cleanly)
+  //   • on trial                     → PASS (legitimate trial→paid upgrade)
+  //   • license missing/expired/etc  → PASS (fresh purchase)
+  //
+  // Invalid token = silent fall-through to anonymous-purchase path
+  // (no gate, no carry) — same shape as before this change.
   let emailHashCarry: string | null = null;
   if (typeof body.token === "string" && body.token.length > 0) {
     try {
@@ -72,6 +90,30 @@ export async function handleCheckoutCreate(
         env.DIMMY_LICENSE_PUBKEY
       );
       emailHashCarry = claims.eh;
+
+      const lic = await findLicenseById(env.DB, claims.lid);
+      if (lic && lic.status === "active") {
+        if (lic.tier === "lifetime") {
+          return json(
+            { error: "already on lifetime — no further purchase needed" },
+            409
+          );
+        }
+        if (
+          (lic.tier === "monthly" || lic.tier === "annual") &&
+          (tier === "monthly" || tier === "annual")
+        ) {
+          return json(
+            {
+              error:
+                "already on a paid subscription — use /api/plan-change to switch monthly⇄annual",
+              current_tier: lic.tier,
+              requested_tier: tier,
+            },
+            409
+          );
+        }
+      }
     } catch {
       emailHashCarry = null;
     }
