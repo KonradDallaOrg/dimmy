@@ -20,6 +20,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         hkLog("[AppDelegate] applicationDidFinishLaunching ENTER")
 
+        // Crash capture: route any uncaught NSException + fatal POSIX
+        // signal (SIGSEGV / SIGABRT / SIGBUS) to the Rust core's
+        // dimmy.log so the user can hand-deliver a useful "what
+        // happened?" line instead of just "the app vanished". Sentry
+        // catches Rust panics but NOT Swift / AppKit faults — which
+        // is exactly the class of crash we've been hitting on pill
+        // scroll. This stays on even in release builds; the secret
+        // sauce is just routing the trace through our existing log.
+        Self.installCrashHandlers()
+
         // Single-instance guard. macOS deduplicates by bundle path, not
         // bundle ID — so a Release in /Applications and a Debug build in
         // ~/Library/Developer/Xcode/DerivedData with the same
@@ -124,6 +134,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let servicesList = toReset.joined(separator: ", ")
         hkLog("[AppDelegate] resetting stale TCC entries: \(servicesList)")
         perms.resetTccEntries(services: toReset)
+    }
+
+    // MARK: - Crash capture
+    //
+    // The handlers below MUST be top-level `@convention(c)` functions
+    // (or method-less closures) because NSSetUncaughtExceptionHandler
+    // and signal(2) take a C function pointer. Capturing `self` would
+    // make Swift refuse to bridge the closure to a C pointer.
+    // `crashAppendLine` is the freestanding helper; `installCrashHandlers`
+    // wires up the static blocks.
+
+    private static func installCrashHandlers() {
+        NSSetUncaughtExceptionHandler(crashHandleNSException)
+        for sig in [SIGSEGV, SIGABRT, SIGBUS, SIGILL, SIGFPE] {
+            signal(sig, crashHandleSignal)
+        }
+        crashAppendLine("crash handlers installed (NSException + SIG{SEGV,ABRT,BUS,ILL,FPE})")
     }
 
     // MARK: - Live captions
@@ -518,4 +545,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         onboardingWindow = nil
         applyActivationPolicy()
     }
+}
+
+// MARK: - Free-standing crash handlers
+//
+// These live at top level so they convert to C function pointers
+// (NSSetUncaughtExceptionHandler / signal(2) both want plain
+// `@convention(c)` callbacks — captured-context closures don't bridge).
+
+private func crashLogPath() -> String {
+    let dir = FileManager.default.urls(
+        for: .applicationSupportDirectory,
+        in: .userDomainMask
+    ).first?.appendingPathComponent("dimmy", isDirectory: true)
+    return dir?.appendingPathComponent("dimmy.log").path
+        ?? "/tmp/dimmy-crash.log"
+}
+
+private func crashAppendLine(_ line: String) {
+    let path = crashLogPath()
+    let stamped = "[\(ISO8601DateFormatter().string(from: Date()))] [crash] \(line)\n"
+    if let data = stamped.data(using: .utf8) {
+        if let handle = FileHandle(forWritingAtPath: path) {
+            handle.seekToEndOfFile()
+            handle.write(data)
+            try? handle.close()
+        } else {
+            try? stamped.write(toFile: path, atomically: false, encoding: .utf8)
+        }
+    }
+    FileHandle.standardError.write(stamped.data(using: .utf8) ?? Data())
+}
+
+private func crashHandleNSException(_ exc: NSException) {
+    let name = exc.name.rawValue
+    let reason = exc.reason ?? ""
+    let symbols = exc.callStackSymbols.joined(separator: "\n  ")
+    crashAppendLine("NSException name=\(name) reason=\"\(reason)\"\n  \(symbols)")
+}
+
+private func crashHandleSignal(_ sig: Int32) {
+    let name: String
+    switch sig {
+    case SIGSEGV: name = "SIGSEGV"
+    case SIGABRT: name = "SIGABRT"
+    case SIGBUS:  name = "SIGBUS"
+    case SIGILL:  name = "SIGILL"
+    case SIGFPE:  name = "SIGFPE"
+    default:      name = "signal=\(sig)"
+    }
+    let backtrace = Thread.callStackSymbols.joined(separator: "\n  ")
+    crashAppendLine("\(name)\n  \(backtrace)")
+    // Re-raise via default handler so the exit code is correct + Apple
+    // CrashReporter still files an .ips at the system level.
+    signal(sig, SIG_DFL)
+    raise(sig)
 }

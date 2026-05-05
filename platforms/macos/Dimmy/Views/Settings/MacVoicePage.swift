@@ -330,9 +330,16 @@ struct MacVoicePage: View {
 
                 MacRow(
                     "Microphone volume",
-                    description: "Software gain applied before transcription",
+                    description: "Software gain applied before transcription · 50% default",
                     showsDivider: false
                 ) {
+                    // Slider runs over the same Rust-validated range
+                    // (0.0...2.0 — see save_config_file's assertion in
+                    // core/src/lib.rs). 0.5 (= 50% default) matches
+                    // the Rust default + the Win InputGainPercent
+                    // alignment from commit c1896da. Display is the
+                    // Rust value × 100 so the Settings number tracks
+                    // the slider 1:1 — no double-mapping.
                     Slider(
                         value: Binding(
                             get: { Double(appState.inputGain) },
@@ -341,13 +348,14 @@ struct MacVoicePage: View {
                                 persistConfig()
                             }
                         ),
-                        in: 0.5...1.5
+                        in: 0.0...2.0,
+                        step: 0.05
                     )
                     .frame(width: 160)
                     Text(String(format: "%.0f%%", Double(appState.inputGain) * 100))
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(Color.macTextSecondary)
-                        .frame(width: 36, alignment: .trailing)
+                        .frame(width: 44, alignment: .trailing)
                 }
             }
         }
