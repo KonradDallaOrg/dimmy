@@ -46,7 +46,7 @@ struct ModelDownloadStepView: View {
                     Text("Whisper Base · 78 MB (recommended)").tag(Self.defaultWhisper)
                     Text("Whisper Small · 466 MB").tag("ggml-small-q8_0.bin")
                     Text("Whisper Medium · 1.5 GB").tag("ggml-medium-q8_0.bin")
-                    Text("Parakeet TDT v3 FP32 · 2.5 GB").tag(Self.parakeetTag)
+                    Text("Parakeet TDT v3 · 466 MB · Apple Neural Engine").tag(Self.parakeetTag)
                 }
                 .labelsHidden()
                 .pickerStyle(.menu)
@@ -120,6 +120,7 @@ struct ModelDownloadStepView: View {
         .padding(.horizontal, 40)
         .onAppear {
             refreshFromCore()
+            applyAutoPick()
         }
         .onChange(of: selection) {
             // If the new selection is already on disk, jump straight
@@ -128,11 +129,65 @@ struct ModelDownloadStepView: View {
         }
     }
 
+    /// Smart default: on Apple Silicon with >= 2 GB free disk we auto-
+    /// pick Parakeet (Apple Neural Engine, 466 MB) and kick the
+    /// download — the user just clicks Continue when it's done. With
+    /// less disk we fall back to Whisper Base (78 MB). On a previously
+    /// completed onboarding (model already on disk) we don't re-trigger
+    /// anything; the user is past this step.
+    private func applyAutoPick() {
+        guard downloadState == .notStarted else { return }
+        // Don't override an explicit choice the user already made by
+        // tapping the picker — onAppear fires once on entry, so this
+        // only runs on a fresh visit.
+        let freeGB = availableDiskGB() ?? 0
+        if freeGB >= 2 {
+            // Bump the default to Parakeet and start downloading it.
+            // The user can still pick a smaller model from the dropdown
+            // if they cancel — the picker remains active.
+            if selection != Self.parakeetTag {
+                selection = Self.parakeetTag
+            }
+            // refreshFromCore on the new selection runs via .onChange;
+            // if Parakeet is already on disk it'll flip to .completed
+            // and we won't auto-start.
+            DispatchQueue.main.async {
+                if downloadState == .notStarted {
+                    startDownload()
+                }
+            }
+        } else if freeGB >= 0.2 {
+            if selection != Self.defaultWhisper {
+                selection = Self.defaultWhisper
+            }
+        }
+        // < 200 MB free: stay on the .notStarted UI so the user has to
+        // make space and click Download manually. We don't show a
+        // dedicated error here — the model dropdown plus the implicit
+        // OS "Disk full" notification is enough.
+    }
+
+    /// Free space (GB) on the volume that holds `~/Library/Application
+    /// Support/dimmy`. Returns nil if the OS won't tell us.
+    private func availableDiskGB() -> Double? {
+        guard let url = try? FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: false)
+        else { return nil }
+        let values = try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+        guard let capacityBytes = values?.volumeAvailableCapacityForImportantUsage else {
+            return nil
+        }
+        return Double(capacityBytes) / (1024.0 * 1024.0 * 1024.0)
+    }
+
     private var isParakeet: Bool { selection == Self.parakeetTag }
 
     private var currentDescription: String {
         if isParakeet {
-            return "NVIDIA Parakeet — fastest local STT on consumer CPUs (~300 ms warm). Italian quality matches cloud Groq. Larger download."
+            return "NVIDIA Parakeet on Apple Neural Engine — fastest local STT on Apple Silicon (~50× realtime). Italian quality matches cloud Groq."
         }
         switch selection {
         case "ggml-tiny-q8_0.bin": return "Whisper Tiny — fastest, lower accuracy."
@@ -144,7 +199,7 @@ struct ModelDownloadStepView: View {
     }
 
     private var downloadButtonLabel: String {
-        isParakeet ? "Download Parakeet bundle (2.5 GB)" : "Download model"
+        isParakeet ? "Download Parakeet (466 MB)" : "Download model"
     }
 
     private var currentProgress: Double {

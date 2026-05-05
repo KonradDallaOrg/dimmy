@@ -2154,7 +2154,7 @@ pub unsafe extern "C" fn dimmy_llm_model_exists(filename_ptr: *const c_char) -> 
 /// CTA or let the user pick Parakeet as the active local backend.
 #[no_mangle]
 pub extern "C" fn dimmy_parakeet_bundle_present() -> c_int {
-    if crate::parakeet::bundle_present() {
+    if crate::parakeet::active_bundle_present() {
         1
     } else {
         0
@@ -2168,7 +2168,7 @@ pub extern "C" fn dimmy_parakeet_bundle_present() -> c_int {
 /// on -1 also emits an `error` event with a short message.
 #[no_mangle]
 pub extern "C" fn dimmy_parakeet_download_bundle() -> c_int {
-    let result = crate::parakeet::download_bundle(|downloaded, total| {
+    let result = crate::parakeet::download_active_bundle(|downloaded, total| {
         let payload = format!(r#"{{"downloaded":{},"total":{}}}"#, downloaded, total);
         emit_event("parakeet_bundle_download_progress", &payload);
     });

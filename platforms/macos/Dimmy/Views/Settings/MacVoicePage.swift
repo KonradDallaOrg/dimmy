@@ -107,7 +107,7 @@ struct MacVoicePage: View {
                     MacRow(
                         "Local model",
                         description: localBackendIsParakeet
-                            ? "NVIDIA Parakeet TDT v3 FP32 — runs entirely offline"
+                            ? "NVIDIA Parakeet TDT v3 — Apple Neural Engine, fastest"
                             : "Whisper, runs entirely offline",
                         showsDivider: !localModelReady || downloadInFlight
                     ) {
@@ -116,7 +116,7 @@ struct MacVoicePage: View {
                             Text("Base · 142 MB").tag("ggml-base-q8_0.bin")
                             Text("Small · 466 MB").tag("ggml-small-q8_0.bin")
                             Text("Medium · 1.5 GB").tag("ggml-medium-q8_0.bin")
-                            Text("Parakeet TDT v3 FP32 · 2.5 GB")
+                            Text("Parakeet TDT v3 · 466 MB · Apple Neural Engine")
                                 .tag(Self.parakeetTag)
                         }
                         .labelsHidden()
@@ -129,14 +129,14 @@ struct MacVoicePage: View {
                                 ? appState.parakeetDownloadProgress
                                 : appState.modelDownloadProgress,
                             label: localBackendIsParakeet
-                                ? "Downloading Parakeet bundle (~2.5 GB)…"
+                                ? "Downloading Parakeet CoreML bundle (~466 MB)…"
                                 : "Downloading \(appState.localModel)…"
                         )
                     } else if !localModelReady {
                         MacRow(
                             "Download",
                             description: downloadFailed ?? (localBackendIsParakeet
-                                ? "The Parakeet bundle isn't on disk yet (~2.5 GB)."
+                                ? "Parakeet CoreML bundle (~466 MB) isn't on disk yet."
                                 : "This model isn't on disk yet."),
                             showsDivider: false
                         ) {

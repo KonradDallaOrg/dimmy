@@ -175,6 +175,42 @@ pub fn download_bundle(mut progress: impl FnMut(u64, u64)) -> Result<(), Transcr
 
 // ── Inference ────────────────────────────────────────────────────
 
+/// True when the active backend's bundle is on disk. Mirrors
+/// `transcribe` dispatch — fluid first when wired, ort as fallback.
+/// UI gates the "Ready / Download" pill on this.
+pub fn active_bundle_present() -> bool {
+    #[cfg(all(
+        feature = "local-stt-parakeet-fluid",
+        target_os = "macos",
+        target_arch = "aarch64"
+    ))]
+    {
+        // On Mac with fluid in the build, fluid is always preferred;
+        // we report on its bundle, not ort's.
+        return crate::parakeet_fluid::bundle_present();
+    }
+    #[allow(unreachable_code)]
+    bundle_present()
+}
+
+/// Download the bundle for the active backend. Mirrors `transcribe`
+/// dispatch — fluid on Mac (when wired), ort otherwise. Progress is
+/// emitted as `(downloaded_bytes, total_bytes)`; fluid only emits
+/// `(0, 0)` then `(1, 1)` because the underlying Swift framework
+/// doesn't expose a byte-level callback.
+pub fn download_active_bundle(progress: impl FnMut(u64, u64)) -> Result<(), TranscribeError> {
+    #[cfg(all(
+        feature = "local-stt-parakeet-fluid",
+        target_os = "macos",
+        target_arch = "aarch64"
+    ))]
+    {
+        return crate::parakeet_fluid::download_bundle(progress);
+    }
+    #[allow(unreachable_code)]
+    download_bundle(progress)
+}
+
 /// Top-level dispatch for Parakeet transcribe across the two backends:
 ///
 /// 1. **FluidInference / Apple Neural Engine** (`parakeet_fluid`) when
