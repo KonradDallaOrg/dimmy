@@ -219,8 +219,17 @@ struct PillView: View {
                 .opacity(isHovering ? 1 : 0)
                 .clipped()
         }
-        .frame(height: pillHeight)
-        .padding(.horizontal, 14)
+        // When idle and not hovered (standby), force the pill to a perfect
+        // circle (width = height). Hovering re-expands to show the
+        // shortcut + language; the .animation modifier downstream
+        // smooths the transition. This is purely cosmetic — the
+        // recording / transcribing / completing states keep their
+        // own shapes, untouched.
+        .frame(
+            width: isHovering ? nil : pillHeight,
+            height: pillHeight
+        )
+        .padding(.horizontal, isHovering ? 14 : 0)
         // Warning badge sits on the pill itself (not on the larger panel),
         // so it follows the pill wherever the position grid moves it.
         // Borderless: just the orange triangle, no black backdrop.
