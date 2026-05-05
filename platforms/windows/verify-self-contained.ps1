@@ -33,7 +33,13 @@ $requiredFiles = @(
     # App + native
     'Dimmy.Windows.exe',
     'Dimmy.Windows.dll',
-    'dimmy_lib.dll'
+    'dimmy_lib.dll',
+    # Parakeet ort runtime: required by `local-stt-parakeet` feature.
+    # Without these the Rust DLL exports `dimmy_parakeet_*` but every
+    # call returns LocalModel("ort init failed") at runtime — backend
+    # silently broken on first use.
+    'onnxruntime.dll',
+    'onnxruntime_providers_shared.dll'
     # VC++ runtime (msvcp140/vcruntime140) is NOT bundled here — Velopack
     # installs it at setup time via `--framework vcredist143-x64` (the
     # official Microsoft Redist, which lands in System32). Co-locating our

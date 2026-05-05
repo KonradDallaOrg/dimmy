@@ -409,6 +409,14 @@ jobs:
           workspaces: core
           shared-key: windows-staging
 
+      - name: Fetch onnxruntime win-x64 DLL (Parakeet ort path)
+        # ort 2.0.0-rc.10 binds to onnxruntime 1.22.0; the .csproj
+        # CopyOrtDll target reads this exact path so it can co-locate
+        # onnxruntime.dll next to dimmy_lib.dll in the publish bundle.
+        # Same script the local dev flow uses (idempotent / cached).
+        shell: pwsh
+        run: scripts/download-onnxruntime.ps1
+
       - name: Build Rust DLL (VS 2026 MSVC env)
         working-directory: core
         shell: cmd
@@ -440,7 +448,7 @@ jobs:
           call "%VS2026_PATH%\VC\Auxiliary\Build\vcvars64.bat"
           if errorlevel 1 exit /b 1
           cargo clean --release 2>nul
-          cargo build --lib --release --features local-stt-vulkan,local-llm-vulkan
+          cargo build --lib --release --features local-stt-vulkan,local-llm-vulkan,local-stt-parakeet
 
       - name: Gate — verify dimmy_lib.dll linker version
         shell: pwsh
@@ -526,6 +534,14 @@ jobs:
           # with an older ABI (v0.6.10 crash cause). System32 wins.
           $pubDir = "platforms/windows/Dimmy.Windows/publish"
           Copy-Item "D:\t\release\dimmy_lib.dll" "$pubDir/"
+          # onnxruntime.dll + onnxruntime_providers_shared.dll are the
+          # Parakeet ort path's runtime dependency. The .csproj target
+          # copies them to bin/ during dotnet build but `dotnet publish`
+          # output landed in `publish/` — copy them across explicitly so
+          # the self-contained bundle has everything Parakeet needs.
+          $ortLib = "core/target/onnxruntime-win-x64-1.22.0/lib"
+          Copy-Item "$ortLib/onnxruntime.dll" "$pubDir/"
+          Copy-Item "$ortLib/onnxruntime_providers_shared.dll" "$pubDir/"
           Get-ChildItem "$pubDir" -Filter "*.pdb" -Recurse | Remove-Item -ErrorAction SilentlyContinue
 
       - name: Verify self-contained bundle
