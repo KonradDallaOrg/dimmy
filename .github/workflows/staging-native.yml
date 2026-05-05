@@ -184,14 +184,16 @@ jobs:
           # the cdylib under WindowsAppSDK + Velopack (V3 / V8).
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-          # staging credentials — this workflow fires on push to the
-          # `staging` branch (or workflow_dispatch), never on a prod
-          # tag. Pubkey + URL + flavor must match staging-release.yml
-          # so binaries built here talk to the staging Cloudflare
-          # Worker, isolate their config dir (~/.config/dimmy-staging),
-          # and watermark the UI as STAGING. build.rs invariant
-          # (commit 8a71f30) requires pubkey + URL to move together.
-          DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY_STAGING }}
+          # staging credentials — pubkey + URL are public by design (see
+          # .env.staging committed to the repo). Hardcoding inline avoids
+          # depending on a secrets.DIMMY_LICENSE_PUBKEY_STAGING entry
+          # that may not be set on this repo's GitHub Secrets — the
+          # private signing key lives only in Cloudflare's staging Worker
+          # secret store, never in the public binary's verify pubkey.
+          # build.rs invariant (commit 8a71f30) requires pubkey + URL
+          # to move together; flavor=staging triggers ~/.config/dimmy-
+          # staging isolation + UI watermark.
+          DIMMY_LICENSE_PUBKEY: avlM65dRGDHomOzqGICiuIXf6_dY21w653AOnza2fzU
           DIMMY_LICENSE_SERVER_URL: https://license-staging.dimmy.app
           DIMMY_BUILD_FLAVOR: staging
         run: |
@@ -417,14 +419,16 @@ jobs:
           # Diagnostic build (see macOS step for the rationale).
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-          # staging credentials — this workflow fires on push to the
-          # `staging` branch (or workflow_dispatch), never on a prod
-          # tag. Pubkey + URL + flavor must match staging-release.yml
-          # so binaries built here talk to the staging Cloudflare
-          # Worker, isolate their config dir (~/.config/dimmy-staging),
-          # and watermark the UI as STAGING. build.rs invariant
-          # (commit 8a71f30) requires pubkey + URL to move together.
-          DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY_STAGING }}
+          # staging credentials — pubkey + URL are public by design (see
+          # .env.staging committed to the repo). Hardcoding inline avoids
+          # depending on a secrets.DIMMY_LICENSE_PUBKEY_STAGING entry
+          # that may not be set on this repo's GitHub Secrets — the
+          # private signing key lives only in Cloudflare's staging Worker
+          # secret store, never in the public binary's verify pubkey.
+          # build.rs invariant (commit 8a71f30) requires pubkey + URL
+          # to move together; flavor=staging triggers ~/.config/dimmy-
+          # staging isolation + UI watermark.
+          DIMMY_LICENSE_PUBKEY: avlM65dRGDHomOzqGICiuIXf6_dY21w653AOnza2fzU
           DIMMY_LICENSE_SERVER_URL: https://license-staging.dimmy.app
           DIMMY_BUILD_FLAVOR: staging
         run: |
@@ -597,14 +601,16 @@ jobs:
           # Diagnostic build (see macOS step for the rationale).
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-          # staging credentials — this workflow fires on push to the
-          # `staging` branch (or workflow_dispatch), never on a prod
-          # tag. Pubkey + URL + flavor must match staging-release.yml
-          # so binaries built here talk to the staging Cloudflare
-          # Worker, isolate their config dir (~/.config/dimmy-staging),
-          # and watermark the UI as STAGING. build.rs invariant
-          # (commit 8a71f30) requires pubkey + URL to move together.
-          DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY_STAGING }}
+          # staging credentials — pubkey + URL are public by design (see
+          # .env.staging committed to the repo). Hardcoding inline avoids
+          # depending on a secrets.DIMMY_LICENSE_PUBKEY_STAGING entry
+          # that may not be set on this repo's GitHub Secrets — the
+          # private signing key lives only in Cloudflare's staging Worker
+          # secret store, never in the public binary's verify pubkey.
+          # build.rs invariant (commit 8a71f30) requires pubkey + URL
+          # to move together; flavor=staging triggers ~/.config/dimmy-
+          # staging isolation + UI watermark.
+          DIMMY_LICENSE_PUBKEY: avlM65dRGDHomOzqGICiuIXf6_dY21w653AOnza2fzU
           DIMMY_LICENSE_SERVER_URL: https://license-staging.dimmy.app
           DIMMY_BUILD_FLAVOR: staging
         run: cargo build --release
