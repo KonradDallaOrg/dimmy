@@ -532,6 +532,22 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
     // Small delay to let in-flight audio callbacks flush
     std::thread::sleep(std::time::Duration::from_millis(30));
 
+    // Drain the chunked transcriber BEFORE the audio buffer is cleared.
+    // The worker's stop() does one final pass on the trailing audio
+    // (everything that arrived after the last 5 s window fired) — if
+    // we cleared the buffer first, that final pass would find nothing
+    // and the last few seconds of speech would silently disappear from
+    // the cumulative transcript. Bug surfaced 2026-05-05 in user
+    // testing: "non viene appeso l'ultimo pezzetto".
+    let chunked_final = CHUNKED
+        .lock()
+        .ok()
+        .and_then(|mut slot| slot.take())
+        .map(|ct| {
+            log("[StopRec] draining chunked-stt worker (pre-clear)");
+            ct.stop()
+        });
+
     // Get audio buffer
     let buffer = match st.audio_buffer.lock() {
         Ok(mut b) => {
@@ -669,14 +685,9 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
 
     // Route transcription based on stt_mode: "local" or "cloud"
     let transcribe_start = std::time::Instant::now();
-    // First, if a chunked transcriber was running for this session,
-    // drain it. It already produced the cumulative text incrementally
-    // via stt_chunk events during recording — `stop()` just runs one
-    // final pass on the trailing audio and returns the full string.
-    let chunked_taken = CHUNKED.lock().ok().and_then(|mut slot| slot.take());
-    let transcript = if let Some(ct) = chunked_taken {
-        log("[StopRec] draining chunked-stt worker");
-        let cumulative = ct.stop();
+    // The chunked transcriber was already drained above (before the
+    // audio buffer was cleared) so we just consume its result here.
+    let transcript = if let Some(cumulative) = chunked_final {
         if cumulative.trim().is_empty() {
             Err(crate::error::TranscribeError::Empty)
         } else {
