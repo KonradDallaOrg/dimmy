@@ -175,21 +175,68 @@ pub fn download_bundle(mut progress: impl FnMut(u64, u64)) -> Result<(), Transcr
 
 // ── Inference ────────────────────────────────────────────────────
 
+/// Top-level dispatch for Parakeet transcribe across the two backends:
+///
+/// 1. **FluidInference / Apple Neural Engine** (`parakeet_fluid`) when
+///    the `local-stt-parakeet-fluid` feature is on AND the FluidAudio
+///    cache is populated. Mac arm64 only. ~50-60x realtime warm.
+/// 2. **ONNX Runtime** (`local-stt-parakeet`) — the cross-platform
+///    baseline. CPU-only on Mac for now (CoreML EP failed dynamic
+///    MLProgram on this model — see STT-002). ~10x realtime warm.
+///
+/// `chunked_stt` and `transcribe.rs` call this single entry; they
+/// don't need to know which engine they got. Whichever bundle the
+/// user has on disk wins, with FluidAudio preferred when both are
+/// available.
+pub fn transcribe(pcm_16k: &[f32]) -> Result<String, TranscribeError> {
+    #[cfg(all(
+        feature = "local-stt-parakeet-fluid",
+        target_os = "macos",
+        target_arch = "aarch64"
+    ))]
+    {
+        if crate::parakeet_fluid::bundle_present() {
+            return crate::parakeet_fluid::transcribe(pcm_16k);
+        }
+    }
+    transcribe_ort(pcm_16k)
+}
+
+/// Mirror of `transcribe` for warmup.
+pub fn warmup() -> Result<(), TranscribeError> {
+    #[cfg(all(
+        feature = "local-stt-parakeet-fluid",
+        target_os = "macos",
+        target_arch = "aarch64"
+    ))]
+    {
+        if crate::parakeet_fluid::bundle_present() {
+            return crate::parakeet_fluid::warmup();
+        }
+    }
+    warmup_ort()
+}
+
 #[cfg(not(feature = "local-stt-parakeet"))]
-pub fn transcribe(_pcm_16k: &[f32]) -> Result<String, TranscribeError> {
+fn transcribe_ort(_pcm_16k: &[f32]) -> Result<String, TranscribeError> {
     Err(TranscribeError::LocalModel(
         "parakeet inference requires the `local-stt-parakeet` cargo feature".into(),
     ))
 }
 
 #[cfg(feature = "local-stt-parakeet")]
-pub use inference::{transcribe, warmup};
+fn transcribe_ort(pcm_16k: &[f32]) -> Result<String, TranscribeError> {
+    inference::transcribe(pcm_16k)
+}
 
-/// Stub when the feature is off — UIs can call this unconditionally
-/// without a `cfg` dance and silently get a no-op.
 #[cfg(not(feature = "local-stt-parakeet"))]
-pub fn warmup() -> Result<(), TranscribeError> {
+fn warmup_ort() -> Result<(), TranscribeError> {
     Ok(())
+}
+
+#[cfg(feature = "local-stt-parakeet")]
+fn warmup_ort() -> Result<(), TranscribeError> {
+    inference::warmup()
 }
 
 #[cfg(feature = "local-stt-parakeet")]
@@ -222,6 +269,11 @@ mod inference {
     }
 
     fn build_session(path: &std::path::Path) -> Result<Session, TranscribeError> {
+        // `mut` is needed only when an EP feature is on (CoreML / CUDA);
+        // pure CPU only chains `with_optimization_level().commit_from_file()`.
+        // Suppress unused_mut here so the simple-CPU build stays warning-free
+        // without splitting the function on cfg lines.
+        #[allow(unused_mut)]
         let mut builder = Session::builder()
             .map_err(|e| TranscribeError::LocalModel(format!("ort builder {:?}: {e}", path)))?;
 

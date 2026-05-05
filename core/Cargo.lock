@@ -809,6 +809,7 @@ dependencies = [
  "dagc",
  "dirs 5.0.1",
  "ed25519-dalek",
+ "fluidaudio-rs",
  "hound",
  "keyring",
  "libloading",
@@ -1035,6 +1036,14 @@ checksum = "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
+]
+
+[[package]]
+name = "fluidaudio-rs"
+version = "0.12.6"
+source = "git+https://github.com/FluidInference/fluidaudio-rs?tag=v0.12.6#d38f95f679f403b3fc5a00769a86e0c874a2c8dd"
+dependencies = [
+ "thiserror 1.0.69",
 ]
 
 [[package]]

@@ -70,6 +70,15 @@ name = "chunked_smoke"
 path = "src/bin/chunked_smoke.rs"
 required-features = ["local-stt-parakeet"]
 
+# Mac-only counterpart to parakeet_smoke that exercises the
+# FluidInference / Apple Neural Engine path. Same shape: one WAV in,
+# one transcript out, plus timings. Gated on the matching cargo
+# feature so non-Mac builds skip it cleanly.
+[[bin]]
+name = "parakeet_fluid_smoke"
+path = "src/bin/parakeet_fluid_smoke.rs"
+required-features = ["local-stt-parakeet-fluid"]
+
 [features]
 default = ["local-stt", "telemetry-sentry"]
 local-stt = ["dep:whisper-rs"]
@@ -84,6 +93,14 @@ local-stt-vulkan = ["local-stt", "whisper-rs/vulkan"]
 local-stt-parakeet      = ["dep:ort", "dep:ndarray"]
 local-stt-parakeet-cuda = ["local-stt-parakeet", "ort/cuda"]
 local-stt-parakeet-coreml = ["local-stt-parakeet", "ort/coreml"]
+# Parakeet via FluidInference's CoreML bundle, Apple-Silicon-only.
+# Wraps the `fluidaudio-rs` Swift bridge (build.rs invokes `swift build`
+# at compile time → requires Xcode CLT with Swift 5.10+). At runtime
+# the FluidAudio framework auto-downloads the ~3 GB CoreML bundle into
+# `~/.cache/fluidaudio/` on first `init_asr()`. RTF on M-series is
+# documented at 100-300x; intended as the Mac-only fast path while
+# Win/Linux stay on ort.
+local-stt-parakeet-fluid = ["dep:fluidaudio-rs"]
 local-llm = ["dep:llama-cpp-4"]
 local-llm-metal = ["local-llm", "llama-cpp-4/metal", "llama-cpp-4/dynamic-link"]
 local-llm-cuda = ["local-llm", "llama-cpp-4/cuda"]
@@ -187,3 +204,14 @@ serial_test = "3"
 proptest = "1"
 # Cross-platform binary parser for the ABI snapshot test (PE / ELF / Mach-O).
 object = { version = "0.36", default-features = false, features = ["read", "std"] }
+
+# fluidaudio-rs: Apple-Silicon-only Parakeet TDT v3 via CoreML on the
+# Apple Neural Engine. `build.rs` runs `swift build` at compile time
+# and statically links a Swift bridge → only buildable on macOS arm64
+# with a Swift 5.10+ toolchain. Target-scoped so cross-platform builds
+# (Win/Linux/Intel-Mac) never try to fetch the crate. Pinned to git
+# tag `v0.12.6` because crates.io only has 0.1.0 published (the repo
+# has been releasing tags without pushing to crates.io). Gated by the
+# `local-stt-parakeet-fluid` feature.
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+fluidaudio-rs = { git = "https://github.com/FluidInference/fluidaudio-rs", tag = "v0.12.6", optional = true }

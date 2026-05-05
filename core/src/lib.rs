@@ -30,6 +30,12 @@ pub mod local_stt;
 /// helpers are always available so the UI can render the "needs
 /// download" state without a feature-gate dance.
 pub mod parakeet;
+/// Apple-Silicon-only Parakeet via FluidInference's CoreML bundle on
+/// the Neural Engine. Inference behind `local-stt-parakeet-fluid`;
+/// `bundle_present` / `download_bundle` always available. The module
+/// itself compiles only on macOS arm64.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub mod parakeet_fluid;
 pub mod preprocess;
 pub mod provider;
 pub mod telemetry;

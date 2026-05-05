@@ -18,6 +18,60 @@ fn main() {
         println!("cargo:rustc-link-arg=-Wl,-multiply_defined,suppress");
     }
 
+    // FluidAudio Swift bridge needs the Swift compatibility libraries
+    // that ship in the Xcode toolchain at
+    // <Xcode>/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/macosx/.
+    // The fluidaudio-rs build.rs links `swiftCore` only and assumes
+    // Swift 5; on Swift 6.x toolchains the symbols
+    //   __swift_FORCE_LOAD_$_swiftCompatibilityConcurrency
+    //   __swift_FORCE_LOAD_$_swiftCompatibilityPacks
+    // get pulled in unresolved. We add the compat-static archives + the
+    // swift macosx lib search path here so the linker can resolve them.
+    // Apple-Silicon-only — same gate as the fluidaudio-rs target spec.
+    #[cfg(all(
+        feature = "local-stt-parakeet-fluid",
+        target_os = "macos",
+        target_arch = "aarch64"
+    ))]
+    {
+        let xcode = std::process::Command::new("xcode-select")
+            .arg("-p")
+            .output()
+            .expect("xcode-select -p");
+        let xcode_path = String::from_utf8_lossy(&xcode.stdout).trim().to_string();
+        let swift_lib = format!(
+            "{}/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/macosx",
+            xcode_path
+        );
+        println!("cargo:rustc-link-search=native={}", swift_lib);
+        // Order matters: Concurrency / Packs reference symbols in 5.0 / 5.1 / 5.6.
+        for lib in [
+            "swiftCompatibility50",
+            "swiftCompatibility51",
+            "swiftCompatibility56",
+            "swiftCompatibilityConcurrency",
+            "swiftCompatibilityPacks",
+            "swiftCompatibilityDynamicReplacements",
+        ] {
+            println!("cargo:rustc-link-lib=static={}", lib);
+        }
+
+        // Runtime: dyld must find libswift_Concurrency.dylib + friends.
+        // Stock macOS 14+ ships them in /usr/lib/swift/, but this dev box
+        // (macOS 26 preview) has a stripped /usr/lib/swift/ — the back-
+        // deployed runtimes only live under Xcode's swift-5.5/macosx/.
+        // We register both as rpaths so binaries work both on this dev
+        // host and on any normal end-user macOS Sonoma+. The shipping
+        // .app gets a Frameworks-relative rpath via Xcode build phases;
+        // CLI binaries (smoke / bench) rely on these absolute paths.
+        let swift_back_deploy = format!(
+            "{}/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.5/macosx",
+            xcode_path
+        );
+        println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
+        println!("cargo:rustc-link-arg=-Wl,-rpath,{}", swift_back_deploy);
+    }
+
     // Telemetry secrets — read from env at compile time, embed via env!().
     // Missing values become empty strings; the runtime client treats an
     // empty key as "telemetry disabled" and stays silent. This keeps
