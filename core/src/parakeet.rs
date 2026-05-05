@@ -44,10 +44,13 @@ pub const VOCAB_SIZE: usize = 8193;
 pub const NUM_DURATIONS: usize = 5;
 pub const BLANK_IDX: i64 = 8192;
 pub const MAX_TOKENS_PER_STEP: usize = 10;
+#[cfg(feature = "local-stt-parakeet")]
 const HIDDEN: usize = 640;
 
 pub fn bundle_present() -> bool {
-    let Some(dir) = bundle_dir() else { return false };
+    let Some(dir) = bundle_dir() else {
+        return false;
+    };
     let required = [
         FILE_MEL,
         FILE_ENCODER,
@@ -62,10 +65,9 @@ pub fn bundle_present() -> bool {
     })
 }
 
-pub fn download_bundle(
-    mut progress: impl FnMut(u64, u64),
-) -> Result<(), TranscribeError> {
-    let dir = bundle_dir().ok_or_else(|| TranscribeError::LocalModel("config dir unknown".into()))?;
+pub fn download_bundle(mut progress: impl FnMut(u64, u64)) -> Result<(), TranscribeError> {
+    let dir =
+        bundle_dir().ok_or_else(|| TranscribeError::LocalModel("config dir unknown".into()))?;
     std::fs::create_dir_all(&dir)
         .map_err(|e| TranscribeError::LocalModel(format!("create {:?}: {}", dir, e)))?;
 
@@ -303,7 +305,12 @@ mod inference {
         };
 
         // ── 3. Greedy TDT decode loop ─────────────────────────────────
+        // LSTM state shape is [num_layers=2, batch=1, hidden=HIDDEN] —
+        // the `1` is the batch dim, kept in the literal for parity with
+        // the model signature. Allow identity_op for that reason.
+        #[allow(clippy::identity_op)]
         let mut state1: Vec<f32> = vec![0.0; 2 * 1 * HIDDEN];
+        #[allow(clippy::identity_op)]
         let mut state2: Vec<f32> = vec![0.0; 2 * 1 * HIDDEN];
         let mut tokens: Vec<i64> = Vec::new();
         let mut frame_buf = vec![0f32; 1024];

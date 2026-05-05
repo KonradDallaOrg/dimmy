@@ -2037,6 +2037,88 @@ pub unsafe extern "C" fn dimmy_llm_model_exists(filename_ptr: *const c_char) -> 
     }
 }
 
+// ── Parakeet TDT v3 FP32 (local STT, alternative to whisper.cpp) ────
+//
+// Three exports: presence check, blocking download with progress
+// events, and direct PCM → text. Mirrors the whisper.cpp shape so the
+// UI can treat them as parallel local backends. All gated behind the
+// `local-stt-parakeet` cargo feature; without it, transcribe returns
+// a clear error and the others return false / no-op.
+
+/// Returns 1 if the Parakeet model bundle is on disk and complete,
+/// 0 otherwise. Used by Settings to decide whether to show a download
+/// CTA or let the user pick Parakeet as the active local backend.
+#[no_mangle]
+pub extern "C" fn dimmy_parakeet_bundle_present() -> c_int {
+    if crate::parakeet::bundle_present() {
+        1
+    } else {
+        0
+    }
+}
+
+/// Download the Parakeet TDT v3 FP32 bundle (~2.5 GB) into the
+/// dimmy config dir. BLOCKING — call from a background thread.
+/// Emits `parakeet_bundle_download_progress` events as
+/// `{"downloaded":N,"total":N}`. Returns 0 on success, -1 on error;
+/// on -1 also emits an `error` event with a short message.
+#[no_mangle]
+pub extern "C" fn dimmy_parakeet_download_bundle() -> c_int {
+    let result = crate::parakeet::download_bundle(|downloaded, total| {
+        let payload = format!(r#"{{"downloaded":{},"total":{}}}"#, downloaded, total);
+        emit_event("parakeet_bundle_download_progress", &payload);
+    });
+    match result {
+        Ok(()) => 0,
+        Err(e) => {
+            let msg: String = format!("{}", e).chars().take(200).collect();
+            emit_event("error", &format!(r#"{{"message":"{}"}}"#, msg));
+            -1
+        }
+    }
+}
+
+/// Transcribe a 16 kHz mono f32 PCM buffer with Parakeet. Writes the
+/// UTF-8 result into `buf` (null-terminated, truncated if buf_len is
+/// too small). Returns the number of bytes written (excluding the
+/// terminator), or -1 on error. The model is loaded lazily on the
+/// first call and stays cached for the process lifetime.
+///
+/// # Safety
+/// `pcm_ptr` must point to `pcm_len` valid `f32` samples (or be null
+/// when pcm_len == 0). `buf` must be writable for `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_parakeet_transcribe(
+    pcm_ptr: *const c_float,
+    pcm_len: c_int,
+    buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    if pcm_len < 0 {
+        return -1;
+    }
+    let pcm: &[f32] = if pcm_len == 0 {
+        &[]
+    } else {
+        if pcm_ptr.is_null() {
+            return -1;
+        }
+        std::slice::from_raw_parts(pcm_ptr, pcm_len as usize)
+    };
+
+    match crate::parakeet::transcribe(pcm) {
+        Ok(text) => write_to_buf(&text, buf, buf_len),
+        Err(e) => {
+            let msg: String = format!("{}", e).chars().take(200).collect();
+            emit_event("error", &format!(r#"{{"message":"{}"}}"#, msg));
+            -1
+        }
+    }
+}
+
 // ── History ─────────────────────────────────────────────────────────
 
 /// Helper: serialize a slice of Transcripts to a JSON array string.
@@ -2898,7 +2980,11 @@ pub unsafe extern "C" fn dimmy_license_checkout_url(
         let s = unsafe { CStr::from_ptr(email_ptr) }
             .to_string_lossy()
             .into_owned();
-        if s.is_empty() { None } else { Some(s) }
+        if s.is_empty() {
+            None
+        } else {
+            Some(s)
+        }
     };
     let token = license::load_license_file().ok().flatten();
     let server = licensing_server_url();
