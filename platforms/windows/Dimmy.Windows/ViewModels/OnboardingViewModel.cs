@@ -26,6 +26,12 @@ public partial class OnboardingViewModel : ObservableObject
     [ObservableProperty] private string _downloadStatusText = "Preparing...";
     [ObservableProperty] private string _downloadBytesText = "";
 
+    /// Sentinel tag of the currently selected local model in the Local
+    /// card ComboBox. For whisper sizes this is the whisper model
+    /// filename (e.g. "ggml-base-q8_0.bin"). For Parakeet it is the
+    /// magic value "parakeet:fp32". Persisted to config on Next.
+    [ObservableProperty] private string _selectedLocalModelTag = "";
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanAdvanceFromChoiceStep))]
     [NotifyPropertyChangedFor(nameof(ChoiceContinueLabel))]

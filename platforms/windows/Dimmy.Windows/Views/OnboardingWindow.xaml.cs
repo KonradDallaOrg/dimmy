@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Dimmy.Windows.Helpers;
 using Dimmy.Windows.Interop;
@@ -18,9 +19,15 @@ public sealed partial class OnboardingWindow : Window
 {
     public OnboardingViewModel ViewModel { get; } = new();
 
-    private readonly ModelPrefetchService _prefetch = new();
+    /// Sentinel tag for the Parakeet entry in OnboardingLocalModelComboBox.
+    /// Distinguished from whisper filenames by prefix.
+    private const string ParakeetTag = "parakeet:fp32";
+
+    private ModelPrefetchService _prefetch = new();
     private readonly DispatcherQueue _dq = DispatcherQueue.GetForCurrentThread();
     private CancellationTokenSource? _keyValidateCts;
+    private CancellationTokenSource? _parakeetDownloadCts;
+    private bool _onboardingLoaded;
 
     public OnboardingWindow()
     {
@@ -39,8 +46,170 @@ public sealed partial class OnboardingWindow : Window
         _prefetch.StateChanged += Prefetch_StateChanged;
         Closed += OnboardingWindow_Closed;
 
+        // Subscribe to Parakeet download progress (FFI-routed), so the
+        // same DownloadPercent / status binding the whisper prefetch
+        // updates is also driven by the Rust core when the user picks
+        // Parakeet from the ComboBox.
+        if (Application.Current is App app)
+        {
+            app.AppViewModel.ParakeetDownloadProgress += OnParakeetDownloadProgress;
+        }
+
         DetectPriorState();
+        PopulateOnboardingModelCombo();
         _prefetch.StartBasePrefetch();
+        _onboardingLoaded = true;
+    }
+
+    private void PopulateOnboardingModelCombo()
+    {
+        try
+        {
+            var json = DimmyNative.ListLocalModels();
+            if (string.IsNullOrEmpty(json)) return;
+
+            using var doc = JsonDocument.Parse(json);
+            OnboardingLocalModelComboBox.Items.Clear();
+            int defaultIdx = 0;
+            int idx = 0;
+            foreach (var el in doc.RootElement.EnumerateArray())
+            {
+                var name = el.GetProperty("name").GetString() ?? "";
+                var filename = el.GetProperty("filename").GetString() ?? "";
+                var sizeMb = el.GetProperty("size_mb").GetInt32();
+                var downloaded = el.GetProperty("downloaded").GetBoolean();
+                var status = downloaded ? "Ready" : $"{sizeMb}MB";
+                OnboardingLocalModelComboBox.Items.Add(new ComboBoxItem
+                {
+                    Content = $"{name} ({status})",
+                    Tag = filename,
+                });
+                if (filename == ModelPaths.BaseModelFilename)
+                    defaultIdx = idx;
+                idx++;
+            }
+
+            bool parakeetReady = false;
+            try { parakeetReady = DimmyNative.dimmy_parakeet_bundle_present() == 1; }
+            catch { }
+            OnboardingLocalModelComboBox.Items.Add(new ComboBoxItem
+            {
+                Content = $"Parakeet TDT v3 FP32 ({(parakeetReady ? "Ready" : "2.5GB")})",
+                Tag = ParakeetTag,
+            });
+
+            OnboardingLocalModelComboBox.SelectedIndex = defaultIdx;
+            ViewModel.SelectedLocalModelTag = ModelPaths.BaseModelFilename;
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[Onboarding] PopulateOnboardingModelCombo: {ex.Message}");
+        }
+    }
+
+    private void OnboardingLocalModel_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_onboardingLoaded) return;
+        if (OnboardingLocalModelComboBox.SelectedItem is not ComboBoxItem item) return;
+        if (item.Tag is not string tag || tag == ViewModel.SelectedLocalModelTag) return;
+
+        ViewModel.SelectedLocalModelTag = tag;
+
+        // Tear down whatever is in flight: a whisper download via the
+        // prefetch service, or a Parakeet FFI download.
+        try { _prefetch.StateChanged -= Prefetch_StateChanged; } catch { }
+        try { _prefetch.Dispose(); } catch { }
+        _parakeetDownloadCts?.Cancel();
+        _parakeetDownloadCts = null;
+
+        // Reset the visible progress so the user immediately sees the
+        // new download starting fresh.
+        ViewModel.DownloadPercent = 0;
+        ViewModel.DownloadBytesText = "";
+        ViewModel.IsLocalReady = false;
+        ViewModel.IsLocalFailed = false;
+
+        if (tag == ParakeetTag)
+        {
+            ViewModel.DownloadStatusText = "Starting Parakeet download...";
+            StartParakeetDownload();
+        }
+        else
+        {
+            ViewModel.DownloadStatusText = "Starting download...";
+            _prefetch = new ModelPrefetchService();
+            _prefetch.StateChanged += Prefetch_StateChanged;
+            long expected = WhisperExpectedSize(tag);
+            _prefetch.StartFor(tag, expected);
+        }
+    }
+
+    /// Look up the expected size of a whisper model file from the Rust
+    /// core's manifest (dimmy_list_local_models JSON). Falls back to a
+    /// generic estimate when not found, which only affects the initial
+    /// progress bar before Content-Length comes back.
+    private static long WhisperExpectedSize(string filename)
+    {
+        try
+        {
+            var json = DimmyNative.ListLocalModels();
+            if (string.IsNullOrEmpty(json)) return 200L * 1024 * 1024;
+            using var doc = JsonDocument.Parse(json);
+            foreach (var el in doc.RootElement.EnumerateArray())
+            {
+                var fn = el.GetProperty("filename").GetString();
+                if (fn == filename)
+                    return (long)el.GetProperty("size_mb").GetInt32() * 1024L * 1024L;
+            }
+        }
+        catch { }
+        return 200L * 1024 * 1024;
+    }
+
+    private void StartParakeetDownload()
+    {
+        var cts = new CancellationTokenSource();
+        _parakeetDownloadCts = cts;
+        Task.Run(() =>
+        {
+            int rc = DimmyNative.dimmy_parakeet_download_bundle();
+            _dq.TryEnqueue(() =>
+            {
+                if (cts.IsCancellationRequested) return;
+                if (rc == 0)
+                {
+                    ViewModel.IsLocalReady = true;
+                    ViewModel.IsLocalFailed = false;
+                    ViewModel.DownloadPercent = 100;
+                    ViewModel.DownloadStatusText = "Ready";
+                }
+                else
+                {
+                    ViewModel.IsLocalFailed = true;
+                    ViewModel.IsLocalReady = false;
+                    ViewModel.DownloadStatusText = "Download failed";
+                    ViewModel.LocalErrorText = "Parakeet bundle download failed";
+                }
+            });
+        });
+    }
+
+    private void OnParakeetDownloadProgress(long downloaded, long total)
+    {
+        // Only update the onboarding UI while the user has Parakeet
+        // selected — otherwise a stale event from a cancelled download
+        // would clobber the whisper prefetch progress.
+        if (ViewModel.SelectedLocalModelTag != ParakeetTag) return;
+        if (total <= 0)
+        {
+            ViewModel.DownloadStatusText = "Downloading";
+            ViewModel.DownloadBytesText = $"{downloaded / 1024.0 / 1024.0:0} MB";
+            return;
+        }
+        ViewModel.DownloadPercent = Math.Min(100, downloaded * 100.0 / total);
+        ViewModel.DownloadStatusText = "Downloading";
+        ViewModel.DownloadBytesText = $"{downloaded / 1024.0 / 1024.0:0} / {total / 1024.0 / 1024.0:0} MB";
+        ViewModel.IsLocalReady = false;
     }
 
     private void DetectPriorState()
@@ -191,26 +360,35 @@ public sealed partial class OnboardingWindow : Window
     {
         try
         {
-            string json = ViewModel.Choice switch
+            string json;
+            switch (ViewModel.Choice)
             {
-                ModelChoice.Local => JsonSerializer.Serialize(new
-                {
-                    stt_mode = "local",
-                    local_model = ModelPaths.BaseModelFilename,
-                }),
-                ModelChoice.Cloud => JsonSerializer.Serialize(new
-                {
-                    stt_mode = "cloud",
-                    api_key = ViewModel.GroqApiKey.Trim(),
-                }),
-                _ => "",
-            };
-            if (!string.IsNullOrEmpty(json))
-            {
-                DimmyNative.dimmy_set_config_json(json);
-                App.Instance?.ReloadConfig();
-                App.MarkOnboardingComplete();
+                case ModelChoice.Local:
+                    bool isParakeet = ViewModel.SelectedLocalModelTag == ParakeetTag;
+                    json = JsonSerializer.Serialize(new
+                    {
+                        stt_mode = "local",
+                        local_model = isParakeet
+                            ? ModelPaths.BaseModelFilename
+                            : (string.IsNullOrEmpty(ViewModel.SelectedLocalModelTag)
+                                ? ModelPaths.BaseModelFilename
+                                : ViewModel.SelectedLocalModelTag),
+                        local_stt_backend = isParakeet ? "parakeet" : "whisper",
+                    });
+                    break;
+                case ModelChoice.Cloud:
+                    json = JsonSerializer.Serialize(new
+                    {
+                        stt_mode = "cloud",
+                        api_key = ViewModel.GroqApiKey.Trim(),
+                    });
+                    break;
+                default:
+                    return;
             }
+            DimmyNative.dimmy_set_config_json(json);
+            App.Instance?.ReloadConfig();
+            App.MarkOnboardingComplete();
         }
         catch (Exception ex)
         {
@@ -242,7 +420,12 @@ public sealed partial class OnboardingWindow : Window
     private void OnboardingWindow_Closed(object sender, WindowEventArgs args)
     {
         _keyValidateCts?.Cancel();
-        _prefetch.StateChanged -= Prefetch_StateChanged;
-        _prefetch.Dispose();
+        _parakeetDownloadCts?.Cancel();
+        try { _prefetch.StateChanged -= Prefetch_StateChanged; } catch { }
+        try { _prefetch.Dispose(); } catch { }
+        if (Application.Current is App app)
+        {
+            app.AppViewModel.ParakeetDownloadProgress -= OnParakeetDownloadProgress;
+        }
     }
 }

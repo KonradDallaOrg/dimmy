@@ -64,12 +64,21 @@
                                   HorizontalAlignment="Left"
                                   Foreground="{ThemeResource AccentFillColorDefaultBrush}" />
                         <TextBlock Text="Local" FontSize="18" FontWeight="SemiBold" />
-                        <TextBlock Text="Private · offline · 78 MB"
+                        <TextBlock Text="Private · offline · runs on your machine"
                                    FontSize="12"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                         <TextBlock Text="Your voice never leaves your device"
                                    FontSize="11" TextWrapping="Wrap"
                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                        <!-- Model picker. Same shape as Settings → Local model.
+                             Default selection is the whisper base file (smallest,
+                             fastest first run). Picking a different size or
+                             Parakeet TDT v3 cancels the current download and
+                             starts the new one. -->
+                        <ComboBox x:Name="OnboardingLocalModelComboBox"
+                                  HorizontalAlignment="Stretch"
+                                  Margin="0,8,0,0"
+                                  SelectionChanged="OnboardingLocalModel_SelectionChanged" />
 
                         <StackPanel Spacing="4" Margin="0,8,0,0"
                                     Visibility="{Binding IsLocalReady, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Invert}">
