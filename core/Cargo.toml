@@ -44,6 +44,22 @@ name = "license_cli"
 path = "src/bin/license_cli.rs"
 required-features = ["license-cli"]
 
+# One-shot Parakeet smoke test: loads a WAV, calls
+# `dimmy::parakeet::transcribe`, prints the text + timings.
+# Requires ORT_DYLIB_PATH pointing at onnxruntime.dll/.dylib/.so.
+[[bin]]
+name = "parakeet_smoke"
+path = "src/bin/parakeet_smoke.rs"
+required-features = ["local-stt-parakeet"]
+
+# Warm-path benchmark — runs short/medium/long fixtures + reports
+# cold vs warm latency. Used to validate the Rust port of the TDT
+# decoder against the Python reference's numbers.
+[[bin]]
+name = "parakeet_bench"
+path = "src/bin/parakeet_bench.rs"
+required-features = ["local-stt-parakeet"]
+
 [features]
 default = ["local-stt", "telemetry-sentry"]
 local-stt = ["dep:whisper-rs"]
@@ -102,7 +118,7 @@ whisper-rs = { version = "0.16", optional = true }
 # extractor as 3 separate .onnx files). Native execution, no Python.
 # Build pulls a prebuilt onnxruntime dll/dylib for the host (~30MB);
 # CUDA / CoreML are opt-in via cargo features.
-ort = { version = "=2.0.0-rc.10", optional = true, default-features = false, features = ["std", "load-dynamic", "ndarray"] }
+ort = { version = "=2.0.0-rc.10", optional = true, features = ["ndarray", "load-dynamic"] }
 ndarray = { version = "0.16", optional = true }
 llama-cpp-4 = { git = "https://github.com/KonradDallaOrg/llama-cpp-rs", optional = true, default-features = false }
 rusqlite = { version = "0.31", features = ["bundled"] }

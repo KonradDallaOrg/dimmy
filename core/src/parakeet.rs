@@ -1,69 +1,32 @@
-//! Parakeet TDT v3 FP32 local STT via ONNX Runtime.
+//! Parakeet TDT v3 FP32 local STT — pure Rust via ONNX Runtime.
 //!
-//! ## Status (2026-05-05)
+//! Bundle layout (downloaded from `istupakov/parakeet-tdt-0.6b-v3-onnx`,
+//! ~2.5 GB, kept under `<config-dir>/parakeet-fp32/`):
 //!
-//! - [x] Bundle path resolution + presence check
-//! - [x] Streaming download from HuggingFace with progress callback
-//! - [x] `local-stt-parakeet` cargo feature + ort/ndarray deps
-//! - [ ] Native ort inference (encoder + TDT greedy decoder)
-//! - [ ] FFI exposure (`dimmy_parakeet_*`)
-//! - [ ] UI integration (Settings → Voice input → Local backend = Parakeet)
-//!
-//! Scaffold work is complete + compiles. The inference body is left as
-//! `Err(LocalModel("not yet implemented in Rust …"))` with a hand-written
-//! design note below: porting the greedy TDT loop from
-//! `onnx_asr.models.nemo.NemoConformerTdt` (Python) to `ort` 2.0.0-rc.10
-//! is the next step. See `docs/dev/parakeet-local-stt.md` for the
-//! architecture + porting plan + the live time-travel POC numbers from
-//! the WSL Python reference (337-547 ms warm on CPU, 5 s chunks, 80 %
-//! real-time margin per `tests/stt_benchmark/test_chunked.py`).
-//!
-//! ## Bundle layout (downloaded to `<config-dir>/parakeet-fp32/`)
-//!
-//! - `nemo128.onnx`              waveform → 128-bin mel features (~140 KB)
+//! - `nemo128.onnx`              waveform → 128-bin mel features
 //! - `encoder-model.onnx`        + `.data` external weights (~2.4 GB)
-//! - `decoder_joint-model.onnx`  TDT prediction net + joint (~73 MB)
-//! - `vocab.txt`                 8193 tokens (BPE-style, `▁` = word start)
+//! - `decoder_joint-model.onnx`  TDT prediction net + joint
+//! - `vocab.txt`                 8193 tokens (BPE-style with `▁` word marker)
 //!
-//! ## Pipeline (target)
+//! Pipeline (ported 1:1 from onnx_asr.models.nemo.NemoConformerTdt +
+//! asr._AsrWithTransducerDecoding._decoding):
 //!
 //! ```text
 //!  16 kHz f32 PCM (mono)
 //!         │
-//!  nemo128.onnx  ──▶  features[1, 128, T]      (T = frames at 10ms hop)
+//!  nemo128.onnx  ──▶  features[1, 128, T_mel]
 //!         │
-//!  encoder-model.onnx ──▶ encoded[1, 1024, T'] (T' = T / 8 sub-sampling)
+//!  encoder-model.onnx ──▶ encoded[1, 1024, T_enc] + lens
 //!         │
-//!  ┌── greedy TDT loop ──┐
-//!  │  decoder LSTM state init zeros [2, 1, 640] x2
-//!  │  prev_token = blank_idx (8192) at t=0
-//!  │  while t < T':
-//!  │    (logits[V+5], states') = decoder_joint(enc[t], prev_token, state)
-//!  │    token = argmax(logits[..V])
-//!  │    step  = argmax(logits[V..V+5])     // 0..=4 frames to skip (TDT-v3)
-//!  │    if token != blank: emit + commit state
-//!  │    if step > 0: t += step             // jump
-//!  │    elif token == blank || emitted == 10: t += 1
-//!  └─────────────────────┘
+//!  greedy TDT (LSTM state [2,1,640] x2; per frame argmax token + dur)
 //!         │
-//!  vocab lookup → text (concat with `▁` → space)
+//!  vocab → text (`▁foo` → ` foo`, `<…>` skipped)
 //! ```
-//!
-//! ## GPU
-//!
-//! `local-stt-parakeet-cuda` (Win) and `local-stt-parakeet-coreml` (Mac)
-//! register the matching ort execution provider. Falls back to CPU when
-//! the EP fails to initialise.
 
 use std::path::PathBuf;
 
 use crate::error::TranscribeError;
 
-// ── Bundle paths ─────────────────────────────────────────────────
-
-/// Where the Parakeet bundle files live on this machine.
-/// `~/.config/dimmy/parakeet-fp32/` on Linux, `%APPDATA%\dimmy\…`
-/// on Windows, `~/Library/Application Support/dimmy/…` on macOS.
 pub fn bundle_dir() -> Option<PathBuf> {
     crate::config_dir_path().map(|p| p.join("parakeet-fp32"))
 }
@@ -76,29 +39,13 @@ pub const FILE_VOCAB: &str = "vocab.txt";
 
 const HF_BASE: &str = "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main";
 
-/// Approximate bundle size in MB. Used by the FFI / UI to render a
-/// download progress bar that doesn't surprise.
 pub const BUNDLE_SIZE_MB: u32 = 2500;
-
-/// Vocabulary size (real tokens, excluding the blank). Matches the
-/// `decoder_joint-model.onnx` output layout: first 8193 logits are
-/// vocab + blank, last 5 are TDT duration buckets.
 pub const VOCAB_SIZE: usize = 8193;
-
-/// TDT v3 supports skip durations 0..=4 (5 buckets). Encoded as the
-/// argmax over `logits[VOCAB_SIZE..]`.
 pub const NUM_DURATIONS: usize = 5;
-
-/// Token id used for "blank" in the TDT vocabulary. Last entry in
-/// `vocab.txt`.
 pub const BLANK_IDX: i64 = 8192;
-
-/// Maximum tokens emitted at the same encoder frame before forcing
-/// `t += 1`. Mirrors NemoConformerRnnt's default `max_tokens_per_step`.
 pub const MAX_TOKENS_PER_STEP: usize = 10;
+const HIDDEN: usize = 640;
 
-/// Cheap presence check for the FFI / UI to gate "Download Parakeet"
-/// vs "Use Parakeet". Verifies all 5 required files are non-empty.
 pub fn bundle_present() -> bool {
     let Some(dir) = bundle_dir() else { return false };
     let required = [
@@ -115,10 +62,6 @@ pub fn bundle_present() -> bool {
     })
 }
 
-/// Streaming download of the FP32 bundle from HuggingFace. Reports
-/// (bytes_done, bytes_total) via `progress`. Blocking — call from a
-/// background task. Atomic per-file: each file is written to `.part`
-/// then renamed.
 pub fn download_bundle(
     mut progress: impl FnMut(u64, u64),
 ) -> Result<(), TranscribeError> {
@@ -139,8 +82,6 @@ pub fn download_bundle(
         .build()
         .map_err(|e| TranscribeError::LocalModel(format!("http client: {}", e)))?;
 
-    // First pass: HEAD missing files to compute the grand total so the
-    // progress bar fills smoothly across all 5 files.
     let mut grand_total: u64 = 0;
     let mut grand_done: u64 = 0;
     for name in files {
@@ -167,7 +108,6 @@ pub fn download_bundle(
     }
     progress(grand_done, grand_total);
 
-    // Second pass: stream each missing file to a `.part` then rename.
     for name in files {
         let dest = dir.join(name);
         if let Ok(meta) = std::fs::metadata(&dest) {
@@ -208,12 +148,6 @@ pub fn download_bundle(
 }
 
 // ── Inference ────────────────────────────────────────────────────
-//
-// Stub. Will be filled in during the next session — full design + the
-// onnx_asr Python reference loop are documented at the top of this
-// file and in docs/dev/parakeet-local-stt.md. The Cargo dependencies
-// (`ort`, `ndarray`) are wired so a follow-up commit can write the
-// bodies without touching the dependency tree.
 
 #[cfg(not(feature = "local-stt-parakeet"))]
 pub fn transcribe(_pcm_16k: &[f32]) -> Result<String, TranscribeError> {
@@ -223,29 +157,264 @@ pub fn transcribe(_pcm_16k: &[f32]) -> Result<String, TranscribeError> {
 }
 
 #[cfg(feature = "local-stt-parakeet")]
-pub fn transcribe(pcm_16k: &[f32]) -> Result<String, TranscribeError> {
-    assert!(
-        pcm_16k.iter().all(|s| s.is_finite()),
-        "parakeet::transcribe: pcm_16k must be all-finite"
-    );
-    if pcm_16k.is_empty() {
-        return Ok(String::new());
+pub use inference::transcribe;
+
+#[cfg(feature = "local-stt-parakeet")]
+mod inference {
+    use super::*;
+    use ort::session::{builder::GraphOptimizationLevel, Session};
+    use ort::value::Tensor;
+    use std::sync::OnceLock;
+
+    static MODEL: OnceLock<std::sync::Mutex<Option<Inner>>> = OnceLock::new();
+
+    struct Inner {
+        mel: Session,
+        encoder: Session,
+        decoder_joint: Session,
+        vocab: Vec<String>,
     }
-    if !bundle_present() {
-        return Err(TranscribeError::LocalModel(
-            "parakeet bundle not downloaded — call parakeet::download_bundle() first".into(),
-        ));
+
+    fn lock() -> &'static std::sync::Mutex<Option<Inner>> {
+        MODEL.get_or_init(|| std::sync::Mutex::new(None))
     }
-    Err(TranscribeError::LocalModel(
-        "parakeet greedy TDT decoder pending native impl — see \
-         docs/dev/parakeet-local-stt.md for the porting plan from \
-         the onnx_asr Python reference"
-            .into(),
-    ))
+
+    fn build_session(path: &std::path::Path) -> Result<Session, TranscribeError> {
+        Session::builder()
+            .map_err(|e| TranscribeError::LocalModel(format!("ort builder {:?}: {e}", path)))?
+            .with_optimization_level(GraphOptimizationLevel::Level3)
+            .map_err(|e| TranscribeError::LocalModel(format!("ort opt level: {e}")))?
+            .commit_from_file(path)
+            .map_err(|e| TranscribeError::LocalModel(format!("ort load {:?}: {e}", path)))
+    }
+
+    fn load(dir: &std::path::Path) -> Result<Inner, TranscribeError> {
+        let mel = build_session(&dir.join(FILE_MEL))?;
+        let encoder = build_session(&dir.join(FILE_ENCODER))?;
+        let decoder_joint = build_session(&dir.join(FILE_DECODER_JOINT))?;
+
+        let vocab_text = std::fs::read_to_string(dir.join(FILE_VOCAB))
+            .map_err(|e| TranscribeError::LocalModel(format!("read vocab: {e}")))?;
+        let mut vocab: Vec<String> = Vec::with_capacity(VOCAB_SIZE + 16);
+        for line in vocab_text.lines() {
+            let token = line.split_whitespace().next().unwrap_or("").to_string();
+            vocab.push(token);
+        }
+
+        Ok(Inner {
+            mel,
+            encoder,
+            decoder_joint,
+            vocab,
+        })
+    }
+
+    pub fn transcribe(pcm_16k: &[f32]) -> Result<String, TranscribeError> {
+        assert!(
+            pcm_16k.iter().all(|s| s.is_finite()),
+            "parakeet::transcribe: pcm_16k must be all-finite"
+        );
+        if pcm_16k.is_empty() {
+            return Ok(String::new());
+        }
+        if !bundle_present() {
+            return Err(TranscribeError::LocalModel(
+                "parakeet bundle not downloaded — call parakeet::download_bundle() first".into(),
+            ));
+        }
+        let dir = bundle_dir().ok_or_else(|| TranscribeError::LocalModel("bundle dir".into()))?;
+
+        let mtx = lock();
+        let mut g = mtx
+            .lock()
+            .map_err(|e| TranscribeError::LocalModel(format!("mutex: {e}")))?;
+        if g.is_none() {
+            *g = Some(load(&dir)?);
+        }
+        let inner = g.as_mut().expect("just initialised");
+
+        // ── 1. Mel: waveform → features [1, 128, T_mel] ──────────────
+        let n = pcm_16k.len();
+        let wave_t = Tensor::from_array((vec![1i64, n as i64], pcm_16k.to_vec()))
+            .map_err(|e| TranscribeError::LocalModel(format!("mk wave: {e}")))?;
+        let wlen_t = Tensor::from_array((vec![1i64], vec![n as i64]))
+            .map_err(|e| TranscribeError::LocalModel(format!("mk wlen: {e}")))?;
+
+        let mel_outs = inner
+            .mel
+            .run(ort::inputs! {
+                "waveforms" => wave_t,
+                "waveforms_lens" => wlen_t,
+            })
+            .map_err(|e| TranscribeError::LocalModel(format!("mel run: {e}")))?;
+
+        let (feat_shape, feat_data) = mel_outs["features"]
+            .try_extract_tensor::<f32>()
+            .map_err(|e| TranscribeError::LocalModel(format!("mel extract: {e}")))?;
+        let feat_dims: Vec<i64> = feat_shape.iter().copied().collect();
+        if feat_dims.len() != 3 || feat_dims[1] != 128 {
+            return Err(TranscribeError::LocalModel(format!(
+                "unexpected mel features shape {:?}",
+                feat_dims
+            )));
+        }
+        let t_mel = feat_dims[2] as usize;
+        let feat_vec = feat_data.to_vec();
+
+        // ── 2. Encoder: features → outputs [1, 1024, T_enc] + lens ──
+        let feat_t = Tensor::from_array((vec![1i64, 128, t_mel as i64], feat_vec))
+            .map_err(|e| TranscribeError::LocalModel(format!("mk feat: {e}")))?;
+        let flen_t = Tensor::from_array((vec![1i64], vec![t_mel as i64]))
+            .map_err(|e| TranscribeError::LocalModel(format!("mk flen: {e}")))?;
+
+        let enc_outs = inner
+            .encoder
+            .run(ort::inputs! {
+                "audio_signal" => feat_t,
+                "length" => flen_t,
+            })
+            .map_err(|e| TranscribeError::LocalModel(format!("encoder run: {e}")))?;
+
+        let (enc_shape, enc_data) = enc_outs["outputs"]
+            .try_extract_tensor::<f32>()
+            .map_err(|e| TranscribeError::LocalModel(format!("enc extract: {e}")))?;
+        let enc_dims: Vec<i64> = enc_shape.iter().copied().collect();
+        if enc_dims.len() != 3 || enc_dims[1] != 1024 {
+            return Err(TranscribeError::LocalModel(format!(
+                "unexpected encoder shape {:?}",
+                enc_dims
+            )));
+        }
+        let t_enc = enc_dims[2] as usize;
+        let enc_data_owned: Vec<f32> = enc_data.to_vec();
+
+        let (_enc_len_shape, enc_len_data) = enc_outs["encoded_lengths"]
+            .try_extract_tensor::<i64>()
+            .map_err(|e| TranscribeError::LocalModel(format!("enclen extract: {e}")))?;
+        let enc_len_owned: Vec<i64> = enc_len_data.to_vec();
+        let valid_t_enc = (enc_len_owned[0] as usize).min(t_enc);
+
+        // [1, 1024, T_enc] layout, channel-major: index = c * T_enc + t
+        let enc_step = |t: usize, dst: &mut [f32]| {
+            assert_eq!(dst.len(), 1024);
+            for c in 0..1024 {
+                dst[c] = enc_data_owned[c * t_enc + t];
+            }
+        };
+
+        // ── 3. Greedy TDT decode loop ─────────────────────────────────
+        let mut state1: Vec<f32> = vec![0.0; 2 * 1 * HIDDEN];
+        let mut state2: Vec<f32> = vec![0.0; 2 * 1 * HIDDEN];
+        let mut tokens: Vec<i64> = Vec::new();
+        let mut frame_buf = vec![0f32; 1024];
+        let mut t: usize = 0;
+        let mut emitted: usize = 0;
+
+        while t < valid_t_enc {
+            enc_step(t, &mut frame_buf);
+            let prev_tok = *tokens.last().unwrap_or(&BLANK_IDX);
+
+            let enc_t = Tensor::from_array((vec![1i64, 1024, 1], frame_buf.clone()))
+                .map_err(|e| TranscribeError::LocalModel(format!("mk enc[t]: {e}")))?;
+            // `targets` + `target_length` declared as INT32 in the model
+            // signature — ort would otherwise reject the i64 ours.
+            let tgt_t = Tensor::from_array((vec![1i64, 1], vec![prev_tok as i32]))
+                .map_err(|e| TranscribeError::LocalModel(format!("mk tgt: {e}")))?;
+            let tlen_t = Tensor::from_array((vec![1i64], vec![1i32]))
+                .map_err(|e| TranscribeError::LocalModel(format!("mk tlen: {e}")))?;
+            let s1_t = Tensor::from_array((vec![2i64, 1, HIDDEN as i64], state1.clone()))
+                .map_err(|e| TranscribeError::LocalModel(format!("mk s1: {e}")))?;
+            let s2_t = Tensor::from_array((vec![2i64, 1, HIDDEN as i64], state2.clone()))
+                .map_err(|e| TranscribeError::LocalModel(format!("mk s2: {e}")))?;
+
+            let dj_outs = inner
+                .decoder_joint
+                .run(ort::inputs! {
+                    "encoder_outputs" => enc_t,
+                    "targets" => tgt_t,
+                    "target_length" => tlen_t,
+                    "input_states_1" => s1_t,
+                    "input_states_2" => s2_t,
+                })
+                .map_err(|e| TranscribeError::LocalModel(format!("dj run: {e}")))?;
+
+            let (out_shape, out_data) = dj_outs["outputs"]
+                .try_extract_tensor::<f32>()
+                .map_err(|e| TranscribeError::LocalModel(format!("dj out extract: {e}")))?;
+            let total: i64 = out_shape.iter().product();
+            let total = total as usize;
+            if total < VOCAB_SIZE + NUM_DURATIONS {
+                let dims: Vec<i64> = out_shape.iter().copied().collect();
+                return Err(TranscribeError::LocalModel(format!(
+                    "dj outputs unexpected size {} (shape {:?})",
+                    total, dims
+                )));
+            }
+            let logits = &out_data[..total];
+
+            let mut best_tok: i64 = 0;
+            let mut best_tok_v = f32::NEG_INFINITY;
+            for (i, v) in logits[..VOCAB_SIZE].iter().enumerate() {
+                if *v > best_tok_v {
+                    best_tok_v = *v;
+                    best_tok = i as i64;
+                }
+            }
+            let mut step: usize = 0;
+            let mut best_step_v = f32::NEG_INFINITY;
+            for (i, v) in logits[VOCAB_SIZE..VOCAB_SIZE + NUM_DURATIONS]
+                .iter()
+                .enumerate()
+            {
+                if *v > best_step_v {
+                    best_step_v = *v;
+                    step = i;
+                }
+            }
+
+            if best_tok != BLANK_IDX {
+                let (_, s1_data) = dj_outs["output_states_1"]
+                    .try_extract_tensor::<f32>()
+                    .map_err(|e| TranscribeError::LocalModel(format!("s1 extract: {e}")))?;
+                let (_, s2_data) = dj_outs["output_states_2"]
+                    .try_extract_tensor::<f32>()
+                    .map_err(|e| TranscribeError::LocalModel(format!("s2 extract: {e}")))?;
+                state1 = s1_data.to_vec();
+                state2 = s2_data.to_vec();
+                tokens.push(best_tok);
+                emitted += 1;
+            }
+
+            if step > 0 {
+                t += step;
+                emitted = 0;
+            } else if best_tok == BLANK_IDX || emitted >= MAX_TOKENS_PER_STEP {
+                t += 1;
+                emitted = 0;
+            }
+        }
+
+        // ── 4. Vocab lookup: tokens → text ────────────────────────────
+        let mut out = String::with_capacity(tokens.len() * 4);
+        for tok in tokens {
+            if let Some(piece) = inner.vocab.get(tok as usize) {
+                if let Some(rest) = piece.strip_prefix('\u{2581}') {
+                    if !out.is_empty() {
+                        out.push(' ');
+                    }
+                    out.push_str(rest);
+                } else if piece.starts_with('<') && piece.ends_with('>') {
+                    continue;
+                } else {
+                    out.push_str(piece);
+                }
+            }
+        }
+        Ok(out.trim().to_string())
+    }
 }
 
-// ── Tests (always compiled — exercise the path resolution + presence
-// check even without the feature flag) ────────────────────────────
+// ── Tests ────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -253,14 +422,12 @@ mod tests {
 
     #[test]
     fn bundle_dir_returns_path() {
-        // On any host with a config dir, bundle_dir should resolve.
         let p = bundle_dir().expect("config_dir_path should not be None");
         assert!(p.ends_with("parakeet-fp32"));
     }
 
     #[test]
     fn vocab_size_and_blank_match_bundle() {
-        // BLANK_IDX is the last entry in an 8193-token vocab → idx 8192.
         assert_eq!(BLANK_IDX as usize, VOCAB_SIZE - 1);
     }
 }
