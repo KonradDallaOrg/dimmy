@@ -270,7 +270,12 @@ jobs:
   # ── Windows Native Build (parallel with macOS + rust-check) ─────────
   build-windows:
     name: Build Windows Native
-    needs: create-release
+    # Gate Win on macOS success. The Win runner takes 30-40 min to
+    # finish; gating prevents that whole budget from being burned
+    # when an early Mac failure (e.g. broken Xcode build phase or
+    # cargo feature drift) would invalidate the run anyway. Linux
+    # is gated the same way below.
+    needs: [create-release, build-macos]
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
@@ -534,7 +539,7 @@ jobs:
   # ── Linux Native Build (parallel with macOS + Windows + rust-check) ──
   build-linux:
     name: Build Linux (GTK4)
-    needs: create-release
+    needs: [create-release, build-macos]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
