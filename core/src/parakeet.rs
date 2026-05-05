@@ -192,7 +192,16 @@ mod inference {
     use ort::value::Tensor;
     use std::sync::OnceLock;
 
-    static MODEL: OnceLock<std::sync::Mutex<Option<Inner>>> = OnceLock::new();
+    // Box::leak the Mutex — Sessions are needed for the entire process
+    // lifetime (load is the slow path, ~5 s on M1 cold) so dropping is
+    // never desirable. Leaking sidesteps Rust's static-destructor order
+    // entirely, which matters because ort 2.0.0-rc.10's Session::drop
+    // touches a global onnxruntime mutex; on a noisy process exit that
+    // mutex can already be torn down, surfacing as a benign but
+    // confusing `mutex lock failed: Invalid argument` SIGABRT after the
+    // test summary line. Known cosmetic exit-code noise, tracked as a
+    // known bug; production paste-and-quit flow doesn't hit it.
+    static MODEL: OnceLock<&'static std::sync::Mutex<Option<Inner>>> = OnceLock::new();
 
     struct Inner {
         mel: Session,
@@ -202,7 +211,7 @@ mod inference {
     }
 
     fn lock() -> &'static std::sync::Mutex<Option<Inner>> {
-        MODEL.get_or_init(|| std::sync::Mutex::new(None))
+        MODEL.get_or_init(|| Box::leak(Box::new(std::sync::Mutex::new(None))))
     }
 
     fn build_session(path: &std::path::Path) -> Result<Session, TranscribeError> {

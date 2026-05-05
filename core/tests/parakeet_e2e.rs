@@ -11,11 +11,17 @@
 //! `onnxruntime.dll` / `.dylib` must be discoverable: either next to the
 //! test binary (target/debug/deps/), in `PATH`, or via `ORT_DYLIB_PATH`.
 //!
-//! Fixtures are debug captures the developer recorded with Dimmy under
-//! `~/AppData/Roaming/dimmy/audio_debug/<timestamp>/processed.wav` on
-//! Windows or the platform equivalent. Picked because they exercise
-//! short / medium / long lengths in Italian — the language Parakeet v3 is
-//! used for in production. CI without the bundle skips at the gate.
+//! Fixtures are sourced two ways:
+//!
+//! - A small public-domain English clip (`tests/fixtures/jfk_16k_mono.wav`,
+//!   ~344 KB) is committed alongside the test so the full path works on
+//!   any developer's machine the moment the Parakeet bundle is on disk.
+//!   This is the canonical smoke fixture across platforms.
+//! - Italian dev captures under `<config-dir>/audio_debug/<timestamp>/processed.wav`
+//!   exercise longer / harder samples but only land if the developer has
+//!   recorded with the audio-debug toggle on. They skip cleanly otherwise.
+//!
+//! CI without the bundle skips at the gate.
 
 #![cfg(feature = "local-stt-parakeet")]
 
@@ -32,26 +38,42 @@ struct Fixture {
     expected_substring: &'static str,
 }
 
-const FIXTURES: &[Fixture] = &[
+/// Italian audio-debug captures (only on the developer's machine that
+/// recorded them). Path is platform-agnostic via `Path::join` — the
+/// joined components survive both Windows backslashes and POSIX slashes
+/// at runtime.
+const ITALIAN_FIXTURES: &[Fixture] = &[
     Fixture {
         label: "short 1.8s",
-        path: r"audio_debug\2026-05-02_23-34-12\processed.wav",
+        path: "audio_debug/2026-05-02_23-34-12/processed.wav",
         expected_substring: "altra volta",
     },
     Fixture {
         label: "medium 5.2s",
-        path: r"audio_debug\2026-05-02_23-32-26\processed.wav",
+        path: "audio_debug/2026-05-02_23-32-26/processed.wav",
         expected_substring: "un'altra volta",
     },
     Fixture {
         label: "long 50s",
-        path: r"audio_debug\2026-05-02_23-43-16\processed.wav",
+        path: "audio_debug/2026-05-02_23-43-16/processed.wav",
         expected_substring: "Il secondo baco",
     },
 ];
 
-fn fixture_root() -> Option<PathBuf> {
+/// Committed JFK clip — public-domain, 11 s mono 16 kHz. Path is relative
+/// to the crate root (CARGO_MANIFEST_DIR) so it resolves under any tier.
+const JFK_FIXTURE: Fixture = Fixture {
+    label: "JFK 11s (committed)",
+    path: "tests/fixtures/jfk_16k_mono.wav",
+    expected_substring: "fellow Americans",
+};
+
+fn italian_fixture_root() -> Option<PathBuf> {
     dimmy_lib::config_dir_path()
+}
+
+fn jfk_fixture_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
 fn load_wav_16k_mono(path: &Path) -> Vec<f32> {
@@ -85,23 +107,60 @@ fn load_wav_16k_mono(path: &Path) -> Vec<f32> {
     }
 }
 
+/// Cross-platform smoke: the committed JFK clip is byte-identical on every
+/// developer's machine, so this case has the same shape on Win/Mac/Linux
+/// and lights up the moment the bundle is downloaded.
 #[test]
-fn transcribe_italian_fixtures() {
+fn transcribe_committed_jfk_fixture() {
     if !dimmy_lib::parakeet::bundle_present() {
         eprintln!(
-            "[skip] parakeet bundle not at {:?} — skipping integration test",
+            "[skip] parakeet bundle not at {:?} — skipping committed-fixture test",
             dimmy_lib::parakeet::bundle_dir()
         );
         return;
     }
 
-    let Some(root) = fixture_root() else {
+    let full = jfk_fixture_root().join(JFK_FIXTURE.path);
+    assert!(
+        full.exists(),
+        "committed fixture missing at {:?} — should be in the repo",
+        full
+    );
+
+    let pcm = load_wav_16k_mono(&full);
+    assert!(!pcm.is_empty(), "JFK fixture pcm empty");
+
+    let t = Instant::now();
+    let text = dimmy_lib::parakeet::transcribe(&pcm)
+        .unwrap_or_else(|e| panic!("JFK transcribe failed: {}", e));
+    let ms = t.elapsed().as_millis();
+
+    eprintln!("[{}] {}ms → {:?}", JFK_FIXTURE.label, ms, text);
+    assert!(
+        text.contains(JFK_FIXTURE.expected_substring),
+        "expected substring {:?} not found in {:?}",
+        JFK_FIXTURE.expected_substring,
+        text,
+    );
+}
+
+#[test]
+fn transcribe_italian_fixtures() {
+    if !dimmy_lib::parakeet::bundle_present() {
+        eprintln!(
+            "[skip] parakeet bundle not at {:?} — skipping italian fixtures",
+            dimmy_lib::parakeet::bundle_dir()
+        );
+        return;
+    }
+
+    let Some(root) = italian_fixture_root() else {
         eprintln!("[skip] config_dir_path() returned None");
         return;
     };
 
     let mut ran_any = false;
-    for fx in FIXTURES {
+    for fx in ITALIAN_FIXTURES {
         let full = root.join(fx.path);
         if !full.exists() {
             eprintln!("[skip] {} fixture missing at {:?}", fx.label, full);
@@ -128,7 +187,7 @@ fn transcribe_italian_fixtures() {
     }
 
     if !ran_any {
-        eprintln!("[skip] no fixtures present — full test path was not exercised");
+        eprintln!("[skip] no italian fixtures present — only the JFK case ran");
     }
 }
 
@@ -141,12 +200,9 @@ fn warm_call_is_deterministic() {
         eprintln!("[skip] bundle missing");
         return;
     }
-    let Some(root) = fixture_root() else {
-        return;
-    };
-    let path = root.join(FIXTURES[0].path);
+    let path = jfk_fixture_root().join(JFK_FIXTURE.path);
     if !path.exists() {
-        eprintln!("[skip] fixture missing: {:?}", path);
+        eprintln!("[skip] committed JFK fixture missing: {:?}", path);
         return;
     }
     let pcm = load_wav_16k_mono(&path);

@@ -1,10 +1,12 @@
-# Parakeet TDT v3 FP32 — local STT (in progress)
+# Parakeet TDT v3 FP32 — local STT
 
 > **Branch**: `feat/parakeet-stt-local`
-> **Status**: scaffold + bundle download landed; native inference body
-> deferred. Cargo `local-stt-parakeet` feature compiles cleanly on
-> default features and on `--features local-stt-parakeet`. 2 unit tests
-> pass. Ready to bolt the greedy TDT decoder onto.
+> **Status**: working end-to-end on Windows (UI + chunked live captions
+> shipped) and on macOS local dev (CLI smoke + 4 e2e tests green
+> against the JFK fixture, see [Mac validation](#mac-validation-2026-05-05)).
+> Mac UI (Settings + Onboarding) is wired and the app builds + signs
+> with the bundled `libonnxruntime.dylib`. Live mic path on Mac
+> awaits a hardware-equipped session.
 
 ## Why Parakeet (already validated, branch `feat/stt-providers-expansion`)
 
@@ -210,6 +212,17 @@ cargo build --release --lib --features local-stt-parakeet-coreml
 # Tests (default features)
 cargo test --lib parakeet
 ```
+
+## Mac validation (2026-05-05)
+
+Local Mac dev session, M-series Apple Silicon, no microphone (validated
+via committed JFK fixture, not live recording).
+
+- `cargo build --release --lib --target aarch64-apple-darwin --features local-stt-metal,local-llm-metal,local-stt-parakeet-coreml` — clean, ~52 s.
+- Xcode `Debug` build of `Dimmy.app` succeeds end-to-end. The new shell-script build phase `Bundle onnxruntime.dylib` (`AE000004`) runs `scripts/download-onnxruntime.sh` and copies + ad-hoc-signs the 33 MB dylib into `Dimmy.app/Contents/Frameworks/libonnxruntime.dylib`. `ENABLE_USER_SCRIPT_SANDBOXING = NO` is required project-wide so the script's `codesign` call doesn't 503 inside Xcode's sandbox.
+- `parakeet_smoke <jfk.wav>` cold path: 6.1 s for 11 s audio (1.8× realtime). A second invocation in a fresh process is 2.7 s (4.0× realtime) thanks to OS-level mmap caching of the 2.4 GB encoder weights.
+- `cargo test --release --test parakeet_e2e --features local-stt-parakeet -- --test-threads=1` → all 4 tests pass (empty PCM, JFK transcribe, italian fixtures skipped without recordings, warm-call deterministic). The binary then SIGABRTs at process exit — known cosmetic noise tracked as STT-002 in `known-bugs.md`.
+- Output text: `"And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country."` — byte-identical to the upstream reference, no leading-phoneme drop.
 
 ## Risks / open questions
 

@@ -61,7 +61,10 @@ impl ChunkedTranscriber {
     ) -> Self {
         assert!(chunk_secs > 0.0, "chunk_secs must be positive");
         assert!(chunk_secs <= 60.0, "chunk_secs > 60 is excessive");
-        assert!(device_sample_rate > 0, "device_sample_rate must be positive");
+        assert!(
+            device_sample_rate > 0,
+            "device_sample_rate must be positive"
+        );
 
         let cancel = Arc::new(AtomicBool::new(false));
         let final_text = Arc::new(Mutex::new(String::new()));
@@ -116,8 +119,7 @@ fn worker_loop(
     on_chunk: Arc<ChunkCallback>,
 ) {
     let chunk_samples = (chunk_secs * device_sample_rate as f32) as usize;
-    let overlap_samples =
-        ((overlap_ms as f32 / 1000.0) * device_sample_rate as f32) as usize;
+    let overlap_samples = ((overlap_ms as f32 / 1000.0) * device_sample_rate as f32) as usize;
     assert!(chunk_samples > 0, "chunk_samples must be positive");
 
     let mut cumulative = String::new();

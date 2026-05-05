@@ -121,7 +121,7 @@ struct ModelDownloadStepView: View {
         .onAppear {
             refreshFromCore()
         }
-        .onChange(of: selection) { _ in
+        .onChange(of: selection) {
             // If the new selection is already on disk, jump straight
             // to .completed — the user can Continue without re-downloading.
             refreshFromCore()

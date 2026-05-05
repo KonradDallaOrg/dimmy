@@ -65,5 +65,13 @@ Check this file before touching audio preprocessing, macOS FFI, or Windows trans
 - **Fix**: Pipe base64 via stdin: `base64 -w0 file | jq -Rs ...` and `curl -d @"$body_file"`
 - **Files**: `tests/test_benchmark.sh`
 
+## STT-002: SIGABRT at process exit when Parakeet feature is on (cosmetic)
+- **Symptom**: parakeet smoke / e2e test runs print `test result: ok` with all asserts green, then the binary exits with SIGABRT (`libc++abi: terminating due to uncaught exception of type std::__1::system_error: mutex lock failed: Invalid argument`). Cargo surfaces it as `process didn't exit successfully (signal: 6)`.
+- **Root cause**: ort 2.0.0-rc.10's `Session::drop` touches a global onnxruntime mutex during tear-down. By the time atexit fires that mutex has already been destroyed by libonnxruntime's own atexit chain, and the C++ runtime aborts.
+- **Mitigation in place**: `core/src/parakeet.rs` `Box::leak`s the `Mutex<Option<Inner>>` so Rust's static-destructor pass never drops the cached Sessions. Shrinks the surface but doesn't fully suppress the abort because libonnxruntime still has its own globals.
+- **Production impact**: none. The released app calls `dimmy_shutdown()` then NSApp / Velopack tears the process down — the user's paste-and-quit flow is finished by then.
+- **Test-runner impact**: cargo reports the test binary exit as failure even though all asserts passed. Workaround: read the `test result: ok` line, ignore the SIGABRT trailer.
+- **Followup**: revisit when ort ships 2.0.0 stable.
+
 ## Native UI Era
 No platform-specific bugs filed yet. Report issues at https://github.com/KonradDallaOrg/dimmy/issues
