@@ -14,6 +14,11 @@ struct MacVoicePage: View {
     @State private var downloadInFlight: Bool = false
     @State private var downloadFailed: String? = nil
 
+    /// Sentinel value for the Parakeet entry in the unified local-model
+    /// Picker. Mirrors `ParakeetTag` in the Windows OnboardingWindow.xaml.cs
+    /// so the two UIs round-trip the same selection through the Rust core.
+    private static let parakeetTag = "parakeet:fp32"
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             speechRecognitionGroup
@@ -101,40 +106,46 @@ struct MacVoicePage: View {
                 } else {
                     MacRow(
                         "Local model",
-                        description: "Whisper, runs entirely offline",
-                        showsDivider: !localModelExists || downloadInFlight
+                        description: localBackendIsParakeet
+                            ? "NVIDIA Parakeet TDT v3 FP32 — runs entirely offline"
+                            : "Whisper, runs entirely offline",
+                        showsDivider: !localModelReady || downloadInFlight
                     ) {
-                        Picker("", selection: Binding(
-                            get: { appState.localModel },
-                            set: { newValue in
-                                appState.localModel = newValue
-                                persistConfig()
-                                refreshLocalModelStatus()
-                            }
-                        )) {
+                        Picker("", selection: localModelPickerBinding) {
                             Text("Tiny · 78 MB").tag("ggml-tiny-q8_0.bin")
                             Text("Base · 142 MB").tag("ggml-base-q8_0.bin")
                             Text("Small · 466 MB").tag("ggml-small-q8_0.bin")
                             Text("Medium · 1.5 GB").tag("ggml-medium-q8_0.bin")
+                            Text("Parakeet TDT v3 FP32 · 2.5 GB")
+                                .tag(Self.parakeetTag)
                         }
                         .labelsHidden()
-                        .frame(width: 200)
+                        .frame(width: 260)
                     }
 
                     if downloadInFlight {
                         modelProgressRow(
-                            progress: appState.modelDownloadProgress,
-                            label: "Downloading \(appState.localModel)…"
+                            progress: localBackendIsParakeet
+                                ? appState.parakeetDownloadProgress
+                                : appState.modelDownloadProgress,
+                            label: localBackendIsParakeet
+                                ? "Downloading Parakeet bundle (~2.5 GB)…"
+                                : "Downloading \(appState.localModel)…"
                         )
-                    } else if !localModelExists {
+                    } else if !localModelReady {
                         MacRow(
                             "Download",
-                            description: downloadFailed ?? "This model isn't on disk yet.",
+                            description: downloadFailed ?? (localBackendIsParakeet
+                                ? "The Parakeet bundle isn't on disk yet (~2.5 GB)."
+                                : "This model isn't on disk yet."),
                             showsDivider: false
                         ) {
-                            Button("Download model") { startSttDownload() }
-                                .buttonStyle(.borderedProminent)
-                                .controlSize(.small)
+                            Button(localBackendIsParakeet
+                                   ? "Download bundle" : "Download model") {
+                                startSttDownload()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
                         }
                     }
                 }
@@ -160,28 +171,86 @@ struct MacVoicePage: View {
         .onAppear { refreshLocalModelStatus() }
     }
 
+    private var localBackendIsParakeet: Bool {
+        appState.localSttBackend == "parakeet"
+    }
+
+    /// True when the currently-selected local backend has its data on
+    /// disk and is ready to transcribe. Whisper: ggml file present.
+    /// Parakeet: full ~2.5 GB bundle present.
+    private var localModelReady: Bool {
+        if localBackendIsParakeet {
+            return appState.parakeetBundlePresent
+        }
+        return localModelExists
+    }
+
+    /// Single Picker binding that drives BOTH `localModel` (whisper
+    /// filename) and `localSttBackend` ("whisper" | "parakeet"). Picking
+    /// the Parakeet sentinel flips the backend without overwriting the
+    /// remembered ggml choice, so toggling back restores the previous
+    /// whisper model — same UX as the Windows ComboBox unification.
+    private var localModelPickerBinding: Binding<String> {
+        Binding(
+            get: {
+                localBackendIsParakeet ? Self.parakeetTag : appState.localModel
+            },
+            set: { newValue in
+                if newValue == Self.parakeetTag {
+                    appState.localSttBackend = "parakeet"
+                } else {
+                    appState.localSttBackend = "whisper"
+                    appState.localModel = newValue
+                }
+                persistConfig()
+                refreshLocalModelStatus()
+            }
+        )
+    }
+
     private func refreshLocalModelStatus() {
-        // FFI sync call, but cheap (just stat() on the file).
-        let exists = DimmyCore.shared.isInitialized
-            && DimmyCore.shared.modelExists(appState.localModel)
-        localModelExists = exists
+        guard DimmyCore.shared.isInitialized else {
+            localModelExists = false
+            appState.parakeetBundlePresent = false
+            return
+        }
+        // FFI sync calls, but cheap (just stat() on the files).
+        localModelExists = DimmyCore.shared.modelExists(appState.localModel)
+        appState.parakeetBundlePresent = DimmyCore.shared.parakeetBundlePresent()
         downloadFailed = nil
     }
 
     private func startSttDownload() {
         guard !downloadInFlight, DimmyCore.shared.isInitialized else { return }
-        let target = appState.localModel
         downloadInFlight = true
         downloadFailed = nil
-        appState.modelDownloadProgress = 0
-        DispatchQueue.global(qos: .userInitiated).async {
-            let ok = DimmyCore.shared.downloadModel(target)
-            DispatchQueue.main.async {
-                downloadInFlight = false
-                if ok {
-                    refreshLocalModelStatus()
-                } else {
-                    downloadFailed = "Download failed. Check your connection and try again."
+        if localBackendIsParakeet {
+            appState.parakeetDownloadProgress = 0
+            appState.isDownloadingParakeet = true
+            DispatchQueue.global(qos: .userInitiated).async {
+                let ok = DimmyCore.shared.downloadParakeetBundle()
+                DispatchQueue.main.async {
+                    downloadInFlight = false
+                    appState.isDownloadingParakeet = false
+                    if ok {
+                        refreshLocalModelStatus()
+                    } else {
+                        downloadFailed = "Parakeet download failed. Check your connection and try again."
+                    }
+                }
+            }
+        } else {
+            let target = appState.localModel
+            appState.modelDownloadProgress = 0
+            DispatchQueue.global(qos: .userInitiated).async {
+                let ok = DimmyCore.shared.downloadModel(target)
+                DispatchQueue.main.async {
+                    downloadInFlight = false
+                    if ok {
+                        refreshLocalModelStatus()
+                    } else {
+                        downloadFailed = "Download failed. Check your connection and try again."
+                    }
                 }
             }
         }
