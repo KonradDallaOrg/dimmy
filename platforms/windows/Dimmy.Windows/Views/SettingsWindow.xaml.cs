@@ -51,6 +51,12 @@ public sealed partial class SettingsWindow : Window
         LicenseService.LicenseChanged += OnLicenseChangedExternal;
         this.Closed += (_, __) => LicenseService.LicenseChanged -= OnLicenseChangedExternal;
 
+        // Auto-save on window close. The "Saved" InfoBar pulse already
+        // promises Win11-native auto-save UX — make it real, so closing
+        // the window via the X (or ESC) doesn't silently drop the user's
+        // edits. Save_Click stays for the explicit "Save & close" path.
+        this.Closed += (_, __) => AutoSaveOnClose();
+
         // Subscribe to Parakeet download progress events routed through
         // the App-level FFI callback. AppViewModel.HandleEvent already
         // marshals onto the UI thread before invoking the event.
@@ -331,6 +337,9 @@ public sealed partial class SettingsWindow : Window
 
     private void PopulateLocalModels()
     {
+        App.Log(
+            $"PopulateLocalModels enter: VM.LocalSttBackend={ViewModel.LocalSttBackend}, VM.LocalModel={ViewModel.LocalModel}",
+            "Settings");
         try
         {
             var json = DimmyNative.ListLocalModels();
@@ -381,19 +390,31 @@ public sealed partial class SettingsWindow : Window
                 selectedIdx = idx;
 
             if (LocalModelComboBox.Items.Count > 0)
-                LocalModelComboBox.SelectedIndex = selectedIdx >= 0 ? selectedIdx : 0;
+            {
+                var finalIdx = selectedIdx >= 0 ? selectedIdx : 0;
+                App.Log(
+                    $"PopulateLocalModels SET SelectedIndex={finalIdx} (count={LocalModelComboBox.Items.Count}, parakeetIdx={idx})",
+                    "Settings");
+                LocalModelComboBox.SelectedIndex = finalIdx;
+            }
         }
-        catch { }
+        catch (Exception ex) { App.Log($"PopulateLocalModels EXC: {ex.Message}", "Settings"); }
     }
 
     private void LocalModel_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        App.Log(
+            $"LocalModel_SelectionChanged: _loaded={_loaded}, SelectedIndex={LocalModelComboBox.SelectedIndex}, " +
+            $"SelectedItem.Tag={(LocalModelComboBox.SelectedItem as ComboBoxItem)?.Tag}, " +
+            $"VM.LocalSttBackend={ViewModel.LocalSttBackend}, VM.LocalModel={ViewModel.LocalModel}",
+            "Settings");
         if (!_loaded) return;
         if (LocalModelComboBox.SelectedItem is ComboBoxItem item && item.Tag is string tag)
         {
             if (tag == ParakeetTag)
             {
                 ViewModel.LocalSttBackend = "parakeet";
+                App.Log("→ set LocalSttBackend=parakeet", "Settings");
                 // Keep LocalModel pointing at the previous whisper choice
                 // so flipping back to a whisper entry restores it.
             }
@@ -401,6 +422,7 @@ public sealed partial class SettingsWindow : Window
             {
                 ViewModel.LocalSttBackend = "whisper";
                 ViewModel.LocalModel = tag;
+                App.Log($"→ set LocalSttBackend=whisper, LocalModel={tag}", "Settings");
             }
             CheckModelStatus();
         }
@@ -1752,7 +1774,36 @@ public sealed partial class SettingsWindow : Window
 
         App.Instance?.ReloadConfig();
         App.Instance?.ApplySettings(ViewModel);
+        // Skip the Closed-handler save since we already wrote the
+        // current state — flag prevents a redundant FFI round-trip.
+        _autoSaveDone = true;
         this.Close();
+    }
+
+    private bool _autoSaveDone;
+
+    /// Catch-all auto-save fired by the Closed event so users who
+    /// dismiss Settings with the X (or ESC) don't silently lose their
+    /// edits. Same code path Save_Click uses, minus the Close() call.
+    private void AutoSaveOnClose()
+    {
+        if (_autoSaveDone) return;
+        try
+        {
+            if (!string.IsNullOrEmpty(CloudApiKeyBox?.Password))
+                ViewModel.ApiKey = CloudApiKeyBox.Password;
+            if (!string.IsNullOrEmpty(LlmApiKeyBox?.Password))
+                ViewModel.LlmApiKey = LlmApiKeyBox.Password;
+            var json = ViewModel.ToJson();
+            DimmyNative.dimmy_set_config_json(json);
+            App.Instance?.ReloadConfig();
+            App.Instance?.ApplySettings(ViewModel);
+            App.Log("AutoSaveOnClose: persisted ViewModel via X/ESC", "Settings");
+        }
+        catch (Exception ex)
+        {
+            App.Log($"AutoSaveOnClose failed: {ex.Message}", "Settings");
+        }
     }
 
     /// <summary>Apply the pill-visibility prefs immediately on toggle

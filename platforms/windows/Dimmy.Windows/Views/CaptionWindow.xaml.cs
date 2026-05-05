@@ -1,28 +1,31 @@
 using System;
+using System.Collections.Generic;
 using Microsoft.UI;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
-using Microsoft.UI.Xaml.Media;
 using Windows.Graphics;
 using WinRT.Interop;
 using Dimmy.Windows.Helpers;
 
 namespace Dimmy.Windows.Views;
 
-/// Floating caption window — sits a few pixels below the pill while
-/// the realtime chunked transcriber is producing partials. Borderless,
-/// click-through-friendly, transparent corners. Auto-resizes to the
-/// text height up to a fixed max width that mirrors Win11 live captions.
-///
-/// Why a separate window (not a sub-element of the pill): the pill
-/// design is locked — shape, proportions, colors. Stretching it to
-/// fit a growing transcript would break the captured-in-memory invariants.
-/// A separate WS_POPUP is the same pattern the OS itself uses for live
-/// captions and toasts.
+/// Subtitle-style live caption — borderless, transparent, centered at
+/// the bottom of the primary display. No background fill, just white
+/// text on a soft drop-shadow so it remains readable over any wallpaper
+/// or focused app. Shows a FIFO buffer of the last N chunks (default 2):
+/// when a new chunk arrives the oldest one rolls out. The cumulative
+/// text used for the final paste lives upstream — this window only owns
+/// the on-screen scroll.
 public sealed partial class CaptionWindow : Window
 {
-    private const int MaxLogicalWidth = 720;
-    private const int MaxLogicalHeight = 200;
+    private const int VisibleChunks = 2;
+    private const int LogicalWidthFraction = 70; // percent of screen width
+    private const int BottomMarginPx = 80;       // gap above taskbar
+    private const int FixedHeightPx = 110;       // room for ~2 wrapped lines
+    private const int MinWidthPx = 480;
+    private const int MaxWidthPx = 1200;
+
+    private readonly Queue<string> _chunks = new();
 
     public CaptionWindow()
     {
@@ -40,58 +43,67 @@ public sealed partial class CaptionWindow : Window
         }
         if (appWindow != null)
         {
-            try
-            {
-                appWindow.IsShownInSwitchers = false;
-            }
-            catch { /* not all SDK versions expose it */ }
+            try { appWindow.IsShownInSwitchers = false; } catch { }
         }
 
-        // Transparent system backdrop so corners don't show a white
-        // square around our rounded Border.
-        try
+        // Transparent background so only the text + soft shadow show.
+        // The system backdrop must be cleared and the WS_EX_NO_REDIRECTION_BITMAP
+        // path is already handled by WindowHelper for the pill — same trick
+        // works here.
+        try { this.SystemBackdrop = null; } catch { }
+        if (Content is FrameworkElement root)
         {
-            this.SystemBackdrop = null;
-            if (Content is FrameworkElement root)
-            {
-                root.RequestedTheme = ElementTheme.Dark;
-            }
+            root.RequestedTheme = ElementTheme.Dark;
         }
-        catch { }
 
-        WindowHelper.ResizeLogical(this, MaxLogicalWidth, 60);
         Hide();
     }
 
-    public void SetText(string text)
+    /// Append a new chunk delta to the FIFO. Trims to the last
+    /// `VisibleChunks` entries. Updates the visible text immediately.
+    public void PushChunk(string delta)
     {
-        if (string.IsNullOrEmpty(text))
+        if (string.IsNullOrWhiteSpace(delta)) return;
+        _chunks.Enqueue(delta.Trim());
+        while (_chunks.Count > VisibleChunks)
         {
-            CaptionText.Text = "";
-            return;
+            _chunks.Dequeue();
         }
-        CaptionText.Text = text;
-        // Re-measure so the caption resizes to fit content.
-        CaptionBorder.Measure(new global::Windows.Foundation.Size(MaxLogicalWidth, MaxLogicalHeight));
-        var desired = CaptionBorder.DesiredSize;
-        // Add a small margin so the rounded corner of the border
-        // isn't clipped by the window edge.
-        int w = Math.Min(MaxLogicalWidth, (int)Math.Ceiling(desired.Width) + 8);
-        int h = Math.Min(MaxLogicalHeight, (int)Math.Ceiling(desired.Height) + 8);
-        WindowHelper.ResizeLogical(this, Math.Max(240, w), Math.Max(40, h));
+        var text = string.Join("  ·  ", _chunks);
+        MainText.Text = text;
+        ShadowText.Text = text;
+        ShadowText2.Text = text;
     }
 
-    /// Position the window directly below the given anchor rect (the
-    /// pill window's bounds in screen coordinates). Centered horizontally,
-    /// 12 px gap below.
-    public void PositionBelow(int pillScreenX, int pillScreenY, int pillScreenWidth, int pillScreenHeight)
+    public void Reset()
+    {
+        _chunks.Clear();
+        MainText.Text = "";
+        ShadowText.Text = "";
+        ShadowText2.Text = "";
+    }
+
+    /// Park the window centered horizontally, near the bottom of the
+    /// primary display. Width scales to a percentage of the screen so
+    /// captions feel like proper subtitles, not a balloon.
+    public void PositionAtScreenBottom()
     {
         var appWindow = WindowHelper.GetAppWindow(this);
         if (appWindow == null) return;
 
-        var captionWidth = appWindow.Size.Width;
-        int x = pillScreenX + (pillScreenWidth - captionWidth) / 2;
-        int y = pillScreenY + pillScreenHeight + 12;
+        var displayArea = DisplayArea.GetFromWindowId(appWindow.Id, DisplayAreaFallback.Primary);
+        if (displayArea == null) return;
+        var work = displayArea.WorkArea;
+
+        int width = Math.Clamp(
+            (int)(work.Width * (LogicalWidthFraction / 100.0)),
+            MinWidthPx,
+            MaxWidthPx);
+        int height = FixedHeightPx;
+
+        appWindow.Resize(new SizeInt32(width, height));
+        int x = work.X + (work.Width - width) / 2;
+        int y = work.Y + work.Height - height - BottomMarginPx;
         appWindow.Move(new PointInt32(x, y));
     }
 

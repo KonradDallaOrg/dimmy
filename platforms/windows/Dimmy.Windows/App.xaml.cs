@@ -57,9 +57,13 @@ public partial class App : Application
     private static readonly string PttLogPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "dimmy", "ptt.log");
 
-    private static void PttLog(string msg)
+    private static void PttLog(string msg) => Log(msg, "PTT");
+
+    /// Public diagnostic logger callable from any window for ad-hoc
+    /// debugging. Routes to the same ptt.log so output is one stream.
+    public static void Log(string msg, string tag = "Dimmy")
     {
-        var line = $"[{DateTime.Now:HH:mm:ss.fff}] [PTT] {msg}";
+        var line = $"[{DateTime.Now:HH:mm:ss.fff}] [{tag}] {msg}";
         Console.WriteLine(line);
         Console.Out.Flush();
         try { File.AppendAllText(PttLogPath, line + Environment.NewLine); } catch { }
@@ -589,11 +593,13 @@ public partial class App : Application
         StartNormalMode();
     }
 
-    /// Fires on the UI thread for every chunk emitted by the Rust
-    /// chunked transcriber. Lazy-creates the CaptionWindow on first
-    /// use, positions it under the pill, updates the visible text.
-    /// On is_final hides the window after a short reading delay so
-    /// the user can finish glancing at the last chunk.
+    /// Subtitle-style routing of stt_chunk events: the caption window
+    /// shows a FIFO of the last N chunk deltas (currently 2), centered
+    /// at the bottom of the primary display. The cumulative text used
+    /// for the final paste is owned upstream — only the rolling on-
+    /// screen subtitles are managed here. AppViewModel still tracks
+    /// the cumulative for any other consumer that wants it.
+    private string _lastCumulative = "";
     private void OnSttChunkReceived(string cumulative, bool isFinal)
     {
         if (!_appViewModel.LiveCaptionsEnabled) return;
@@ -604,36 +610,49 @@ public partial class App : Application
             _captionWindow.Activate();
         }
 
-        _captionWindow.SetText(cumulative);
-        AlignCaptionToPill();
+        // Compute the per-chunk delta from the cumulative diff. The
+        // Rust core also sends a `delta` field via the stt_chunk
+        // payload, but routing it would mean changing AppViewModel's
+        // signature — this keeps the FIFO logic compact and self-
+        // contained on the C# side.
+        string delta;
+        if (!string.IsNullOrEmpty(_lastCumulative)
+            && cumulative.StartsWith(_lastCumulative, StringComparison.Ordinal))
+        {
+            delta = cumulative.Substring(_lastCumulative.Length).Trim();
+        }
+        else
+        {
+            delta = cumulative.Trim();
+        }
+        _lastCumulative = cumulative;
+
+        if (!string.IsNullOrEmpty(delta))
+        {
+            _captionWindow.PushChunk(delta);
+        }
+        _captionWindow.PositionAtScreenBottom();
+
         if (!isFinal)
         {
             _captionWindow.Show();
         }
         else
         {
-            // Hide after ~1.2s so the user gets a final glance, then
-            // clear ViewModel text so a new recording starts clean.
+            // Hide after ~1.2 s so the user gets a final glance, then
+            // reset state for the next recording.
             var dq = _dispatcherQueue;
             _ = System.Threading.Tasks.Task.Delay(1200).ContinueWith(_ =>
             {
                 dq?.TryEnqueue(() =>
                 {
                     _captionWindow?.Hide();
+                    _captionWindow?.Reset();
                     _appViewModel.LiveCaptionText = "";
+                    _lastCumulative = "";
                 });
             });
         }
-    }
-
-    private void AlignCaptionToPill()
-    {
-        if (_captionWindow == null || _pillWindow == null) return;
-        var pillAppWindow = WindowHelper.GetAppWindow(_pillWindow);
-        if (pillAppWindow == null) return;
-        var pos = pillAppWindow.Position;
-        var size = pillAppWindow.Size;
-        _captionWindow.PositionBelow(pos.X, pos.Y, size.Width, size.Height);
     }
 
     private void OnNativeEvent(IntPtr jsonPtr)

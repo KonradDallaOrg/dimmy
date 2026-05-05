@@ -1220,6 +1220,19 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
             *m = s.to_string();
         }
     }
+    if let Some(s) = v["local_stt_backend"].as_str() {
+        if let Ok(mut m) = st.local_stt_backend.lock() {
+            if *m != s {
+                log(&format!("[LocalSTT] Backend changed: {} → {}", *m, s));
+            }
+            *m = s.to_string();
+        }
+    }
+    if let Some(b) = v["live_captions_enabled"].as_bool() {
+        if let Ok(mut f) = st.live_captions_enabled.lock() {
+            *f = b;
+        }
+    }
     if let Some(b) = v["filler_removal_enabled"].as_bool() {
         if let Ok(mut f) = st.filler_removal_enabled.lock() {
             *f = b;

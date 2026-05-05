@@ -4,24 +4,43 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
-    <Grid Background="Transparent" Padding="0">
-        <Border x:Name="CaptionBorder"
-                Background="#E61a1a1a"
-                CornerRadius="14"
-                Padding="18,12,18,12"
-                MinWidth="240"
-                MaxWidth="700"
-                BorderBrush="#33FFFFFF"
-                BorderThickness="1"
-                HorizontalAlignment="Center"
-                VerticalAlignment="Center">
-            <TextBlock x:Name="CaptionText"
+    <!-- Subtitle-style caption: transparent window, white text on top of
+         a soft dark drop-shadow layer for legibility against any
+         background. Two TextBlocks stacked produce a hand-rolled stroke;
+         we keep the shadow offset small so the text doesn't ghost. -->
+    <Grid Background="Transparent">
+        <Grid HorizontalAlignment="Center"
+              VerticalAlignment="Center"
+              Margin="60,0,60,0">
+            <TextBlock x:Name="ShadowText"
                        Text=""
-                       FontSize="16"
-                       FontWeight="Normal"
+                       FontSize="26"
+                       FontFamily="Segoe UI"
+                       FontWeight="SemiBold"
+                       Foreground="#CC000000"
+                       TextWrapping="Wrap"
+                       TextAlignment="Center"
+                       LineHeight="34"
+                       Margin="2,2,0,0" />
+            <TextBlock x:Name="ShadowText2"
+                       Text=""
+                       FontSize="26"
+                       FontFamily="Segoe UI"
+                       FontWeight="SemiBold"
+                       Foreground="#99000000"
+                       TextWrapping="Wrap"
+                       TextAlignment="Center"
+                       LineHeight="34"
+                       Margin="-2,2,0,0" />
+            <TextBlock x:Name="MainText"
+                       Text=""
+                       FontSize="26"
+                       FontFamily="Segoe UI"
+                       FontWeight="SemiBold"
                        Foreground="#FFFFFFFF"
                        TextWrapping="Wrap"
-                       LineHeight="22" />
-        </Border>
+                       TextAlignment="Center"
+                       LineHeight="34" />
+        </Grid>
     </Grid>
 </Window>
