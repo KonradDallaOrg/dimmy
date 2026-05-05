@@ -116,11 +116,30 @@ jobs:
           brew install cmake
           cmake --version
 
+      - name: Verify Swift toolchain (need 5.10+ for FluidAudio)
+        run: |
+          swift --version
+          xcodebuild -version | head -2
+
+      - name: Fetch onnxruntime arm64 dylib
+        run: scripts/download-onnxruntime.sh
+
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: core
           shared-key: macos-staging
+
+      - name: Cache FluidAudio Swift build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Developer/Xcode/DerivedData/FluidAudio*
+            ~/Library/Caches/org.swift.swiftpm
+            core/target/aarch64-apple-darwin/release/build/fluidaudio-rs-*
+          key: fluidaudio-${{ runner.os }}-${{ hashFiles('core/Cargo.lock') }}
+          restore-keys: |
+            fluidaudio-${{ runner.os }}-
 
       - name: Build Rust static library (staging flavor)
         working-directory: core
@@ -133,7 +152,7 @@ jobs:
         run: |
           cargo clean --release 2>/dev/null
           cargo build --lib --release --target aarch64-apple-darwin \
-            --features local-stt-metal,local-llm-metal,license-client
+            --features local-stt-metal,local-llm-metal,local-stt-parakeet-coreml,local-stt-parakeet-fluid,license-client
 
       - name: Verify static library
         run: |

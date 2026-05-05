@@ -131,10 +131,29 @@ jobs:
           brew install cmake
           cmake --version
 
+      - name: Verify Swift toolchain (need 5.10+ for FluidAudio)
+        run: |
+          swift --version
+          xcodebuild -version | head -2
+
+      - name: Fetch onnxruntime arm64 dylib
+        run: scripts/download-onnxruntime.sh
+
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: core
+
+      - name: Cache FluidAudio Swift build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Developer/Xcode/DerivedData/FluidAudio*
+            ~/Library/Caches/org.swift.swiftpm
+            core/target/aarch64-apple-darwin/release/build/fluidaudio-rs-*
+          key: fluidaudio-${{ runner.os }}-${{ hashFiles('core/Cargo.lock') }}
+          restore-keys: |
+            fluidaudio-${{ runner.os }}-
 
       - name: Build Rust static library
         working-directory: core
@@ -156,7 +175,11 @@ jobs:
           echo "CMake: $(cmake --version | head -1)"
           echo "Xcode CLT: $(xcode-select -p)"
           cargo clean --release 2>/dev/null
-          cargo build --lib --release --target aarch64-apple-darwin --features local-stt-metal,local-llm-metal
+          # local-stt-parakeet-fluid: Apple Neural Engine path via
+          # FluidInference's CoreML bundle. Target-scoped to macOS
+          # arm64 so the feature has no effect on Win/Linux jobs.
+          cargo build --lib --release --target aarch64-apple-darwin \
+            --features local-stt-metal,local-llm-metal,local-stt-parakeet-coreml,local-stt-parakeet-fluid
 
       - name: Verify static library
         run: |
