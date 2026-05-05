@@ -19,6 +19,11 @@ use crate::{load_config_file, log, save_config_file, save_key_with_store, AppSta
 static GLOBAL_STATE: OnceLock<AppState> = OnceLock::new();
 static EVENT_CALLBACK: Mutex<Option<extern "C" fn(*const c_char)>> = Mutex::new(None);
 
+/// Holds the active realtime chunked transcriber while a recording is
+/// in progress with `chunk_streaming_enabled && backend == parakeet`.
+/// Taken out by `dimmy_stop_recording` to drain the final cumulative.
+static CHUNKED: Mutex<Option<crate::chunked_stt::ChunkedTranscriber>> = Mutex::new(None);
+
 fn state() -> &'static AppState {
     GLOBAL_STATE
         .get()
@@ -215,6 +220,7 @@ fn dimmy_init_inner() -> c_int {
         stt_mode: Mutex::new(file_cfg.stt_mode),
         local_model: Mutex::new(file_cfg.local_model),
         local_stt_backend: Mutex::new(file_cfg.local_stt_backend),
+        live_captions_enabled: Mutex::new(file_cfg.live_captions_enabled),
         filler_removal_enabled: Mutex::new(file_cfg.filler_removal_enabled),
         llm_mode: Mutex::new(file_cfg.llm_mode),
         local_llm_model: Mutex::new(file_cfg.local_llm_model),
@@ -424,6 +430,50 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
         .lock()
         .map(|tx| tx.send(AudioCommand::Start(selected_device)));
 
+    // Spawn the realtime chunked transcriber when the user has it
+    // turned on AND the active local backend is Parakeet. Whisper.cpp
+    // is too slow per-chunk to keep up; only Parakeet earns this path.
+    let chunked_on = st
+        .chunk_streaming_enabled
+        .lock()
+        .map(|b| *b)
+        .unwrap_or(false);
+    let backend_parakeet = st
+        .local_stt_backend
+        .lock()
+        .map(|b| b.as_str() == "parakeet")
+        .unwrap_or(false);
+    if is_local && chunked_on && backend_parakeet {
+        // Clear any zombie buffer from a previous run so the worker
+        // doesn't transcribe stale audio. The audio thread will
+        // refill from the new stream.
+        if let Ok(mut b) = st.audio_buffer.lock() {
+            b.clear();
+        }
+        let buffer_arc = st.audio_buffer.clone();
+        let on_chunk: Arc<crate::chunked_stt::ChunkCallback> =
+            Arc::new(|delta: &str, cumulative: &str, is_final: bool| {
+                let payload = serde_json::json!({
+                    "delta": delta,
+                    "cumulative": cumulative,
+                    "is_final": is_final,
+                })
+                .to_string();
+                emit_event("stt_chunk", &payload);
+            });
+        let transcriber = crate::chunked_stt::ChunkedTranscriber::start(
+            buffer_arc,
+            device_sr,
+            5.0,    // chunk_secs — interactive cadence
+            500,    // overlap_ms — proven safe value from WSL bench
+            on_chunk,
+        );
+        if let Ok(mut slot) = CHUNKED.lock() {
+            *slot = Some(transcriber);
+        }
+        log("[StartRec] chunked-stt worker spawned (5s+500ms+dedup)");
+    }
+
     emit_event("recording_started", "{}");
     0
 }
@@ -619,9 +669,22 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
 
     // Route transcription based on stt_mode: "local" or "cloud"
     let transcribe_start = std::time::Instant::now();
-    let transcript = if stt_mode == "local" {
+    // First, if a chunked transcriber was running for this session,
+    // drain it. It already produced the cumulative text incrementally
+    // via stt_chunk events during recording — `stop()` just runs one
+    // final pass on the trailing audio and returns the full string.
+    let chunked_taken = CHUNKED.lock().ok().and_then(|mut slot| slot.take());
+    let transcript = if let Some(ct) = chunked_taken {
+        log("[StopRec] draining chunked-stt worker");
+        let cumulative = ct.stop();
+        if cumulative.trim().is_empty() {
+            Err(crate::error::TranscribeError::Empty)
+        } else {
+            Ok(cumulative)
+        }
+    } else if stt_mode == "local" {
         if local_stt_backend == "parakeet" {
-            log("[StopRec] Local STT mode — backend: parakeet");
+            log("[StopRec] Local STT mode — backend: parakeet (batch)");
             crate::transcribe::transcribe_audio_local_parakeet(&processed)
         } else {
             log(&format!(
@@ -844,6 +907,12 @@ pub extern "C" fn dimmy_cancel_recording() {
     }
     if let Ok(mut b) = st.audio_buffer.lock() {
         b.clear();
+    }
+    // If a chunked transcriber was running, signal it and discard
+    // its output — `stop()` joins the worker thread cleanly. Without
+    // this drop the thread keeps running on a now-empty buffer.
+    if let Some(ct) = CHUNKED.lock().ok().and_then(|mut slot| slot.take()) {
+        let _ = ct.stop();
     }
     emit_event("recording_cancelled", "{}");
 
@@ -3486,6 +3555,7 @@ mod tests {
                 stt_mode: Mutex::new("local".to_string()),
                 local_model: Mutex::new("ggml-base-q8_0.bin".to_string()),
                 local_stt_backend: Mutex::new("whisper".to_string()),
+                live_captions_enabled: Mutex::new(true),
                 filler_removal_enabled: Mutex::new(true),
                 llm_mode: Mutex::new("cloud".to_string()),
                 local_llm_model: Mutex::new(crate::local_llm::DEFAULT_LLM_MODEL.to_string()),

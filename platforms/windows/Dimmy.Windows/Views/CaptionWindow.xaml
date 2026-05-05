@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="Dimmy.Windows.Views.CaptionWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Grid Background="Transparent" Padding="0">
+        <Border x:Name="CaptionBorder"
+                Background="#E61a1a1a"
+                CornerRadius="14"
+                Padding="18,12,18,12"
+                MinWidth="240"
+                MaxWidth="700"
+                BorderBrush="#33FFFFFF"
+                BorderThickness="1"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center">
+            <TextBlock x:Name="CaptionText"
+                       Text=""
+                       FontSize="16"
+                       FontWeight="Normal"
+                       Foreground="#FFFFFFFF"
+                       TextWrapping="Wrap"
+                       LineHeight="22" />
+        </Border>
+    </Grid>
+</Window>

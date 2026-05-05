@@ -28,6 +28,7 @@ pub mod local_stt;
 /// behind `local-stt-parakeet`; the bundle download/presence helpers
 /// are always available so the UI can render the "needs download"
 /// state without a feature-gate dance.
+pub mod chunked_stt;
 pub mod parakeet;
 pub mod preprocess;
 pub mod provider;
@@ -300,6 +301,12 @@ pub struct AppConfig {
     /// `"parakeet"` (Parakeet TDT v3 FP32 via the `local-stt-parakeet`
     /// feature). Old configs default to `"whisper"` for compatibility.
     pub local_stt_backend: String,
+    /// When true (and backend = parakeet), show a floating live-caption
+    /// window below the pill while chunked transcription is running.
+    /// Independent from `chunk_streaming_enabled` — a user can have
+    /// the chunked engine on for faster final paste while keeping the
+    /// caption window off if they find it visually distracting.
+    pub live_captions_enabled: bool,
     pub filler_removal_enabled: bool,
     // Local LLM fields
     pub llm_mode: String,        // "cloud" or "local"
@@ -363,6 +370,7 @@ impl Default for AppConfig {
             .to_string(),
             local_model: "ggml-base-q8_0.bin".to_string(),
             local_stt_backend: "whisper".to_string(),
+            live_captions_enabled: true,
             filler_removal_enabled: true,
             llm_mode: "cloud".to_string(),
             local_llm_model: local_llm::DEFAULT_LLM_MODEL.to_string(),
@@ -434,6 +442,7 @@ pub fn save_config_file(cfg: &AppConfig) {
             "stt_mode": cfg.stt_mode,
             "local_model": cfg.local_model,
             "local_stt_backend": cfg.local_stt_backend,
+            "live_captions_enabled": cfg.live_captions_enabled,
             "filler_removal_enabled": cfg.filler_removal_enabled,
             "llm_mode": cfg.llm_mode,
             "local_llm_model": cfg.local_llm_model,
@@ -548,6 +557,9 @@ pub fn load_config_file() -> AppConfig {
                         .as_str()
                         .unwrap_or(&defaults.local_stt_backend)
                         .to_string(),
+                    live_captions_enabled: v["live_captions_enabled"]
+                        .as_bool()
+                        .unwrap_or(defaults.live_captions_enabled),
                     filler_removal_enabled: v["filler_removal_enabled"]
                         .as_bool()
                         .unwrap_or(defaults.filler_removal_enabled),
@@ -775,6 +787,7 @@ pub struct AppState {
     pub stt_mode: Mutex<String>,
     pub local_model: Mutex<String>,
     pub local_stt_backend: Mutex<String>,
+    pub live_captions_enabled: Mutex<bool>,
     pub filler_removal_enabled: Mutex<bool>,
     // Local LLM state
     pub llm_mode: Mutex<String>,
@@ -881,6 +894,7 @@ impl AppState {
             stt_mode: Mutex::new(file_cfg.stt_mode),
             local_model: Mutex::new(file_cfg.local_model),
             local_stt_backend: Mutex::new(file_cfg.local_stt_backend),
+            live_captions_enabled: Mutex::new(file_cfg.live_captions_enabled),
             filler_removal_enabled: Mutex::new(file_cfg.filler_removal_enabled),
             llm_mode: Mutex::new(file_cfg.llm_mode),
             local_llm_model: Mutex::new(file_cfg.local_llm_model),
@@ -982,6 +996,10 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         .lock()
         .map_err(|e| e.to_string())?
         .clone();
+    let live_captions_enabled = *state
+        .live_captions_enabled
+        .lock()
+        .map_err(|e| e.to_string())?;
     let filler_removal_enabled = *state
         .filler_removal_enabled
         .lock()
@@ -1013,6 +1031,7 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         stt_mode,
         local_model,
         local_stt_backend,
+        live_captions_enabled,
         filler_removal_enabled,
         llm_mode: state.llm_mode.lock().map_err(|e| e.to_string())?.clone(),
         local_llm_model: state

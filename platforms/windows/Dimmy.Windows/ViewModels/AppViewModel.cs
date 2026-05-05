@@ -35,6 +35,16 @@ public partial class AppViewModel : ObservableObject
     [ObservableProperty] private string _statusText = "";
     [ObservableProperty] private string _errorMessage = "";
     [ObservableProperty] private float _amplitude;
+
+    /// Cumulative transcript text emitted by the chunked transcriber
+    /// (Rust core, behind chunk_streaming_enabled + Parakeet backend).
+    /// Updated on every stt_chunk event during recording. Cleared when
+    /// the recording finishes and the final paste is done.
+    [ObservableProperty] private string _liveCaptionText = "";
+
+    /// Mirrors the user-facing toggle. When false, App.xaml.cs does
+    /// not show the CaptionWindow even if the chunked engine is on.
+    [ObservableProperty] private bool _liveCaptionsEnabled = true;
     [ObservableProperty] private int _chunkCurrent;
     [ObservableProperty] private int _chunkTotal;
     [ObservableProperty] private string _llmStyle = "off";
@@ -106,6 +116,11 @@ public partial class AppViewModel : ObservableObject
     /// that as "indeterminate". Fired on the UI thread.
     public event Action<long, long>? ParakeetDownloadProgress;
 
+    /// Fires when the chunked transcriber emits a new chunk. Args:
+    /// (cumulative_text, is_final). App.xaml.cs uses this to show /
+    /// hide the CaptionWindow and to keep its text in sync.
+    public event Action<string, bool>? SttChunkReceived;
+
     public void HandleEvent(string? json)
     {
         if (string.IsNullOrEmpty(json)) return;
@@ -123,6 +138,14 @@ public partial class AppViewModel : ObservableObject
                     ParakeetDownloadProgress?.Invoke(
                         payload.GetProperty("downloaded").GetInt64(),
                         payload.GetProperty("total").GetInt64());
+                    break;
+                case "stt_chunk":
+                    {
+                        var cumulative = payload.GetProperty("cumulative").GetString() ?? "";
+                        var isFinal = payload.GetProperty("is_final").GetBoolean();
+                        LiveCaptionText = cumulative;
+                        SttChunkReceived?.Invoke(cumulative, isFinal);
+                    }
                     break;
                 case "recording_started":
                     if (SuppressRecordingStarted)

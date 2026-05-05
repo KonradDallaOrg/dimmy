@@ -28,6 +28,7 @@ public partial class App : Application
     /// callback already de-duplicates and dispatches onto the UI thread.
     public AppViewModel AppViewModel => _appViewModel;
     private PillWindow? _pillWindow;
+    private CaptionWindow? _captionWindow;
     private OnboardingWindow? _onboardingWindow;
     private HotkeyService? _hotkeyService;
     private TrayService? _trayService;
@@ -214,6 +215,11 @@ public partial class App : Application
             // 2. Register event callback
             _eventCallbackDelegate = OnNativeEvent;
             DimmyNative.dimmy_set_event_callback(_eventCallbackDelegate);
+
+            // 2b. Caption window — chunked transcriber emits stt_chunk
+            // events from the Rust core; we route them through the
+            // shared AppViewModel.SttChunkReceived hook.
+            _appViewModel.SttChunkReceived += OnSttChunkReceived;
 
             // 3. Load config into ViewModel
             LoadConfigIntoViewModel();
@@ -583,6 +589,53 @@ public partial class App : Application
         StartNormalMode();
     }
 
+    /// Fires on the UI thread for every chunk emitted by the Rust
+    /// chunked transcriber. Lazy-creates the CaptionWindow on first
+    /// use, positions it under the pill, updates the visible text.
+    /// On is_final hides the window after a short reading delay so
+    /// the user can finish glancing at the last chunk.
+    private void OnSttChunkReceived(string cumulative, bool isFinal)
+    {
+        if (!_appViewModel.LiveCaptionsEnabled) return;
+
+        if (_captionWindow == null)
+        {
+            _captionWindow = new CaptionWindow();
+            _captionWindow.Activate();
+        }
+
+        _captionWindow.SetText(cumulative);
+        AlignCaptionToPill();
+        if (!isFinal)
+        {
+            _captionWindow.Show();
+        }
+        else
+        {
+            // Hide after ~1.2s so the user gets a final glance, then
+            // clear ViewModel text so a new recording starts clean.
+            var dq = _dispatcherQueue;
+            _ = System.Threading.Tasks.Task.Delay(1200).ContinueWith(_ =>
+            {
+                dq?.TryEnqueue(() =>
+                {
+                    _captionWindow?.Hide();
+                    _appViewModel.LiveCaptionText = "";
+                });
+            });
+        }
+    }
+
+    private void AlignCaptionToPill()
+    {
+        if (_captionWindow == null || _pillWindow == null) return;
+        var pillAppWindow = WindowHelper.GetAppWindow(_pillWindow);
+        if (pillAppWindow == null) return;
+        var pos = pillAppWindow.Position;
+        var size = pillAppWindow.Size;
+        _captionWindow.PositionBelow(pos.X, pos.Y, size.Width, size.Height);
+    }
+
     private void OnNativeEvent(IntPtr jsonPtr)
     {
         try
@@ -646,6 +699,11 @@ public partial class App : Application
                 _appViewModel.KeepInClipboard = kc.GetBoolean();
             if (r.TryGetProperty("theme", out var pt))
                 _appViewModel.Theme = pt.GetString() ?? "Default";
+            // live_captions_enabled — defaults to true if absent (old configs).
+            // Drives whether OnSttChunkReceived shows the floating caption
+            // window. Independent of chunk_streaming_enabled.
+            _appViewModel.LiveCaptionsEnabled =
+                !r.TryGetProperty("live_captions_enabled", out var lce) || lce.GetBoolean();
             PttLog($"LoadConfig: shortcut={_appViewModel.Shortcut}, mode={_appViewModel.ShortcutMode}");
         }
         catch (Exception ex) { PttLog($"LoadConfig: parse error: {ex.Message}"); }

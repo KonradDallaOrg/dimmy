@@ -485,9 +485,15 @@
                                 OnContent="" OffContent="" />
                 </controls:SettingCard>
                 <controls:SettingCard Glyph="&#xE7F2;"
-                                      Label="Chunk streaming"
-                                      Description="Stream audio in chunks for partial results during long recordings.">
+                                      Label="Chunk streaming (Parakeet only)"
+                                      Description="Transcribe in 5 s windows during recording so the final paste lands ~700 ms after release instead of waiting for the full batch. Requires Local backend = Parakeet.">
                   <ToggleSwitch IsOn="{Binding ChunkStreamingEnabled, Mode=TwoWay}"
+                                OnContent="" OffContent="" />
+                </controls:SettingCard>
+                <controls:SettingCard Glyph="&#xE890;"
+                                      Label="Live captions"
+                                      Description="Show a floating caption window below the pill while chunked streaming is active. Toggle off to keep chunked speed-up without the on-screen caption.">
+                  <ToggleSwitch IsOn="{Binding LiveCaptionsEnabled, Mode=TwoWay}"
                                 OnContent="" OffContent="" />
                 </controls:SettingCard>
                 <!-- API keys always stored in local encrypted file (keys.enc) -->
