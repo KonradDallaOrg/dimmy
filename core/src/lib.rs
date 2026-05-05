@@ -295,6 +295,11 @@ pub struct AppConfig {
     // Local STT fields
     pub stt_mode: String,    // "cloud" or "local"
     pub local_model: String, // e.g. "ggml-base-q8_0.bin"
+    /// Which local STT backend to use when `stt_mode == "local"`. Either
+    /// `"whisper"` (whisper.cpp via the `local-stt` feature, default) or
+    /// `"parakeet"` (Parakeet TDT v3 FP32 via the `local-stt-parakeet`
+    /// feature). Old configs default to `"whisper"` for compatibility.
+    pub local_stt_backend: String,
     pub filler_removal_enabled: bool,
     // Local LLM fields
     pub llm_mode: String,        // "cloud" or "local"
@@ -357,6 +362,7 @@ impl Default for AppConfig {
             }
             .to_string(),
             local_model: "ggml-base-q8_0.bin".to_string(),
+            local_stt_backend: "whisper".to_string(),
             filler_removal_enabled: true,
             llm_mode: "cloud".to_string(),
             local_llm_model: local_llm::DEFAULT_LLM_MODEL.to_string(),
@@ -427,6 +433,7 @@ pub fn save_config_file(cfg: &AppConfig) {
             "use_keyring": cfg.use_keyring,
             "stt_mode": cfg.stt_mode,
             "local_model": cfg.local_model,
+            "local_stt_backend": cfg.local_stt_backend,
             "filler_removal_enabled": cfg.filler_removal_enabled,
             "llm_mode": cfg.llm_mode,
             "local_llm_model": cfg.local_llm_model,
@@ -536,6 +543,10 @@ pub fn load_config_file() -> AppConfig {
                     local_model: v["local_model"]
                         .as_str()
                         .unwrap_or(&defaults.local_model)
+                        .to_string(),
+                    local_stt_backend: v["local_stt_backend"]
+                        .as_str()
+                        .unwrap_or(&defaults.local_stt_backend)
                         .to_string(),
                     filler_removal_enabled: v["filler_removal_enabled"]
                         .as_bool()
@@ -763,6 +774,7 @@ pub struct AppState {
     // Local STT state
     pub stt_mode: Mutex<String>,
     pub local_model: Mutex<String>,
+    pub local_stt_backend: Mutex<String>,
     pub filler_removal_enabled: Mutex<bool>,
     // Local LLM state
     pub llm_mode: Mutex<String>,
@@ -868,6 +880,7 @@ impl AppState {
             use_keyring: Mutex::new(file_cfg.use_keyring),
             stt_mode: Mutex::new(file_cfg.stt_mode),
             local_model: Mutex::new(file_cfg.local_model),
+            local_stt_backend: Mutex::new(file_cfg.local_stt_backend),
             filler_removal_enabled: Mutex::new(file_cfg.filler_removal_enabled),
             llm_mode: Mutex::new(file_cfg.llm_mode),
             local_llm_model: Mutex::new(file_cfg.local_llm_model),
@@ -964,6 +977,11 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
     let ggml_debug_logging = *state.ggml_debug_logging.lock().map_err(|e| e.to_string())?;
     let stt_mode = state.stt_mode.lock().map_err(|e| e.to_string())?.clone();
     let local_model = state.local_model.lock().map_err(|e| e.to_string())?.clone();
+    let local_stt_backend = state
+        .local_stt_backend
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     let filler_removal_enabled = *state
         .filler_removal_enabled
         .lock()
@@ -994,6 +1012,7 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         use_keyring: *state.use_keyring.lock().map_err(|e| e.to_string())?,
         stt_mode,
         local_model,
+        local_stt_backend,
         filler_removal_enabled,
         llm_mode: state.llm_mode.lock().map_err(|e| e.to_string())?.clone(),
         local_llm_model: state

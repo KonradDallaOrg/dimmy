@@ -200,6 +200,7 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _showInTaskbar;
     [ObservableProperty] private string _sttMode = "cloud";
     [ObservableProperty] private string _localModel = "ggml-base-q8_0.bin";
+    [ObservableProperty] private string _localSttBackend = "whisper";
     [ObservableProperty] private bool _fillerRemovalEnabled = true;
     [ObservableProperty] private string _llmMode = "cloud";
     [ObservableProperty] private string _localLlmModel = "gemma-4-E2B-it-Q4_K_M.gguf";
@@ -311,6 +312,7 @@ public partial class SettingsViewModel : ObservableObject
             catch { /* DLL maybe missing in test/headless context */ }
             SttMode = r.TryGetProperty("stt_mode", out var sm2) ? sm2.GetString() ?? "cloud" : "cloud";
             LocalModel = r.TryGetProperty("local_model", out var lmod) ? lmod.GetString() ?? "ggml-base-q8_0.bin" : "ggml-base-q8_0.bin";
+            LocalSttBackend = r.TryGetProperty("local_stt_backend", out var lsb) ? lsb.GetString() ?? "whisper" : "whisper";
             FillerRemovalEnabled = !r.TryGetProperty("filler_removal_enabled", out var fre) || fre.GetBoolean();
             LlmMode = r.TryGetProperty("llm_mode", out var llmm) ? llmm.GetString() ?? "cloud" : "cloud";
             LocalLlmModel = r.TryGetProperty("local_llm_model", out var llmod) ? llmod.GetString() ?? "gemma-4-E2B-it-Q4_K_M.gguf" : "gemma-4-E2B-it-Q4_K_M.gguf";
@@ -363,6 +365,7 @@ public partial class SettingsViewModel : ObservableObject
             ["ggml_debug_logging"] = GgmlDebugLogging,
             ["stt_mode"] = SttMode,
             ["local_model"] = LocalModel,
+            ["local_stt_backend"] = LocalSttBackend,
             ["filler_removal_enabled"] = FillerRemovalEnabled,
             ["llm_mode"] = LlmMode,
             ["local_llm_model"] = LocalLlmModel,

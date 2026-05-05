@@ -376,7 +376,9 @@ public sealed partial class SettingsWindow : Window
         CloudSttPanel.Visibility = isLocal ? Visibility.Collapsed : Visibility.Visible;
 
         if (isLocal)
-            CheckModelStatus();
+        {
+            SyncLocalSttBackend();
+        }
     }
 
     private void SttMode_Checked(object sender, RoutedEventArgs e)
@@ -390,7 +392,108 @@ public sealed partial class SettingsWindow : Window
             CloudSttPanel.Visibility = isLocal ? Visibility.Collapsed : Visibility.Visible;
 
             if (isLocal)
+                SyncLocalSttBackend();
+        }
+    }
+
+    // ── Local STT backend (whisper / parakeet) ───────────────────────
+
+    private void SyncLocalSttBackend()
+    {
+        // Select matching ComboBox item from ViewModel value.
+        for (int i = 0; i < LocalSttBackendComboBox.Items.Count; i++)
+        {
+            if (LocalSttBackendComboBox.Items[i] is ComboBoxItem item
+                && item.Tag is string tag && tag == ViewModel.LocalSttBackend)
+            {
+                LocalSttBackendComboBox.SelectedIndex = i;
+                break;
+            }
+        }
+        ApplyBackendVisibility(ViewModel.LocalSttBackend);
+        if (ViewModel.LocalSttBackend == "parakeet")
+            CheckParakeetStatus();
+        else
+            CheckModelStatus();
+    }
+
+    private void ApplyBackendVisibility(string backend)
+    {
+        bool isParakeet = backend == "parakeet";
+        WhisperCardsPanel.Visibility = isParakeet ? Visibility.Collapsed : Visibility.Visible;
+        ParakeetCardsPanel.Visibility = isParakeet ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void LocalSttBackend_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_loaded) return;
+        if (LocalSttBackendComboBox.SelectedItem is ComboBoxItem item && item.Tag is string tag)
+        {
+            ViewModel.LocalSttBackend = tag;
+            ApplyBackendVisibility(tag);
+            if (tag == "parakeet")
+                CheckParakeetStatus();
+            else
                 CheckModelStatus();
+        }
+    }
+
+    private void CheckParakeetStatus()
+    {
+        try
+        {
+            int present = DimmyNative.dimmy_parakeet_bundle_present();
+            if (present == 1)
+            {
+                ParakeetStatusText.Text = "Ready";
+                DownloadParakeetBtn.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                ParakeetStatusText.Text = "Not downloaded";
+                DownloadParakeetBtn.Visibility = Visibility.Visible;
+                DownloadParakeetBtn.IsEnabled = true;
+                DownloadParakeetBtn.Content = "Download (2.5 GB)";
+            }
+        }
+        catch
+        {
+            ParakeetStatusText.Text = "Unable to check";
+        }
+    }
+
+    private async void DownloadParakeet_Click(object sender, RoutedEventArgs e)
+    {
+        DownloadParakeetBtn.IsEnabled = false;
+        DownloadParakeetBtn.Content = "Downloading...";
+        ParakeetDownloadProgress.IsIndeterminate = true;
+        ParakeetDownloadProgress.Visibility = Visibility.Visible;
+        ParakeetStatusText.Text = "Downloading 2.5 GB — first run takes 5-10 min...";
+
+        try
+        {
+            int rc = await Task.Run(() => DimmyNative.dimmy_parakeet_download_bundle());
+            if (rc == 0)
+            {
+                ParakeetStatusText.Text = "Ready";
+                DownloadParakeetBtn.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                ParakeetStatusText.Text = "Download failed";
+                DownloadParakeetBtn.Content = "Retry Download";
+                DownloadParakeetBtn.IsEnabled = true;
+            }
+        }
+        catch
+        {
+            ParakeetStatusText.Text = "Download failed";
+            DownloadParakeetBtn.Content = "Retry Download";
+            DownloadParakeetBtn.IsEnabled = true;
+        }
+        finally
+        {
+            ParakeetDownloadProgress.Visibility = Visibility.Collapsed;
         }
     }
 

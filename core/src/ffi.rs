@@ -214,6 +214,7 @@ fn dimmy_init_inner() -> c_int {
         use_keyring: Mutex::new(file_cfg.use_keyring),
         stt_mode: Mutex::new(file_cfg.stt_mode),
         local_model: Mutex::new(file_cfg.local_model),
+        local_stt_backend: Mutex::new(file_cfg.local_stt_backend),
         filler_removal_enabled: Mutex::new(file_cfg.filler_removal_enabled),
         llm_mode: Mutex::new(file_cfg.llm_mode),
         local_llm_model: Mutex::new(file_cfg.local_llm_model),
@@ -551,6 +552,11 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         .lock()
         .map(|m| m.clone())
         .unwrap_or_else(|_| "ggml-base-q8_0.bin".to_string());
+    let local_stt_backend = st
+        .local_stt_backend
+        .lock()
+        .map(|m| m.clone())
+        .unwrap_or_else(|_| "whisper".to_string());
     let api_url = st.api_url.lock().map(|u| u.clone()).unwrap_or_default();
     let api_model = st.api_model.lock().map(|m| m.clone()).unwrap_or_default();
     // API key is only required for cloud mode
@@ -614,11 +620,16 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
     // Route transcription based on stt_mode: "local" or "cloud"
     let transcribe_start = std::time::Instant::now();
     let transcript = if stt_mode == "local" {
-        log(&format!(
-            "[StopRec] Local STT mode — model: {}",
-            local_model_filename
-        ));
-        crate::transcribe::transcribe_audio_local(&processed, &language, &local_model_filename)
+        if local_stt_backend == "parakeet" {
+            log("[StopRec] Local STT mode — backend: parakeet");
+            crate::transcribe::transcribe_audio_local_parakeet(&processed)
+        } else {
+            log(&format!(
+                "[StopRec] Local STT mode — backend: whisper, model: {}",
+                local_model_filename
+            ));
+            crate::transcribe::transcribe_audio_local(&processed, &language, &local_model_filename)
+        }
     } else {
         // Cloud mode: existing flow — WAV encode + chunked cloud API
         let cloud_key = api_key.unwrap_or_default();
@@ -3474,6 +3485,7 @@ mod tests {
                 use_keyring: Mutex::new(false),
                 stt_mode: Mutex::new("local".to_string()),
                 local_model: Mutex::new("ggml-base-q8_0.bin".to_string()),
+                local_stt_backend: Mutex::new("whisper".to_string()),
                 filler_removal_enabled: Mutex::new(true),
                 llm_mode: Mutex::new("cloud".to_string()),
                 local_llm_model: Mutex::new(crate::local_llm::DEFAULT_LLM_MODEL.to_string()),

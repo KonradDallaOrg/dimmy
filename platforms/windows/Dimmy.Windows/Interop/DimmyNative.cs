@@ -100,6 +100,13 @@ public static class DimmyNative
     public static extern int dimmy_llm_model_exists(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string filename);
 
+    // ── Parakeet TDT v3 FP32 (alternative local STT backend) ─────
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_parakeet_bundle_present();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_parakeet_download_bundle();
+
     // ── History ──────────────────────────────────────────────────
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_history_save(

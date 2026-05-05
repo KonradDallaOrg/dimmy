@@ -259,24 +259,55 @@
 
               <!-- Local STT (when Local selected) -->
               <StackPanel x:Name="LocalSttPanel" Spacing="4">
-                <controls:SettingCard Glyph="&#xE968;"
-                                      Label="Local model"
-                                      Description="Whisper.cpp runs entirely offline.">
-                  <ComboBox x:Name="LocalModelComboBox" MinWidth="240"
-                            SelectionChanged="LocalModel_SelectionChanged" />
+                <controls:SettingCard Glyph="&#xE7B5;"
+                                      Label="Local backend"
+                                      Description="Whisper.cpp ships in multiple sizes; Parakeet TDT v3 is faster and EU-language friendly but downloads ~2.5 GB on first use.">
+                  <ComboBox x:Name="LocalSttBackendComboBox" MinWidth="240"
+                            SelectionChanged="LocalSttBackend_SelectionChanged">
+                    <ComboBoxItem Tag="whisper" Content="Whisper.cpp" />
+                    <ComboBoxItem Tag="parakeet" Content="Parakeet TDT v3 FP32" />
+                  </ComboBox>
                 </controls:SettingCard>
-                <controls:SettingCard Glyph="&#xE946;"
-                                      Label="Model status">
-                  <StackPanel Orientation="Horizontal" Spacing="8">
-                    <TextBlock x:Name="LocalModelStatus" Text="Checking..."
-                               FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                               VerticalAlignment="Center" />
-                    <Button x:Name="DownloadModelBtn" Content="Download"
-                            Click="DownloadModel_Click" Visibility="Collapsed" />
-                    <ProgressBar x:Name="DownloadProgress" IsIndeterminate="True"
-                                 Width="120" Visibility="Collapsed" />
-                  </StackPanel>
-                </controls:SettingCard>
+
+                <!-- Whisper.cpp cards (visible when backend = whisper) -->
+                <StackPanel x:Name="WhisperCardsPanel" Spacing="4">
+                  <controls:SettingCard Glyph="&#xE968;"
+                                        Label="Local model"
+                                        Description="Whisper.cpp runs entirely offline.">
+                    <ComboBox x:Name="LocalModelComboBox" MinWidth="240"
+                              SelectionChanged="LocalModel_SelectionChanged" />
+                  </controls:SettingCard>
+                  <controls:SettingCard Glyph="&#xE946;"
+                                        Label="Model status">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <TextBlock x:Name="LocalModelStatus" Text="Checking..."
+                                 FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                 VerticalAlignment="Center" />
+                      <Button x:Name="DownloadModelBtn" Content="Download"
+                              Click="DownloadModel_Click" Visibility="Collapsed" />
+                      <ProgressBar x:Name="DownloadProgress" IsIndeterminate="True"
+                                   Width="120" Visibility="Collapsed" />
+                    </StackPanel>
+                  </controls:SettingCard>
+                </StackPanel>
+
+                <!-- Parakeet cards (visible when backend = parakeet) -->
+                <StackPanel x:Name="ParakeetCardsPanel" Spacing="4" Visibility="Collapsed">
+                  <controls:SettingCard Glyph="&#xE946;"
+                                        Label="Parakeet bundle"
+                                        Description="One-time 2.5 GB download (NVIDIA NeMo Parakeet TDT v3 FP32).">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <TextBlock x:Name="ParakeetStatusText" Text="Checking..."
+                                 FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                 VerticalAlignment="Center" />
+                      <Button x:Name="DownloadParakeetBtn" Content="Download (2.5 GB)"
+                              Click="DownloadParakeet_Click" Visibility="Collapsed" />
+                      <ProgressBar x:Name="ParakeetDownloadProgress" Width="160"
+                                   Minimum="0" Maximum="100" Visibility="Collapsed" />
+                    </StackPanel>
+                  </controls:SettingCard>
+                </StackPanel>
+
                 <controls:SettingCard Glyph="&#xE74D;"
                                       Label="Remove filler words"
                                       Description="Strips um, uh, basically, cioè, ecc. in 6 languages.">
