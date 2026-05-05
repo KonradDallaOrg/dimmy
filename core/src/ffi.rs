@@ -3204,6 +3204,15 @@ pub extern "C" fn dimmy_license_billing_portal_url(buf: *mut c_char, buf_len: c_
 /// returns JSON `{ok, license_id, tier, max_devices, devices: [...], error?}`.
 #[no_mangle]
 pub extern "C" fn dimmy_license_devices_list(buf: *mut c_char, buf_len: c_int) -> c_int {
+    // Source / dev builds have no embedded pubkey AND no embedded server
+    // URL; the URL falls back to http://localhost:8787 which obviously
+    // isn't running for an end user, so the call surfaces a confusing
+    // "connection refused localhost:8787" error in Settings → Devices.
+    // Short-circuit here with a clear "licensing not configured" so the
+    // UI can render an empty state instead of a network error.
+    if license::EMBEDDED_PUBKEY_B64.is_empty() {
+        return write_license_err(buf, buf_len, "licensing not configured in this build");
+    }
     let token = match license::load_license_file() {
         Ok(Some(t)) => t,
         Ok(None) => return write_license_err(buf, buf_len, "no license file"),
@@ -3241,6 +3250,12 @@ pub unsafe extern "C" fn dimmy_license_device_deactivate(
     buf: *mut c_char,
     buf_len: c_int,
 ) -> c_int {
+    // Same source-build short-circuit as dimmy_license_devices_list —
+    // skip the localhost HTTP attempt when there's no licensing server
+    // configured for this build.
+    if license::EMBEDDED_PUBKEY_B64.is_empty() {
+        return write_license_err(buf, buf_len, "licensing not configured in this build");
+    }
     let token = match license::load_license_file() {
         Ok(Some(t)) => t,
         Ok(None) => return write_license_err(buf, buf_len, "no license file"),
