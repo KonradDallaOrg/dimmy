@@ -462,10 +462,8 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
                 emit_event("stt_chunk", &payload);
             });
         let transcriber = crate::chunked_stt::ChunkedTranscriber::start(
-            buffer_arc,
-            device_sr,
-            5.0,    // chunk_secs — interactive cadence
-            500,    // overlap_ms — proven safe value from WSL bench
+            buffer_arc, device_sr, 5.0, // chunk_secs — interactive cadence
+            500, // overlap_ms — proven safe value from WSL bench
             on_chunk,
         );
         if let Ok(mut slot) = CHUNKED.lock() {
