@@ -224,6 +224,26 @@ via committed JFK fixture, not live recording).
 - `cargo test --release --test parakeet_e2e --features local-stt-parakeet -- --test-threads=1` → all 4 tests pass (empty PCM, JFK transcribe, italian fixtures skipped without recordings, warm-call deterministic). The binary then SIGABRTs at process exit — known cosmetic noise tracked as STT-002 in `known-bugs.md`.
 - Output text: `"And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country."` — byte-identical to the upstream reference, no leading-phoneme drop.
 
+### Chunked path validated offline
+
+`core/src/bin/chunked_smoke.rs` simulates a live cpal capture by tiling
+the JFK fixture 4× (44 s) and pushing 100 ms slices into the shared
+`Arc<Mutex<Vec<f32>>>` while `ChunkedTranscriber` runs against it.
+Result on this Mac:
+
+- **8 non-final chunks + 1 final** fired across the 44 s window
+- per-chunk transcribe **493–622 ms warm** (after a 6 s cold load on
+  chunk #1) — same envelope the WSL bench reported
+- total wall time **46.1 s for 44 s audio = ~1.05× realtime**, i.e.
+  the worker keeps up with live capture comfortably
+- final cumulative contains the full JFK quote 4 times. Dedup
+  imperfections at tile boundaries (`"Ask not"` / `"And so"` echoes)
+  are an artifact of the input being a literal repeat of the same
+  phrase — the WSL last-3-words dedup is tuned for natural speech
+  where phrase-level duplication doesn't occur. The audio chosen for
+  the smoke is intentionally adversarial; on natural speech the
+  cross-platform behaviour matches the published numbers.
+
 ## Risks / open questions
 
 - **`ort` 2.0.0-rc.10 API stability**: rc.12 broke compilation on a

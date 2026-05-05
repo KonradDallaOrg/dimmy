@@ -60,6 +60,16 @@ name = "parakeet_bench"
 path = "src/bin/parakeet_bench.rs"
 required-features = ["local-stt-parakeet"]
 
+# Offline driver for the chunked-STT pipeline. Tiles a WAV, simulates
+# a live cpal capture by pushing 100 ms slices into the shared PCM
+# buffer, prints every per-chunk callback + the final cumulative
+# transcript. Used on dev Macs / Linux without a microphone to
+# validate the chunked path end-to-end against medium-long audio.
+[[bin]]
+name = "chunked_smoke"
+path = "src/bin/chunked_smoke.rs"
+required-features = ["local-stt-parakeet"]
+
 [features]
 default = ["local-stt", "telemetry-sentry"]
 local-stt = ["dep:whisper-rs"]
