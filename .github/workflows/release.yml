@@ -171,6 +171,7 @@ jobs:
           # binary as "unrestricted" (source-build path). Released
           # binaries always have it set so license verification is on.
           DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY }}
+          DIMMY_LICENSE_SERVER_URL: https://license.dimmy.app
         run: |
           echo "CMake: $(cmake --version | head -1)"
           echo "Xcode CLT: $(xcode-select -p)"
@@ -395,6 +396,7 @@ jobs:
           # Licensing v2 — same env var the macOS build above injects.
           # Embedded into core/src/license.rs via option_env!.
           DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY }}
+          DIMMY_LICENSE_SERVER_URL: https://license.dimmy.app
         run: |
           REM Activate VS 2026 MSVC for this step only — PATH, INCLUDE,
           REM LIB point at the 14.50+ toolchain. Subsequent steps inherit
@@ -567,6 +569,7 @@ jobs:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           # Licensing v2 — same env var the other build steps inject.
           DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY }}
+          DIMMY_LICENSE_SERVER_URL: https://license.dimmy.app
         run: cargo build --release
 
       - name: Package AppImage

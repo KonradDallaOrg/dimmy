@@ -185,6 +185,11 @@ jobs:
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY }}
+          # prod license URL — paired with the prod pubkey above.
+          # build.rs (commit 8a71f30) refuses any build where pubkey
+          # is set but URL is empty, to prevent staging-keyed binaries
+          # from accidentally hitting prod via a hardcoded fallback.
+          DIMMY_LICENSE_SERVER_URL: https://license.dimmy.app
         run: |
           echo "CMake: $(cmake --version | head -1)"
           echo "Xcode CLT: $(xcode-select -p)"
@@ -409,6 +414,11 @@ jobs:
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY }}
+          # prod license URL — paired with the prod pubkey above.
+          # build.rs (commit 8a71f30) refuses any build where pubkey
+          # is set but URL is empty, to prevent staging-keyed binaries
+          # from accidentally hitting prod via a hardcoded fallback.
+          DIMMY_LICENSE_SERVER_URL: https://license.dimmy.app
         run: |
           REM Activate VS 2026 MSVC for this step only — PATH, INCLUDE,
           REM LIB point at the 14.50+ toolchain. Subsequent steps inherit
@@ -580,6 +590,11 @@ jobs:
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY }}
+          # prod license URL — paired with the prod pubkey above.
+          # build.rs (commit 8a71f30) refuses any build where pubkey
+          # is set but URL is empty, to prevent staging-keyed binaries
+          # from accidentally hitting prod via a hardcoded fallback.
+          DIMMY_LICENSE_SERVER_URL: https://license.dimmy.app
         run: cargo build --release
 
       - name: Package AppImage
