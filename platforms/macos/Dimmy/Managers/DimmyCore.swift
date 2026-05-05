@@ -21,12 +21,67 @@ final class DimmyCore {
     /// pending so `initializeCoreAsync` hasn't fired).
     private(set) var isInitialized: Bool = false
 
+    // MARK: - ONNX Runtime dylib path
+
+    /// Resolve and export ORT_DYLIB_PATH BEFORE the first FFI call. The
+    /// `ort` crate is built with the `load-dynamic` feature, so the
+    /// Parakeet path opens libonnxruntime.dylib via this env var on
+    /// first use. Lookup chain (first hit wins):
+    ///   1. caller-provided env var (CI / dev)
+    ///   2. Frameworks folder of the running .app (release / `Cmd+R`)
+    ///   3. repo dev fallback core/target/onnxruntime-osx-arm64-<ver>/lib/
+    /// If none resolve we leave the var unset; ort will surface a clear
+    /// "library not loaded" only when Parakeet is actually invoked,
+    /// keeping non-Parakeet flows unaffected.
+    private static func configureOrtDylibPath() {
+        if let existing = ProcessInfo.processInfo.environment["ORT_DYLIB_PATH"],
+           !existing.isEmpty {
+            return
+        }
+        let fm = FileManager.default
+        let candidates: [String] = [
+            Bundle.main.privateFrameworksPath.map { "\($0)/libonnxruntime.dylib" },
+            Bundle.main.bundlePath.appending("/Contents/Frameworks/libonnxruntime.dylib"),
+            devFallbackOrtPath(),
+        ].compactMap { $0 }
+        for path in candidates where fm.fileExists(atPath: path) {
+            setenv("ORT_DYLIB_PATH", path, 1)
+            print("[DimmyCore] ORT_DYLIB_PATH=\(path)")
+            return
+        }
+        print("[DimmyCore] ORT_DYLIB_PATH unresolved (Parakeet path will fail until set)")
+    }
+
+    private static func devFallbackOrtPath() -> String? {
+        // Walk up from the app bundle to the repo root and pick the
+        // pinned arm64 dylib that scripts/download-onnxruntime.sh drops
+        // under core/target/. Only used during `swift build` / Xcode
+        // run-from-source; release .app installs hit the Frameworks
+        // path above first.
+        let bundlePath = Bundle.main.bundlePath
+        let parts = bundlePath.split(separator: "/").map(String.init)
+        guard parts.count >= 4 else { return nil }
+        // Trim platforms/macos/build/.../Dimmy.app — repo root is 5+ levels up.
+        // Conservative: try a few ancestor depths and pick the first hit.
+        var candidate = (bundlePath as NSString).deletingLastPathComponent
+        for _ in 0..<8 {
+            let probe = "\(candidate)/core/target/onnxruntime-osx-arm64-1.22.0/lib/libonnxruntime.dylib"
+            if FileManager.default.fileExists(atPath: probe) {
+                return probe
+            }
+            candidate = (candidate as NSString).deletingLastPathComponent
+            if candidate == "/" || candidate.isEmpty { break }
+        }
+        return nil
+    }
+
     // MARK: - Lifecycle
 
     /// Initialize the Rust core. Call once at app launch.
     /// Returns true on success.
     @discardableResult
     func initialize() -> Bool {
+        Self.configureOrtDylibPath()
         let result = dimmy_init()
         if result == 0 {
             isInitialized = true
@@ -375,6 +430,25 @@ final class DimmyCore {
         }
     }
 
+    // MARK: - Parakeet (alternative local STT backend)
+
+    /// 1 = bundle complete on disk, 0 = missing or partial.
+    func parakeetBundlePresent() -> Bool {
+        dimmy_parakeet_bundle_present() == 1
+    }
+
+    /// Download the ~2.5 GB Parakeet bundle into the dimmy config dir.
+    /// BLOCKING — call from a background thread. Progress arrives as
+    /// "parakeet_bundle_download_progress" events on the global handler.
+    @discardableResult
+    func downloadParakeetBundle() -> Bool {
+        let result = dimmy_parakeet_download_bundle()
+        if result != 0 {
+            print("[DimmyCore] ERROR: downloadParakeetBundle failed with code \(result)")
+        }
+        return result == 0
+    }
+
     // MARK: - Local LLM Models
 
     /// List available local LLM models with download status.
@@ -580,6 +654,13 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
            let total = payload["total"] as? Int,
            total > 0 {
             appState.llmModelDownloadProgress = Double(downloaded) / Double(total)
+        }
+
+    case "parakeet_bundle_download_progress":
+        if let downloaded = payload["downloaded"] as? Int,
+           let total = payload["total"] as? Int,
+           total > 0 {
+            appState.parakeetDownloadProgress = Double(downloaded) / Double(total)
         }
 
     default:

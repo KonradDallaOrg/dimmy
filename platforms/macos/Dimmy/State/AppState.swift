@@ -557,6 +557,15 @@ final class AppState: ObservableObject {
     @Published var isDownloadingModel: Bool = false
     @Published var fillerRemovalEnabled: Bool = true
 
+    /// Active local STT backend. Mirrors core's AppConfig.local_stt_backend.
+    /// "whisper" = whisper.cpp (ggml models, default); "parakeet" = NVIDIA
+    /// TDT v3 FP32 via ONNX Runtime. The two are mutually exclusive — the
+    /// dispatcher in transcribe.rs picks one based on this string.
+    @Published var localSttBackend: String = "whisper"
+    @Published var parakeetDownloadProgress: Double = 0.0
+    @Published var isDownloadingParakeet: Bool = false
+    @Published var parakeetBundlePresent: Bool = false
+
     // MARK: - LLM Mode (local vs cloud)
 
     @Published var llmMode: String = "cloud"  // "local" or "cloud"
@@ -717,6 +726,7 @@ final class AppState: ObservableObject {
         // Local STT
         if let v = config["stt_mode"] as? String { sttMode = v }
         if let v = config["local_model"] as? String { localModel = v }
+        if let v = config["local_stt_backend"] as? String { localSttBackend = v }
         if let v = config["filler_removal_enabled"] as? Bool { fillerRemovalEnabled = v }
 
         // Local LLM
@@ -789,6 +799,7 @@ final class AppState: ObservableObject {
             "llm_log_enabled": llmLogEnabled,
             "stt_mode": sttMode,
             "local_model": localModel,
+            "local_stt_backend": localSttBackend,
             "filler_removal_enabled": fillerRemovalEnabled,
             "llm_mode": llmMode,
             "local_llm_model": localLlmModel,

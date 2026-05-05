@@ -97,6 +97,23 @@ int32_t dimmy_download_model(const char * _Nonnull filename);
 /// Returns 1=yes, 0=no.
 int32_t dimmy_model_exists(const char * _Nonnull filename);
 
+// ── Parakeet TDT v3 FP32 (alternative local STT backend) ────────────
+
+/// 1 = the Parakeet FP32 bundle (~2.5 GB) is fully on disk, 0 otherwise.
+int32_t dimmy_parakeet_bundle_present(void);
+
+/// Download the Parakeet bundle into the dimmy config dir. BLOCKING —
+/// call from a background thread. Emits "parakeet_bundle_download_progress"
+/// events with {downloaded,total}. Returns 0=OK, -1=error.
+int32_t dimmy_parakeet_download_bundle(void);
+
+/// Direct PCM → text via Parakeet (used by tests / smoke; the live STT
+/// path goes through dimmy_stop_recording()). Returns bytes written, or -1.
+int32_t dimmy_parakeet_transcribe(const float * _Nullable pcm_ptr,
+                                  int32_t pcm_len,
+                                  char * _Nonnull out_buf,
+                                  int32_t buf_len);
+
 // ── Local LLM ────────────────────────────────────────────────────────
 
 /// Get JSON array of available local LLM models with download status.
