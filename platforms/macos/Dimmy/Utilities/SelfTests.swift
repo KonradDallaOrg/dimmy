@@ -21,6 +21,9 @@ enum SelfTests {
         testSttProviderFromUrl()
         testHotkeyStatusCases()
         testOnboardingStepCount()
+        testPillCycleStyleWrap()
+        testPillCycleLanguageWrap()
+        testPillCyclePresetsAreContiguous()
         print("[SelfTests] All \(testCount) tests passed.")
         #endif
     }
@@ -206,5 +209,89 @@ enum SelfTests {
 
     private static func testOnboardingStepCount() {
         assert(OnboardingContainerView.totalSteps == 4, "Onboarding has 4 steps, got \(OnboardingContainerView.totalSteps)")
+    }
+
+    // MARK: - Pill scroll-cycle (regression: see fix(mac) commit bca5c4a)
+    //
+    // The pill style dot + language label both let the user scroll-cycle
+    // through MacLlmStyles / PillTranslateLanguages. The cycle math
+    // (`(current + step + count) % count`) explodes if either array is
+    // empty, and the `firstIndex(of:)` fallback to 0 has to keep working
+    // for unknown values (e.g. config from a future build with a new
+    // style). These tests assert both invariants without spinning up a
+    // full SwiftUI surface — they're pure-data checks on the same
+    // arrays the runtime uses.
+
+    /// Pure cycle math, parameterised so we can run it against either
+    /// preset list. Mirrors the body of cycleStyle / cycleLanguage in
+    /// PillView; if PillView's algorithm changes, this stays the
+    /// canonical reference.
+    private static func cycleMath(keys: [String], current: String, deltaPositive: Bool) -> String {
+        precondition(!keys.isEmpty, "cycle keys must not be empty")
+        let i = keys.firstIndex(of: current) ?? 0
+        let step = deltaPositive ? -1 : 1
+        let next = (i + step + keys.count) % keys.count
+        return keys[next]
+    }
+
+    private static func testPillCycleStyleWrap() {
+        let keys = MacLlmStyles.map { $0.key }
+        assert(!keys.isEmpty, "MacLlmStyles must not be empty")
+
+        // Forward from "off" lands on the next item.
+        assert(cycleMath(keys: keys, current: "off", deltaPositive: false) == keys[1],
+               "scroll-down from off must move to keys[1], got \(cycleMath(keys: keys, current: "off", deltaPositive: false))")
+
+        // Forward wraparound: from the last key cycles back to the first.
+        let last = keys.last!
+        assert(cycleMath(keys: keys, current: last, deltaPositive: false) == keys[0],
+               "scroll-down from last (\(last)) must wrap to keys[0]")
+
+        // Backward wraparound: from the first key cycles to the last.
+        assert(cycleMath(keys: keys, current: keys[0], deltaPositive: true) == last,
+               "scroll-up from first must wrap to last")
+
+        // Unknown current value falls back to index 0; one step forward
+        // lands on keys[1], not on a stray index.
+        assert(cycleMath(keys: keys, current: "this-style-does-not-exist", deltaPositive: false) == keys[1],
+               "unknown current must fall back to index 0 then step")
+    }
+
+    private static func testPillCycleLanguageWrap() {
+        let keys = PillTranslateLanguages.map { $0.key }
+        assert(!keys.isEmpty, "PillTranslateLanguages must not be empty")
+        assert(keys[0] == "", "first translate-to entry must be the empty / no-translation key")
+
+        let last = keys.last!
+        assert(cycleMath(keys: keys, current: last, deltaPositive: false) == keys[0],
+               "wrap forward from last → first")
+        assert(cycleMath(keys: keys, current: keys[0], deltaPositive: true) == last,
+               "wrap backward from first → last")
+
+        // Unknown locale code (e.g. someone manually edited config.json
+        // with "tlh") must not crash — falls back to index 0.
+        let next = cycleMath(keys: keys, current: "tlh", deltaPositive: false)
+        assert(next == keys[1], "unknown lang must fall back to keys[1] after one forward step")
+    }
+
+    /// Catches the regression class where someone edits a preset list
+    /// in one place but forgets to update an enum / Rust mirror. We
+    /// can't hit Rust from the Swift self-test, but we can at least
+    /// assert the lists' shape stays sane.
+    private static func testPillCyclePresetsAreContiguous() {
+        let styleKeys = MacLlmStyles.map { $0.key }
+        let langKeys = PillTranslateLanguages.map { $0.key }
+
+        // No duplicates — duplicate keys would make wrap math jump
+        // unpredictably and make `firstIndex(of:)` return the wrong slot.
+        assert(Set(styleKeys).count == styleKeys.count, "MacLlmStyles must not contain duplicate keys")
+        assert(Set(langKeys).count == langKeys.count, "PillTranslateLanguages must not contain duplicate keys")
+
+        // No whitespace-only or accidentally-trimmed keys (would make
+        // the pill display a phantom "no style" indistinguishable
+        // from off).
+        for k in styleKeys {
+            assert(!k.isEmpty || k == "off", "MacLlmStyles key empty (only 'off' may be falsy-ish): \(k)")
+        }
     }
 }

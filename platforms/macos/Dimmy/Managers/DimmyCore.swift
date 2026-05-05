@@ -161,6 +161,19 @@ final class DimmyCore {
     /// Set config from a dictionary. Returns true on success.
     @discardableResult
     func setConfig(_ config: [String: Any]) -> Bool {
+        // Hard guard: dimmy_set_config_json calls into state() which
+        // panics with "dimmy_init() must be called before any other
+        // function" when the Rust core hasn't finished initializing.
+        // Without this guard, any UI interaction that happens during
+        // the init window (~50 ms on this dev box, longer with cold
+        // CoreML compile) hits the panic and SIGABRTs the whole app.
+        // Hit live by scrolling the pill style dot in the first
+        // moment after launch — backtrace landed unwrap_failed →
+        // dimmy_set_config_json → DimmyCore.setConfig → cycleStyle.
+        guard isInitialized else {
+            print("[DimmyCore] setConfig dropped — core not yet initialized")
+            return false
+        }
         guard let data = try? JSONSerialization.data(withJSONObject: config),
               let jsonStr = String(data: data, encoding: .utf8)
         else { return false }

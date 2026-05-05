@@ -315,6 +315,8 @@
 				AC000001 /* Frameworks */,
 				AE000003 /* Resources */,
 				AE000004 /* Bundle onnxruntime.dylib */,
+				AE000005 /* Bundle llama.cpp + ggml dylibs */,
+				AE000006 /* Validate Frameworks bundle */,
 			);
 			buildRules = (
 			);
@@ -370,6 +372,44 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		AE000005 /* Bundle llama.cpp + ggml dylibs */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Bundle llama.cpp + ggml dylibs";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "set -euo pipefail\n# Bundle libllama + libggml*.dylib into Dimmy.app/Contents/Frameworks/.\n# Mirrors release.yml's \"Bundle llama.cpp dylibs\" step so a local Xcode\n# build produces a self-contained .app that runs outside Xcode and on\n# end-user macOS where /opt/homebrew/lib isn't on the linker path.\n# Idempotent — skips files that are already present and unchanged.\nREPO_ROOT=\"$SRCROOT/../..\"\nRD=\"$REPO_ROOT/core/target/aarch64-apple-darwin/release\"\nFW=\"$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH\"\nmkdir -p \"$FW\"\nIDENTITY=\"${EXPANDED_CODE_SIGN_IDENTITY:-${CODE_SIGN_IDENTITY:--}}\"\nfor n in libllama libggml libggml-base libggml-cpu libggml-metal; do\n  for d in \"$RD\"/${n}*.dylib; do\n    [ -e \"$d\" ] || continue\n    name=\"$(basename \"$d\")\"\n    cp -RL \"$d\" \"$FW/$name\"\n    install_name_tool -id \"@rpath/$name\" \"$FW/$name\" 2>/dev/null || true\n    chmod 644 \"$FW/$name\"\n    codesign --force --sign \"$IDENTITY\" --timestamp=none \"$FW/$name\"\n  done\ndone\n";
+		};
+		AE000006 /* Validate Frameworks bundle */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Validate Frameworks bundle";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "set -euo pipefail\n# Verify the runtime dylibs Dimmy.app needs are bundled in\n# Contents/Frameworks/ and resolvable. Catches a missing\n# libonnxruntime.dylib or libllama.dylib at build time, before the\n# user discovers it as a launch crash.\nFW=\"$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH\"\nrequired=(\n  libonnxruntime.dylib\n  libllama.dylib\n  libggml.dylib\n  libggml-base.dylib\n  libggml-cpu.dylib\n  libggml-metal.dylib\n)\nmissing=()\nfor f in \"${required[@]}\"; do\n  [ -f \"$FW/$f\" ] || missing+=(\"$f\")\ndone\nif (( ${#missing[@]} > 0 )); then\n  echo \"error: missing required dylibs in $FW:\" >&2\n  for f in \"${missing[@]}\"; do echo \"  - $f\" >&2; done\n  echo \"hint: rebuild the Rust core with the matching feature flags\" >&2\n  echo \"      (cargo build --release --lib --target aarch64-apple-darwin\" >&2\n  echo \"       --features local-stt-metal,local-llm-metal,local-stt-parakeet-coreml,local-stt-parakeet-fluid)\" >&2\n  exit 1\nfi\necho \"[validate] all required dylibs present (${#required[@]} files)\"\n";
+		};
 		AE000004 /* Bundle onnxruntime.dylib */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
