@@ -32,6 +32,18 @@ public sealed partial class CaptionWindow : Window
         this.InitializeComponent();
         Title = "Dimmy Captions";
 
+        // Same transparency recipe the PillWindow uses (project memory:
+        // feedback_window_transparency, "8-step technique"). Without
+        // ExtendsContentIntoTitleBar + TransparentBackdrop the WinUI 3
+        // window paints the system Mica/acrylic + a thin chrome stripe
+        // even when our XAML root is Background="Transparent". Apply
+        // the same recipe so the caption renders as bare text on the
+        // desktop, like real movie subtitles.
+        ExtendsContentIntoTitleBar = true;
+        var backdrop = new Helpers.TransparentBackdrop();
+        backdrop.Hwnd = WindowHelper.GetHwnd(this);
+        this.SystemBackdrop = backdrop;
+
         var appWindow = WindowHelper.GetAppWindow(this);
         if (appWindow?.Presenter is OverlappedPresenter presenter)
         {
@@ -45,12 +57,8 @@ public sealed partial class CaptionWindow : Window
         {
             try { appWindow.IsShownInSwitchers = false; } catch { }
         }
+        WindowHelper.EnableTransparency(this);
 
-        // Transparent background so only the text + soft shadow show.
-        // The system backdrop must be cleared and the WS_EX_NO_REDIRECTION_BITMAP
-        // path is already handled by WindowHelper for the pill — same trick
-        // works here.
-        try { this.SystemBackdrop = null; } catch { }
         if (Content is FrameworkElement root)
         {
             root.RequestedTheme = ElementTheme.Dark;
