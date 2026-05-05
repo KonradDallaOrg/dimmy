@@ -411,9 +411,7 @@ public sealed partial class SettingsWindow : Window
         bool isLocal = ViewModel.SttMode == "local";
         SttModeLocal.IsChecked = isLocal;
         SttModeCloud.IsChecked = !isLocal;
-        LocalSttPanel.Visibility = isLocal ? Visibility.Visible : Visibility.Collapsed;
-        CloudSttPanel.Visibility = isLocal ? Visibility.Collapsed : Visibility.Visible;
-
+        ApplySttModeVisibility(isLocal);
         if (isLocal)
             CheckModelStatus();
     }
@@ -425,12 +423,21 @@ public sealed partial class SettingsWindow : Window
         {
             ViewModel.SttMode = tag;
             bool isLocal = tag == "local";
-            LocalSttPanel.Visibility = isLocal ? Visibility.Visible : Visibility.Collapsed;
-            CloudSttPanel.Visibility = isLocal ? Visibility.Collapsed : Visibility.Visible;
-
+            ApplySttModeVisibility(isLocal);
             if (isLocal)
                 CheckModelStatus();
         }
+    }
+
+    private void ApplySttModeVisibility(bool isLocal)
+    {
+        LocalSttPanel.Visibility = isLocal ? Visibility.Visible : Visibility.Collapsed;
+        CloudSttPanel.Visibility = isLocal ? Visibility.Collapsed : Visibility.Visible;
+        // Provider details + custom URL/model + prompt are cloud-only —
+        // they live inside CloudAdvancedPanel so a single toggle hides
+        // them all when the user switches to Local mode. Microphone +
+        // gain + preprocessing are general and stay visible.
+        CloudAdvancedPanel.Visibility = isLocal ? Visibility.Collapsed : Visibility.Visible;
     }
 
     /// Convenience: progress callback from Rust during a Parakeet

@@ -309,6 +309,10 @@
               <StackPanel Spacing="4"
                           Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
 
+                <!-- Provider details — cloud-only. Hidden when stt_mode == "local"
+                     since picking a cloud STT provider has no effect there. The
+                     Microphone group below stays visible for both modes. -->
+                <StackPanel x:Name="CloudAdvancedPanel" Spacing="4">
                 <TextBlock Text="PROVIDER DETAILS"
                            FontSize="12" FontWeight="SemiBold"
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
@@ -453,6 +457,8 @@
                            AcceptsReturn="True" TextWrapping="Wrap" Height="80"
                            Text="{Binding Prompt, Mode=TwoWay}" />
                 </controls:SettingCard>
+                </StackPanel>
+                <!-- /CloudAdvancedPanel -->
 
                 <TextBlock Text="MICROPHONE"
                            FontSize="12" FontWeight="SemiBold"
