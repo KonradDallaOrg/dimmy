@@ -23,6 +23,10 @@ public partial class App : Application
     private static Mutex? _singleInstanceMutex;
 
     private AppViewModel _appViewModel = new();
+    /// Exposes the shared view-model so secondary windows (Settings,
+    /// Onboarding) can subscribe to FFI-routed events that the App-level
+    /// callback already de-duplicates and dispatches onto the UI thread.
+    public AppViewModel AppViewModel => _appViewModel;
     private PillWindow? _pillWindow;
     private OnboardingWindow? _onboardingWindow;
     private HotkeyService? _hotkeyService;

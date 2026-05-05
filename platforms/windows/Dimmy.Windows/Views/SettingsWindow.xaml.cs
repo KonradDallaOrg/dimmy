@@ -51,6 +51,16 @@ public sealed partial class SettingsWindow : Window
         LicenseService.LicenseChanged += OnLicenseChangedExternal;
         this.Closed += (_, __) => LicenseService.LicenseChanged -= OnLicenseChangedExternal;
 
+        // Subscribe to Parakeet download progress events routed through
+        // the App-level FFI callback. AppViewModel.HandleEvent already
+        // marshals onto the UI thread before invoking the event.
+        if (Application.Current is App app)
+        {
+            app.AppViewModel.ParakeetDownloadProgress += OnParakeetProgress;
+            this.Closed += (_, __) =>
+                app.AppViewModel.ParakeetDownloadProgress -= OnParakeetProgress;
+        }
+
         LoadConfig();
         ViewModel.LoadGpuStatus();
         SyncProviderComboBox();
@@ -466,9 +476,13 @@ public sealed partial class SettingsWindow : Window
     {
         DownloadParakeetBtn.IsEnabled = false;
         DownloadParakeetBtn.Content = "Downloading...";
+        // Start indeterminate; switches to determinate as soon as the
+        // first parakeet_bundle_download_progress event with total > 0
+        // arrives from the Rust core.
         ParakeetDownloadProgress.IsIndeterminate = true;
+        ParakeetDownloadProgress.Value = 0;
         ParakeetDownloadProgress.Visibility = Visibility.Visible;
-        ParakeetStatusText.Text = "Downloading 2.5 GB — first run takes 5-10 min...";
+        ParakeetStatusText.Text = "Starting download...";
 
         try
         {
@@ -495,6 +509,31 @@ public sealed partial class SettingsWindow : Window
         {
             ParakeetDownloadProgress.Visibility = Visibility.Collapsed;
         }
+    }
+
+    private void OnParakeetProgress(long downloaded, long total)
+    {
+        // Total may be 0 when Content-Length was unavailable on one of
+        // the bundle files — keep the bar indeterminate in that case.
+        if (total <= 0)
+        {
+            ParakeetDownloadProgress.IsIndeterminate = true;
+            ParakeetStatusText.Text =
+                $"Downloading... {FormatMb(downloaded)} so far";
+            return;
+        }
+        ParakeetDownloadProgress.IsIndeterminate = false;
+        double percent = Math.Min(100, downloaded * 100.0 / total);
+        ParakeetDownloadProgress.Value = percent;
+        ParakeetStatusText.Text =
+            $"Downloading... {FormatMb(downloaded)} / {FormatMb(total)} ({percent:F0}%)";
+    }
+
+    private static string FormatMb(long bytes)
+    {
+        if (bytes >= 1024L * 1024L * 1024L)
+            return $"{bytes / 1024.0 / 1024.0 / 1024.0:F2} GB";
+        return $"{bytes / 1024.0 / 1024.0:F0} MB";
     }
 
     private void CheckModelStatus()

@@ -1,8 +1,12 @@
 # ABI snapshot for dimmy_lib (cdylib). DO NOT EDIT BY HAND.
 # Regenerate with: UPDATE_ABI=1 cargo test --release --test abi_snapshot --features local-stt
 # See core/tests/abi_snapshot.rs for what this guards against.
+dimmy_autostart_is_enabled
+dimmy_autostart_set_enabled
+dimmy_build_flavor
 dimmy_cancel_recording
 dimmy_check_audio_health
+dimmy_clear_app_context
 dimmy_cycle_llm_style
 dimmy_cycle_llm_tone
 dimmy_download_llm_model
@@ -27,12 +31,27 @@ dimmy_hotkey_take_event
 dimmy_hotkey_take_recorded
 dimmy_init
 dimmy_is_recording
+dimmy_license_billing_portal_url
+dimmy_license_checkout_url
+dimmy_license_clear
+dimmy_license_device_deactivate
+dimmy_license_devices_list
+dimmy_license_has_scope
+dimmy_license_plan_change
+dimmy_license_redeem
+dimmy_license_refresh
+dimmy_license_request_trial
+dimmy_license_status_json
 dimmy_list_devices_json
 dimmy_list_llm_models
 dimmy_list_local_models
 dimmy_llm_model_exists
 dimmy_model_exists
+dimmy_parakeet_bundle_present
+dimmy_parakeet_download_bundle
+dimmy_parakeet_transcribe
 dimmy_process_with_llm
+dimmy_set_app_context
 dimmy_set_config_json
 dimmy_set_event_callback
 dimmy_shutdown

@@ -84,6 +84,17 @@ pub fn download_bundle(mut progress: impl FnMut(u64, u64)) -> Result<(), Transcr
         .build()
         .map_err(|e| TranscribeError::LocalModel(format!("http client: {}", e)))?;
 
+    // Throttle progress callbacks: at 64 KB chunks for a 2.5 GB bundle
+    // we'd fire ~40 K events. Even 200 ns of FFI marshalling per call
+    // would stall the download for ~8 ms cumulative on the worker
+    // thread, plus the dispatcher queue on the UI side has nowhere
+    // useful to put 40 K updates per second. Emit at most every
+    // 100 ms or every 1 MB, whichever arrives first.
+    const PROGRESS_BYTES_INTERVAL: u64 = 1 << 20;
+    const PROGRESS_TIME_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+    let mut last_emit_bytes: u64 = 0;
+    let mut last_emit_time = std::time::Instant::now();
+
     let mut grand_total: u64 = 0;
     let mut grand_done: u64 = 0;
     for name in files {
@@ -140,8 +151,21 @@ pub fn download_bundle(mut progress: impl FnMut(u64, u64)) -> Result<(), Transcr
             out.write_all(&buf[..n])
                 .map_err(|e| TranscribeError::LocalModel(format!("write {:?}: {}", tmp, e)))?;
             grand_done = grand_done.saturating_add(n as u64);
-            progress(grand_done, grand_total);
+
+            let bytes_since = grand_done.saturating_sub(last_emit_bytes);
+            if bytes_since >= PROGRESS_BYTES_INTERVAL
+                || last_emit_time.elapsed() >= PROGRESS_TIME_INTERVAL
+            {
+                progress(grand_done, grand_total);
+                last_emit_bytes = grand_done;
+                last_emit_time = std::time::Instant::now();
+            }
         }
+        // Always emit a fresh value at end-of-file so the UI doesn't
+        // get stuck a few hundred KB shy of 100 % between files.
+        progress(grand_done, grand_total);
+        last_emit_bytes = grand_done;
+        last_emit_time = std::time::Instant::now();
         std::fs::rename(&tmp, &dest)
             .map_err(|e| TranscribeError::LocalModel(format!("rename {:?}: {}", tmp, e)))?;
     }

@@ -100,6 +100,12 @@ public partial class AppViewModel : ObservableObject
         ChunkTotal = total;
     }
 
+    /// Fires when the Rust core emits a Parakeet bundle download
+    /// progress event. Args: (downloaded_bytes, total_bytes). `total`
+    /// is 0 if Content-Length was unavailable; consumers should treat
+    /// that as "indeterminate". Fired on the UI thread.
+    public event Action<long, long>? ParakeetDownloadProgress;
+
     public void HandleEvent(string? json)
     {
         if (string.IsNullOrEmpty(json)) return;
@@ -113,6 +119,11 @@ public partial class AppViewModel : ObservableObject
 
             switch (eventName)
             {
+                case "parakeet_bundle_download_progress":
+                    ParakeetDownloadProgress?.Invoke(
+                        payload.GetProperty("downloaded").GetInt64(),
+                        payload.GetProperty("total").GetInt64());
+                    break;
                 case "recording_started":
                     if (SuppressRecordingStarted)
                     {
