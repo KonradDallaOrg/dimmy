@@ -566,6 +566,25 @@ final class AppState: ObservableObject {
     @Published var isDownloadingParakeet: Bool = false
     @Published var parakeetBundlePresent: Bool = false
 
+    /// Show the floating subtitle window during recording when the
+    /// chunked engine is firing. Independent of `chunkStreamingEnabled`
+    /// — power users can keep the chunked transcriber on (better tail
+    /// latency on long recordings) while preferring no live captions.
+    /// Defaults to true to match the Win shipping behaviour.
+    @Published var liveCaptionsEnabled: Bool = true
+    /// Per-chunk delta pushed by the Rust core via `stt_chunk` events.
+    /// CaptionWindowController subscribes — UI publishers like a
+    /// status pill could subscribe too.
+    @Published var liveCaptionDelta: String = ""
+    /// Cumulative running transcript during chunked recording. Reset
+    /// when a new recording starts. Useful if any view wants the
+    /// full text without re-accumulating from deltas.
+    @Published var liveCaptionCumulative: String = ""
+    /// Bumped each time an `stt_chunk` event lands so observers can
+    /// react to "another chunk arrived" without diffing strings.
+    @Published var liveCaptionTick: Int = 0
+    @Published var liveCaptionIsFinal: Bool = false
+
     // MARK: - LLM Mode (local vs cloud)
 
     @Published var llmMode: String = "cloud"  // "local" or "cloud"
@@ -727,6 +746,7 @@ final class AppState: ObservableObject {
         if let v = config["stt_mode"] as? String { sttMode = v }
         if let v = config["local_model"] as? String { localModel = v }
         if let v = config["local_stt_backend"] as? String { localSttBackend = v }
+        if let v = config["live_captions_enabled"] as? Bool { liveCaptionsEnabled = v }
         if let v = config["filler_removal_enabled"] as? Bool { fillerRemovalEnabled = v }
 
         // Local LLM
@@ -800,6 +820,7 @@ final class AppState: ObservableObject {
             "stt_mode": sttMode,
             "local_model": localModel,
             "local_stt_backend": localSttBackend,
+            "live_captions_enabled": liveCaptionsEnabled,
             "filler_removal_enabled": fillerRemovalEnabled,
             "llm_mode": llmMode,
             "local_llm_model": localLlmModel,

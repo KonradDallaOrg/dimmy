@@ -663,6 +663,20 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
             appState.parakeetDownloadProgress = Double(downloaded) / Double(total)
         }
 
+    case "stt_chunk":
+        // Rust core emits this when chunk_streaming is on AND the
+        // active local backend is Parakeet. Payload schema:
+        //   { "delta": "<new text>", "cumulative": "<full text>",
+        //     "is_final": <bool> }
+        // CaptionWindowController watches the publishers below.
+        let delta = (payload["delta"] as? String) ?? ""
+        let cumulative = (payload["cumulative"] as? String) ?? ""
+        let isFinal = (payload["is_final"] as? Bool) ?? false
+        appState.liveCaptionDelta = delta
+        appState.liveCaptionCumulative = cumulative
+        appState.liveCaptionIsFinal = isFinal
+        appState.liveCaptionTick &+= 1
+
     default:
         print("[DimmyCore] unhandled event: \(event)")
     }

@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private var statusBarController: StatusBarController?
     private var pillWindowController: PillWindowController?
+    private var captionWindowController: CaptionWindowController?
     private var onboardingWindow: NSWindow?
     private var settingsWindow: NSWindow?
     private let appState = AppState.shared
@@ -46,6 +47,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // UI-only setup. No audio, no keychain, no permission-triggering calls yet.
         statusBarController = StatusBarController(appState: appState)
         pillWindowController = PillWindowController(appState: appState)
+        captionWindowController = CaptionWindowController()
+        wireLiveCaptions()
 
         // Watch for onboarding completion — then initialize the core once permissions are granted.
         appState.$isOnboardingComplete
@@ -121,6 +124,79 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let servicesList = toReset.joined(separator: ", ")
         hkLog("[AppDelegate] resetting stale TCC entries: \(servicesList)")
         perms.resetTccEntries(services: toReset)
+    }
+
+    // MARK: - Live captions
+
+    /// Subscribe AppState publishers to drive the floating subtitle
+    /// window. Mirrors the Win OnSttChunkReceived flow:
+    ///   * recording starts → if (live captions on AND chunked AND backend == parakeet)
+    ///                        show the (empty) caption window
+    ///   * stt_chunk arrives → push delta. is_final=true schedules a delayed hide
+    ///   * recording cancels / is otherwise reset → hide immediately
+    private func wireLiveCaptions() {
+        // Per-chunk push, driven by liveCaptionTick so observers fire even
+        // if two consecutive chunks happen to share the same delta string.
+        appState.$liveCaptionTick
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                guard self.appState.liveCaptionsEnabled else { return }
+                self.captionWindowController?.push(delta: self.appState.liveCaptionDelta)
+                if self.appState.liveCaptionIsFinal {
+                    self.captionWindowController?.scheduleHide()
+                } else {
+                    self.captionWindowController?.show()
+                }
+            }
+            .store(in: &cancellables)
+
+        // Drive show/hide on recording lifecycle. Show only when the
+        // chunked + parakeet preconditions are met; otherwise the
+        // window stays hidden and the user gets only the final paste.
+        appState.$recordingState
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] state in
+                guard let self else { return }
+                switch state {
+                case .recording:
+                    if self.shouldShowLiveCaptions() {
+                        self.captionWindowController?.reset()
+                        self.captionWindowController?.show()
+                    }
+                case .idle:
+                    // Stop / cancel paths converge here. If the user
+                    // cancelled (no final emitted) the schedule-hide
+                    // never fires — hide eagerly.
+                    if !self.appState.liveCaptionIsFinal {
+                        self.captionWindowController?.hide()
+                    }
+                case .transcribing, .processing, .completing:
+                    // Brief tail states between stop and final paste —
+                    // leave the caption alone, the schedule-hide from
+                    // the final stt_chunk will close it.
+                    break
+                }
+            }
+            .store(in: &cancellables)
+
+        // Toggling the preference off mid-session should hide the
+        // window immediately without waiting for a recording to end.
+        appState.$liveCaptionsEnabled
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] enabled in
+                if !enabled { self?.captionWindowController?.hide() }
+            }
+            .store(in: &cancellables)
+    }
+
+    private func shouldShowLiveCaptions() -> Bool {
+        appState.liveCaptionsEnabled
+            && appState.chunkStreamingEnabled
+            && appState.localSttBackend == "parakeet"
+            && appState.sttMode == "local"
     }
 
     /// Single source of truth for whether Dimmy appears in the Dock / Cmd+Tab.

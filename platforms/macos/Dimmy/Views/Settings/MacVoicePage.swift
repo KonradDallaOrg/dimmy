@@ -392,8 +392,9 @@ struct MacVoicePage: View {
                 if appState.showAdvanced {
                     MacRow(
                         "Chunk streaming",
-                        description: "Stream audio in 250 ms chunks for partial results",
-                        showsDivider: false
+                        description: "Stream audio in 5 s chunks (Parakeet only)",
+                        showsDivider: appState.chunkStreamingEnabled
+                            && appState.localSttBackend == "parakeet"
                     ) {
                         Toggle("", isOn: Binding(
                             get: { appState.chunkStreamingEnabled },
@@ -404,6 +405,30 @@ struct MacVoicePage: View {
                         ))
                         .toggleStyle(.switch)
                         .labelsHidden()
+                    }
+
+                    // Live captions toggle — only meaningful when
+                    // the chunked engine is firing AND the backend
+                    // is Parakeet (Whisper.cpp is too slow per-chunk
+                    // to keep up). Hide the row otherwise so it
+                    // doesn't masquerade as a knob the user can flip.
+                    if appState.chunkStreamingEnabled
+                        && appState.localSttBackend == "parakeet" {
+                        MacRow(
+                            "Live captions",
+                            description: "Floating subtitle window during recording",
+                            showsDivider: false
+                        ) {
+                            Toggle("", isOn: Binding(
+                                get: { appState.liveCaptionsEnabled },
+                                set: { newValue in
+                                    appState.liveCaptionsEnabled = newValue
+                                    persistConfig()
+                                }
+                            ))
+                            .toggleStyle(.switch)
+                            .labelsHidden()
+                        }
                     }
                 }
             }

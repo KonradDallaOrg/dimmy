@@ -12,6 +12,7 @@
 		AA000003 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000003 /* AppState.swift */; };
 		AA000004 /* StatusBarController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000004 /* StatusBarController.swift */; };
 		AA000005 /* PillWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000005 /* PillWindowController.swift */; };
+		AA000400 /* CaptionWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000400 /* CaptionWindowController.swift */; };
 		AA000006 /* HotkeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000006 /* HotkeyManager.swift */; };
 		AA000007 /* AudioSimulator.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000007 /* AudioSimulator.swift */; };
 		AA000008 /* TextInjector.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000008 /* TextInjector.swift */; };
@@ -74,6 +75,7 @@
 		AB000003 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		AB000004 /* StatusBarController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusBarController.swift; sourceTree = "<group>"; };
 		AB000005 /* PillWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PillWindowController.swift; sourceTree = "<group>"; };
+		AB000400 /* CaptionWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptionWindowController.swift; sourceTree = "<group>"; };
 		AB000006 /* HotkeyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyManager.swift; sourceTree = "<group>"; };
 		AB000007 /* AudioSimulator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSimulator.swift; sourceTree = "<group>"; };
 		AB000008 /* TextInjector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextInjector.swift; sourceTree = "<group>"; };
@@ -192,6 +194,7 @@
 			children = (
 				AB000004 /* StatusBarController.swift */,
 				AB000005 /* PillWindowController.swift */,
+				AB000400 /* CaptionWindowController.swift */,
 			);
 			path = Controllers;
 			sourceTree = "<group>";
@@ -399,6 +402,7 @@
 				AA000003 /* AppState.swift in Sources */,
 				AA000004 /* StatusBarController.swift in Sources */,
 				AA000005 /* PillWindowController.swift in Sources */,
+				AA000400 /* CaptionWindowController.swift in Sources */,
 				AA000006 /* HotkeyManager.swift in Sources */,
 				AA000007 /* AudioSimulator.swift in Sources */,
 				AA000008 /* TextInjector.swift in Sources */,
