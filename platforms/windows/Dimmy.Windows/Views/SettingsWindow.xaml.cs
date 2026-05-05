@@ -325,6 +325,10 @@ public sealed partial class SettingsWindow : Window
 
     private System.Collections.Generic.List<LocalModelInfo> _localModels = new();
 
+    /// Sentinel ComboBox tag identifying the Parakeet entry. Not a real
+    /// whisper-model filename — distinguished from `*.bin` by prefix.
+    private const string ParakeetTag = "parakeet:fp32";
+
     private void PopulateLocalModels()
     {
         try
@@ -336,8 +340,8 @@ public sealed partial class SettingsWindow : Window
             _localModels.Clear();
             LocalModelComboBox.Items.Clear();
 
-            int selectedIdx = 0;
             int idx = 0;
+            int selectedIdx = -1;
             foreach (var el in doc.RootElement.EnumerateArray())
             {
                 var name = el.GetProperty("name").GetString() ?? "";
@@ -356,13 +360,28 @@ public sealed partial class SettingsWindow : Window
                 };
                 LocalModelComboBox.Items.Add(item);
 
-                if (filename == ViewModel.LocalModel)
+                if (ViewModel.LocalSttBackend != "parakeet" && filename == ViewModel.LocalModel)
                     selectedIdx = idx;
                 idx++;
             }
 
+            // Append Parakeet as a virtual entry. The backend it picks
+            // is implicit — selecting this item flips ViewModel.LocalSttBackend
+            // to "parakeet"; selecting any whisper item flips it to "whisper".
+            bool parakeetDownloaded = false;
+            try { parakeetDownloaded = DimmyNative.dimmy_parakeet_bundle_present() == 1; }
+            catch { }
+            var parakeetStatus = parakeetDownloaded ? "Ready" : "2.5GB";
+            LocalModelComboBox.Items.Add(new ComboBoxItem
+            {
+                Content = $"Parakeet TDT v3 FP32 — fast, EU-language friendly ({parakeetStatus})",
+                Tag = ParakeetTag,
+            });
+            if (ViewModel.LocalSttBackend == "parakeet")
+                selectedIdx = idx;
+
             if (LocalModelComboBox.Items.Count > 0)
-                LocalModelComboBox.SelectedIndex = selectedIdx;
+                LocalModelComboBox.SelectedIndex = selectedIdx >= 0 ? selectedIdx : 0;
         }
         catch { }
     }
@@ -370,9 +389,19 @@ public sealed partial class SettingsWindow : Window
     private void LocalModel_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (!_loaded) return;
-        if (LocalModelComboBox.SelectedItem is ComboBoxItem item && item.Tag is string filename)
+        if (LocalModelComboBox.SelectedItem is ComboBoxItem item && item.Tag is string tag)
         {
-            ViewModel.LocalModel = filename;
+            if (tag == ParakeetTag)
+            {
+                ViewModel.LocalSttBackend = "parakeet";
+                // Keep LocalModel pointing at the previous whisper choice
+                // so flipping back to a whisper entry restores it.
+            }
+            else
+            {
+                ViewModel.LocalSttBackend = "whisper";
+                ViewModel.LocalModel = tag;
+            }
             CheckModelStatus();
         }
     }
@@ -386,9 +415,7 @@ public sealed partial class SettingsWindow : Window
         CloudSttPanel.Visibility = isLocal ? Visibility.Collapsed : Visibility.Visible;
 
         if (isLocal)
-        {
-            SyncLocalSttBackend();
-        }
+            CheckModelStatus();
     }
 
     private void SttMode_Checked(object sender, RoutedEventArgs e)
@@ -402,134 +429,31 @@ public sealed partial class SettingsWindow : Window
             CloudSttPanel.Visibility = isLocal ? Visibility.Collapsed : Visibility.Visible;
 
             if (isLocal)
-                SyncLocalSttBackend();
-        }
-    }
-
-    // ── Local STT backend (whisper / parakeet) ───────────────────────
-
-    private void SyncLocalSttBackend()
-    {
-        // Select matching ComboBox item from ViewModel value.
-        for (int i = 0; i < LocalSttBackendComboBox.Items.Count; i++)
-        {
-            if (LocalSttBackendComboBox.Items[i] is ComboBoxItem item
-                && item.Tag is string tag && tag == ViewModel.LocalSttBackend)
-            {
-                LocalSttBackendComboBox.SelectedIndex = i;
-                break;
-            }
-        }
-        ApplyBackendVisibility(ViewModel.LocalSttBackend);
-        if (ViewModel.LocalSttBackend == "parakeet")
-            CheckParakeetStatus();
-        else
-            CheckModelStatus();
-    }
-
-    private void ApplyBackendVisibility(string backend)
-    {
-        bool isParakeet = backend == "parakeet";
-        WhisperCardsPanel.Visibility = isParakeet ? Visibility.Collapsed : Visibility.Visible;
-        ParakeetCardsPanel.Visibility = isParakeet ? Visibility.Visible : Visibility.Collapsed;
-    }
-
-    private void LocalSttBackend_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (!_loaded) return;
-        if (LocalSttBackendComboBox.SelectedItem is ComboBoxItem item && item.Tag is string tag)
-        {
-            ViewModel.LocalSttBackend = tag;
-            ApplyBackendVisibility(tag);
-            if (tag == "parakeet")
-                CheckParakeetStatus();
-            else
                 CheckModelStatus();
         }
     }
 
-    private void CheckParakeetStatus()
-    {
-        try
-        {
-            int present = DimmyNative.dimmy_parakeet_bundle_present();
-            if (present == 1)
-            {
-                ParakeetStatusText.Text = "Ready";
-                DownloadParakeetBtn.Visibility = Visibility.Collapsed;
-            }
-            else
-            {
-                ParakeetStatusText.Text = "Not downloaded";
-                DownloadParakeetBtn.Visibility = Visibility.Visible;
-                DownloadParakeetBtn.IsEnabled = true;
-                DownloadParakeetBtn.Content = "Download (2.5 GB)";
-            }
-        }
-        catch
-        {
-            ParakeetStatusText.Text = "Unable to check";
-        }
-    }
-
-    private async void DownloadParakeet_Click(object sender, RoutedEventArgs e)
-    {
-        DownloadParakeetBtn.IsEnabled = false;
-        DownloadParakeetBtn.Content = "Downloading...";
-        // Start indeterminate; switches to determinate as soon as the
-        // first parakeet_bundle_download_progress event with total > 0
-        // arrives from the Rust core.
-        ParakeetDownloadProgress.IsIndeterminate = true;
-        ParakeetDownloadProgress.Value = 0;
-        ParakeetDownloadProgress.Visibility = Visibility.Visible;
-        ParakeetStatusText.Text = "Starting download...";
-
-        try
-        {
-            int rc = await Task.Run(() => DimmyNative.dimmy_parakeet_download_bundle());
-            if (rc == 0)
-            {
-                ParakeetStatusText.Text = "Ready";
-                DownloadParakeetBtn.Visibility = Visibility.Collapsed;
-            }
-            else
-            {
-                ParakeetStatusText.Text = "Download failed";
-                DownloadParakeetBtn.Content = "Retry Download";
-                DownloadParakeetBtn.IsEnabled = true;
-            }
-        }
-        catch
-        {
-            ParakeetStatusText.Text = "Download failed";
-            DownloadParakeetBtn.Content = "Retry Download";
-            DownloadParakeetBtn.IsEnabled = true;
-        }
-        finally
-        {
-            ParakeetDownloadProgress.Visibility = Visibility.Collapsed;
-        }
-    }
-
+    /// Convenience: progress callback from Rust during a Parakeet
+    /// bundle download. Updates the same DownloadProgress bar used by
+    /// the whisper-model download path. Total is 0 when one of the
+    /// HEAD calls didn't return a Content-Length — fall back to
+    /// indeterminate in that case.
     private void OnParakeetProgress(long downloaded, long total)
     {
-        // Total may be 0 when Content-Length was unavailable on one of
-        // the bundle files — keep the bar indeterminate in that case.
         if (total <= 0)
         {
-            ParakeetDownloadProgress.IsIndeterminate = true;
-            ParakeetStatusText.Text =
-                $"Downloading... {FormatMb(downloaded)} so far";
+            DownloadProgress.IsIndeterminate = true;
+            LocalModelStatus.Text = $"Downloading... {FormatBytes(downloaded)} so far";
             return;
         }
-        ParakeetDownloadProgress.IsIndeterminate = false;
+        DownloadProgress.IsIndeterminate = false;
         double percent = Math.Min(100, downloaded * 100.0 / total);
-        ParakeetDownloadProgress.Value = percent;
-        ParakeetStatusText.Text =
-            $"Downloading... {FormatMb(downloaded)} / {FormatMb(total)} ({percent:F0}%)";
+        DownloadProgress.Value = percent;
+        LocalModelStatus.Text =
+            $"Downloading... {FormatBytes(downloaded)} / {FormatBytes(total)} ({percent:F0}%)";
     }
 
-    private static string FormatMb(long bytes)
+    private static string FormatBytes(long bytes)
     {
         if (bytes >= 1024L * 1024L * 1024L)
             return $"{bytes / 1024.0 / 1024.0 / 1024.0:F2} GB";
@@ -538,9 +462,12 @@ public sealed partial class SettingsWindow : Window
 
     private void CheckModelStatus()
     {
+        bool isParakeet = ViewModel.LocalSttBackend == "parakeet";
         try
         {
-            int exists = DimmyNative.dimmy_model_exists(ViewModel.LocalModel);
+            int exists = isParakeet
+                ? DimmyNative.dimmy_parakeet_bundle_present()
+                : DimmyNative.dimmy_model_exists(ViewModel.LocalModel);
             if (exists == 1)
             {
                 LocalModelStatus.Text = "Ready";
@@ -548,10 +475,19 @@ public sealed partial class SettingsWindow : Window
             }
             else
             {
-                var model = _localModels.Find(m => m.Filename == ViewModel.LocalModel);
-                var sizeInfo = model != null ? $" ({model.SizeMb}MB)" : "";
+                string sizeInfo;
+                if (isParakeet)
+                {
+                    sizeInfo = " (2.5GB)";
+                }
+                else
+                {
+                    var model = _localModels.Find(m => m.Filename == ViewModel.LocalModel);
+                    sizeInfo = model != null ? $" ({model.SizeMb}MB)" : "";
+                }
                 LocalModelStatus.Text = $"Not downloaded{sizeInfo}";
                 DownloadModelBtn.Content = $"Download{sizeInfo}";
+                DownloadModelBtn.IsEnabled = true;
                 DownloadModelBtn.Visibility = Visibility.Visible;
             }
         }
@@ -564,19 +500,24 @@ public sealed partial class SettingsWindow : Window
 
     private async void DownloadModel_Click(object sender, RoutedEventArgs e)
     {
+        bool isParakeet = ViewModel.LocalSttBackend == "parakeet";
         DownloadModelBtn.IsEnabled = false;
         DownloadModelBtn.Content = "Downloading...";
+        DownloadProgress.IsIndeterminate = true;
+        DownloadProgress.Value = 0;
         DownloadProgress.Visibility = Visibility.Visible;
-        LocalModelStatus.Text = "Downloading...";
+        LocalModelStatus.Text = "Starting download...";
 
         try
         {
-            int result = await Task.Run(() => DimmyNative.dimmy_download_model(ViewModel.LocalModel));
+            int result = await Task.Run(() => isParakeet
+                ? DimmyNative.dimmy_parakeet_download_bundle()
+                : DimmyNative.dimmy_download_model(ViewModel.LocalModel));
             if (result == 0)
             {
                 LocalModelStatus.Text = "Ready";
                 DownloadModelBtn.Visibility = Visibility.Collapsed;
-                // Refresh the ComboBox to show updated download status
+                // Refresh the ComboBox so the status suffix flips to (Ready).
                 PopulateLocalModels();
             }
             else
