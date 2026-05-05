@@ -967,6 +967,8 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "use_keyring": use_kr,
         "stt_mode": *st.stt_mode.lock().unwrap_or_else(|e| e.into_inner()),
         "local_model": *st.local_model.lock().unwrap_or_else(|e| e.into_inner()),
+        "local_stt_backend": *st.local_stt_backend.lock().unwrap_or_else(|e| e.into_inner()),
+        "live_captions_enabled": *st.live_captions_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "filler_removal_enabled": *st.filler_removal_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "llm_mode": *st.llm_mode.lock().unwrap_or_else(|e| e.into_inner()),
         "local_llm_model": *st.local_llm_model.lock().unwrap_or_else(|e| e.into_inner()),
