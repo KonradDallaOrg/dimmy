@@ -184,12 +184,16 @@ jobs:
           # the cdylib under WindowsAppSDK + Velopack (V3 / V8).
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-          DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY }}
-          # prod license URL — paired with the prod pubkey above.
-          # build.rs (commit 8a71f30) refuses any build where pubkey
-          # is set but URL is empty, to prevent staging-keyed binaries
-          # from accidentally hitting prod via a hardcoded fallback.
-          DIMMY_LICENSE_SERVER_URL: https://license.dimmy.app
+          # staging credentials — this workflow fires on push to the
+          # `staging` branch (or workflow_dispatch), never on a prod
+          # tag. Pubkey + URL + flavor must match staging-release.yml
+          # so binaries built here talk to the staging Cloudflare
+          # Worker, isolate their config dir (~/.config/dimmy-staging),
+          # and watermark the UI as STAGING. build.rs invariant
+          # (commit 8a71f30) requires pubkey + URL to move together.
+          DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY_STAGING }}
+          DIMMY_LICENSE_SERVER_URL: https://license-staging.dimmy.app
+          DIMMY_BUILD_FLAVOR: staging
         run: |
           echo "CMake: $(cmake --version | head -1)"
           echo "Xcode CLT: $(xcode-select -p)"
@@ -413,12 +417,16 @@ jobs:
           # Diagnostic build (see macOS step for the rationale).
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-          DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY }}
-          # prod license URL — paired with the prod pubkey above.
-          # build.rs (commit 8a71f30) refuses any build where pubkey
-          # is set but URL is empty, to prevent staging-keyed binaries
-          # from accidentally hitting prod via a hardcoded fallback.
-          DIMMY_LICENSE_SERVER_URL: https://license.dimmy.app
+          # staging credentials — this workflow fires on push to the
+          # `staging` branch (or workflow_dispatch), never on a prod
+          # tag. Pubkey + URL + flavor must match staging-release.yml
+          # so binaries built here talk to the staging Cloudflare
+          # Worker, isolate their config dir (~/.config/dimmy-staging),
+          # and watermark the UI as STAGING. build.rs invariant
+          # (commit 8a71f30) requires pubkey + URL to move together.
+          DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY_STAGING }}
+          DIMMY_LICENSE_SERVER_URL: https://license-staging.dimmy.app
+          DIMMY_BUILD_FLAVOR: staging
         run: |
           REM Activate VS 2026 MSVC for this step only — PATH, INCLUDE,
           REM LIB point at the 14.50+ toolchain. Subsequent steps inherit
@@ -589,12 +597,16 @@ jobs:
           # Diagnostic build (see macOS step for the rationale).
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-          DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY }}
-          # prod license URL — paired with the prod pubkey above.
-          # build.rs (commit 8a71f30) refuses any build where pubkey
-          # is set but URL is empty, to prevent staging-keyed binaries
-          # from accidentally hitting prod via a hardcoded fallback.
-          DIMMY_LICENSE_SERVER_URL: https://license.dimmy.app
+          # staging credentials — this workflow fires on push to the
+          # `staging` branch (or workflow_dispatch), never on a prod
+          # tag. Pubkey + URL + flavor must match staging-release.yml
+          # so binaries built here talk to the staging Cloudflare
+          # Worker, isolate their config dir (~/.config/dimmy-staging),
+          # and watermark the UI as STAGING. build.rs invariant
+          # (commit 8a71f30) requires pubkey + URL to move together.
+          DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY_STAGING }}
+          DIMMY_LICENSE_SERVER_URL: https://license-staging.dimmy.app
+          DIMMY_BUILD_FLAVOR: staging
         run: cargo build --release
 
       - name: Package AppImage
