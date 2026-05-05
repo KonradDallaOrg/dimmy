@@ -73,6 +73,7 @@ struct GeneralSettingsView: View {
                                         Image(systemName: "gear")
                                     } else {
                                         Image(preset.iconAssetName)
+                                            .renderingMode(.original)
                                             .resizable()
                                             .frame(width: 14, height: 14)
                                     }
