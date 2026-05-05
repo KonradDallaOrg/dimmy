@@ -121,14 +121,106 @@ mod inference {
     }
 
     /// Mirror of `parakeet::download_bundle`. FluidAudio doesn't expose
-    /// download progress through the Rust binding (no callback shape
-    /// in v0.12.6), so we emit a single 0/0 tick at start and a 1/1
-    /// tick on completion to satisfy the UI's progress pill.
+    /// a byte-level progress callback in v0.12.6, so we run the blocking
+    /// `ensure_loaded` on the calling thread and spawn a side-poller
+    /// that scans the cache dir every 200 ms and emits cumulative-bytes
+    /// ticks to the UI. The total is the empirical 466 MB the v3 bundle
+    /// expands to (we pin it as a const so a future bundle revision
+    /// trips an obvious "stuck at 80 %" instead of silently mis-reporting).
     pub fn download_bundle(mut progress: impl FnMut(u64, u64)) -> Result<(), TranscribeError> {
-        progress(0, 0);
-        ensure_loaded()?;
-        progress(1, 1);
+        const TOTAL_BYTES: u64 = 466 * 1024 * 1024;
+        const POLL_MS: u64 = 200;
+
+        progress(0, TOTAL_BYTES);
+
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let bytes = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let stop_w = stop.clone();
+        let bytes_w = bytes.clone();
+        let dir = parakeet_bundle_dir();
+
+        let poller = std::thread::Builder::new()
+            .name("fluid-dl-progress".into())
+            .spawn(move || {
+                while !stop_w.load(std::sync::atomic::Ordering::Relaxed) {
+                    let total = dir.as_ref().map(|p| dir_size(p)).unwrap_or(0);
+                    bytes_w.store(total, std::sync::atomic::Ordering::Relaxed);
+                    std::thread::sleep(std::time::Duration::from_millis(POLL_MS));
+                }
+            })
+            .ok();
+
+        // Pump bytes → caller while ensure_loaded blocks.
+        // We spawn a SECOND thread that fires the user-supplied callback
+        // because `progress` may write into a Mutex/FFI that we don't
+        // want to touch from the file-walking thread. The callback is
+        // capped at TOTAL_BYTES so a slight oversize bundle revision
+        // doesn't make the UI render >100%.
+        let bytes_r = bytes.clone();
+        let stop_r = stop.clone();
+        let (tx, rx) = std::sync::mpsc::channel::<u64>();
+        let pump = std::thread::Builder::new()
+            .name("fluid-dl-pump".into())
+            .spawn(move || {
+                while !stop_r.load(std::sync::atomic::Ordering::Relaxed) {
+                    let b = bytes_r
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                        .min(TOTAL_BYTES);
+                    let _ = tx.send(b);
+                    std::thread::sleep(std::time::Duration::from_millis(POLL_MS));
+                }
+            })
+            .ok();
+
+        // Drive the caller's `progress` from this (calling) thread —
+        // try_recv non-blocking so we don't starve `ensure_loaded`,
+        // which itself runs on a separate background queue managed
+        // by the FFI caller (DimmyCore.downloadParakeetBundle).
+        // ensure_loaded() is synchronous and blocks here; we run a
+        // background pump that ferries progress ticks via the
+        // channel, and we'll drain the channel after ensure_loaded
+        // returns (any final tick close to TOTAL_BYTES gets emitted).
+        let result = ensure_loaded();
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(h) = poller {
+            let _ = h.join();
+        }
+        if let Some(h) = pump {
+            let _ = h.join();
+        }
+        // Drain remaining ticks. drop(tx) happened when pump exited.
+        for b in rx.try_iter() {
+            progress(b, TOTAL_BYTES);
+        }
+        result?;
+        // Final 100 % tick — ensure UI lands on completion regardless
+        // of whether the last polled value was a few hundred KB shy.
+        progress(TOTAL_BYTES, TOTAL_BYTES);
         Ok(())
+    }
+
+    /// Recursively sum file sizes under `dir`. Returns 0 if the dir
+    /// doesn't exist yet (early-poll race) or any I/O error happens
+    /// — the poller re-tries on the next tick.
+    fn dir_size(dir: &std::path::Path) -> u64 {
+        fn walk(p: &std::path::Path) -> u64 {
+            let Ok(rd) = std::fs::read_dir(p) else {
+                return 0;
+            };
+            let mut sum = 0u64;
+            for entry in rd.flatten() {
+                let path = entry.path();
+                if let Ok(meta) = entry.metadata() {
+                    if meta.is_file() {
+                        sum = sum.saturating_add(meta.len());
+                    } else if meta.is_dir() {
+                        sum = sum.saturating_add(walk(&path));
+                    }
+                }
+            }
+            sum
+        }
+        walk(dir)
     }
 
     /// Run a 1 s zero-PCM dummy inference so the first user recording

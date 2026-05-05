@@ -75,7 +75,7 @@ struct GeneralSettingsView: View {
                                         Image(preset.iconAssetName)
                                             .renderingMode(.original)
                                             .resizable()
-                                            .frame(width: 14, height: 14)
+                                            .frame(width: 12, height: 12)
                                     }
                                 }
                                 .tag(preset.id)
