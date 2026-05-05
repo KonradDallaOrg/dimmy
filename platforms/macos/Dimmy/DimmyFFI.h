@@ -114,6 +114,12 @@ int32_t dimmy_parakeet_transcribe(const float * _Nullable pcm_ptr,
                                   char * _Nonnull out_buf,
                                   int32_t buf_len);
 
+/// Pre-load the Parakeet sessions + run a tiny dummy inference so the
+/// user's first real recording skips the ~6 s cold path. BLOCKING —
+/// call from a background thread. Returns 0 on success, -1 on error
+/// (most commonly "bundle not present" — caller should guard).
+int32_t dimmy_parakeet_warmup(void);
+
 // ── Local LLM ────────────────────────────────────────────────────────
 
 /// Get JSON array of available local LLM models with download status.

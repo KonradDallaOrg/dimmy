@@ -183,7 +183,14 @@ pub fn transcribe(_pcm_16k: &[f32]) -> Result<String, TranscribeError> {
 }
 
 #[cfg(feature = "local-stt-parakeet")]
-pub use inference::transcribe;
+pub use inference::{transcribe, warmup};
+
+/// Stub when the feature is off — UIs can call this unconditionally
+/// without a `cfg` dance and silently get a no-op.
+#[cfg(not(feature = "local-stt-parakeet"))]
+pub fn warmup() -> Result<(), TranscribeError> {
+    Ok(())
+}
 
 #[cfg(feature = "local-stt-parakeet")]
 mod inference {
@@ -215,12 +222,101 @@ mod inference {
     }
 
     fn build_session(path: &std::path::Path) -> Result<Session, TranscribeError> {
-        Session::builder()
-            .map_err(|e| TranscribeError::LocalModel(format!("ort builder {:?}: {e}", path)))?
+        let mut builder = Session::builder()
+            .map_err(|e| TranscribeError::LocalModel(format!("ort builder {:?}: {e}", path)))?;
+
+        // CoreML execution provider — currently OPT-IN via the runtime
+        // env var `DIMMY_PARAKEET_USE_COREML=1`, even when the build flag
+        // is on. Local benchmark on M-series with ort 2.0.0-rc.10 against
+        // this specific FP32 bundle: NeuralNetwork format is silently
+        // CPU-falling-back the 2.4 GB encoder (>2 GB artifact limit), and
+        // MLProgram fails to compile with `code: -14` on the dynamic-shape
+        // Conformer. Net effect today is "no faster, sometimes slower".
+        // Keeping the wiring in tree so we can re-enable from outside
+        // the build (or flip the default) once a future ort / onnxruntime
+        // release fixes the dynamic MLProgram path.
+        #[cfg(feature = "local-stt-parakeet-coreml")]
+        if std::env::var("DIMMY_PARAKEET_USE_COREML").as_deref() == Ok("1") {
+            use ort::execution_providers::coreml::{CoreMLComputeUnits, CoreMLModelFormat};
+            use ort::execution_providers::CoreMLExecutionProvider;
+            let cache_dir = dirs::cache_dir()
+                .map(|p| p.join("dimmy").join("coreml-parakeet"))
+                .unwrap_or_else(|| std::path::PathBuf::from("/tmp/dimmy-coreml-parakeet"));
+            let _ = std::fs::create_dir_all(&cache_dir);
+            // Try MLProgram first (handles >2 GB encoders). If a future
+            // session fails to register the EP we just log and fall back
+            // to CPU instead of breaking the whole load — getting the
+            // user a working CPU path matters more than a hypothetical
+            // EP win.
+            match builder.with_execution_providers([CoreMLExecutionProvider::default()
+                .with_model_format(CoreMLModelFormat::MLProgram)
+                .with_compute_units(CoreMLComputeUnits::All)
+                .with_model_cache_dir(cache_dir.to_string_lossy().to_string())
+                .build()])
+            {
+                Ok(b) => {
+                    builder = b;
+                    crate::log("[Parakeet] CoreML EP registered (DIMMY_PARAKEET_USE_COREML=1)");
+                }
+                Err(e) => {
+                    crate::log(&format!(
+                        "[Parakeet] CoreML EP register failed, falling back to CPU: {e}"
+                    ));
+                    builder = Session::builder().map_err(|e| {
+                        TranscribeError::LocalModel(format!("ort builder fallback {:?}: {e}", path))
+                    })?;
+                }
+            }
+        }
+
+        // CUDA (Win/Linux) — same gating shape so feature flags stay
+        // symmetric across platforms. Currently only used by Win;
+        // included here for parity / future Linux-CUDA tier.
+        #[cfg(feature = "local-stt-parakeet-cuda")]
+        {
+            use ort::execution_providers::CUDAExecutionProvider;
+            builder = builder
+                .with_execution_providers([CUDAExecutionProvider::default().build()])
+                .map_err(|e| TranscribeError::LocalModel(format!("ort cuda ep register: {e}")))?;
+        }
+
+        builder
             .with_optimization_level(GraphOptimizationLevel::Level3)
             .map_err(|e| TranscribeError::LocalModel(format!("ort opt level: {e}")))?
             .commit_from_file(path)
             .map_err(|e| TranscribeError::LocalModel(format!("ort load {:?}: {e}", path)))
+    }
+
+    /// Load the 3 ONNX sessions + vocab into the global cache and run a
+    /// 1 s zero-input dummy inference to prime CoreML's compute-graph
+    /// compile (+ kernel cache + mmap fault). Idempotent: if the cache
+    /// is already warm, returns Ok in <1 ms. Designed to be called from
+    /// a background thread right after `dimmy_init()` so the user's
+    /// first real recording doesn't pay the ~6 s cold path.
+    pub fn warmup() -> Result<(), TranscribeError> {
+        if !bundle_present() {
+            return Err(TranscribeError::LocalModel(
+                "parakeet bundle not downloaded — warmup skipped".into(),
+            ));
+        }
+        // Run a tiny dummy inference. The first transcribe call exercises
+        // every session + the JIT-compile of the CoreML graph; one-second
+        // zero PCM is enough to trigger all of it. The output is
+        // discarded.
+        let dir = bundle_dir().ok_or_else(|| TranscribeError::LocalModel("bundle dir".into()))?;
+        {
+            let mtx = lock();
+            let mut g = mtx
+                .lock()
+                .map_err(|e| TranscribeError::LocalModel(format!("mutex: {e}")))?;
+            if g.is_some() {
+                return Ok(()); // already warm
+            }
+            *g = Some(load(&dir)?);
+        }
+        let dummy: Vec<f32> = vec![0.0; 16_000];
+        let _ = transcribe(&dummy)?;
+        Ok(())
     }
 
     fn load(dir: &std::path::Path) -> Result<Inner, TranscribeError> {

@@ -2180,6 +2180,21 @@ pub extern "C" fn dimmy_parakeet_download_bundle() -> c_int {
     }
 }
 
+/// Pre-load the Parakeet sessions + run a tiny dummy inference so the
+/// user's first real recording doesn't pay the ~6 s cold path. BLOCKING —
+/// call from a background thread. Returns 0 on success, -1 on error
+/// (most commonly "bundle not present" — caller should guard).
+#[no_mangle]
+pub extern "C" fn dimmy_parakeet_warmup() -> c_int {
+    match crate::parakeet::warmup() {
+        Ok(()) => 0,
+        Err(e) => {
+            log(&format!("[Parakeet warmup] {}", e));
+            -1
+        }
+    }
+}
+
 /// Transcribe a 16 kHz mono f32 PCM buffer with Parakeet. Writes the
 /// UTF-8 result into `buf` (null-terminated, truncated if buf_len is
 /// too small). Returns the number of bytes written (excluding the

@@ -449,6 +449,19 @@ final class DimmyCore {
         return result == 0
     }
 
+    /// Pre-load the Parakeet sessions on a background thread so the
+    /// user's first real recording doesn't pay the ~6 s cold path.
+    /// No-op if the bundle isn't present yet — caller doesn't need
+    /// to gate.
+    @discardableResult
+    func warmupParakeet() -> Bool {
+        let result = dimmy_parakeet_warmup()
+        if result != 0 {
+            print("[DimmyCore] parakeet warmup skipped (rc=\(result))")
+        }
+        return result == 0
+    }
+
     // MARK: - Local LLM Models
 
     /// List available local LLM models with download status.

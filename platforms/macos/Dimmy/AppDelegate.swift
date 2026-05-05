@@ -190,6 +190,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 if !enabled { self?.captionWindowController?.hide() }
             }
             .store(in: &cancellables)
+
+        // Re-fire the Parakeet warmup when the user flips the backend
+        // from "whisper" → "parakeet" in Settings. Skips automatically
+        // if already warm.
+        appState.$localSttBackend
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.maybeWarmupParakeet() }
+            .store(in: &cancellables)
     }
 
     private func shouldShowLiveCaptions() -> Bool {
@@ -232,7 +241,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 }
                 hkLog("[AppDelegate] core ready — starting HotkeyManager")
                 HotkeyManager.shared.start(appState: self.appState)
+
+                // Async warmup — Parakeet only, and only if the bundle is
+                // already on disk. Avoids the ~6 s cold path on the user's
+                // first recording at the cost of one upfront background
+                // inference (~6-10 s wall, no UI block). Triggered only
+                // when Parakeet is the active backend; flipping to it
+                // later in Settings re-fires below.
+                self.maybeWarmupParakeet()
             }
+        }
+    }
+
+    /// Spawn a one-shot Parakeet warmup if (a) the active backend is
+    /// Parakeet, (b) the bundle is on disk, and (c) we haven't already
+    /// warmed in this session. Idempotent across calls — the Rust side
+    /// short-circuits if the model cache is already populated.
+    private var didWarmupParakeet = false
+    func maybeWarmupParakeet() {
+        guard !didWarmupParakeet else { return }
+        guard appState.localSttBackend == "parakeet" else { return }
+        guard DimmyCore.shared.isInitialized else { return }
+        guard DimmyCore.shared.parakeetBundlePresent() else { return }
+        didWarmupParakeet = true
+        hkLog("[AppDelegate] Parakeet warmup → background")
+        DispatchQueue.global(qos: .utility).async {
+            let t0 = Date()
+            let ok = DimmyCore.shared.warmupParakeet()
+            let ms = Int(Date().timeIntervalSince(t0) * 1000)
+            hkLog("[AppDelegate] Parakeet warmup done in \(ms) ms (ok=\(ok))")
         }
     }
 
