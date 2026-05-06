@@ -1117,17 +1117,20 @@
                         <ToggleSwitch Grid.Column="0"
                                       IsOn="{Binding Enabled, Mode=TwoWay}"
                                       OnContent="" OffContent="" MinWidth="0"/>
-                        <Grid Grid.Column="1" Width="22" Height="22"
-                              VerticalAlignment="Center" Margin="2,0,4,0">
+                        <Grid Grid.Column="1" Width="32" Height="32"
+                              VerticalAlignment="Center" Margin="2,0,6,0">
                           <!-- Real Windows icon extracted from the .exe
-                               (SHGetFileInfo, cached as PNG); Segoe
-                               Fluent glyph as fallback when no exe has
-                               been seen yet for this process. -->
-                          <Image Width="22" Height="22"
+                               at 256×256 via IShellItemImageFactory,
+                               cached as PNG; the Image control
+                               downscales to 32 with bilinear filtering
+                               so even apps with mediocre source icons
+                               look crisp. Segoe Fluent glyph fallback
+                               when no exe has been seen for this rule. -->
+                          <Image Width="32" Height="32"
                                  Source="{Binding IconAssetUri, Mode=OneWay}"
                                  Visibility="{Binding IconAssetUri, Mode=OneWay, Converter={StaticResource NotNullToVisibilityConverter}}"/>
                           <FontIcon Glyph="{Binding IconGlyph, Mode=OneWay}"
-                                    FontSize="18"
+                                    FontSize="22"
                                     Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
                                     Visibility="{Binding IconAssetUri, Mode=OneWay, Converter={StaticResource NotNullToVisibilityConverter}, ConverterParameter=Invert}"/>
                         </Grid>

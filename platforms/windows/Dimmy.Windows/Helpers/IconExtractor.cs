@@ -32,8 +32,11 @@ public static class IconExtractor
 
     /// Bumped whenever the extraction algorithm changes — old PNGs
     /// from a previous algorithm would otherwise be served forever.
-    /// v2 = IShellItemImageFactory (transparent, 64×64).
-    private const int CACHE_VERSION = 2;
+    /// v3 = IShellItemImageFactory at 256×256 (was 64×64; tiny icons
+    /// looked pixelated when scaled by the WinUI Image control even
+    /// at the small list size, because we were getting a low-res
+    /// variant from the icon resource and upscaling it).
+    private const int CACHE_VERSION = 3;
 
     static IconExtractor()
     {
@@ -115,7 +118,12 @@ public static class IconExtractor
             if (hr != 0 || item == null) return;
             try
             {
-                var size = new SIZE { cx = 64, cy = 64 };
+                // 256×256 is the largest "jumbo" variant Windows ships
+                // for modern apps; smaller sizes get a low-res icon
+                // resource that looks pixelated when scaled down by
+                // the Image control. Asking for 256 + BIGGERSIZEOK
+                // produces the highest-fidelity ARGB bitmap available.
+                var size = new SIZE { cx = 256, cy = 256 };
                 // SIIGBF_BIGGERSIZEOK lets the shell return a larger icon
                 // than requested if a smaller one would lose detail —
                 // matches Explorer's "Large icons" behaviour. Combine
