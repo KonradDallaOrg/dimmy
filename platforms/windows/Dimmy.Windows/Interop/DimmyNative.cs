@@ -139,6 +139,16 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_history_delete(int id);
 
+    // ── File-load transcription (offline) ────────────────────────
+    /// Synchronously transcribe a WAV file using the active local
+    /// backend. See core/src/ffi.rs::dimmy_transcribe_file for return
+    /// codes. On success the transcript is written to `outBuf` and
+    /// the function returns its byte length.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_transcribe_file(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string path,
+        byte[] outBuf, int bufLen);
+
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_history_stats(byte[] buf, int len);
 

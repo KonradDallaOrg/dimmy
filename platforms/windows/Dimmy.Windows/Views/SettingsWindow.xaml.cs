@@ -152,6 +152,91 @@ public sealed partial class SettingsWindow : Window
             ViewModel.AppRules.Remove(rule);
     }
 
+    // ── File-load (offline transcribe) ────────────────────────────
+
+    private async void FileLoadPick_Click(object sender, RoutedEventArgs e)
+    {
+        var picker = new global::Windows.Storage.Pickers.FileOpenPicker();
+        var hwnd = WindowHelper.GetHwnd(this);
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
+        picker.SuggestedStartLocation = global::Windows.Storage.Pickers.PickerLocationId.MusicLibrary;
+        picker.FileTypeFilter.Add(".wav");
+        var file = await picker.PickSingleFileAsync();
+        if (file == null) return;
+        await TranscribeFileAsync(file.Path);
+    }
+
+    private void FileLoadDropTarget_DragOver(object sender, Microsoft.UI.Xaml.DragEventArgs e)
+    {
+        if (e.DataView.Contains(global::Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems))
+        {
+            e.AcceptedOperation = global::Windows.ApplicationModel.DataTransfer.DataPackageOperation.Copy;
+        }
+    }
+
+    private async void FileLoadDropTarget_Drop(object sender, Microsoft.UI.Xaml.DragEventArgs e)
+    {
+        if (!e.DataView.Contains(global::Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems))
+            return;
+        var items = await e.DataView.GetStorageItemsAsync();
+        var first = items.FirstOrDefault(i => i is global::Windows.Storage.StorageFile sf
+            && sf.FileType.Equals(".wav", StringComparison.OrdinalIgnoreCase))
+            as global::Windows.Storage.StorageFile;
+        if (first == null)
+        {
+            FileLoadStatus.Text = "Only .wav supported in this build";
+            return;
+        }
+        await TranscribeFileAsync(first.Path);
+    }
+
+    private async System.Threading.Tasks.Task TranscribeFileAsync(string path)
+    {
+        FileLoadProgress.IsActive = true;
+        FileLoadProgress.Visibility = Visibility.Visible;
+        FileLoadResult.Visibility = Visibility.Collapsed;
+        FileLoadStatus.Text = $"Transcribing {System.IO.Path.GetFileName(path)}...";
+        FileLoadPickBtn.IsEnabled = false;
+        try
+        {
+            const int BufLen = 1 << 22;
+            var buf = new byte[BufLen];
+            int rc = await System.Threading.Tasks.Task.Run(() =>
+                DimmyNative.dimmy_transcribe_file(path, buf, BufLen));
+            if (rc < 0)
+            {
+                FileLoadStatus.Text = rc switch
+                {
+                    -1 => "Bad arguments",
+                    -2 => "Could not open / decode the WAV",
+                    -3 => "VAD removed all audio (file silent?)",
+                    -4 => "Cloud mode is not supported here yet — switch to Local",
+                    -5 => "Backend transcribe failed (see dimmy.log)",
+                    _ => $"Failed (code {rc})",
+                };
+                FileLoadResult.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                var text = System.Text.Encoding.UTF8.GetString(buf, 0, rc);
+                FileLoadResult.Text = text;
+                FileLoadResult.Visibility = Visibility.Visible;
+                FileLoadStatus.Text = $"{text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length} words. Saved to History.";
+            }
+        }
+        catch (Exception ex)
+        {
+            FileLoadStatus.Text = $"Error: {ex.Message}";
+            App.Log($"file-load failed: {ex}", "FileLoad");
+        }
+        finally
+        {
+            FileLoadProgress.IsActive = false;
+            FileLoadProgress.Visibility = Visibility.Collapsed;
+            FileLoadPickBtn.IsEnabled = true;
+        }
+    }
+
     private void LoadConfig()
     {
         // Read from config.json file first — it has all fields including UI-only ones
