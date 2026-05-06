@@ -513,8 +513,9 @@ public sealed partial class SettingsWindow : Window
             try
             {
                 var uri = new Uri(path);
-                HistoryAudioPlayer.Source =
-                    global::Windows.Media.Core.MediaSource.CreateFromUri(uri);
+                if (HistoryAudioPlayer != null)
+                    HistoryAudioPlayer.Source =
+                        global::Windows.Media.Core.MediaSource.CreateFromUri(uri);
             }
             catch (Exception ex)
             {
@@ -523,6 +524,7 @@ public sealed partial class SettingsWindow : Window
 
             // Waveform — read peaks on a background thread, then draw.
             // Bucket count tracks the canvas width so bars are ~3px wide.
+            if (HistoryWaveformCanvas == null) return;
             double width = HistoryWaveformCanvas.ActualWidth;
             if (width <= 0) width = 600; // fallback before first layout pass
             int buckets = (int)Math.Max(60, Math.Min(400, width / 3));
