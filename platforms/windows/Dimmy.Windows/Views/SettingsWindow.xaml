@@ -1434,7 +1434,9 @@
                             BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
                             BorderThickness="1" CornerRadius="4"
                             Padding="6,4" Height="64">
-                      <Canvas x:Name="HistoryWaveformCanvas" />
+                      <Canvas x:Name="HistoryWaveformCanvas"
+                              Background="Transparent"
+                              PointerPressed="HistoryWaveformCanvas_PointerPressed" />
                     </Border>
                     <MediaPlayerElement x:Name="HistoryAudioPlayer"
                                         Grid.Row="1"

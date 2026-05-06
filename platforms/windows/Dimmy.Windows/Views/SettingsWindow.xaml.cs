@@ -126,22 +126,18 @@ public sealed partial class SettingsWindow : Window
         };
         UpdateAppRulesEmptyHint();
 
-        // Drag/drop has to be hooked via AddHandler with
-        // handledEventsToo=true. Otherwise the ScrollViewer wrapping
-        // the page swallows DragOver (built-in drag-to-scroll marks
-        // it handled before our Border's declarative handler runs).
-        if (FileLoadDropTarget != null)
+        // WinUI 3 desktop's DragOver/Drop events never fire even with
+        // handledEventsToo=true (verified empirically — DragEnter logger
+        // never showed up in ptt.log on a real drop). Bypass with Win32
+        // OLE RegisterDragDrop bound to the Window's HWND. The drop
+        // target accepts file drops anywhere on the Settings window;
+        // we filter to .wav at TranscribeFileAsync time.
+        Activated += SettingsWindow_Activated;
+        Closed += (_, _) =>
         {
-            FileLoadDropTarget.AddHandler(UIElement.DragOverEvent,
-                new DragEventHandler(FileLoadDropTarget_DragOver),
-                handledEventsToo: true);
-            FileLoadDropTarget.AddHandler(UIElement.DropEvent,
-                new DragEventHandler(FileLoadDropTarget_Drop),
-                handledEventsToo: true);
-            FileLoadDropTarget.AddHandler(UIElement.DragEnterEvent,
-                new DragEventHandler((_, _) => App.Log("DragEnter fired", "FileLoad")),
-                handledEventsToo: true);
-        }
+            try { _win32Drop?.Unregister(); } catch { }
+            _win32Drop = null;
+        };
 
         // Warm-up: extract real icons from currently-running processes
         // so the App Rules list shows them immediately instead of the
@@ -259,6 +255,50 @@ public sealed partial class SettingsWindow : Window
             FileLoadStatus.Text = $"Picker error: {ex.Message}";
             App.Log($"FileLoadPick exc: {ex}", "FileLoad");
         }
+    }
+
+    /// Active Win32 drop target. Created lazily on first Activated
+    /// because RegisterDragDrop wants the HWND already alive.
+    private Helpers.Win32DropTarget? _win32Drop;
+
+    private void SettingsWindow_Activated(object sender,
+        Microsoft.UI.Xaml.WindowActivatedEventArgs e)
+    {
+        // Idempotent: only register once across the window's lifetime.
+        if (_win32Drop != null) return;
+        try
+        {
+            var hwnd = WindowHelper.GetHwnd(this);
+            _win32Drop = new Helpers.Win32DropTarget(hwnd, OnFilesDroppedFromWin32);
+            _win32Drop.Register();
+        }
+        catch (Exception ex)
+        {
+            App.Log($"Win32 drop register exc: {ex.Message}", "FileLoad");
+        }
+    }
+
+    private async void OnFilesDroppedFromWin32(string[] paths)
+    {
+        // Marshal back to UI thread — RegisterDragDrop callbacks run
+        // on the OLE STA but XAML wants the dispatcher.
+        var first = Array.Find(paths,
+            p => p.EndsWith(".wav", StringComparison.OrdinalIgnoreCase));
+        if (first == null)
+        {
+            DispatcherQueue.TryEnqueue(() =>
+                FileLoadStatus.Text = "Only .wav supported in this build");
+            return;
+        }
+        // Hop to UI dispatcher so TranscribeFileAsync can touch
+        // FileLoadProgress / FileLoadResult safely.
+        var tcs = new System.Threading.Tasks.TaskCompletionSource<bool>();
+        DispatcherQueue.TryEnqueue(async () =>
+        {
+            try { await TranscribeFileAsync(first); }
+            finally { tcs.TrySetResult(true); }
+        });
+        await tcs.Task;
     }
 
     private void FileLoadDropTarget_DragOver(object sender, Microsoft.UI.Xaml.DragEventArgs e)
@@ -514,8 +554,18 @@ public sealed partial class SettingsWindow : Window
             {
                 var uri = new Uri(path);
                 if (HistoryAudioPlayer != null)
+                {
                     HistoryAudioPlayer.Source =
                         global::Windows.Media.Core.MediaSource.CreateFromUri(uri);
+                    // Hook PositionChanged once per source — drives the
+                    // orange playhead overlay on top of the waveform.
+                    var mp = HistoryAudioPlayer.MediaPlayer;
+                    if (mp != null)
+                    {
+                        mp.PlaybackSession.PositionChanged -= OnPlaybackPositionChanged;
+                        mp.PlaybackSession.PositionChanged += OnPlaybackPositionChanged;
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -543,6 +593,12 @@ public sealed partial class SettingsWindow : Window
         }
     }
 
+    /// Vertical line that tracks current playback position. Created
+    /// on first DrawWaveform, repositioned in HistoryAudioPlayer's
+    /// PositionChanged handler. Kept as a field so it survives the
+    /// per-frame Canvas re-render.
+    private Microsoft.UI.Xaml.Shapes.Rectangle? _waveformPlayhead;
+
     private void DrawWaveform(float[] peaks)
     {
         if (HistoryWaveformCanvas == null || peaks.Length == 0) return;
@@ -568,6 +624,73 @@ public sealed partial class SettingsWindow : Window
             Microsoft.UI.Xaml.Controls.Canvas.SetTop(rect, mid - barH / 2.0);
             HistoryWaveformCanvas.Children.Add(rect);
         }
+
+        // Re-add the playhead on top of the bars. Solid orange, 2 px
+        // wide, positioned at x=0 until the player starts emitting
+        // PositionChanged events.
+        _waveformPlayhead = new Microsoft.UI.Xaml.Shapes.Rectangle
+        {
+            Width = 2,
+            Height = h,
+            Fill = new Microsoft.UI.Xaml.Media.SolidColorBrush(
+                Microsoft.UI.Colors.OrangeRed),
+            IsHitTestVisible = false,
+        };
+        Microsoft.UI.Xaml.Controls.Canvas.SetLeft(_waveformPlayhead, 0);
+        Microsoft.UI.Xaml.Controls.Canvas.SetTop(_waveformPlayhead, 0);
+        HistoryWaveformCanvas.Children.Add(_waveformPlayhead);
+    }
+
+    /// Tap on the waveform → seek the MediaPlayer to that fractional
+    /// position. Bound in XAML via Canvas.PointerPressed so the
+    /// affordance is "click anywhere on the bars to jump there".
+    private void HistoryWaveformCanvas_PointerPressed(object sender,
+        Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        try
+        {
+            if (HistoryWaveformCanvas == null || HistoryAudioPlayer?.MediaPlayer == null)
+                return;
+            var pt = e.GetCurrentPoint(HistoryWaveformCanvas).Position;
+            double w = HistoryWaveformCanvas.ActualWidth;
+            if (w <= 0) return;
+            double frac = Math.Max(0, Math.Min(1, pt.X / w));
+            var session = HistoryAudioPlayer.MediaPlayer.PlaybackSession;
+            var total = session.NaturalDuration;
+            if (total.TotalSeconds <= 0) return;
+            session.Position = TimeSpan.FromSeconds(total.TotalSeconds * frac);
+            UpdatePlayheadPosition(frac);
+        }
+        catch (Exception ex)
+        {
+            App.Log($"WaveformPointer exc: {ex.Message}", "History");
+        }
+    }
+
+    private void UpdatePlayheadPosition(double frac)
+    {
+        if (_waveformPlayhead == null || HistoryWaveformCanvas == null) return;
+        double w = HistoryWaveformCanvas.ActualWidth;
+        if (w <= 0) return;
+        Microsoft.UI.Xaml.Controls.Canvas.SetLeft(_waveformPlayhead,
+            Math.Max(0, Math.Min(w - 2, w * frac)));
+    }
+
+    /// MediaPlayer fires PositionChanged off the UI thread — hop back
+    /// to the dispatcher before touching the Canvas. Computes the
+    /// fractional position from the session's NaturalDuration and
+    /// drives the orange playhead overlay.
+    private void OnPlaybackPositionChanged(
+        global::Windows.Media.Playback.MediaPlaybackSession session, object args)
+    {
+        try
+        {
+            var total = session.NaturalDuration.TotalSeconds;
+            if (total <= 0) return;
+            double frac = session.Position.TotalSeconds / total;
+            DispatcherQueue.TryEnqueue(() => UpdatePlayheadPosition(frac));
+        }
+        catch { /* MediaPlayer races on source-swap; ignore. */ }
     }
 
     private void LoadConfig()

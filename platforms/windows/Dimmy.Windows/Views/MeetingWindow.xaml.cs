@@ -93,6 +93,7 @@ public sealed partial class MeetingWindow : Window
                 Application.Current.Resources["TextFillColorTertiaryBrush"];
             RecapBorder.Visibility = Visibility.Collapsed;
             ActionsBorder.Visibility = Visibility.Collapsed;
+            _lastTranscriptLen = -1; // reset for fresh polling cycle
             StartPolling();
             App.Log($"meeting started: {id}", "Meeting");
         }
@@ -179,6 +180,12 @@ public sealed partial class MeetingWindow : Window
         _pollTimer = null;
     }
 
+    /// Cached length of transcripts.txt last seen — only refresh the
+    /// TextBlock when the file actually grew. Avoids touching XAML on
+    /// every 2 s tick when nothing changed and gives a clear log line
+    /// when chunks ARE landing.
+    private long _lastTranscriptLen = -1;
+
     private void OnPollTick(DispatcherQueueTimer sender, object args)
     {
         // Update timer text.
@@ -194,30 +201,60 @@ public sealed partial class MeetingWindow : Window
             var meetings = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                 "dimmy", "meetings");
-            if (!Directory.Exists(meetings)) return;
+            if (!Directory.Exists(meetings))
+            {
+                App.Log("poll: meetings dir missing", "Meeting");
+                return;
+            }
             var latest = new DirectoryInfo(meetings).GetDirectories()
                 .OrderByDescending(d => d.LastWriteTime)
                 .FirstOrDefault();
-            if (latest == null) return;
+            if (latest == null)
+            {
+                App.Log("poll: no meeting dirs found", "Meeting");
+                return;
+            }
             _activeMeetingDir = latest.FullName;
             DirText.Text = latest.FullName;
             var transcriptsPath = Path.Combine(latest.FullName, "transcripts.txt");
-            if (!File.Exists(transcriptsPath)) return;
-            var content = File.ReadAllText(transcriptsPath);
-            if (string.IsNullOrWhiteSpace(content)) return;
-            // First time we see real content: swap from tertiary
-            // (placeholder hint) to primary brush so the transcript
-            // reads cleanly.
-            if (TranscriptText.Foreground != (Microsoft.UI.Xaml.Media.Brush)
-                Application.Current.Resources["TextFillColorPrimaryBrush"])
+            if (!File.Exists(transcriptsPath))
             {
-                TranscriptText.Foreground = (Microsoft.UI.Xaml.Media.Brush)
-                    Application.Current.Resources["TextFillColorPrimaryBrush"];
+                // First chunk hasn't landed yet — normal during the
+                // initial chunk_secs window. Don't log to avoid noise.
+                return;
             }
+            var fi = new FileInfo(transcriptsPath);
+            if (fi.Length == _lastTranscriptLen) return; // unchanged
+            _lastTranscriptLen = fi.Length;
+
+            // Read using FileShare.ReadWrite — Rust may be appending
+            // concurrently and the default FileShare.Read on Windows
+            // would throw IOException "file in use".
+            string content;
+            using (var fs = new FileStream(transcriptsPath, FileMode.Open,
+                FileAccess.Read, FileShare.ReadWrite))
+            using (var sr = new StreamReader(fs))
+            {
+                content = sr.ReadToEnd();
+            }
+            if (string.IsNullOrWhiteSpace(content)) return;
+
+            App.Log($"poll: {fi.Length} bytes from {latest.Name[..8]}", "Meeting");
+            // Swap brush to primary unconditionally — XAML default was
+            // tertiary (placeholder). Cheap reassignment.
+            TranscriptText.Foreground = (Microsoft.UI.Xaml.Media.Brush)
+                Application.Current.Resources["TextFillColorPrimaryBrush"];
             TranscriptText.Text = content;
             ChunkCountText.Text = $"{content.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length} chunks";
+
+            // Auto-scroll to bottom so the most recent chunk is always
+            // visible without the user having to drag the thumb.
+            TranscriptScroll?.ChangeView(null, double.MaxValue, null, true);
         }
-        catch { /* best-effort live view */ }
+        catch (Exception ex)
+        {
+            App.Log($"poll exc: {ex.Message}", "Meeting");
+        }
     }
 
     // ── Post-process pipeline (LLM recap + actions) ──────────────
