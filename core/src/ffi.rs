@@ -24,6 +24,11 @@ static EVENT_CALLBACK: Mutex<Option<extern "C" fn(*const c_char)>> = Mutex::new(
 /// Taken out by `dimmy_stop_recording` to drain the final cumulative.
 static CHUNKED: Mutex<Option<crate::chunked_stt::ChunkedTranscriber>> = Mutex::new(None);
 
+/// Active meeting-mode session, if any. Independent of CHUNKED — the
+/// meeting flow runs its own audio capture (started via
+/// `dimmy_meeting_start`, NOT via the dictation hotkey).
+static MEETING: Mutex<Option<crate::meeting::MeetingSession>> = Mutex::new(None);
+
 fn state() -> &'static AppState {
     GLOBAL_STATE
         .get()
@@ -1950,6 +1955,186 @@ pub extern "C" fn dimmy_has_api_key() -> c_int {
 #[no_mangle]
 pub extern "C" fn dimmy_get_version(out_buf: *mut c_char, buf_len: c_int) -> c_int {
     write_to_buf(env!("CARGO_PKG_VERSION"), out_buf, buf_len)
+}
+
+// ── Meeting mode ─────────────────────────────────────────────────
+
+/// Start a long-form meeting session. Spins up a fresh audio capture
+/// (independent of the dictation hotkey path) and a MeetingSession
+/// worker that streams the recorded WAV to disk and transcribes
+/// chunks every 15 s. Returns 0 on success and writes the meeting id
+/// to `out_buf`. Returns -1 if a session is already active, -2 on
+/// audio-capture start failure, -3 on filesystem error.
+///
+/// # Safety
+/// `out_buf` must be a valid writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_meeting_start(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    {
+        let guard = match MEETING.lock() {
+            Ok(g) => g,
+            Err(_) => return -1,
+        };
+        if guard.is_some() {
+            return -1; // already active
+        }
+    }
+
+    let st = state();
+    let selected_device = st.selected_device.lock().ok().and_then(|d| d.clone());
+    let device_sr = crate::audio::device_sample_rate(&selected_device);
+    if let Ok(mut sr) = st.audio_sample_rate.lock() {
+        *sr = device_sr;
+    }
+    // Clear any stale buffer from a previous recording so the meeting
+    // worker starts at offset 0.
+    if let Ok(mut b) = st.audio_buffer.lock() {
+        b.clear();
+    }
+    let _ = st
+        .audio_tx
+        .lock()
+        .map(|tx| tx.send(crate::audio::AudioCommand::Start(selected_device)));
+
+    let session = match crate::meeting::MeetingSession::start(
+        st.audio_buffer.clone(),
+        device_sr,
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            log(&format!("[Meeting] start failed: {}", e));
+            // Best-effort: stop the audio we just started so the next
+            // Start doesn't error on "already running".
+            let _ = st
+                .audio_tx
+                .lock()
+                .map(|tx| tx.send(crate::audio::AudioCommand::Stop));
+            return -3;
+        }
+    };
+    let id = session.id().to_string();
+    if let Ok(mut g) = MEETING.lock() {
+        *g = Some(session);
+    }
+    log(&format!("[Meeting] active id={}", id));
+    write_to_buf(&id, out_buf, buf_len)
+}
+
+/// Stop the active meeting and return a JSON bundle with the id, dir,
+/// transcript, duration, chunk_count, error. Caller is then expected
+/// to optionally run dimmy_process_with_llm on the transcript and
+/// call dimmy_meeting_save_post_process to persist the recap +
+/// actions. Returns the byte length of the JSON, or -1 if no
+/// meeting is active.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_meeting_stop(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let session = {
+        let mut guard = match MEETING.lock() {
+            Ok(g) => g,
+            Err(_) => return -1,
+        };
+        match guard.take() {
+            Some(s) => s,
+            None => return -1,
+        }
+    };
+
+    // Stop audio capture in parallel with the worker drain — the
+    // worker's stop() blocks for up to one chunk's transcribe time
+    // (a few hundred ms), so we issue the cpal Stop first.
+    let st = state();
+    let _ = st
+        .audio_tx
+        .lock()
+        .map(|tx| tx.send(crate::audio::AudioCommand::Stop));
+    if let Ok(mut r) = st.recording.lock() {
+        *r = false;
+    }
+
+    let result = session.stop();
+    let json = serde_json::json!({
+        "id": result.id,
+        "dir": result.dir.to_string_lossy(),
+        "transcript": result.transcript,
+        "duration_secs": result.duration_secs,
+        "chunk_count": result.chunk_count,
+        "error": result.error,
+    })
+    .to_string();
+    write_to_buf(&json, out_buf, buf_len)
+}
+
+/// Persist the post-process LLM artefacts (recap, actions JSON,
+/// optional translation) into the meeting directory. Each pointer
+/// can be null/empty — empty fields are skipped, not written as
+/// blank files. Returns 0 on success, -1 on any error.
+///
+/// # Safety
+/// All non-null `*const c_char` pointers must be valid null-
+/// terminated UTF-8 C strings.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_meeting_save_post_process(
+    dir_ptr: *const c_char,
+    recap_ptr: *const c_char,
+    actions_ptr: *const c_char,
+    translated_ptr: *const c_char,
+) -> c_int {
+    if dir_ptr.is_null() {
+        return -1;
+    }
+    let dir_str = match CStr::from_ptr(dir_ptr).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let dir = std::path::Path::new(dir_str);
+    let recap = if recap_ptr.is_null() {
+        ""
+    } else {
+        CStr::from_ptr(recap_ptr).to_str().unwrap_or("")
+    };
+    let actions = if actions_ptr.is_null() {
+        ""
+    } else {
+        CStr::from_ptr(actions_ptr).to_str().unwrap_or("")
+    };
+    let translated = if translated_ptr.is_null() {
+        None
+    } else {
+        match CStr::from_ptr(translated_ptr).to_str() {
+            Ok(s) if !s.is_empty() => Some(s),
+            _ => None,
+        }
+    };
+    match crate::meeting::save_post_process(dir, recap, actions, translated) {
+        Ok(_) => 0,
+        Err(e) => {
+            log(&format!("[Meeting] save_post_process: {}", e));
+            -1
+        }
+    }
+}
+
+/// Return JSON array of meeting sessions left with a `.recording`
+/// marker (i.e. crashed before clean stop). UI surfaces this as a
+/// "recover meeting?" prompt at startup. Returns the byte length of
+/// the JSON, or -1 on buffer-too-small.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_meeting_list_orphans(
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let arr = crate::meeting::list_orphans();
+    let json = serde_json::to_string(&arr).unwrap_or_else(|_| "[]".to_string());
+    write_to_buf(&json, out_buf, buf_len)
 }
 
 /// Build flavor — "" (prod) or "staging". Embedded at compile time via

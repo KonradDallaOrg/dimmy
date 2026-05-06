@@ -128,6 +128,23 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_history_stats(byte[] buf, int len);
 
+    // ── Meeting mode (long-form recording) ───────────────────────
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_meeting_start(byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_meeting_stop(byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_meeting_save_post_process(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string dir,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? recap,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? actions,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? translated);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_meeting_list_orphans(byte[] outBuf, int bufLen);
+
     // ── Hotkey (low-level keyboard hook via Rust) ─────────────────
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern void dimmy_hotkey_install();

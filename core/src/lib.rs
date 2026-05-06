@@ -8,6 +8,14 @@ pub mod app_rules;
 pub mod audio;
 pub mod autostart;
 pub mod chunked_stt;
+/// Long-form meeting recording. Streams to disk so memory stays
+/// bounded over multi-hour sessions and a `.recording` marker
+/// enables crash recovery. Post-process pipeline (recap, actions,
+/// optional translation) runs from `dimmy_meeting_stop` returning
+/// the full transcript; the LLM call itself is driven from the C#/
+/// Swift host through dimmy_process_with_llm to keep async runtime
+/// concerns out of the meeting worker.
+pub mod meeting;
 pub mod error;
 pub mod ffi;
 pub mod filler;
@@ -160,6 +168,13 @@ fn transcription_debug_log_path() -> Option<std::path::PathBuf> {
 
 fn audio_debug_dir() -> Option<std::path::PathBuf> {
     config_dir_path().map(|p| p.join("audio_debug"))
+}
+
+/// Where meeting-mode sessions persist their on-disk artefacts
+/// (`audio.wav` + `transcripts.txt` + `meta.json` + post-process
+/// outputs). One sub-directory per meeting, named with a v4 UUID.
+pub fn meetings_dir() -> Option<std::path::PathBuf> {
+    config_dir_path().map(|p| p.join("meetings"))
 }
 
 /// Create a session directory for audio debug dumps and return its path.

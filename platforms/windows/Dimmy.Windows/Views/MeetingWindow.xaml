@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="Dimmy.Windows.Views.MeetingWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Dimmy — Meeting">
+
+    <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
+          Padding="24" RowSpacing="14">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" Spacing="2">
+            <TextBlock Text="Meeting mode" FontSize="24" FontWeight="SemiBold"/>
+            <TextBlock TextWrapping="Wrap" FontSize="12"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                       Text="Long-form recording. Streamed to disk so memory stays bounded; live transcript appears every ~15 s. Stop to generate recap + action items."/>
+        </StackPanel>
+
+        <!-- Status row: dot + timer + chunk count -->
+        <Border Grid.Row="1"
+                Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                BorderThickness="1" CornerRadius="6" Padding="14,10">
+            <StackPanel Orientation="Horizontal" Spacing="14">
+                <Ellipse x:Name="StatusDot" Width="10" Height="10" Fill="#888"/>
+                <TextBlock x:Name="StatusText" Text="Ready"
+                           VerticalAlignment="Center" FontWeight="SemiBold"/>
+                <TextBlock x:Name="TimerText" Text="00:00:00"
+                           VerticalAlignment="Center"
+                           FontFamily="Consolas" FontSize="14"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                <TextBlock x:Name="ChunkCountText" Text=""
+                           VerticalAlignment="Center"
+                           FontSize="12"
+                           Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Action row -->
+        <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8">
+            <Button x:Name="StartBtn" Click="Start_Click"
+                    Style="{ThemeResource AccentButtonStyle}">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <FontIcon Glyph="&#xE7C8;" FontSize="14"/>
+                    <TextBlock Text="Start meeting"/>
+                </StackPanel>
+            </Button>
+            <Button x:Name="StopBtn" Click="Stop_Click" IsEnabled="False">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <FontIcon Glyph="&#xE71A;" FontSize="14"/>
+                    <TextBlock Text="Stop &amp; process"/>
+                </StackPanel>
+            </Button>
+            <CheckBox x:Name="GenerateRecapCheck" Content="Generate recap + actions on stop"
+                      IsChecked="True" VerticalAlignment="Center"/>
+        </StackPanel>
+
+        <!-- Transcript live view -->
+        <Border Grid.Row="3"
+                Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                BorderThickness="1" CornerRadius="6" Padding="0">
+            <ScrollViewer x:Name="TranscriptScroll"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled">
+                <StackPanel Padding="14" Spacing="10">
+                    <TextBlock x:Name="TranscriptText"
+                               Text="(transcript will appear here as the meeting progresses)"
+                               TextWrapping="Wrap"
+                               FontSize="14"
+                               Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
+                    <Border x:Name="RecapBorder" Visibility="Collapsed"
+                            Background="{ThemeResource LayerFillColorDefaultBrush}"
+                            CornerRadius="4" Padding="12">
+                        <StackPanel Spacing="6">
+                            <TextBlock Text="RECAP" FontWeight="SemiBold" FontSize="12"
+                                       Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
+                            <TextBlock x:Name="RecapText" TextWrapping="Wrap" FontSize="13"/>
+                        </StackPanel>
+                    </Border>
+                    <Border x:Name="ActionsBorder" Visibility="Collapsed"
+                            Background="{ThemeResource LayerFillColorDefaultBrush}"
+                            CornerRadius="4" Padding="12">
+                        <StackPanel Spacing="6">
+                            <TextBlock Text="ACTION ITEMS" FontWeight="SemiBold" FontSize="12"
+                                       Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
+                            <TextBlock x:Name="ActionsText" TextWrapping="Wrap"
+                                       FontFamily="Consolas" FontSize="12"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+
+        <!-- Footer: meeting dir + open folder -->
+        <StackPanel Grid.Row="4" Orientation="Horizontal" Spacing="8">
+            <TextBlock x:Name="DirText" Text=""
+                       FontSize="11"
+                       FontFamily="Consolas"
+                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                       VerticalAlignment="Center"
+                       TextTrimming="CharacterEllipsis"/>
+            <Button x:Name="OpenFolderBtn" Click="OpenFolder_Click"
+                    IsEnabled="False" Content="Open folder"/>
+        </StackPanel>
+    </Grid>
+</Window>

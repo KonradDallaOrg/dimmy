@@ -29,6 +29,7 @@ public partial class App : Application
     public AppViewModel AppViewModel => _appViewModel;
     private PillWindow? _pillWindow;
     private CaptionWindow? _captionWindow;
+    private MeetingWindow? _meetingWindow;
     private OnboardingWindow? _onboardingWindow;
     private HotkeyService? _hotkeyService;
     private TrayService? _trayService;
@@ -898,6 +899,23 @@ public partial class App : Application
     private SettingsWindow? _settingsWindow;
 
     public void OpenSettingsWindow() => OpenSettings();
+
+    /// Open the dedicated MeetingWindow (or activate it if already
+    /// open). Triggered from the tray menu's "Start meeting…" item
+    /// and from the Settings home → Meeting card.
+    public void OpenMeetingWindow()
+    {
+        if (_meetingWindow == null)
+        {
+            _meetingWindow = new MeetingWindow();
+            _meetingWindow.Closed += (_, __) => _meetingWindow = null;
+            _meetingWindow.Activate();
+        }
+        else
+        {
+            _meetingWindow.Activate();
+        }
+    }
 
     /// Open Settings and navigate to the named nav tag (e.g. "license").
     /// Used post-activation to surface confirmation without forcing the
