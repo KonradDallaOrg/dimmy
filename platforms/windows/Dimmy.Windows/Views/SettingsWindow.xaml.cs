@@ -97,6 +97,16 @@ public sealed partial class SettingsWindow : Window
         // a visual hint that the form is dirty.
         ViewModel.PropertyChanged += (_, _) => PulseSavedInfoBar();
 
+        // Render waveform + load audio whenever the History selection
+        // changes. Hooked here (not in XAML) because rendering needs
+        // the Canvas's actual ActualWidth which isn't known until
+        // layout — ViewModel can't reach it from a binding.
+        ViewModel.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(ViewModel.SelectedHistoryItem))
+                _ = RefreshHistoryAudioAsync();
+        };
+
         // App rules: pulse on collection change (add/remove/reorder) AND
         // on any per-row property edit (pattern, style, ...). Without
         // hooking the inner ObservableObjects' PropertyChanged the user
@@ -480,6 +490,81 @@ public sealed partial class SettingsWindow : Window
         else
         {
             App.Log($"history_delete returned {rc} for id {item.Id}", "History");
+        }
+    }
+
+    /// Render a waveform of the selected History row's audio file and
+    /// point the MediaPlayerElement at it. Called on every selection
+    /// change. No-ops cleanly when the row has no audio (HasAudio=false
+    /// hides the whole Grid via XAML binding) or the file is missing.
+    private async System.Threading.Tasks.Task RefreshHistoryAudioAsync()
+    {
+        try
+        {
+            HistoryWaveformCanvas?.Children.Clear();
+            if (HistoryAudioPlayer != null) HistoryAudioPlayer.Source = null;
+
+            var item = ViewModel.SelectedHistoryItem;
+            if (item == null || !item.HasAudio) return;
+            var path = item.AudioPath;
+            if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path)) return;
+
+            // Audio source — let WinUI's MediaPlayer handle decoding/seek.
+            try
+            {
+                var uri = new Uri(path);
+                HistoryAudioPlayer.Source =
+                    global::Windows.Media.Core.MediaSource.CreateFromUri(uri);
+            }
+            catch (Exception ex)
+            {
+                App.Log($"MediaPlayer setSource exc: {ex.Message}", "History");
+            }
+
+            // Waveform — read peaks on a background thread, then draw.
+            // Bucket count tracks the canvas width so bars are ~3px wide.
+            double width = HistoryWaveformCanvas.ActualWidth;
+            if (width <= 0) width = 600; // fallback before first layout pass
+            int buckets = (int)Math.Max(60, Math.Min(400, width / 3));
+            var peaks = await System.Threading.Tasks.Task.Run(()
+                => Helpers.WavPeaks.ReadPeaks(path, buckets));
+            if (peaks.Length == 0) return;
+            // Re-check selection: user may have switched to a different
+            // row while we were reading the WAV.
+            if (ViewModel.SelectedHistoryItem != item) return;
+
+            DrawWaveform(peaks);
+        }
+        catch (Exception ex)
+        {
+            App.Log($"RefreshHistoryAudioAsync exc: {ex.Message}", "History");
+        }
+    }
+
+    private void DrawWaveform(float[] peaks)
+    {
+        if (HistoryWaveformCanvas == null || peaks.Length == 0) return;
+        HistoryWaveformCanvas.Children.Clear();
+        double w = HistoryWaveformCanvas.ActualWidth;
+        double h = HistoryWaveformCanvas.ActualHeight;
+        if (w <= 0 || h <= 0) return;
+        double barWidth = Math.Max(1, w / peaks.Length - 1);
+        double mid = h / 2.0;
+        var brush = new Microsoft.UI.Xaml.Media.SolidColorBrush(
+            (Microsoft.UI.Colors.DodgerBlue));
+        for (int i = 0; i < peaks.Length; i++)
+        {
+            double barH = Math.Max(1, peaks[i] * (h - 2));
+            var rect = new Microsoft.UI.Xaml.Shapes.Rectangle
+            {
+                Width = barWidth,
+                Height = barH,
+                Fill = brush,
+                RadiusX = 1, RadiusY = 1,
+            };
+            Microsoft.UI.Xaml.Controls.Canvas.SetLeft(rect, i * (w / peaks.Length));
+            Microsoft.UI.Xaml.Controls.Canvas.SetTop(rect, mid - barH / 2.0);
+            HistoryWaveformCanvas.Children.Add(rect);
         }
     }
 

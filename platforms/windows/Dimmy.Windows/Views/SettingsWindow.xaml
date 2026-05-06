@@ -1416,6 +1416,33 @@
                     <TextBlock Text="{Binding SelectedHistoryItem.DurationDisplay, Mode=OneWay}"
                                FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                   </StackPanel>
+                  <!-- Waveform + audio playback. Canvas peaks are drawn
+                       in code-behind whenever SelectedHistoryItem
+                       changes (see HistoryWaveformRender). The
+                       MediaPlayerElement uses the WAV's file:/// URI;
+                       its built-in transport controls cover play/seek. -->
+                  <Grid Margin="0,8,0,0"
+                        Visibility="{Binding SelectedHistoryItem.HasAudio, Mode=OneWay,
+                                     Converter={StaticResource BoolToVisibilityConverter},
+                                     FallbackValue=Collapsed}">
+                    <Grid.RowDefinitions>
+                      <RowDefinition Height="Auto"/>
+                      <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <Border Grid.Row="0"
+                            Background="{ThemeResource LayerFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                            BorderThickness="1" CornerRadius="4"
+                            Padding="6,4" Height="64">
+                      <Canvas x:Name="HistoryWaveformCanvas" />
+                    </Border>
+                    <MediaPlayerElement x:Name="HistoryAudioPlayer"
+                                        Grid.Row="1"
+                                        AreTransportControlsEnabled="True"
+                                        AutoPlay="False"
+                                        Margin="0,4,0,0"
+                                        MaxHeight="80" />
+                  </Grid>
                   <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,8,0,0">
                     <Button x:Name="HistoryCopyRawBtn" Click="HistoryCopyRaw_Click" Content="Copy raw" />
                     <Button x:Name="HistoryCopyEnhancedBtn" Click="HistoryCopyEnhanced_Click" Content="Copy enhanced" />
