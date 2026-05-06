@@ -39,8 +39,8 @@
         <NavigationViewItem Content="Shortcut" Tag="shortcut">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE765;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
-        <NavigationViewItem Content="History" Tag="history">
-          <NavigationViewItem.Icon><FontIcon Glyph="&#xE81C;" /></NavigationViewItem.Icon>
+        <NavigationViewItem Content="Recordings" Tag="history">
+          <NavigationViewItem.Icon><FontIcon Glyph="&#xE7B8;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
         <NavigationViewItem Content="Privacy &amp; data" Tag="privacy">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE72E;" /></NavigationViewItem.Icon>
@@ -1279,10 +1279,10 @@
             <!-- ═══ History ═══ -->
             <StackPanel x:Name="HistoryPanel" Spacing="12" Visibility="Collapsed">
               <StackPanel Spacing="2" Margin="0,0,0,4">
-                <TextBlock Text="History" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="Recordings" FontSize="28" FontWeight="SemiBold" />
                 <TextBlock TextWrapping="Wrap"
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                           Text="Past transcriptions, full-text searchable. Audio retention is opt-in (off by default for privacy)." />
+                           Text="Past transcriptions — dictations, file-load, meetings. Full-text searchable. Audio retention is opt-in (off by default for privacy). Meeting recordings live separately in &lt;config&gt;/meetings/&lt;id&gt;/." />
               </StackPanel>
 
               <Grid ColumnSpacing="8" Margin="0,4,0,0">
