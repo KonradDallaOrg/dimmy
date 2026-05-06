@@ -14,10 +14,49 @@ public partial class AppRuleViewModel : ObservableObject
     [ObservableProperty] private bool _enabled = true;
 
     /// Segoe Fluent Icons code point inferred from the pattern.
-    /// Hardcoded category mapping (chat / mail / browser / code / doc /
-    /// generic). Full SVG brand library + SHGetFileInfo runtime
-    /// fallback is a follow-up Phase ("AppIcons").
+    /// Used as the fallback when no SVG brand asset matches.
     public string IconGlyph => InferIconGlyph(MatchPattern);
+
+    /// Path to a bundled brand SVG (SimpleIcons-style) under
+    /// Assets/AppIcons/ when one exists for this process name. Empty
+    /// when no brand match — the XAML row template then renders the
+    /// fallback FontIcon (IconGlyph). Future: SHGetFileInfo runtime
+    /// extraction for arbitrary user-added rules.
+    public string IconAssetUri => InferIconAssetUri(MatchPattern);
+
+    private static string InferIconAssetUri(string pattern)
+    {
+        var p = (pattern ?? "").ToLowerInvariant();
+        // Strip the .exe suffix on Win and look up by stem.
+        var stem = p.EndsWith(".exe") ? p.Substring(0, p.Length - 4) : p;
+        // Lookup table: process stem → bundled SVG basename. Add new
+        // brands here when shipping more icons (drop the SVG file in
+        // Assets/AppIcons/ first; .csproj globs **\*.svg).
+        var lookup = new System.Collections.Generic.Dictionary<string, string>
+        {
+            ["slack"] = "slack",
+            ["discord"] = "discord",
+            ["teams"] = "teams",
+            ["ms-teams"] = "teams",
+            ["outlook"] = "outlook",
+            ["chrome"] = "chrome",
+            ["firefox"] = "firefox",
+            ["msedge"] = "msedge",
+            ["brave"] = "brave",
+            ["code"] = "code",
+            ["cursor"] = "cursor",
+            ["notepad++"] = "notepad++",
+            ["whatsapp"] = "whatsapp",
+            ["telegram"] = "telegram",
+            ["notion"] = "notion",
+            ["obsidian"] = "obsidian",
+            ["winword"] = "winword",
+            ["excel"] = "excel",
+        };
+        if (lookup.TryGetValue(stem, out var name))
+            return $"ms-appx:///Assets/AppIcons/{name}.svg";
+        return "";
+    }
 
     private static string InferIconGlyph(string pattern)
     {

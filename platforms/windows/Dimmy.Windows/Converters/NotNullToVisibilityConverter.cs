@@ -11,9 +11,15 @@ public sealed class NotNullToVisibilityConverter : IValueConverter
 {
     public object Convert(object value, Type targetType, object parameter, string language)
     {
-        if (value is null) return Visibility.Collapsed;
-        if (value is string s && string.IsNullOrEmpty(s)) return Visibility.Collapsed;
-        return Visibility.Visible;
+        bool invert = parameter is string p && p == "Invert";
+        bool present = value switch
+        {
+            null => false,
+            string s => !string.IsNullOrEmpty(s),
+            _ => true,
+        };
+        if (invert) present = !present;
+        return present ? Visibility.Visible : Visibility.Collapsed;
     }
 
     public object ConvertBack(object value, Type targetType, object parameter, string language)
