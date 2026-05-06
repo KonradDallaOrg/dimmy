@@ -310,7 +310,8 @@ public partial class App : Application
             vm: _appViewModel,
             onTogglePill: TogglePill,
             onSettingsClick: OpenSettings,
-            onQuitClick: Quit);
+            onQuitClick: Quit,
+            onMeetingClick: OpenMeetingWindow);
 
         // Initialize tray icon with the pill window's HWND
         if (_pillWindow != null)

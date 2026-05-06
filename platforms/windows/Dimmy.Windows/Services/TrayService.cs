@@ -11,6 +11,7 @@ public class TrayService : IDisposable
     private readonly Action _onTogglePill;
     private readonly Action _onSettingsClick;
     private readonly Action _onQuitClick;
+    private readonly Action? _onMeetingClick;
     private IntPtr _hwnd;
     private bool _iconAdded;
 
@@ -44,6 +45,7 @@ public class TrayService : IDisposable
     private const int IDM_TOGGLE = 1;
     private const int IDM_SETTINGS = 2;
     private const int IDM_QUIT = 3;
+    private const int IDM_MEETING = 4;
     private const int IDM_STATUS = 99; // owner-drawn status item
 
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
@@ -187,12 +189,18 @@ public class TrayService : IDisposable
 
     private Action? _onShowMenu;
 
-    public TrayService(AppViewModel vm, Action onTogglePill, Action onSettingsClick, Action onQuitClick)
+    public TrayService(
+        AppViewModel vm,
+        Action onTogglePill,
+        Action onSettingsClick,
+        Action onQuitClick,
+        Action? onMeetingClick = null)
     {
         _vm = vm;
         _onTogglePill = onTogglePill;
         _onSettingsClick = onSettingsClick;
         _onQuitClick = onQuitClick;
+        _onMeetingClick = onMeetingClick;
     }
 
     /// <summary>Set the callback for showing the WinUI 3 context menu from the pill window.</summary>
@@ -315,6 +323,10 @@ public class TrayService : IDisposable
             // — "Show Pill" reads better than "Show/Hide" when only
             // one direction is meaningful right now.
             AppendMenu(menu, MF_STRING, (nuint)IDM_TOGGLE, "Show Pill");
+            if (_onMeetingClick != null)
+            {
+                AppendMenu(menu, MF_STRING, (nuint)IDM_MEETING, "Open Meeting…");
+            }
             AppendMenu(menu, MF_STRING, (nuint)IDM_SETTINGS, "Settings…");
             AppendMenu(menu, MF_SEPARATOR, 0, null);
             AppendMenu(menu, MF_STRING, (nuint)IDM_QUIT, "Quit Dimmy");
@@ -333,6 +345,7 @@ public class TrayService : IDisposable
             switch (cmd)
             {
                 case IDM_TOGGLE:   _onTogglePill();   break;
+                case IDM_MEETING:  _onMeetingClick?.Invoke(); break;
                 case IDM_SETTINGS: _onSettingsClick(); break;
                 case IDM_QUIT:     _onQuitClick();    break;
                 // 0 = dismissed without selection. IDM_STATUS is

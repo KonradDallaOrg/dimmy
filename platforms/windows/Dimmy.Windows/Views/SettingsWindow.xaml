@@ -1085,7 +1085,10 @@
                           ItemsSource="{Binding AppRules}"
                           SelectionMode="None"
                           IsItemClickEnabled="False"
-                          HorizontalContentAlignment="Stretch">
+                          HorizontalContentAlignment="Stretch"
+                          CanReorderItems="True"
+                          AllowDrop="True"
+                          ReorderMode="Enabled">
                   <ListView.ItemContainerStyle>
                     <Style TargetType="ListViewItem">
                       <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
@@ -1097,6 +1100,7 @@
                       <Grid ColumnSpacing="8" Padding="14,10" >
                         <Grid.ColumnDefinitions>
                           <ColumnDefinition Width="Auto"/>      <!-- enabled toggle -->
+                          <ColumnDefinition Width="Auto"/>      <!-- icon -->
                           <ColumnDefinition Width="2*"/>        <!-- pattern -->
                           <ColumnDefinition Width="1.4*"/>      <!-- match type -->
                           <ColumnDefinition Width="1.6*"/>      <!-- style -->
@@ -1106,16 +1110,22 @@
                         <ToggleSwitch Grid.Column="0"
                                       IsOn="{Binding Enabled, Mode=TwoWay}"
                                       OnContent="" OffContent="" MinWidth="0"/>
-                        <TextBox Grid.Column="1"
+                        <FontIcon Grid.Column="1"
+                                  Glyph="{Binding IconGlyph, Mode=OneWay}"
+                                  FontSize="18"
+                                  Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                                  VerticalAlignment="Center"
+                                  Margin="2,0,4,0"/>
+                        <TextBox Grid.Column="2"
                                  Text="{Binding MatchPattern, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                  PlaceholderText="slack.exe" />
-                        <ComboBox Grid.Column="2" SelectedValue="{Binding MatchType, Mode=TwoWay}"
+                        <ComboBox Grid.Column="3" SelectedValue="{Binding MatchType, Mode=TwoWay}"
                                   SelectedValuePath="Tag" HorizontalAlignment="Stretch">
                           <ComboBoxItem Tag="process_name" Content="Process (Win)"/>
                           <ComboBoxItem Tag="bundle_id" Content="Bundle (Mac)"/>
                           <ComboBoxItem Tag="wm_class" Content="WM_CLASS (Linux)"/>
                         </ComboBox>
-                        <ComboBox Grid.Column="3" SelectedValue="{Binding LlmStyle, Mode=TwoWay}"
+                        <ComboBox Grid.Column="4" SelectedValue="{Binding LlmStyle, Mode=TwoWay}"
                                   SelectedValuePath="Tag" HorizontalAlignment="Stretch">
                           <ComboBoxItem Tag="off"            Content="Off (no LLM)"/>
                           <ComboBoxItem Tag="correct"        Content="Correct"/>
@@ -1130,7 +1140,7 @@
                           <ComboBoxItem Tag="imbruttito"     Content="Imbruttito"/>
                           <ComboBoxItem Tag="prompt"         Content="Custom prompt"/>
                         </ComboBox>
-                        <ComboBox Grid.Column="4" SelectedValue="{Binding LlmTranslateTo, Mode=TwoWay}"
+                        <ComboBox Grid.Column="5" SelectedValue="{Binding LlmTranslateTo, Mode=TwoWay}"
                                   SelectedValuePath="Tag" HorizontalAlignment="Stretch">
                           <ComboBoxItem Tag=""    Content="No translation"/>
                           <ComboBoxItem Tag="en"  Content="→ English"/>
@@ -1140,7 +1150,7 @@
                           <ComboBoxItem Tag="de"  Content="→ Deutsch"/>
                           <ComboBoxItem Tag="pt"  Content="→ Português"/>
                         </ComboBox>
-                        <Button Grid.Column="5"
+                        <Button Grid.Column="6"
                                 Click="AppRuleDelete_Click"
                                 Tag="{Binding}"
                                 ToolTipService.ToolTip="Remove rule"
