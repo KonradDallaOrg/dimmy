@@ -180,6 +180,12 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_meeting_list_orphans(byte[] outBuf, int bufLen);
 
+    /// 1 = meeting currently recording; 0 = no active meeting. Used
+    /// to gate the dictation hotkey so a parallel recording can't
+    /// corrupt the shared cpal audio buffer.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_meeting_is_active();
+
     /// Raw LLM call — bypasses the dictation rewrite wrapper. Pass
     /// empty string for `modelOverride` to use the user-configured
     /// llm_api_model. Used by meeting recap + audio-load summarizer.

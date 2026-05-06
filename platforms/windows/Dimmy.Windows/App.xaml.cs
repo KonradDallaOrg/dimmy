@@ -760,6 +760,17 @@ public partial class App : Application
     {
         _dispatcherQueue?.TryEnqueue(async () =>
         {
+            // Gate: if a meeting recording is active, swallow the hotkey
+            // entirely. Starting a parallel dictation would corrupt the
+            // shared cpal audio buffer (both writers append to the same
+            // Vec<f32>). User gets visible feedback via the meeting
+            // window's pulsing red dot — no toast needed.
+            if (DimmyNative.dimmy_meeting_is_active() != 0)
+            {
+                PttLog("hotkey ignored — meeting recording in progress");
+                return;
+            }
+
             // Show pill if hidden — but only if the user hasn't opted
             // into "taskbar-only" mode. With PillShowOnHotkey=false the
             // recording status is conveyed exclusively via the taskbar

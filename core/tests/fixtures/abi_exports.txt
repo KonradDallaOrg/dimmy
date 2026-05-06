@@ -49,6 +49,7 @@ dimmy_list_llm_models
 dimmy_list_local_models
 dimmy_llm_call_raw
 dimmy_llm_model_exists
+dimmy_meeting_is_active
 dimmy_meeting_list_orphans
 dimmy_meeting_save_post_process
 dimmy_meeting_start

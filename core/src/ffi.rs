@@ -336,6 +336,45 @@ fn dimmy_init_inner() -> c_int {
                 cold_start_ms,
             });
 
+            // Background history-audio retention. Runs once 5 s after
+            // init (lets the rest of the app settle) then once per
+            // hour. Bounded I/O — only touches files in
+            // <config>/history_audio/. Best-effort.
+            std::thread::Builder::new()
+                .name("history-audio-prune".into())
+                .spawn(|| {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    loop {
+                        let st = state();
+                        let keep_days = st
+                            .history_audio_keep_days
+                            .lock()
+                            .map(|n| *n)
+                            .unwrap_or(30);
+                        let max_mb = st
+                            .history_audio_max_mb
+                            .lock()
+                            .map(|n| *n)
+                            .unwrap_or(5_000);
+                        if let Some(dir) = crate::history_audio_dir() {
+                            match crate::history::prune_audio_dir(&dir, keep_days, max_mb) {
+                                Ok((removed, bytes)) => {
+                                    if removed > 0 {
+                                        log(&format!(
+                                            "[HistoryAudio] pruned {} files / {:.1} MB",
+                                            removed,
+                                            bytes as f64 / 1_048_576.0
+                                        ));
+                                    }
+                                }
+                                Err(e) => log(&format!("[HistoryAudio] prune err: {}", e)),
+                            }
+                        }
+                        std::thread::sleep(std::time::Duration::from_secs(3600));
+                    }
+                })
+                .ok();
+
             0
         }
         Err(_) => {
@@ -2339,6 +2378,16 @@ pub unsafe extern "C" fn dimmy_meeting_list_orphans(
     let arr = crate::meeting::list_orphans();
     let json = serde_json::to_string(&arr).unwrap_or_else(|_| "[]".to_string());
     write_to_buf(&json, out_buf, buf_len)
+}
+
+/// Returns 1 if a meeting recording is currently active (between
+/// dimmy_meeting_start and _stop), 0 otherwise. Used by the C#/Swift
+/// host to gate the dictation hotkey: starting a parallel recording
+/// while a meeting is in flight would corrupt both sessions because
+/// they share the cpal audio buffer.
+#[no_mangle]
+pub extern "C" fn dimmy_meeting_is_active() -> c_int {
+    MEETING.lock().map(|g| g.is_some() as c_int).unwrap_or(0)
 }
 
 /// Raw LLM call: send `prompt` to the configured LLM endpoint without

@@ -55,6 +55,99 @@ fn row_to_transcript(row: &rusqlite::Row<'_>) -> rusqlite::Result<Transcript> {
     })
 }
 
+/// Run the history-audio retention pass on `dir`: delete WAVs older
+/// than `keep_days`, then if total size still exceeds `max_mb` MB,
+/// delete oldest first until under the cap. Returns (files_removed,
+/// bytes_reclaimed). `keep_days = 0` skips age-based pruning;
+/// `max_mb = 0` skips size-based. Both 0 = no-op.
+///
+/// Called from a background thread spawned in `dimmy_init`. Best-
+/// effort — any I/O error is logged and the next file is tried.
+/// The history.db pointers to deleted files become stale (UI shows
+/// "audio missing"); a rare cleanup pass racing a UI playback is
+/// fine because Windows holds a file lock during read.
+pub fn prune_audio_dir(
+    dir: &std::path::Path,
+    keep_days: u32,
+    max_mb: u32,
+) -> Result<(u32, u64), String> {
+    if keep_days == 0 && max_mb == 0 {
+        return Ok((0, 0));
+    }
+    if !dir.exists() {
+        return Ok((0, 0));
+    }
+    let entries = std::fs::read_dir(dir).map_err(|e| format!("read_dir {:?}: {}", dir, e))?;
+    let mut files: Vec<(std::path::PathBuf, u64, std::time::SystemTime)> = entries
+        .flatten()
+        .filter_map(|e| {
+            let path = e.path();
+            if !path
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(|s| s.eq_ignore_ascii_case("wav"))
+                .unwrap_or(false)
+            {
+                return None;
+            }
+            let meta = e.metadata().ok()?;
+            let modified = meta.modified().ok()?;
+            Some((path, meta.len(), modified))
+        })
+        .collect();
+
+    let mut removed = 0u32;
+    let mut bytes_reclaimed = 0u64;
+
+    if keep_days > 0 {
+        let cutoff = std::time::SystemTime::now()
+            .checked_sub(std::time::Duration::from_secs(keep_days as u64 * 86_400))
+            .unwrap_or(std::time::UNIX_EPOCH);
+        files.retain(|(path, size, modified)| {
+            if *modified < cutoff {
+                if let Err(e) = std::fs::remove_file(path) {
+                    crate::log(&format!(
+                        "[HistoryAudio] prune-age failed on {:?}: {}",
+                        path, e
+                    ));
+                    true
+                } else {
+                    removed += 1;
+                    bytes_reclaimed += *size;
+                    false
+                }
+            } else {
+                true
+            }
+        });
+    }
+
+    if max_mb > 0 {
+        let max_bytes = max_mb as u64 * 1_048_576;
+        let total: u64 = files.iter().map(|(_, s, _)| *s).sum();
+        if total > max_bytes {
+            files.sort_by_key(|(_, _, modified)| *modified);
+            let mut current = total;
+            for (path, size, _) in &files {
+                if current <= max_bytes {
+                    break;
+                }
+                if let Err(e) = std::fs::remove_file(path) {
+                    crate::log(&format!(
+                        "[HistoryAudio] prune-size failed on {:?}: {}",
+                        path, e
+                    ));
+                    continue;
+                }
+                removed += 1;
+                bytes_reclaimed += *size;
+                current = current.saturating_sub(*size);
+            }
+        }
+    }
+    Ok((removed, bytes_reclaimed))
+}
+
 /// Bundle of optional metadata for `HistoryStore::save_v2`. All fields
 /// are optional; the caller passes only what's meaningful at this
 /// recording boundary. Empty strings collapse to None at insert time.

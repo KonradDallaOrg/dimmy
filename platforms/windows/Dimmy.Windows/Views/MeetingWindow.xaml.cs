@@ -84,7 +84,13 @@ public sealed partial class MeetingWindow : Window
             StatusDot.Fill = new SolidColorBrush(Microsoft.UI.Colors.Crimson);
             StatusText.Text = $"Recording (id {id[..8]}…)";
             StopBtn.IsEnabled = true;
-            TranscriptText.Text = "";
+            // Placeholder during the first chunk window: chunk_secs is
+            // 15 s for meetings, so without this hint the user sees an
+            // empty box for ~15 s and assumes the recorder is broken
+            // (observed on first ship).
+            TranscriptText.Text = "🎙️ Listening… first transcript appears in ~15 s.";
+            TranscriptText.Foreground = (Microsoft.UI.Xaml.Media.Brush)
+                Application.Current.Resources["TextFillColorTertiaryBrush"];
             RecapBorder.Visibility = Visibility.Collapsed;
             ActionsBorder.Visibility = Visibility.Collapsed;
             StartPolling();
@@ -198,8 +204,18 @@ public sealed partial class MeetingWindow : Window
             var transcriptsPath = Path.Combine(latest.FullName, "transcripts.txt");
             if (!File.Exists(transcriptsPath)) return;
             var content = File.ReadAllText(transcriptsPath);
+            if (string.IsNullOrWhiteSpace(content)) return;
+            // First time we see real content: swap from tertiary
+            // (placeholder hint) to primary brush so the transcript
+            // reads cleanly.
+            if (TranscriptText.Foreground != (Microsoft.UI.Xaml.Media.Brush)
+                Application.Current.Resources["TextFillColorPrimaryBrush"])
+            {
+                TranscriptText.Foreground = (Microsoft.UI.Xaml.Media.Brush)
+                    Application.Current.Resources["TextFillColorPrimaryBrush"];
+            }
             TranscriptText.Text = content;
-            ChunkCountText.Text = $"{content.Split('\n').Length} chunks";
+            ChunkCountText.Text = $"{content.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length} chunks";
         }
         catch { /* best-effort live view */ }
     }

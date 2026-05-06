@@ -57,6 +57,36 @@ public static class TranscriptionService
         var enhanced = await llmTask;
         // If LLM returned empty or failed, fall back to raw transcript
         var finalText = string.IsNullOrEmpty(enhanced) ? transcript : enhanced;
+
+        // Persist the enhanced text on the most recent history row.
+        // dimmy_stop_recording already saved the raw transcript; we
+        // don't have its id back, so we ask Rust for the most recent
+        // row and update it. Race-free because we're synchronous from
+        // hotkey-release through here, and every recording produces
+        // exactly one save_v2 call.
+        if (!string.IsNullOrEmpty(enhanced) && enhanced != transcript)
+        {
+            try
+            {
+                var listBuf = new byte[8192];
+                int listLen = DimmyNative.dimmy_history_recent(1, listBuf, listBuf.Length);
+                if (listLen > 0)
+                {
+                    var listJson = Encoding.UTF8.GetString(listBuf, 0, listLen);
+                    using var doc = System.Text.Json.JsonDocument.Parse(listJson);
+                    if (doc.RootElement.GetArrayLength() > 0)
+                    {
+                        var topId = doc.RootElement[0].GetProperty("id").GetInt64();
+                        DimmyNative.dimmy_history_update_enhanced((int)topId, enhanced);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[Dimmy] update_enhanced failed: {ex.Message}");
+            }
+        }
+
         return TranscriptionResult.Success(finalText);
     }
 }
