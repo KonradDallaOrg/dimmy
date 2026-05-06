@@ -118,6 +118,10 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _preprocessingEnabled = true;
     [ObservableProperty] private bool _chunkStreamingEnabled;
     [ObservableProperty] private bool _liveCaptionsEnabled = true;
+    [ObservableProperty] private bool _saveAudioInHistory = false;
+    [ObservableProperty] private int _historyAudioKeepDays = 30;
+    [ObservableProperty] private int _historyAudioMaxMb = 5_000;
+    [ObservableProperty] private string _historySearchQuery = "";
 
     /// User-defined app rules. Round-tripped through config.json's
     /// `app_rules` array. The Rust core reads this list at LLM-enhance
@@ -125,6 +129,11 @@ public partial class SettingsViewModel : ObservableObject
     /// llm_translate_to. Drag-reorder in the Settings UI maps to list
     /// order = priority.
     public ObservableCollection<AppRuleViewModel> AppRules { get; } = new();
+
+    /// Result list for the History page. Populated lazily when the user
+    /// navigates to that page (see SettingsWindow.LoadHistoryItems).
+    public ObservableCollection<HistoryItemViewModel> HistoryItems { get; } = new();
+    [ObservableProperty] private HistoryItemViewModel? _selectedHistoryItem;
     [ObservableProperty] private bool _useKeyring = false;
     [ObservableProperty] private bool _llmEnabled;
     [ObservableProperty] private string _llmApiUrl = "";
@@ -291,6 +300,9 @@ public partial class SettingsViewModel : ObservableObject
             PreprocessingEnabled = !r.TryGetProperty("preprocessing_enabled", out var pe) || pe.GetBoolean();
             ChunkStreamingEnabled = r.TryGetProperty("chunk_streaming_enabled", out var cs) && cs.GetBoolean();
             LiveCaptionsEnabled = !r.TryGetProperty("live_captions_enabled", out var lce) || lce.GetBoolean();
+            SaveAudioInHistory = r.TryGetProperty("save_audio_in_history", out var sah) && sah.GetBoolean();
+            HistoryAudioKeepDays = r.TryGetProperty("history_audio_keep_days", out var hkd) ? hkd.GetInt32() : 30;
+            HistoryAudioMaxMb = r.TryGetProperty("history_audio_max_mb", out var hmm) ? hmm.GetInt32() : 5_000;
             LoadAppRulesFromJson(r);
             UseKeyring = false;  // Always local encrypted file, ignore stored value
             LlmEnabled = r.TryGetProperty("llm_enabled", out var le) && le.GetBoolean();
@@ -365,6 +377,9 @@ public partial class SettingsViewModel : ObservableObject
             ["preprocessing_enabled"] = PreprocessingEnabled,
             ["chunk_streaming_enabled"] = ChunkStreamingEnabled,
             ["live_captions_enabled"] = LiveCaptionsEnabled,
+            ["save_audio_in_history"] = SaveAudioInHistory,
+            ["history_audio_keep_days"] = HistoryAudioKeepDays,
+            ["history_audio_max_mb"] = HistoryAudioMaxMb,
             ["use_keyring"] = false,  // Always local encrypted file
             ["llm_enabled"] = LlmStyle != "off",
             ["llm_api_url"] = LlmApiUrl,

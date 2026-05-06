@@ -22,6 +22,8 @@ dimmy_history_recent
 dimmy_history_save
 dimmy_history_search
 dimmy_history_stats
+dimmy_history_update_audio
+dimmy_history_update_enhanced
 dimmy_hotkey_install
 dimmy_hotkey_poll_recording
 dimmy_hotkey_set
@@ -46,10 +48,15 @@ dimmy_list_devices_json
 dimmy_list_llm_models
 dimmy_list_local_models
 dimmy_llm_model_exists
+dimmy_meeting_list_orphans
+dimmy_meeting_save_post_process
+dimmy_meeting_start
+dimmy_meeting_stop
 dimmy_model_exists
 dimmy_parakeet_bundle_present
 dimmy_parakeet_download_bundle
 dimmy_parakeet_transcribe
+dimmy_parakeet_warmup
 dimmy_process_with_llm
 dimmy_set_app_context
 dimmy_set_config_json
@@ -65,4 +72,5 @@ dimmy_telemetry_reset_anonymous_id
 dimmy_telemetry_set_crash_enabled
 dimmy_telemetry_set_enabled
 dimmy_telemetry_status
+dimmy_transcribe_file
 dimmy_update_stats

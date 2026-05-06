@@ -76,6 +76,40 @@ fn write_to_buf(s: &str, buf: *mut c_char, buf_len: c_int) -> c_int {
     copy_len as c_int
 }
 
+/// Write 16 kHz mono int16 WAV. Used by the history-audio retention
+/// path. Clamps + scales f32 [-1.0, 1.0] to i16 range with int16
+/// saturation so peaking samples don't wrap around. Returns the
+/// resulting file size on success.
+fn write_pcm_as_wav_16k_mono_int16(
+    path: &std::path::Path,
+    samples_16k: &[f32],
+) -> Result<i64, String> {
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 16_000,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(path, spec)
+        .map_err(|e| format!("hound create {:?}: {}", path, e))?;
+    for &s in samples_16k {
+        // Clamp before scaling to avoid wraparound when the source
+        // had >|1.0| amplitude (rare with AGC but possible without).
+        let clamped = s.clamp(-1.0, 1.0);
+        let i = (clamped * i16::MAX as f32) as i16;
+        writer
+            .write_sample(i)
+            .map_err(|e| format!("hound write_sample: {e}"))?;
+    }
+    writer
+        .finalize()
+        .map_err(|e| format!("hound finalize: {e}"))?;
+    let size = std::fs::metadata(path)
+        .map(|m| m.len() as i64)
+        .unwrap_or(0);
+    Ok(size)
+}
+
 // ── Lifecycle ───────────────────────────────────────────────────────
 
 /// Initialize the Dimmy core. Must be called once before any other function.
@@ -226,6 +260,9 @@ fn dimmy_init_inner() -> c_int {
         local_model: Mutex::new(file_cfg.local_model),
         local_stt_backend: Mutex::new(file_cfg.local_stt_backend),
         live_captions_enabled: Mutex::new(file_cfg.live_captions_enabled),
+        save_audio_in_history: Mutex::new(file_cfg.save_audio_in_history),
+        history_audio_keep_days: Mutex::new(file_cfg.history_audio_keep_days),
+        history_audio_max_mb: Mutex::new(file_cfg.history_audio_max_mb),
         filler_removal_enabled: Mutex::new(file_cfg.filler_removal_enabled),
         llm_mode: Mutex::new(file_cfg.llm_mode),
         local_llm_model: Mutex::new(file_cfg.local_llm_model),
@@ -644,7 +681,13 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         None
     };
 
-    // Build typed audio pipeline: RawAudio → ProcessedAudio
+    // Build typed audio pipeline: RawAudio → ProcessedAudio. Clone
+    // the buffer so the history-audio retention path further down can
+    // re-use the original raw samples (preprocess is destructive: VAD
+    // trims silence, AGC scales, downsample to 16k discards data).
+    // Saving the post-preprocess version would mean replaying back
+    // strips out original mic level + breath cues.
+    let raw_samples_for_history: Vec<f32> = buffer.clone();
     let raw = crate::audio::RawAudio {
         samples: buffer,
         sample_rate,
@@ -850,7 +893,13 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
             });
             TRANSCRIBE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-            // Auto-save to history
+            // Auto-save to history (v2 path: include app context +
+            // current LLM style/translation so the History UI can
+            // group by app and show what rewrite ran). The enhanced
+            // text isn't known at this point — the LLM call happens
+            // after `dimmy_stop_recording` returns. Caller (C# /
+            // Swift) is expected to follow up with `dimmy_history_
+            // update_enhanced(id, text)` once the LLM finishes.
             if !text.trim().is_empty() {
                 if let Ok(guard) = st.history_store.lock() {
                     if let Some(ref store) = *guard {
@@ -860,7 +909,92 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
                         } else {
                             lang
                         };
-                        let _ = store.save(&text, &lang, speaking_secs);
+                        let app_ctx = st
+                            .current_app_context
+                            .lock()
+                            .map(|c| c.clone())
+                            .unwrap_or_default();
+                        let llm_style_str = st
+                            .llm_style
+                            .lock()
+                            .map(|s| s.as_str().to_string())
+                            .unwrap_or_default();
+                        let llm_translate = st
+                            .llm_translate_to
+                            .lock()
+                            .map(|t| t.clone())
+                            .unwrap_or_default();
+                        let meta = crate::history::SaveMetadata {
+                            enhanced_text: None,
+                            audio_path: None,
+                            app_process_name: if app_ctx.process_name.is_empty() {
+                                None
+                            } else {
+                                Some(app_ctx.process_name.as_str())
+                            },
+                            app_bundle_id: if app_ctx.bundle_id.is_empty() {
+                                None
+                            } else {
+                                Some(app_ctx.bundle_id.as_str())
+                            },
+                            llm_style: if llm_style_str.is_empty() {
+                                None
+                            } else {
+                                Some(llm_style_str.as_str())
+                            },
+                            llm_translate_to: if llm_translate.is_empty() {
+                                None
+                            } else {
+                                Some(llm_translate.as_str())
+                            },
+                            size_bytes: 0,
+                        };
+                        if let Ok(id) = store.save_v2(&text, &lang, speaking_secs, meta) {
+                            // Audio retention is opt-in. When on, save
+                            // a 16 kHz mono int16 WAV next to the row
+                            // and link it. Keep the WAV write off the
+                            // critical path of the user's paste — it's
+                            // best-effort and any failure is logged but
+                            // doesn't fail the transcription.
+                            let save_audio = st
+                                .save_audio_in_history
+                                .lock()
+                                .map(|b| *b)
+                                .unwrap_or(false);
+                            if save_audio {
+                                if let Some(audio_dir) = crate::history_audio_dir() {
+                                    let _ = std::fs::create_dir_all(&audio_dir);
+                                    let wav_path = audio_dir.join(format!("{}.wav", id));
+                                    let pcm_16k = if sample_rate == 16_000 {
+                                        raw_samples_for_history.clone()
+                                    } else {
+                                        crate::preprocess::downsample_to_16k(
+                                            &raw_samples_for_history,
+                                            sample_rate,
+                                        )
+                                    };
+                                    match write_pcm_as_wav_16k_mono_int16(&wav_path, &pcm_16k) {
+                                        Ok(size) => {
+                                            let _ = store.update_audio(
+                                                id,
+                                                &wav_path.to_string_lossy(),
+                                                size,
+                                            );
+                                            log(&format!(
+                                                "[History] saved audio for row #{} to {:?} ({} bytes)",
+                                                id, wav_path, size
+                                            ));
+                                        }
+                                        Err(e) => {
+                                            log(&format!(
+                                                "[History] WAV save failed for row #{}: {}",
+                                                id, e
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1247,6 +1381,21 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
     if let Some(b) = v["live_captions_enabled"].as_bool() {
         if let Ok(mut f) = st.live_captions_enabled.lock() {
             *f = b;
+        }
+    }
+    if let Some(b) = v["save_audio_in_history"].as_bool() {
+        if let Ok(mut f) = st.save_audio_in_history.lock() {
+            *f = b;
+        }
+    }
+    if let Some(n) = v["history_audio_keep_days"].as_u64() {
+        if let Ok(mut f) = st.history_audio_keep_days.lock() {
+            *f = n as u32;
+        }
+    }
+    if let Some(n) = v["history_audio_max_mb"].as_u64() {
+        if let Ok(mut f) = st.history_audio_max_mb.lock() {
+            *f = n as u32;
         }
     }
     if let Some(b) = v["filler_removal_enabled"].as_bool() {
@@ -2475,6 +2624,16 @@ fn transcripts_to_json(transcripts: &[crate::history::Transcript]) -> String {
                 "timestamp": t.timestamp,
                 "duration": t.duration,
                 "word_count": t.word_count,
+                // v2 fields — null when the row predates the migration
+                // (older transcripts) or the field wasn't applicable
+                // (e.g. no LLM run, no audio retention).
+                "enhanced_text": t.enhanced_text,
+                "audio_path": t.audio_path,
+                "app_process_name": t.app_process_name,
+                "app_bundle_id": t.app_bundle_id,
+                "llm_style": t.llm_style,
+                "llm_translate_to": t.llm_translate_to,
+                "size_bytes": t.size_bytes,
             })
         })
         .collect();
@@ -2581,6 +2740,69 @@ pub unsafe extern "C" fn dimmy_history_search(
     } else {
         -1
     }
+}
+
+/// Update the enhanced_text column for a row. Async follow-up after
+/// the LLM rewrite finishes. Returns 0 on success, -1 on any error.
+///
+/// # Safety
+/// `text_ptr` must be a valid null-terminated UTF-8 C string (or null
+/// to clear the field).
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_history_update_enhanced(
+    id: c_int,
+    text_ptr: *const c_char,
+) -> c_int {
+    let text = if text_ptr.is_null() {
+        ""
+    } else {
+        match CStr::from_ptr(text_ptr).to_str() {
+            Ok(s) => s,
+            Err(_) => return -1,
+        }
+    };
+    let st = state();
+    if let Ok(guard) = st.history_store.lock() {
+        if let Some(ref store) = *guard {
+            return match store.update_enhanced(id as i64, text) {
+                Ok(_) => 0,
+                Err(_) => -1,
+            };
+        }
+    }
+    -1
+}
+
+/// Update the audio_path + size_bytes columns for a row. Called by
+/// the audio retention layer once a recording's PCM is on disk.
+///
+/// # Safety
+/// `path_ptr` must be a valid null-terminated UTF-8 C string (or null
+/// to unlink).
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_history_update_audio(
+    id: c_int,
+    path_ptr: *const c_char,
+    size_bytes: i64,
+) -> c_int {
+    let path = if path_ptr.is_null() {
+        ""
+    } else {
+        match CStr::from_ptr(path_ptr).to_str() {
+            Ok(s) => s,
+            Err(_) => return -1,
+        }
+    };
+    let st = state();
+    if let Ok(guard) = st.history_store.lock() {
+        if let Some(ref store) = *guard {
+            return match store.update_audio(id as i64, path, size_bytes) {
+                Ok(_) => 0,
+                Err(_) => -1,
+            };
+        }
+    }
+    -1
 }
 
 /// Delete a transcript by ID. Returns 0 on success, -1 on error.
@@ -3992,6 +4214,9 @@ mod tests {
                 local_model: Mutex::new("ggml-base-q8_0.bin".to_string()),
                 local_stt_backend: Mutex::new("whisper".to_string()),
                 live_captions_enabled: Mutex::new(true),
+                save_audio_in_history: Mutex::new(false),
+                history_audio_keep_days: Mutex::new(30),
+                history_audio_max_mb: Mutex::new(5_000),
                 filler_removal_enabled: Mutex::new(true),
                 llm_mode: Mutex::new("cloud".to_string()),
                 local_llm_model: Mutex::new(crate::local_llm::DEFAULT_LLM_MODEL.to_string()),
