@@ -180,6 +180,16 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_meeting_list_orphans(byte[] outBuf, int bufLen);
 
+    /// Raw LLM call — bypasses the dictation rewrite wrapper. Pass
+    /// empty string for `modelOverride` to use the user-configured
+    /// llm_api_model. Used by meeting recap + audio-load summarizer.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_llm_call_raw(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string prompt,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string modelOverride,
+        int maxTokens,
+        byte[] outBuf, int bufLen);
+
     // ── Hotkey (low-level keyboard hook via Rust) ─────────────────
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern void dimmy_hotkey_install();

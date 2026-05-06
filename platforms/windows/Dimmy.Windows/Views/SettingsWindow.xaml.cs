@@ -156,38 +156,86 @@ public sealed partial class SettingsWindow : Window
 
     private async void FileLoadPick_Click(object sender, RoutedEventArgs e)
     {
-        var picker = new global::Windows.Storage.Pickers.FileOpenPicker();
-        var hwnd = WindowHelper.GetHwnd(this);
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
-        picker.SuggestedStartLocation = global::Windows.Storage.Pickers.PickerLocationId.MusicLibrary;
-        picker.FileTypeFilter.Add(".wav");
-        var file = await picker.PickSingleFileAsync();
-        if (file == null) return;
-        await TranscribeFileAsync(file.Path);
+        App.Log("FileLoadPick_Click fired", "FileLoad");
+        try
+        {
+            var picker = new global::Windows.Storage.Pickers.FileOpenPicker();
+            var hwnd = WindowHelper.GetHwnd(this);
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
+            // PickerLocationId.MusicLibrary requires `musicLibrary`
+            // capability in Package.appxmanifest. Without it the call
+            // throws E_ACCESSDENIED on some Win10 builds and the
+            // picker silently doesn't appear. Downloads has no such
+            // requirement and is a sensible default for ad-hoc files.
+            picker.SuggestedStartLocation = global::Windows.Storage.Pickers.PickerLocationId.Downloads;
+            picker.ViewMode = global::Windows.Storage.Pickers.PickerViewMode.List;
+            picker.FileTypeFilter.Add(".wav");
+            App.Log("FileLoadPick: opening picker…", "FileLoad");
+            var file = await picker.PickSingleFileAsync();
+            App.Log($"FileLoadPick: picker returned {(file == null ? "null" : file.Path)}", "FileLoad");
+            if (file == null)
+            {
+                FileLoadStatus.Text = "Cancelled";
+                return;
+            }
+            await TranscribeFileAsync(file.Path);
+        }
+        catch (Exception ex)
+        {
+            FileLoadStatus.Text = $"Picker error: {ex.Message}";
+            App.Log($"FileLoadPick exc: {ex}", "FileLoad");
+        }
     }
 
     private void FileLoadDropTarget_DragOver(object sender, Microsoft.UI.Xaml.DragEventArgs e)
     {
+        // Accept any drag that carries a file-system item — we filter
+        // to .wav at Drop time. Setting both AcceptedOperation AND
+        // marking Handled=true is required on WinUI 3 desktop;
+        // omitting Handled lets the parent ScrollViewer steal the
+        // event back and the cursor shows a "no-entry" sign.
         if (e.DataView.Contains(global::Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems))
         {
             e.AcceptedOperation = global::Windows.ApplicationModel.DataTransfer.DataPackageOperation.Copy;
+            if (e.DragUIOverride != null)
+            {
+                e.DragUIOverride.Caption = "Drop .wav to transcribe";
+                e.DragUIOverride.IsCaptionVisible = true;
+                e.DragUIOverride.IsContentVisible = true;
+                e.DragUIOverride.IsGlyphVisible = true;
+            }
+            e.Handled = true;
         }
     }
 
     private async void FileLoadDropTarget_Drop(object sender, Microsoft.UI.Xaml.DragEventArgs e)
     {
+        App.Log("FileLoadDropTarget_Drop fired", "FileLoad");
         if (!e.DataView.Contains(global::Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems))
-            return;
-        var items = await e.DataView.GetStorageItemsAsync();
-        var first = items.FirstOrDefault(i => i is global::Windows.Storage.StorageFile sf
-            && sf.FileType.Equals(".wav", StringComparison.OrdinalIgnoreCase))
-            as global::Windows.Storage.StorageFile;
-        if (first == null)
         {
-            FileLoadStatus.Text = "Only .wav supported in this build";
+            App.Log("Drop: no StorageItems in DataView", "FileLoad");
             return;
         }
-        await TranscribeFileAsync(first.Path);
+        e.Handled = true;
+        try
+        {
+            var items = await e.DataView.GetStorageItemsAsync();
+            App.Log($"Drop: got {items.Count} items", "FileLoad");
+            var first = items.FirstOrDefault(i => i is global::Windows.Storage.StorageFile sf
+                && sf.FileType.Equals(".wav", StringComparison.OrdinalIgnoreCase))
+                as global::Windows.Storage.StorageFile;
+            if (first == null)
+            {
+                FileLoadStatus.Text = "Only .wav supported in this build";
+                return;
+            }
+            await TranscribeFileAsync(first.Path);
+        }
+        catch (Exception ex)
+        {
+            FileLoadStatus.Text = $"Drop error: {ex.Message}";
+            App.Log($"Drop exc: {ex}", "FileLoad");
+        }
     }
 
     private async System.Threading.Tasks.Task TranscribeFileAsync(string path)

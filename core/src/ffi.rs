@@ -504,8 +504,13 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
                 emit_event("stt_chunk", &payload);
             });
         let transcriber = crate::chunked_stt::ChunkedTranscriber::start(
-            buffer_arc, device_sr, 5.0, // chunk_secs — interactive cadence
-            500, // overlap_ms — proven safe value from WSL bench
+            buffer_arc, device_sr,
+            // 3 s chunks — chunked_smoke A/B 2026-05-06 showed first
+            // chunk 8.7 s vs 12.6 s, cadence 3 s vs 5 s, real-time
+            // margin 87 % vs 86 %. Interactive caption appears nearly
+            // twice as often with no quality regression on jfk×6.
+            3.0,
+            500, // overlap_ms — covers a word that straddles a chunk
             on_chunk,
         );
         if let Ok(mut slot) = CHUNKED.lock() {
@@ -1911,6 +1916,18 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
             .map(|c| c.clone())
             .unwrap_or_default();
         let ovr = crate::app_rules::resolve(&rules, &ctx);
+        // Always log the resolution attempt so debugging "why didn't
+        // my rule fire" requires only reading dimmy.log. We intentionally
+        // log the rule count + the captured context so an empty rules
+        // list is distinguishable from a no-match.
+        log(&format!(
+            "[AppRules] resolve ctx(process='{}', bundle='{}', wm='{}') against {} rule(s) → matched_idx={:?}",
+            ctx.process_name,
+            ctx.bundle_id,
+            ctx.wm_class,
+            rules.len(),
+            ovr.matched_rule_index
+        ));
         if let Some(s) = ovr.llm_style.as_deref() {
             let new_style = crate::llm::LlmStyle::from_str_lossy(s);
             log(&format!(
@@ -2322,6 +2339,116 @@ pub unsafe extern "C" fn dimmy_meeting_list_orphans(
     let arr = crate::meeting::list_orphans();
     let json = serde_json::to_string(&arr).unwrap_or_else(|_| "[]".to_string());
     write_to_buf(&json, out_buf, buf_len)
+}
+
+/// Raw LLM call: send `prompt` to the configured LLM endpoint without
+/// the dictation rewrite wrapper. Used by meeting-mode post-process
+/// (recap + actions extraction) and any other caller that owns its
+/// own prompt template.
+///
+/// Provider is auto-selected from the configured LLM API URL — same
+/// routing the dictation enhance path uses. `model_override` lets the
+/// caller request a stronger model than the user's dictation default
+/// (e.g. claude-opus-4-7 or gemini-2.5-pro for recap quality);
+/// pass an empty string to use the configured `llm_api_model`.
+///
+/// Returns the response byte length on success. Negative on error:
+/// - -1 invalid args (null pointers, empty prompt)
+/// - -2 no LLM API key / URL configured
+/// - -3 HTTP / parsing error (truncated reason in dimmy.log)
+///
+/// # Safety
+/// `prompt_ptr` and `model_override_ptr` (when non-null) must be
+/// valid null-terminated UTF-8 C strings. `out_buf` must be a valid
+/// writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_llm_call_raw(
+    prompt_ptr: *const c_char,
+    model_override_ptr: *const c_char,
+    max_tokens: i32,
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if prompt_ptr.is_null() || out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let prompt = match CStr::from_ptr(prompt_ptr).to_str() {
+        Ok(s) if !s.is_empty() => s.to_string(),
+        _ => return -1,
+    };
+    let model_override = if model_override_ptr.is_null() {
+        String::new()
+    } else {
+        CStr::from_ptr(model_override_ptr)
+            .to_str()
+            .map(|s| s.to_string())
+            .unwrap_or_default()
+    };
+
+    let st = state();
+    let api_url = st
+        .llm_api_url
+        .lock()
+        .map(|u| u.clone())
+        .unwrap_or_default();
+    let api_model = st
+        .llm_api_model
+        .lock()
+        .map(|m| m.clone())
+        .unwrap_or_default();
+    let api_key = st
+        .llm_api_key
+        .lock()
+        .ok()
+        .and_then(|k| k.clone())
+        .unwrap_or_default();
+
+    if api_url.is_empty() || api_key.is_empty() {
+        log("[LlmRaw] missing api_url or api_key — configure an LLM in Settings");
+        return -2;
+    }
+    let model = if model_override.is_empty() {
+        api_model
+    } else {
+        model_override
+    };
+    if model.is_empty() {
+        log("[LlmRaw] no model — neither api_model nor override provided");
+        return -2;
+    }
+    let max_tokens_u = if max_tokens <= 0 {
+        4096
+    } else {
+        max_tokens as u64
+    };
+
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(r) => r,
+        Err(e) => {
+            log(&format!("[LlmRaw] tokio runtime: {}", e));
+            return -3;
+        }
+    };
+    let result = runtime.block_on(async {
+        crate::llm::process_raw_prompt(&api_url, &model, &api_key, &prompt, max_tokens_u).await
+    });
+    match result {
+        Ok(text) => {
+            log(&format!(
+                "[LlmRaw] ok — {} chars in (model={})",
+                text.len(),
+                model
+            ));
+            write_to_buf(&text, out_buf, buf_len)
+        }
+        Err(e) => {
+            let msg = format!("{}", e);
+            let mut truncated = msg;
+            truncated.truncate(200);
+            log(&format!("[LlmRaw] failed: {}", truncated));
+            -3
+        }
+    }
 }
 
 /// Build flavor — "" (prod) or "staging". Embedded at compile time via

@@ -744,8 +744,11 @@ public partial class App : Application
                 + System.Text.Json.JsonEncodedText.Encode(procName).ToString()
                 + "\",\"bundle_id\":\"\",\"wm_class\":\"\"}";
             var rc = DimmyNative.dimmy_set_app_context(json);
-            if (rc != 0)
-                PttLog($"set_app_context returned {rc} for '{procName}'");
+            // Always log the captured value so diagnosing "rules don't
+            // match" only requires reading ptt.log: empty = capture
+            // failed (UAC-elevated foreground, exotic shell), non-empty
+            // = what we sent to Rust for the resolve() lookup.
+            Log($"captured process='{procName}' rc={rc}", "AppCtx");
         }
         catch (Exception ex)
         {

@@ -211,15 +211,25 @@ public sealed partial class MeetingWindow : Window
         StatusText.Text = "Generating recap + actions via LLM…";
         try
         {
-            // Single-call structured output: prompt the LLM to return
-            // a tagged response with sections, then split client-side.
-            // Avoids two round-trips for what's conceptually one task.
+            // Single-call structured output via the new raw-LLM FFI:
+            // bypasses dictation llm_style ("off" returns prompt
+            // verbatim, the bug we hit on first ship). Strong-model
+            // override is auto-picked: prefer Anthropic Opus, then
+            // Gemini Pro, then Groq Llama as a last fallback.
             var prompt = BuildPostProcessPrompt(transcript);
+            var modelOverride = PickRecapModel();
+            App.Log($"recap with model='{modelOverride}', prompt {prompt.Length} chars", "Meeting");
             var buf = new byte[1 << 18];
-            int rc = await Task.Run(() => DimmyNative.dimmy_process_with_llm(prompt, buf, buf.Length));
+            int rc = await Task.Run(() =>
+                DimmyNative.dimmy_llm_call_raw(prompt, modelOverride, 4096, buf, buf.Length));
             if (rc <= 0)
             {
-                StatusText.Text = $"LLM call returned {rc} — see dimmy.log";
+                StatusText.Text = rc switch
+                {
+                    -2 => "Configure an LLM API key + URL first",
+                    -3 => "LLM HTTP call failed — see dimmy.log",
+                    _ => $"LLM call returned {rc}",
+                };
                 return;
             }
             var raw = System.Text.Encoding.UTF8.GetString(buf, 0, rc);
@@ -237,6 +247,43 @@ public sealed partial class MeetingWindow : Window
         {
             StatusText.Text = $"Post-process failed: {ex.Message}";
             App.Log($"post-process exc: {ex}", "Meeting");
+        }
+    }
+
+    /// Pick the strongest LLM available given what's configured. Only
+    /// the model NAME is overridden — the URL + key still come from
+    /// the user's main LLM config. So if the user set up Anthropic in
+    /// Settings, this returns "claude-opus-4-7"; if Gemini is the
+    /// configured provider, "gemini-2.5-pro"; otherwise empty string
+    /// (Rust falls back to user's llm_api_model — typically Llama
+    /// 3.3 70b on Groq, also fine for recap).
+    private static string PickRecapModel()
+    {
+        // We can't read the URL from outside SettingsViewModel here
+        // (Meeting window is independent), so peek at config.json
+        // file directly — same pattern Settings uses.
+        try
+        {
+            var cfgPath = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "dimmy", "config.json");
+            if (!System.IO.File.Exists(cfgPath)) return "";
+            using var doc = System.Text.Json.JsonDocument.Parse(
+                System.IO.File.ReadAllText(cfgPath));
+            if (!doc.RootElement.TryGetProperty("llm_api_url", out var urlEl))
+                return "";
+            var url = urlEl.GetString() ?? "";
+            if (url.Contains("anthropic.com", StringComparison.OrdinalIgnoreCase))
+                return "claude-opus-4-7";
+            if (url.Contains("googleapis.com", StringComparison.OrdinalIgnoreCase))
+                return "gemini-2.5-pro";
+            // Groq, OpenAI, Together, Fireworks, OpenRouter — keep
+            // the user's configured model. They've already picked.
+            return "";
+        }
+        catch
+        {
+            return "";
         }
     }
 

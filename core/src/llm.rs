@@ -437,6 +437,116 @@ pub async fn process_text(
     Ok(content)
 }
 
+/// Raw LLM call: send `user_prompt` directly without the dictation
+/// `style + tone + translate` rewriting wrapper. Used by meeting-mode
+/// post-process (recap + actions extraction) and by the audio-load
+/// summarizer when the file is long enough to qualify as a meeting.
+///
+/// Provider routing matches `process_text`: HTTPS-only, Anthropic
+/// Messages API for *.anthropic.com URLs, OpenAI-compatible chat
+/// completions everywhere else. `max_tokens` is provided by the
+/// caller so summary callers can request 4 K outputs without us
+/// guessing from input length.
+pub async fn process_raw_prompt(
+    api_url: &str,
+    model: &str,
+    api_key: &str,
+    user_prompt: &str,
+    max_tokens: u64,
+) -> Result<String, crate::error::LlmError> {
+    assert!(!user_prompt.is_empty(), "process_raw_prompt: empty user_prompt");
+    assert!(max_tokens > 0, "process_raw_prompt: max_tokens must be > 0");
+    assert!(max_tokens <= 100_000, "process_raw_prompt: max_tokens too large");
+    if let Err(reason) = crate::provider::Provider::validate_url(api_url) {
+        return Err(crate::error::LlmError::Network(reason));
+    }
+
+    // Longer timeout than the dictation rewrite path: meeting recaps
+    // can take 5-15 s on a hot LLM. 60 s gives headroom for cold
+    // model wakes on free tiers (Groq especially).
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()?;
+
+    let is_anthropic = crate::provider::Provider::from_url(api_url).is_anthropic();
+    let response = if is_anthropic {
+        let body = serde_json::json!({
+            "model": model,
+            "max_tokens": max_tokens,
+            "messages": [
+                { "role": "user", "content": user_prompt },
+            ],
+        });
+        client
+            .post(api_url)
+            .header("x-api-key", api_key)
+            .header("anthropic-version", "2023-06-01")
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await?
+    } else {
+        // OpenAI-compatible (Groq, OpenAI, Together, Gemini-OAI proxy, ...).
+        let body = serde_json::json!({
+            "model": model,
+            "temperature": 0.3,
+            "max_tokens": max_tokens,
+            "messages": [
+                { "role": "user", "content": user_prompt },
+            ],
+        });
+        client
+            .post(api_url)
+            .header("Authorization", format!("Bearer {api_key}"))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await?
+    };
+
+    let status = response.status();
+    if !status.is_success() {
+        let mut body = response.text().await.unwrap_or_default();
+        body.truncate(200); // never leak full error body (key/PII)
+        return Err(crate::error::LlmError::Network(format!(
+            "{}: {}",
+            status, body
+        )));
+    }
+
+    if is_anthropic {
+        // Anthropic: { "content": [{"type": "text", "text": "..."}] }
+        #[derive(serde::Deserialize)]
+        struct AnthropicResponse { content: Vec<AnthropicContent> }
+        #[derive(serde::Deserialize)]
+        struct AnthropicContent { text: String }
+        let parsed: AnthropicResponse = response.json().await?;
+        Ok(parsed
+            .content
+            .into_iter()
+            .map(|c| c.text)
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim()
+            .to_string())
+    } else {
+        // OpenAI-compatible
+        #[derive(serde::Deserialize)]
+        struct ChatResponse { choices: Vec<ChatChoice> }
+        #[derive(serde::Deserialize)]
+        struct ChatChoice { message: ChatMessage }
+        #[derive(serde::Deserialize)]
+        struct ChatMessage { content: String }
+        let parsed: ChatResponse = response.json().await?;
+        Ok(parsed
+            .choices
+            .into_iter()
+            .next()
+            .map(|c| c.message.content.trim().to_string())
+            .unwrap_or_default())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
