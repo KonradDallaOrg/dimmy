@@ -1180,6 +1180,25 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         }
     }
 
+    // v2 retention + auto-recap fields. Same workaround as app_rules
+    // above — the json! macro is already past its expansion budget,
+    // so these are mutated onto the Value after the fact. Without
+    // this block the Mac UI's Privacy → "Save audio" toggle and the
+    // Advanced → auto-recap stepper round-trip to disk fine but
+    // appear reverted on the next read because the getter omits them.
+    if let Ok(b) = st.save_audio_in_history.lock() {
+        json["save_audio_in_history"] = serde_json::Value::Bool(*b);
+    }
+    if let Ok(n) = st.history_audio_keep_days.lock() {
+        json["history_audio_keep_days"] = serde_json::Value::from(*n);
+    }
+    if let Ok(n) = st.history_audio_max_mb.lock() {
+        json["history_audio_max_mb"] = serde_json::Value::from(*n);
+    }
+    if let Ok(n) = st.auto_recap_threshold_secs.lock() {
+        json["auto_recap_threshold_secs"] = serde_json::Value::from(*n);
+    }
+
     let s = serde_json::to_string(&json).unwrap_or_else(|_| "{}".to_string());
     write_to_buf(&s, out_buf, buf_len)
 }
