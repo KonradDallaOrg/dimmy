@@ -286,6 +286,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 // when Parakeet is the active backend; flipping to it
                 // later in Settings re-fires below.
                 self.maybeWarmupParakeet()
+
+                // Preload Parakeet during onboarding so by the time the
+                // user reaches the model-download step the bundle is
+                // already on disk (or downloading). Mirrors the Win
+                // "smart auto-pick" — eligibility: Apple Silicon
+                // (always true for our arm64 build), >= 2 GB free disk,
+                // bundle not yet present, onboarding still in flight.
+                self.maybeStartParakeetOnboardingPreload()
+            }
+        }
+    }
+
+    /// Pre-download the Parakeet bundle in the background while the user
+    /// is still clicking through Welcome / Permissions / Shortcut. By the
+    /// time they hit the model-download step the bundle is already on
+    /// disk — they tap Continue without waiting on a 466 MB download.
+    /// Mirrors the Win onboarding behaviour. Skipped when the user has
+    /// already finished onboarding (they've made their choice) or when
+    /// the bundle is already present.
+    private var didStartParakeetPreload = false
+    private func maybeStartParakeetOnboardingPreload() {
+        guard !didStartParakeetPreload else { return }
+        guard !appState.isOnboardingComplete else { return }  // user past the step
+        guard DimmyCore.shared.isInitialized else { return }
+        guard !DimmyCore.shared.parakeetBundlePresent() else { return }
+
+        // Disk gate — same threshold the model-download view uses.
+        guard let support = try? FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: false
+        ),
+              let caps = try? support.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
+              let bytes = caps.volumeAvailableCapacityForImportantUsage,
+              bytes >= 2 * 1024 * 1024 * 1024
+        else {
+            hkLog("[AppDelegate] Parakeet preload skipped — disk gate (< 2 GB free)")
+            return
+        }
+
+        didStartParakeetPreload = true
+        hkLog("[AppDelegate] Parakeet onboarding preload starting (~466 MB)")
+        appState.localSttBackend = "parakeet"
+        appState.parakeetDownloadProgress = 0.0
+        appState.isDownloadingParakeet = true
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let ok = DimmyCore.shared.downloadParakeetBundle()
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.appState.isDownloadingParakeet = false
+                self.appState.parakeetBundlePresent = ok
+                hkLog("[AppDelegate] Parakeet onboarding preload done (ok=\(ok))")
             }
         }
     }

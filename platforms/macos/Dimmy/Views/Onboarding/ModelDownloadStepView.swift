@@ -213,10 +213,35 @@ struct ModelDownloadStepView: View {
         } else {
             ready = DimmyCore.shared.modelExists(selection)
         }
+        // Honour an in-flight background preload: AppDelegate kicks off
+        // the Parakeet download at boot when eligibility passes, so by
+        // the time the user lands on this step the file may already be
+        // streaming. Show progress instead of asking the user to start
+        // a second download.
+        if isParakeet && !ready && appState.isDownloadingParakeet {
+            downloadState = .downloading
+            return
+        }
+        if !isParakeet && !ready && appState.isDownloadingModel {
+            downloadState = .downloading
+            return
+        }
         downloadState = ready ? .completed : .notStarted
     }
 
     private func startDownload() {
+        // Don't fork a second download if the AppDelegate-side preload is
+        // already pumping bytes into the same on-disk dir. Without this
+        // guard the FFI gets two concurrent download_active_bundle calls
+        // racing on the same files.
+        if isParakeet && appState.isDownloadingParakeet {
+            downloadState = .downloading
+            return
+        }
+        if !isParakeet && appState.isDownloadingModel {
+            downloadState = .downloading
+            return
+        }
         downloadState = .downloading
         if isParakeet {
             appState.localSttBackend = "parakeet"
