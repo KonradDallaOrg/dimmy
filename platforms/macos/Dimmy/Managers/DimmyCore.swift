@@ -689,6 +689,22 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
             appState.parakeetDownloadProgress = Double(downloaded) / Double(total)
         }
 
+    case "file_transcribe_progress":
+        // Emitted between chunks by dimmy_transcribe_file. Drives the
+        // determinate progress bar on Settings → Home → Transcribe a file.
+        let processed = (payload["processed_secs"] as? Double) ?? 0
+        let total = (payload["total_secs"] as? Double) ?? 0
+        let percent = (payload["percent"] as? Double) ?? 0
+        let chunkIndex = (payload["chunk_index"] as? Int) ?? 0
+        let chunkTotal = (payload["chunk_total"] as? Int) ?? 0
+        appState.fileTranscribeProgress = FileTranscribeProgress(
+            processedSecs: processed,
+            totalSecs: total,
+            percent: percent,
+            chunkIndex: chunkIndex,
+            chunkTotal: chunkTotal
+        )
+
     case "stt_chunk":
         // Rust core emits this when chunk_streaming is on AND the
         // active local backend is Parakeet. Payload schema:

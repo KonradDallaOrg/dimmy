@@ -235,11 +235,22 @@ struct PillView: View {
         // Borderless: just the orange triangle, no black backdrop.
         .overlay(alignment: .topTrailing) {
             if appState.hotkeyStatus != .installed {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundColor(.orange)
-                    .offset(x: 2, y: -2)
-                    .help(Self.warningText(for: appState.hotkeyStatus))
+                Button {
+                    // One-click hand-off: open Privacy → Accessibility
+                    // directly so the user doesn't have to dig through
+                    // the system pane. Polling timer in HotkeyManager
+                    // picks up the grant within 2 s and re-installs
+                    // the event tap automatically.
+                    PermissionsManager.shared.openAccessibilitySettings()
+                } label: {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(.orange)
+                }
+                .buttonStyle(.plain)
+                .offset(x: 2, y: -2)
+                .help(Self.warningText(for: appState.hotkeyStatus) +
+                      " — click to open System Settings")
             }
         }
         // Scroll-cycle tooltip: anchored to the pill (not the panel) so it

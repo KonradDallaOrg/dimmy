@@ -18,8 +18,98 @@ struct MacAdvancedPage: View {
 
             appearanceGroup
             performanceGroup
+            autoRecapGroup
+            #if DEBUG
+            debugSeedGroup
+            #endif
             diagnosticsGroup
             resetGroup
+        }
+    }
+
+    #if DEBUG
+    /// Debug-only: drop one sample row with a synthesised WAV so the
+    /// History detail's waveform + Raw/Enhanced toggle can be demoed
+    /// without a microphone. Compiled out in Release/Staging — under
+    /// `#if DEBUG` instead of a runtime flag so a binary you ship
+    /// physically cannot insert fake rows.
+    private var debugSeedGroup: some View {
+        Group {
+            MacGroupLabel(text: "Debug · history seed")
+            MacTile {
+                MacRow(
+                    "Insert sample row",
+                    description: "Adds one fake history entry with a synthesised 4 s WAV so the waveform + playback can be exercised without a real recording.",
+                    showsDivider: false
+                ) {
+                    Button("Add sample") {
+                        seedSampleHistory()
+                    }
+                    .controlSize(.small)
+                }
+            }
+        }
+    }
+
+    private func seedSampleHistory() {
+        DispatchQueue.global(qos: .utility).async {
+            if !DimmyCore.shared.isInitialized {
+                _ = DimmyCore.shared.initialize()
+            }
+            guard DimmyCore.shared.isInitialized else { return }
+
+            let id = DimmyCore.shared.historySave(
+                text: "today we agreed on a three-tier pricing structure, marketing will draft launch copy by friday, engineering needs a feature flag for the trial gate",
+                language: "en",
+                duration: 4.0
+            )
+            guard id > 0 else { return }
+
+            DimmyCore.shared.historyUpdateEnhanced(
+                id: id,
+                text: "Today we agreed on a three-tier pricing structure. Marketing will draft launch copy by Friday. Engineering needs a feature flag for the trial gate.\n\n═════ Recap ═════\n• 3-tier pricing structure agreed\n• Marketing draft due Friday\n• Engineering: feature flag for trial gate"
+            )
+
+            if let dir = SampleAudioSynth.historyAudioDir() {
+                let wavURL = dir.appendingPathComponent("\(id).wav")
+                if let size = SampleAudioSynth.writeBurstyWAV(to: wavURL) {
+                    DimmyCore.shared.historyUpdateAudio(
+                        id: id, path: wavURL.path, sizeBytes: size
+                    )
+                }
+            }
+        }
+    }
+    #endif
+
+    /// Phase 6.4 — fire-and-forget recap on long dictations. Independent
+    /// of meeting mode (which always recaps) and from the dictation
+    /// rewrite (which uses llm_style). 0 = disabled.
+    private var autoRecapGroup: some View {
+        Group {
+            MacGroupLabel(text: "Auto-recap")
+            MacTile {
+                MacRow(
+                    "Long dictation auto-recap",
+                    description: "When a single dictation runs longer than the threshold, ask the LLM for a quick bullet recap and append it to the History row. 0 disables.",
+                    showsDivider: false
+                ) {
+                    HStack(spacing: 6) {
+                        Stepper(value: Binding(
+                            get: { Int(appState.autoRecapThresholdSecs) },
+                            set: { appState.autoRecapThresholdSecs = UInt32(max(0, $0))
+                                   DimmyCore.shared.setConfig(appState.toRustConfig()) }
+                        ), in: 0...3600, step: 30) {
+                            Text(appState.autoRecapThresholdSecs == 0
+                                 ? "Off"
+                                 : "\(appState.autoRecapThresholdSecs)s threshold")
+                                .font(.system(size: 12))
+                        }
+                        .controlSize(.small)
+                    }
+                }
+            }
+            MacGroupFooter(text: "The recap is appended to the History row's enhanced_text — visible in the History detail under the original transcript.")
         }
     }
 

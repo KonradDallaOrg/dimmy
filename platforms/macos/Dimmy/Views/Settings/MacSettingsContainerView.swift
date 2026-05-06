@@ -13,7 +13,7 @@ import SwiftUI
 // reserves space at the top so visual alignment matches.
 
 enum MacSettingsTab: String, CaseIterable, Identifiable {
-    case home, voice, output, rules, pill, shortcut, permissions, privacy, license, about, advanced
+    case home, voice, output, rules, history, pill, shortcut, permissions, privacy, license, about, advanced
 
     var id: String { rawValue }
 
@@ -23,6 +23,7 @@ enum MacSettingsTab: String, CaseIterable, Identifiable {
         case .voice:       return "Voice input"
         case .output:      return "Output"
         case .rules:       return "App rules"
+        case .history:     return "History"
         case .pill:        return "Pill overlay"
         case .shortcut:    return "Shortcut"
         case .permissions: return "Permissions"
@@ -39,6 +40,7 @@ enum MacSettingsTab: String, CaseIterable, Identifiable {
         case .voice:       return "How Dimmy hears and transcribes your voice."
         case .output:      return "How Dimmy rewrites and delivers your dictation."
         case .rules:       return "Auto-switch the rewrite style based on the focused app."
+        case .history:     return "Past dictations — click a row to see Raw / Enhanced and replay audio."
         case .pill:        return "The floating pill — where it lives and how it looks."
         case .shortcut:    return "The hotkey that starts and stops recording."
         case .permissions: return "macOS access Dimmy needs to record and paste."
@@ -56,6 +58,7 @@ enum MacSettingsTab: String, CaseIterable, Identifiable {
         case .voice:       return "mic.fill"
         case .output:      return "text.bubble.fill"
         case .rules:       return "rectangle.3.group.fill"
+        case .history:     return "clock.arrow.circlepath"
         case .pill:        return "capsule.fill"
         case .shortcut:    return "keyboard.fill"
         case .permissions: return "hand.raised.fill"
@@ -74,6 +77,7 @@ enum MacSettingsTab: String, CaseIterable, Identifiable {
         case .voice:       return Color(red: 1.00, green: 0.22, blue: 0.37)  // red/pink
         case .output:      return Color(red: 1.00, green: 0.80, blue: 0.00)  // yellow
         case .rules:       return Color(red: 0.20, green: 0.78, blue: 0.35)  // green
+        case .history:     return Color(red: 0.34, green: 0.61, blue: 0.99)  // light blue
         case .pill:        return Color(red: 0.69, green: 0.32, blue: 0.87)  // purple
         case .shortcut:    return Color(red: 0.04, green: 0.52, blue: 1.00)  // blue
         case .permissions: return Color(red: 1.00, green: 0.45, blue: 0.20)  // orange/red
@@ -369,6 +373,8 @@ struct MacSettingsContainerView: View {
         case .voice:       MacVoicePage(appState: appState)
         case .output:      MacOutputPage(appState: appState)
         case .rules:       MacRulesPage(appState: appState)
+        case .history:     HistorySettingsView(appState: appState)
+                              .frame(minHeight: 480)
         case .pill:        MacPillPage(appState: appState)
         case .shortcut:    MacShortcutPage(appState: appState)
         case .permissions: MacPermissionsPage(appState: appState)

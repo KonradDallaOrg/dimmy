@@ -158,6 +158,14 @@ final class PillWindowController {
         settingsItem.target = self
         menu.addItem(settingsItem)
 
+        // Phase 6.2 — meeting entry point reachable from the pill right-
+        // click in addition to tray + dock. Mirror of the Win flyout.
+        let meetingItem = NSMenuItem(title: "Open Meeting…",
+                                     action: #selector(openMeetingAction),
+                                     keyEquivalent: "")
+        meetingItem.target = self
+        menu.addItem(meetingItem)
+
         let hideItem = NSMenuItem(title: "Hide pill", action: #selector(hidePillAction), keyEquivalent: "")
         hideItem.target = self
         menu.addItem(hideItem)
@@ -173,6 +181,10 @@ final class PillWindowController {
 
     @objc private func settingsAction() {
         AppDelegate.shared?.openSettings()
+    }
+
+    @objc private func openMeetingAction() {
+        AppDelegate.shared?.openMeetingWindow()
     }
 
     @objc private func hidePillAction() {

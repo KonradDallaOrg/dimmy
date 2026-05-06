@@ -245,6 +245,35 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
+        // UI-driven recording toggle. Bypasses the global hotkey path so
+        // users without Accessibility (e.g. fresh Debug builds whose
+        // signature voided the grant) can still trigger a recording.
+        // Mic permission is still required — the system prompt fires on
+        // first invocation. Disabled while the core hasn't initialised.
+        let recordTitle: String
+        if appState.isRecording {
+            recordTitle = "Stop Recording"
+        } else {
+            recordTitle = "Start Recording…"
+        }
+        let recordItem = NSMenuItem(title: recordTitle,
+                                    action: #selector(toggleRecordingFromMenu),
+                                    keyEquivalent: "r")
+        recordItem.target = self
+        recordItem.isEnabled = DimmyCore.shared.isInitialized
+        menu.addItem(recordItem)
+
+        // Open Meeting… — Phase 4 entry point. Distinct from the
+        // dictation hotkey: starts a long-form recording with live
+        // transcript + post-stop LLM recap. Mirrors the Win tray entry.
+        let meetingItem = NSMenuItem(title: "Open Meeting…",
+                                     action: #selector(openMeeting),
+                                     keyEquivalent: "")
+        meetingItem.target = self
+        menu.addItem(meetingItem)
+
+        menu.addItem(NSMenuItem.separator())
+
         // Actions.
         let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
@@ -253,6 +282,23 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         let quitItem = NSMenuItem(title: "Quit Dimmy", action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
+    }
+
+    @objc private func openMeeting() {
+        AppDelegate.shared?.openMeetingWindow()
+    }
+
+    @objc private func toggleRecordingFromMenu() {
+        // Lazy-init in case the user got here before mic permission ever
+        // mattered. dimmy_init is idempotent.
+        if !DimmyCore.shared.isInitialized {
+            DispatchQueue.global(qos: .userInitiated).async {
+                _ = DimmyCore.shared.initialize()
+                DispatchQueue.main.async { HotkeyManager.shared.toggleRecordingFromUI() }
+            }
+            return
+        }
+        HotkeyManager.shared.toggleRecordingFromUI()
     }
 
     /// Public so AppDelegate can reuse it inside `applicationDockMenu(_:)`,

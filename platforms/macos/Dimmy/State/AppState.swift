@@ -139,6 +139,19 @@ enum RecordingMode: String, CaseIterable {
     case toggle = "Toggle"
 }
 
+// MARK: - File-load progress payload
+
+/// Mirror of the `file_transcribe_progress` event Rust emits between
+/// chunks. The detail view binds `percent` to a determinate progress
+/// bar; the chunk index/total drive the "X / Y" status text.
+struct FileTranscribeProgress: Equatable {
+    let processedSecs: Double
+    let totalSecs: Double
+    let percent: Double
+    let chunkIndex: Int
+    let chunkTotal: Int
+}
+
 enum AppTheme: String, CaseIterable {
     case auto = "Auto"
     case light = "Light"
@@ -662,6 +675,39 @@ final class AppState: ObservableObject {
     @Published var statsTotalWords: UInt64 = 0
     @Published var statsTotalSpeakingSecs: Double = 0.0
 
+    // MARK: - History v2
+
+    /// Save 16 kHz mono int16 WAV alongside each row in
+    /// `<config>/history_audio/<id>.wav`. Off by default — opt-in for
+    /// users who want playback. Round-trips through the Rust core.
+    @Published var saveAudioInHistory: Bool = false
+    /// Days to keep audio recordings before the prune thread deletes
+    /// them. 0 = never delete by age.
+    @Published var historyAudioKeepDays: UInt32 = 30
+    /// Maximum total size of `<config>/history_audio/` in MB. When the
+    /// dir exceeds this, the prune thread deletes oldest WAVs first
+    /// until under the cap. 0 = no size cap.
+    @Published var historyAudioMaxMb: UInt32 = 5_000
+
+    // MARK: - Phase 6.4 — auto-recap
+
+    /// Auto-generate a recap when a single dictation runs longer than
+    /// this many seconds (fire-and-forget, after paste, prepended to
+    /// `enhanced_text`). 0 = disabled. Default 60.
+    @Published var autoRecapThresholdSecs: UInt32 = 60
+
+    // MARK: - App rules (foreground-app overrides)
+
+    /// User-curated rules evaluated top-down at hotkey-down. Persisted
+    /// as `app_rules` in the Rust config.json. The mac UI is in
+    /// `MacRulesPage`; defaults live in `AppRulesDefaults.macV1`.
+    @Published var appRules: [AppRule] = []
+
+    // MARK: - File-load progress
+
+    /// Live progress for `dimmy_transcribe_file`. nil while idle.
+    @Published var fileTranscribeProgress: FileTranscribeProgress?
+
     // MARK: - Per-provider key flags
 
     @Published var hasGroqKey: Bool = false
@@ -798,6 +844,21 @@ final class AppState: ObservableObject {
         if let v = config["has_fireworks_key"] as? Bool { hasFireworksKey = v }
         if let v = config["has_together_key"] as? Bool { hasTogetherKey = v }
         if let v = config["has_custom_key"] as? Bool { hasCustomKey = v }
+
+        // History v2 retention
+        if let v = config["save_audio_in_history"] as? Bool { saveAudioInHistory = v }
+        if let v = config["history_audio_keep_days"] as? Int { historyAudioKeepDays = UInt32(max(0, v)) }
+        if let v = config["history_audio_max_mb"] as? Int { historyAudioMaxMb = UInt32(max(0, v)) }
+
+        // Phase 6.4 auto-recap
+        if let v = config["auto_recap_threshold_secs"] as? Int { autoRecapThresholdSecs = UInt32(max(0, v)) }
+
+        // App rules — array of dicts matching Rust serde shape
+        if let arr = config["app_rules"] as? [[String: Any]] {
+            appRules = arr.compactMap { AppRule(dict: $0) }
+        } else {
+            appRules = []
+        }
     }
 
     /// Build a config dictionary for sending to Rust via FFI.
@@ -833,6 +894,11 @@ final class AppState: ObservableObject {
             "overlay_position": overlayPosition,
             "keep_in_clipboard": keepInClipboard,
             "use_keyring": false,  // Always local encrypted file
+            "save_audio_in_history": saveAudioInHistory,
+            "history_audio_keep_days": Int(historyAudioKeepDays),
+            "history_audio_max_mb": Int(historyAudioMaxMb),
+            "auto_recap_threshold_secs": Int(autoRecapThresholdSecs),
+            "app_rules": appRules.map { $0.toDict() },
         ]
         if let dev = selectedDevice {
             config["selected_device"] = dev

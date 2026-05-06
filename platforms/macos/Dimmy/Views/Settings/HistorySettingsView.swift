@@ -1,184 +1,281 @@
 import SwiftUI
 import AppKit
+import AVFoundation
 
+/// History — past dictations grouped by date, in the Tahoe design
+/// language (MacTile + MacRow). v2 fields surfaced: enhanced_text
+/// (Raw/Enhanced toggle in the detail sheet), audio_path (waveform
+/// playback), app_bundle_id (real Mac icon + display name),
+/// size_bytes, llm_style, llm_translate_to.
 struct HistorySettingsView: View {
     @ObservedObject var appState: AppState
     @State private var searchQuery: String = ""
-    @State private var transcripts: [[String: Any]] = []
+    @State private var transcripts: [HistoryEntry] = []
     @State private var stats: [String: Any]?
+    @State private var selected: HistoryEntry?
+    @State private var refreshTimer: Timer?
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Search bar
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 0) {
+            searchField
+                .padding(.bottom, 8)
+
+            if let stats = stats {
+                statsTile(stats)
+                    .padding(.bottom, 12)
+            }
+
+            if transcripts.isEmpty {
+                emptyState
+            } else {
+                transcriptGroups
+            }
+        }
+        .onAppear {
+            loadTranscripts()
+            loadStats()
+            refreshTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { _ in
+                Task { @MainActor in
+                    self.loadTranscripts()
+                    self.loadStats()
+                }
+            }
+        }
+        .onDisappear {
+            refreshTimer?.invalidate()
+            refreshTimer = nil
+        }
+        .sheet(item: $selected) { entry in
+            HistoryDetailSheet(
+                entry: entry,
+                onDelete: { deleteTranscript(id: $0) }
+            )
+        }
+    }
+
+    // MARK: - Search bar
+
+    private var searchField: some View {
+        MacTile {
+            HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
-                    .foregroundColor(.secondary)
-                TextField("Search transcripts...", text: $searchQuery)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.macTextSecondary)
+                TextField("Search transcripts…", text: $searchQuery)
                     .textFieldStyle(.plain)
-                    .font(.system(.body))
+                    .font(.system(size: 13))
                     .onChange(of: searchQuery) { _, _ in loadTranscripts() }
                 if !searchQuery.isEmpty {
                     Button {
                         searchQuery = ""
                     } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(Color.macTextTertiary)
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(8)
-
-            Divider()
-
-            // Transcript list or empty state
-            if transcripts.isEmpty {
-                emptyState
-            } else {
-                transcriptList
-            }
-
-            // Stats footer
-            if let stats = stats {
-                Divider()
-                statsFooter(stats)
-            }
-        }
-        .onAppear {
-            loadTranscripts()
-            loadStats()
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
         }
     }
 
-    // MARK: - Empty State
+    // MARK: - Stats tile
+
+    private func statsTile(_ stats: [String: Any]) -> some View {
+        let totalWords = stats["total_words"] as? Int ?? 0
+        let totalSessions = stats["total_sessions"] as? Int ?? 0
+        let totalDuration = stats["total_duration"] as? Double ?? 0.0
+        return HStack(spacing: 8) {
+            MacStatTile(value: "\(totalSessions)", label: "Sessions")
+            MacStatTile(value: "\(totalWords.formatted())", label: "Words")
+            MacStatTile(value: formatDuration(totalDuration), label: "Total time")
+        }
+    }
+
+    // MARK: - Empty state
 
     private var emptyState: some View {
-        VStack(spacing: 12) {
-            Spacer()
-            Image(systemName: "waveform.slash")
-                .font(.system(size: 40))
-                .foregroundColor(.secondary)
-            Text(searchQuery.isEmpty ? "No transcriptions yet" : "No results for \"\(searchQuery)\"")
-                .font(.system(.body))
-                .foregroundColor(.secondary)
-            if searchQuery.isEmpty {
-                Text("Start dictating to build your history")
-                    .font(.system(size: 12))
-                    .foregroundColor(Color(nsColor: .tertiaryLabelColor))
+        MacTile {
+            VStack(spacing: 10) {
+                Image(systemName: searchQuery.isEmpty ? "waveform.path" : "magnifyingglass")
+                    .font(.system(size: 36))
+                    .foregroundStyle(Color.macTextTertiary)
+                Text(searchQuery.isEmpty ? "No transcriptions yet" : "No results for \"\(searchQuery)\"")
+                    .font(.system(size: 13, weight: .medium))
+                if searchQuery.isEmpty {
+                    Text("Press your shortcut anywhere or drop a WAV on Home — recordings land here.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.macTextSecondary)
+                        .multilineTextAlignment(.center)
+                }
             }
-            Spacer()
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 36)
+            .padding(.horizontal, 20)
         }
-        .frame(maxWidth: .infinity, minHeight: 200)
     }
 
-    // MARK: - Transcript List (grouped by date)
+    // MARK: - Grouped list
 
-    private var transcriptList: some View {
-        List {
-            ForEach(groupedTranscripts, id: \.0) { group, items in
-                Section(header: Text(group)) {
-                    ForEach(items, id: \.id) { entry in
-                        transcriptRow(entry)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                copyToClipboard(entry.text)
-                            }
-                            .contextMenu {
-                                Button {
-                                    copyToClipboard(entry.text)
-                                } label: {
-                                    Label("Copy", systemImage: "doc.on.doc")
-                                }
+    private var transcriptGroups: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(groupedTranscripts, id: \.0) { groupName, items in
+                MacGroupLabel(text: "\(groupName) · \(items.count)")
+                MacTile {
+                    VStack(spacing: 0) {
+                        ForEach(Array(items.enumerated()), id: \.element.id) { idx, entry in
+                            row(entry)
+                            if idx < items.count - 1 {
                                 Divider()
-                                Button(role: .destructive) {
-                                    deleteTranscript(id: entry.id)
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
-                                }
+                                    .background(Color.macRowDivider)
+                                    .padding(.leading, 14)
+                                    .opacity(0.6)
                             }
+                        }
                     }
                 }
+                .padding(.bottom, 8)
             }
         }
-        .listStyle(.inset)
     }
 
-    private func transcriptRow(_ entry: TranscriptEntry) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(entry.text)
-                .font(.system(.body))
-                .lineLimit(2)
-                .foregroundColor(.primary)
+    @ViewBuilder
+    private func row(_ entry: HistoryEntry) -> some View {
+        Button {
+            selected = entry
+        } label: {
+            HStack(spacing: 12) {
+                appBadge(entry)
 
-            HStack(spacing: 8) {
-                Text(formatTimestamp(entry.timestamp))
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(entry.preview)
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.primary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
-                if entry.wordCount > 0 {
-                    Text("\(entry.wordCount) words")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.secondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.secondary.opacity(0.12))
-                        .clipShape(Capsule())
+                    HStack(spacing: 6) {
+                        meta(formatTimestamp(entry.timestamp), systemImage: "clock")
+                        if entry.duration > 0 {
+                            meta(formatShortDuration(entry.duration), systemImage: "waveform")
+                        }
+                        if !entry.language.isEmpty {
+                            tag(entry.language.uppercased(), color: .accentColor)
+                        }
+                        if entry.hasEnhanced {
+                            tag("Enhanced", color: .purple, systemImage: "sparkles")
+                        }
+                        if entry.hasAudio {
+                            tag(formatBytesShort(entry.sizeBytes), color: .blue, systemImage: "play.circle.fill")
+                        }
+                        Spacer()
+                    }
                 }
 
-                if !entry.language.isEmpty {
-                    Text(entry.language.uppercased())
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(.accentColor)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.accentColor.opacity(0.12))
-                        .clipShape(Capsule())
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color.macTextTertiary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(entry.preferredDisplay, forType: .string)
+            } label: {
+                Label("Copy", systemImage: "doc.on.doc")
+            }
+            if entry.hasEnhanced {
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(entry.text, forType: .string)
+                } label: {
+                    Label("Copy raw", systemImage: "doc.plaintext")
                 }
-
-                Spacer()
+            }
+            if let p = entry.audioPath, !p.isEmpty {
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: p)])
+                } label: {
+                    Label("Reveal audio", systemImage: "folder")
+                }
+            }
+            Divider()
+            Button(role: .destructive) {
+                deleteTranscript(id: entry.id)
+            } label: {
+                Label("Delete", systemImage: "trash")
             }
         }
+    }
+
+    @ViewBuilder
+    private func appBadge(_ entry: HistoryEntry) -> some View {
+        ZStack {
+            // Subtle squircle backdrop so the icon visually anchors
+            // (and lines up with the rest of the Tahoe layout) even
+            // when the .icns is just a flat glyph.
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(Color.primary.opacity(0.06))
+                .frame(width: 36, height: 36)
+
+            if let bundleId = entry.appBundleId,
+               !bundleId.isEmpty,
+               let icon = AppContextCapture.appIcon(for: bundleId) {
+                Image(nsImage: icon)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 28, height: 28)
+            } else {
+                Image(systemName: "waveform")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+            }
+        }
+    }
+
+    private func meta(_ text: String, systemImage: String) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: systemImage)
+                .font(.system(size: 9))
+            Text(text)
+                .font(.system(size: 10))
+        }
+        .foregroundStyle(Color.macTextSecondary)
+    }
+
+    private func tag(_ text: String, color: Color, systemImage: String? = nil) -> some View {
+        HStack(spacing: 3) {
+            if let img = systemImage {
+                Image(systemName: img)
+                    .font(.system(size: 9, weight: .semibold))
+            }
+            Text(text)
+                .font(.system(size: 10, weight: .semibold))
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, 6)
         .padding(.vertical, 2)
+        .background(color.opacity(0.14))
+        .clipShape(Capsule())
     }
 
-    // MARK: - Stats Footer
-
-    private func statsFooter(_ stats: [String: Any]) -> some View {
-        HStack(spacing: 16) {
-            let totalWords = stats["total_words"] as? Int ?? 0
-            let totalSessions = stats["total_sessions"] as? Int ?? 0
-            let totalDuration = stats["total_duration"] as? Double ?? 0.0
-
-            statPill(icon: "text.word.spacing", value: "\(totalWords)", label: "words")
-            statPill(icon: "waveform", value: "\(totalSessions)", label: "sessions")
-            statPill(icon: "timer", value: formatDuration(totalDuration), label: "total")
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-    }
-
-    private func statPill(icon: String, value: String, label: String) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: icon)
-                .font(.system(size: 10))
-                .foregroundColor(.secondary)
-            Text(value)
-                .font(.system(size: 11, weight: .semibold))
-                .monospacedDigit()
-            Text(label)
-                .font(.system(size: 10))
-                .foregroundColor(.secondary)
-        }
-    }
-
-    // MARK: - Data Loading
+    // MARK: - Data loading
 
     func loadTranscripts() {
+        let raw: [[String: Any]]
         if searchQuery.isEmpty {
-            transcripts = DimmyCore.shared.historyRecent(limit: 100) ?? []
+            raw = DimmyCore.shared.historyRecent(limit: 200) ?? []
         } else {
-            transcripts = DimmyCore.shared.historySearch(query: searchQuery, limit: 100) ?? []
+            raw = DimmyCore.shared.historySearch(query: searchQuery, limit: 200) ?? []
         }
+        transcripts = raw.map { HistoryEntry(dict: $0) }
     }
 
     func loadStats() {
@@ -187,29 +284,20 @@ struct HistorySettingsView: View {
 
     func deleteTranscript(id: Int32) {
         _ = DimmyCore.shared.historyDelete(id: id)
+        if selected?.id == id { selected = nil }
         loadTranscripts()
         loadStats()
     }
 
-    func copyToClipboard(_ text: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-    }
+    // MARK: - Date grouping
 
-    // MARK: - Date Grouping
-
-    private var groupedTranscripts: [(String, [TranscriptEntry])] {
-        let entries = transcripts.map { TranscriptEntry(dict: $0) }
-
-        let grouped = Dictionary(grouping: entries) { entry in
+    private var groupedTranscripts: [(String, [HistoryEntry])] {
+        let grouped = Dictionary(grouping: transcripts) { entry in
             dateGroup(for: entry.timestamp)
         }
-
-        // Sort groups in display order
         let groupOrder = ["Today", "Yesterday", "This Week", "Older"]
         return groupOrder.compactMap { group in
             guard let items = grouped[group], !items.isEmpty else { return nil }
-            // Sort items within group by timestamp descending (newest first)
             let sorted = items.sorted { $0.timestamp > $1.timestamp }
             return (group, sorted)
         }
@@ -230,53 +318,302 @@ struct HistorySettingsView: View {
     private func formatTimestamp(_ timestamp: Double) -> String {
         let date = Date(timeIntervalSince1970: timestamp)
         let calendar = Calendar.current
-        let timeFormatter = DateFormatter()
-        timeFormatter.dateFormat = "h:mm a"
-
-        if calendar.isDateInToday(date) {
-            return timeFormatter.string(from: date)
-        }
-        if calendar.isDateInYesterday(date) {
-            return "Yesterday \(timeFormatter.string(from: date))"
-        }
-
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateStyle = .medium
-        dateFormatter.timeStyle = .short
-        return dateFormatter.string(from: date)
+        let timeFmt = DateFormatter()
+        timeFmt.dateFormat = "HH:mm"
+        if calendar.isDateInToday(date) { return timeFmt.string(from: date) }
+        if calendar.isDateInYesterday(date) { return "Yesterday \(timeFmt.string(from: date))" }
+        let dayFmt = DateFormatter()
+        dayFmt.dateStyle = .medium
+        dayFmt.timeStyle = .short
+        return dayFmt.string(from: date)
     }
 
-    private func formatDuration(_ seconds: Double) -> String {
-        guard seconds > 0 else { return "0s" }
-        let h = Int(seconds) / 3600
-        let m = (Int(seconds) % 3600) / 60
-        let s = Int(seconds) % 60
-        if h > 0 {
-            return String(format: "%dh %02dm", h, m)
-        } else if m > 0 {
-            return String(format: "%dm %02ds", m, s)
-        } else {
-            return String(format: "%ds", s)
-        }
+    private func formatShortDuration(_ secs: Double) -> String {
+        if secs < 60 { return String(format: "%.0fs", secs) }
+        let m = Int(secs) / 60
+        let s = Int(secs) % 60
+        return s == 0 ? "\(m)m" : "\(m)m \(s)s"
     }
+
+    private func formatDuration(_ secs: Double) -> String {
+        guard secs > 0 else { return "0s" }
+        let h = Int(secs) / 3600
+        let m = (Int(secs) % 3600) / 60
+        let s = Int(secs) % 60
+        if h > 0 { return String(format: "%dh %02dm", h, m) }
+        if m > 0 { return String(format: "%dm %02ds", m, s) }
+        return String(format: "%ds", s)
+    }
+
+    fileprivate static func formatBytesShort(_ bytes: Int64) -> String {
+        let fmt = ByteCountFormatter()
+        fmt.allowedUnits = [.useKB, .useMB]
+        fmt.countStyle = .file
+        return fmt.string(fromByteCount: bytes)
+    }
+
+    private func formatBytesShort(_ bytes: Int64) -> String { Self.formatBytesShort(bytes) }
 }
 
-// MARK: - TranscriptEntry (typed wrapper around JSON dict)
+// MARK: - HistoryEntry
 
-private struct TranscriptEntry {
+struct HistoryEntry: Identifiable, Equatable {
     let id: Int32
     let text: String
+    let enhancedText: String?
     let language: String
     let timestamp: Double
     let duration: Double
     let wordCount: Int
+    let audioPath: String?
+    let appBundleId: String?
+    let appProcessName: String?
+    let llmStyle: String?
+    let llmTranslateTo: String?
+    let sizeBytes: Int64
 
     init(dict: [String: Any]) {
-        self.id = dict["id"] as? Int32 ?? Int32(dict["id"] as? Int ?? 0)
+        self.id = (dict["id"] as? Int32) ?? Int32(dict["id"] as? Int ?? 0)
         self.text = dict["text"] as? String ?? ""
+        self.enhancedText = dict["enhanced_text"] as? String
         self.language = dict["language"] as? String ?? ""
         self.timestamp = dict["timestamp"] as? Double ?? 0.0
         self.duration = dict["duration"] as? Double ?? 0.0
         self.wordCount = dict["word_count"] as? Int ?? 0
+        self.audioPath = dict["audio_path"] as? String
+        self.appBundleId = dict["app_bundle_id"] as? String
+        self.appProcessName = dict["app_process_name"] as? String
+        self.llmStyle = dict["llm_style"] as? String
+        self.llmTranslateTo = dict["llm_translate_to"] as? String
+        if let sb = dict["size_bytes"] as? Int64 {
+            self.sizeBytes = sb
+        } else if let sb = dict["size_bytes"] as? Int {
+            self.sizeBytes = Int64(sb)
+        } else {
+            self.sizeBytes = 0
+        }
+    }
+
+    var hasEnhanced: Bool {
+        guard let e = enhancedText, !e.isEmpty else { return false }
+        return e != text
+    }
+
+    var hasAudio: Bool {
+        guard let p = audioPath, !p.isEmpty else { return false }
+        return FileManager.default.fileExists(atPath: p)
+    }
+
+    var preferredDisplay: String {
+        if let e = enhancedText, !e.isEmpty { return e }
+        return text
+    }
+
+    var preview: String {
+        let s = preferredDisplay
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.count > 110 { return String(s.prefix(110)) + "…" }
+        return s
+    }
+
+    var appDisplay: String {
+        if let id = appBundleId, !id.isEmpty {
+            let resolved = AppContextCapture.appName(for: id)
+            return resolved.isEmpty ? id : resolved
+        }
+        if let n = appProcessName, !n.isEmpty { return n }
+        return ""
+    }
+}
+
+// MARK: - Detail sheet (Tahoe-style)
+
+struct HistoryDetailSheet: View {
+    let entry: HistoryEntry
+    let onDelete: (Int32) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var showEnhanced: Bool
+
+    init(entry: HistoryEntry, onDelete: @escaping (Int32) -> Void) {
+        self.entry = entry
+        self.onDelete = onDelete
+        self._showEnhanced = State(initialValue: entry.hasEnhanced)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+                .padding(.horizontal, 18)
+                .padding(.top, 16)
+                .padding(.bottom, 12)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    if entry.hasAudio, let path = entry.audioPath {
+                        MacTile {
+                            AudioWaveformView(path: path)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 12)
+                        }
+                    }
+
+                    if entry.hasEnhanced {
+                        Picker("", selection: $showEnhanced) {
+                            Label("Enhanced", systemImage: "sparkles").tag(true)
+                            Label("Raw", systemImage: "doc.plaintext").tag(false)
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                    }
+
+                    MacTile {
+                        Text(currentText.isEmpty ? "(empty transcript)" : currentText)
+                            .font(.system(size: 13))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 12)
+                    }
+
+                    metadataTile
+                }
+                .padding(.horizontal, 18)
+                .padding(.bottom, 18)
+            }
+        }
+        .frame(minWidth: 560, minHeight: 460)
+        .background(.regularMaterial)
+    }
+
+    // MARK: Header
+
+    private var header: some View {
+        HStack(alignment: .center, spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.primary.opacity(0.06))
+                    .frame(width: 48, height: 48)
+                if let bid = entry.appBundleId, !bid.isEmpty,
+                   let icon = AppContextCapture.appIcon(for: bid) {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .interpolation(.high)
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 38, height: 38)
+                } else {
+                    Image(systemName: "waveform")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.appDisplay.isEmpty ? "Dictation" : entry.appDisplay)
+                    .font(.system(size: 16, weight: .semibold))
+                Text(headerMeta)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.macTextSecondary)
+            }
+
+            Spacer()
+
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(currentText, forType: .string)
+            } label: {
+                Label("Copy", systemImage: "doc.on.doc")
+            }
+            .controlSize(.small)
+
+            Button(role: .destructive) {
+                onDelete(entry.id)
+                dismiss()
+            } label: {
+                Image(systemName: "trash")
+                    .foregroundStyle(.red)
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+
+            Button("Done") { dismiss() }
+                .keyboardShortcut(.defaultAction)
+                .controlSize(.small)
+        }
+    }
+
+    private var currentText: String {
+        if showEnhanced, let e = entry.enhancedText, !e.isEmpty { return e }
+        return entry.text
+    }
+
+    private var headerMeta: String {
+        let date = Date(timeIntervalSince1970: entry.timestamp)
+        let fmt = DateFormatter()
+        fmt.dateStyle = .medium
+        fmt.timeStyle = .short
+        var parts: [String] = [fmt.string(from: date)]
+        if entry.duration > 0 {
+            parts.append(String(format: "%.1fs", entry.duration))
+        }
+        if entry.wordCount > 0 {
+            parts.append("\(entry.wordCount) words")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    // MARK: Metadata tile
+
+    @ViewBuilder
+    private var metadataTile: some View {
+        let style = (entry.llmStyle ?? "")
+        let translate = (entry.llmTranslateTo ?? "")
+        if !style.isEmpty || !translate.isEmpty || (entry.appBundleId ?? "").isEmpty == false {
+            MacGroupLabel(text: "Details")
+            MacTile {
+                VStack(spacing: 0) {
+                    if let bid = entry.appBundleId, !bid.isEmpty {
+                        MacRow(
+                            "App",
+                            description: bid,
+                            icon: "app.fill",
+                            iconBackground: Color(red: 0.34, green: 0.61, blue: 0.99)
+                        ) {
+                            Text(entry.appDisplay)
+                                .font(.system(size: 12))
+                                .foregroundStyle(Color.macTextSecondary)
+                        }
+                    }
+                    if !style.isEmpty {
+                        MacRow(
+                            "Rewrite style",
+                            icon: "wand.and.stars",
+                            iconBackground: Color(red: 0.69, green: 0.32, blue: 0.87)
+                        ) {
+                            HStack(spacing: 4) {
+                                Circle()
+                                    .fill(MacStyleColor.color(for: style))
+                                    .frame(width: 6, height: 6)
+                                Text(style.capitalized)
+                                    .font(.system(size: 12))
+                            }
+                        }
+                    }
+                    if !translate.isEmpty, translate != "none" {
+                        MacRow(
+                            "Translated to",
+                            icon: "globe",
+                            iconBackground: Color(red: 0.10, green: 0.69, blue: 0.45),
+                            showsDivider: false
+                        ) {
+                            Text(translate.uppercased())
+                                .font(.system(size: 12))
+                        }
+                    }
+                }
+            }
+        }
     }
 }

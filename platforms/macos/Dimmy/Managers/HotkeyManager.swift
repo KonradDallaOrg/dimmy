@@ -265,6 +265,23 @@ final class HotkeyManager {
         guard let appState else { return }
         guard case .idle = appState.recordingState else { return }
 
+        // Phase 4 hotkey gate: a meeting recording owns the cpal buffer.
+        // Starting a parallel dictation here would corrupt both sessions
+        // (verified on Win shipping). Same protection mirrors
+        // MeetingWindow.OnHotkey on the Win side.
+        if DimmyCore.shared.meetingIsActive {
+            hkLog("[HotkeyManager] dictation hotkey ignored — meeting active")
+            return
+        }
+
+        // Capture the foreground app BEFORE start_recording so the
+        // current_app_context slot in Rust state holds the right
+        // bundle id by the time the LLM-enhance step reads it.
+        let bundleId = AppContextCapture.foregroundBundleId()
+        DimmyCore.shared.setAppContext(bundleId: bundleId)
+        currentRecordingBundleId = bundleId
+        recordingStartedAt = Date()
+
         let result = DimmyCore.shared.startRecording()
         if result == 0 {
             appState.recordingState = .recording(mode)
@@ -272,10 +289,26 @@ final class HotkeyManager {
         } else if result == -1 {
             appState.lastError = "No API key configured"
             print("[HotkeyManager] startRecording failed: no API key")
+            // Failed start → clear so we don't carry stale context into
+            // the next attempt.
+            DimmyCore.shared.clearAppContext()
+            currentRecordingBundleId = ""
+            recordingStartedAt = nil
         } else if result == -2 {
             print("[HotkeyManager] startRecording failed: already recording")
+            DimmyCore.shared.clearAppContext()
+            currentRecordingBundleId = ""
+            recordingStartedAt = nil
         }
     }
+
+    /// Bundle ID captured at hotkey-down. Held until the post-LLM update
+    /// step so we know what to write into history.app_bundle_id.
+    private var currentRecordingBundleId: String = ""
+    /// Wall-clock start of the active recording. Used by the auto-recap
+    /// gate (Phase 6.4) — only fire when the dictation ran long enough
+    /// to be worth summarising.
+    private var recordingStartedAt: Date?
 
     private func stopRecordingIfNeeded() {
         guard let appState else { return }
@@ -284,21 +317,49 @@ final class HotkeyManager {
         stopAmplitudePolling()
         appState.recordingState = .transcribing
 
+        let startedAt = recordingStartedAt
+        recordingStartedAt = nil
         // Stop recording + transcribe on background thread (blocking call)
         DispatchQueue.global(qos: .userInitiated).async {
             let transcript = DimmyCore.shared.stopRecording() ?? ""
 
             // LLM enhancement (if enabled, also blocking)
             var finalText = transcript
+            var didEnhance = false
             if !transcript.isEmpty {
                 let enhanced = DimmyCore.shared.processWithLLM(text: transcript)
                 if !enhanced.isEmpty {
                     finalText = enhanced
+                    didEnhance = enhanced != transcript
                 }
             }
 
+            // Post-LLM history hook: backfill enhanced_text on the row
+            // dimmy_stop_recording just inserted (mirror of Win
+            // TranscriptionService.UpdateEnhancedAsync). Runs only when
+            // an actual rewrite happened — no point storing duplicate
+            // text otherwise. dimmy_history_recent(1) returns the row
+            // we just inserted.
+            var historyId: Int32 = -1
+            if didEnhance, let recent = DimmyCore.shared.historyRecent(limit: 1)?.first,
+               let id = recent["id"] as? Int32 ?? (recent["id"] as? Int).map(Int32.init) {
+                historyId = id
+                DimmyCore.shared.historyUpdateEnhanced(id: id, text: finalText)
+            }
+
+            // Capture state we need for the post-paste auto-recap gate
+            // before we hand back to the main thread.
+            let didEnhanceFinal = didEnhance
+            let historyIdFinal = historyId
+
+            // Clear the app-context snapshot so it can't bleed into the
+            // next recording. Done on the background thread to avoid
+            // racing with another hotkey-down on the main thread.
+            DimmyCore.shared.clearAppContext()
+
             DispatchQueue.main.async { [weak self] in
-                guard let appState = self?.appState else { return }
+                guard let self, let appState = self.appState else { return }
+                self.currentRecordingBundleId = ""
 
                 appState.lastTranscript = finalText
 
@@ -318,6 +379,22 @@ final class HotkeyManager {
                     NSPasteboard.general.setString(finalText, forType: .string)
                 }
 
+                // Phase 6.4 auto-recap: if this dictation ran longer
+                // than the user's threshold, fire-and-forget a recap
+                // call in the background and append it to enhanced_text.
+                // Stays out of the paste critical path — the user gets
+                // their transcript first, and the recap quietly lands
+                // in the history detail when the LLM returns.
+                if didEnhanceFinal, historyIdFinal > 0,
+                   let started = startedAt {
+                    self.maybeAutoRecap(
+                        appState: appState,
+                        historyId: historyIdFinal,
+                        baseText: finalText,
+                        startedAt: started
+                    )
+                }
+
                 // Return to idle after brief completion animation
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                     if case .completing = appState.recordingState {
@@ -328,17 +405,80 @@ final class HotkeyManager {
         }
     }
 
+    // MARK: - Phase 6.4 — auto-recap
+
+    /// Fire-and-forget recap pass for a long dictation. Mirrors the
+    /// Win-side `MaybeAutoRecap`. Skipped when:
+    ///   - threshold is 0 (user opted out)
+    ///   - elapsed wall time < threshold
+    ///   - history row id unknown (no enhance happened)
+    /// On success, appends "═════ Recap ═════\n<recap>" to the
+    /// enhanced_text column so the History detail panel shows both.
+    private func maybeAutoRecap(appState: AppState,
+                                 historyId: Int32,
+                                 baseText: String,
+                                 startedAt: Date) {
+        let threshold = TimeInterval(appState.autoRecapThresholdSecs)
+        if threshold <= 0 { return }
+        let elapsed = Date().timeIntervalSince(startedAt)
+        if elapsed < threshold { return }
+
+        let prompt = """
+        Summarise the following dictation in 2-4 short bullet points. \
+        Focus on decisions, action items, and key facts. Do NOT include \
+        meta-commentary like "Here's a summary"; output the bullets only.
+
+        Dictation:
+        \(baseText)
+        """
+
+        DispatchQueue.global(qos: .utility).async {
+            let modelOverride = pickRecapModel()
+            let result = DimmyCore.shared.llmCallRaw(
+                prompt: prompt,
+                modelOverride: modelOverride,
+                maxTokens: 1024
+            )
+            switch result {
+            case .success(let recap):
+                let trimmed = recap.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.isEmpty { return }
+                let combined = "\(baseText)\n\n═════ Recap ═════\n\(trimmed)"
+                _ = DimmyCore.shared.historyUpdateEnhanced(id: historyId, text: combined)
+                hkLog("[HotkeyManager] auto-recap saved (id=\(historyId), \(trimmed.count) chars, \(Int(elapsed))s elapsed)")
+            case .failure(let err):
+                hkLog("[HotkeyManager] auto-recap skipped: \(err)")
+            }
+        }
+    }
+
     private func cancelRecording() {
         guard let appState else { return }
         guard appState.isRecording else { return }
 
         stopAmplitudePolling()
         DimmyCore.shared.cancelRecording()
+        DimmyCore.shared.clearAppContext()
+        currentRecordingBundleId = ""
+        recordingStartedAt = nil
         appState.recordingState = .idle
     }
 
     func stopToggleRecording() {
         stopRecordingIfNeeded()
+    }
+
+    /// UI-driven recording toggle, independent of the global hotkey.
+    /// Lets the menubar / dock / pill click start a recording even when
+    /// Accessibility is missing (CGEventTap dead). Recording itself
+    /// still needs Mic — that prompt fires once cpal opens the input.
+    func toggleRecordingFromUI() {
+        guard let appState else { return }
+        if appState.isRecording {
+            stopRecordingIfNeeded()
+        } else if case .idle = appState.recordingState {
+            startRecording(mode: .toggle)
+        }
     }
 
     // MARK: - Amplitude Polling (drives waveform animation)

@@ -81,16 +81,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             .sink { [weak self] _ in self?.applyActivationPolicy() }
             .store(in: &cancellables)
 
-        // Initialize the Rust core only once microphone is granted — initializing earlier probes
-        // audio devices and triggers the macOS mic prompt outside of onboarding. Tying it to the
-        // permission flip means the prompt only happens when the user clicks Grant in the
-        // Permissions step, and returning users (mic already authorized) init immediately.
+        // Initialize the Rust core. Two firing paths to balance "don't pop the
+        // mic prompt before the user expects it" with "non-mic features (file
+        // load, Parakeet download, meeting recap) shouldn't sit dead waiting
+        // for a permission they don't even need":
+        //  1. Mic just became authorized → init immediately (the original
+        //     onboarding flow, mirrored from earlier behaviour).
+        //  2. Onboarding is already complete at launch → init now regardless
+        //     of mic state. Returning users who dismissed mic still get file
+        //     load + Parakeet download + history populated. Without this
+        //     branch the FileLoadCard sits at "Dimmy core hasn't finished
+        //     initializing yet" forever.
         PermissionsManager.shared.$microphone
             .filter { $0 == .authorized }
             .first()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.initializeCoreAsync() }
             .store(in: &cancellables)
+        if appState.isOnboardingComplete {
+            initializeCoreAsync()
+        }
 
         hkLog("[AppDelegate] isOnboardingComplete=\(appState.isOnboardingComplete) perms=\(permissionsGranted())")
         if appState.isOnboardingComplete {
@@ -441,7 +451,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         pillItem.isEnabled = true
         menu.addItem(pillItem)
 
+        let meetingItem = NSMenuItem(title: "Open Meeting…",
+                                     action: #selector(openMeetingFromDock),
+                                     keyEquivalent: "")
+        meetingItem.target = self
+        meetingItem.isEnabled = true
+        menu.addItem(meetingItem)
+
         return menu
+    }
+
+    @objc func openMeetingFromDock() {
+        openMeetingWindow()
     }
 
     @objc func toggleDockPillVisibility() {
@@ -500,6 +521,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func reopenOnboarding() {
         showOnboarding(startStep: 0)
+    }
+
+    /// Open the dedicated MeetingWindow (Phase 4 entry point). Called
+    /// from the menubar menu, dock menu, and pill right-click. The
+    /// controller is a singleton so reopening with a meeting in flight
+    /// activates the existing window instead of forking state.
+    func openMeetingWindow() {
+        // Kick off core init if it hasn't run yet (mic-not-authorized path).
+        // The window can open without the core; Start button handles the
+        // not-initialised case with a clear status message.
+        if !DimmyCore.shared.isInitialized {
+            initializeCoreAsync()
+        }
+        MeetingWindowController.shared.show()
     }
 
     private func showOnboarding(startStep: Int = 0) {

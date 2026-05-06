@@ -13,6 +13,15 @@
 		AA000004 /* StatusBarController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000004 /* StatusBarController.swift */; };
 		AA000005 /* PillWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000005 /* PillWindowController.swift */; };
 		AA000400 /* CaptionWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000400 /* CaptionWindowController.swift */; };
+		AA000500 /* DimmyCore+V2.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000500 /* DimmyCore+V2.swift */; };
+		AA000501 /* AppRulesDefaults.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000501 /* AppRulesDefaults.swift */; };
+		AA000502 /* AppContextCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000502 /* AppContextCapture.swift */; };
+		AA000503 /* RecapModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000503 /* RecapModel.swift */; };
+		AA000504 /* MeetingWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000504 /* MeetingWindowController.swift */; };
+		AA000505 /* MeetingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000505 /* MeetingView.swift */; };
+		AA000506 /* FileLoadCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000506 /* FileLoadCard.swift */; };
+		AA000507 /* AudioWaveformView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000507 /* AudioWaveformView.swift */; };
+		AA000508 /* SampleAudioSynth.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000508 /* SampleAudioSynth.swift */; };
 		AA000006 /* HotkeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000006 /* HotkeyManager.swift */; };
 		AA000007 /* AudioSimulator.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000007 /* AudioSimulator.swift */; };
 		AA000008 /* TextInjector.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000008 /* TextInjector.swift */; };
@@ -76,6 +85,15 @@
 		AB000004 /* StatusBarController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusBarController.swift; sourceTree = "<group>"; };
 		AB000005 /* PillWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PillWindowController.swift; sourceTree = "<group>"; };
 		AB000400 /* CaptionWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptionWindowController.swift; sourceTree = "<group>"; };
+		AB000500 /* DimmyCore+V2.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DimmyCore+V2.swift"; sourceTree = "<group>"; };
+		AB000501 /* AppRulesDefaults.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRulesDefaults.swift; sourceTree = "<group>"; };
+		AB000502 /* AppContextCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppContextCapture.swift; sourceTree = "<group>"; };
+		AB000503 /* RecapModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecapModel.swift; sourceTree = "<group>"; };
+		AB000504 /* MeetingWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingWindowController.swift; sourceTree = "<group>"; };
+		AB000505 /* MeetingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingView.swift; sourceTree = "<group>"; };
+		AB000506 /* FileLoadCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileLoadCard.swift; sourceTree = "<group>"; };
+		AB000507 /* AudioWaveformView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioWaveformView.swift; sourceTree = "<group>"; };
+		AB000508 /* SampleAudioSynth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleAudioSynth.swift; sourceTree = "<group>"; };
 		AB000006 /* HotkeyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyManager.swift; sourceTree = "<group>"; };
 		AB000007 /* AudioSimulator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSimulator.swift; sourceTree = "<group>"; };
 		AB000008 /* TextInjector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextInjector.swift; sourceTree = "<group>"; };
@@ -175,10 +193,28 @@
 				AD000003 /* State */,
 				AD000004 /* Controllers */,
 				AD000005 /* Managers */,
+				AD000020 /* ViewModels */,
+				AD000021 /* Helpers */,
 				AD000006 /* Views */,
 				AD000010 /* Utilities */,
 			);
 			path = Dimmy;
+			sourceTree = "<group>";
+		};
+		AD000020 /* ViewModels */ = {
+			isa = PBXGroup;
+			children = (
+				AB000501 /* AppRulesDefaults.swift */,
+			);
+			path = ViewModels;
+			sourceTree = "<group>";
+		};
+		AD000021 /* Helpers */ = {
+			isa = PBXGroup;
+			children = (
+				AB000502 /* AppContextCapture.swift */,
+			);
+			path = Helpers;
 			sourceTree = "<group>";
 		};
 		AD000003 /* State */ = {
@@ -195,6 +231,7 @@
 				AB000004 /* StatusBarController.swift */,
 				AB000005 /* PillWindowController.swift */,
 				AB000400 /* CaptionWindowController.swift */,
+				AB000504 /* MeetingWindowController.swift */,
 			);
 			path = Controllers;
 			sourceTree = "<group>";
@@ -207,6 +244,7 @@
 				AB000008 /* TextInjector.swift */,
 				AB000030 /* DimmyCore.swift */,
 				AB000300 /* DimmyCore+License.swift */,
+				AB000500 /* DimmyCore+V2.swift */,
 			);
 			path = Managers;
 			sourceTree = "<group>";
@@ -217,6 +255,9 @@
 				AB000010 /* PillView.swift */,
 				AB000011 /* WaveformView.swift */,
 				AB000012 /* MenuBarPopover.swift */,
+				AB000505 /* MeetingView.swift */,
+				AB000506 /* FileLoadCard.swift */,
+				AB000507 /* AudioWaveformView.swift */,
 				AD000007 /* Onboarding */,
 				AD000008 /* Settings */,
 			);
@@ -276,6 +317,8 @@
 				AB000023 /* AppStyle.swift */,
 				AB000041 /* SelfTests.swift */,
 				AB000042 /* RecordingSimulator.swift */,
+				AB000503 /* RecapModel.swift */,
+				AB000508 /* SampleAudioSynth.swift */,
 			);
 			path = Utilities;
 			sourceTree = "<group>";
@@ -487,6 +530,15 @@
 				AA000301 /* MacLicensePage.swift in Sources */,
 				AA000041 /* SelfTests.swift in Sources */,
 				AA000042 /* RecordingSimulator.swift in Sources */,
+				AA000500 /* DimmyCore+V2.swift in Sources */,
+				AA000501 /* AppRulesDefaults.swift in Sources */,
+				AA000502 /* AppContextCapture.swift in Sources */,
+				AA000503 /* RecapModel.swift in Sources */,
+				AA000504 /* MeetingWindowController.swift in Sources */,
+				AA000505 /* MeetingView.swift in Sources */,
+				AA000506 /* FileLoadCard.swift in Sources */,
+				AA000507 /* AudioWaveformView.swift in Sources */,
+				AA000508 /* SampleAudioSynth.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

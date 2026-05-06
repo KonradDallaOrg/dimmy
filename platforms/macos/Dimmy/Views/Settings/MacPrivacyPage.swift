@@ -22,10 +22,73 @@ struct MacPrivacyPage: View {
             .padding(.bottom, 8)
 
             telemetryGroup
+            audioRetentionGroup
             anonymousIdGroup
             feedbackGroup
             resourcesGroup
         }
+    }
+
+    // MARK: Audio retention
+
+    /// On-disk retention of the recorded audio. Off by default — opt
+    /// in for users who want the audio next to each history row (lets
+    /// them replay a past dictation). Updates round-trip through the
+    /// Rust core which owns the prune thread.
+    private var audioRetentionGroup: some View {
+        Group {
+            MacGroupLabel(text: "Audio retention")
+            MacTile {
+                MacRow(
+                    "Save audio with each history row",
+                    description: "16 kHz mono WAV in ~/Library/Application Support/dimmy/history_audio. Off by default."
+                ) {
+                    Toggle("", isOn: Binding(
+                        get: { appState.saveAudioInHistory },
+                        set: { newValue in
+                            appState.saveAudioInHistory = newValue
+                            persistConfig()
+                        }
+                    ))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                }
+                MacRow(
+                    "Keep for",
+                    description: "Days before automatic delete. 0 = never auto-delete by age."
+                ) {
+                    Stepper(value: Binding(
+                        get: { Int(appState.historyAudioKeepDays) },
+                        set: { appState.historyAudioKeepDays = UInt32(max(0, $0)); persistConfig() }
+                    ), in: 0...365) {
+                        Text("\(appState.historyAudioKeepDays) day\(appState.historyAudioKeepDays == 1 ? "" : "s")")
+                            .font(.system(size: 12))
+                    }
+                    .controlSize(.small)
+                    .disabled(!appState.saveAudioInHistory)
+                }
+                MacRow(
+                    "Storage cap",
+                    description: "Maximum size of the history_audio folder. Oldest WAVs are deleted first when over the cap. 0 = no cap.",
+                    showsDivider: false
+                ) {
+                    Stepper(value: Binding(
+                        get: { Int(appState.historyAudioMaxMb) },
+                        set: { appState.historyAudioMaxMb = UInt32(max(0, $0)); persistConfig() }
+                    ), in: 0...50_000, step: 100) {
+                        Text("\(appState.historyAudioMaxMb) MB")
+                            .font(.system(size: 12))
+                    }
+                    .controlSize(.small)
+                    .disabled(!appState.saveAudioInHistory)
+                }
+            }
+            MacGroupFooter(text: "Audio is saved only when the toggle is on. Existing files stay on disk until the next prune pass.")
+        }
+    }
+
+    private func persistConfig() {
+        DimmyCore.shared.setConfig(appState.toRustConfig())
     }
 
     // MARK: Telemetry

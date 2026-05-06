@@ -268,4 +268,79 @@ int32_t dimmy_license_plan_change(const char * _Nonnull new_tier,
                                   char * _Nonnull out_buf,
                                   int32_t buf_len);
 
+// ── App context (foreground-app rules) ───────────────────────────
+
+/// Push the foreground-app snapshot captured at hotkey-down. JSON shape:
+///   {"process_name":"","bundle_id":"com.tinyspeck.slackmacgap","wm_class":""}
+/// Returns 0 on success, non-zero on parse error.
+int32_t dimmy_set_app_context(const char * _Nullable json_ptr);
+
+/// Clear the foreground-app snapshot. Call after transcription completes
+/// so a stale snapshot can't bleed into the next recording.
+void dimmy_clear_app_context(void);
+
+// ── Audio file load ──────────────────────────────────────────────
+
+/// Synchronously transcribe a WAV file via the active local STT
+/// backend. Returns transcript length on success, negative on error.
+/// Emits `file_transcribe_progress` events between chunks. Cloud mode
+/// is unsupported via this entry point (returns -4).
+int32_t dimmy_transcribe_file(const char * _Nonnull path_ptr,
+                              char * _Nonnull out_buf,
+                              int32_t buf_len);
+
+// ── Meeting mode ─────────────────────────────────────────────────
+
+/// Start a meeting recording. Returns the session id length on success;
+/// -1 already-active or unable to lock; -3 audio/session start failure.
+int32_t dimmy_meeting_start(char * _Nonnull out_buf, int32_t buf_len);
+
+/// Stop the active meeting. Returns JSON with id/dir/transcript/
+/// duration_secs/chunk_count/error. Negative on error / no active session.
+int32_t dimmy_meeting_stop(char * _Nonnull out_buf, int32_t buf_len);
+
+/// Persist the LLM-produced recap + actions (+ optional translation) into
+/// the meeting directory. Pass nulls/empty to skip a field. 0 ok, -1 error.
+int32_t dimmy_meeting_save_post_process(const char * _Nonnull dir_ptr,
+                                        const char * _Nullable recap_ptr,
+                                        const char * _Nullable actions_ptr,
+                                        const char * _Nullable translated_ptr);
+
+/// JSON array of orphaned meeting directories (`.recording` marker still
+/// present from a crashed session). UI can offer "recover meeting?".
+int32_t dimmy_meeting_list_orphans(char * _Nonnull out_buf, int32_t buf_len);
+
+/// 1 = a meeting is currently active, 0 otherwise. Used to gate the
+/// dictation hotkey while a meeting is recording (cpal collision).
+int32_t dimmy_meeting_is_active(void);
+
+// ── Raw LLM call (bypasses dictation rewrite) ────────────────────
+
+/// Send `prompt` to the configured LLM endpoint without the dictation
+/// llm_style wrapper. `model_override` (nullable / empty for "use the
+/// configured api_model") lets the caller pick a stronger model for
+/// recap quality. Returns response byte length, or:
+///   -1 invalid args, -2 missing config, -3 HTTP/parse error.
+int32_t dimmy_llm_call_raw(const char * _Nonnull prompt_ptr,
+                           const char * _Nullable model_override_ptr,
+                           int32_t max_tokens,
+                           char * _Nonnull out_buf,
+                           int32_t buf_len);
+
+// ── History v2 update hooks ──────────────────────────────────────
+
+/// Backfill the `enhanced_text` column for the row created by the most
+/// recent `dimmy_history_save`. Empty/null clears the column. 0 ok, -1 err.
+int32_t dimmy_history_update_enhanced(int32_t id, const char * _Nullable text_ptr);
+
+/// Set the `word_timestamps` JSON column (caller serialises the array).
+/// Empty/null clears. 0 ok, -1 err.
+int32_t dimmy_history_update_word_timestamps(int32_t id, const char * _Nullable json_ptr);
+
+/// Set audio_path + size_bytes when audio retention writes a WAV. Pass
+/// null path to unlink. 0 ok, -1 err.
+int32_t dimmy_history_update_audio(int32_t id,
+                                   const char * _Nullable path_ptr,
+                                   int64_t size_bytes);
+
 #endif /* DimmyFFI_h */

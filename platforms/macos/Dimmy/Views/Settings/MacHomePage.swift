@@ -26,6 +26,30 @@ struct MacHomePage: View {
             statsGrid
                 .padding(.bottom, 8)
 
+            MacGroupLabel(text: "Transcribe a file")
+            FileLoadCard(appState: appState)
+                .padding(.bottom, 8)
+
+            MacGroupLabel(text: "Meeting mode")
+            MacTile {
+                MacRow(
+                    "Long-form recording with recap",
+                    description: "Record a meeting, get a live transcript, and an LLM-generated recap + action items at the end. Independent from the dictation hotkey.",
+                    icon: "rectangle.dashed.and.paperclip",
+                    iconBackground: Color(red: 0.92, green: 0.25, blue: 0.48),
+                    showsDivider: false
+                ) {
+                    Button {
+                        AppDelegate.shared?.openMeetingWindow()
+                    } label: {
+                        Label("Open meeting", systemImage: "record.circle")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                }
+            }
+            .padding(.bottom, 8)
+
             MacGroupLabel(text: "Current setup")
             MacTile {
                 MacRow(
