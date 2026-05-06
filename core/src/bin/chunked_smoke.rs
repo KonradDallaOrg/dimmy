@@ -15,11 +15,16 @@
 //!
 //! Run:
 //!     ORT_DYLIB_PATH=.../libonnxruntime.dylib \
-//!     target/release/chunked_smoke <path-to-wav> [tile_count]
+//!     target/release/chunked_smoke <path-to-wav> [tile_count] [chunk_secs] [overlap_ms]
 //!
 //! `tile_count` (default 4) repeats the input WAV that many times so a
 //! short fixture like `jfk_16k_mono.wav` (11 s) becomes 44 s and reliably
-//! crosses several chunk boundaries (chunk_secs = 5).
+//! crosses several chunk boundaries (chunk_secs default 5.0).
+//!
+//! Set `CHUNKED_SMOKE_FAST=1` to disable the 100 ms producer sleep so
+//! the entire WAV is buffered up-front; the chunked worker then fires
+//! chunks back-to-back as fast as it can process them. Use this for
+//! quick chunk-size comparisons without waiting real-time.
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -38,6 +43,21 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .filter(|n: &usize| *n >= 1)
         .unwrap_or(4);
+    let chunk_secs: f32 = args
+        .get(3)
+        .and_then(|s| s.parse().ok())
+        .filter(|x: &f32| *x > 0.0 && *x <= 60.0)
+        .unwrap_or(5.0);
+    let overlap_ms: u32 = args
+        .get(4)
+        .and_then(|s| s.parse().ok())
+        .filter(|n: &u32| *n < 5_000)
+        .unwrap_or(500);
+    let fast = std::env::var("CHUNKED_SMOKE_FAST").ok().as_deref() == Some("1");
+    eprintln!(
+        "config: chunk_secs={} overlap_ms={} tile_count={} fast={}",
+        chunk_secs, overlap_ms, tile_count, fast
+    );
 
     eprintln!("bundle present: {}", dimmy_lib::parakeet::bundle_present());
     if !dimmy_lib::parakeet::bundle_present() {
@@ -113,8 +133,8 @@ fn main() {
     let transcriber = dimmy_lib::chunked_stt::ChunkedTranscriber::start(
         audio_buffer.clone(),
         16_000,
-        5.0,
-        500,
+        chunk_secs,
+        overlap_ms,
         on_chunk,
     );
 
@@ -122,7 +142,11 @@ fn main() {
     // Mimics cpal's callback cadence well enough for the chunked
     // worker to fire multiple windows during the producer's run.
     let produce_chunk_samples = 1_600usize; // 100 ms @ 16 kHz
-    let produce_sleep = Duration::from_millis(100);
+    let produce_sleep = if fast {
+        Duration::from_millis(0)
+    } else {
+        Duration::from_millis(100)
+    };
     let mut idx = 0usize;
     while idx < tiled.len() {
         let end = (idx + produce_chunk_samples).min(tiled.len());
@@ -130,7 +154,9 @@ fn main() {
             b.extend_from_slice(&tiled[idx..end]);
         }
         idx = end;
-        std::thread::sleep(produce_sleep);
+        if !fast {
+            std::thread::sleep(produce_sleep);
+        }
     }
     eprintln!(
         "[producer done @ {:>5} ms] all {} samples buffered",
