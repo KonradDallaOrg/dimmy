@@ -215,11 +215,11 @@ public sealed class TaskbarService : IDisposable
 
     private static string DescribeState(AppState s) => s switch
     {
-        AppState.Recording => "Dimmy — Recording",
-        AppState.Transcribing => "Dimmy — Transcribing",
-        AppState.Processing => "Dimmy — LLM",
-        AppState.Completing => "Dimmy — Done",
-        AppState.Error => "Dimmy — Error",
+        AppState.Recording => "Dimmy: Recording",
+        AppState.Transcribing => "Dimmy: Transcribing",
+        AppState.Processing => "Dimmy: LLM",
+        AppState.Completing => "Dimmy: Done",
+        AppState.Error => "Dimmy: Error",
         _ => "Dimmy",
     };
 

@@ -271,7 +271,7 @@ public sealed partial class OnboardingWindow : Window
                     ViewModel.IsLocalReady = false;
                     break;
                 case ModelDownloadStatus.Offline:
-                    ViewModel.DownloadStatusText = "Offline — connect to download";
+                    ViewModel.DownloadStatusText = "Offline. Connect to download.";
                     ViewModel.LocalErrorText = state.BaseError ?? "No internet";
                     ViewModel.IsLocalOffline = true;
                     ViewModel.IsLocalReady = false;

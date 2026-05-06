@@ -49,13 +49,13 @@ public static class GroqKeyValidator
             {
                 HttpStatusCode.Unauthorized => GroqKeyValidationResult.Invalid("Invalid key"),
                 HttpStatusCode.Forbidden => GroqKeyValidationResult.Invalid("Key has no permissions"),
-                HttpStatusCode.TooManyRequests => GroqKeyValidationResult.Invalid("Rate limited — try again in a moment"),
+                HttpStatusCode.TooManyRequests => GroqKeyValidationResult.Invalid("Rate limited. Try again in a moment."),
                 _ => GroqKeyValidationResult.Invalid($"Unexpected response ({(int)resp.StatusCode})"),
             };
         }
         catch (TaskCanceledException) when (!ct.IsCancellationRequested)
         {
-            return GroqKeyValidationResult.Invalid("Timeout — check connection");
+            return GroqKeyValidationResult.Invalid("Timeout. Check connection.");
         }
         catch (OperationCanceledException)
         {
@@ -64,7 +64,7 @@ public static class GroqKeyValidator
         catch (HttpRequestException ex)
         {
             Debug.WriteLine($"[Onboarding] Groq validation network error: {ex.Message}");
-            return GroqKeyValidationResult.Invalid("Network error — check connection");
+            return GroqKeyValidationResult.Invalid("Network error. Check connection.");
         }
         catch (Exception ex)
         {

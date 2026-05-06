@@ -222,7 +222,7 @@ public class TrayService : IDisposable
         nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
         nid.uCallbackMessage = WM_TRAYICON;
         nid.hIcon = _hIcon;
-        nid.szTip = "Dimmy — Ready";
+        nid.szTip = "Dimmy: Ready";
 
         _iconAdded = Shell_NotifyIcon(NIM_ADD, ref nid);
         System.Diagnostics.Debug.WriteLine($"[Tray] Shell_NotifyIcon ADD = {_iconAdded}, hIcon={_hIcon}, hwnd={_hwnd}");

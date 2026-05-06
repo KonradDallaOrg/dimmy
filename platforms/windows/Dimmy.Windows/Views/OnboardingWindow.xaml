@@ -217,7 +217,7 @@
                     <TextBlock Text=" and say something" FontSize="14"
                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                 </StackPanel>
-                <TextBlock Text="Look at the pill overlay — it will animate while you speak"
+                <TextBlock Text="Look at the pill overlay. It will animate while you speak."
                            FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                            HorizontalAlignment="Center" />
                 <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
