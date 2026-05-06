@@ -22,6 +22,7 @@ public static class TranscriptionService
     /// </summary>
     public static async Task<TranscriptionResult> StopAndProcessAsync()
     {
+        var startedAt = DateTime.UtcNow;
         // Step 1: Stop recording + transcribe (blocking FFI, run on thread pool)
         var transcribeTask = Task.Run(() =>
         {
@@ -64,6 +65,7 @@ public static class TranscriptionService
         // row and update it. Race-free because we're synchronous from
         // hotkey-release through here, and every recording produces
         // exactly one save_v2 call.
+        long? topId = null;
         if (!string.IsNullOrEmpty(enhanced) && enhanced != transcript)
         {
             try
@@ -76,8 +78,8 @@ public static class TranscriptionService
                     using var doc = System.Text.Json.JsonDocument.Parse(listJson);
                     if (doc.RootElement.GetArrayLength() > 0)
                     {
-                        var topId = doc.RootElement[0].GetProperty("id").GetInt64();
-                        DimmyNative.dimmy_history_update_enhanced((int)topId, enhanced);
+                        topId = doc.RootElement[0].GetProperty("id").GetInt64();
+                        DimmyNative.dimmy_history_update_enhanced((int)topId.Value, enhanced);
                     }
                 }
             }
@@ -87,7 +89,82 @@ public static class TranscriptionService
             }
         }
 
+        // Smart-detect: long dictation → fire-and-forget recap LLM
+        // call. Stays out of the paste critical path (the user already
+        // has finalText pasted by the time this kicks in). Result
+        // appended to enhanced_text with a separator so the History
+        // detail panel surfaces both the dictation rewrite + the
+        // structured recap. Threshold + LLM provider come from
+        // config.json (auto_recap_threshold_secs, llm_api_url).
+        var elapsedSecs = (DateTime.UtcNow - startedAt).TotalSeconds;
+        _ = Task.Run(() => MaybeAutoRecap(transcript, enhanced, topId, elapsedSecs));
+
         return TranscriptionResult.Success(finalText);
+    }
+
+    /// Threshold-gated background recap. No-op when:
+    /// - threshold is 0 (user opted out)
+    /// - elapsed < threshold (short dictation, no recap needed)
+    /// - history row id is unknown (couldn't resolve which row to update)
+    /// - LLM call returns negative rc (no key configured / network err)
+    private static void MaybeAutoRecap(string transcript, string? enhanced, long? topId, double elapsedSecs)
+    {
+        try
+        {
+            int thresholdSecs = ReadAutoRecapThreshold();
+            if (thresholdSecs <= 0 || elapsedSecs < thresholdSecs) return;
+            if (topId is null) return;
+            if (string.IsNullOrWhiteSpace(transcript)) return;
+
+            var prompt =
+                "Summarize the following dictation as a recap.\n\n" +
+                "===RECAP===\n" +
+                "<3-6 bullet points covering decisions, topics, outcomes>\n\n" +
+                "===ACTIONS===\n" +
+                "<numbered list of action items: N. owner — task — due (or 'unspecified')>\n\n" +
+                "Output ONLY the two sections above. Use the exact markers.\n\n" +
+                "Transcript:\n" + transcript;
+
+            var buf = new byte[1 << 17];
+            int rc = DimmyNative.dimmy_llm_call_raw(prompt, "", 4096, buf, buf.Length);
+            if (rc <= 0)
+            {
+                System.Diagnostics.Debug.WriteLine($"[Dimmy] auto-recap LLM rc={rc}");
+                return;
+            }
+            var recap = Encoding.UTF8.GetString(buf, 0, rc).Trim();
+            if (string.IsNullOrWhiteSpace(recap)) return;
+
+            // Append the recap to whatever enhanced_text already has,
+            // separated by a visible header so the History detail can
+            // render both. If the dictation rewrite was empty, the
+            // recap stands alone.
+            var combined = string.IsNullOrWhiteSpace(enhanced)
+                ? "═════ Recap ═════\n\n" + recap
+                : enhanced + "\n\n═════ Recap ═════\n\n" + recap;
+            DimmyNative.dimmy_history_update_enhanced((int)topId.Value, combined);
+            System.Diagnostics.Debug.WriteLine($"[Dimmy] auto-recap saved ({recap.Length} chars)");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[Dimmy] auto-recap exc: {ex.Message}");
+        }
+    }
+
+    private static int ReadAutoRecapThreshold()
+    {
+        try
+        {
+            var cfgPath = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "dimmy", "config.json");
+            if (!System.IO.File.Exists(cfgPath)) return 60;
+            using var doc = System.Text.Json.JsonDocument.Parse(System.IO.File.ReadAllText(cfgPath));
+            return doc.RootElement.TryGetProperty("auto_recap_threshold_secs", out var el)
+                ? el.GetInt32()
+                : 60;
+        }
+        catch { return 60; }
     }
 }
 

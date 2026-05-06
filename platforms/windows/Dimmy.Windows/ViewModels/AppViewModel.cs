@@ -121,6 +121,12 @@ public partial class AppViewModel : ObservableObject
     /// hide the CaptionWindow and to keep its text in sync.
     public event Action<string, bool>? SttChunkReceived;
 
+    /// Fires when the Rust core emits a file_transcribe_progress
+    /// event during dimmy_transcribe_file. Args: (processed_secs,
+    /// total_secs, percent 0-100). Used by Settings → Home → file
+    /// load card to drive a determinate progress bar.
+    public event Action<double, double, double>? FileTranscribeProgress;
+
     public void HandleEvent(string? json)
     {
         if (string.IsNullOrEmpty(json)) return;
@@ -145,6 +151,14 @@ public partial class AppViewModel : ObservableObject
                         var isFinal = payload.GetProperty("is_final").GetBoolean();
                         LiveCaptionText = cumulative;
                         SttChunkReceived?.Invoke(cumulative, isFinal);
+                    }
+                    break;
+                case "file_transcribe_progress":
+                    {
+                        var processed = payload.GetProperty("processed_secs").GetDouble();
+                        var total = payload.GetProperty("total_secs").GetDouble();
+                        var percent = payload.GetProperty("percent").GetDouble();
+                        FileTranscribeProgress?.Invoke(processed, total, percent);
                     }
                     break;
                 case "recording_started":

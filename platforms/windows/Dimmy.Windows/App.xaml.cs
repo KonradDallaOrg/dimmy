@@ -407,6 +407,7 @@ public partial class App : Application
             {
                 if (command == "toggle-pill") { TogglePill(); return; }
                 if (command == "open-settings") { OpenSettings(); return; }
+                if (command == "open-meeting") { OpenMeetingWindow(); return; }
                 if (command == "quit") { Quit(); return; }
                 if (command.StartsWith("set-style:", StringComparison.Ordinal))
                 {

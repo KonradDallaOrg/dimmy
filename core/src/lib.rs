@@ -349,6 +349,14 @@ pub struct AppConfig {
     /// exceeded, the oldest files are deleted first until the size is
     /// back under this threshold. 0 disables size-based cleanup.
     pub history_audio_max_mb: u32,
+    /// When a dictation recording exceeds this many seconds, the
+    /// host (C#/Swift) should fire the meeting-style recap pipeline
+    /// in addition to the dictation rewrite. 0 disables auto-recap.
+    /// Read by TranscriptionService.StopAndProcessAsync; not used by
+    /// Rust directly (the recap call is driven from the host because
+    /// it shares the same dimmy_llm_call_raw FFI that the meeting
+    /// window already uses).
+    pub auto_recap_threshold_secs: u32,
     pub filler_removal_enabled: bool,
     // Local LLM fields
     pub llm_mode: String,        // "cloud" or "local"
@@ -416,6 +424,7 @@ impl Default for AppConfig {
             save_audio_in_history: false,
             history_audio_keep_days: 30,
             history_audio_max_mb: 5_000,
+            auto_recap_threshold_secs: 60,
             filler_removal_enabled: true,
             llm_mode: "cloud".to_string(),
             local_llm_model: local_llm::DEFAULT_LLM_MODEL.to_string(),
@@ -491,6 +500,7 @@ pub fn save_config_file(cfg: &AppConfig) {
             "save_audio_in_history": cfg.save_audio_in_history,
             "history_audio_keep_days": cfg.history_audio_keep_days,
             "history_audio_max_mb": cfg.history_audio_max_mb,
+            "auto_recap_threshold_secs": cfg.auto_recap_threshold_secs,
             "filler_removal_enabled": cfg.filler_removal_enabled,
             "llm_mode": cfg.llm_mode,
             "local_llm_model": cfg.local_llm_model,
@@ -619,6 +629,10 @@ pub fn load_config_file() -> AppConfig {
                         .as_u64()
                         .map(|n| n as u32)
                         .unwrap_or(defaults.history_audio_max_mb),
+                    auto_recap_threshold_secs: v["auto_recap_threshold_secs"]
+                        .as_u64()
+                        .map(|n| n as u32)
+                        .unwrap_or(defaults.auto_recap_threshold_secs),
                     filler_removal_enabled: v["filler_removal_enabled"]
                         .as_bool()
                         .unwrap_or(defaults.filler_removal_enabled),
@@ -850,6 +864,7 @@ pub struct AppState {
     pub save_audio_in_history: Mutex<bool>,
     pub history_audio_keep_days: Mutex<u32>,
     pub history_audio_max_mb: Mutex<u32>,
+    pub auto_recap_threshold_secs: Mutex<u32>,
     pub filler_removal_enabled: Mutex<bool>,
     // Local LLM state
     pub llm_mode: Mutex<String>,
@@ -960,6 +975,7 @@ impl AppState {
             save_audio_in_history: Mutex::new(file_cfg.save_audio_in_history),
             history_audio_keep_days: Mutex::new(file_cfg.history_audio_keep_days),
             history_audio_max_mb: Mutex::new(file_cfg.history_audio_max_mb),
+            auto_recap_threshold_secs: Mutex::new(file_cfg.auto_recap_threshold_secs),
             filler_removal_enabled: Mutex::new(file_cfg.filler_removal_enabled),
             llm_mode: Mutex::new(file_cfg.llm_mode),
             local_llm_model: Mutex::new(file_cfg.local_llm_model),
@@ -1077,6 +1093,10 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         .history_audio_max_mb
         .lock()
         .map_err(|e| e.to_string())?;
+    let auto_recap_threshold_secs = *state
+        .auto_recap_threshold_secs
+        .lock()
+        .map_err(|e| e.to_string())?;
     let filler_removal_enabled = *state
         .filler_removal_enabled
         .lock()
@@ -1112,6 +1132,7 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         save_audio_in_history,
         history_audio_keep_days,
         history_audio_max_mb,
+        auto_recap_threshold_secs,
         filler_removal_enabled,
         llm_mode: state.llm_mode.lock().map_err(|e| e.to_string())?.clone(),
         local_llm_model: state

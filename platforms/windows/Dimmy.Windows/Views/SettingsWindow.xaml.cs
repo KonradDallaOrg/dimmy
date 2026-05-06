@@ -63,8 +63,12 @@ public sealed partial class SettingsWindow : Window
         if (Application.Current is App app)
         {
             app.AppViewModel.ParakeetDownloadProgress += OnParakeetProgress;
+            app.AppViewModel.FileTranscribeProgress += OnFileTranscribeProgress;
             this.Closed += (_, __) =>
+            {
                 app.AppViewModel.ParakeetDownloadProgress -= OnParakeetProgress;
+                app.AppViewModel.FileTranscribeProgress -= OnFileTranscribeProgress;
+            };
         }
 
         LoadConfig();
@@ -243,6 +247,11 @@ public sealed partial class SettingsWindow : Window
         FileLoadProgress.IsActive = true;
         FileLoadProgress.Visibility = Visibility.Visible;
         FileLoadResult.Visibility = Visibility.Collapsed;
+        // Determinate bar starts at 0 — the first
+        // file_transcribe_progress event from Rust will land within ~30 s
+        // (one chunk window) and tick the bar forward.
+        FileLoadBar.Value = 0;
+        FileLoadBar.Visibility = Visibility.Visible;
         FileLoadStatus.Text = $"Transcribing {System.IO.Path.GetFileName(path)}...";
         FileLoadPickBtn.IsEnabled = false;
         try
@@ -269,6 +278,7 @@ public sealed partial class SettingsWindow : Window
                 var text = System.Text.Encoding.UTF8.GetString(buf, 0, rc);
                 FileLoadResult.Text = text;
                 FileLoadResult.Visibility = Visibility.Visible;
+                FileLoadBar.Value = 100;
                 FileLoadStatus.Text = $"{text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length} words. Saved to History.";
             }
         }
@@ -281,8 +291,20 @@ public sealed partial class SettingsWindow : Window
         {
             FileLoadProgress.IsActive = false;
             FileLoadProgress.Visibility = Visibility.Collapsed;
+            FileLoadBar.Visibility = Visibility.Collapsed;
             FileLoadPickBtn.IsEnabled = true;
         }
+    }
+
+    /// Progress event from Rust during chunked file transcribe.
+    /// Updates the determinate ProgressBar + status text. Fires on
+    /// the UI thread (AppViewModel.HandleEvent already marshals).
+    private void OnFileTranscribeProgress(double processedSecs, double totalSecs, double percent)
+    {
+        if (FileLoadBar.Visibility != Visibility.Visible) return;
+        FileLoadBar.Value = percent;
+        FileLoadStatus.Text =
+            $"Transcribing… {processedSecs:F0} / {totalSecs:F0} s ({percent:F0}%)";
     }
 
     // ── History ──────────────────────────────────────────────────────

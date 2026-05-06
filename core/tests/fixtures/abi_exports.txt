@@ -24,6 +24,7 @@ dimmy_history_search
 dimmy_history_stats
 dimmy_history_update_audio
 dimmy_history_update_enhanced
+dimmy_history_update_word_timestamps
 dimmy_hotkey_install
 dimmy_hotkey_poll_recording
 dimmy_hotkey_set

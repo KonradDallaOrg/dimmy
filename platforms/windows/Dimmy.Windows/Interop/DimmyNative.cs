@@ -160,6 +160,14 @@ public static class DimmyNative
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? path,
         long sizeBytes);
 
+    /// Set the word_timestamps JSON column for a history row.
+    /// Caller serialises `[{"word":"...","start_ms":N,"end_ms":N}]`.
+    /// Empty / null clears the field. Returns 0 on success, -1 on error.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_history_update_word_timestamps(
+        int id,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? json);
+
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_history_stats(byte[] buf, int len);
 

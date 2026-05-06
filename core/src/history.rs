@@ -32,9 +32,14 @@ pub struct Transcript {
     pub llm_translate_to: Option<String>,
     /// On-disk size of the saved WAV. 0 when no audio stored.
     pub size_bytes: i64,
+    /// JSON array of word-level timestamps:
+    /// `[{"word":"hello","start_ms":120,"end_ms":480},...]`. NULL
+    /// when the backend didn't emit them (current state — Whisper
+    /// + Parakeet extraction is a follow-up Phase).
+    pub word_timestamps: Option<String>,
 }
 
-/// Map a 13-column SELECT result into a `Transcript`. Used by both
+/// Map a 14-column SELECT result into a `Transcript`. Used by both
 /// `recent` and `search` so the column-index ↔ field mapping is in
 /// one place.
 fn row_to_transcript(row: &rusqlite::Row<'_>) -> rusqlite::Result<Transcript> {
@@ -52,6 +57,7 @@ fn row_to_transcript(row: &rusqlite::Row<'_>) -> rusqlite::Result<Transcript> {
         llm_style: row.get(10)?,
         llm_translate_to: row.get(11)?,
         size_bytes: row.get(12)?,
+        word_timestamps: row.get(13)?,
     })
 }
 
@@ -225,6 +231,10 @@ impl HistoryStore {
             ("llm_style",       "ADD COLUMN llm_style TEXT"),
             ("llm_translate_to","ADD COLUMN llm_translate_to TEXT"),
             ("size_bytes",      "ADD COLUMN size_bytes INTEGER NOT NULL DEFAULT 0"),
+            // Word-level timestamps as JSON array. Schema lands now;
+            // extraction from whisper.cpp segments + Parakeet TDT
+            // alignments is a follow-up Phase. NULL until wired.
+            ("word_timestamps", "ADD COLUMN word_timestamps TEXT"),
         ] {
             let exists: bool = conn
                 .query_row(
@@ -405,7 +415,7 @@ impl HistoryStore {
                 "SELECT id, text, language, timestamp, duration, word_count,
                         enhanced_text, audio_path, app_process_name,
                         app_bundle_id, llm_style, llm_translate_to,
-                        COALESCE(size_bytes, 0)
+                        COALESCE(size_bytes, 0), word_timestamps
                  FROM transcripts ORDER BY timestamp DESC LIMIT ?1",
             )
             .map_err(|e| format!("sqlite prepare: {e}"))?;
@@ -456,7 +466,7 @@ impl HistoryStore {
                 "SELECT t.id, t.text, t.language, t.timestamp, t.duration, t.word_count,
                         t.enhanced_text, t.audio_path, t.app_process_name,
                         t.app_bundle_id, t.llm_style, t.llm_translate_to,
-                        COALESCE(t.size_bytes, 0)
+                        COALESCE(t.size_bytes, 0), t.word_timestamps
                  FROM transcripts t
                  JOIN transcripts_fts f ON t.id = f.rowid
                  WHERE transcripts_fts MATCH ?1
@@ -496,6 +506,25 @@ impl HistoryStore {
                 params![opt, id],
             )
             .map_err(|e| format!("sqlite update_enhanced: {e}"))?;
+        if affected == 0 {
+            return Err(format!("no transcript with id {id}"));
+        }
+        Ok(())
+    }
+
+    /// Set / clear the word_timestamps JSON for a row. Empty / NULL
+    /// indicates the backend didn't emit them. Caller serialises the
+    /// `[{"word":..., "start_ms":..., "end_ms":...}, ...]` shape.
+    pub fn update_word_timestamps(&self, id: i64, json: &str) -> Result<(), String> {
+        assert!(id > 0, "update_word_timestamps() id must be positive, got {id}");
+        let conn = self.conn.lock().map_err(|e| format!("lock: {e}"))?;
+        let opt: Option<&str> = if json.trim().is_empty() { None } else { Some(json) };
+        let affected = conn
+            .execute(
+                "UPDATE transcripts SET word_timestamps = ?1 WHERE id = ?2",
+                params![opt, id],
+            )
+            .map_err(|e| format!("sqlite update_word_timestamps: {e}"))?;
         if affected == 0 {
             return Err(format!("no transcript with id {id}"));
         }

@@ -263,6 +263,7 @@ fn dimmy_init_inner() -> c_int {
         save_audio_in_history: Mutex::new(file_cfg.save_audio_in_history),
         history_audio_keep_days: Mutex::new(file_cfg.history_audio_keep_days),
         history_audio_max_mb: Mutex::new(file_cfg.history_audio_max_mb),
+        auto_recap_threshold_secs: Mutex::new(file_cfg.auto_recap_threshold_secs),
         filler_removal_enabled: Mutex::new(file_cfg.filler_removal_enabled),
         llm_mode: Mutex::new(file_cfg.llm_mode),
         local_llm_model: Mutex::new(file_cfg.local_llm_model),
@@ -1439,6 +1440,11 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
     }
     if let Some(n) = v["history_audio_max_mb"].as_u64() {
         if let Ok(mut f) = st.history_audio_max_mb.lock() {
+            *f = n as u32;
+        }
+    }
+    if let Some(n) = v["auto_recap_threshold_secs"].as_u64() {
+        if let Ok(mut f) = st.auto_recap_threshold_secs.lock() {
             *f = n as u32;
         }
     }
@@ -2810,6 +2816,7 @@ fn transcripts_to_json(transcripts: &[crate::history::Transcript]) -> String {
                 "llm_style": t.llm_style,
                 "llm_translate_to": t.llm_translate_to,
                 "size_bytes": t.size_bytes,
+                "word_timestamps": t.word_timestamps,
             })
         })
         .collect();
@@ -2941,6 +2948,37 @@ pub unsafe extern "C" fn dimmy_history_update_enhanced(
     if let Ok(guard) = st.history_store.lock() {
         if let Some(ref store) = *guard {
             return match store.update_enhanced(id as i64, text) {
+                Ok(_) => 0,
+                Err(_) => -1,
+            };
+        }
+    }
+    -1
+}
+
+/// Set the word_timestamps JSON column for a row. Caller serialises
+/// the `[{"word":...,"start_ms":...,"end_ms":...}, ...]` array.
+/// Empty/null clears the field. Returns 0 on success, -1 on error.
+///
+/// # Safety
+/// `json_ptr` must be a valid null-terminated UTF-8 C string (or null).
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_history_update_word_timestamps(
+    id: c_int,
+    json_ptr: *const c_char,
+) -> c_int {
+    let json = if json_ptr.is_null() {
+        ""
+    } else {
+        match CStr::from_ptr(json_ptr).to_str() {
+            Ok(s) => s,
+            Err(_) => return -1,
+        }
+    };
+    let st = state();
+    if let Ok(guard) = st.history_store.lock() {
+        if let Some(ref store) = *guard {
+            return match store.update_word_timestamps(id as i64, json) {
                 Ok(_) => 0,
                 Err(_) => -1,
             };
@@ -3205,20 +3243,83 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
         .lock()
         .map(|m| m.clone())
         .unwrap_or_else(|_| "ggml-base-q8_0.bin".to_string());
-    let result = if backend == "parakeet" {
-        log("[FileLoad] backend=parakeet");
-        crate::transcribe::transcribe_audio_local_parakeet(&processed)
-    } else {
-        log(&format!("[FileLoad] backend=whisper model={}", model));
-        crate::transcribe::transcribe_audio_local(&processed, &language, &model)
-    };
-    let text = match result {
-        Ok(t) => t,
-        Err(e) => {
-            log(&format!("[FileLoad] transcribe failed: {}", e));
-            return -5;
+    // Emit a starting event so the UI can flip its progress bar
+    // from indeterminate to 0 % the moment we begin work.
+    let total_secs = raw_samples_for_history.len() as f64 / spec.sample_rate as f64;
+    emit_event(
+        "file_transcribe_progress",
+        &serde_json::json!({
+            "processed_secs": 0.0,
+            "total_secs": total_secs,
+            "percent": 0.0,
+        })
+        .to_string(),
+    );
+
+    // Chunk the preprocessed audio so we can emit per-chunk progress
+    // events. 30-second windows give a smooth percent indicator
+    // without too many model wakeups; falling back to a single chunk
+    // on short files (≤ 35 s) keeps the existing fast path.
+    const CHUNK_MAX_SECS: usize = 30;
+    let max_chunk_samples = CHUNK_MAX_SECS * processed.sample_rate as usize;
+    let chunks = processed.split_at_silence(max_chunk_samples);
+    let n_chunks = chunks.len();
+    log(&format!(
+        "[FileLoad] backend={} model={} → {} chunk(s)",
+        backend, model, n_chunks
+    ));
+
+    let mut transcript_acc = String::new();
+    let chunk_secs = CHUNK_MAX_SECS as f64;
+    for (idx, chunk) in chunks.into_iter().enumerate() {
+        let result = if backend == "parakeet" {
+            crate::transcribe::transcribe_audio_local_parakeet(&chunk)
+        } else {
+            crate::transcribe::transcribe_audio_local(&chunk, &language, &model)
+        };
+        match result {
+            Ok(text) => {
+                let delta =
+                    crate::chunked_stt::dedup_last_3_words(&transcript_acc, &text);
+                if !delta.is_empty() {
+                    if !transcript_acc.is_empty() && !transcript_acc.ends_with(' ') {
+                        transcript_acc.push(' ');
+                    }
+                    transcript_acc.push_str(&delta);
+                }
+            }
+            Err(e) => {
+                log(&format!(
+                    "[FileLoad] chunk {} of {} failed: {}",
+                    idx + 1, n_chunks, e
+                ));
+                // Continue — one bad chunk shouldn't kill the whole
+                // file. Empty chunks are normal (long silence).
+            }
         }
-    };
+        // Best-effort progress: assume even-sized chunks. The user
+        // sees a smoothly advancing bar even if the last chunk is
+        // shorter than the rest.
+        let processed_secs = ((idx + 1) as f64 * chunk_secs).min(total_secs);
+        let percent = (processed_secs / total_secs.max(0.001) * 100.0).min(100.0);
+        emit_event(
+            "file_transcribe_progress",
+            &serde_json::json!({
+                "processed_secs": processed_secs,
+                "total_secs": total_secs,
+                "percent": percent,
+                "chunk_index": idx + 1,
+                "chunk_total": n_chunks,
+            })
+            .to_string(),
+        );
+    }
+
+    if transcript_acc.trim().is_empty() {
+        log("[FileLoad] all chunks produced empty transcripts");
+        return -5;
+    }
+    let text = transcript_acc;
 
     // Auto-save to history (v1 schema on this branch). When the
     // history-v2 branch lands the merge will switch this to save_v2
@@ -4393,6 +4494,7 @@ mod tests {
                 save_audio_in_history: Mutex::new(false),
                 history_audio_keep_days: Mutex::new(30),
                 history_audio_max_mb: Mutex::new(5_000),
+                auto_recap_threshold_secs: Mutex::new(60),
                 filler_removal_enabled: Mutex::new(true),
                 llm_mode: Mutex::new("cloud".to_string()),
                 local_llm_model: Mutex::new(crate::local_llm::DEFAULT_LLM_MODEL.to_string()),
