@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Text.Json;
 using CommunityToolkit.Mvvm.ComponentModel;
 
@@ -117,6 +118,13 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _preprocessingEnabled = true;
     [ObservableProperty] private bool _chunkStreamingEnabled;
     [ObservableProperty] private bool _liveCaptionsEnabled = true;
+
+    /// User-defined app rules. Round-tripped through config.json's
+    /// `app_rules` array. The Rust core reads this list at LLM-enhance
+    /// time and applies the first-match override to llm_style /
+    /// llm_translate_to. Drag-reorder in the Settings UI maps to list
+    /// order = priority.
+    public ObservableCollection<AppRuleViewModel> AppRules { get; } = new();
     [ObservableProperty] private bool _useKeyring = false;
     [ObservableProperty] private bool _llmEnabled;
     [ObservableProperty] private string _llmApiUrl = "";
@@ -283,6 +291,7 @@ public partial class SettingsViewModel : ObservableObject
             PreprocessingEnabled = !r.TryGetProperty("preprocessing_enabled", out var pe) || pe.GetBoolean();
             ChunkStreamingEnabled = r.TryGetProperty("chunk_streaming_enabled", out var cs) && cs.GetBoolean();
             LiveCaptionsEnabled = !r.TryGetProperty("live_captions_enabled", out var lce) || lce.GetBoolean();
+            LoadAppRulesFromJson(r);
             UseKeyring = false;  // Always local encrypted file, ignore stored value
             LlmEnabled = r.TryGetProperty("llm_enabled", out var le) && le.GetBoolean();
             LlmApiUrl = r.TryGetProperty("llm_api_url", out var lu) ? lu.GetString() ?? "" : "";
@@ -382,7 +391,57 @@ public partial class SettingsViewModel : ObservableObject
         if (!string.IsNullOrEmpty(ApiKey)) dict["api_key"] = ApiKey;
         if (!string.IsNullOrEmpty(LlmApiKey)) dict["llm_api_key"] = LlmApiKey;
 
+        // app_rules — serialized as a JSON array matching the Rust
+        // `Vec<AppRule>` shape. Empty translate is encoded as null
+        // (semantically distinct from "" which means "force off").
+        var rules = new List<Dictionary<string, object?>>();
+        foreach (var r in AppRules)
+        {
+            rules.Add(new Dictionary<string, object?>
+            {
+                ["match_pattern"] = r.MatchPattern,
+                ["match_type"] = r.MatchType,
+                ["llm_style"] = r.LlmStyle,
+                ["llm_translate_to"] = string.IsNullOrEmpty(r.LlmTranslateTo) ? null : r.LlmTranslateTo,
+                ["label"] = r.Label,
+                ["enabled"] = r.Enabled,
+            });
+        }
+        dict["app_rules"] = rules;
+
         return JsonSerializer.Serialize(dict);
+    }
+
+    private void LoadAppRulesFromJson(JsonElement r)
+    {
+        AppRules.Clear();
+        if (!r.TryGetProperty("app_rules", out var arr) || arr.ValueKind != JsonValueKind.Array)
+            return;
+        foreach (var el in arr.EnumerateArray())
+        {
+            var pattern = el.TryGetProperty("match_pattern", out var p) ? p.GetString() ?? "" : "";
+            var matchType = el.TryGetProperty("match_type", out var mt) ? mt.GetString() ?? "process_name" : "process_name";
+            var style = el.TryGetProperty("llm_style", out var s) ? s.GetString() ?? "off" : "off";
+            string translate = "";
+            if (el.TryGetProperty("llm_translate_to", out var tt) && tt.ValueKind == JsonValueKind.String)
+                translate = tt.GetString() ?? "";
+            var label = el.TryGetProperty("label", out var l) ? l.GetString() ?? "" : "";
+            var enabled = !el.TryGetProperty("enabled", out var en) || en.GetBoolean();
+            AppRules.Add(new AppRuleViewModel(pattern, matchType, style, translate, label, enabled));
+        }
+    }
+
+    /// Drop the current rule list and load the v1 defaults bundled with
+    /// the app. Used by the "Load defaults" button. Designed to be safe
+    /// to call repeatedly — replaces, doesn't merge — because users who
+    /// click it a second time after editing usually want a clean reset.
+    /// Future versions will introduce a "Sync v2 defaults" button that
+    /// merges by pattern, leaving custom edits alone.
+    public void LoadAppRulesDefaults()
+    {
+        AppRules.Clear();
+        foreach (var r in AppRulesDefaults.V1Windows)
+            AppRules.Add(r);
     }
 
     /// <summary>

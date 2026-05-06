@@ -728,6 +728,30 @@ public partial class App : Application
         catch (Exception ex) { PttLog($"LoadConfig: parse error: {ex.Message}"); }
     }
 
+    /// Snapshot the foreground app's process name and push it to the
+    /// Rust core. The Rust matcher uses it later (LLM-enhance time) to
+    /// resolve any user-defined app_rules. Empty string is fine — Rust
+    /// treats it as "no rule matches" and falls back to user defaults.
+    private void CaptureAndPushAppContext()
+    {
+        try
+        {
+            var procName = Helpers.AppContextCapture.GetForegroundProcessName();
+            // Bundle id + wm_class are macOS / Linux specific — leave
+            // empty on Windows. The Rust core matches first-non-empty.
+            var json = "{\"process_name\":\""
+                + System.Text.Json.JsonEncodedText.Encode(procName).ToString()
+                + "\",\"bundle_id\":\"\",\"wm_class\":\"\"}";
+            var rc = DimmyNative.dimmy_set_app_context(json);
+            if (rc != 0)
+                PttLog($"set_app_context returned {rc} for '{procName}'");
+        }
+        catch (Exception ex)
+        {
+            PttLog($"app context capture failed: {ex.Message}");
+        }
+    }
+
     private void OnHotkeyPressed()
     {
         _dispatcherQueue?.TryEnqueue(async () =>
@@ -745,6 +769,11 @@ public partial class App : Application
                 // PTT: press starts recording
                 if (!_appViewModel.IsBusy && !_pttStarted)
                 {
+                    // Snapshot foreground app BEFORE start_recording —
+                    // by the time Rust applies app_rules at LLM-enhance
+                    // time the focus may have moved to Dimmy itself or
+                    // wherever the paste landed.
+                    CaptureAndPushAppContext();
                     _pendingStop = false; // clear before starting
                     _pttStarted = true;
                     _appViewModel.SuppressRecordingStarted = false; // allow recording_started event
@@ -788,6 +817,7 @@ public partial class App : Application
                     await StopAndProcess();
                 else if (!_appViewModel.IsBusy && !_stopInProgress)
                 {
+                    CaptureAndPushAppContext();
                     _appViewModel.SuppressRecordingStarted = false; // ensure Rust event is accepted
                     var result = DimmyNative.dimmy_start_recording();
                     if (result == -1)
