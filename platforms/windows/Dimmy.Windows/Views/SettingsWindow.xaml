@@ -1119,45 +1119,47 @@
                   <ListView.ItemTemplate>
                     <DataTemplate>
                       <Grid ColumnSpacing="8" Padding="14,10" >
+                        <!-- Order: icon, pattern (compact), match type,
+                             style, translate, ENABLE TOGGLE, delete.
+                             Toggle moved to the right (just before
+                             delete) so the row reads left-to-right
+                             "what app → what to do → on/off → remove".
+                             Pattern shrunk from 2* to 1.4* — exe names
+                             are short and the field was eating layout. -->
                         <Grid.ColumnDefinitions>
-                          <ColumnDefinition Width="Auto"/>      <!-- enabled toggle -->
                           <ColumnDefinition Width="Auto"/>      <!-- icon -->
-                          <ColumnDefinition Width="2*"/>        <!-- pattern -->
+                          <ColumnDefinition Width="1.4*"/>      <!-- pattern -->
                           <ColumnDefinition Width="1.4*"/>      <!-- match type -->
                           <ColumnDefinition Width="1.6*"/>      <!-- style -->
                           <ColumnDefinition Width="1.4*"/>      <!-- translate -->
+                          <ColumnDefinition Width="Auto"/>      <!-- enabled toggle -->
                           <ColumnDefinition Width="Auto"/>      <!-- delete -->
                         </Grid.ColumnDefinitions>
-                        <ToggleSwitch Grid.Column="0"
-                                      IsOn="{Binding Enabled, Mode=TwoWay}"
-                                      OnContent="" OffContent="" MinWidth="0"/>
-                        <Grid Grid.Column="1" Width="32" Height="32"
-                              VerticalAlignment="Center" Margin="2,0,6,0">
+                        <Grid Grid.Column="0" Width="24" Height="24"
+                              VerticalAlignment="Center" Margin="2,0,4,0">
                           <!-- Real Windows icon extracted from the .exe
-                               at 256×256 via IShellItemImageFactory,
-                               cached as PNG; the Image control
-                               downscales to 32 with bilinear filtering
-                               so even apps with mediocre source icons
-                               look crisp. Segoe Fluent glyph fallback
-                               when no exe has been seen for this rule. -->
-                          <Image Width="32" Height="32"
+                               at 256×256 via IShellItemImageFactory.
+                               Displayed at 24 px to match the remote
+                               model combo icons; cell size cut from 32
+                               so the row chrome doesn't dominate. -->
+                          <Image Width="24" Height="24"
                                  Source="{Binding IconAssetUri, Mode=OneWay}"
                                  Visibility="{Binding IconAssetUri, Mode=OneWay, Converter={StaticResource NotNullToVisibilityConverter}}"/>
                           <FontIcon Glyph="{Binding IconGlyph, Mode=OneWay}"
-                                    FontSize="22"
+                                    FontSize="16"
                                     Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
                                     Visibility="{Binding IconAssetUri, Mode=OneWay, Converter={StaticResource NotNullToVisibilityConverter}, ConverterParameter=Invert}"/>
                         </Grid>
-                        <TextBox Grid.Column="2"
+                        <TextBox Grid.Column="1"
                                  Text="{Binding MatchPattern, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                  PlaceholderText="slack.exe" />
-                        <ComboBox Grid.Column="3" SelectedValue="{Binding MatchType, Mode=TwoWay}"
+                        <ComboBox Grid.Column="2" SelectedValue="{Binding MatchType, Mode=TwoWay}"
                                   SelectedValuePath="Tag" HorizontalAlignment="Stretch">
                           <ComboBoxItem Tag="process_name" Content="Process (Win)"/>
                           <ComboBoxItem Tag="bundle_id" Content="Bundle (Mac)"/>
                           <ComboBoxItem Tag="wm_class" Content="WM_CLASS (Linux)"/>
                         </ComboBox>
-                        <ComboBox Grid.Column="4" SelectedValue="{Binding LlmStyle, Mode=TwoWay}"
+                        <ComboBox Grid.Column="3" SelectedValue="{Binding LlmStyle, Mode=TwoWay}"
                                   SelectedValuePath="Tag" HorizontalAlignment="Stretch">
                           <ComboBoxItem Tag="off"            Content="Off (no LLM)"/>
                           <ComboBoxItem Tag="correct"        Content="Correct"/>
@@ -1172,7 +1174,7 @@
                           <ComboBoxItem Tag="imbruttito"     Content="Imbruttito"/>
                           <ComboBoxItem Tag="prompt"         Content="Custom prompt"/>
                         </ComboBox>
-                        <ComboBox Grid.Column="5" SelectedValue="{Binding LlmTranslateTo, Mode=TwoWay}"
+                        <ComboBox Grid.Column="4" SelectedValue="{Binding LlmTranslateTo, Mode=TwoWay}"
                                   SelectedValuePath="Tag" HorizontalAlignment="Stretch">
                           <ComboBoxItem Tag=""    Content="No translation"/>
                           <ComboBoxItem Tag="en"  Content="→ English"/>
@@ -1182,6 +1184,11 @@
                           <ComboBoxItem Tag="de"  Content="→ Deutsch"/>
                           <ComboBoxItem Tag="pt"  Content="→ Português"/>
                         </ComboBox>
+                        <ToggleSwitch Grid.Column="5"
+                                      IsOn="{Binding Enabled, Mode=TwoWay}"
+                                      OnContent="" OffContent="" MinWidth="0"
+                                      VerticalAlignment="Center"
+                                      ToolTipService.ToolTip="Enable rule"/>
                         <Button Grid.Column="6"
                                 Click="AppRuleDelete_Click"
                                 Tag="{Binding}"
@@ -1917,22 +1924,18 @@
     </NavigationView>
 
     <!-- Footer -->
-    <Grid Grid.Row="1" Margin="16">
-      <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="*" />
-        <ColumnDefinition Width="Auto" />
-      </Grid.ColumnDefinitions>
-      <!-- Auto-save InfoBar — appears briefly when a setting is changed so
-           the user gets confirmation that the change persisted. Win11-native
-           pattern; pairs with the existing Save button for explicit commits. -->
-      <InfoBar x:Name="SavedInfoBar" Grid.Column="0"
+    <!-- Bottom action bar: the auto-save badge sits flush-right next
+         to Cancel/Save instead of stretching the full bottom strip
+         and overlapping the sidebar's "Advanced mode" toggle when
+         the window is narrowed. -->
+    <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8"
+                HorizontalAlignment="Right" Margin="16">
+      <InfoBar x:Name="SavedInfoBar"
                IsOpen="False" IsClosable="False" Severity="Success"
                Message="Saved"
-               HorizontalAlignment="Left" VerticalAlignment="Center" />
-      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
-        <Button Content="Cancel" Click="Cancel_Click" />
-        <Button Content="Save" Click="Save_Click" Style="{ThemeResource AccentButtonStyle}" />
-      </StackPanel>
-    </Grid>
+               VerticalAlignment="Center" />
+      <Button Content="Cancel" Click="Cancel_Click" />
+      <Button Content="Save" Click="Save_Click" Style="{ThemeResource AccentButtonStyle}" />
+    </StackPanel>
   </Grid>
 </Window>
