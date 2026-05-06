@@ -96,6 +96,12 @@ public sealed partial class SettingsWindow : Window
         _loaded = true;
     }
 
+    private void OpenMeeting_Click(object sender, RoutedEventArgs e)
+    {
+        App.Log("OpenMeeting_Click fired", "Meeting");
+        App.Instance?.OpenMeetingWindow();
+    }
+
     private void LoadConfig()
     {
         // Read from config.json file first — it has all fields including UI-only ones

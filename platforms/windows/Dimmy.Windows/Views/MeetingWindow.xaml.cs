@@ -25,14 +25,40 @@ public sealed partial class MeetingWindow : Window
 
     public MeetingWindow()
     {
+        App.Log("ctor enter", "Meeting");
         this.InitializeComponent();
         Title = "Dimmy — Meeting";
-        var appWindow = WindowHelper.GetAppWindow(this);
-        WindowHelper.ResizeLogical(this, 720, 640);
-        if (appWindow?.Presenter is OverlappedPresenter presenter)
+        try
         {
-            presenter.IsResizable = true;
-            presenter.IsMaximizable = true;
+            var appWindow = WindowHelper.GetAppWindow(this);
+            WindowHelper.ResizeLogical(this, 720, 640);
+            if (appWindow?.Presenter is OverlappedPresenter presenter)
+            {
+                presenter.IsResizable = true;
+                presenter.IsMaximizable = true;
+                presenter.Restore(); // ensure not minimized
+            }
+            // Centre on the primary display so the window doesn't open
+            // off-screen (a known WinUI 3 quirk on multi-monitor setups
+            // that have a non-primary monitor with negative coords).
+            if (appWindow != null)
+            {
+                var da = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(
+                    appWindow.Id, Microsoft.UI.Windowing.DisplayAreaFallback.Primary);
+                if (da != null)
+                {
+                    int w = appWindow.Size.Width;
+                    int h = appWindow.Size.Height;
+                    int x = da.WorkArea.X + (da.WorkArea.Width - w) / 2;
+                    int y = da.WorkArea.Y + (da.WorkArea.Height - h) / 2;
+                    appWindow.Move(new global::Windows.Graphics.PointInt32(x, y));
+                }
+            }
+            App.Log($"ctor done — appWindow={(appWindow != null)}", "Meeting");
+        }
+        catch (Exception ex)
+        {
+            App.Log($"ctor EXC: {ex}", "Meeting");
         }
         Closed += (_, __) => StopPolling();
     }

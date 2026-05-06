@@ -905,15 +905,28 @@ public partial class App : Application
     /// and from the Settings home → Meeting card.
     public void OpenMeetingWindow()
     {
-        if (_meetingWindow == null)
+        Log("OpenMeetingWindow called", "Meeting");
+        try
         {
-            _meetingWindow = new MeetingWindow();
-            _meetingWindow.Closed += (_, __) => _meetingWindow = null;
+            if (_meetingWindow == null)
+            {
+                _meetingWindow = new MeetingWindow();
+                _meetingWindow.Closed += (_, __) => _meetingWindow = null;
+            }
             _meetingWindow.Activate();
+            // Bring to foreground — Activate() alone doesn't always
+            // raise above other apps on Win11 if some other process
+            // recently called SetForegroundWindow.
+            var hwnd = WindowHelper.GetHwnd(_meetingWindow);
+            if (hwnd != IntPtr.Zero)
+            {
+                SetForegroundWindow(hwnd);
+            }
+            Log($"OpenMeetingWindow activated, hwnd={hwnd}", "Meeting");
         }
-        else
+        catch (Exception ex)
         {
-            _meetingWindow.Activate();
+            Log($"OpenMeetingWindow EXC: {ex}", "Meeting");
         }
     }
 

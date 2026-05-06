@@ -139,6 +139,31 @@
                 </Grid>
               </Border>
 
+              <!-- Meeting mode launcher — long-form recording with
+                   streaming-to-disk + post-process recap + actions. -->
+              <TextBlock Text="MEETING MODE"
+                         FontSize="12" FontWeight="SemiBold"
+                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                         CharacterSpacing="40" Margin="2,20,0,8" />
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="4" Padding="20,16">
+                <StackPanel Spacing="8">
+                  <TextBlock Text="Record a meeting" FontSize="16" FontWeight="SemiBold" />
+                  <TextBlock TextWrapping="Wrap"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                             Text="Streamed to disk so a multi-hour session won't fill RAM. Live transcript every ~15 s. On stop, the LLM produces a recap + action items (when an LLM key is configured)." />
+                  <Button x:Name="OpenMeetingBtn" Click="OpenMeeting_Click"
+                          Style="{ThemeResource AccentButtonStyle}"
+                          Margin="0,4,0,0">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <FontIcon Glyph="&#xE7C8;" FontSize="14"/>
+                      <TextBlock Text="Open meeting window" />
+                    </StackPanel>
+                  </Button>
+                </StackPanel>
+              </Border>
+
               <!-- Quick stats: bordered card with two big numbers — visually
                    distinct from setting rows so it reads as a dashboard. -->
               <TextBlock Text="YOUR DICTATION"
