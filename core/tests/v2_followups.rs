@@ -142,8 +142,16 @@ mod app_rules_resolve {
     #[test]
     fn first_enabled_match_wins_even_with_later_more_specific_rule() {
         let rules = vec![
-            rule("com.tinyspeck.slackmacgap", MatchType::BundleId, "imbruttito"),
-            rule("com.tinyspeck.slackmacgap", MatchType::BundleId, "professional"),
+            rule(
+                "com.tinyspeck.slackmacgap",
+                MatchType::BundleId,
+                "imbruttito",
+            ),
+            rule(
+                "com.tinyspeck.slackmacgap",
+                MatchType::BundleId,
+                "professional",
+            ),
         ];
         let mut ctx = AppContext::default();
         ctx.bundle_id = "com.tinyspeck.slackmacgap".to_string();
@@ -232,10 +240,8 @@ fn ffi_app_rules_set_app_context_smoke() {
     );
     unsafe { dimmy_clear_app_context() };
 
-    let json = CString::new(
-        r#"{"process_name":"","bundle_id":"com.example.notes","wm_class":""}"#,
-    )
-    .unwrap();
+    let json = CString::new(r#"{"process_name":"","bundle_id":"com.example.notes","wm_class":""}"#)
+        .unwrap();
     let rc = unsafe { dimmy_set_app_context(json.as_ptr()) };
     assert_eq!(rc, 0, "set_app_context succeeded");
 

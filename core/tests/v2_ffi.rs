@@ -115,8 +115,10 @@ fn set_config(json: &str) {
 #[serial]
 fn app_context_set_and_clear_round_trip_does_not_crash() {
     ensure_init();
-    let json = CString::new(r#"{"process_name":"","bundle_id":"com.tinyspeck.slackmacgap","wm_class":""}"#)
-        .unwrap();
+    let json = CString::new(
+        r#"{"process_name":"","bundle_id":"com.tinyspeck.slackmacgap","wm_class":""}"#,
+    )
+    .unwrap();
     let rc = unsafe { dimmy_set_app_context(json.as_ptr()) };
     assert_eq!(rc, 0, "set_app_context should accept a well-formed JSON");
 
@@ -226,7 +228,11 @@ fn transcribe_file_rejects_missing_path() {
             buf.len() as c_int,
         )
     };
-    assert!(n < 0, "missing file must return a negative error, got {}", n);
+    assert!(
+        n < 0,
+        "missing file must return a negative error, got {}",
+        n
+    );
 }
 
 #[test]
@@ -271,7 +277,11 @@ fn history_update_enhanced_round_trip() {
     let text = CString::new("raw transcript line").unwrap();
     let lang = CString::new("en").unwrap();
     let id = unsafe { dimmy_history_save(text.as_ptr(), lang.as_ptr(), 1.5) };
-    assert!(id > 0, "history_save should return a positive id, got {}", id);
+    assert!(
+        id > 0,
+        "history_save should return a positive id, got {}",
+        id
+    );
 
     let enhanced = CString::new("enhanced rewrite").unwrap();
     let rc = unsafe { dimmy_history_update_enhanced(id, enhanced.as_ptr()) };
@@ -303,7 +313,10 @@ fn history_update_audio_round_trip() {
 
     // Null path = unlink — sanity-check the contract.
     let rc = unsafe { dimmy_history_update_audio(id, std::ptr::null(), 0) };
-    assert_eq!(rc, 0, "update_audio(null) should succeed (unlinks audio_path)");
+    assert_eq!(
+        rc, 0,
+        "update_audio(null) should succeed (unlinks audio_path)"
+    );
 }
 
 #[test]
@@ -488,10 +501,7 @@ fn config_persists_to_disk_so_next_launch_sees_v2_fields() {
 #[serial]
 fn meeting_save_post_process_writes_recap_and_actions_files() {
     ensure_init();
-    let tmp = std::env::temp_dir().join(format!(
-        "dimmy-test-meeting-{}",
-        std::process::id()
-    ));
+    let tmp = std::env::temp_dir().join(format!("dimmy-test-meeting-{}", std::process::id()));
     std::fs::create_dir_all(&tmp).expect("mkdir tmp meeting dir");
 
     let dir_c = CString::new(tmp.to_string_lossy().as_ref()).unwrap();
