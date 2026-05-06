@@ -20,6 +20,10 @@
     <Compile Include="..\Dimmy.Windows\ViewModels\AppViewModel.cs" Link="ViewModels\AppViewModel.cs" />
     <Compile Include="..\Dimmy.Windows\ViewModels\SettingsViewModel.cs" Link="ViewModels\SettingsViewModel.cs" />
     <Compile Include="..\Dimmy.Windows\ViewModels\OnboardingViewModel.cs" Link="ViewModels\OnboardingViewModel.cs" />
+    <Compile Include="..\Dimmy.Windows\ViewModels\AppRuleViewModel.cs" Link="ViewModels\AppRuleViewModel.cs" />
+    <Compile Include="..\Dimmy.Windows\ViewModels\HistoryItemViewModel.cs" Link="ViewModels\HistoryItemViewModel.cs" />
+    <Compile Include="..\Dimmy.Windows\ViewModels\AppRulesDefaults.cs" Link="ViewModels\AppRulesDefaults.cs" />
+    <Compile Include="..\Dimmy.Windows\Helpers\IconExtractor.cs" Link="Helpers\IconExtractor.cs" />
     <Compile Include="..\Dimmy.Windows\Services\HotkeyParser.cs" Link="Services\HotkeyParser.cs" />
     <Compile Include="..\Dimmy.Windows\Services\TranscriptionService.cs" Link="Services\TranscriptionService.cs" />
     <Compile Include="..\Dimmy.Windows\Interop\DimmyNative.cs" Link="Interop\DimmyNative.cs" />

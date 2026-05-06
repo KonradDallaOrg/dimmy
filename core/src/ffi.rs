@@ -2257,6 +2257,9 @@ pub unsafe extern "C" fn dimmy_meeting_start(out_buf: *mut c_char, buf_len: c_in
 /// call dimmy_meeting_save_post_process to persist the recap +
 /// actions. Returns the byte length of the JSON, or -1 if no
 /// meeting is active.
+///
+/// # Safety
+/// `out_buf` must be a valid writable buffer of `buf_len` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn dimmy_meeting_stop(out_buf: *mut c_char, buf_len: c_int) -> c_int {
     if out_buf.is_null() || buf_len <= 0 {
@@ -2352,6 +2355,9 @@ pub unsafe extern "C" fn dimmy_meeting_save_post_process(
 /// marker (i.e. crashed before clean stop). UI surfaces this as a
 /// "recover meeting?" prompt at startup. Returns the byte length of
 /// the JSON, or -1 on buffer-too-small.
+///
+/// # Safety
+/// `out_buf` must be a valid writable buffer of `buf_len` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn dimmy_meeting_list_orphans(out_buf: *mut c_char, buf_len: c_int) -> c_int {
     if out_buf.is_null() || buf_len <= 0 {
