@@ -15,37 +15,49 @@ namespace Dimmy.Windows.Helpers;
 /// matches" — same path as the no-foreground case.
 public static class AppContextCapture
 {
+    public readonly record struct ForegroundApp(string ProcessName, string ExePath)
+    {
+        public bool HasValue => !string.IsNullOrEmpty(ProcessName);
+        public static ForegroundApp Empty => new("", "");
+    }
+
     /// Returns the basename of the foreground window's process executable
     /// (e.g. "slack.exe", "code.exe"), lowercased. Empty string when the
     /// foreground window can't be identified.
     public static string GetForegroundProcessName()
+        => GetForegroundApp().ProcessName;
+
+    /// Returns both the basename and the full executable path of the
+    /// foreground process. The full path lets us extract the real
+    /// taskbar icon via SHGetFileInfo (see IconExtractor).
+    public static ForegroundApp GetForegroundApp()
     {
         try
         {
             var hwnd = GetForegroundWindow();
-            if (hwnd == IntPtr.Zero) return "";
+            if (hwnd == IntPtr.Zero) return ForegroundApp.Empty;
 
             uint pid = 0;
             GetWindowThreadProcessId(hwnd, out pid);
-            if (pid == 0) return "";
+            if (pid == 0) return ForegroundApp.Empty;
 
             // PROCESS_QUERY_LIMITED_INFORMATION (0x1000) is enough for
             // QueryFullProcessImageName and works against UAC-elevated
             // processes from a non-elevated caller; PROCESS_QUERY_INFORMATION
             // would deny.
             var hProc = OpenProcess(0x1000, false, pid);
-            if (hProc == IntPtr.Zero) return "";
+            if (hProc == IntPtr.Zero) return ForegroundApp.Empty;
 
             try
             {
                 var sb = new StringBuilder(1024);
                 int len = sb.Capacity;
                 if (!QueryFullProcessImageName(hProc, 0, sb, ref len))
-                    return "";
+                    return ForegroundApp.Empty;
                 var path = sb.ToString(0, len);
-                if (string.IsNullOrEmpty(path)) return "";
+                if (string.IsNullOrEmpty(path)) return ForegroundApp.Empty;
                 var name = System.IO.Path.GetFileName(path);
-                return name?.ToLowerInvariant() ?? "";
+                return new ForegroundApp(name?.ToLowerInvariant() ?? "", path);
             }
             finally
             {
@@ -54,7 +66,7 @@ public static class AppContextCapture
         }
         catch
         {
-            return "";
+            return ForegroundApp.Empty;
         }
     }
 

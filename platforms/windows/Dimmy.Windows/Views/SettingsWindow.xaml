@@ -1116,14 +1116,13 @@
                                       OnContent="" OffContent="" MinWidth="0"/>
                         <Grid Grid.Column="1" Width="22" Height="22"
                               VerticalAlignment="Center" Margin="2,0,4,0">
-                          <!-- Brand SVG when bundled in Assets/AppIcons,
-                               Segoe Fluent fallback otherwise. -->
+                          <!-- Real Windows icon extracted from the .exe
+                               (SHGetFileInfo, cached as PNG); Segoe
+                               Fluent glyph as fallback when no exe has
+                               been seen yet for this process. -->
                           <Image Width="22" Height="22"
-                                 Visibility="{Binding IconAssetUri, Mode=OneWay, Converter={StaticResource NotNullToVisibilityConverter}}">
-                            <Image.Source>
-                              <SvgImageSource UriSource="{Binding IconAssetUri, Mode=OneWay}"/>
-                            </Image.Source>
-                          </Image>
+                                 Source="{Binding IconAssetUri, Mode=OneWay}"
+                                 Visibility="{Binding IconAssetUri, Mode=OneWay, Converter={StaticResource NotNullToVisibilityConverter}}"/>
                           <FontIcon Glyph="{Binding IconGlyph, Mode=OneWay}"
                                     FontSize="18"
                                     Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"

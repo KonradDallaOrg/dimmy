@@ -6,7 +6,10 @@ namespace Dimmy.Windows.ViewModels;
 /// `core/src/app_rules.rs::AppRule` for two-way XAML binding.
 public partial class AppRuleViewModel : ObservableObject
 {
-    [ObservableProperty] private string _matchPattern = "";
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IconGlyph))]
+    [NotifyPropertyChangedFor(nameof(IconAssetUri))]
+    private string _matchPattern = "";
     [ObservableProperty] private string _matchType = "process_name";
     [ObservableProperty] private string _llmStyle = "off";
     [ObservableProperty] private string _llmTranslateTo = "";
@@ -17,46 +20,21 @@ public partial class AppRuleViewModel : ObservableObject
     /// Used as the fallback when no SVG brand asset matches.
     public string IconGlyph => InferIconGlyph(MatchPattern);
 
-    /// Path to a bundled brand SVG (SimpleIcons-style) under
-    /// Assets/AppIcons/ when one exists for this process name. Empty
-    /// when no brand match — the XAML row template then renders the
-    /// fallback FontIcon (IconGlyph). Future: SHGetFileInfo runtime
-    /// extraction for arbitrary user-added rules.
-    public string IconAssetUri => InferIconAssetUri(MatchPattern);
+    /// file:/// URI of the cached PNG extracted from the real .exe of
+    /// this process (see Helpers/IconExtractor). Empty when the icon
+    /// hasn't been extracted yet — the XAML row template falls back
+    /// to FontIcon (IconGlyph). The cache is populated:
+    ///   • on every hotkey press for whichever app was foreground
+    ///     (App.xaml.cs::CaptureAndPushAppContext), and
+    ///   • by a warm-up pass over Process.GetProcesses() at Settings
+    ///     window open (see SettingsWindow.WarmUpAppIcons).
+    public string IconAssetUri => Helpers.IconExtractor.TryGetCachedUri(MatchPattern);
 
-    private static string InferIconAssetUri(string pattern)
-    {
-        var p = (pattern ?? "").ToLowerInvariant();
-        // Strip the .exe suffix on Win and look up by stem.
-        var stem = p.EndsWith(".exe") ? p.Substring(0, p.Length - 4) : p;
-        // Lookup table: process stem → bundled SVG basename. Add new
-        // brands here when shipping more icons (drop the SVG file in
-        // Assets/AppIcons/ first; .csproj globs **\*.svg).
-        var lookup = new System.Collections.Generic.Dictionary<string, string>
-        {
-            ["slack"] = "slack",
-            ["discord"] = "discord",
-            ["teams"] = "teams",
-            ["ms-teams"] = "teams",
-            ["outlook"] = "outlook",
-            ["chrome"] = "chrome",
-            ["firefox"] = "firefox",
-            ["msedge"] = "msedge",
-            ["brave"] = "brave",
-            ["code"] = "code",
-            ["cursor"] = "cursor",
-            ["notepad++"] = "notepad++",
-            ["whatsapp"] = "whatsapp",
-            ["telegram"] = "telegram",
-            ["notion"] = "notion",
-            ["obsidian"] = "obsidian",
-            ["winword"] = "winword",
-            ["excel"] = "excel",
-        };
-        if (lookup.TryGetValue(stem, out var name))
-            return $"ms-appx:///Assets/AppIcons/{name}.svg";
-        return "";
-    }
+    /// Forces re-evaluation of IconAssetUri after the cache has been
+    /// populated by an external pass (warm-up scan). Without this the
+    /// XAML binding caches the empty string from the first read and
+    /// the row keeps showing the FontIcon fallback forever.
+    public void RefreshIconAssetUri() => OnPropertyChanged(nameof(IconAssetUri));
 
     private static string InferIconGlyph(string pattern)
     {

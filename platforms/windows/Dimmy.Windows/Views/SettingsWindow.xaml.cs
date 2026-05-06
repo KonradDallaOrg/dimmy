@@ -116,7 +116,51 @@ public sealed partial class SettingsWindow : Window
         };
         UpdateAppRulesEmptyHint();
 
+        // Warm-up: extract real icons from currently-running processes
+        // so the App Rules list shows them immediately instead of the
+        // FontIcon fallback. Runs on a background thread; refreshes
+        // each row's IconAssetUri on the UI thread when done.
+        _ = WarmUpAppIconsAsync();
+
         _loaded = true;
+    }
+
+    private async System.Threading.Tasks.Task WarmUpAppIconsAsync()
+    {
+        try
+        {
+            await System.Threading.Tasks.Task.Run(() =>
+            {
+                foreach (var proc in System.Diagnostics.Process.GetProcesses())
+                {
+                    try
+                    {
+                        var path = proc.MainModule?.FileName;
+                        if (!string.IsNullOrEmpty(path))
+                            Helpers.IconExtractor.EnsureCachedFromExePath(path);
+                    }
+                    catch
+                    {
+                        // MainModule throws on UAC-elevated processes
+                        // when we're non-elevated; skip and move on.
+                    }
+                    finally
+                    {
+                        proc.Dispose();
+                    }
+                }
+            });
+            // Hop back to UI thread to re-evaluate bindings.
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                foreach (var r in ViewModel.AppRules)
+                    r.RefreshIconAssetUri();
+            });
+        }
+        catch (Exception ex)
+        {
+            App.Log($"WarmUpAppIcons exc: {ex.Message}", "AppCtx");
+        }
     }
 
     private void OpenMeeting_Click(object sender, RoutedEventArgs e)

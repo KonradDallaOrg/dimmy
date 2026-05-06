@@ -739,18 +739,26 @@ public partial class App : Application
     {
         try
         {
-            var procName = Helpers.AppContextCapture.GetForegroundProcessName();
+            var fg = Helpers.AppContextCapture.GetForegroundApp();
             // Bundle id + wm_class are macOS / Linux specific — leave
             // empty on Windows. The Rust core matches first-non-empty.
             var json = "{\"process_name\":\""
-                + System.Text.Json.JsonEncodedText.Encode(procName).ToString()
+                + System.Text.Json.JsonEncodedText.Encode(fg.ProcessName).ToString()
                 + "\",\"bundle_id\":\"\",\"wm_class\":\"\"}";
             var rc = DimmyNative.dimmy_set_app_context(json);
+            // Fire-and-forget icon extraction: SHGetFileInfo on the exe
+            // path → PNG cache. Future Settings → App Rules renders
+            // pull the cached PNG instead of a hand-rolled SVG.
+            if (fg.HasValue && !string.IsNullOrEmpty(fg.ExePath))
+            {
+                System.Threading.Tasks.Task.Run(() =>
+                    Helpers.IconExtractor.EnsureCachedFromExePath(fg.ExePath));
+            }
             // Always log the captured value so diagnosing "rules don't
             // match" only requires reading ptt.log: empty = capture
             // failed (UAC-elevated foreground, exotic shell), non-empty
             // = what we sent to Rust for the resolve() lookup.
-            Log($"captured process='{procName}' rc={rc}", "AppCtx");
+            Log($"captured process='{fg.ProcessName}' rc={rc}", "AppCtx");
         }
         catch (Exception ex)
         {
