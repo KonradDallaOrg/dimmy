@@ -104,9 +104,7 @@ fn write_pcm_as_wav_16k_mono_int16(
     writer
         .finalize()
         .map_err(|e| format!("hound finalize: {e}"))?;
-    let size = std::fs::metadata(path)
-        .map(|m| m.len() as i64)
-        .unwrap_or(0);
+    let size = std::fs::metadata(path).map(|m| m.len() as i64).unwrap_or(0);
     Ok(size)
 }
 
@@ -347,16 +345,8 @@ fn dimmy_init_inner() -> c_int {
                     std::thread::sleep(std::time::Duration::from_secs(5));
                     loop {
                         let st = state();
-                        let keep_days = st
-                            .history_audio_keep_days
-                            .lock()
-                            .map(|n| *n)
-                            .unwrap_or(30);
-                        let max_mb = st
-                            .history_audio_max_mb
-                            .lock()
-                            .map(|n| *n)
-                            .unwrap_or(5_000);
+                        let keep_days = st.history_audio_keep_days.lock().map(|n| *n).unwrap_or(30);
+                        let max_mb = st.history_audio_max_mb.lock().map(|n| *n).unwrap_or(5_000);
                         if let Some(dir) = crate::history_audio_dir() {
                             match crate::history::prune_audio_dir(&dir, keep_days, max_mb) {
                                 Ok((removed, bytes)) => {
@@ -549,8 +539,7 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
             // chunk 8.7 s vs 12.6 s, cadence 3 s vs 5 s, real-time
             // margin 87 % vs 86 %. Interactive caption appears nearly
             // twice as often with no quality regression on jfk×6.
-            3.0,
-            500, // overlap_ms — covers a word that straddles a chunk
+            3.0, 500, // overlap_ms — covers a word that straddles a chunk
             on_chunk,
         );
         if let Ok(mut slot) = CHUNKED.lock() {
@@ -1001,11 +990,8 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
                             // critical path of the user's paste — it's
                             // best-effort and any failure is logged but
                             // doesn't fail the transcription.
-                            let save_audio = st
-                                .save_audio_in_history
-                                .lock()
-                                .map(|b| *b)
-                                .unwrap_or(false);
+                            let save_audio =
+                                st.save_audio_in_history.lock().map(|b| *b).unwrap_or(false);
                             if save_audio {
                                 if let Some(audio_dir) = crate::history_audio_dir() {
                                     let _ = std::fs::create_dir_all(&audio_dir);
@@ -1950,11 +1936,7 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
     // down matches one of the user's configured rules. First-match wins.
     // An empty override leaves style/translate as the user's defaults.
     {
-        let rules = st
-            .app_rules
-            .lock()
-            .map(|r| r.clone())
-            .unwrap_or_default();
+        let rules = st.app_rules.lock().map(|r| r.clone()).unwrap_or_default();
         let ctx = st
             .current_app_context
             .lock()
@@ -2248,10 +2230,7 @@ pub unsafe extern "C" fn dimmy_meeting_start(out_buf: *mut c_char, buf_len: c_in
         .lock()
         .map(|tx| tx.send(crate::audio::AudioCommand::Start(selected_device)));
 
-    let session = match crate::meeting::MeetingSession::start(
-        st.audio_buffer.clone(),
-        device_sr,
-    ) {
+    let session = match crate::meeting::MeetingSession::start(st.audio_buffer.clone(), device_sr) {
         Ok(s) => s,
         Err(e) => {
             log(&format!("[Meeting] start failed: {}", e));
@@ -2374,10 +2353,7 @@ pub unsafe extern "C" fn dimmy_meeting_save_post_process(
 /// "recover meeting?" prompt at startup. Returns the byte length of
 /// the JSON, or -1 on buffer-too-small.
 #[no_mangle]
-pub unsafe extern "C" fn dimmy_meeting_list_orphans(
-    out_buf: *mut c_char,
-    buf_len: c_int,
-) -> c_int {
+pub unsafe extern "C" fn dimmy_meeting_list_orphans(out_buf: *mut c_char, buf_len: c_int) -> c_int {
     if out_buf.is_null() || buf_len <= 0 {
         return -1;
     }
@@ -2441,11 +2417,7 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
     };
 
     let st = state();
-    let api_url = st
-        .llm_api_url
-        .lock()
-        .map(|u| u.clone())
-        .unwrap_or_default();
+    let api_url = st.llm_api_url.lock().map(|u| u.clone()).unwrap_or_default();
     let api_model = st
         .llm_api_model
         .lock()
@@ -3180,9 +3152,7 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
                 .map(|s| s as f32 / scale)
                 .collect()
         }
-        hound::SampleFormat::Float => {
-            reader.samples::<f32>().filter_map(|s| s.ok()).collect()
-        }
+        hound::SampleFormat::Float => reader.samples::<f32>().filter_map(|s| s.ok()).collect(),
     };
     if raw_samples.is_empty() {
         log("[FileLoad] WAV decoded to zero samples");
@@ -3367,13 +3337,11 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
             crate::transcribe::transcribe_audio_local_parakeet_with_word_ts(&chunk)
                 .map(|(t, j)| (t, Some(j)))
         } else {
-            crate::transcribe::transcribe_audio_local(&chunk, &language, &model)
-                .map(|t| (t, None))
+            crate::transcribe::transcribe_audio_local(&chunk, &language, &model).map(|t| (t, None))
         };
         match result {
             Ok((text, ts_opt)) => {
-                let delta =
-                    crate::chunked_stt::dedup_last_3_words(&transcript_acc, &text);
+                let delta = crate::chunked_stt::dedup_last_3_words(&transcript_acc, &text);
                 if !delta.is_empty() {
                     if !transcript_acc.is_empty() && !transcript_acc.ends_with(' ') {
                         transcript_acc.push(' ');
@@ -3404,7 +3372,9 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
             Err(e) => {
                 log(&format!(
                     "[FileLoad] chunk {} of {} failed: {}",
-                    idx + 1, n_chunks, e
+                    idx + 1,
+                    n_chunks,
+                    e
                 ));
                 // Continue — one bad chunk shouldn't kill the whole
                 // file. Empty chunks are normal (long silence).

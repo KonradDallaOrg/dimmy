@@ -224,13 +224,16 @@ impl HistoryStore {
         // `ADD COLUMN IF NOT EXISTS`, but we can check pragma_table_info
         // and skip when the column is already present.
         for (col, decl) in &[
-            ("enhanced_text",   "ADD COLUMN enhanced_text TEXT"),
-            ("audio_path",      "ADD COLUMN audio_path TEXT"),
-            ("app_process_name","ADD COLUMN app_process_name TEXT"),
-            ("app_bundle_id",   "ADD COLUMN app_bundle_id TEXT"),
-            ("llm_style",       "ADD COLUMN llm_style TEXT"),
-            ("llm_translate_to","ADD COLUMN llm_translate_to TEXT"),
-            ("size_bytes",      "ADD COLUMN size_bytes INTEGER NOT NULL DEFAULT 0"),
+            ("enhanced_text", "ADD COLUMN enhanced_text TEXT"),
+            ("audio_path", "ADD COLUMN audio_path TEXT"),
+            ("app_process_name", "ADD COLUMN app_process_name TEXT"),
+            ("app_bundle_id", "ADD COLUMN app_bundle_id TEXT"),
+            ("llm_style", "ADD COLUMN llm_style TEXT"),
+            ("llm_translate_to", "ADD COLUMN llm_translate_to TEXT"),
+            (
+                "size_bytes",
+                "ADD COLUMN size_bytes INTEGER NOT NULL DEFAULT 0",
+            ),
             // Word-level timestamps as JSON array. Schema lands now;
             // extraction from whisper.cpp segments + Parakeet TDT
             // alignments is a follow-up Phase. NULL until wired.
@@ -516,9 +519,16 @@ impl HistoryStore {
     /// indicates the backend didn't emit them. Caller serialises the
     /// `[{"word":..., "start_ms":..., "end_ms":...}, ...]` shape.
     pub fn update_word_timestamps(&self, id: i64, json: &str) -> Result<(), String> {
-        assert!(id > 0, "update_word_timestamps() id must be positive, got {id}");
+        assert!(
+            id > 0,
+            "update_word_timestamps() id must be positive, got {id}"
+        );
         let conn = self.conn.lock().map_err(|e| format!("lock: {e}"))?;
-        let opt: Option<&str> = if json.trim().is_empty() { None } else { Some(json) };
+        let opt: Option<&str> = if json.trim().is_empty() {
+            None
+        } else {
+            Some(json)
+        };
         let affected = conn
             .execute(
                 "UPDATE transcripts SET word_timestamps = ?1 WHERE id = ?2",

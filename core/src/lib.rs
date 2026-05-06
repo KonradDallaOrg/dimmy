@@ -8,14 +8,6 @@ pub mod app_rules;
 pub mod audio;
 pub mod autostart;
 pub mod chunked_stt;
-/// Long-form meeting recording. Streams to disk so memory stays
-/// bounded over multi-hour sessions and a `.recording` marker
-/// enables crash recovery. Post-process pipeline (recap, actions,
-/// optional translation) runs from `dimmy_meeting_stop` returning
-/// the full transcript; the LLM call itself is driven from the C#/
-/// Swift host through dimmy_process_with_llm to keep async runtime
-/// concerns out of the meeting worker.
-pub mod meeting;
 pub mod error;
 pub mod ffi;
 pub mod filler;
@@ -33,6 +25,14 @@ pub mod license;
 pub mod llm;
 pub mod local_llm;
 pub mod local_stt;
+/// Long-form meeting recording. Streams to disk so memory stays
+/// bounded over multi-hour sessions and a `.recording` marker
+/// enables crash recovery. Post-process pipeline (recap, actions,
+/// optional translation) runs from `dimmy_meeting_stop` returning
+/// the full transcript; the LLM call itself is driven from the C#/
+/// Swift host through dimmy_process_with_llm to keep async runtime
+/// concerns out of the meeting worker.
+pub mod meeting;
 /// Parakeet TDT v3 FP32 local STT via ONNX Runtime. Inference is
 /// gated behind `local-stt-parakeet`; bundle download / presence
 /// helpers are always available so the UI can render the "needs

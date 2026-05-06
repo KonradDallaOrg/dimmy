@@ -68,7 +68,10 @@ impl MeetingSession {
         audio_buffer: Arc<Mutex<Vec<f32>>>,
         device_sample_rate: u32,
     ) -> Result<Self, String> {
-        assert!(device_sample_rate > 0, "device_sample_rate must be positive");
+        assert!(
+            device_sample_rate > 0,
+            "device_sample_rate must be positive"
+        );
         let id = uuid_v4_simple();
         let dir = crate::meetings_dir()
             .ok_or_else(|| "config dir unavailable".to_string())?
@@ -143,14 +146,17 @@ impl MeetingSession {
     pub fn stop(mut self) -> MeetingResult {
         self.cancel.store(true, Ordering::SeqCst);
         let handle = self.handle.take();
-        let result = handle.map(|h| h.join().ok()).unwrap_or(None).unwrap_or(MeetingResult {
-            id: self.id.clone(),
-            dir: self.dir.clone(),
-            transcript: String::new(),
-            duration_secs: 0.0,
-            chunk_count: 0,
-            error: Some("worker panicked".into()),
-        });
+        let result = handle
+            .map(|h| h.join().ok())
+            .unwrap_or(None)
+            .unwrap_or(MeetingResult {
+                id: self.id.clone(),
+                dir: self.dir.clone(),
+                transcript: String::new(),
+                duration_secs: 0.0,
+                chunk_count: 0,
+                error: Some("worker panicked".into()),
+            });
         // Marker is removed only on clean exit so a crash leaves it.
         let _ = std::fs::remove_file(self.dir.join(".recording"));
         crate::log(&format!(
@@ -178,7 +184,8 @@ fn worker_loop(
     cancel: Arc<AtomicBool>,
 ) -> MeetingResult {
     let chunk_samples = (DEFAULT_CHUNK_SECS * device_sample_rate as f32) as usize;
-    let overlap_samples = ((DEFAULT_OVERLAP_MS as f32 / 1000.0) * device_sample_rate as f32) as usize;
+    let overlap_samples =
+        ((DEFAULT_OVERLAP_MS as f32 / 1000.0) * device_sample_rate as f32) as usize;
 
     // `samples_written` tracks how many SOURCE-RATE samples have been
     // streamed into the WAV (after downsample they map to fewer 16k
@@ -296,23 +303,15 @@ fn worker_loop(
                     }
                 };
                 if !chunk_text.trim().is_empty() {
-                    let delta = crate::chunked_stt::dedup_last_3_words(
-                        &transcript_accum,
-                        &chunk_text,
-                    );
+                    let delta =
+                        crate::chunked_stt::dedup_last_3_words(&transcript_accum, &chunk_text);
                     if !delta.is_empty() {
-                        if !transcript_accum.is_empty()
-                            && !transcript_accum.ends_with(' ')
-                        {
+                        if !transcript_accum.is_empty() && !transcript_accum.ends_with(' ') {
                             transcript_accum.push(' ');
                         }
                         transcript_accum.push_str(&delta);
                         chunk_count += 1;
-                        let line = format!(
-                            "[{:>6} ms] {}\n",
-                            started.elapsed().as_millis(),
-                            delta
-                        );
+                        let line = format!("[{:>6} ms] {}\n", started.elapsed().as_millis(), delta);
                         let _ = transcripts_file.write_all(line.as_bytes());
                         let _ = transcripts_file.flush();
                     }
@@ -370,7 +369,9 @@ fn uuid_v4_simple() -> String {
     // strong but sufficient for unique per-meeting directory names.
     let mut seed = now_ns ^ (counter.wrapping_mul(0x9E3779B97F4A7C15));
     for b in bytes.iter_mut() {
-        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         *b = (seed >> 56) as u8;
     }
     bytes[6] = (bytes[6] & 0x0F) | 0x40; // version 4

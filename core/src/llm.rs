@@ -454,9 +454,15 @@ pub async fn process_raw_prompt(
     user_prompt: &str,
     max_tokens: u64,
 ) -> Result<String, crate::error::LlmError> {
-    assert!(!user_prompt.is_empty(), "process_raw_prompt: empty user_prompt");
+    assert!(
+        !user_prompt.is_empty(),
+        "process_raw_prompt: empty user_prompt"
+    );
     assert!(max_tokens > 0, "process_raw_prompt: max_tokens must be > 0");
-    assert!(max_tokens <= 100_000, "process_raw_prompt: max_tokens too large");
+    assert!(
+        max_tokens <= 100_000,
+        "process_raw_prompt: max_tokens too large"
+    );
     if let Err(reason) = crate::provider::Provider::validate_url(api_url) {
         return Err(crate::error::LlmError::Network(reason));
     }
@@ -517,9 +523,13 @@ pub async fn process_raw_prompt(
     if is_anthropic {
         // Anthropic: { "content": [{"type": "text", "text": "..."}] }
         #[derive(serde::Deserialize)]
-        struct AnthropicResponse { content: Vec<AnthropicContent> }
+        struct AnthropicResponse {
+            content: Vec<AnthropicContent>,
+        }
         #[derive(serde::Deserialize)]
-        struct AnthropicContent { text: String }
+        struct AnthropicContent {
+            text: String,
+        }
         let parsed: AnthropicResponse = response.json().await?;
         Ok(parsed
             .content
@@ -532,11 +542,17 @@ pub async fn process_raw_prompt(
     } else {
         // OpenAI-compatible
         #[derive(serde::Deserialize)]
-        struct ChatResponse { choices: Vec<ChatChoice> }
+        struct ChatResponse {
+            choices: Vec<ChatChoice>,
+        }
         #[derive(serde::Deserialize)]
-        struct ChatChoice { message: ChatMessage }
+        struct ChatChoice {
+            message: ChatMessage,
+        }
         #[derive(serde::Deserialize)]
-        struct ChatMessage { content: String }
+        struct ChatMessage {
+            content: String,
+        }
         let parsed: ChatResponse = response.json().await?;
         Ok(parsed
             .choices
