@@ -2456,10 +2456,169 @@ pub unsafe extern "C" fn dimmy_clear_app_context() {
     }
 }
 
+/// Synchronously transcribe a WAV file using the active local STT
+/// backend (whisper.cpp or Parakeet, per `local_stt_backend`). Cloud
+/// transcription via this entry point is unimplemented for now —
+/// callers that need cloud should use the recording flow.
+///
+/// `path_ptr` must point to a UTF-8 file path (any 16/24/32-bit int
+/// or 32-bit float WAV). The file is decoded in-process via hound,
+/// downmixed to mono, run through the standard preprocess pipeline
+/// (highpass + VAD + AGC + downsample to 16 k), and routed to the
+/// configured local backend. The resulting transcript is also
+/// written to the history database with audio_path linking back to
+/// the source file (so the user can replay it from the History UI).
+///
+/// Returns the transcript length on success (bytes written, excluding
+/// the null terminator), or one of:
+/// - -1 invalid args (null pointer / bad UTF-8 / null buffer)
+/// - -2 file open / decode failure
+/// - -3 VAD removed all audio (input was effectively silent)
+/// - -4 cloud mode requested — not supported here
+/// - -5 backend transcribe failed
+///
+/// # Safety
+/// `path_ptr` must be a valid null-terminated UTF-8 C string and
+/// `out_buf` a valid writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_transcribe_file(
+    path_ptr: *const c_char,
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if path_ptr.is_null() || out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let path = match CStr::from_ptr(path_ptr).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    log(&format!("[FileLoad] decoding '{}'", path));
+
+    // ── Decode WAV → mono f32 at the file's native sample rate ──
+    let mut reader = match hound::WavReader::open(path) {
+        Ok(r) => r,
+        Err(e) => {
+            log(&format!("[FileLoad] open failed: {}", e));
+            return -2;
+        }
+    };
+    let spec = reader.spec();
+    if spec.sample_rate == 0 || spec.channels == 0 {
+        log("[FileLoad] invalid WAV header (sample_rate or channels = 0)");
+        return -2;
+    }
+    let raw_samples: Vec<f32> = match spec.sample_format {
+        hound::SampleFormat::Int => {
+            let bits = spec.bits_per_sample as i32;
+            if bits <= 0 {
+                return -2;
+            }
+            let scale = (1i64 << (bits - 1)) as f32;
+            reader
+                .samples::<i32>()
+                .filter_map(|s| s.ok())
+                .map(|s| s as f32 / scale)
+                .collect()
+        }
+        hound::SampleFormat::Float => {
+            reader.samples::<f32>().filter_map(|s| s.ok()).collect()
+        }
+    };
+    if raw_samples.is_empty() {
+        log("[FileLoad] WAV decoded to zero samples");
+        return -2;
+    }
+    let mono: Vec<f32> = if spec.channels == 1 {
+        raw_samples
+    } else {
+        let ch = spec.channels as usize;
+        raw_samples
+            .chunks_exact(ch)
+            .map(|frame| frame.iter().sum::<f32>() / ch as f32)
+            .collect()
+    };
+    log(&format!(
+        "[FileLoad] decoded: {} samples @ {} Hz mono ({:.1}s)",
+        mono.len(),
+        spec.sample_rate,
+        mono.len() as f64 / spec.sample_rate as f64,
+    ));
+
+    // ── Preprocess (same pipeline the recording path uses) ──────
+    let raw_samples_for_history = mono.clone();
+    let raw = crate::audio::RawAudio {
+        samples: mono,
+        sample_rate: spec.sample_rate,
+    };
+    let processed = raw.preprocess(true);
+    if processed.samples.is_empty() {
+        log("[FileLoad] preprocess produced 0 samples (silent input?)");
+        return -3;
+    }
+
+    // ── Route per active local backend ──────────────────────────
+    let st = state();
+    let stt_mode = st
+        .stt_mode
+        .lock()
+        .map(|m| m.clone())
+        .unwrap_or_else(|_| "local".to_string());
+    if stt_mode != "local" {
+        log("[FileLoad] cloud transcription via this entry point not yet supported");
+        return -4;
+    }
+    let backend = st
+        .local_stt_backend
+        .lock()
+        .map(|b| b.clone())
+        .unwrap_or_else(|_| "whisper".to_string());
+    let language = st.language.lock().map(|l| l.clone()).unwrap_or_default();
+    let language = if language.is_empty() {
+        "en".to_string()
+    } else {
+        language
+    };
+    let model = st
+        .local_model
+        .lock()
+        .map(|m| m.clone())
+        .unwrap_or_else(|_| "ggml-base-q8_0.bin".to_string());
+    let result = if backend == "parakeet" {
+        log("[FileLoad] backend=parakeet");
+        crate::transcribe::transcribe_audio_local_parakeet(&processed)
+    } else {
+        log(&format!("[FileLoad] backend=whisper model={}", model));
+        crate::transcribe::transcribe_audio_local(&processed, &language, &model)
+    };
+    let text = match result {
+        Ok(t) => t,
+        Err(e) => {
+            log(&format!("[FileLoad] transcribe failed: {}", e));
+            return -5;
+        }
+    };
+
+    // Auto-save to history (v1 schema on this branch). When the
+    // history-v2 branch lands the merge will switch this to save_v2
+    // with audio_path = source-file path (no copy) so the user can
+    // jump from a History row to the original file.
+    if !text.trim().is_empty() {
+        if let Ok(guard) = st.history_store.lock() {
+            if let Some(ref store) = *guard {
+                let duration = raw_samples_for_history.len() as f64 / spec.sample_rate as f64;
+                let _ = store.save(&text, &language, duration);
+            }
+        }
+    }
+
+    write_to_buf(&text, out_buf, buf_len)
+}
+
 /// Poll for hotkey events. Returns:
 /// - 0 = no event
 /// - 1 = pressed (all keys in combo are down)
-/// - 2 = released (any key in combo released after press)
+/// - 2 = released (any key in combo released after price)
 #[no_mangle]
 pub extern "C" fn dimmy_hotkey_take_event() -> c_int {
     let ev = crate::hotkey::take_event();
