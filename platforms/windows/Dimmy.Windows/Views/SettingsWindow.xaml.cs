@@ -96,6 +96,122 @@ public sealed partial class SettingsWindow : Window
         _loaded = true;
     }
 
+    // ── History ──────────────────────────────────────────────────────
+
+    /// Refresh the History list. Called on tab activation, on Refresh
+    /// click, on search submit, after delete. The FFI returns up to 200
+    /// rows newest-first; pagination beyond that is a follow-up.
+    private void LoadHistoryItems()
+    {
+        try
+        {
+            string? json;
+            var query = ViewModel.HistorySearchQuery?.Trim() ?? "";
+            const int Limit = 200;
+            const int BufLen = 1 << 18; // 256 KB
+            var buf = new byte[BufLen];
+            int len;
+            if (string.IsNullOrEmpty(query))
+                len = DimmyNative.dimmy_history_recent(Limit, buf, BufLen);
+            else
+                len = DimmyNative.dimmy_history_search(query, Limit, buf, BufLen);
+            if (len <= 0)
+            {
+                ViewModel.HistoryItems.Clear();
+                return;
+            }
+            json = System.Text.Encoding.UTF8.GetString(buf, 0, len);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            ViewModel.HistoryItems.Clear();
+            foreach (var el in doc.RootElement.EnumerateArray())
+            {
+                var item = new ViewModels.HistoryItemViewModel
+                {
+                    Id = el.GetProperty("id").GetInt64(),
+                    Text = el.GetProperty("text").GetString() ?? "",
+                    Language = el.GetProperty("language").GetString() ?? "",
+                    Timestamp = el.GetProperty("timestamp").GetDouble(),
+                    Duration = el.GetProperty("duration").GetDouble(),
+                    WordCount = el.GetProperty("word_count").GetInt32(),
+                };
+                if (el.TryGetProperty("enhanced_text", out var et) && et.ValueKind == System.Text.Json.JsonValueKind.String)
+                    item.EnhancedText = et.GetString();
+                if (el.TryGetProperty("audio_path", out var ap) && ap.ValueKind == System.Text.Json.JsonValueKind.String)
+                    item.AudioPath = ap.GetString();
+                if (el.TryGetProperty("app_process_name", out var apn) && apn.ValueKind == System.Text.Json.JsonValueKind.String)
+                    item.AppProcessName = apn.GetString();
+                if (el.TryGetProperty("app_bundle_id", out var abi) && abi.ValueKind == System.Text.Json.JsonValueKind.String)
+                    item.AppBundleId = abi.GetString();
+                if (el.TryGetProperty("llm_style", out var ls) && ls.ValueKind == System.Text.Json.JsonValueKind.String)
+                    item.LlmStyle = ls.GetString();
+                if (el.TryGetProperty("llm_translate_to", out var ltt) && ltt.ValueKind == System.Text.Json.JsonValueKind.String)
+                    item.LlmTranslateTo = ltt.GetString();
+                if (el.TryGetProperty("size_bytes", out var sb))
+                    item.SizeBytes = sb.GetInt64();
+                ViewModel.HistoryItems.Add(item);
+            }
+            App.Log($"History: loaded {ViewModel.HistoryItems.Count} rows (query='{query}')", "History");
+        }
+        catch (Exception ex)
+        {
+            App.Log($"History load failed: {ex.Message}", "History");
+        }
+    }
+
+    private void HistorySearchBox_KeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
+    {
+        if (e.Key == global::Windows.System.VirtualKey.Enter)
+        {
+            LoadHistoryItems();
+            e.Handled = true;
+        }
+    }
+
+    private void HistorySearch_Click(object sender, RoutedEventArgs e) => LoadHistoryItems();
+    private void HistoryRefresh_Click(object sender, RoutedEventArgs e)
+    {
+        ViewModel.HistorySearchQuery = "";
+        LoadHistoryItems();
+    }
+
+    private void HistoryCopyRaw_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.SelectedHistoryItem is { } item)
+            CopyToClipboard(item.Text);
+    }
+
+    private void HistoryCopyEnhanced_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.SelectedHistoryItem is { } item && !string.IsNullOrEmpty(item.EnhancedText))
+            CopyToClipboard(item.EnhancedText!);
+    }
+
+    private static void CopyToClipboard(string text)
+    {
+        try
+        {
+            var dp = new global::Windows.ApplicationModel.DataTransfer.DataPackage();
+            dp.SetText(text);
+            global::Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dp);
+        }
+        catch (Exception ex) { App.Log($"clipboard set failed: {ex.Message}", "History"); }
+    }
+
+    private void HistoryDelete_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.SelectedHistoryItem is not { } item) return;
+        var rc = DimmyNative.dimmy_history_delete((int)item.Id);
+        if (rc == 0)
+        {
+            ViewModel.HistoryItems.Remove(item);
+            ViewModel.SelectedHistoryItem = null;
+        }
+        else
+        {
+            App.Log($"history_delete returned {rc} for id {item.Id}", "History");
+        }
+    }
+
     private void LoadConfig()
     {
         // Read from config.json file first — it has all fields including UI-only ones
@@ -755,6 +871,7 @@ public sealed partial class SettingsWindow : Window
             OutputPanel.Visibility = Visibility.Collapsed;
             OverlayPanel.Visibility = Visibility.Collapsed;
             RulesPanel.Visibility = Visibility.Collapsed;
+            HistoryPanel.Visibility = Visibility.Collapsed;
             AboutPanel.Visibility = Visibility.Collapsed;
             PrivacyPanel.Visibility = Visibility.Collapsed;
             LicensePanel.Visibility = Visibility.Collapsed;
@@ -768,6 +885,7 @@ public sealed partial class SettingsWindow : Window
                 "output" => OutputPanel,
                 "pill" or "overlay" => OverlayPanel,
                 "rules" => RulesPanel,
+                "history" => HistoryPanel,
                 "shortcut" => ShortcutPanel,
                 "privacy" => PrivacyPanel,
                 "license" => LicensePanel,
@@ -777,6 +895,7 @@ public sealed partial class SettingsWindow : Window
                 _ => HomePanel,
             };
             panel.Visibility = Visibility.Visible;
+            if (tag == "history") LoadHistoryItems();
 
             if (tag == "privacy")
             {

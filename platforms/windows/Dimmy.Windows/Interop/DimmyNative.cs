@@ -126,6 +126,17 @@ public static class DimmyNative
     public static extern int dimmy_history_delete(int id);
 
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_history_update_enhanced(
+        int id,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? text);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_history_update_audio(
+        int id,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? path,
+        long sizeBytes);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_history_stats(byte[] buf, int len);
 
     // ── Hotkey (low-level keyboard hook via Rust) ─────────────────
