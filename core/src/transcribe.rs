@@ -252,6 +252,72 @@ pub fn transcribe_audio_local(
     crate::local_stt::transcribe_local(&model_path, &samples_16k, language)
 }
 
+/// Transcribe ProcessedAudio locally using Parakeet TDT v3 FP32. No
+/// language argument: Parakeet is auto-language (trained on 25 EU
+/// languages incl. Italian + English). Returns Empty if the user
+/// recording was silence; LocalModel error if the bundle is missing.
+pub fn transcribe_audio_local_parakeet(
+    audio: &crate::audio::ProcessedAudio,
+) -> Result<String, crate::error::TranscribeError> {
+    assert!(
+        !audio.samples.is_empty(),
+        "transcribe_audio_local_parakeet: audio samples must not be empty"
+    );
+    assert!(
+        audio.samples.iter().all(|s| s.is_finite()),
+        "transcribe_audio_local_parakeet: all samples must be finite"
+    );
+    assert!(
+        audio.sample_rate > 0,
+        "transcribe_audio_local_parakeet: sample_rate must be positive"
+    );
+
+    let samples_16k = crate::preprocess::downsample_to_16k(&audio.samples, audio.sample_rate);
+    assert!(
+        !samples_16k.is_empty(),
+        "transcribe_audio_local_parakeet: downsampled samples must not be empty"
+    );
+
+    let text = crate::parakeet::transcribe(&samples_16k)?;
+    if text.trim().is_empty() {
+        return Err(crate::error::TranscribeError::Empty);
+    }
+    Ok(text)
+}
+
+/// Same as `transcribe_audio_local_parakeet` but also returns word-level
+/// timestamps as JSON (`[{"word":"hi","start":0.42,"end":0.94}, ...]`).
+/// Used by the file-load path so the saved history row carries the
+/// timestamps that drive the History detail panel's playback scrub.
+pub fn transcribe_audio_local_parakeet_with_word_ts(
+    audio: &crate::audio::ProcessedAudio,
+) -> Result<(String, String), crate::error::TranscribeError> {
+    assert!(
+        !audio.samples.is_empty(),
+        "transcribe_audio_local_parakeet_with_word_ts: audio samples must not be empty"
+    );
+    assert!(
+        audio.samples.iter().all(|s| s.is_finite()),
+        "transcribe_audio_local_parakeet_with_word_ts: all samples must be finite"
+    );
+    assert!(
+        audio.sample_rate > 0,
+        "transcribe_audio_local_parakeet_with_word_ts: sample_rate must be positive"
+    );
+
+    let samples_16k = crate::preprocess::downsample_to_16k(&audio.samples, audio.sample_rate);
+    assert!(
+        !samples_16k.is_empty(),
+        "transcribe_audio_local_parakeet_with_word_ts: downsampled samples must not be empty"
+    );
+
+    let (text, ts_json) = crate::parakeet::transcribe_with_word_timestamps(&samples_16k)?;
+    if text.trim().is_empty() {
+        return Err(crate::error::TranscribeError::Empty);
+    }
+    Ok((text, ts_json))
+}
+
 /// Transcribe ProcessedAudio, automatically chunking if it exceeds the provider's
 /// file size limit. Chunk size = 80% of `max_wav_bytes` (safety margin).
 ///

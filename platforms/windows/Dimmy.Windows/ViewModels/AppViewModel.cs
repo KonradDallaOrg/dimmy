@@ -35,6 +35,16 @@ public partial class AppViewModel : ObservableObject
     [ObservableProperty] private string _statusText = "";
     [ObservableProperty] private string _errorMessage = "";
     [ObservableProperty] private float _amplitude;
+
+    /// Cumulative transcript text emitted by the chunked transcriber
+    /// (Rust core, behind chunk_streaming_enabled + Parakeet backend).
+    /// Updated on every stt_chunk event during recording. Cleared when
+    /// the recording finishes and the final paste is done.
+    [ObservableProperty] private string _liveCaptionText = "";
+
+    /// Mirrors the user-facing toggle. When false, App.xaml.cs does
+    /// not show the CaptionWindow even if the chunked engine is on.
+    [ObservableProperty] private bool _liveCaptionsEnabled = true;
     [ObservableProperty] private int _chunkCurrent;
     [ObservableProperty] private int _chunkTotal;
     [ObservableProperty] private string _llmStyle = "off";
@@ -100,6 +110,23 @@ public partial class AppViewModel : ObservableObject
         ChunkTotal = total;
     }
 
+    /// Fires when the Rust core emits a Parakeet bundle download
+    /// progress event. Args: (downloaded_bytes, total_bytes). `total`
+    /// is 0 if Content-Length was unavailable; consumers should treat
+    /// that as "indeterminate". Fired on the UI thread.
+    public event Action<long, long>? ParakeetDownloadProgress;
+
+    /// Fires when the chunked transcriber emits a new chunk. Args:
+    /// (cumulative_text, is_final). App.xaml.cs uses this to show /
+    /// hide the CaptionWindow and to keep its text in sync.
+    public event Action<string, bool>? SttChunkReceived;
+
+    /// Fires when the Rust core emits a file_transcribe_progress
+    /// event during dimmy_transcribe_file. Args: (processed_secs,
+    /// total_secs, percent 0-100). Used by Settings → Home → file
+    /// load card to drive a determinate progress bar.
+    public event Action<double, double, double>? FileTranscribeProgress;
+
     public void HandleEvent(string? json)
     {
         if (string.IsNullOrEmpty(json)) return;
@@ -113,6 +140,27 @@ public partial class AppViewModel : ObservableObject
 
             switch (eventName)
             {
+                case "parakeet_bundle_download_progress":
+                    ParakeetDownloadProgress?.Invoke(
+                        payload.GetProperty("downloaded").GetInt64(),
+                        payload.GetProperty("total").GetInt64());
+                    break;
+                case "stt_chunk":
+                    {
+                        var cumulative = payload.GetProperty("cumulative").GetString() ?? "";
+                        var isFinal = payload.GetProperty("is_final").GetBoolean();
+                        LiveCaptionText = cumulative;
+                        SttChunkReceived?.Invoke(cumulative, isFinal);
+                    }
+                    break;
+                case "file_transcribe_progress":
+                    {
+                        var processed = payload.GetProperty("processed_secs").GetDouble();
+                        var total = payload.GetProperty("total_secs").GetDouble();
+                        var percent = payload.GetProperty("percent").GetDouble();
+                        FileTranscribeProgress?.Invoke(processed, total, percent);
+                    }
+                    break;
                 case "recording_started":
                     if (SuppressRecordingStarted)
                     {

@@ -12,6 +12,7 @@
 		AA000003 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000003 /* AppState.swift */; };
 		AA000004 /* StatusBarController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000004 /* StatusBarController.swift */; };
 		AA000005 /* PillWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000005 /* PillWindowController.swift */; };
+		AA000400 /* CaptionWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000400 /* CaptionWindowController.swift */; };
 		AA000006 /* HotkeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000006 /* HotkeyManager.swift */; };
 		AA000007 /* AudioSimulator.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000007 /* AudioSimulator.swift */; };
 		AA000008 /* TextInjector.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000008 /* TextInjector.swift */; };
@@ -54,6 +55,8 @@
 		AA000046 /* LLMModelSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000046 /* LLMModelSettingsView.swift */; };
 		AA000200 /* MacAtoms.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000200 /* MacAtoms.swift */; };
 		AA000201 /* MacSettingsContainerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000201 /* MacSettingsContainerView.swift */; };
+		AA000300 /* DimmyCore+License.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000300 /* DimmyCore+License.swift */; };
+		AA000301 /* MacLicensePage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000301 /* MacLicensePage.swift */; };
 		AA000202 /* MacHomePage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000202 /* MacHomePage.swift */; };
 		AA000203 /* MacVoicePage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000203 /* MacVoicePage.swift */; };
 		AA000204 /* MacOutputPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000204 /* MacOutputPage.swift */; };
@@ -72,6 +75,7 @@
 		AB000003 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		AB000004 /* StatusBarController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusBarController.swift; sourceTree = "<group>"; };
 		AB000005 /* PillWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PillWindowController.swift; sourceTree = "<group>"; };
+		AB000400 /* CaptionWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptionWindowController.swift; sourceTree = "<group>"; };
 		AB000006 /* HotkeyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyManager.swift; sourceTree = "<group>"; };
 		AB000007 /* AudioSimulator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSimulator.swift; sourceTree = "<group>"; };
 		AB000008 /* TextInjector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextInjector.swift; sourceTree = "<group>"; };
@@ -116,6 +120,8 @@
 		AB000046 /* LLMModelSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMModelSettingsView.swift; sourceTree = "<group>"; };
 		AB000200 /* MacAtoms.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAtoms.swift; sourceTree = "<group>"; };
 		AB000201 /* MacSettingsContainerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSettingsContainerView.swift; sourceTree = "<group>"; };
+		AB000300 /* DimmyCore+License.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DimmyCore+License.swift"; sourceTree = "<group>"; };
+		AB000301 /* MacLicensePage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacLicensePage.swift; sourceTree = "<group>"; };
 		AB000202 /* MacHomePage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacHomePage.swift; sourceTree = "<group>"; };
 		AB000203 /* MacVoicePage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacVoicePage.swift; sourceTree = "<group>"; };
 		AB000204 /* MacOutputPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacOutputPage.swift; sourceTree = "<group>"; };
@@ -188,6 +194,7 @@
 			children = (
 				AB000004 /* StatusBarController.swift */,
 				AB000005 /* PillWindowController.swift */,
+				AB000400 /* CaptionWindowController.swift */,
 			);
 			path = Controllers;
 			sourceTree = "<group>";
@@ -199,6 +206,7 @@
 				AB000007 /* AudioSimulator.swift */,
 				AB000008 /* TextInjector.swift */,
 				AB000030 /* DimmyCore.swift */,
+				AB000300 /* DimmyCore+License.swift */,
 			);
 			path = Managers;
 			sourceTree = "<group>";
@@ -256,6 +264,7 @@
 				AB000209 /* MacAdvancedPage.swift */,
 				AB000210 /* MacRulesPage.swift */,
 				AB000211 /* MacPermissionsPage.swift */,
+				AB000301 /* MacLicensePage.swift */,
 			);
 			path = Settings;
 			sourceTree = "<group>";
@@ -305,6 +314,9 @@
 				AE000002 /* Sources */,
 				AC000001 /* Frameworks */,
 				AE000003 /* Resources */,
+				AE000004 /* Bundle onnxruntime.dylib */,
+				AE000005 /* Bundle llama.cpp + ggml dylibs */,
+				AE000006 /* Validate Frameworks bundle */,
 			);
 			buildRules = (
 			);
@@ -359,6 +371,67 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		AE000005 /* Bundle llama.cpp + ggml dylibs */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Bundle llama.cpp + ggml dylibs";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "set -euo pipefail\n# Bundle libllama + libggml*.dylib into Dimmy.app/Contents/Frameworks/.\n# Mirrors release.yml's \"Bundle llama.cpp dylibs\" step so a local Xcode\n# build produces a self-contained .app that runs outside Xcode and on\n# end-user macOS where /opt/homebrew/lib isn't on the linker path.\n# Idempotent — skips files that are already present and unchanged.\nREPO_ROOT=\"$SRCROOT/../..\"\nRD=\"$REPO_ROOT/core/target/aarch64-apple-darwin/release\"\nFW=\"$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH\"\nmkdir -p \"$FW\"\nIDENTITY=\"${EXPANDED_CODE_SIGN_IDENTITY:-${CODE_SIGN_IDENTITY:--}}\"\nfor n in libllama libggml libggml-base libggml-cpu libggml-metal; do\n  for d in \"$RD\"/${n}*.dylib; do\n    [ -e \"$d\" ] || continue\n    name=\"$(basename \"$d\")\"\n    cp -RL \"$d\" \"$FW/$name\"\n    install_name_tool -id \"@rpath/$name\" \"$FW/$name\" 2>/dev/null || true\n    chmod 644 \"$FW/$name\"\n    codesign --force --sign \"$IDENTITY\" --timestamp=none \"$FW/$name\"\n  done\ndone\n";
+		};
+		AE000006 /* Validate Frameworks bundle */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Validate Frameworks bundle";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "set -euo pipefail\n# Verify the runtime dylibs Dimmy.app needs are bundled in\n# Contents/Frameworks/ and resolvable. Catches a missing\n# libonnxruntime.dylib or libllama.dylib at build time, before the\n# user discovers it as a launch crash.\nFW=\"$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH\"\nrequired=(\n  libonnxruntime.dylib\n  libllama.dylib\n  libggml.dylib\n  libggml-base.dylib\n  libggml-cpu.dylib\n  libggml-metal.dylib\n)\nmissing=()\nfor f in \"${required[@]}\"; do\n  [ -f \"$FW/$f\" ] || missing+=(\"$f\")\ndone\nif (( ${#missing[@]} > 0 )); then\n  echo \"error: missing required dylibs in $FW:\" >&2\n  for f in \"${missing[@]}\"; do echo \"  - $f\" >&2; done\n  echo \"hint: rebuild the Rust core with the matching feature flags\" >&2\n  echo \"      (cargo build --release --lib --target aarch64-apple-darwin\" >&2\n  echo \"       --features local-stt-metal,local-llm-metal,local-stt-parakeet-coreml,local-stt-parakeet-fluid)\" >&2\n  exit 1\nfi\necho \"[validate] all required dylibs present (${#required[@]} files)\"\n";
+		};
+		AE000004 /* Bundle onnxruntime.dylib */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Bundle onnxruntime.dylib";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libonnxruntime.dylib",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "set -euo pipefail\n# Fetch (idempotent) and bundle libonnxruntime.dylib into\n# Dimmy.app/Contents/Frameworks/. Required by the local-stt-parakeet\n# backend (ort crate, load-dynamic mode).\nORT_VERSION=\"1.22.0\"\nORT_ARCH=\"arm64\"\nREPO_ROOT=\"$SRCROOT/../..\"\n\"$REPO_ROOT/scripts/download-onnxruntime.sh\" -v \"$ORT_VERSION\" -a \"$ORT_ARCH\"\n\nSRC_DIR=\"$REPO_ROOT/core/target/onnxruntime-osx-$ORT_ARCH-$ORT_VERSION/lib\"\nDEST_DIR=\"$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH\"\nmkdir -p \"$DEST_DIR\"\ncp -f \"$SRC_DIR/libonnxruntime.$ORT_VERSION.dylib\" \"$DEST_DIR/libonnxruntime.dylib\"\nchmod 644 \"$DEST_DIR/libonnxruntime.dylib\"\n# Re-sign with the project's signing identity so the hardened runtime\n# accepts the bundled dylib at launch. Ad-hoc (-) when no Developer ID.\nIDENTITY=\"${EXPANDED_CODE_SIGN_IDENTITY:-${CODE_SIGN_IDENTITY:--}}\"\ncodesign --force --sign \"$IDENTITY\" --timestamp=none \"$DEST_DIR/libonnxruntime.dylib\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		AE000002 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -369,6 +442,7 @@
 				AA000003 /* AppState.swift in Sources */,
 				AA000004 /* StatusBarController.swift in Sources */,
 				AA000005 /* PillWindowController.swift in Sources */,
+				AA000400 /* CaptionWindowController.swift in Sources */,
 				AA000006 /* HotkeyManager.swift in Sources */,
 				AA000007 /* AudioSimulator.swift in Sources */,
 				AA000008 /* TextInjector.swift in Sources */,
@@ -409,6 +483,8 @@
 				AA000210 /* MacRulesPage.swift in Sources */,
 				AA000211 /* MacPermissionsPage.swift in Sources */,
 				AA000030 /* DimmyCore.swift in Sources */,
+				AA000300 /* DimmyCore+License.swift in Sources */,
+				AA000301 /* MacLicensePage.swift in Sources */,
 				AA000041 /* SelfTests.swift in Sources */,
 				AA000042 /* RecordingSimulator.swift in Sources */,
 			);
@@ -454,7 +530,7 @@
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -516,7 +592,7 @@
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;

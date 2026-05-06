@@ -974,6 +974,10 @@ public sealed partial class PillWindow : Window
         toggleItem.Click += (_, _) => App.Instance?.TogglePill();
         menu.Items.Add(toggleItem);
 
+        var meetingItem = new MenuFlyoutItem { Text = "Open Meeting…" };
+        meetingItem.Click += (_, _) => App.Instance?.OpenMeetingWindow();
+        menu.Items.Add(meetingItem);
+
         var settingsItem = new MenuFlyoutItem { Text = "Settings..." };
         settingsItem.Click += (_, _) => App.Instance?.OpenSettingsWindow();
         menu.Items.Add(settingsItem);

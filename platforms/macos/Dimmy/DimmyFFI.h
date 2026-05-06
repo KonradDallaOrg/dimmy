@@ -97,6 +97,29 @@ int32_t dimmy_download_model(const char * _Nonnull filename);
 /// Returns 1=yes, 0=no.
 int32_t dimmy_model_exists(const char * _Nonnull filename);
 
+// ── Parakeet TDT v3 FP32 (alternative local STT backend) ────────────
+
+/// 1 = the Parakeet FP32 bundle (~2.5 GB) is fully on disk, 0 otherwise.
+int32_t dimmy_parakeet_bundle_present(void);
+
+/// Download the Parakeet bundle into the dimmy config dir. BLOCKING —
+/// call from a background thread. Emits "parakeet_bundle_download_progress"
+/// events with {downloaded,total}. Returns 0=OK, -1=error.
+int32_t dimmy_parakeet_download_bundle(void);
+
+/// Direct PCM → text via Parakeet (used by tests / smoke; the live STT
+/// path goes through dimmy_stop_recording()). Returns bytes written, or -1.
+int32_t dimmy_parakeet_transcribe(const float * _Nullable pcm_ptr,
+                                  int32_t pcm_len,
+                                  char * _Nonnull out_buf,
+                                  int32_t buf_len);
+
+/// Pre-load the Parakeet sessions + run a tiny dummy inference so the
+/// user's first real recording skips the ~6 s cold path. BLOCKING —
+/// call from a background thread. Returns 0 on success, -1 on error
+/// (most commonly "bundle not present" — caller should guard).
+int32_t dimmy_parakeet_warmup(void);
+
 // ── Local LLM ────────────────────────────────────────────────────────
 
 /// Get JSON array of available local LLM models with download status.
@@ -172,10 +195,77 @@ int32_t dimmy_check_audio_health(char * _Nonnull out_buf, int32_t buf_len);
 /// Build version (CARGO_PKG_VERSION). Returns bytes written, or -1.
 int32_t dimmy_get_version(char * _Nonnull out_buf, int32_t buf_len);
 
+/// Build flavor — "" (prod) or "staging". Embedded at compile time
+/// via DIMMY_BUILD_FLAVOR. UIs surface a "STAGING" watermark on
+/// non-prod flavors. Returns bytes written, or -1 on null buffer.
+int32_t dimmy_build_flavor(char * _Nonnull out_buf, int32_t buf_len);
+
 /// GPU known-bad marker status as JSON. Returns bytes written, or -1.
 int32_t dimmy_gpu_get_status(char * _Nonnull out_buf, int32_t buf_len);
 
 /// Clear the known-bad GPU marker so we re-probe Metal next launch.
 int32_t dimmy_gpu_clear_known_bad(void);
+
+// ── Licensing ──────────────────────────────────────────────────────
+
+// dimmy_license_set_server_url removed from the public ABI. The Rust
+// implementation is now gated behind cfg(debug_assertions) and the
+// Mac Settings UI that called it has been deleted. Release dylibs
+// embed the URL via DIMMY_LICENSE_SERVER_URL at compile time.
+
+/// Current license status as JSON. Schema:
+///   { kind, tier?, days_remaining?, days_offline?, error?,
+///     cloud_enabled, updates_enabled, scopes: [...] }
+int32_t dimmy_license_status_json(char * _Nonnull out_buf, int32_t buf_len);
+
+/// POST /api/trial/start { email }. Writes JSON {ok, magic_link?, error?}.
+int32_t dimmy_license_request_trial(const char * _Nonnull email,
+                                    char * _Nonnull out_buf,
+                                    int32_t buf_len);
+
+/// GET /api/activate?code=...&device_label=... — on success persists the
+/// returned token to ~/.config/dimmy/license.json.
+int32_t dimmy_license_redeem(const char * _Nonnull code,
+                             const char * _Nullable device_label,
+                             char * _Nonnull out_buf,
+                             int32_t buf_len);
+
+/// POST /api/refresh — bumps last_seen + rotates token.
+int32_t dimmy_license_refresh(char * _Nonnull out_buf, int32_t buf_len);
+
+/// Delete the on-disk license file. Useful for "Sign out". Returns 0=ok.
+int32_t dimmy_license_clear(void);
+
+/// Capability check: 1=scope present, 0=denied, -1=null input.
+int32_t dimmy_license_has_scope(const char * _Nonnull scope_name);
+
+/// POST /api/devices/list — JSON {ok, license_id, tier, max_devices, devices: [...]}.
+int32_t dimmy_license_devices_list(char * _Nonnull out_buf, int32_t buf_len);
+
+/// POST /api/devices/deactivate { device_id? }. Pass NULL to self-sign-out.
+int32_t dimmy_license_device_deactivate(const char * _Nullable device_id,
+                                        char * _Nonnull out_buf,
+                                        int32_t buf_len);
+
+/// POST /api/checkout/create — returns Stripe Checkout URL (or 409
+/// with current_tier when the email already has an active license).
+/// `tier` must be "monthly" | "annual" | "lifetime".
+/// `email` is optional (NULL = anonymous / token-authenticated path).
+int32_t dimmy_license_checkout_url(const char * _Nonnull tier,
+                                   const char * _Nullable email,
+                                   char * _Nonnull out_buf,
+                                   int32_t buf_len);
+
+/// POST /api/billing-portal — returns Stripe Customer Portal URL.
+/// Only valid for paid licenses.
+int32_t dimmy_license_billing_portal_url(char * _Nonnull out_buf, int32_t buf_len);
+
+/// POST /api/plan-change — switch monthly⇄annual via Stripe subscription
+/// update API (proration handled server-side). Reject path: lifetime tier
+/// or first-purchase. After success, callers should call dimmy_license_refresh
+/// to pick up the new tier in the local token.
+int32_t dimmy_license_plan_change(const char * _Nonnull new_tier,
+                                  char * _Nonnull out_buf,
+                                  int32_t buf_len);
 
 #endif /* DimmyFFI_h */

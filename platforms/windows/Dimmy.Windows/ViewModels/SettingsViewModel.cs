@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Text.Json;
 using CommunityToolkit.Mvvm.ComponentModel;
 
@@ -21,6 +22,10 @@ public partial class SettingsViewModel : ObservableObject
         new("Deepgram-Nova2", "https://api.deepgram.com/v1/listen", "nova-2"),
         new("Gemini", "https://generativelanguage.googleapis.com/v1beta/models", "gemini-2.5-flash"),
         new("Gemini-Pro", "https://generativelanguage.googleapis.com/v1beta/models", "gemini-2.5-pro"),
+        // Phase 1 cloud expansion (2026-05-04 benchmark drove the model picks)
+        new("Fireworks", "https://audio-turbo.api.fireworks.ai/v1/audio/transcriptions", "whisper-v3-turbo"),
+        new("Together-Parakeet", "https://api.together.xyz/v1/audio/transcriptions", "nvidia/parakeet-tdt-0.6b-v3"),
+        new("Together-Whisper", "https://api.together.xyz/v1/audio/transcriptions", "openai/whisper-large-v3"),
         new("Custom", "", ""),
     ];
 
@@ -33,6 +38,10 @@ public partial class SettingsViewModel : ObservableObject
         new("Gemini", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-2.5-flash"),
         new("Anthropic", "https://api.anthropic.com/v1/messages", "claude-haiku-4-5-20251001"),
         new("Anthropic-Sonnet", "https://api.anthropic.com/v1/messages", "claude-sonnet-4-20250514"),
+        // Phase 1 cloud expansion (2026-05-04, sensible model picks for filler-removal/smart-format)
+        new("Fireworks", "https://api.fireworks.ai/inference/v1/chat/completions", "accounts/fireworks/models/kimi-k2p6"),
+        new("Together-Llama", "https://api.together.xyz/v1/chat/completions", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
+        new("Together-Qwen", "https://api.together.xyz/v1/chat/completions", "Qwen/Qwen2.5-7B-Instruct-Turbo"),
         new("Custom", "", ""),
     ];
 
@@ -108,6 +117,23 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private List<string> _devices = [];
     [ObservableProperty] private bool _preprocessingEnabled = true;
     [ObservableProperty] private bool _chunkStreamingEnabled;
+    [ObservableProperty] private bool _liveCaptionsEnabled = true;
+    [ObservableProperty] private bool _saveAudioInHistory = false;
+    [ObservableProperty] private int _historyAudioKeepDays = 30;
+    [ObservableProperty] private int _historyAudioMaxMb = 5_000;
+    [ObservableProperty] private string _historySearchQuery = "";
+
+    /// User-defined app rules. Round-tripped through config.json's
+    /// `app_rules` array. The Rust core reads this list at LLM-enhance
+    /// time and applies the first-match override to llm_style /
+    /// llm_translate_to. Drag-reorder in the Settings UI maps to list
+    /// order = priority.
+    public ObservableCollection<AppRuleViewModel> AppRules { get; } = new();
+
+    /// Result list for the History page. Populated lazily when the user
+    /// navigates to that page (see SettingsWindow.LoadHistoryItems).
+    public ObservableCollection<HistoryItemViewModel> HistoryItems { get; } = new();
+    [ObservableProperty] private HistoryItemViewModel? _selectedHistoryItem;
     [ObservableProperty] private bool _useKeyring = false;
     [ObservableProperty] private bool _llmEnabled;
     [ObservableProperty] private string _llmApiUrl = "";
@@ -192,6 +218,7 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _showInTaskbar;
     [ObservableProperty] private string _sttMode = "cloud";
     [ObservableProperty] private string _localModel = "ggml-base-q8_0.bin";
+    [ObservableProperty] private string _localSttBackend = "whisper";
     [ObservableProperty] private bool _fillerRemovalEnabled = true;
     [ObservableProperty] private string _llmMode = "cloud";
     [ObservableProperty] private string _localLlmModel = "gemma-4-E2B-it-Q4_K_M.gguf";
@@ -272,6 +299,11 @@ public partial class SettingsViewModel : ObservableObject
             SelectedDevice = r.TryGetProperty("selected_device", out var dev) ? dev.GetString() : null;
             PreprocessingEnabled = !r.TryGetProperty("preprocessing_enabled", out var pe) || pe.GetBoolean();
             ChunkStreamingEnabled = r.TryGetProperty("chunk_streaming_enabled", out var cs) && cs.GetBoolean();
+            LiveCaptionsEnabled = !r.TryGetProperty("live_captions_enabled", out var lce) || lce.GetBoolean();
+            SaveAudioInHistory = r.TryGetProperty("save_audio_in_history", out var sah) && sah.GetBoolean();
+            HistoryAudioKeepDays = r.TryGetProperty("history_audio_keep_days", out var hkd) ? hkd.GetInt32() : 30;
+            HistoryAudioMaxMb = r.TryGetProperty("history_audio_max_mb", out var hmm) ? hmm.GetInt32() : 5_000;
+            LoadAppRulesFromJson(r);
             UseKeyring = false;  // Always local encrypted file, ignore stored value
             LlmEnabled = r.TryGetProperty("llm_enabled", out var le) && le.GetBoolean();
             LlmApiUrl = r.TryGetProperty("llm_api_url", out var lu) ? lu.GetString() ?? "" : "";
@@ -303,6 +335,7 @@ public partial class SettingsViewModel : ObservableObject
             catch { /* DLL maybe missing in test/headless context */ }
             SttMode = r.TryGetProperty("stt_mode", out var sm2) ? sm2.GetString() ?? "cloud" : "cloud";
             LocalModel = r.TryGetProperty("local_model", out var lmod) ? lmod.GetString() ?? "ggml-base-q8_0.bin" : "ggml-base-q8_0.bin";
+            LocalSttBackend = r.TryGetProperty("local_stt_backend", out var lsb) ? lsb.GetString() ?? "whisper" : "whisper";
             FillerRemovalEnabled = !r.TryGetProperty("filler_removal_enabled", out var fre) || fre.GetBoolean();
             LlmMode = r.TryGetProperty("llm_mode", out var llmm) ? llmm.GetString() ?? "cloud" : "cloud";
             LocalLlmModel = r.TryGetProperty("local_llm_model", out var llmod) ? llmod.GetString() ?? "gemma-4-E2B-it-Q4_K_M.gguf" : "gemma-4-E2B-it-Q4_K_M.gguf";
@@ -343,6 +376,10 @@ public partial class SettingsViewModel : ObservableObject
             ["selected_device"] = SelectedDevice,
             ["preprocessing_enabled"] = PreprocessingEnabled,
             ["chunk_streaming_enabled"] = ChunkStreamingEnabled,
+            ["live_captions_enabled"] = LiveCaptionsEnabled,
+            ["save_audio_in_history"] = SaveAudioInHistory,
+            ["history_audio_keep_days"] = HistoryAudioKeepDays,
+            ["history_audio_max_mb"] = HistoryAudioMaxMb,
             ["use_keyring"] = false,  // Always local encrypted file
             ["llm_enabled"] = LlmStyle != "off",
             ["llm_api_url"] = LlmApiUrl,
@@ -355,6 +392,7 @@ public partial class SettingsViewModel : ObservableObject
             ["ggml_debug_logging"] = GgmlDebugLogging,
             ["stt_mode"] = SttMode,
             ["local_model"] = LocalModel,
+            ["local_stt_backend"] = LocalSttBackend,
             ["filler_removal_enabled"] = FillerRemovalEnabled,
             ["llm_mode"] = LlmMode,
             ["local_llm_model"] = LocalLlmModel,
@@ -368,7 +406,57 @@ public partial class SettingsViewModel : ObservableObject
         if (!string.IsNullOrEmpty(ApiKey)) dict["api_key"] = ApiKey;
         if (!string.IsNullOrEmpty(LlmApiKey)) dict["llm_api_key"] = LlmApiKey;
 
+        // app_rules — serialized as a JSON array matching the Rust
+        // `Vec<AppRule>` shape. Empty translate is encoded as null
+        // (semantically distinct from "" which means "force off").
+        var rules = new List<Dictionary<string, object?>>();
+        foreach (var r in AppRules)
+        {
+            rules.Add(new Dictionary<string, object?>
+            {
+                ["match_pattern"] = r.MatchPattern,
+                ["match_type"] = r.MatchType,
+                ["llm_style"] = r.LlmStyle,
+                ["llm_translate_to"] = string.IsNullOrEmpty(r.LlmTranslateTo) ? null : r.LlmTranslateTo,
+                ["label"] = r.Label,
+                ["enabled"] = r.Enabled,
+            });
+        }
+        dict["app_rules"] = rules;
+
         return JsonSerializer.Serialize(dict);
+    }
+
+    private void LoadAppRulesFromJson(JsonElement r)
+    {
+        AppRules.Clear();
+        if (!r.TryGetProperty("app_rules", out var arr) || arr.ValueKind != JsonValueKind.Array)
+            return;
+        foreach (var el in arr.EnumerateArray())
+        {
+            var pattern = el.TryGetProperty("match_pattern", out var p) ? p.GetString() ?? "" : "";
+            var matchType = el.TryGetProperty("match_type", out var mt) ? mt.GetString() ?? "process_name" : "process_name";
+            var style = el.TryGetProperty("llm_style", out var s) ? s.GetString() ?? "off" : "off";
+            string translate = "";
+            if (el.TryGetProperty("llm_translate_to", out var tt) && tt.ValueKind == JsonValueKind.String)
+                translate = tt.GetString() ?? "";
+            var label = el.TryGetProperty("label", out var l) ? l.GetString() ?? "" : "";
+            var enabled = !el.TryGetProperty("enabled", out var en) || en.GetBoolean();
+            AppRules.Add(new AppRuleViewModel(pattern, matchType, style, translate, label, enabled));
+        }
+    }
+
+    /// Drop the current rule list and load the v1 defaults bundled with
+    /// the app. Used by the "Load defaults" button. Designed to be safe
+    /// to call repeatedly — replaces, doesn't merge — because users who
+    /// click it a second time after editing usually want a clean reset.
+    /// Future versions will introduce a "Sync v2 defaults" button that
+    /// merges by pattern, leaving custom edits alone.
+    public void LoadAppRulesDefaults()
+    {
+        AppRules.Clear();
+        foreach (var r in AppRulesDefaults.V1Windows)
+            AppRules.Add(r);
     }
 
     /// <summary>

@@ -18,6 +18,60 @@ fn main() {
         println!("cargo:rustc-link-arg=-Wl,-multiply_defined,suppress");
     }
 
+    // FluidAudio Swift bridge needs the Swift compatibility libraries
+    // that ship in the Xcode toolchain at
+    // <Xcode>/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/macosx/.
+    // The fluidaudio-rs build.rs links `swiftCore` only and assumes
+    // Swift 5; on Swift 6.x toolchains the symbols
+    //   __swift_FORCE_LOAD_$_swiftCompatibilityConcurrency
+    //   __swift_FORCE_LOAD_$_swiftCompatibilityPacks
+    // get pulled in unresolved. We add the compat-static archives + the
+    // swift macosx lib search path here so the linker can resolve them.
+    // Apple-Silicon-only — same gate as the fluidaudio-rs target spec.
+    #[cfg(all(
+        feature = "local-stt-parakeet-fluid",
+        target_os = "macos",
+        target_arch = "aarch64"
+    ))]
+    {
+        let xcode = std::process::Command::new("xcode-select")
+            .arg("-p")
+            .output()
+            .expect("xcode-select -p");
+        let xcode_path = String::from_utf8_lossy(&xcode.stdout).trim().to_string();
+        let swift_lib = format!(
+            "{}/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/macosx",
+            xcode_path
+        );
+        println!("cargo:rustc-link-search=native={}", swift_lib);
+        // Order matters: Concurrency / Packs reference symbols in 5.0 / 5.1 / 5.6.
+        for lib in [
+            "swiftCompatibility50",
+            "swiftCompatibility51",
+            "swiftCompatibility56",
+            "swiftCompatibilityConcurrency",
+            "swiftCompatibilityPacks",
+            "swiftCompatibilityDynamicReplacements",
+        ] {
+            println!("cargo:rustc-link-lib=static={}", lib);
+        }
+
+        // Runtime: dyld must find libswift_Concurrency.dylib + friends.
+        // Stock macOS 14+ ships them in /usr/lib/swift/, but this dev box
+        // (macOS 26 preview) has a stripped /usr/lib/swift/ — the back-
+        // deployed runtimes only live under Xcode's swift-5.5/macosx/.
+        // We register both as rpaths so binaries work both on this dev
+        // host and on any normal end-user macOS Sonoma+. The shipping
+        // .app gets a Frameworks-relative rpath via Xcode build phases;
+        // CLI binaries (smoke / bench) rely on these absolute paths.
+        let swift_back_deploy = format!(
+            "{}/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.5/macosx",
+            xcode_path
+        );
+        println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
+        println!("cargo:rustc-link-arg=-Wl,-rpath,{}", swift_back_deploy);
+    }
+
     // Telemetry secrets — read from env at compile time, embed via env!().
     // Missing values become empty strings; the runtime client treats an
     // empty key as "telemetry disabled" and stays silent. This keeps
@@ -37,6 +91,37 @@ fn main() {
     // consumer downstream sees a clean string.
     let posthog_key = sanitize_secret(std::env::var("POSTHOG_API_KEY").unwrap_or_default());
     let sentry_dsn = sanitize_secret(std::env::var("SENTRY_DSN").unwrap_or_default());
+    // Same sanitize+rerun pattern for the licensing public key so a
+    // GitHub Secret that copy-pasted with a trailing newline (the most
+    // common foot-gun) doesn't end up in the binary as `uut9…\n`,
+    // which `verify_token` then rejects as a malformed pubkey. Also
+    // adds explicit `rerun-if-env-changed` so a changed secret on
+    // re-run invalidates the cached license.rs compilation even when
+    // `option_env!` cache tracking is unreliable across actions/cache.
+    let license_pubkey = sanitize_secret(std::env::var("DIMMY_LICENSE_PUBKEY").unwrap_or_default());
+    // Server URL is paired with the pubkey at build time. We refuse to
+    // default a non-empty pubkey to a hardcoded prod URL — that's how a
+    // staging-keyed build accidentally hits prod, the exact failure
+    // mode we're locking down. Pubkey + URL move together or not at
+    // all. Source-builds (both empty) fall back to the localhost mock.
+    let license_server_url =
+        sanitize_secret(std::env::var("DIMMY_LICENSE_SERVER_URL").unwrap_or_default());
+
+    // Build flavor — drives everything that needs to keep a staging
+    // build from colliding with a prod install on the same machine:
+    // config dir name (~/.config/dimmy vs ~/.config/dimmy-staging),
+    // single-instance mutex name on Windows, the "STAGING" watermark
+    // on the UI. Empty/unset = prod build (default). Only "staging"
+    // is accepted as the alternate value; anything else is a typo
+    // and we abort the build.
+    let build_flavor = sanitize_secret(std::env::var("DIMMY_BUILD_FLAVOR").unwrap_or_default());
+    if !build_flavor.is_empty() && build_flavor != "staging" {
+        panic!(
+            "DIMMY_BUILD_FLAVOR must be empty (prod) or 'staging' — got '{}'. \
+            Refusing to ship a binary with an unknown flavor.",
+            build_flavor
+        );
+    }
 
     // Build-time sanity checks. Non-fatal — emit `cargo:warning` so the
     // CI log surfaces "secret looks bad" without breaking the build. A
@@ -68,10 +153,94 @@ fn main() {
         );
     }
 
+    // ── Hard validation: refuse misconfigured release builds ──────────
+    //
+    // Two failure modes we lock down at compile time so a slip in CI
+    // can't ship a binary that runs free or hits the wrong backend:
+    //
+    //   1. Release build + license-client feature ON + empty pubkey.
+    //      Pre-fix: `cargo:warning` and binary ships as Unrestricted
+    //      (free for everyone). Post-fix: build aborts.
+    //
+    //   2. Pubkey set but server URL empty. Pre-fix: code defaulted to
+    //      `https://license.dimmy.app` regardless of which keypair the
+    //      pubkey came from — so a staging-keyed build silently hit
+    //      prod. Post-fix: pubkey and URL must be set together.
+    //
+    // PROFILE is set by Cargo to "debug" or "release". CARGO_FEATURE_*
+    // env vars are present iff that feature is active for this build.
+    let is_release = std::env::var("PROFILE").unwrap_or_default() == "release";
+    let license_client_on = std::env::var("CARGO_FEATURE_LICENSE_CLIENT").is_ok();
+    if is_release && license_client_on && license_pubkey.is_empty() {
+        panic!(
+            "DIMMY_LICENSE_PUBKEY is empty but this is a release build with \
+            license-client feature on. Refusing to ship a binary that would \
+            run in Unrestricted mode for every user. Set the env var (CI: \
+            via release.yml `env:` block from GitHub Secrets) or build \
+            without --features license-client for source-build."
+        );
+    }
+    if !license_pubkey.is_empty() && license_server_url.is_empty() {
+        panic!(
+            "DIMMY_LICENSE_PUBKEY is set ({} chars) but DIMMY_LICENSE_SERVER_URL \
+            is empty. Refusing to fall back to a hardcoded prod URL — the \
+            previous behavior shipped staging-keyed builds that talked to \
+            prod by accident. Set BOTH env vars to the matching pair (staging \
+            pubkey → staging URL, prod pubkey → prod URL) or unset BOTH for a \
+            source-build / mock-server local run.",
+            license_pubkey.len()
+        );
+    }
+
+    // Loud diagnostic on every build so a misconfigured secret surfaces
+    // in the CI log instead of producing a "source build" binary
+    // silently. We log only the length (and a short prefix hash so two
+    // different valid 43-char keys are distinguishable in the log) —
+    // never the full key, never a token-like substring that would let
+    // somebody reading logs reconstruct the secret.
+    if license_pubkey.is_empty() {
+        println!(
+            "cargo:warning=DIMMY_LICENSE_PUBKEY empty — source-build / debug \
+            run, licensing disabled. (Release builds with license-client \
+            feature would have aborted earlier.)"
+        );
+    } else if license_pubkey.len() != 43 {
+        println!(
+            "cargo:warning=DIMMY_LICENSE_PUBKEY is {} chars; expected 43 (base64url \
+            of a 32-byte Ed25519 public key, no padding). License verify will fail.",
+            license_pubkey.len()
+        );
+    } else {
+        // Length-only confirmation — proves end-to-end env propagation
+        // worked without leaking the value. Two-char prefix is enough
+        // to spot-check we got the key we meant to ship.
+        let prefix2: String = license_pubkey.chars().take(2).collect();
+        println!(
+            "cargo:warning=DIMMY_LICENSE_PUBKEY embedded ok ({} chars, prefix={}…)",
+            license_pubkey.len(),
+            prefix2
+        );
+    }
+
     println!("cargo:rustc-env=DIMMY_POSTHOG_API_KEY={}", posthog_key);
     println!("cargo:rustc-env=DIMMY_SENTRY_DSN={}", sentry_dsn);
+    // Re-emit DIMMY_LICENSE_PUBKEY itself (sanitized) so `option_env!`
+    // in core/src/license.rs picks up the cleaned value, not the raw
+    // env that may carry trailing whitespace.
+    println!("cargo:rustc-env=DIMMY_LICENSE_PUBKEY={}", license_pubkey);
+    println!(
+        "cargo:rustc-env=DIMMY_LICENSE_SERVER_URL={}",
+        license_server_url
+    );
+    println!("cargo:rustc-env=DIMMY_BUILD_FLAVOR={}", build_flavor);
+    if build_flavor == "staging" {
+        println!("cargo:warning=DIMMY_BUILD_FLAVOR=staging — config dir will be 'dimmy-staging' and UI will show STAGING watermark");
+    }
     println!("cargo:rerun-if-env-changed=POSTHOG_API_KEY");
     println!("cargo:rerun-if-env-changed=SENTRY_DSN");
+    println!("cargo:rerun-if-env-changed=DIMMY_LICENSE_PUBKEY");
+    println!("cargo:rerun-if-env-changed=DIMMY_LICENSE_SERVER_URL");
+    println!("cargo:rerun-if-env-changed=DIMMY_BUILD_FLAVOR");
 }
 
 /// Strip leading UTF-8 BOM, then ASCII-trim. Returns owned String so

@@ -48,7 +48,19 @@ struct OutputSettingsView: View {
                 Section("LLM Provider") {
                     Picker("Provider + Model", selection: $selectedLlmPreset) {
                         ForEach(LlmPreset.presets) { preset in
-                            Text(preset.displayName).tag(preset.id)
+                            Label {
+                                Text(preset.displayName)
+                            } icon: {
+                                if preset.iconAssetName.isEmpty {
+                                    Image(systemName: "gear")
+                                } else {
+                                    Image(preset.iconAssetName)
+                                        .renderingMode(.original)
+                                        .resizable()
+                                        .frame(width: 12, height: 12)
+                                }
+                            }
+                            .tag(preset.id)
                         }
                     }
                     .onChange(of: selectedLlmPreset) { _, newId in

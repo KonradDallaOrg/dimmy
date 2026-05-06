@@ -175,6 +175,47 @@ pub enum Event {
     ErrorAudioHealth {
         code: i32,
     },
+
+    // ── Licensing ────────────────────────────────────────────
+    // Privacy hard rule (CLAUDE.md): NEVER send `email`, `email_hash`,
+    // `license_id`, `device_id`, `device_label`, `token`, magic links
+    // (the URL contains the activation code which is one-shot but
+    // observably distinguishes users). Tier names + categorical error
+    // buckets + counts are OK. The categorical sets are documented in
+    // docs/dev/telemetry-implementation.md.
+    /// User started or completed an activation. Fired from the dimmy://
+    /// scheme handler AND from the manual paste-code path.
+    LicenseActivated {
+        /// "trial" | "monthly" | "annual" | "lifetime" — comes from the verified token
+        /// after redeem so it's always categorical, never user-supplied.
+        tier: &'static str,
+    },
+    /// Activation request failed (network, server, signature). The
+    /// `error_category` is bucketed to a fixed enum — never the raw
+    /// reqwest::Error message which can leak URLs.
+    LicenseActivationFailed {
+        /// "network" | "server_4xx" | "server_5xx" | "verify" | "disk" | "unknown"
+        error_category: &'static str,
+    },
+    /// `/api/refresh` succeeded, last_online_check bumped.
+    LicenseRefreshed {
+        tier: &'static str,
+    },
+    LicenseRefreshFailed {
+        error_category: &'static str,
+    },
+    /// A scope check at a feature gate returned false (= user hit a
+    /// paywall). Lets us see which capabilities matter most for upsell.
+    LicenseScopeDenied {
+        /// "managed_stt" | "managed_llm" | "auto_update" | "history_sync" | "premium_styles"
+        scope: &'static str,
+    },
+    /// Self sign-out or admin device-deactivate.
+    LicenseDeviceDeactivated {
+        /// `true` if the calling device deactivated itself, `false` if
+        /// it deactivated another device under the same license.
+        is_self: bool,
+    },
 }
 
 impl Event {
@@ -213,6 +254,12 @@ impl Event {
             Event::ErrorAudioHealth { .. } => "error.audio_health",
             Event::FeatureHotkeyTriggered => "feature.hotkey_triggered",
             Event::FeatureApiKeySet { .. } => "feature.api_key_set",
+            Event::LicenseActivated { .. } => "license.activated",
+            Event::LicenseActivationFailed { .. } => "license.activation_failed",
+            Event::LicenseRefreshed { .. } => "license.refreshed",
+            Event::LicenseRefreshFailed { .. } => "license.refresh_failed",
+            Event::LicenseScopeDenied { .. } => "license.scope_denied",
+            Event::LicenseDeviceDeactivated { .. } => "license.device_deactivated",
         }
     }
 
@@ -304,5 +351,91 @@ mod tests {
     fn os_and_arch_are_known() {
         assert!(matches!(os_name(), "windows" | "macos" | "linux" | "other"));
         assert!(matches!(arch_name(), "x86_64" | "aarch64" | "other"));
+    }
+
+    /// Every license event MUST carry only categorical data — verify by
+    /// scanning the serialised properties for any field that smells like
+    /// a user identifier. This catches drift if someone adds a field
+    /// like `license_id` or `email_hash` later without thinking.
+    #[test]
+    fn license_events_carry_no_user_identifiers() {
+        let events = vec![
+            Event::LicenseActivated { tier: "trial" },
+            Event::LicenseActivationFailed {
+                error_category: "network",
+            },
+            Event::LicenseRefreshed { tier: "annual" },
+            Event::LicenseRefreshFailed {
+                error_category: "server_5xx",
+            },
+            Event::LicenseScopeDenied {
+                scope: "managed_stt",
+            },
+            Event::LicenseDeviceDeactivated { is_self: true },
+        ];
+        let banned_keys = [
+            "email",
+            "email_hash",
+            "eh",
+            "license_id",
+            "lid",
+            "device_id",
+            "did",
+            "device_label",
+            "label",
+            "token",
+            "magic_link",
+            "code",
+            "ip",
+            "hostname",
+            "username",
+        ];
+        for e in events {
+            let p = e.properties();
+            let p_obj = p
+                .as_object()
+                .expect("license event must serialise as object");
+            for k in p_obj.keys() {
+                assert!(
+                    !banned_keys.contains(&k.as_str()),
+                    "license event '{}' leaks PII via property '{}'",
+                    e.name(),
+                    k
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn license_event_names_are_dotted_lowercase() {
+        let names = [
+            Event::LicenseActivated { tier: "trial" }.name(),
+            Event::LicenseActivationFailed {
+                error_category: "x",
+            }
+            .name(),
+            Event::LicenseRefreshed { tier: "trial" }.name(),
+            Event::LicenseRefreshFailed {
+                error_category: "x",
+            }
+            .name(),
+            Event::LicenseScopeDenied {
+                scope: "managed_stt",
+            }
+            .name(),
+            Event::LicenseDeviceDeactivated { is_self: false }.name(),
+        ];
+        for n in names {
+            assert!(
+                n.starts_with("license."),
+                "license event name must start with 'license.': {}",
+                n
+            );
+            assert!(
+                n.chars().all(|c| c.is_lowercase() || c == '.' || c == '_'),
+                "license event name must be lowercase + dot/underscore: {}",
+                n
+            );
+        }
     }
 }

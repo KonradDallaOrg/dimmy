@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
@@ -22,7 +23,13 @@ public partial class App : Application
     private static Mutex? _singleInstanceMutex;
 
     private AppViewModel _appViewModel = new();
+    /// Exposes the shared view-model so secondary windows (Settings,
+    /// Onboarding) can subscribe to FFI-routed events that the App-level
+    /// callback already de-duplicates and dispatches onto the UI thread.
+    public AppViewModel AppViewModel => _appViewModel;
     private PillWindow? _pillWindow;
+    private CaptionWindow? _captionWindow;
+    private MeetingWindow? _meetingWindow;
     private OnboardingWindow? _onboardingWindow;
     private HotkeyService? _hotkeyService;
     private TrayService? _trayService;
@@ -31,6 +38,11 @@ public partial class App : Application
     private CommandPipeServer? _commandPipe;
     private UiPreferences _uiPrefs = new();
     private DispatcherQueue? _dispatcherQueue;
+
+    /// <summary>Set on launch if `dimmy://activate?…` was the trigger
+    /// AND no running instance was reachable to forward to. Picked up
+    /// inside StartNormalMode after the pipe server is online.</summary>
+    private string? _pendingActivationPayload;
 
     // Must be stored as a field to prevent GC collection of the delegate
     private DimmyNative.EventCallback? _eventCallbackDelegate;
@@ -46,9 +58,13 @@ public partial class App : Application
     private static readonly string PttLogPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "dimmy", "ptt.log");
 
-    private static void PttLog(string msg)
+    private static void PttLog(string msg) => Log(msg, "PTT");
+
+    /// Public diagnostic logger callable from any window for ad-hoc
+    /// debugging. Routes to the same ptt.log so output is one stream.
+    public static void Log(string msg, string tag = "Dimmy")
     {
-        var line = $"[{DateTime.Now:HH:mm:ss.fff}] [PTT] {msg}";
+        var line = $"[{DateTime.Now:HH:mm:ss.fff}] [{tag}] {msg}";
         Console.WriteLine(line);
         Console.Out.Flush();
         try { File.AppendAllText(PttLogPath, line + Environment.NewLine); } catch { }
@@ -108,6 +124,53 @@ public partial class App : Application
         // our taskbar entry and right-click shows nothing custom.
         JumpListService.SetProcessAumi();
 
+        // Register the dimmy:// custom URL scheme in HKCU\Classes so
+        // activation magic-link emails can deep-link into the app.
+        // No admin needed; idempotent.
+        UrlSchemeRegistrar.EnsureRegistered();
+
+        // If launched via a `dimmy://activate?…` URL, normalise to a
+        // pipe command and either:
+        //   (a) forward to a running Dimmy via the command pipe and
+        //       exit (so the user doesn't see a second window flash),
+        //   (b) keep the payload on our process so the still-to-be-
+        //       constructed Dimmy can dispatch it once StartNormalMode
+        //       brings the pipe + UI online.
+        var activationPayload = TryGetActivationPipeCommand();
+        if (activationPayload is not null)
+        {
+            // Hand off foreground rights to the running instance BEFORE
+            // forwarding the pipe command. Without this, the running
+            // instance's SetForegroundWindow call (post-activation,
+            // when popping Settings → License) silently no-ops because
+            // Windows only lets the *currently foreground* process
+            // promote arbitrary windows. We are foreground briefly here
+            // (this transient instance was launched by the OS in
+            // response to the dimmy:// click), so we transfer the
+            // promote-window right to the running PID, then exit.
+            try
+            {
+                var running = System.Diagnostics.Process
+                    .GetProcessesByName("Dimmy.Windows")
+                    .FirstOrDefault(p => p.Id != Environment.ProcessId);
+                if (running is not null)
+                {
+                    AllowSetForegroundWindow((uint)running.Id);
+                }
+            }
+            catch { /* best-effort handoff; activation still works without it */ }
+
+            if (CommandPipeServer.TrySendCommand(activationPayload))
+            {
+                Environment.Exit(0);
+                return;
+            }
+        }
+        // If a payload exists but we couldn't forward (no running
+        // instance), stash it for HandleForwardedCommand to pick up
+        // after StartNormalMode initialises the pipe server.
+        _pendingActivationPayload = activationPayload;
+
         // Ensure a Start-menu shortcut with the matching AUMI exists.
         // Velopack creates one in production; in dev we make a "Dimmy
         // (Dev).lnk" so Windows 11 is willing to display the custom
@@ -127,8 +190,11 @@ public partial class App : Application
             return;
         }
 
-        // Single-instance guard: exit immediately if another Dimmy is already running
-        _singleInstanceMutex = new Mutex(true, @"Global\DimmySingleInstance", out bool createdNew);
+        // Single-instance guard: exit immediately if another Dimmy is already running.
+        // Mutex name is flavor-aware (BuildInfo.SingleInstanceMutexName) so a
+        // staging install can coexist with a prod install on the same machine
+        // without the second launcher exiting silently.
+        _singleInstanceMutex = new Mutex(true, BuildInfo.SingleInstanceMutexName, out bool createdNew);
         if (!createdNew)
         {
             // Another instance exists — just exit silently
@@ -154,6 +220,11 @@ public partial class App : Application
             // 2. Register event callback
             _eventCallbackDelegate = OnNativeEvent;
             DimmyNative.dimmy_set_event_callback(_eventCallbackDelegate);
+
+            // 2b. Caption window — chunked transcriber emits stt_chunk
+            // events from the Rust core; we route them through the
+            // shared AppViewModel.SttChunkReceived hook.
+            _appViewModel.SttChunkReceived += OnSttChunkReceived;
 
             // 3. Load config into ViewModel
             LoadConfigIntoViewModel();
@@ -239,7 +310,8 @@ public partial class App : Application
             vm: _appViewModel,
             onTogglePill: TogglePill,
             onSettingsClick: OpenSettings,
-            onQuitClick: Quit);
+            onQuitClick: Quit,
+            onMeetingClick: OpenMeetingWindow);
 
         // Initialize tray icon with the pill window's HWND
         if (_pillWindow != null)
@@ -255,6 +327,40 @@ public partial class App : Application
 
         InitTaskbarAnchor();
         InitCommandPipeAndJumpList();
+
+        // If the launch came from a `dimmy://activate?…` URL but no
+        // running instance was around to handle it, we stashed the
+        // payload pre-mutex. Dispatch it now that the pipe server
+        // (and the rest of the UI) is up.
+        if (_pendingActivationPayload is not null)
+        {
+            HandleForwardedCommand(_pendingActivationPayload);
+            _pendingActivationPayload = null;
+        }
+
+        // Best-effort refresh — if we have a license, bump last_online_check
+        // server-side so the soft-suspend grace clock stays accurate. Errors
+        // are silent (offline / server unreachable / no license) — the
+        // existing on-disk token continues to work either way.
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var s = Dimmy.Windows.Services.LicenseService.GetStatus();
+                if (s.Kind is "TrialActive" or "Active" or "Suspended")
+                {
+                    var r = await Dimmy.Windows.Services.LicenseService.RefreshAsync();
+                    if (!r.Ok)
+                        PttLog($"[license] launch refresh: {r.Error}");
+                    else
+                        PttLog("[license] launch refresh ok");
+                }
+            }
+            catch (Exception ex)
+            {
+                PttLog($"[license] launch refresh error: {ex.Message}");
+            }
+        });
     }
 
     /// <summary>
@@ -301,6 +407,7 @@ public partial class App : Application
             {
                 if (command == "toggle-pill") { TogglePill(); return; }
                 if (command == "open-settings") { OpenSettings(); return; }
+                if (command == "open-meeting") { OpenMeetingWindow(); return; }
                 if (command == "quit") { Quit(); return; }
                 if (command.StartsWith("set-style:", StringComparison.Ordinal))
                 {
@@ -325,6 +432,53 @@ public partial class App : Application
                         }));
                     return;
                 }
+                if (command.StartsWith("activate-code:", StringComparison.Ordinal))
+                {
+                    var code = command["activate-code:".Length..];
+                    PttLog($"[license] activate-code received (len={code.Length})");
+                    _ = Task.Run(async () =>
+                    {
+                        bool ok = false;
+                        try
+                        {
+                            var r = await Dimmy.Windows.Services.LicenseService
+                                .RedeemAsync(code, Environment.MachineName);
+                            ok = r.Ok;
+                            PttLog(r.Ok
+                                ? "[license] activated via dimmy:// scheme"
+                                : $"[license] activation failed: {r.Error}");
+                        }
+                        catch (Exception ex)
+                        {
+                            PttLog($"[license] activate-code error: {ex.Message}");
+                        }
+                        finally
+                        {
+                            Dimmy.Windows.Services.LicenseService.NotifyChanged();
+                            // Surface confirmation: pop Settings → License so the user
+                            // sees the result. Without this, activation is silent and
+                            // they don't know whether the magic-link click landed.
+                            if (ok)
+                            {
+                                _dispatcherQueue?.TryEnqueue(() =>
+                                {
+                                    try { OpenSettingsWindowAt("license"); }
+                                    catch (Exception ex)
+                                    {
+                                        PttLog($"[license] OpenSettingsWindowAt failed: {ex.Message}");
+                                    }
+                                });
+                            }
+                        }
+                    });
+                    return;
+                }
+                if (command.StartsWith("activate-token:", StringComparison.Ordinal))
+                {
+                    var token = command["activate-token:".Length..];
+                    PttLog($"[license] activate-token received (len={token.Length}) — pre-signed token paste not yet supported");
+                    return;
+                }
                 System.Diagnostics.Debug.WriteLine($"[App] unknown forwarded command: {command}");
             }
             catch (Exception ex)
@@ -346,6 +500,26 @@ public partial class App : Application
         {
             if (args[i] == "--command")
                 return args[i + 1];
+        }
+        return null;
+    }
+
+    /// <summary>Walk the command-line args looking for a `dimmy://`
+    /// URL (Windows passes the URL as a single argv entry per the
+    /// `"%1"` registered command). Convert to a pipe-command payload
+    /// so the rest of the dispatch flow (HandleForwardedCommand)
+    /// doesn't have to know about URL parsing.</summary>
+    private static string? TryGetActivationPipeCommand()
+    {
+        var args = Environment.GetCommandLineArgs();
+        for (int i = 1; i < args.Length; i++)
+        {
+            var raw = args[i];
+            if (string.IsNullOrEmpty(raw)) continue;
+            if (!raw.StartsWith("dimmy://", StringComparison.OrdinalIgnoreCase)) continue;
+            var (code, token) = UrlSchemeRegistrar.ParseActivationUrl(raw);
+            if (code is not null) return $"activate-code:{code}";
+            if (token is not null) return $"activate-token:{token}";
         }
         return null;
     }
@@ -422,6 +596,68 @@ public partial class App : Application
         StartNormalMode();
     }
 
+    /// Subtitle-style routing of stt_chunk events: the caption window
+    /// shows a FIFO of the last N chunk deltas (currently 2), centered
+    /// at the bottom of the primary display. The cumulative text used
+    /// for the final paste is owned upstream — only the rolling on-
+    /// screen subtitles are managed here. AppViewModel still tracks
+    /// the cumulative for any other consumer that wants it.
+    private string _lastCumulative = "";
+    private void OnSttChunkReceived(string cumulative, bool isFinal)
+    {
+        if (!_appViewModel.LiveCaptionsEnabled) return;
+
+        if (_captionWindow == null)
+        {
+            _captionWindow = new CaptionWindow();
+            _captionWindow.Activate();
+        }
+
+        // Compute the per-chunk delta from the cumulative diff. The
+        // Rust core also sends a `delta` field via the stt_chunk
+        // payload, but routing it would mean changing AppViewModel's
+        // signature — this keeps the FIFO logic compact and self-
+        // contained on the C# side.
+        string delta;
+        if (!string.IsNullOrEmpty(_lastCumulative)
+            && cumulative.StartsWith(_lastCumulative, StringComparison.Ordinal))
+        {
+            delta = cumulative.Substring(_lastCumulative.Length).Trim();
+        }
+        else
+        {
+            delta = cumulative.Trim();
+        }
+        _lastCumulative = cumulative;
+
+        if (!string.IsNullOrEmpty(delta))
+        {
+            _captionWindow.PushChunk(delta);
+        }
+        _captionWindow.PositionAtScreenBottom();
+
+        if (!isFinal)
+        {
+            _captionWindow.Show();
+        }
+        else
+        {
+            // Hide after ~1.2 s so the user gets a final glance, then
+            // reset state for the next recording.
+            var dq = _dispatcherQueue;
+            _ = System.Threading.Tasks.Task.Delay(1200).ContinueWith(_ =>
+            {
+                dq?.TryEnqueue(() =>
+                {
+                    _captionWindow?.Hide();
+                    _captionWindow?.Reset();
+                    _appViewModel.LiveCaptionText = "";
+                    _lastCumulative = "";
+                });
+            });
+        }
+    }
+
     private void OnNativeEvent(IntPtr jsonPtr)
     {
         try
@@ -485,15 +721,66 @@ public partial class App : Application
                 _appViewModel.KeepInClipboard = kc.GetBoolean();
             if (r.TryGetProperty("theme", out var pt))
                 _appViewModel.Theme = pt.GetString() ?? "Default";
+            // live_captions_enabled — defaults to true if absent (old configs).
+            // Drives whether OnSttChunkReceived shows the floating caption
+            // window. Independent of chunk_streaming_enabled.
+            _appViewModel.LiveCaptionsEnabled =
+                !r.TryGetProperty("live_captions_enabled", out var lce) || lce.GetBoolean();
             PttLog($"LoadConfig: shortcut={_appViewModel.Shortcut}, mode={_appViewModel.ShortcutMode}");
         }
         catch (Exception ex) { PttLog($"LoadConfig: parse error: {ex.Message}"); }
+    }
+
+    /// Snapshot the foreground app's process name and push it to the
+    /// Rust core. The Rust matcher uses it later (LLM-enhance time) to
+    /// resolve any user-defined app_rules. Empty string is fine — Rust
+    /// treats it as "no rule matches" and falls back to user defaults.
+    private void CaptureAndPushAppContext()
+    {
+        try
+        {
+            var fg = Helpers.AppContextCapture.GetForegroundApp();
+            // Bundle id + wm_class are macOS / Linux specific — leave
+            // empty on Windows. The Rust core matches first-non-empty.
+            var json = "{\"process_name\":\""
+                + System.Text.Json.JsonEncodedText.Encode(fg.ProcessName).ToString()
+                + "\",\"bundle_id\":\"\",\"wm_class\":\"\"}";
+            var rc = DimmyNative.dimmy_set_app_context(json);
+            // Fire-and-forget icon extraction: SHGetFileInfo on the exe
+            // path → PNG cache. Future Settings → App Rules renders
+            // pull the cached PNG instead of a hand-rolled SVG.
+            if (fg.HasValue && !string.IsNullOrEmpty(fg.ExePath))
+            {
+                System.Threading.Tasks.Task.Run(() =>
+                    Helpers.IconExtractor.EnsureCachedFromExePath(fg.ExePath));
+            }
+            // Always log the captured value so diagnosing "rules don't
+            // match" only requires reading ptt.log: empty = capture
+            // failed (UAC-elevated foreground, exotic shell), non-empty
+            // = what we sent to Rust for the resolve() lookup.
+            Log($"captured process='{fg.ProcessName}' rc={rc}", "AppCtx");
+        }
+        catch (Exception ex)
+        {
+            PttLog($"app context capture failed: {ex.Message}");
+        }
     }
 
     private void OnHotkeyPressed()
     {
         _dispatcherQueue?.TryEnqueue(async () =>
         {
+            // Gate: if a meeting recording is active, swallow the hotkey
+            // entirely. Starting a parallel dictation would corrupt the
+            // shared cpal audio buffer (both writers append to the same
+            // Vec<f32>). User gets visible feedback via the meeting
+            // window's pulsing red dot — no toast needed.
+            if (DimmyNative.dimmy_meeting_is_active() != 0)
+            {
+                PttLog("hotkey ignored — meeting recording in progress");
+                return;
+            }
+
             // Show pill if hidden — but only if the user hasn't opted
             // into "taskbar-only" mode. With PillShowOnHotkey=false the
             // recording status is conveyed exclusively via the taskbar
@@ -507,6 +794,11 @@ public partial class App : Application
                 // PTT: press starts recording
                 if (!_appViewModel.IsBusy && !_pttStarted)
                 {
+                    // Snapshot foreground app BEFORE start_recording —
+                    // by the time Rust applies app_rules at LLM-enhance
+                    // time the focus may have moved to Dimmy itself or
+                    // wherever the paste landed.
+                    CaptureAndPushAppContext();
                     _pendingStop = false; // clear before starting
                     _pttStarted = true;
                     _appViewModel.SuppressRecordingStarted = false; // allow recording_started event
@@ -550,6 +842,7 @@ public partial class App : Application
                     await StopAndProcess();
                 else if (!_appViewModel.IsBusy && !_stopInProgress)
                 {
+                    CaptureAndPushAppContext();
                     _appViewModel.SuppressRecordingStarted = false; // ensure Rust event is accepted
                     var result = DimmyNative.dimmy_start_recording();
                     if (result == -1)
@@ -644,7 +937,7 @@ public partial class App : Application
         _trayService?.UpdateState("Dimmy — Ready", "");
     }
 
-    private bool IsPillVisible()
+    public bool IsPillVisible()
     {
         if (_pillWindow == null) return false;
         var appWindow = WindowHelper.GetAppWindow(_pillWindow);
@@ -661,18 +954,122 @@ public partial class App : Application
 
     public void OpenSettingsWindow() => OpenSettings();
 
+    /// Open the dedicated MeetingWindow (or activate it if already
+    /// open). Triggered from the tray menu's "Start meeting…" item
+    /// and from the Settings home → Meeting card.
+    public void OpenMeetingWindow()
+    {
+        Log("OpenMeetingWindow called", "Meeting");
+        try
+        {
+            if (_meetingWindow == null)
+            {
+                _meetingWindow = new MeetingWindow();
+                _meetingWindow.Closed += (_, __) => _meetingWindow = null;
+            }
+            _meetingWindow.Activate();
+            // Bring to foreground — Activate() alone doesn't always
+            // raise above other apps on Win11 if some other process
+            // recently called SetForegroundWindow.
+            var hwnd = WindowHelper.GetHwnd(_meetingWindow);
+            if (hwnd != IntPtr.Zero)
+            {
+                SetForegroundWindow(hwnd);
+            }
+            Log($"OpenMeetingWindow activated, hwnd={hwnd}", "Meeting");
+        }
+        catch (Exception ex)
+        {
+            Log($"OpenMeetingWindow EXC: {ex}", "Meeting");
+        }
+    }
+
+    /// Open Settings and navigate to the named nav tag (e.g. "license").
+    /// Used post-activation to surface confirmation without forcing the
+    /// user to find the License panel manually.
+    public void OpenSettingsWindowAt(string tag)
+    {
+        OpenSettings();
+        _settingsWindow?.NavigateToTag(tag);
+        ForegroundSettingsWindow();
+    }
+
     private void OpenSettings()
     {
         // Only allow one settings window at a time
         if (_settingsWindow != null)
         {
-            try { _settingsWindow.Activate(); return; }
+            try
+            {
+                _settingsWindow.Activate();
+                // Activate() alone doesn't reliably bring the window to
+                // foreground when the calling process (tray icon thread,
+                // pipe IPC handler) isn't already the foreground process.
+                // The topmost-toggle in ForegroundSettingsWindow is the
+                // workaround pattern that does — apply it on every open.
+                ForegroundSettingsWindow();
+                return;
+            }
             catch { _settingsWindow = null; }
         }
         _settingsWindow = new SettingsWindow();
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         _settingsWindow.Activate();
+        ForegroundSettingsWindow();
     }
+
+    /// <summary>
+    /// Force the Settings window to the foreground via Win32 — `Activate()`
+    /// alone is unreliable when the calling process isn't the current
+    /// foreground process (typical for our case: dimmy:// URL clicked in
+    /// browser, browser is foreground, our running instance receives the
+    /// command via pipe and tries to surface).
+    ///
+    /// The trick is the topmost-toggle pattern: briefly mark the window
+    /// HWND_TOPMOST then immediately undo to NOTOPMOST. SetForegroundWindow
+    /// is paired with the AllowSetForegroundWindow handoff that the
+    /// transient (URL-launched) instance issues before forwarding via pipe
+    /// — see TryGetActivationPipeCommand path below.
+    /// </summary>
+    private void ForegroundSettingsWindow()
+    {
+        if (_settingsWindow is null) return;
+        try
+        {
+            var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(_settingsWindow);
+            // Restore if minimised, then promote.
+            ShowWindow(hwnd, SW_RESTORE);
+            SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            SetForegroundWindow(hwnd);
+        }
+        catch (Exception ex)
+        {
+            PttLog($"[license] ForegroundSettingsWindow failed: {ex.Message}");
+        }
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter,
+        int X, int Y, int cx, int cy, uint uFlags);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+    private static extern bool AllowSetForegroundWindow(uint dwProcessId);
+
+    private const int SW_RESTORE = 9;
+    private static readonly IntPtr HWND_TOPMOST = new(-1);
+    private static readonly IntPtr HWND_NOTOPMOST = new(-2);
+    private const uint SWP_NOMOVE = 0x0002;
+    private const uint SWP_NOSIZE = 0x0001;
+    private const uint SWP_NOACTIVATE = 0x0010;
 
     private void CheckAudioHealth()
     {

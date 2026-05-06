@@ -12,6 +12,8 @@ pub enum Provider {
     Gemini,
     Deepgram,
     Anthropic,
+    Fireworks,
+    Together,
     Custom,
     Local,
 }
@@ -35,6 +37,10 @@ impl Provider {
             Self::Deepgram
         } else if url.contains("anthropic.com") {
             Self::Anthropic
+        } else if url.contains("fireworks.ai") {
+            Self::Fireworks
+        } else if url.contains("together.xyz") || url.contains("together.ai") {
+            Self::Together
         } else {
             Self::Custom
         }
@@ -50,6 +56,8 @@ impl Provider {
             Self::Gemini => "gemini",
             Self::Deepgram => "deepgram",
             Self::Anthropic => "anthropic",
+            Self::Fireworks => "fireworks",
+            Self::Together => "together",
             Self::Custom => "custom",
             Self::Local => "local",
         }
@@ -62,6 +70,7 @@ impl Provider {
         let limit = match self {
             Self::Deepgram => 2 * 1024 * 1024 * 1024, // 2 GB
             Self::Gemini => 20 * 1024 * 1024,         // 20 MB (inline_data limit)
+            Self::Fireworks | Self::Together => 100 * 1024 * 1024, // 100 MB (verified 2026-05-04)
             Self::Local => usize::MAX,                // In-memory, no upload limit
             _ => 25 * 1024 * 1024,                    // 25 MB (Groq, OpenAI, OpenRouter, etc.)
         };
@@ -253,6 +262,38 @@ mod tests {
     }
 
     #[test]
+    fn detect_fireworks() {
+        assert_eq!(
+            Provider::from_url("https://audio-turbo.api.fireworks.ai/v1/audio/transcriptions"),
+            Provider::Fireworks
+        );
+        assert_eq!(
+            Provider::from_url(
+                "https://audio-prod.us-virginia-1.direct.fireworks.ai/v1/audio/transcriptions"
+            ),
+            Provider::Fireworks
+        );
+        assert_eq!(
+            Provider::from_url("https://api.fireworks.ai/inference/v1/chat/completions"),
+            Provider::Fireworks
+        );
+    }
+
+    #[test]
+    fn detect_together() {
+        // .xyz is the canonical host the docs return
+        assert_eq!(
+            Provider::from_url("https://api.together.xyz/v1/audio/transcriptions"),
+            Provider::Together
+        );
+        // .ai is the older alias still in some references
+        assert_eq!(
+            Provider::from_url("https://api.together.ai/v1/chat/completions"),
+            Provider::Together
+        );
+    }
+
+    #[test]
     fn detect_custom() {
         assert_eq!(
             Provider::from_url("https://my-custom-server.com/v1/transcriptions"),
@@ -269,6 +310,8 @@ mod tests {
         assert_eq!(Provider::Gemini.as_str(), "gemini");
         assert_eq!(Provider::Deepgram.as_str(), "deepgram");
         assert_eq!(Provider::Anthropic.as_str(), "anthropic");
+        assert_eq!(Provider::Fireworks.as_str(), "fireworks");
+        assert_eq!(Provider::Together.as_str(), "together");
         assert_eq!(Provider::Custom.as_str(), "custom");
     }
 
@@ -435,6 +478,8 @@ mod tests {
         assert_eq!(Provider::Deepgram.max_file_bytes(), 2 * 1024 * 1024 * 1024);
         assert_eq!(Provider::Gemini.max_file_bytes(), 20 * 1024 * 1024);
         assert_eq!(Provider::Anthropic.max_file_bytes(), 25 * 1024 * 1024);
+        assert_eq!(Provider::Fireworks.max_file_bytes(), 100 * 1024 * 1024);
+        assert_eq!(Provider::Together.max_file_bytes(), 100 * 1024 * 1024);
         assert_eq!(Provider::Custom.max_file_bytes(), 25 * 1024 * 1024);
     }
 
@@ -448,6 +493,8 @@ mod tests {
             Provider::Gemini,
             Provider::Deepgram,
             Provider::Anthropic,
+            Provider::Fireworks,
+            Provider::Together,
             Provider::Custom,
         ] {
             assert!(

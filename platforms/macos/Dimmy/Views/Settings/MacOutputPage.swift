@@ -96,11 +96,23 @@ struct MacOutputPage: View {
                     MacRow("Provider") {
                         Picker("", selection: llmPresetBinding) {
                             ForEach(LlmPreset.presets) { preset in
-                                Text(preset.displayName).tag(preset.id)
+                                Label {
+                                    Text(preset.displayName)
+                                } icon: {
+                                    if preset.iconAssetName.isEmpty {
+                                        Image(systemName: "gear")
+                                    } else {
+                                        Image(preset.iconAssetName)
+                                            .renderingMode(.original)
+                                            .resizable()
+                                            .frame(width: 12, height: 12)
+                                    }
+                                }
+                                .tag(preset.id)
                             }
                         }
                         .labelsHidden()
-                        .frame(width: 280)
+                        .frame(width: 320)
                     }
 
                     MacRow(

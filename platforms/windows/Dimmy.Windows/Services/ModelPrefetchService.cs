@@ -83,6 +83,27 @@ public sealed class ModelPrefetchService : IDisposable
             _cts.Token));
     }
 
+    /// Start downloading an arbitrary whisper model file. Used when the
+    /// onboarding user picks something other than the default base —
+    /// e.g. small / medium / large-turbo. Reuses the BaseStatus state
+    /// slot so the existing UI binding (DownloadPercent / status text)
+    /// reflects the active download regardless of which file. Single-
+    /// flight: a second call while a download is in-flight is ignored.
+    public void StartFor(string filename, long expectedSize)
+    {
+        if (_disposed) return;
+        lock (_stateLock)
+        {
+            if (_baseTask != null) return;
+            // Reset state so the UI doesn't briefly show stale bytes
+            // from a prior run when the new file's totals differ.
+            _state = ModelDownloadState.Initial;
+        }
+        NotifyStateChanged();
+        _baseTask = Task.Run(() => DownloadAsync(
+            filename, expectedSize, isBase: true, _cts.Token));
+    }
+
     public void Retry()
     {
         lock (_stateLock)

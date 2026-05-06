@@ -3,7 +3,13 @@ name: Release
 on:
   push:
     tags:
+      # Prod tags only. Staging tags use the `v*-staging*` shape and
+      # are handled by staging-release.yml — exclude them here so a
+      # staging tag doesn't accidentally fire BOTH pipelines (we hit
+      # this on 2026-05-04 with v0.6.27-staging.2: GitHub only honors
+      # the first pattern hit, but having both fire-able is brittle).
       - "v*"
+      - "!v*-staging*"
 
 permissions:
   contents: write
@@ -125,10 +131,29 @@ jobs:
           brew install cmake
           cmake --version
 
+      - name: Verify Swift toolchain (need 5.10+ for FluidAudio)
+        run: |
+          swift --version
+          xcodebuild -version | head -2
+
+      - name: Fetch onnxruntime arm64 dylib
+        run: scripts/download-onnxruntime.sh
+
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: core
+
+      - name: Cache FluidAudio Swift build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Developer/Xcode/DerivedData/FluidAudio*
+            ~/Library/Caches/org.swift.swiftpm
+            core/target/aarch64-apple-darwin/release/build/fluidaudio-rs-*
+          key: fluidaudio-${{ runner.os }}-${{ hashFiles('core/Cargo.lock') }}
+          restore-keys: |
+            fluidaudio-${{ runner.os }}-
 
       - name: Build Rust static library
         working-directory: core
@@ -141,11 +166,21 @@ jobs:
           # the cdylib under WindowsAppSDK + Velopack (V3 / V8).
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          # Licensing v2 public key — embedded via `option_env!()` in
+          # core/src/license.rs. When unset, the cdylib treats every
+          # binary as "unrestricted" (source-build path). Released
+          # binaries always have it set so license verification is on.
+          DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY }}
+          DIMMY_LICENSE_SERVER_URL: https://license.dimmy.app
         run: |
           echo "CMake: $(cmake --version | head -1)"
           echo "Xcode CLT: $(xcode-select -p)"
           cargo clean --release 2>/dev/null
-          cargo build --lib --release --target aarch64-apple-darwin --features local-stt-metal,local-llm-metal
+          # local-stt-parakeet-fluid: Apple Neural Engine path via
+          # FluidInference's CoreML bundle. Target-scoped to macOS
+          # arm64 so the feature has no effect on Win/Linux jobs.
+          cargo build --lib --release --target aarch64-apple-darwin \
+            --features local-stt-metal,local-llm-metal,local-stt-parakeet-coreml,local-stt-parakeet-fluid
 
       - name: Verify static library
         run: |
@@ -348,6 +383,13 @@ jobs:
           workspaces: core
           shared-key: windows-release
 
+      - name: Fetch onnxruntime win-x64 DLL (Parakeet ort path)
+        # Mirrors the macOS download-onnxruntime.sh step. ort 2.0.0-rc.10
+        # binds to onnxruntime 1.22.0; the .csproj CopyOrtDll target reads
+        # this path so the DLL ends up next to dimmy_lib.dll in publish/.
+        shell: pwsh
+        run: scripts/download-onnxruntime.ps1
+
       - name: Build Rust DLL (VS 2026 MSVC env)
         working-directory: core
         shell: cmd
@@ -358,6 +400,10 @@ jobs:
           # Diagnostic build (see macOS step for the rationale).
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          # Licensing v2 — same env var the macOS build above injects.
+          # Embedded into core/src/license.rs via option_env!.
+          DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY }}
+          DIMMY_LICENSE_SERVER_URL: https://license.dimmy.app
         run: |
           REM Activate VS 2026 MSVC for this step only — PATH, INCLUDE,
           REM LIB point at the 14.50+ toolchain. Subsequent steps inherit
@@ -367,7 +413,7 @@ jobs:
           call "%VS2026_PATH%\VC\Auxiliary\Build\vcvars64.bat"
           if errorlevel 1 exit /b 1
           cargo clean --release 2>nul
-          cargo build --lib --release --features local-stt-vulkan,local-llm-vulkan
+          cargo build --lib --release --features local-stt-vulkan,local-llm-vulkan,local-stt-parakeet
 
       - name: Gate — verify dimmy_lib.dll linker version
         shell: pwsh
@@ -453,6 +499,12 @@ jobs:
           # with an older ABI (v0.6.10 crash cause). System32 wins.
           $pubDir = "platforms/windows/Dimmy.Windows/publish"
           Copy-Item "D:\t\release\dimmy_lib.dll" "$pubDir/"
+          # onnxruntime — Parakeet ort path's runtime dependency. Same
+          # rationale as staging-native.yml: dotnet publish dropped its
+          # output in publish/, so we co-locate the native DLLs there.
+          $ortLib = "core/target/onnxruntime-win-x64-1.22.0/lib"
+          Copy-Item "$ortLib/onnxruntime.dll" "$pubDir/"
+          Copy-Item "$ortLib/onnxruntime_providers_shared.dll" "$pubDir/"
           Get-ChildItem "$pubDir" -Filter "*.pdb" -Recurse | Remove-Item -ErrorAction SilentlyContinue
 
       - name: Verify self-contained bundle
@@ -528,6 +580,9 @@ jobs:
           # Diagnostic build (see macOS step for the rationale).
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          # Licensing v2 — same env var the other build steps inject.
+          DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY }}
+          DIMMY_LICENSE_SERVER_URL: https://license.dimmy.app
         run: cargo build --release
 
       - name: Package AppImage

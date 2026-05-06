@@ -138,11 +138,40 @@ jobs:
           brew install cmake
           cmake --version
 
+      - name: Verify Swift toolchain (need 5.10+ for FluidAudio)
+        run: |
+          # FluidAudio's Package.swift declares swift-tools-version:5.10.
+          # macos-latest runner ships Xcode 15.3+ → Swift 5.10+. Print
+          # the version explicitly so a future runner downgrade fails
+          # this step instead of mid-build.
+          swift --version
+          xcodebuild -version | head -2
+
+      - name: Fetch onnxruntime arm64 dylib (Parakeet ort path)
+        # The Xcode build phase needs the dylib in core/target/onnxruntime-osx-arm64-1.22.0/.
+        # Pre-fetch here so the Xcode step is offline-quick.
+        run: scripts/download-onnxruntime.sh
+
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: core
           shared-key: macos-staging
+
+      - name: Cache FluidAudio Swift build
+        uses: actions/cache@v4
+        with:
+          # `swift build` runs as part of fluidaudio-rs's build.rs and
+          # rebuilds 500+ Swift files (~5 min cold) for FluidAudio +
+          # NIO + Collections + Argument Parser. Cache the OUT_DIR
+          # subdir + SwiftPM repo cache so warm CI runs are <30s.
+          path: |
+            ~/Library/Developer/Xcode/DerivedData/FluidAudio*
+            ~/Library/Caches/org.swift.swiftpm
+            core/target/aarch64-apple-darwin/release/build/fluidaudio-rs-*
+          key: fluidaudio-${{ runner.os }}-${{ hashFiles('core/Cargo.lock') }}
+          restore-keys: |
+            fluidaudio-${{ runner.os }}-
 
       - name: Build Rust static library
         working-directory: core
@@ -155,11 +184,27 @@ jobs:
           # the cdylib under WindowsAppSDK + Velopack (V3 / V8).
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          # staging credentials — pubkey + URL are public by design (see
+          # .env.staging committed to the repo). Hardcoding inline avoids
+          # depending on a secrets.DIMMY_LICENSE_PUBKEY_STAGING entry
+          # that may not be set on this repo's GitHub Secrets — the
+          # private signing key lives only in Cloudflare's staging Worker
+          # secret store, never in the public binary's verify pubkey.
+          # build.rs invariant (commit 8a71f30) requires pubkey + URL
+          # to move together; flavor=staging triggers ~/.config/dimmy-
+          # staging isolation + UI watermark.
+          DIMMY_LICENSE_PUBKEY: avlM65dRGDHomOzqGICiuIXf6_dY21w653AOnza2fzU
+          DIMMY_LICENSE_SERVER_URL: https://license-staging.dimmy.app
+          DIMMY_BUILD_FLAVOR: staging
         run: |
           echo "CMake: $(cmake --version | head -1)"
           echo "Xcode CLT: $(xcode-select -p)"
           cargo clean --release 2>/dev/null
-          cargo build --lib --release --target aarch64-apple-darwin --features local-stt-metal,local-llm-metal
+          # local-stt-parakeet-fluid: Apple Neural Engine path via
+          # FluidInference's CoreML bundle. Target-scoped to macOS
+          # arm64 so the feature has no effect on Win/Linux jobs.
+          cargo build --lib --release --target aarch64-apple-darwin \
+            --features local-stt-metal,local-llm-metal,local-stt-parakeet-coreml,local-stt-parakeet-fluid
 
       - name: Verify static library
         run: |
@@ -236,7 +281,12 @@ jobs:
   # ── Windows Native Build (parallel with macOS + rust-check) ─────────
   build-windows:
     name: Build Windows Native
-    needs: create-release
+    # Gate Win on macOS success. The Win runner takes 30-40 min to
+    # finish; gating prevents that whole budget from being burned
+    # when an early Mac failure (e.g. broken Xcode build phase or
+    # cargo feature drift) would invalidate the run anyway. Linux
+    # is gated the same way below.
+    needs: [create-release, build-macos]
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
@@ -359,6 +409,14 @@ jobs:
           workspaces: core
           shared-key: windows-staging
 
+      - name: Fetch onnxruntime win-x64 DLL (Parakeet ort path)
+        # ort 2.0.0-rc.10 binds to onnxruntime 1.22.0; the .csproj
+        # CopyOrtDll target reads this exact path so it can co-locate
+        # onnxruntime.dll next to dimmy_lib.dll in the publish bundle.
+        # Same script the local dev flow uses (idempotent / cached).
+        shell: pwsh
+        run: scripts/download-onnxruntime.ps1
+
       - name: Build Rust DLL (VS 2026 MSVC env)
         working-directory: core
         shell: cmd
@@ -369,6 +427,18 @@ jobs:
           # Diagnostic build (see macOS step for the rationale).
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          # staging credentials — pubkey + URL are public by design (see
+          # .env.staging committed to the repo). Hardcoding inline avoids
+          # depending on a secrets.DIMMY_LICENSE_PUBKEY_STAGING entry
+          # that may not be set on this repo's GitHub Secrets — the
+          # private signing key lives only in Cloudflare's staging Worker
+          # secret store, never in the public binary's verify pubkey.
+          # build.rs invariant (commit 8a71f30) requires pubkey + URL
+          # to move together; flavor=staging triggers ~/.config/dimmy-
+          # staging isolation + UI watermark.
+          DIMMY_LICENSE_PUBKEY: avlM65dRGDHomOzqGICiuIXf6_dY21w653AOnza2fzU
+          DIMMY_LICENSE_SERVER_URL: https://license-staging.dimmy.app
+          DIMMY_BUILD_FLAVOR: staging
         run: |
           REM Activate VS 2026 MSVC for this step only — PATH, INCLUDE,
           REM LIB point at the 14.50+ toolchain. Subsequent steps inherit
@@ -378,7 +448,7 @@ jobs:
           call "%VS2026_PATH%\VC\Auxiliary\Build\vcvars64.bat"
           if errorlevel 1 exit /b 1
           cargo clean --release 2>nul
-          cargo build --lib --release --features local-stt-vulkan,local-llm-vulkan
+          cargo build --lib --release --features local-stt-vulkan,local-llm-vulkan,local-stt-parakeet
 
       - name: Gate — verify dimmy_lib.dll linker version
         shell: pwsh
@@ -464,6 +534,14 @@ jobs:
           # with an older ABI (v0.6.10 crash cause). System32 wins.
           $pubDir = "platforms/windows/Dimmy.Windows/publish"
           Copy-Item "D:\t\release\dimmy_lib.dll" "$pubDir/"
+          # onnxruntime.dll + onnxruntime_providers_shared.dll are the
+          # Parakeet ort path's runtime dependency. The .csproj target
+          # copies them to bin/ during dotnet build but `dotnet publish`
+          # output landed in `publish/` — copy them across explicitly so
+          # the self-contained bundle has everything Parakeet needs.
+          $ortLib = "core/target/onnxruntime-win-x64-1.22.0/lib"
+          Copy-Item "$ortLib/onnxruntime.dll" "$pubDir/"
+          Copy-Item "$ortLib/onnxruntime_providers_shared.dll" "$pubDir/"
           Get-ChildItem "$pubDir" -Filter "*.pdb" -Recurse | Remove-Item -ErrorAction SilentlyContinue
 
       - name: Verify self-contained bundle
@@ -499,7 +577,7 @@ jobs:
   # ── Linux Native Build (parallel with macOS + Windows + rust-check) ──
   build-linux:
     name: Build Linux (GTK4)
-    needs: create-release
+    needs: [create-release, build-macos]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -539,6 +617,18 @@ jobs:
           # Diagnostic build (see macOS step for the rationale).
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          # staging credentials — pubkey + URL are public by design (see
+          # .env.staging committed to the repo). Hardcoding inline avoids
+          # depending on a secrets.DIMMY_LICENSE_PUBKEY_STAGING entry
+          # that may not be set on this repo's GitHub Secrets — the
+          # private signing key lives only in Cloudflare's staging Worker
+          # secret store, never in the public binary's verify pubkey.
+          # build.rs invariant (commit 8a71f30) requires pubkey + URL
+          # to move together; flavor=staging triggers ~/.config/dimmy-
+          # staging isolation + UI watermark.
+          DIMMY_LICENSE_PUBKEY: avlM65dRGDHomOzqGICiuIXf6_dY21w653AOnza2fzU
+          DIMMY_LICENSE_SERVER_URL: https://license-staging.dimmy.app
+          DIMMY_BUILD_FLAVOR: staging
         run: cargo build --release
 
       - name: Package AppImage

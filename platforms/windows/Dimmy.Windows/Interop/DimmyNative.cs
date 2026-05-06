@@ -100,6 +100,27 @@ public static class DimmyNative
     public static extern int dimmy_llm_model_exists(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string filename);
 
+    // ── Parakeet TDT v3 FP32 (alternative local STT backend) ─────
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_parakeet_bundle_present();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_parakeet_download_bundle();
+
+    // ── App context ──────────────────────────────────────────────
+    /// Push the foreground-app snapshot so the Rust core can resolve
+    /// app_rules at LLM-enhance time. JSON shape:
+    ///   { "process_name": "slack.exe", "bundle_id": "", "wm_class": "" }
+    /// Pass any subset of keys; missing ones default to empty string.
+    /// Returns 0 on success, non-zero on parse error.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl,
+        CharSet = CharSet.Ansi, BestFitMapping = false, ThrowOnUnmappableChar = true)]
+    public static extern int dimmy_set_app_context(
+        [MarshalAs(UnmanagedType.LPStr)] string json);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void dimmy_clear_app_context();
+
     // ── History ──────────────────────────────────────────────────
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_history_save(
@@ -118,8 +139,70 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_history_delete(int id);
 
+    // ── File-load transcription (offline) ────────────────────────
+    /// Synchronously transcribe a WAV file using the active local
+    /// backend. See core/src/ffi.rs::dimmy_transcribe_file for return
+    /// codes. On success the transcript is written to `outBuf` and
+    /// the function returns its byte length.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_transcribe_file(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string path,
+        byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_history_update_enhanced(
+        int id,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? text);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_history_update_audio(
+        int id,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? path,
+        long sizeBytes);
+
+    /// Set the word_timestamps JSON column for a history row.
+    /// Caller serialises `[{"word":"...","start_ms":N,"end_ms":N}]`.
+    /// Empty / null clears the field. Returns 0 on success, -1 on error.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_history_update_word_timestamps(
+        int id,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? json);
+
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_history_stats(byte[] buf, int len);
+
+    // ── Meeting mode (long-form recording) ───────────────────────
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_meeting_start(byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_meeting_stop(byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_meeting_save_post_process(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string dir,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? recap,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? actions,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? translated);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_meeting_list_orphans(byte[] outBuf, int bufLen);
+
+    /// 1 = meeting currently recording; 0 = no active meeting. Used
+    /// to gate the dictation hotkey so a parallel recording can't
+    /// corrupt the shared cpal audio buffer.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_meeting_is_active();
+
+    /// Raw LLM call — bypasses the dictation rewrite wrapper. Pass
+    /// empty string for `modelOverride` to use the user-configured
+    /// llm_api_model. Used by meeting recap + audio-load summarizer.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_llm_call_raw(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string prompt,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string modelOverride,
+        int maxTokens,
+        byte[] outBuf, int bufLen);
 
     // ── Hotkey (low-level keyboard hook via Rust) ─────────────────
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
@@ -153,6 +236,9 @@ public static class DimmyNative
 
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_get_version(byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_build_flavor(byte[] outBuf, int bufLen);
 
     // ── Managed helpers ──────────────────────────────────────────────
 
@@ -268,4 +354,59 @@ public static class DimmyNative
                     $"Failed to set autostart to {value} (return code {rc})");
         }
     }
+
+    // ── Licensing ────────────────────────────────────────────────
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_license_status_json(byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_license_plan_change(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string newTier,
+        byte[] outBuf, int bufLen);
+
+    // dimmy_license_set_server_url removed: the FFI is now debug-only on
+    // the Rust side (gated behind cfg(debug_assertions)) and the
+    // Settings UI override that called it has been deleted. Release
+    // builds embed the URL via DIMMY_LICENSE_SERVER_URL at compile
+    // time and refuse to be re-pointed. Local debug runs that need a
+    // custom endpoint should use a debug DLL and call the FFI directly
+    // from a test harness — never from shipped UI code.
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_license_request_trial(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string email,
+        byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_license_redeem(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string code,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string deviceLabel,
+        byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_license_refresh(byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_license_clear();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_license_has_scope(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string scopeName);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_license_devices_list(byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_license_device_deactivate(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? deviceId,
+        byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_license_checkout_url(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string tier,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? email,
+        byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_license_billing_portal_url(byte[] outBuf, int bufLen);
 }

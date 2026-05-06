@@ -13,6 +13,9 @@ dist/
 .env
 .env.*
 !.env.example
+# .env.staging holds only PUBLIC values (Ed25519 pubkey + HTTPS URL).
+# Matching private key lives in Cloudflare staging secrets + 1Password.
+!.env.staging
 tests/test_audio.wav
 tests/audio/
 tests/results/
@@ -23,3 +26,18 @@ mockup/build/
 *.swp
 *.swo
 platforms/macos/build/
+
+# Licensing PoC — runtime data (keypair + SQLite) is per-machine,
+# never commit it.
+data/licensing/
+core/data/
+backend/.dev-data/
+# Wrangler dev runtime — secrets in plain text, MUST never reach git.
+backend/.dev.vars
+backend/.wrangler/
+licensing-data/
+**/dimmy_jumplist.log
+**/dimmy_startup.log
+
+# Local-only licensing flow notes (kept on disk, not in repo).
+docs/dev/licensing-flow.md

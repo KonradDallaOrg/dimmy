@@ -1,0 +1,113 @@
+# Dimmy licensing backend — Cloudflare Workers config.
+#
+# This is the production deployment of the PoC validated in
+# core/src/license_server.rs. Same wire shapes, same DB schema,
+# different runtime (Workers + D1 instead of axum + SQLite).
+#
+# To deploy:
+#   cd backend
+#   npm install
+#   wrangler login
+#   wrangler d1 create dimmy-licensing            # one-time, copy id below
+#   wrangler d1 migrations apply dimmy-licensing  # runs migrations/*.sql
+#   wrangler secret put DIMMY_LICENSE_PRIVKEY     # base64url 32-byte ed25519 priv
+#   wrangler secret put STRIPE_WEBHOOK_SECRET     # whsec_… from Stripe dashboard
+#   wrangler secret put RESEND_API_KEY            # re_… from Resend dashboard
+#   wrangler deploy
+
+name = "dimmy-licensing"
+main = "src/index.ts"
+compatibility_date = "2025-04-01"
+workers_dev = true
+
+# Custom domain — Cloudflare attaches the Worker to license.dimmy.app
+# on deploy (also auto-creates the DNS record + provisions the SSL
+# cert via the existing dimmy.app zone). The workers.dev URL stays
+# live as a fallback while DNS propagates / for emergency rollback.
+[[routes]]
+pattern = "license.dimmy.app"
+custom_domain = true
+
+# ── D1 binding (SQLite-compatible serverless DB) ─────────────────────
+# Created 2026-05-01 in WEUR (Western Europe — best latency for EU users).
+[[d1_databases]]
+binding = "DB"
+database_name = "dimmy-licensing"
+database_id = "06a210a1-2e3b-4142-9d21-0eef9ee517de"
+
+# ── Public (non-secret) env vars ─────────────────────────────────────
+[vars]
+# The fully-qualified URL the Worker is reachable at — used to build
+# magic-link URLs in email bodies. Pinned to the custom domain.
+PUBLIC_URL = "https://license.dimmy.app"
+
+# Sender address for activation emails. MUST be on a verified Resend
+# domain. The local-part can be anything.
+EMAIL_FROM = "Dimmy <hello@dimmy.app>"
+
+# Stripe price IDs (TEST MODE — created via MCP 2026-05-01).
+# Used as a fallback to map checkout events to tier when `metadata.tier`
+# is missing on a session. The Payment Links created alongside these
+# prices DO set `metadata.tier`, so the fallback is belt-and-braces.
+# When switching to live mode: re-create the same products + prices in
+# live, paste the new price_… IDs here, redeploy.
+STRIPE_PRICE_MONTHLY  = "price_1TSKE8HxRNDPFvsZegNx8slR"
+STRIPE_PRICE_ANNUAL   = "price_1TSKE9HxRNDPFvsZv4T1Ampf"
+STRIPE_PRICE_LIFETIME = "price_1TSKEAHxRNDPFvsZvcQOWqbr"
+
+# ── Secrets (set via `wrangler secret put`, NOT in this file) ────────
+# DIMMY_LICENSE_PRIVKEY      base64url(32-byte Ed25519 private key)
+# STRIPE_WEBHOOK_SECRET      whsec_… (verify Stripe-Signature header)
+# RESEND_API_KEY             re_… (Resend transactional email)
+
+# ─────────────────────────────────────────────────────────────────────
+#  STAGING environment
+# ─────────────────────────────────────────────────────────────────────
+# Sibling Worker for development + Stripe-TEST integration tests.
+# Same source code (src/index.ts), separate D1 + separate keypair +
+# separate Stripe webhook secret + separate FROM email so a mistake on
+# staging cannot leak into prod tokens or prod customer state.
+#
+# Deploy from WSL:
+#   wrangler d1 create dimmy-licensing-staging          # one-time, paste id below
+#   wrangler d1 migrations apply dimmy-licensing-staging --remote --env staging
+#   wrangler secret put DIMMY_LICENSE_PRIVKEY --env staging
+#   wrangler secret put DIMMY_LICENSE_PUBKEY  --env staging
+#   wrangler secret put STRIPE_WEBHOOK_SECRET --env staging   # Stripe TEST whsec
+#   wrangler secret put RESEND_API_KEY        --env staging   # same prod key OK
+#   wrangler deploy --env staging
+#
+# After deploy, in Stripe TEST dashboard:
+#   - REMOVE the webhook pointing at license.dimmy.app
+#   - ADD a webhook to https://license-staging.dimmy.app/api/stripe/webhook
+#     with the same event list as prod (checkout.session.completed,
+#     customer.subscription.{updated,deleted}, invoice.{paid,payment_failed},
+#     charge.refunded). Copy the new whsec into the secret above.
+# Outcome: prod Worker stops receiving Stripe TEST events; only staging does.
+
+[env.staging]
+name = "dimmy-licensing-staging"
+
+[[env.staging.routes]]
+pattern = "license-staging.dimmy.app"
+custom_domain = true
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "dimmy-licensing-staging"
+# Created 2026-05-03 in WEUR (same region as prod for migration parity).
+database_id = "18117e7f-582a-4079-8a58-177daad2aa26"
+
+[env.staging.vars]
+PUBLIC_URL = "https://license-staging.dimmy.app"
+# Distinct FROM so a staging activation mail in your inbox is impossible
+# to confuse with prod. Resend treats `staging@dimmy.app` as a normal
+# address on the verified `dimmy.app` domain — no extra domain setup.
+EMAIL_FROM = "Dimmy Staging <staging@dimmy.app>"
+# Stripe price IDs (TEST mode — same as the legacy default block above
+# while prod still mixes test secrets in. After staging is up and the
+# Stripe TEST webhook has been moved here, prod's STRIPE_PRICE_* will
+# eventually be re-pinned to LIVE IDs and these stay TEST forever.)
+STRIPE_PRICE_MONTHLY  = "price_1TSKE8HxRNDPFvsZegNx8slR"
+STRIPE_PRICE_ANNUAL   = "price_1TSKE9HxRNDPFvsZv4T1Ampf"
+STRIPE_PRICE_LIFETIME = "price_1TSKEAHxRNDPFvsZvcQOWqbr"

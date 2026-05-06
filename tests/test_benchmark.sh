@@ -151,6 +151,11 @@ STT_PROVIDERS=(
   "OpenAI|gpt-4o-mini-transcribe|OPENAI_KEY|openai|https://api.openai.com/v1/audio/transcriptions|25|25min"
   "Deepgram|nova-3|DEEPGRAM_KEY|deepgram|https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true|2048|unlimited"
   "Gemini|gemini-2.5-flash|GEMINI_KEY|gemini|https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent|20|9.5hr"
+  "Fireworks|whisper-v3-turbo|FIREWORKS_API_KEY|openai|https://audio-turbo.api.fireworks.ai/v1/audio/transcriptions|100|unlimited"
+  "Fireworks|whisper-v3|FIREWORKS_API_KEY|openai|https://audio-prod.us-virginia-1.direct.fireworks.ai/v1/audio/transcriptions|100|unlimited"
+  "Together|nvidia/parakeet-tdt-0.6b-v3|TOGETHER_API_KEY|openai|https://api.together.xyz/v1/audio/transcriptions|100|unlimited"
+  "Together|openai/whisper-large-v3|TOGETHER_API_KEY|openai|https://api.together.xyz/v1/audio/transcriptions|100|unlimited"
+  "Together|mistralai/Voxtral-Mini-3B-2507|TOGETHER_API_KEY|openai|https://api.together.xyz/v1/audio/transcriptions|100|unlimited"
 )
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

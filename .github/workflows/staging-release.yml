@@ -1,0 +1,354 @@
+name: Staging Release
+
+# Sibling pipeline of release.yml — produces installers signed against
+# the STAGING licensing keypair, talking to license-staging.dimmy.app,
+# with distinct packId / bundle id so a tester can run staging
+# side-by-side with a prod install on the same machine.
+#
+# Trigger: tags matching `v*-staging` (e.g. `v0.6.27-staging.1`). Prod
+# releases keep using `v*` and release.yml — this file does NOT touch
+# that pipeline at all, it just lives next to it.
+#
+# Inputs (GitHub Secrets):
+#   - DIMMY_LICENSE_PUBKEY_STAGING   public key matching the staging
+#                                    Worker's DIMMY_LICENSE_PRIVKEY
+#                                    secret. Public-by-design (Ed25519).
+#   - POSTHOG_API_KEY                shared with prod (telemetry not
+#                                    segregated — tester analytics +
+#                                    crashes flow into the same project)
+#   - SENTRY_DSN                     same as POSTHOG
+#
+# What is NOT here:
+#   - Linux build: staging is iterative tester channel; Linux can be
+#     added later if needed.
+#   - test-install gate: staging tags should ship even if the smoke
+#     test fails (testers help us find those bugs).
+#   - publish-release: staging GH releases land as `prerelease=true`
+#     and stay there — never auto-promote to "Latest".
+
+on:
+  push:
+    tags:
+      - "v*-staging*"
+
+permissions:
+  contents: write
+
+jobs:
+  # ── Create staging release placeholder ─────────────────────────────
+  create-release:
+    name: Create Staging Release
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create.outputs.id }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate changelog
+        run: |
+          PREV_TAG=$(git tag --sort=-creatordate --list 'v*-staging*' | head -n 2 | tail -n 1)
+          if [ -z "$PREV_TAG" ] || [ "$PREV_TAG" = "$GITHUB_REF_NAME" ]; then
+            COMMITS=$(git log --pretty=format:"- %s" HEAD | head -50)
+          else
+            COMMITS=$(git log --pretty=format:"- %s" "${PREV_TAG}..HEAD")
+          fi
+          {
+            echo "## Staging build"
+            echo ""
+            echo "Test environment build — installs side-by-side with prod Dimmy."
+            echo "Talks to **license-staging.dimmy.app** (Stripe TEST). Use card"
+            echo "\`4242 4242 4242 4242\` (any future expiry, any CVC)."
+            echo ""
+            echo "**This binary will NOT process real payments.** All purchases"
+            echo "are simulated. See [staging-testing.md](https://github.com/${{ github.repository }}/blob/feat/licensing-poc/docs/dev/staging-testing.md)."
+            echo ""
+            echo "## What's Changed"
+            echo ""
+            echo "$COMMITS"
+            echo ""
+            echo "## Downloads"
+            echo ""
+            echo "| Platform | File |"
+            echo "|----------|------|"
+            echo "| Windows (installer) | \`Dimmy-Staging-win-Setup.exe\` |"
+            echo "| Windows (portable)  | \`Dimmy-Staging-win-Portable.zip\` |"
+            echo "| macOS (Apple Silicon) | \`Dimmy-Staging-macos-arm64.dmg\` |"
+            echo ""
+            echo "Install paths:"
+            echo "- Win: \`%LOCALAPPDATA%\\Dimmy-Staging\\\` (separate from prod \`Dimmy\\\`)"
+            echo "- Mac: \`/Applications/Dimmy Staging.app\` (bundle id \`com.dimmy.staging\`)"
+            echo "- Config: \`%APPDATA%\\dimmy-staging\\\` / \`~/Library/Application Support/dimmy-staging/\`"
+          } > changelog.md
+          cat changelog.md
+
+      - name: Create GitHub Release
+        id: create
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "Dimmy ${{ steps.version.outputs.version }} (staging)"
+          body_path: changelog.md
+          draft: false
+          prerelease: true
+
+  # ── macOS staging build ────────────────────────────────────────────
+  build-macos:
+    name: Build macOS Native (staging)
+    needs: create-release
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Install CMake
+        run: |
+          brew install cmake
+          cmake --version
+
+      - name: Verify Swift toolchain (need 5.10+ for FluidAudio)
+        run: |
+          swift --version
+          xcodebuild -version | head -2
+
+      - name: Fetch onnxruntime arm64 dylib
+        run: scripts/download-onnxruntime.sh
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+          shared-key: macos-staging
+
+      - name: Cache FluidAudio Swift build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Developer/Xcode/DerivedData/FluidAudio*
+            ~/Library/Caches/org.swift.swiftpm
+            core/target/aarch64-apple-darwin/release/build/fluidaudio-rs-*
+          key: fluidaudio-${{ runner.os }}-${{ hashFiles('core/Cargo.lock') }}
+          restore-keys: |
+            fluidaudio-${{ runner.os }}-
+
+      - name: Build Rust static library (staging flavor)
+        working-directory: core
+        env:
+          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY_STAGING }}
+          DIMMY_LICENSE_SERVER_URL: https://license-staging.dimmy.app
+          DIMMY_BUILD_FLAVOR: staging
+        run: |
+          cargo clean --release 2>/dev/null
+          cargo build --lib --release --target aarch64-apple-darwin \
+            --features local-stt-metal,local-llm-metal,local-stt-parakeet-coreml,local-stt-parakeet-fluid,license-client
+
+      - name: Verify static library
+        run: |
+          ls -lh core/target/aarch64-apple-darwin/release/libdimmy_lib.a
+          rm -f core/target/aarch64-apple-darwin/release/libdimmy_lib.dylib
+          rm -f core/target/aarch64-apple-darwin/release/deps/libdimmy_lib.dylib
+
+      - name: Build Xcode project (staging bundle id)
+        working-directory: platforms/macos
+        run: |
+          xcodebuild -project Dimmy.xcodeproj \
+            -scheme Dimmy \
+            -configuration Release \
+            -derivedDataPath build/derived \
+            PRODUCT_BUNDLE_IDENTIFIER=com.dimmy.staging \
+            PRODUCT_NAME="Dimmy Staging" \
+            build \
+            CODE_SIGN_IDENTITY="-"
+
+      - name: Bundle llama.cpp dylibs
+        run: |
+          APP_PATH="platforms/macos/build/derived/Build/Products/Release/Dimmy Staging.app"
+          if [ ! -d "$APP_PATH" ]; then
+            APP_PATH="platforms/macos/build/derived/Build/Products/Release/Dimmy.app"
+          fi
+          FRAMEWORKS_DIR="$APP_PATH/Contents/Frameworks"
+          mkdir -p "$FRAMEWORKS_DIR"
+          RELEASE_DIR="core/target/aarch64-apple-darwin/release"
+          for name in libllama libggml libggml-base libggml-cpu libggml-metal; do
+            for dylib in "$RELEASE_DIR"/${name}*.dylib; do
+              [ -e "$dylib" ] || continue
+              DEST="$FRAMEWORKS_DIR/$(basename "$dylib")"
+              cp -RL "$dylib" "$DEST"
+              install_name_tool -id "@rpath/$(basename "$dylib")" "$DEST" 2>/dev/null || true
+            done
+          done
+          codesign --force --sign - "$FRAMEWORKS_DIR"/*.dylib
+
+      - name: Create DMG
+        working-directory: platforms/macos
+        run: |
+          brew install create-dmg
+          APP_PATH="build/derived/Build/Products/Release/Dimmy Staging.app"
+          if [ ! -d "$APP_PATH" ]; then
+            APP_PATH="build/derived/Build/Products/Release/Dimmy.app"
+          fi
+          create-dmg \
+            --volname "Dimmy Staging" \
+            --window-pos 200 120 \
+            --window-size 660 400 \
+            --icon-size 128 \
+            --no-internet-enable \
+            "build/Dimmy-Staging-macos-arm64.dmg" \
+            "$APP_PATH"
+
+      - name: Upload DMG
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: platforms/macos/build/Dimmy-Staging-macos-arm64.dmg
+
+  # ── Windows staging build ──────────────────────────────────────────
+  build-windows:
+    name: Build Windows Native (staging)
+    needs: create-release
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install CMake & Ninja
+        uses: lukka/get-cmake@latest
+
+      - name: Install VS 2026 BuildTools side-by-side (MSVC 14.50+)
+        shell: pwsh
+        run: |
+          # Same toolchain dance as release.yml — needed because
+          # whisper-vulkan miscompiles on MSVC <= 14.44 (windows-2025
+          # default). See release.yml step for the gory rationale.
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs2026 = & $vswhere -version "[18.0,19.0)" -prerelease -products "*" -property installationPath 2>$null | Select-Object -First 1
+          if (-not $vs2026) {
+            $params = "--add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.Windows11SDK.22621 --quiet --norestart --wait --nocache"
+            $maxTries = 3
+            for ($attempt = 1; $attempt -le $maxTries; $attempt++) {
+              choco install visualstudio2026buildtools-preview -y --pre --no-progress --package-parameters="$params"
+              for ($i = 0; $i -lt 12; $i++) {
+                Start-Sleep -Seconds 5
+                $vs2026 = & $vswhere -version "[18.0,19.0)" -prerelease -products "*" -property installationPath 2>$null | Select-Object -First 1
+                if ($vs2026) { break }
+              }
+              if ($vs2026) { break }
+              Start-Sleep -Seconds (30 * $attempt)
+            }
+            if (-not $vs2026) { throw "VS 2026 not found after $maxTries attempts" }
+          }
+          Add-Content -Path $env:GITHUB_ENV -Value "VS2026_PATH=$vs2026" -Encoding utf8
+          exit 0
+
+      - name: Install Vulkan SDK
+        shell: pwsh
+        run: |
+          $maxTries = 3
+          $sdkDir = $null
+          for ($attempt = 1; $attempt -le $maxTries; $attempt++) {
+            choco install vulkan-sdk -y --no-progress
+            $sdkDir = Get-ChildItem "C:\VulkanSDK" -Directory -ErrorAction SilentlyContinue |
+                      Sort-Object Name -Descending | Select-Object -First 1
+            if ($sdkDir) { break }
+            Start-Sleep -Seconds (30 * $attempt)
+          }
+          if (-not $sdkDir) { throw "VulkanSDK not found" }
+          echo "VULKAN_SDK=$($sdkDir.FullName)" >> $env:GITHUB_ENV
+          echo "$($sdkDir.FullName)\Bin" >> $env:GITHUB_PATH
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+          shared-key: windows-staging
+
+      - name: Build Rust DLL (staging flavor, VS 2026 MSVC env)
+        working-directory: core
+        shell: cmd
+        env:
+          LIBCLANG_PATH: "C:\\Program Files\\LLVM\\bin"
+          CMAKE_GENERATOR: Ninja
+          CARGO_TARGET_DIR: "D:\\t"
+          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          DIMMY_LICENSE_PUBKEY: ${{ secrets.DIMMY_LICENSE_PUBKEY_STAGING }}
+          DIMMY_LICENSE_SERVER_URL: https://license-staging.dimmy.app
+          DIMMY_BUILD_FLAVOR: staging
+        run: |
+          call "%VS2026_PATH%\VC\Auxiliary\Build\vcvars64.bat"
+          if errorlevel 1 exit /b 1
+          cargo clean --release 2>nul
+          cargo build --lib --release --features local-stt-vulkan,local-llm-vulkan,license-client
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore NuGet packages
+        working-directory: platforms/windows/Dimmy.Windows
+        run: dotnet restore
+
+      - name: Locate VS AppxPackage tools
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -version "[17.0,18.0)" -products "*" -property installationPath | Select-Object -First 1
+          if (-not $vs) { throw "vswhere did not find a VS 2022 install" }
+          $candidates = @(
+            "$vs\MSBuild\Microsoft\VisualStudio\v17.0\AppxPackage\",
+            "$vs\MSBuild\Microsoft\VisualStudio\v18.0\AppxPackage\"
+          )
+          $found = $candidates | Where-Object { Test-Path (Join-Path $_ "Microsoft.Build.Packaging.Pri.Tasks.dll") } | Select-Object -First 1
+          if (-not $found) { throw "Microsoft.Build.Packaging.Pri.Tasks.dll not found" }
+          echo "AppxMSBuildToolsPath=$found" >> $env:GITHUB_ENV
+
+      - name: Publish Windows app (self-contained)
+        working-directory: platforms/windows/Dimmy.Windows
+        run: dotnet publish Dimmy.Windows.csproj -c Release -r win-x64 --self-contained true -p:WindowsAppSDKSelfContained=true -p:SelfContained=true "-p:AppxMSBuildToolsPath=$env:AppxMSBuildToolsPath" -o publish
+
+      - name: Prepare distribution
+        shell: pwsh
+        run: |
+          Copy-Item "D:\t\release\dimmy_lib.dll" "platforms/windows/Dimmy.Windows/publish/"
+          Get-ChildItem "platforms/windows/Dimmy.Windows/publish" -Filter "*.pdb" -Recurse | Remove-Item -ErrorAction SilentlyContinue
+
+      - name: Install Velopack CLI
+        run: dotnet tool install -g vpk
+
+      - name: Package with Velopack (Dimmy-Staging packId, staging channel)
+        shell: pwsh
+        run: |
+          $version = "${{ needs.create-release.outputs.version }}"
+          $pubDir = (Resolve-Path "platforms/windows/Dimmy.Windows/publish").Path
+          # packId=Dimmy-Staging produces install dir %LOCALAPPDATA%\Dimmy-Staging,
+          # Start menu entry "Dimmy Staging", uninstall entry "Dimmy Staging" —
+          # all distinct from the prod "Dimmy" install on the same machine.
+          # --channel staging tags the release manifest so a future Velopack
+          # update on a staging install never picks up a prod build.
+          vpk pack --packId Dimmy-Staging --packVersion $version --packDir "$pubDir" --mainExe Dimmy.Windows.exe --icon "platforms/windows/Dimmy.Windows/Assets/dimmy.ico" --framework "vcredist143-x64" --channel staging --outputDir platforms/windows/velopack-output
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            platforms/windows/velopack-output/Dimmy-Staging-win-Setup.exe
+            platforms/windows/velopack-output/Dimmy-Staging-win-Portable.zip
+            platforms/windows/velopack-output/Dimmy-Staging-*-full.nupkg
+            platforms/windows/velopack-output/releases.staging.win.json

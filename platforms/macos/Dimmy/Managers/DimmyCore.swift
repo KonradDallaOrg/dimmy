@@ -21,12 +21,67 @@ final class DimmyCore {
     /// pending so `initializeCoreAsync` hasn't fired).
     private(set) var isInitialized: Bool = false
 
+    // MARK: - ONNX Runtime dylib path
+
+    /// Resolve and export ORT_DYLIB_PATH BEFORE the first FFI call. The
+    /// `ort` crate is built with the `load-dynamic` feature, so the
+    /// Parakeet path opens libonnxruntime.dylib via this env var on
+    /// first use. Lookup chain (first hit wins):
+    ///   1. caller-provided env var (CI / dev)
+    ///   2. Frameworks folder of the running .app (release / `Cmd+R`)
+    ///   3. repo dev fallback core/target/onnxruntime-osx-arm64-<ver>/lib/
+    /// If none resolve we leave the var unset; ort will surface a clear
+    /// "library not loaded" only when Parakeet is actually invoked,
+    /// keeping non-Parakeet flows unaffected.
+    private static func configureOrtDylibPath() {
+        if let existing = ProcessInfo.processInfo.environment["ORT_DYLIB_PATH"],
+           !existing.isEmpty {
+            return
+        }
+        let fm = FileManager.default
+        let candidates: [String] = [
+            Bundle.main.privateFrameworksPath.map { "\($0)/libonnxruntime.dylib" },
+            Bundle.main.bundlePath.appending("/Contents/Frameworks/libonnxruntime.dylib"),
+            devFallbackOrtPath(),
+        ].compactMap { $0 }
+        for path in candidates where fm.fileExists(atPath: path) {
+            setenv("ORT_DYLIB_PATH", path, 1)
+            print("[DimmyCore] ORT_DYLIB_PATH=\(path)")
+            return
+        }
+        print("[DimmyCore] ORT_DYLIB_PATH unresolved (Parakeet path will fail until set)")
+    }
+
+    private static func devFallbackOrtPath() -> String? {
+        // Walk up from the app bundle to the repo root and pick the
+        // pinned arm64 dylib that scripts/download-onnxruntime.sh drops
+        // under core/target/. Only used during `swift build` / Xcode
+        // run-from-source; release .app installs hit the Frameworks
+        // path above first.
+        let bundlePath = Bundle.main.bundlePath
+        let parts = bundlePath.split(separator: "/").map(String.init)
+        guard parts.count >= 4 else { return nil }
+        // Trim platforms/macos/build/.../Dimmy.app — repo root is 5+ levels up.
+        // Conservative: try a few ancestor depths and pick the first hit.
+        var candidate = (bundlePath as NSString).deletingLastPathComponent
+        for _ in 0..<8 {
+            let probe = "\(candidate)/core/target/onnxruntime-osx-arm64-1.22.0/lib/libonnxruntime.dylib"
+            if FileManager.default.fileExists(atPath: probe) {
+                return probe
+            }
+            candidate = (candidate as NSString).deletingLastPathComponent
+            if candidate == "/" || candidate.isEmpty { break }
+        }
+        return nil
+    }
+
     // MARK: - Lifecycle
 
     /// Initialize the Rust core. Call once at app launch.
     /// Returns true on success.
     @discardableResult
     func initialize() -> Bool {
+        Self.configureOrtDylibPath()
         let result = dimmy_init()
         if result == 0 {
             isInitialized = true
@@ -106,6 +161,19 @@ final class DimmyCore {
     /// Set config from a dictionary. Returns true on success.
     @discardableResult
     func setConfig(_ config: [String: Any]) -> Bool {
+        // Hard guard: dimmy_set_config_json calls into state() which
+        // panics with "dimmy_init() must be called before any other
+        // function" when the Rust core hasn't finished initializing.
+        // Without this guard, any UI interaction that happens during
+        // the init window (~50 ms on this dev box, longer with cold
+        // CoreML compile) hits the panic and SIGABRTs the whole app.
+        // Hit live by scrolling the pill style dot in the first
+        // moment after launch — backtrace landed unwrap_failed →
+        // dimmy_set_config_json → DimmyCore.setConfig → cycleStyle.
+        guard isInitialized else {
+            print("[DimmyCore] setConfig dropped — core not yet initialized")
+            return false
+        }
         guard let data = try? JSONSerialization.data(withJSONObject: config),
               let jsonStr = String(data: data, encoding: .utf8)
         else { return false }
@@ -287,6 +355,22 @@ final class DimmyCore {
         return String(cString: buffer)
     }
 
+    /// Build flavor — "" (prod) or "staging". Drives the staging banner +
+    /// title suffix in the SwiftUI views so a side-by-side tester can't
+    /// confuse one flavor for the other. Mirrors Win BuildInfo.Flavor.
+    var buildFlavor: String {
+        let bufLen: Int32 = 64
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+        let written = dimmy_build_flavor(buffer, bufLen)
+        guard written > 0 else { return "" }
+        return String(cString: buffer)
+    }
+
+    /// True when this binary was built with `DIMMY_BUILD_FLAVOR=staging`.
+    var isStagingBuild: Bool { buildFlavor == "staging" }
+
     /// GPU known-bad status as parsed JSON. `enabled` indicates whether
     /// the marker is currently set (forcing CPU fallback).
     func gpuStatus() -> [String: Any]? {
@@ -357,6 +441,38 @@ final class DimmyCore {
         filename.withCString { ptr in
             dimmy_model_exists(ptr) == 1
         }
+    }
+
+    // MARK: - Parakeet (alternative local STT backend)
+
+    /// 1 = bundle complete on disk, 0 = missing or partial.
+    func parakeetBundlePresent() -> Bool {
+        dimmy_parakeet_bundle_present() == 1
+    }
+
+    /// Download the ~2.5 GB Parakeet bundle into the dimmy config dir.
+    /// BLOCKING — call from a background thread. Progress arrives as
+    /// "parakeet_bundle_download_progress" events on the global handler.
+    @discardableResult
+    func downloadParakeetBundle() -> Bool {
+        let result = dimmy_parakeet_download_bundle()
+        if result != 0 {
+            print("[DimmyCore] ERROR: downloadParakeetBundle failed with code \(result)")
+        }
+        return result == 0
+    }
+
+    /// Pre-load the Parakeet sessions on a background thread so the
+    /// user's first real recording doesn't pay the ~6 s cold path.
+    /// No-op if the bundle isn't present yet — caller doesn't need
+    /// to gate.
+    @discardableResult
+    func warmupParakeet() -> Bool {
+        let result = dimmy_parakeet_warmup()
+        if result != 0 {
+            print("[DimmyCore] parakeet warmup skipped (rc=\(result))")
+        }
+        return result == 0
     }
 
     // MARK: - Local LLM Models
@@ -565,6 +681,27 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
            total > 0 {
             appState.llmModelDownloadProgress = Double(downloaded) / Double(total)
         }
+
+    case "parakeet_bundle_download_progress":
+        if let downloaded = payload["downloaded"] as? Int,
+           let total = payload["total"] as? Int,
+           total > 0 {
+            appState.parakeetDownloadProgress = Double(downloaded) / Double(total)
+        }
+
+    case "stt_chunk":
+        // Rust core emits this when chunk_streaming is on AND the
+        // active local backend is Parakeet. Payload schema:
+        //   { "delta": "<new text>", "cumulative": "<full text>",
+        //     "is_final": <bool> }
+        // CaptionWindowController watches the publishers below.
+        let delta = (payload["delta"] as? String) ?? ""
+        let cumulative = (payload["cumulative"] as? String) ?? ""
+        let isFinal = (payload["is_final"] as? Bool) ?? false
+        appState.liveCaptionDelta = delta
+        appState.liveCaptionCumulative = cumulative
+        appState.liveCaptionIsFinal = isFinal
+        appState.liveCaptionTick &+= 1
 
     default:
         print("[DimmyCore] unhandled event: \(event)")

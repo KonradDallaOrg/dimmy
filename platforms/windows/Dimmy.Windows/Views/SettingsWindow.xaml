@@ -6,7 +6,8 @@
     xmlns:controls="using:Dimmy.Windows.Views.Controls"
     Title="Dimmy Settings">
 
-  <Grid RequestedTheme="Light" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+  <Grid x:Name="RootGrid" AllowDrop="True"
+        RequestedTheme="Light" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
     <Grid.RowDefinitions>
       <RowDefinition Height="*" />
       <RowDefinition Height="Auto" />
@@ -39,8 +40,14 @@
         <NavigationViewItem Content="Shortcut" Tag="shortcut">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE765;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
+        <NavigationViewItem Content="Recordings" Tag="history">
+          <NavigationViewItem.Icon><FontIcon Glyph="&#xE7B8;" /></NavigationViewItem.Icon>
+        </NavigationViewItem>
         <NavigationViewItem Content="Privacy &amp; data" Tag="privacy">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE72E;" /></NavigationViewItem.Icon>
+        </NavigationViewItem>
+        <NavigationViewItem Content="License" Tag="license">
+          <NavigationViewItem.Icon><FontIcon Glyph="&#xE192;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
         <NavigationViewItem Content="About" Tag="about">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE946;" /></NavigationViewItem.Icon>
@@ -52,15 +59,37 @@
       </NavigationView.MenuItems>
 
       <NavigationView.PaneFooter>
-        <!-- Advanced mode toggle in the sidebar footer (Win11 native pattern,
-             matches the design bundle). Reveals the Advanced nav item for
-             developer-only diagnostics + debug toggles. -->
-        <Border Padding="14,8" BorderThickness="0,1,0,0"
-                BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}">
-          <ToggleSwitch Header="Advanced mode"
-                        IsOn="{Binding IsAdvanced, Mode=TwoWay}"
-                        OnContent="On" OffContent="Off" />
-        </Border>
+        <StackPanel>
+          <!-- Staging watermark — visible only on builds with
+               DIMMY_BUILD_FLAVOR=staging. Code-behind flips the
+               Visibility on Loaded based on BuildInfo.IsStaging. The
+               yellow stripe + emoji is intentional: a tester running
+               staging side-by-side with prod must spot the difference
+               at a glance even on a single screen. -->
+          <Border x:Name="StagingBanner" Visibility="Collapsed"
+                  Padding="14,10" BorderThickness="0,1,0,1"
+                  BorderBrush="#A86E00"
+                  Background="#3DFFB300">
+            <StackPanel Spacing="2">
+              <TextBlock Text="⚠ STAGING BUILD"
+                         FontWeight="SemiBold" FontSize="12"
+                         Foreground="#A86E00" />
+              <TextBlock Text="Test environment · Stripe TEST · payments simulated"
+                         FontSize="11" TextWrapping="Wrap"
+                         Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            </StackPanel>
+          </Border>
+
+          <!-- Advanced mode toggle in the sidebar footer (Win11 native pattern,
+               matches the design bundle). Reveals the Advanced nav item for
+               developer-only diagnostics + debug toggles. -->
+          <Border Padding="14,8" BorderThickness="0,1,0,0"
+                  BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}">
+            <ToggleSwitch Header="Advanced mode"
+                          IsOn="{Binding IsAdvanced, Mode=TwoWay}"
+                          OnContent="On" OffContent="Off" />
+          </Border>
+        </StackPanel>
       </NavigationView.PaneFooter>
 
       <ScrollViewer Padding="24,20,24,20">
@@ -112,6 +141,84 @@
                                Text="Voice dictation that stays out of your way. Press your shortcut, speak, and the transcript pastes into whatever app has focus." />
                   </StackPanel>
                 </Grid>
+              </Border>
+
+              <!-- Meeting mode launcher — long-form recording with
+                   streaming-to-disk + post-process recap + actions. -->
+              <TextBlock Text="MEETING MODE"
+                         FontSize="12" FontWeight="SemiBold"
+                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                         CharacterSpacing="40" Margin="2,20,0,8" />
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="4" Padding="20,16">
+                <StackPanel Spacing="8">
+                  <TextBlock Text="Record a meeting" FontSize="16" FontWeight="SemiBold" />
+                  <TextBlock TextWrapping="Wrap"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                             Text="Streamed to disk so a multi-hour session won't fill RAM. Live transcript every ~15 s. On stop, the LLM produces a recap + action items (when an LLM key is configured)." />
+                  <Button x:Name="OpenMeetingBtn" Click="OpenMeeting_Click"
+                          Style="{ThemeResource AccentButtonStyle}"
+                          Margin="0,4,0,0">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <FontIcon Glyph="&#xE7C8;" FontSize="14"/>
+                      <TextBlock Text="Open meeting window" />
+                    </StackPanel>
+                  </Button>
+                </StackPanel>
+              </Border>
+
+              <!-- Transcribe audio file (offline): drag a WAV here OR
+                   pick one with the file picker. Routes through the
+                   active local backend (whisper / parakeet) and saves
+                   the transcript to History. -->
+              <TextBlock Text="TRANSCRIBE A FILE"
+                         FontSize="12" FontWeight="SemiBold"
+                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                         CharacterSpacing="40" Margin="2,20,0,8" />
+              <!-- DragOver/Drop are wired in code-behind via AddHandler
+                   with handledEventsToo=true: the parent ScrollViewer's
+                   built-in drag-to-scroll marks DragOver as handled,
+                   so the declarative attribute path never fires. -->
+              <Border x:Name="FileLoadDropTarget"
+                      Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="4" Padding="20,16"
+                      AllowDrop="True">
+                <StackPanel Spacing="8">
+                  <TextBlock Text="Transcribe a WAV file" FontSize="16" FontWeight="SemiBold" />
+                  <TextBlock TextWrapping="Wrap"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                             Text="Drag a .wav file here or click Pick file. The active local backend (whisper.cpp or Parakeet) processes it offline and the transcript lands in History. Cloud + non-WAV formats are a follow-up." />
+                  <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
+                    <Button x:Name="FileLoadPickBtn" Click="FileLoadPick_Click">
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xE8E5;" FontSize="14"/>
+                        <TextBlock Text="Pick file..."/>
+                      </StackPanel>
+                    </Button>
+                    <ProgressRing x:Name="FileLoadProgress"
+                                  IsActive="False" Visibility="Collapsed"
+                                  Width="20" Height="20" />
+                    <TextBlock x:Name="FileLoadStatus" Text=""
+                               VerticalAlignment="Center"
+                               FontSize="12"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               TextWrapping="Wrap" />
+                  </StackPanel>
+                  <ProgressBar x:Name="FileLoadBar"
+                               Visibility="Collapsed"
+                               Minimum="0" Maximum="100" Value="0"
+                               Margin="0,4,0,0"/>
+                  <TextBox x:Name="FileLoadResult"
+                           Visibility="Collapsed"
+                           IsReadOnly="True"
+                           AcceptsReturn="True"
+                           TextWrapping="Wrap"
+                           MinHeight="120"
+                           MaxHeight="240"
+                           Margin="0,8,0,0" />
+                </StackPanel>
               </Border>
 
               <!-- Quick stats: bordered card with two big numbers — visually
@@ -236,8 +343,8 @@
               <StackPanel x:Name="LocalSttPanel" Spacing="4">
                 <controls:SettingCard Glyph="&#xE968;"
                                       Label="Local model"
-                                      Description="Whisper.cpp runs entirely offline.">
-                  <ComboBox x:Name="LocalModelComboBox" MinWidth="240"
+                                      Description="Whisper.cpp sizes run entirely offline; Parakeet TDT v3 is faster + EU-language friendly but is a one-time 2.5 GB download.">
+                  <ComboBox x:Name="LocalModelComboBox" MinWidth="280"
                             SelectionChanged="LocalModel_SelectionChanged" />
                 </controls:SettingCard>
                 <controls:SettingCard Glyph="&#xE946;"
@@ -248,8 +355,8 @@
                                VerticalAlignment="Center" />
                     <Button x:Name="DownloadModelBtn" Content="Download"
                             Click="DownloadModel_Click" Visibility="Collapsed" />
-                    <ProgressBar x:Name="DownloadProgress" IsIndeterminate="True"
-                                 Width="120" Visibility="Collapsed" />
+                    <ProgressBar x:Name="DownloadProgress" Width="180"
+                                 Minimum="0" Maximum="100" Visibility="Collapsed" />
                   </StackPanel>
                 </controls:SettingCard>
                 <controls:SettingCard Glyph="&#xE74D;"
@@ -265,8 +372,13 @@
                 <controls:SettingCard Glyph="&#xE192;"
                                       Label="Cloud STT API key"
                                       Description="Encrypted locally. The provider receives only audio + key, never anything else.">
+                  <!-- StackPanel + fixed Width on the PasswordBox: same shape
+                       as the LLM API-key card below. Avoid HorizontalAlignment
+                       Stretch — it eats the SettingCard's label/description
+                       column and squeezes the heading into a vertical strip
+                       (witnessed live 2026-05-04). -->
                   <StackPanel Orientation="Horizontal" Spacing="8">
-                    <PasswordBox x:Name="CloudApiKeyBox" MinWidth="240"
+                    <PasswordBox x:Name="CloudApiKeyBox" Width="320"
                                  PlaceholderText="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}" />
                     <FontIcon Glyph="&#xE73E;" FontSize="16" Foreground="#4ade80"
                               VerticalAlignment="Center"
@@ -279,6 +391,10 @@
               <StackPanel Spacing="4"
                           Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
 
+                <!-- Provider details — cloud-only. Hidden when stt_mode == "local"
+                     since picking a cloud STT provider has no effect there. The
+                     Microphone group below stays visible for both modes. -->
+                <StackPanel x:Name="CloudAdvancedPanel" Spacing="4">
                 <TextBlock Text="PROVIDER DETAILS"
                            FontSize="12" FontWeight="SemiBold"
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
@@ -286,19 +402,118 @@
                 <controls:SettingCard Glyph="&#xE968;"
                                       Label="Provider"
                                       Description="Choose the cloud STT model to send audio to.">
-                  <ComboBox x:Name="ProviderComboBox" MinWidth="280"
+                  <ComboBox x:Name="ProviderComboBox" MinWidth="320"
                             SelectionChanged="Provider_SelectionChanged">
-                    <ComboBoxItem Content="Groq — whisper-large-v3-turbo (free)" Tag="groq" />
-                    <ComboBoxItem Content="Groq — whisper-large-v3 (free)" Tag="groq-v3" />
-                    <ComboBoxItem Content="Groq — distil-whisper-en (free)" Tag="groq-distil" />
-                    <ComboBoxItem Content="OpenAI — whisper-1" Tag="openai" />
-                    <ComboBoxItem Content="OpenAI — gpt-4o-transcribe" Tag="openai-4o" />
-                    <ComboBoxItem Content="OpenAI — gpt-4o-mini-transcribe" Tag="openai-4o-mini" />
-                    <ComboBoxItem Content="Deepgram — nova-3" Tag="deepgram" />
-                    <ComboBoxItem Content="Deepgram — nova-2" Tag="deepgram-nova2" />
-                    <ComboBoxItem Content="Gemini — gemini-2.5-flash (free)" Tag="gemini" />
-                    <ComboBoxItem Content="Gemini — gemini-2.5-pro (free)" Tag="gemini-pro" />
-                    <ComboBoxItem Content="Custom endpoint" Tag="custom" />
+                    <ComboBoxItem Tag="groq">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/groq.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Groq · whisper-large-v3-turbo (free)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="groq-v3">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/groq.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Groq · whisper-large-v3 (free)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="groq-distil">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/groq.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Groq · distil-whisper-en (free)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="openai">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/openai.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="OpenAI · whisper-1" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="openai-4o">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/openai.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="OpenAI · gpt-4o-transcribe" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="openai-4o-mini">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/openai.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="OpenAI · gpt-4o-mini-transcribe" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="deepgram">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/deepgram.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Deepgram · nova-3" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="deepgram-nova2">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/deepgram.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Deepgram · nova-2" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="gemini">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Gemini · gemini-2.5-flash (free)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="gemini-pro">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Gemini · gemini-2.5-pro (free)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="fireworks">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/fireworks.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Fireworks · whisper-v3-turbo" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="together-parakeet">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/together.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Together · parakeet-tdt-0.6b-v3" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="together-whisper">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/together.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Together · whisper-large-v3" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="custom">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE71B;" FontSize="14" VerticalAlignment="Center"/>
+                        <TextBlock Text="Custom endpoint" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
                   </ComboBox>
                 </controls:SettingCard>
                 <controls:SettingCard x:Name="CustomUrlCard"
@@ -324,6 +539,8 @@
                            AcceptsReturn="True" TextWrapping="Wrap" Height="80"
                            Text="{Binding Prompt, Mode=TwoWay}" />
                 </controls:SettingCard>
+                </StackPanel>
+                <!-- /CloudAdvancedPanel -->
 
                 <TextBlock Text="MICROPHONE"
                            FontSize="12" FontWeight="SemiBold"
@@ -350,9 +567,15 @@
                                 OnContent="" OffContent="" />
                 </controls:SettingCard>
                 <controls:SettingCard Glyph="&#xE7F2;"
-                                      Label="Chunk streaming"
-                                      Description="Stream audio in chunks for partial results during long recordings.">
+                                      Label="Chunk streaming (Parakeet only)"
+                                      Description="Transcribe in 5 s windows during recording so the final paste lands ~700 ms after release instead of waiting for the full batch. Requires Local backend = Parakeet.">
                   <ToggleSwitch IsOn="{Binding ChunkStreamingEnabled, Mode=TwoWay}"
+                                OnContent="" OffContent="" />
+                </controls:SettingCard>
+                <controls:SettingCard Glyph="&#xE890;"
+                                      Label="Live captions"
+                                      Description="Show a floating caption window below the pill while chunked streaming is active. Toggle off to keep chunked speed-up without the on-screen caption.">
+                  <ToggleSwitch IsOn="{Binding LiveCaptionsEnabled, Mode=TwoWay}"
                                 OnContent="" OffContent="" />
                 </controls:SettingCard>
                 <!-- API keys always stored in local encrypted file (keys.enc) -->
@@ -462,16 +685,94 @@
                 <controls:SettingCard Glyph="&#xE968;"
                                       Label="Cloud LLM provider"
                                       Description="Where the rewrite runs and which model.">
-                  <ComboBox x:Name="LlmProviderComboBox" MinWidth="280"
+                  <ComboBox x:Name="LlmProviderComboBox" MinWidth="320"
                             SelectionChanged="LlmProvider_SelectionChanged">
-                    <ComboBoxItem Content="Groq — llama-3.3-70b (free)" Tag="groq" />
-                    <ComboBoxItem Content="OpenAI — gpt-4o-mini" Tag="openai" />
-                    <ComboBoxItem Content="OpenRouter — llama-3.3-70b (free)" Tag="openrouter" />
-                    <ComboBoxItem Content="OpenRouter — DeepSeek R1 (free)" Tag="openrouter-deepseek" />
-                    <ComboBoxItem Content="Gemini — gemini-2.5-flash (free)" Tag="gemini" />
-                    <ComboBoxItem Content="Anthropic — claude-haiku-4.5" Tag="anthropic" />
-                    <ComboBoxItem Content="Anthropic — claude-sonnet-4" Tag="anthropic-sonnet" />
-                    <ComboBoxItem Content="Custom endpoint" Tag="custom" />
+                    <ComboBoxItem Tag="groq">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/groq.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Groq · llama-3.3-70b (free)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="openai">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/openai.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="OpenAI · gpt-4o-mini" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="openrouter">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/openrouter.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="OpenRouter · llama-3.3-70b (free)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="openrouter-deepseek">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/openrouter.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="OpenRouter · DeepSeek R1 (free)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="gemini">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Gemini · gemini-2.5-flash (free)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="anthropic">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/anthropic.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Anthropic · claude-haiku-4.5" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="anthropic-sonnet">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/anthropic.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Anthropic · claude-sonnet-4" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="fireworks">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/fireworks.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Fireworks · kimi-k2" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="together-llama">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/together.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Together · llama-3.3-70b" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="together-qwen">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/together.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Together · qwen-2.5-7b" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="custom">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE71B;" FontSize="14" VerticalAlignment="Center"/>
+                        <TextBlock Text="Custom endpoint" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
                   </ComboBox>
                 </controls:SettingCard>
                 <controls:SettingCard x:Name="LlmCustomUrlCard"
@@ -501,7 +802,7 @@
                                       Description="Encrypted locally. Used when not sharing with STT."
                                       Visibility="{Binding LlmUseSameKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Invert}">
                   <StackPanel Orientation="Horizontal" Spacing="8">
-                    <PasswordBox x:Name="LlmApiKeyBox" MinWidth="240"
+                    <PasswordBox x:Name="LlmApiKeyBox" Width="320"
                                  PlaceholderText="{Binding HasLlmKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}" />
                     <FontIcon Glyph="&#xE73E;" FontSize="16" Foreground="#4ade80"
                               VerticalAlignment="Center"
@@ -760,28 +1061,133 @@
               </controls:SettingCard>
             </StackPanel>
 
-            <!-- ═══ App rules (placeholder pending PR-B backend) ═══ -->
-            <StackPanel x:Name="RulesPanel" Spacing="16" Visibility="Collapsed">
+            <!-- ═══ App rules ═══ -->
+            <StackPanel x:Name="RulesPanel" Spacing="12" Visibility="Collapsed">
               <StackPanel Spacing="2" Margin="0,0,0,4">
                 <TextBlock Text="App rules" FontSize="28" FontWeight="SemiBold" />
-                <TextBlock Text="Auto-switch the rewrite style based on the focused app."
-                           FontSize="13"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <TextBlock TextWrapping="Wrap"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           Text="Auto-switch the LLM style + translation target based on the foreground app at hotkey-down. First match wins, top-to-bottom. Disabled rules stay in the list but are skipped." />
               </StackPanel>
+
+              <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
+                <Button x:Name="AppRuleAddBtn" Click="AppRuleAdd_Click">
+                  <StackPanel Orientation="Horizontal" Spacing="6">
+                    <FontIcon Glyph="&#xE710;" FontSize="14"/>
+                    <TextBlock Text="Add rule" />
+                  </StackPanel>
+                </Button>
+                <Button x:Name="AppRuleLoadDefaultsBtn" Click="AppRuleLoadDefaults_Click">
+                  <StackPanel Orientation="Horizontal" Spacing="6">
+                    <FontIcon Glyph="&#xE74C;" FontSize="14"/>
+                    <TextBlock Text="Load defaults (v1)" />
+                  </StackPanel>
+                </Button>
+              </StackPanel>
+
               <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                       BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="8" Padding="20,16">
-                <StackPanel Spacing="6">
-                  <TextBlock Text="App rules" FontSize="16" FontWeight="SemiBold" />
-                  <TextBlock TextWrapping="Wrap"
-                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                             Text="Auto-switch the LLM rewrite style based on the focused app — Slack/Telegram → Casual, Outlook → Professional, VS Code → off, etc." />
-                  <TextBlock Margin="0,8,0,0"
-                             FontSize="12"
-                             Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
-                             Text="🚧 Coming in V21 — backend in development." />
-                </StackPanel>
+                      BorderThickness="1" CornerRadius="8" Padding="0">
+                <ListView x:Name="AppRulesListView"
+                          ItemsSource="{Binding AppRules}"
+                          SelectionMode="None"
+                          IsItemClickEnabled="False"
+                          HorizontalContentAlignment="Stretch"
+                          CanReorderItems="True"
+                          AllowDrop="True"
+                          ReorderMode="Enabled">
+                  <ListView.ItemContainerStyle>
+                    <Style TargetType="ListViewItem">
+                      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                      <Setter Property="Padding" Value="0"/>
+                    </Style>
+                  </ListView.ItemContainerStyle>
+                  <ListView.ItemTemplate>
+                    <DataTemplate>
+                      <Grid ColumnSpacing="8" Padding="14,10" >
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="Auto"/>      <!-- enabled toggle -->
+                          <ColumnDefinition Width="Auto"/>      <!-- icon -->
+                          <ColumnDefinition Width="2*"/>        <!-- pattern -->
+                          <ColumnDefinition Width="1.4*"/>      <!-- match type -->
+                          <ColumnDefinition Width="1.6*"/>      <!-- style -->
+                          <ColumnDefinition Width="1.4*"/>      <!-- translate -->
+                          <ColumnDefinition Width="Auto"/>      <!-- delete -->
+                        </Grid.ColumnDefinitions>
+                        <ToggleSwitch Grid.Column="0"
+                                      IsOn="{Binding Enabled, Mode=TwoWay}"
+                                      OnContent="" OffContent="" MinWidth="0"/>
+                        <Grid Grid.Column="1" Width="32" Height="32"
+                              VerticalAlignment="Center" Margin="2,0,6,0">
+                          <!-- Real Windows icon extracted from the .exe
+                               at 256×256 via IShellItemImageFactory,
+                               cached as PNG; the Image control
+                               downscales to 32 with bilinear filtering
+                               so even apps with mediocre source icons
+                               look crisp. Segoe Fluent glyph fallback
+                               when no exe has been seen for this rule. -->
+                          <Image Width="32" Height="32"
+                                 Source="{Binding IconAssetUri, Mode=OneWay}"
+                                 Visibility="{Binding IconAssetUri, Mode=OneWay, Converter={StaticResource NotNullToVisibilityConverter}}"/>
+                          <FontIcon Glyph="{Binding IconGlyph, Mode=OneWay}"
+                                    FontSize="22"
+                                    Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                                    Visibility="{Binding IconAssetUri, Mode=OneWay, Converter={StaticResource NotNullToVisibilityConverter}, ConverterParameter=Invert}"/>
+                        </Grid>
+                        <TextBox Grid.Column="2"
+                                 Text="{Binding MatchPattern, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 PlaceholderText="slack.exe" />
+                        <ComboBox Grid.Column="3" SelectedValue="{Binding MatchType, Mode=TwoWay}"
+                                  SelectedValuePath="Tag" HorizontalAlignment="Stretch">
+                          <ComboBoxItem Tag="process_name" Content="Process (Win)"/>
+                          <ComboBoxItem Tag="bundle_id" Content="Bundle (Mac)"/>
+                          <ComboBoxItem Tag="wm_class" Content="WM_CLASS (Linux)"/>
+                        </ComboBox>
+                        <ComboBox Grid.Column="4" SelectedValue="{Binding LlmStyle, Mode=TwoWay}"
+                                  SelectedValuePath="Tag" HorizontalAlignment="Stretch">
+                          <ComboBoxItem Tag="off"            Content="Off (no LLM)"/>
+                          <ComboBoxItem Tag="correct"        Content="Correct"/>
+                          <ComboBoxItem Tag="summarize"      Content="Summarize"/>
+                          <ComboBoxItem Tag="elaborate"      Content="Elaborate"/>
+                          <ComboBoxItem Tag="comprehensible" Content="Comprehensible"/>
+                          <ComboBoxItem Tag="professional"   Content="Professional"/>
+                          <ComboBoxItem Tag="genz"           Content="Gen-Z"/>
+                          <ComboBoxItem Tag="boomer"         Content="Boomer"/>
+                          <ComboBoxItem Tag="emoji"          Content="Emoji"/>
+                          <ComboBoxItem Tag="acronyms"       Content="Acronyms"/>
+                          <ComboBoxItem Tag="imbruttito"     Content="Imbruttito"/>
+                          <ComboBoxItem Tag="prompt"         Content="Custom prompt"/>
+                        </ComboBox>
+                        <ComboBox Grid.Column="5" SelectedValue="{Binding LlmTranslateTo, Mode=TwoWay}"
+                                  SelectedValuePath="Tag" HorizontalAlignment="Stretch">
+                          <ComboBoxItem Tag=""    Content="No translation"/>
+                          <ComboBoxItem Tag="en"  Content="→ English"/>
+                          <ComboBoxItem Tag="it"  Content="→ Italiano"/>
+                          <ComboBoxItem Tag="es"  Content="→ Español"/>
+                          <ComboBoxItem Tag="fr"  Content="→ Français"/>
+                          <ComboBoxItem Tag="de"  Content="→ Deutsch"/>
+                          <ComboBoxItem Tag="pt"  Content="→ Português"/>
+                        </ComboBox>
+                        <Button Grid.Column="6"
+                                Click="AppRuleDelete_Click"
+                                Tag="{Binding}"
+                                ToolTipService.ToolTip="Remove rule"
+                                Background="Transparent"
+                                BorderThickness="0">
+                          <FontIcon Glyph="&#xE74D;" FontSize="14"/>
+                        </Button>
+                      </Grid>
+                    </DataTemplate>
+                  </ListView.ItemTemplate>
+                </ListView>
               </Border>
+
+              <TextBlock x:Name="AppRulesEmptyHint"
+                         Text="No rules yet. Click Load defaults (v1) to populate from the curated list, or Add rule to start from scratch."
+                         FontSize="12"
+                         Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                         TextWrapping="Wrap"
+                         Visibility="Collapsed"/>
             </StackPanel>
 
             <!-- ═══ About ═══ -->
@@ -886,6 +1292,170 @@
                            VerticalAlignment="Center"
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
               </StackPanel>
+            </StackPanel>
+
+            <!-- ═══ History ═══ -->
+            <StackPanel x:Name="HistoryPanel" Spacing="12" Visibility="Collapsed">
+              <StackPanel Spacing="2" Margin="0,0,0,4">
+                <TextBlock Text="Recordings" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock TextWrapping="Wrap"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           Text="Past transcriptions — dictations, file-load, meetings. Full-text searchable. Audio retention is opt-in (off by default for privacy). Meeting recordings live separately in &lt;config&gt;/meetings/&lt;id&gt;/." />
+              </StackPanel>
+
+              <Grid ColumnSpacing="8" Margin="0,4,0,0">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBox Grid.Column="0"
+                         x:Name="HistorySearchBox"
+                         PlaceholderText="Search raw + enhanced text…"
+                         Text="{Binding HistorySearchQuery, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                         KeyDown="HistorySearchBox_KeyDown"/>
+                <Button Grid.Column="1" x:Name="HistorySearchBtn" Click="HistorySearch_Click">
+                  <StackPanel Orientation="Horizontal" Spacing="6">
+                    <FontIcon Glyph="&#xE721;" FontSize="14"/>
+                    <TextBlock Text="Search"/>
+                  </StackPanel>
+                </Button>
+                <Button Grid.Column="2" x:Name="HistoryRefreshBtn" Click="HistoryRefresh_Click">
+                  <FontIcon Glyph="&#xE72C;" FontSize="14" />
+                </Button>
+              </Grid>
+
+              <controls:SettingCard Glyph="&#xE7B8;"
+                                    Label="Save audio with history"
+                                    Description="Off by default. When on, each transcription's WAV is saved alongside the row at 16 kHz mono. Use the retention controls below to bound disk usage.">
+                <ToggleSwitch IsOn="{Binding SaveAudioInHistory, Mode=TwoWay}"
+                              OnContent="" OffContent="" />
+              </controls:SettingCard>
+              <controls:SettingCard Glyph="&#xE823;"
+                                    Label="Audio retention (days)"
+                                    Description="Files older than this are pruned at startup. 0 disables age-based pruning.">
+                <NumberBox MinWidth="120" Minimum="0" Maximum="3650"
+                           Value="{Binding HistoryAudioKeepDays, Mode=TwoWay}" />
+              </controls:SettingCard>
+              <controls:SettingCard Glyph="&#xEDA2;"
+                                    Label="Audio quota (MB)"
+                                    Description="Oldest audio is deleted first when this size is exceeded. 0 disables size-based pruning.">
+                <NumberBox MinWidth="120" Minimum="0" Maximum="100000"
+                           Value="{Binding HistoryAudioMaxMb, Mode=TwoWay}" />
+              </controls:SettingCard>
+
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="0">
+                <ListView x:Name="HistoryListView"
+                          ItemsSource="{Binding HistoryItems}"
+                          SelectedItem="{Binding SelectedHistoryItem, Mode=TwoWay}"
+                          SelectionMode="Single"
+                          MaxHeight="320">
+                  <ListView.ItemContainerStyle>
+                    <Style TargetType="ListViewItem">
+                      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                    </Style>
+                  </ListView.ItemContainerStyle>
+                  <ListView.ItemTemplate>
+                    <DataTemplate>
+                      <Grid ColumnSpacing="12" Padding="6,4">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="Auto"/>
+                          <ColumnDefinition Width="Auto"/>
+                          <ColumnDefinition Width="*"/>
+                          <ColumnDefinition Width="Auto"/>
+                          <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="{Binding TimestampDisplay}"
+                                   FontFamily="Consolas" FontSize="11"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="1" Text="{Binding AppDisplay}"
+                                   FontSize="11"
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                   VerticalAlignment="Center"
+                                   MaxWidth="100" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Grid.Column="2" Text="{Binding Preview}"
+                                   FontSize="13" TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center" />
+                        <FontIcon Grid.Column="3" Glyph="&#xE7B8;" FontSize="12"
+                                  Visibility="{Binding HasAudio, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                                  Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                                  VerticalAlignment="Center"
+                                  ToolTipService.ToolTip="Audio saved" />
+                        <TextBlock Grid.Column="4" Text="{Binding DurationDisplay}"
+                                   FontSize="11"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   VerticalAlignment="Center" Margin="6,0,0,0"/>
+                      </Grid>
+                    </DataTemplate>
+                  </ListView.ItemTemplate>
+                </ListView>
+              </Border>
+
+              <!-- Detail panel: shown when a row is selected -->
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="14"
+                      Visibility="{Binding SelectedHistoryItem, Mode=OneWay, Converter={StaticResource NotNullToVisibilityConverter}}">
+                <StackPanel Spacing="8">
+                  <TextBlock Text="Raw transcript" FontSize="12" FontWeight="SemiBold"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                  <TextBlock Text="{Binding SelectedHistoryItem.Text, Mode=OneWay}"
+                             TextWrapping="Wrap" FontSize="14" />
+                  <TextBlock Text="LLM-enhanced" FontSize="12" FontWeight="SemiBold" Margin="0,8,0,0"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                             Visibility="{Binding SelectedHistoryItem.EnhancedText, Mode=OneWay, Converter={StaticResource NotNullToVisibilityConverter}}" />
+                  <TextBlock Text="{Binding SelectedHistoryItem.EnhancedText, Mode=OneWay}"
+                             TextWrapping="Wrap" FontSize="14"
+                             Visibility="{Binding SelectedHistoryItem.EnhancedText, Mode=OneWay, Converter={StaticResource NotNullToVisibilityConverter}}" />
+                  <StackPanel Orientation="Horizontal" Spacing="14" Margin="0,8,0,0">
+                    <TextBlock Text="{Binding SelectedHistoryItem.AppDisplay, Mode=OneWay, FallbackValue=''}"
+                               FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                    <TextBlock Text="{Binding SelectedHistoryItem.Language, Mode=OneWay}"
+                               FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                    <TextBlock Text="{Binding SelectedHistoryItem.LlmStyle, Mode=OneWay, FallbackValue=''}"
+                               FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                    <TextBlock Text="{Binding SelectedHistoryItem.DurationDisplay, Mode=OneWay}"
+                               FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                  </StackPanel>
+                  <!-- Waveform + audio playback. Canvas peaks are drawn
+                       in code-behind whenever SelectedHistoryItem
+                       changes (see HistoryWaveformRender). The
+                       MediaPlayerElement uses the WAV's file:/// URI;
+                       its built-in transport controls cover play/seek. -->
+                  <Grid Margin="0,8,0,0"
+                        Visibility="{Binding SelectedHistoryItem.HasAudio, Mode=OneWay,
+                                     Converter={StaticResource BoolToVisibilityConverter},
+                                     FallbackValue=Collapsed}">
+                    <Grid.RowDefinitions>
+                      <RowDefinition Height="Auto"/>
+                      <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <Border Grid.Row="0"
+                            Background="{ThemeResource LayerFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                            BorderThickness="1" CornerRadius="4"
+                            Padding="6,4" Height="64">
+                      <Canvas x:Name="HistoryWaveformCanvas"
+                              Background="Transparent"
+                              PointerPressed="HistoryWaveformCanvas_PointerPressed" />
+                    </Border>
+                    <MediaPlayerElement x:Name="HistoryAudioPlayer"
+                                        Grid.Row="1"
+                                        AreTransportControlsEnabled="True"
+                                        AutoPlay="False"
+                                        Margin="0,4,0,0"
+                                        MaxHeight="110" />
+                  </Grid>
+                  <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,8,0,0">
+                    <Button x:Name="HistoryCopyRawBtn" Click="HistoryCopyRaw_Click" Content="Copy raw" />
+                    <Button x:Name="HistoryCopyEnhancedBtn" Click="HistoryCopyEnhanced_Click" Content="Copy enhanced" />
+                    <Button x:Name="HistoryDeleteBtn" Click="HistoryDelete_Click" Content="Delete" />
+                  </StackPanel>
+                </StackPanel>
+              </Border>
             </StackPanel>
 
             <!-- ═══ Privacy & data ═══ -->
@@ -1001,6 +1571,232 @@
                 <HyperlinkButton Content="Open"
                                  NavigateUri="https://dimmy.app/privacy#data" />
               </controls:SettingCard>
+            </StackPanel>
+
+            <!-- ═══ License ═══ -->
+            <StackPanel x:Name="LicensePanel" Spacing="4" Visibility="Collapsed">
+              <StackPanel Spacing="2" Margin="0,0,0,16">
+                <TextBlock Text="License" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="Activate Dimmy, manage your trial, or paste an activation code from email."
+                           FontSize="13"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+              </StackPanel>
+
+              <!-- Status hero card. Mirrors macOS MacLicensePage statusHero:
+                   tier pill (color-coded) + headline/detail + trailing
+                   days counter. Tint = statusTint for the current state;
+                   border pulls a 35%-opacity stroke from the same color. -->
+              <Border x:Name="LicenseStatusBorder"
+                      BorderThickness="1" CornerRadius="6" Padding="18,16" Margin="0,0,0,16">
+                <StackPanel Spacing="10">
+                  <Grid ColumnSpacing="14">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="Auto" />
+                      <ColumnDefinition Width="*" />
+                      <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <!-- Tier pill — populated by RefreshLicenseStatus.
+                         Empty by default so the layout doesn't shift while
+                         we wait for the first FFI call. -->
+                    <!-- Tier badge — Win11 Fluent style: subtle tinted
+                         fill + matching solid-color text + thin border in
+                         the same hue. 4px corner radius (Fluent norm). -->
+                    <Border Grid.Column="0" x:Name="LicenseTierBadgeBorder"
+                            CornerRadius="4" Padding="8,3"
+                            BorderThickness="1"
+                            VerticalAlignment="Center"
+                            Visibility="Collapsed">
+                      <TextBlock x:Name="LicenseTierBadge"
+                                 FontSize="11" FontWeight="SemiBold"
+                                 CharacterSpacing="40"
+                                 Text="" />
+                    </Border>
+                    <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+                      <TextBlock x:Name="LicenseStatusHeadline" FontSize="18" FontWeight="SemiBold"
+                                 Text="Loading…" />
+                      <TextBlock x:Name="LicenseStatusDetail" FontSize="12"
+                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                 TextWrapping="Wrap"
+                                 Text="Fetching status from the licensing module…" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2" x:Name="LicenseTrailingPanel"
+                                Spacing="0" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                Visibility="Collapsed">
+                      <TextBlock x:Name="LicenseTrailingValue"
+                                 FontSize="20" FontWeight="SemiBold"
+                                 HorizontalAlignment="Right"
+                                 Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                                 Text="" />
+                      <TextBlock x:Name="LicenseTrailingLabel"
+                                 FontSize="11" FontWeight="Normal"
+                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                 HorizontalAlignment="Right"
+                                 Text="" />
+                    </StackPanel>
+                  </Grid>
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button Content="Refresh now" Click="License_Refresh_Click" />
+                    <Button Content="Sign out (this device)" Click="License_Clear_Click" />
+                    <Button x:Name="LicenseManageSubButton"
+                            Content="Manage subscription"
+                            Visibility="Collapsed"
+                            Click="License_ManageSubscription_Click" />
+                  </StackPanel>
+                  <InfoBar x:Name="LicenseManageSubInfoBar" IsOpen="False" IsClosable="True"
+                           Margin="0,4,0,0" Severity="Error" Title="" Message="" />
+                </StackPanel>
+              </Border>
+
+              <!-- Devices on this license — list + per-row "Sign out". -->
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="4" Padding="20,16" Margin="0,0,0,16">
+                <StackPanel Spacing="10">
+                  <Grid>
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="*" />
+                      <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Spacing="2">
+                      <TextBlock Text="Devices" FontSize="16" FontWeight="SemiBold" />
+                      <TextBlock x:Name="LicenseDeviceCountLabel" FontSize="11"
+                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                 Text="…" />
+                    </StackPanel>
+                    <Button Grid.Column="1" Content="Reload" Click="License_DevicesReload_Click" />
+                  </Grid>
+                  <StackPanel x:Name="LicenseDevicesList" Spacing="6" />
+                </StackPanel>
+              </Border>
+
+              <!-- Buy / Upgrade — three-tier picker. Visibility flips per
+                   LicenseStatus.Kind in code-behind: shown for NotFound,
+                   TrialActive, TrialExpired, Expired; hidden for Active /
+                   Suspended / Unrestricted. Each button POSTs the tier to
+                   /api/checkout/create and opens the returned Stripe URL. -->
+              <Border x:Name="LicenseBuyCard"
+                      Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="4" Padding="20,16" Margin="0,0,0,16"
+                      Visibility="Collapsed">
+                <StackPanel Spacing="10">
+                  <TextBlock x:Name="LicenseBuyHeadline" Text="Upgrade to Pro"
+                             FontSize="16" FontWeight="SemiBold" />
+                  <TextBlock x:Name="LicenseBuyDetail" FontSize="12"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                             TextWrapping="Wrap"
+                             Text="Pick a plan. Stripe handles payment + tax; we email you a magic link the moment payment clears." />
+                  <Grid x:Name="LicenseBuyButtonsGrid" ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="*" />
+                      <ColumnDefinition Width="*" />
+                      <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Button Grid.Column="0" x:Name="LicenseBuyMonthlyButton"
+                            Click="License_BuyMonthly_Click"
+                            HorizontalAlignment="Stretch">
+                      <StackPanel Spacing="2">
+                        <TextBlock x:Name="LicenseBuyMonthlyLabel" Text="Monthly" FontWeight="SemiBold" />
+                        <TextBlock Text="recurring" FontSize="10"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                      </StackPanel>
+                    </Button>
+                    <Button Grid.Column="1" x:Name="LicenseBuyAnnualButton"
+                            Click="License_BuyAnnual_Click"
+                            HorizontalAlignment="Stretch"
+                            Style="{ThemeResource AccentButtonStyle}">
+                      <StackPanel Spacing="2">
+                        <TextBlock x:Name="LicenseBuyAnnualLabel" Text="Annual" FontWeight="SemiBold" />
+                        <TextBlock Text="best value" FontSize="10" Opacity="0.85" />
+                      </StackPanel>
+                    </Button>
+                    <Button Grid.Column="2" x:Name="LicenseBuyLifetimeButton"
+                            Click="License_BuyLifetime_Click"
+                            HorizontalAlignment="Stretch">
+                      <StackPanel Spacing="2">
+                        <TextBlock x:Name="LicenseBuyLifetimeLabel" Text="Lifetime" FontWeight="SemiBold" />
+                        <TextBlock Text="one-time" FontSize="10"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                      </StackPanel>
+                    </Button>
+                  </Grid>
+                  <!-- Visible only on Active{Monthly|Annual}: nudges the
+                       user toward the Stripe Customer Portal for plan
+                       changes (downgrade, cancel, payment method) so
+                       they don't accidentally double-purchase by hitting
+                       a Buy button thinking it switches plans. -->
+                  <TextBlock x:Name="LicenseBuyPortalHint"
+                             FontSize="11"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                             TextWrapping="Wrap"
+                             Visibility="Collapsed"
+                             Text="Need to downgrade, cancel, or update payment? Use the &quot;Manage subscription&quot; button above — it opens the secure Stripe billing portal." />
+                  <InfoBar x:Name="LicenseBuyInfoBar" IsOpen="False" IsClosable="True"
+                           Severity="Informational" Message="" />
+                </StackPanel>
+              </Border>
+
+              <!-- Capabilities grid — populated by RefreshLicenseStatus.
+                   Each row = one entry in LicenseService.ScopeNames.All. -->
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="4" Padding="20,16" Margin="0,0,0,16">
+                <StackPanel Spacing="10">
+                  <TextBlock Text="Included with your license" FontSize="16" FontWeight="SemiBold" />
+                  <TextBlock FontSize="12"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                             TextWrapping="Wrap"
+                             Text="Local features (BYOK STT/LLM, history, hotkey, paste) are always free. The capabilities below are unlocked by an active license." />
+                  <StackPanel x:Name="LicenseScopeGrid" Spacing="6" />
+                </StackPanel>
+              </Border>
+
+              <!-- Activate / Start trial — primary path -->
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="4" Padding="20,16" Margin="0,0,0,16">
+                <StackPanel Spacing="10">
+                  <TextBlock Text="Activate Dimmy" FontSize="16" FontWeight="SemiBold" />
+                  <TextBlock FontSize="12"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                             TextWrapping="Wrap"
+                             Text="Enter your email. We'll send you a magic link — clicking it opens Dimmy and activates the license automatically. New device on the same email? Same flow, the device joins your existing license." />
+                  <Grid ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="*" />
+                      <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBox Grid.Column="0" x:Name="LicenseTrialEmailBox"
+                             PlaceholderText="you@example.com" />
+                    <Button Grid.Column="1" x:Name="LicenseTrialButton" Content="Activate"
+                            Click="License_StartTrial_Click"
+                            Style="{ThemeResource AccentButtonStyle}" />
+                  </Grid>
+                  <InfoBar x:Name="LicenseTrialInfoBar" IsOpen="False" IsClosable="True"
+                           Severity="Informational" Message="" />
+                </StackPanel>
+              </Border>
+
+              <!-- Fallback: paste activation code (collapsed by default).
+                   Used when the magic link didn't auto-activate (corp email
+                   that strips dimmy:// schemes, copy-paste from another box). -->
+              <Expander Header="Activation didn't open Dimmy? Paste the code"
+                        HorizontalAlignment="Stretch" Margin="0,0,0,16">
+                <StackPanel Spacing="10">
+                  <TextBlock FontSize="12"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                             TextWrapping="Wrap"
+                             Text="Some email clients (especially corporate) strip custom URL schemes. Paste the bare code or full magic-link URL from your email here." />
+                  <TextBox x:Name="LicenseCodeBox" AcceptsReturn="False"
+                           PlaceholderText="32-char activation code or magic-link URL" />
+                  <TextBox x:Name="LicenseDeviceLabelBox"
+                           PlaceholderText="Device label (optional)" />
+                  <Button Content="Activate from code" Click="License_Activate_Click" />
+                  <InfoBar x:Name="LicenseActivateInfoBar" IsOpen="False" IsClosable="True"
+                           Severity="Informational" Message="" />
+                </StackPanel>
+              </Expander>
+
             </StackPanel>
 
             <!-- Orphan Stats panel — kept so existing code-behind that writes

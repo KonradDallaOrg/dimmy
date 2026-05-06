@@ -230,6 +230,11 @@ public static class JumpListService
                     // that brings the visible Dimmy UI back. Default
                     // (null icon) → the EXE's own dimmy.ico.
                     Task("Toggle pill",    "toggle-pill",   icon: null),
+                    // Open the dedicated long-form meeting window —
+                    // streamed-to-disk recording + LLM recap. Uses the
+                    // "settings" gear icon as a sensible neutral; a
+                    // dedicated meeting glyph is a nice-to-have.
+                    Task("Start meeting…", "open-meeting",  icon: SettingsIcon()),
                     // Settings = three horizontal dots (universal
                     // "more / configure" affordance, reads cleaner
                     // than a custom-drawn gear at 16px).

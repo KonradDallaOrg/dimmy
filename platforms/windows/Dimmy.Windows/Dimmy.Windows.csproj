@@ -60,6 +60,9 @@
     <Content Include="Assets\dimmy-logo.png">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <Content Include="Assets\Providers\*.svg">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
   <!-- Copy dimmy_lib.dll from Rust build output to bin dir -->
@@ -69,5 +72,23 @@
     </PropertyGroup>
     <Copy SourceFiles="$(DimmyDllSource)" DestinationFolder="$(OutputPath)" Condition="Exists('$(DimmyDllSource)')" SkipUnchangedFiles="true" />
     <Warning Text="dimmy_lib.dll not found at $(DimmyDllSource). Run 'cargo build --release --lib' in core first." Condition="!Exists('$(DimmyDllSource)')" />
+  </Target>
+
+  <!-- Copy onnxruntime.dll alongside dimmy_lib.dll when the Parakeet local-STT
+       backend is enabled. The DLL is fetched once by scripts/download-onnxruntime.ps1
+       (or downloaded manually) into core/target/onnxruntime-win-x64-<ver>/lib/.
+       Conditional on Exists(): if the file isn't there (Parakeet feature off,
+       or the script wasn't run), this target is a no-op and the build still
+       succeeds — backward-compatible. Velopack picks the OutputPath snapshot,
+       so the DLL ends up in the installer next to dimmy_lib.dll automatically. -->
+  <Target Name="CopyOrtDll" AfterTargets="Build">
+    <PropertyGroup>
+      <!-- Pin must track the ort crate. ort 2.0.0-rc.10 → onnxruntime 1.22.0. -->
+      <OrtVersion>1.22.0</OrtVersion>
+      <OrtDllSource>$(MSBuildThisFileDirectory)..\..\..\core\target\onnxruntime-win-x64-$(OrtVersion)\lib\onnxruntime.dll</OrtDllSource>
+      <OrtProvidersSharedSource>$(MSBuildThisFileDirectory)..\..\..\core\target\onnxruntime-win-x64-$(OrtVersion)\lib\onnxruntime_providers_shared.dll</OrtProvidersSharedSource>
+    </PropertyGroup>
+    <Copy SourceFiles="$(OrtDllSource)" DestinationFolder="$(OutputPath)" Condition="Exists('$(OrtDllSource)')" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(OrtProvidersSharedSource)" DestinationFolder="$(OutputPath)" Condition="Exists('$(OrtProvidersSharedSource)')" SkipUnchangedFiles="true" />
   </Target>
 </Project>

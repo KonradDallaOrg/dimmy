@@ -11,6 +11,7 @@
             </ResourceDictionary.MergedDictionaries>
             <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter" />
             <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityInverter" />
+            <converters:NotNullToVisibilityConverter x:Key="NotNullToVisibilityConverter" />
             <converters:BoolToOpacityConverter x:Key="BoolToOpacityConverter" />
             <converters:StringEqualityConverter x:Key="StringToBoolConverter" />
             <converters:BoolToApiKeyPlaceholderConverter x:Key="BoolToApiKeyPlaceholder" />

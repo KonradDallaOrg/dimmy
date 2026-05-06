@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private var statusBarController: StatusBarController?
     private var pillWindowController: PillWindowController?
+    private var captionWindowController: CaptionWindowController?
     private var onboardingWindow: NSWindow?
     private var settingsWindow: NSWindow?
     private let appState = AppState.shared
@@ -18,6 +19,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         hkLog("[AppDelegate] applicationDidFinishLaunching ENTER")
+
+        // Crash capture: route any uncaught NSException + fatal POSIX
+        // signal (SIGSEGV / SIGABRT / SIGBUS) to the Rust core's
+        // dimmy.log so the user can hand-deliver a useful "what
+        // happened?" line instead of just "the app vanished". Sentry
+        // catches Rust panics but NOT Swift / AppKit faults — which
+        // is exactly the class of crash we've been hitting on pill
+        // scroll. This stays on even in release builds; the secret
+        // sauce is just routing the trace through our existing log.
+        Self.installCrashHandlers()
+
+        // Single-instance guard. macOS deduplicates by bundle path, not
+        // bundle ID — so a Release in /Applications and a Debug build in
+        // ~/Library/Developer/Xcode/DerivedData with the same
+        // CFBundleIdentifier can both run at once. Two Dimmys means two
+        // global hotkey monitors fighting over Cmd+Shift+Space, two pill
+        // windows, two licensing FFI sessions writing the same
+        // license.json. Detect any other process advertising our bundle
+        // ID and bail out — let the existing instance keep running.
+        let myBundleID = Bundle.main.bundleIdentifier ?? ""
+        let myPID = ProcessInfo.processInfo.processIdentifier
+        let others = NSRunningApplication
+            .runningApplications(withBundleIdentifier: myBundleID)
+            .filter { $0.processIdentifier != myPID }
+        if let existing = others.first {
+            hkLog("[AppDelegate] another Dimmy already running (pid=\(existing.processIdentifier)) — activating it and quitting")
+            existing.activate(options: [.activateIgnoringOtherApps])
+            NSApp.terminate(nil)
+            return
+        }
+
         AppDelegate.shared = self
 
         SelfTests.runAll()
@@ -25,6 +57,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // UI-only setup. No audio, no keychain, no permission-triggering calls yet.
         statusBarController = StatusBarController(appState: appState)
         pillWindowController = PillWindowController(appState: appState)
+        captionWindowController = CaptionWindowController()
+        wireLiveCaptions()
 
         // Watch for onboarding completion — then initialize the core once permissions are granted.
         appState.$isOnboardingComplete
@@ -102,6 +136,105 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         perms.resetTccEntries(services: toReset)
     }
 
+    // MARK: - Crash capture
+    //
+    // The handlers below MUST be top-level `@convention(c)` functions
+    // (or method-less closures) because NSSetUncaughtExceptionHandler
+    // and signal(2) take a C function pointer. Capturing `self` would
+    // make Swift refuse to bridge the closure to a C pointer.
+    // `crashAppendLine` is the freestanding helper; `installCrashHandlers`
+    // wires up the static blocks.
+
+    private static func installCrashHandlers() {
+        NSSetUncaughtExceptionHandler(crashHandleNSException)
+        for sig in [SIGSEGV, SIGABRT, SIGBUS, SIGILL, SIGFPE] {
+            signal(sig, crashHandleSignal)
+        }
+        crashAppendLine("crash handlers installed (NSException + SIG{SEGV,ABRT,BUS,ILL,FPE})")
+    }
+
+    // MARK: - Live captions
+
+    /// Subscribe AppState publishers to drive the floating subtitle
+    /// window. Mirrors the Win OnSttChunkReceived flow:
+    ///   * recording starts → if (live captions on AND chunked AND backend == parakeet)
+    ///                        show the (empty) caption window
+    ///   * stt_chunk arrives → push delta. is_final=true schedules a delayed hide
+    ///   * recording cancels / is otherwise reset → hide immediately
+    private func wireLiveCaptions() {
+        // Per-chunk push, driven by liveCaptionTick so observers fire even
+        // if two consecutive chunks happen to share the same delta string.
+        appState.$liveCaptionTick
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                guard self.appState.liveCaptionsEnabled else { return }
+                self.captionWindowController?.push(delta: self.appState.liveCaptionDelta)
+                if self.appState.liveCaptionIsFinal {
+                    self.captionWindowController?.scheduleHide()
+                } else {
+                    self.captionWindowController?.show()
+                }
+            }
+            .store(in: &cancellables)
+
+        // Drive show/hide on recording lifecycle. Show only when the
+        // chunked + parakeet preconditions are met; otherwise the
+        // window stays hidden and the user gets only the final paste.
+        appState.$recordingState
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] state in
+                guard let self else { return }
+                switch state {
+                case .recording:
+                    if self.shouldShowLiveCaptions() {
+                        self.captionWindowController?.reset()
+                        self.captionWindowController?.show()
+                    }
+                case .idle:
+                    // Stop / cancel paths converge here. If the user
+                    // cancelled (no final emitted) the schedule-hide
+                    // never fires — hide eagerly.
+                    if !self.appState.liveCaptionIsFinal {
+                        self.captionWindowController?.hide()
+                    }
+                case .transcribing, .processing, .completing:
+                    // Brief tail states between stop and final paste —
+                    // leave the caption alone, the schedule-hide from
+                    // the final stt_chunk will close it.
+                    break
+                }
+            }
+            .store(in: &cancellables)
+
+        // Toggling the preference off mid-session should hide the
+        // window immediately without waiting for a recording to end.
+        appState.$liveCaptionsEnabled
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] enabled in
+                if !enabled { self?.captionWindowController?.hide() }
+            }
+            .store(in: &cancellables)
+
+        // Re-fire the Parakeet warmup when the user flips the backend
+        // from "whisper" → "parakeet" in Settings. Skips automatically
+        // if already warm.
+        appState.$localSttBackend
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.maybeWarmupParakeet() }
+            .store(in: &cancellables)
+    }
+
+    private func shouldShowLiveCaptions() -> Bool {
+        appState.liveCaptionsEnabled
+            && appState.chunkStreamingEnabled
+            && appState.localSttBackend == "parakeet"
+            && appState.sttMode == "local"
+    }
+
     /// Single source of truth for whether Dimmy appears in the Dock / Cmd+Tab.
     /// Onboarding always forces `.regular` so users who click away to System Settings
     /// can click the Dock icon to return. Otherwise it follows the user preference.
@@ -135,7 +268,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 }
                 hkLog("[AppDelegate] core ready — starting HotkeyManager")
                 HotkeyManager.shared.start(appState: self.appState)
+
+                // Async warmup — Parakeet only, and only if the bundle is
+                // already on disk. Avoids the ~6 s cold path on the user's
+                // first recording at the cost of one upfront background
+                // inference (~6-10 s wall, no UI block). Triggered only
+                // when Parakeet is the active backend; flipping to it
+                // later in Settings re-fires below.
+                self.maybeWarmupParakeet()
             }
+        }
+    }
+
+    /// Spawn a one-shot Parakeet warmup if (a) the active backend is
+    /// Parakeet, (b) the bundle is on disk, and (c) we haven't already
+    /// warmed in this session. Idempotent across calls — the Rust side
+    /// short-circuits if the model cache is already populated.
+    private var didWarmupParakeet = false
+    func maybeWarmupParakeet() {
+        guard !didWarmupParakeet else { return }
+        guard appState.localSttBackend == "parakeet" else { return }
+        guard DimmyCore.shared.isInitialized else { return }
+        guard DimmyCore.shared.parakeetBundlePresent() else { return }
+        didWarmupParakeet = true
+        hkLog("[AppDelegate] Parakeet warmup → background")
+        DispatchQueue.global(qos: .utility).async {
+            let t0 = Date()
+            let ok = DimmyCore.shared.warmupParakeet()
+            let ms = Int(Date().timeIntervalSince(t0) * 1000)
+            hkLog("[AppDelegate] Parakeet warmup done in \(ms) ms (ok=\(ok))")
         }
     }
 
@@ -149,6 +310,88 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// activates the process but leaves the window hidden behind other apps.
     func applicationDidBecomeActive(_ notification: Notification) {
         onboardingWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    /// Handle `dimmy://` URLs delivered by the OS (clicking the magic
+    /// link in the activation email opens this scheme — see
+    /// CFBundleURLTypes in Info.plist).
+    ///
+    /// On `dimmy://activate?code=…` we redeem the code via the licensing
+    /// FFI in the background, then post `.dimmyLicenseChanged` so any
+    /// open Settings → License view refreshes its status without polling.
+    /// On success we also surface Settings to the foreground so the user
+    /// gets a visible confirmation that activation completed.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            guard url.scheme?.lowercased() == "dimmy" else { continue }
+            hkLog("[AppDelegate] custom-URL received: \(url.absoluteString)")
+
+            // Expected forms:
+            //   dimmy://activate?code=ABC123…           (magic link)
+            //   dimmy://activate?token=eyJhbGc…          (paste-token fallback — TBD)
+            guard let comps = URLComponents(url: url, resolvingAgainstBaseURL: false),
+                  comps.host?.lowercased() == "activate" else {
+                hkLog("[AppDelegate] unrecognised URL host: \(url)")
+                continue
+            }
+            let code = comps.queryItems?.first { $0.name == "code" }?.value
+            let token = comps.queryItems?.first { $0.name == "token" }?.value
+            if let code = code, !code.isEmpty {
+                hkLog("[AppDelegate] activation code received (len=\(code.count))")
+                let label = Host.current().localizedName ?? "Mac"
+                Task.detached { [weak self] in
+                    let result = await DimmyCore.shared.licenseRedeem(code: code, deviceLabel: label)
+                    if result.ok {
+                        hkLog("[AppDelegate] licensed activated via dimmy:// scheme")
+                    } else {
+                        hkLog("[AppDelegate] license activation failed: \(result.error ?? "unknown")")
+                    }
+                    await MainActor.run {
+                        if result.ok {
+                            // Post the change notification AFTER opening the
+                            // License tab so the freshly-mounted page is
+                            // already subscribed. Posting before the tab
+                            // switch raced with view materialisation and
+                            // left the License page showing stale state.
+                            // Bring Settings to the front so the user sees
+                            // the confirmation. NSApp.activate is reliable
+                            // here because we're responding to a user-
+                            // initiated open-URL event.
+                            self?.openSettingsToLicense()
+                        } else {
+                            // On failure the License page may already be
+                            // visible — let it refresh to surface the error.
+                            NotificationCenter.default.post(name: .dimmyLicenseChanged, object: nil)
+                        }
+                    }
+                }
+            } else if token != nil {
+                hkLog("[AppDelegate] activation token (paste fallback) received — not yet wired")
+            } else {
+                hkLog("[AppDelegate] activate URL missing both code and token")
+            }
+        }
+    }
+
+    /// Bring the Settings window to the front (creating it if needed) and
+    /// scroll to the License page. Called from the dimmy:// dispatch so
+    /// successful activation has a visible end-state. The container view
+    /// observes `dimmyOpenLicenseTab` to handle the cross-component nav.
+    private func openSettingsToLicense() {
+        NSApp.activate(ignoringOtherApps: true)
+        openSettings()
+        // Two-stage signal: switch tab first so MacLicensePage is mounted,
+        // THEN nudge it to refresh. .onAppear already calls refreshStatus
+        // on first mount, but the explicit dimmyLicenseChanged also covers
+        // the path where the page was already mounted (Settings open on
+        // License tab before the URL fired) and SwiftUI is short-circuiting
+        // the re-mount.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            NotificationCenter.default.post(name: .dimmyOpenLicenseTab, object: nil)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                NotificationCenter.default.post(name: .dimmyLicenseChanged, object: nil)
+            }
+        }
     }
 
     /// Right-click menu on the Dock icon. Mirrors the Translate-to and Style
@@ -302,4 +545,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         onboardingWindow = nil
         applyActivationPolicy()
     }
+}
+
+// MARK: - Free-standing crash handlers
+//
+// These live at top level so they convert to C function pointers
+// (NSSetUncaughtExceptionHandler / signal(2) both want plain
+// `@convention(c)` callbacks — captured-context closures don't bridge).
+
+private func crashLogPath() -> String {
+    let dir = FileManager.default.urls(
+        for: .applicationSupportDirectory,
+        in: .userDomainMask
+    ).first?.appendingPathComponent("dimmy", isDirectory: true)
+    return dir?.appendingPathComponent("dimmy.log").path
+        ?? "/tmp/dimmy-crash.log"
+}
+
+private func crashAppendLine(_ line: String) {
+    let path = crashLogPath()
+    let stamped = "[\(ISO8601DateFormatter().string(from: Date()))] [crash] \(line)\n"
+    if let data = stamped.data(using: .utf8) {
+        if let handle = FileHandle(forWritingAtPath: path) {
+            handle.seekToEndOfFile()
+            handle.write(data)
+            try? handle.close()
+        } else {
+            try? stamped.write(toFile: path, atomically: false, encoding: .utf8)
+        }
+    }
+    FileHandle.standardError.write(stamped.data(using: .utf8) ?? Data())
+}
+
+private func crashHandleNSException(_ exc: NSException) {
+    let name = exc.name.rawValue
+    let reason = exc.reason ?? ""
+    let symbols = exc.callStackSymbols.joined(separator: "\n  ")
+    crashAppendLine("NSException name=\(name) reason=\"\(reason)\"\n  \(symbols)")
+}
+
+private func crashHandleSignal(_ sig: Int32) {
+    let name: String
+    switch sig {
+    case SIGSEGV: name = "SIGSEGV"
+    case SIGABRT: name = "SIGABRT"
+    case SIGBUS:  name = "SIGBUS"
+    case SIGILL:  name = "SIGILL"
+    case SIGFPE:  name = "SIGFPE"
+    default:      name = "signal=\(sig)"
+    }
+    let backtrace = Thread.callStackSymbols.joined(separator: "\n  ")
+    crashAppendLine("\(name)\n  \(backtrace)")
+    // Re-raise via default handler so the exit code is correct + Apple
+    // CrashReporter still files an .ips at the system level.
+    signal(sig, SIG_DFL)
+    raise(sig)
 }

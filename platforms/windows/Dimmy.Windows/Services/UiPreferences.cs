@@ -34,6 +34,12 @@ public sealed class UiPreferences
     /// Default true.</summary>
     public bool PillShowOnStartup { get; set; } = true;
 
+    /// <summary>Last email the user entered in the pre-checkout / activate
+    /// modal. Persisted across Sign out so the user doesn't have to re-type
+    /// it every time. Distinct from license.json (which Sign out drops):
+    /// this is just a UX convenience pre-fill, no auth weight.</summary>
+    public string? BuyerEmail { get; set; }
+
     private static string PrefsPath
     {
         get

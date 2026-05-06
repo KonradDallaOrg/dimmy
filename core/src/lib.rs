@@ -1,6 +1,21 @@
+// `serde_json::json!{...}` in get_status grew past the default macro
+// recursion limit (128) once Fireworks + Together were added to the
+// provider matrix. Bump crate-wide so future provider additions don't
+// silently break the build.
+#![recursion_limit = "256"]
+
 pub mod app_rules;
 pub mod audio;
 pub mod autostart;
+pub mod chunked_stt;
+/// Long-form meeting recording. Streams to disk so memory stays
+/// bounded over multi-hour sessions and a `.recording` marker
+/// enables crash recovery. Post-process pipeline (recap, actions,
+/// optional translation) runs from `dimmy_meeting_stop` returning
+/// the full transcript; the LLM call itself is driven from the C#/
+/// Swift host through dimmy_process_with_llm to keep async runtime
+/// concerns out of the meeting worker.
+pub mod meeting;
 pub mod error;
 pub mod ffi;
 pub mod filler;
@@ -11,9 +26,24 @@ pub mod gpu_health;
 pub mod history;
 mod hotkey;
 pub mod keystore;
+/// Licensing — local-server PoC for the v2 architecture (see
+/// `docs/dev/licensing-poc.md`). Always-available types + file I/O +
+/// HTTP client; Ed25519 verify is gated behind `license-client`.
+pub mod license;
 pub mod llm;
 pub mod local_llm;
 pub mod local_stt;
+/// Parakeet TDT v3 FP32 local STT via ONNX Runtime. Inference is
+/// gated behind `local-stt-parakeet`; bundle download / presence
+/// helpers are always available so the UI can render the "needs
+/// download" state without a feature-gate dance.
+pub mod parakeet;
+/// Apple-Silicon-only Parakeet via FluidInference's CoreML bundle on
+/// the Neural Engine. Inference behind `local-stt-parakeet-fluid`;
+/// `bundle_present` / `download_bundle` always available. The module
+/// itself compiles only on macOS arm64.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub mod parakeet_fluid;
 pub mod preprocess;
 pub mod provider;
 pub mod telemetry;
@@ -54,8 +84,34 @@ fn default_shortcut() -> &'static str {
     }
 }
 
+/// Build flavor — "" (prod, default) or "staging". Embedded at compile
+/// time via build.rs from the `DIMMY_BUILD_FLAVOR` env var. A staging
+/// build uses a distinct config dir, single-instance mutex name, and
+/// surfaces a "STAGING" badge in the UI so a tester running both
+/// flavors side-by-side never confuses one for the other.
+pub fn build_flavor() -> &'static str {
+    option_env!("DIMMY_BUILD_FLAVOR").unwrap_or("")
+}
+
+/// True iff this binary was built with `DIMMY_BUILD_FLAVOR=staging`.
+pub fn is_staging_build() -> bool {
+    build_flavor() == "staging"
+}
+
+/// Per-flavor config dir name. Prod = `dimmy`, staging = `dimmy-staging`.
+/// Splitting these names is what keeps a staging install from
+/// overwriting prod's `license.json` / `config.json` / `keys.enc` on
+/// the same machine.
+fn config_dir_name() -> &'static str {
+    if is_staging_build() {
+        "dimmy-staging"
+    } else {
+        "dimmy"
+    }
+}
+
 pub fn config_dir_path() -> Option<std::path::PathBuf> {
-    dirs::config_dir().map(|p| p.join("dimmy"))
+    dirs::config_dir().map(|p| p.join(config_dir_name()))
 }
 
 /// Marker file path for onboarding completion.
@@ -112,6 +168,21 @@ fn transcription_debug_log_path() -> Option<std::path::PathBuf> {
 
 fn audio_debug_dir() -> Option<std::path::PathBuf> {
     config_dir_path().map(|p| p.join("audio_debug"))
+}
+
+/// Where meeting-mode sessions persist their on-disk artefacts
+/// (`audio.wav` + `transcripts.txt` + `meta.json` + post-process
+/// outputs). One sub-directory per meeting, named with a v4 UUID.
+pub fn meetings_dir() -> Option<std::path::PathBuf> {
+    config_dir_path().map(|p| p.join("meetings"))
+}
+
+/// Where opt-in history-audio WAVs live: one file per transcript row
+/// named `<id>.wav`. Cleaned by age + size at startup; never written
+/// when `save_audio_in_history` is false. Public so the FFI side can
+/// reach it from the history-save path.
+pub fn history_audio_dir() -> Option<std::path::PathBuf> {
+    config_dir_path().map(|p| p.join("history_audio"))
 }
 
 /// Create a session directory for audio debug dumps and return its path.
@@ -254,6 +325,38 @@ pub struct AppConfig {
     // Local STT fields
     pub stt_mode: String,    // "cloud" or "local"
     pub local_model: String, // e.g. "ggml-base-q8_0.bin"
+    /// Which local STT backend to use when `stt_mode == "local"`. Either
+    /// `"whisper"` (whisper.cpp via the `local-stt` feature, default) or
+    /// `"parakeet"` (Parakeet TDT v3 FP32 via the `local-stt-parakeet`
+    /// feature). Old configs default to `"whisper"` for compatibility.
+    pub local_stt_backend: String,
+    /// When true (and backend = parakeet), show a floating live-caption
+    /// window below the pill while chunked transcription is running.
+    /// Independent from `chunk_streaming_enabled` — a user can have
+    /// the chunked engine on for faster final paste while keeping the
+    /// caption window off if they find it visually distracting.
+    pub live_captions_enabled: bool,
+    /// When true, save the recorded WAV alongside the history row so
+    /// the user can replay + view a waveform later. Default false for
+    /// privacy + storage reasons. Honored by the history-save path in
+    /// `dimmy_stop_recording`.
+    pub save_audio_in_history: bool,
+    /// Background cleanup horizon for history audio files. Files older
+    /// than this many days are removed at startup (and on a periodic
+    /// timer). 0 disables age-based cleanup; the size cap still applies.
+    pub history_audio_keep_days: u32,
+    /// Maximum total size of `<config>/history_audio/` in MB. When
+    /// exceeded, the oldest files are deleted first until the size is
+    /// back under this threshold. 0 disables size-based cleanup.
+    pub history_audio_max_mb: u32,
+    /// When a dictation recording exceeds this many seconds, the
+    /// host (C#/Swift) should fire the meeting-style recap pipeline
+    /// in addition to the dictation rewrite. 0 disables auto-recap.
+    /// Read by TranscriptionService.StopAndProcessAsync; not used by
+    /// Rust directly (the recap call is driven from the host because
+    /// it shares the same dimmy_llm_call_raw FFI that the meeting
+    /// window already uses).
+    pub auto_recap_threshold_secs: u32,
     pub filler_removal_enabled: bool,
     // Local LLM fields
     pub llm_mode: String,        // "cloud" or "local"
@@ -316,6 +419,12 @@ impl Default for AppConfig {
             }
             .to_string(),
             local_model: "ggml-base-q8_0.bin".to_string(),
+            local_stt_backend: "whisper".to_string(),
+            live_captions_enabled: true,
+            save_audio_in_history: false,
+            history_audio_keep_days: 30,
+            history_audio_max_mb: 5_000,
+            auto_recap_threshold_secs: 60,
             filler_removal_enabled: true,
             llm_mode: "cloud".to_string(),
             local_llm_model: local_llm::DEFAULT_LLM_MODEL.to_string(),
@@ -386,6 +495,12 @@ pub fn save_config_file(cfg: &AppConfig) {
             "use_keyring": cfg.use_keyring,
             "stt_mode": cfg.stt_mode,
             "local_model": cfg.local_model,
+            "local_stt_backend": cfg.local_stt_backend,
+            "live_captions_enabled": cfg.live_captions_enabled,
+            "save_audio_in_history": cfg.save_audio_in_history,
+            "history_audio_keep_days": cfg.history_audio_keep_days,
+            "history_audio_max_mb": cfg.history_audio_max_mb,
+            "auto_recap_threshold_secs": cfg.auto_recap_threshold_secs,
             "filler_removal_enabled": cfg.filler_removal_enabled,
             "llm_mode": cfg.llm_mode,
             "local_llm_model": cfg.local_llm_model,
@@ -496,6 +611,28 @@ pub fn load_config_file() -> AppConfig {
                         .as_str()
                         .unwrap_or(&defaults.local_model)
                         .to_string(),
+                    local_stt_backend: v["local_stt_backend"]
+                        .as_str()
+                        .unwrap_or(&defaults.local_stt_backend)
+                        .to_string(),
+                    live_captions_enabled: v["live_captions_enabled"]
+                        .as_bool()
+                        .unwrap_or(defaults.live_captions_enabled),
+                    save_audio_in_history: v["save_audio_in_history"]
+                        .as_bool()
+                        .unwrap_or(defaults.save_audio_in_history),
+                    history_audio_keep_days: v["history_audio_keep_days"]
+                        .as_u64()
+                        .map(|n| n as u32)
+                        .unwrap_or(defaults.history_audio_keep_days),
+                    history_audio_max_mb: v["history_audio_max_mb"]
+                        .as_u64()
+                        .map(|n| n as u32)
+                        .unwrap_or(defaults.history_audio_max_mb),
+                    auto_recap_threshold_secs: v["auto_recap_threshold_secs"]
+                        .as_u64()
+                        .map(|n| n as u32)
+                        .unwrap_or(defaults.auto_recap_threshold_secs),
                     filler_removal_enabled: v["filler_removal_enabled"]
                         .as_bool()
                         .unwrap_or(defaults.filler_removal_enabled),
@@ -722,6 +859,12 @@ pub struct AppState {
     // Local STT state
     pub stt_mode: Mutex<String>,
     pub local_model: Mutex<String>,
+    pub local_stt_backend: Mutex<String>,
+    pub live_captions_enabled: Mutex<bool>,
+    pub save_audio_in_history: Mutex<bool>,
+    pub history_audio_keep_days: Mutex<u32>,
+    pub history_audio_max_mb: Mutex<u32>,
+    pub auto_recap_threshold_secs: Mutex<u32>,
     pub filler_removal_enabled: Mutex<bool>,
     // Local LLM state
     pub llm_mode: Mutex<String>,
@@ -827,6 +970,12 @@ impl AppState {
             use_keyring: Mutex::new(file_cfg.use_keyring),
             stt_mode: Mutex::new(file_cfg.stt_mode),
             local_model: Mutex::new(file_cfg.local_model),
+            local_stt_backend: Mutex::new(file_cfg.local_stt_backend),
+            live_captions_enabled: Mutex::new(file_cfg.live_captions_enabled),
+            save_audio_in_history: Mutex::new(file_cfg.save_audio_in_history),
+            history_audio_keep_days: Mutex::new(file_cfg.history_audio_keep_days),
+            history_audio_max_mb: Mutex::new(file_cfg.history_audio_max_mb),
+            auto_recap_threshold_secs: Mutex::new(file_cfg.auto_recap_threshold_secs),
             filler_removal_enabled: Mutex::new(file_cfg.filler_removal_enabled),
             llm_mode: Mutex::new(file_cfg.llm_mode),
             local_llm_model: Mutex::new(file_cfg.local_llm_model),
@@ -923,6 +1072,31 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
     let ggml_debug_logging = *state.ggml_debug_logging.lock().map_err(|e| e.to_string())?;
     let stt_mode = state.stt_mode.lock().map_err(|e| e.to_string())?.clone();
     let local_model = state.local_model.lock().map_err(|e| e.to_string())?.clone();
+    let local_stt_backend = state
+        .local_stt_backend
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
+    let live_captions_enabled = *state
+        .live_captions_enabled
+        .lock()
+        .map_err(|e| e.to_string())?;
+    let save_audio_in_history = *state
+        .save_audio_in_history
+        .lock()
+        .map_err(|e| e.to_string())?;
+    let history_audio_keep_days = *state
+        .history_audio_keep_days
+        .lock()
+        .map_err(|e| e.to_string())?;
+    let history_audio_max_mb = *state
+        .history_audio_max_mb
+        .lock()
+        .map_err(|e| e.to_string())?;
+    let auto_recap_threshold_secs = *state
+        .auto_recap_threshold_secs
+        .lock()
+        .map_err(|e| e.to_string())?;
     let filler_removal_enabled = *state
         .filler_removal_enabled
         .lock()
@@ -953,6 +1127,12 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         use_keyring: *state.use_keyring.lock().map_err(|e| e.to_string())?,
         stt_mode,
         local_model,
+        local_stt_backend,
+        live_captions_enabled,
+        save_audio_in_history,
+        history_audio_keep_days,
+        history_audio_max_mb,
+        auto_recap_threshold_secs,
         filler_removal_enabled,
         llm_mode: state.llm_mode.lock().map_err(|e| e.to_string())?.clone(),
         local_llm_model: state

@@ -1,6 +1,6 @@
 [package]
 name = "dimmy"
-version = "0.6.26"
+version = "0.6.27"
 edition = "2021"
 description = "Dimmy — Cross-platform voice transcription overlay"
 license = "AGPL-3.0-only"
@@ -35,12 +35,72 @@ name = "dimmy_smoke"
 path = "src/bin/dimmy_smoke.rs"
 required-features = ["smoke-test"]
 
+# CLI client that simulates the Dimmy app's licensing interactions —
+# request-trial, activate, status, refresh, simulate-purchase. Used end-
+# to-end against `licensing_server` so we can validate the architecture
+# without dragging in the WinUI / SwiftUI / GTK4 surfaces.
+[[bin]]
+name = "license_cli"
+path = "src/bin/license_cli.rs"
+required-features = ["license-cli"]
+
+# One-shot Parakeet smoke test: loads a WAV, calls
+# `dimmy::parakeet::transcribe`, prints the text + timings.
+# Requires ORT_DYLIB_PATH pointing at onnxruntime.dll/.dylib/.so.
+[[bin]]
+name = "parakeet_smoke"
+path = "src/bin/parakeet_smoke.rs"
+required-features = ["local-stt-parakeet"]
+
+# Warm-path benchmark — runs short/medium/long fixtures + reports
+# cold vs warm latency. Used to validate the Rust port of the TDT
+# decoder against the Python reference's numbers.
+[[bin]]
+name = "parakeet_bench"
+path = "src/bin/parakeet_bench.rs"
+required-features = ["local-stt-parakeet"]
+
+# Offline driver for the chunked-STT pipeline. Tiles a WAV, simulates
+# a live cpal capture by pushing 100 ms slices into the shared PCM
+# buffer, prints every per-chunk callback + the final cumulative
+# transcript. Used on dev Macs / Linux without a microphone to
+# validate the chunked path end-to-end against medium-long audio.
+[[bin]]
+name = "chunked_smoke"
+path = "src/bin/chunked_smoke.rs"
+required-features = ["local-stt-parakeet"]
+
+# Mac-only counterpart to parakeet_smoke that exercises the
+# FluidInference / Apple Neural Engine path. Same shape: one WAV in,
+# one transcript out, plus timings. Gated on the matching cargo
+# feature so non-Mac builds skip it cleanly.
+[[bin]]
+name = "parakeet_fluid_smoke"
+path = "src/bin/parakeet_fluid_smoke.rs"
+required-features = ["local-stt-parakeet-fluid"]
+
 [features]
 default = ["local-stt", "telemetry-sentry"]
 local-stt = ["dep:whisper-rs"]
 local-stt-metal = ["local-stt", "whisper-rs/metal"]
 local-stt-cuda = ["local-stt", "whisper-rs/cuda"]
 local-stt-vulkan = ["local-stt", "whisper-rs/vulkan"]
+# Parakeet TDT v3 FP32 local STT via ONNX Runtime (ort crate). Bundle:
+# istupakov/parakeet-tdt-0.6b-v3-onnx (HuggingFace, ~2.5GB). The model
+# files (encoder, decoder_joint, mel-extractor, vocab) are downloaded
+# at first use into the dimmy config dir. CPU by default; CUDA on Win
+# and CoreML on Mac when the matching feature is enabled (build-time).
+local-stt-parakeet      = ["dep:ort", "dep:ndarray"]
+local-stt-parakeet-cuda = ["local-stt-parakeet", "ort/cuda"]
+local-stt-parakeet-coreml = ["local-stt-parakeet", "ort/coreml"]
+# Parakeet via FluidInference's CoreML bundle, Apple-Silicon-only.
+# Wraps the `fluidaudio-rs` Swift bridge (build.rs invokes `swift build`
+# at compile time → requires Xcode CLT with Swift 5.10+). At runtime
+# the FluidAudio framework auto-downloads the ~3 GB CoreML bundle into
+# `~/.cache/fluidaudio/` on first `init_asr()`. RTF on M-series is
+# documented at 100-300x; intended as the Mac-only fast path while
+# Win/Linux stay on ort.
+local-stt-parakeet-fluid = ["dep:fluidaudio-rs"]
 local-llm = ["dep:llama-cpp-4"]
 local-llm-metal = ["local-llm", "llama-cpp-4/metal", "llama-cpp-4/dynamic-link"]
 local-llm-cuda = ["local-llm", "llama-cpp-4/cuda"]
@@ -56,11 +116,18 @@ smoke-test = ["dep:libloading"]
 # in release builds, off in headless/local dev unless explicitly requested.
 # When off, the Sentry init is a no-op and no events are captured.
 telemetry-sentry = ["dep:sentry"]
+# license-cli: gates the license_cli binary. Lighter than the server (no
+# axum/sqlx) but still pulls clap + reqwest + ed25519-dalek for verification.
+license-cli = ["dep:clap", "dep:ed25519-dalek", "dep:sha2"]
+# license-client: pulls in the Ed25519 verification + license.rs file I/O
+# for the production cdylib. Default ON so the released app can verify
+# tokens. Without it license.rs is a no-op stub returning Unrestricted.
+license-client = ["dep:ed25519-dalek", "dep:sha2"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.12", features = ["multipart", "json"] }
+reqwest = { version = "0.12", features = ["multipart", "json", "blocking"] }
 tokio = { version = "1", features = ["full"] }
 cpal = "0.15"
 hound = "3.5"
@@ -73,6 +140,13 @@ nnnoiseless = "0.5"
 biquad = "0.4"
 dagc = "0.1"
 whisper-rs = { version = "0.16", optional = true }
+# ONNX Runtime Rust bindings — used by the local-stt-parakeet path
+# to load Parakeet TDT v3 FP32 (encoder + decoder_joint + mel
+# extractor as 3 separate .onnx files). Native execution, no Python.
+# Build pulls a prebuilt onnxruntime dll/dylib for the host (~30MB);
+# CUDA / CoreML are opt-in via cargo features.
+ort = { version = "=2.0.0-rc.10", optional = true, features = ["ndarray", "load-dynamic"] }
+ndarray = { version = "0.16", optional = true }
 llama-cpp-4 = { git = "https://github.com/KonradDallaOrg/llama-cpp-rs", optional = true, default-features = false }
 rusqlite = { version = "0.31", features = ["bundled"] }
 regex = "1"
@@ -99,7 +173,26 @@ sentry = { version = "0.47", default-features = false, features = ["backtrace", 
 # what we'd write anyway — better to take the dep.
 auto-launch = "0.5"
 
+# ── Licensing PoC dependencies ──────────────────────────────────────
+# All gated behind the licensing-server / license-cli / license-client
+# features above. The default cdylib build pulls only ed25519-dalek +
+# sha2 (~50KB compiled) for offline token verification.
+
+# Ed25519 sign/verify. Audited RustCrypto crate. v2.x is the current
+# stable line. Used by the client (`license-client`) to verify tokens
+# offline against the build-time–embedded public key. Server-side signing
+# is done in the Cloudflare Worker (TypeScript) — no Rust signer ships.
+ed25519-dalek = { version = "2", optional = true, features = ["rand_core"] }
+# Hash function for email_hash. SHA-256 only — keep dep minimal.
+sha2 = { version = "0.10", optional = true }
+# CLI client.
+clap = { version = "4", features = ["derive"], optional = true }
+
 [dev-dependencies]
+# CSPRNG for ed25519 keypair generation in tests. Pulled here (not into
+# the optional license-client feature) so tests work whether the server
+# feature is on or not.
+rand = "0.8"
 # Integration test infrastructure. Kept minimal — no snapshot crate yet,
 # assertions use substring checks which are robust under whisper determinism.
 wiremock = "0.6"
@@ -111,3 +204,14 @@ serial_test = "3"
 proptest = "1"
 # Cross-platform binary parser for the ABI snapshot test (PE / ELF / Mach-O).
 object = { version = "0.36", default-features = false, features = ["read", "std"] }
+
+# fluidaudio-rs: Apple-Silicon-only Parakeet TDT v3 via CoreML on the
+# Apple Neural Engine. `build.rs` runs `swift build` at compile time
+# and statically links a Swift bridge → only buildable on macOS arm64
+# with a Swift 5.10+ toolchain. Target-scoped so cross-platform builds
+# (Win/Linux/Intel-Mac) never try to fetch the crate. Pinned to git
+# tag `v0.12.6` because crates.io only has 0.1.0 published (the repo
+# has been releasing tags without pushing to crates.io). Gated by the
+# `local-stt-parakeet-fluid` feature.
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+fluidaudio-rs = { git = "https://github.com/FluidInference/fluidaudio-rs", tag = "v0.12.6", optional = true }

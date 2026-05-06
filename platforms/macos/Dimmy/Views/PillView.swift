@@ -219,8 +219,17 @@ struct PillView: View {
                 .opacity(isHovering ? 1 : 0)
                 .clipped()
         }
-        .frame(height: pillHeight)
-        .padding(.horizontal, 14)
+        // When idle and not hovered (standby), force the pill to a perfect
+        // circle (width = height). Hovering re-expands to show the
+        // shortcut + language; the .animation modifier downstream
+        // smooths the transition. This is purely cosmetic — the
+        // recording / transcribing / completing states keep their
+        // own shapes, untouched.
+        .frame(
+            width: isHovering ? nil : pillHeight,
+            height: pillHeight
+        )
+        .padding(.horizontal, isHovering ? 14 : 0)
         // Warning badge sits on the pill itself (not on the larger panel),
         // so it follows the pill wherever the position grid moves it.
         // Borderless: just the orange triangle, no black backdrop.
@@ -348,28 +357,40 @@ struct PillView: View {
     private func cycleLanguage(delta: CGFloat) {
         guard throttle() else { return }
         let keys = PillTranslateLanguages.map { $0.key }
+        precondition(!keys.isEmpty, "PillTranslateLanguages must not be empty")
         let current = keys.firstIndex(of: appState.llmTranslateTo) ?? 0
         let step = delta > 0 ? -1 : 1
         let next = (current + step + keys.count) % keys.count
-        appState.llmTranslateTo = keys[next]
-        DimmyCore.shared.setConfig(["llm_translate_to": keys[next]])
-        showTooltip("Translate to: \(currentLanguageDisplayName)")
+        let key = keys[next]
+        // Defer the AppState mutation + FFI call to the next runloop
+        // tick so we don't re-enter a SwiftUI body update from inside
+        // an AppKit scrollWheel handler. This is the documented fix
+        // for "Modifying state during view update" and matches
+        // Apple's recommendation for NSEvent-driven UI updates.
+        DispatchQueue.main.async {
+            appState.llmTranslateTo = key
+            DimmyCore.shared.setConfig(["llm_translate_to": key])
+            showTooltip("Translate to: \(currentLanguageDisplayName)")
+        }
     }
 
     private func cycleStyle(delta: CGFloat) {
         guard throttle() else { return }
         let keys = MacLlmStyles.map { $0.key }
+        precondition(!keys.isEmpty, "MacLlmStyles must not be empty")
         let current = keys.firstIndex(of: appState.llmStyle) ?? 0
         let step = delta > 0 ? -1 : 1
         let next = (current + step + keys.count) % keys.count
         let key = keys[next]
-        appState.llmStyle = key
-        appState.llmEnabled = key != "off"
-        DimmyCore.shared.setConfig([
-            "llm_style": key,
-            "llm_enabled": key != "off",
-        ])
-        showTooltip("Style: \(currentStyleDisplayName)")
+        DispatchQueue.main.async {
+            appState.llmStyle = key
+            appState.llmEnabled = key != "off"
+            DimmyCore.shared.setConfig([
+                "llm_style": key,
+                "llm_enabled": key != "off",
+            ])
+            showTooltip("Style: \(currentStyleDisplayName)")
+        }
     }
 
     private func throttle() -> Bool {

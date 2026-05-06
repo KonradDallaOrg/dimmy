@@ -154,17 +154,35 @@ struct SttPreset: Identifiable, Hashable {
     let apiUrl: String
     let model: String
 
+    /// Asset Catalog imageset name in `Assets.xcassets/Providers/`. Empty
+    /// for `.custom` (the UI swaps in an SF Symbol fallback).
+    var iconAssetName: String {
+        switch provider {
+        case .groq: return "groq"
+        case .openai: return "openai"
+        case .deepgram: return "deepgram"
+        case .gemini: return "gemini"
+        case .fireworks: return "fireworks"
+        case .together: return "together"
+        case .custom: return ""
+        }
+    }
+
     static let presets: [SttPreset] = [
-        SttPreset(id: "groq-whisper-turbo", displayName: "Groq \u{2014} whisper-large-v3-turbo (free)", provider: .groq, apiUrl: "https://api.groq.com/openai/v1/audio/transcriptions", model: "whisper-large-v3-turbo"),
-        SttPreset(id: "groq-whisper-v3", displayName: "Groq \u{2014} whisper-large-v3 (free)", provider: .groq, apiUrl: "https://api.groq.com/openai/v1/audio/transcriptions", model: "whisper-large-v3"),
-        SttPreset(id: "groq-distil-en", displayName: "Groq \u{2014} distil-whisper-en (free)", provider: .groq, apiUrl: "https://api.groq.com/openai/v1/audio/transcriptions", model: "distil-whisper-large-v3-en"),
-        SttPreset(id: "openai-whisper1", displayName: "OpenAI \u{2014} whisper-1", provider: .openai, apiUrl: "https://api.openai.com/v1/audio/transcriptions", model: "whisper-1"),
-        SttPreset(id: "openai-4o-transcribe", displayName: "OpenAI \u{2014} gpt-4o-transcribe", provider: .openai, apiUrl: "https://api.openai.com/v1/audio/transcriptions", model: "gpt-4o-transcribe"),
-        SttPreset(id: "openai-4o-mini-transcribe", displayName: "OpenAI \u{2014} gpt-4o-mini-transcribe", provider: .openai, apiUrl: "https://api.openai.com/v1/audio/transcriptions", model: "gpt-4o-mini-transcribe"),
-        SttPreset(id: "deepgram-nova3", displayName: "Deepgram \u{2014} nova-3", provider: .deepgram, apiUrl: "https://api.deepgram.com/v1/listen", model: "nova-3"),
-        SttPreset(id: "deepgram-nova2", displayName: "Deepgram \u{2014} nova-2", provider: .deepgram, apiUrl: "https://api.deepgram.com/v1/listen", model: "nova-2"),
-        SttPreset(id: "gemini-flash", displayName: "Gemini \u{2014} gemini-2.5-flash (free)", provider: .gemini, apiUrl: "https://generativelanguage.googleapis.com/v1beta/models", model: "gemini-2.5-flash"),
-        SttPreset(id: "gemini-pro", displayName: "Gemini \u{2014} gemini-2.5-pro (free)", provider: .gemini, apiUrl: "https://generativelanguage.googleapis.com/v1beta/models", model: "gemini-2.5-pro"),
+        SttPreset(id: "groq-whisper-turbo", displayName: "Groq \u{00B7} whisper-large-v3-turbo (free)", provider: .groq, apiUrl: "https://api.groq.com/openai/v1/audio/transcriptions", model: "whisper-large-v3-turbo"),
+        SttPreset(id: "groq-whisper-v3", displayName: "Groq \u{00B7} whisper-large-v3 (free)", provider: .groq, apiUrl: "https://api.groq.com/openai/v1/audio/transcriptions", model: "whisper-large-v3"),
+        SttPreset(id: "groq-distil-en", displayName: "Groq \u{00B7} distil-whisper-en (free)", provider: .groq, apiUrl: "https://api.groq.com/openai/v1/audio/transcriptions", model: "distil-whisper-large-v3-en"),
+        SttPreset(id: "openai-whisper1", displayName: "OpenAI \u{00B7} whisper-1", provider: .openai, apiUrl: "https://api.openai.com/v1/audio/transcriptions", model: "whisper-1"),
+        SttPreset(id: "openai-4o-transcribe", displayName: "OpenAI \u{00B7} gpt-4o-transcribe", provider: .openai, apiUrl: "https://api.openai.com/v1/audio/transcriptions", model: "gpt-4o-transcribe"),
+        SttPreset(id: "openai-4o-mini-transcribe", displayName: "OpenAI \u{00B7} gpt-4o-mini-transcribe", provider: .openai, apiUrl: "https://api.openai.com/v1/audio/transcriptions", model: "gpt-4o-mini-transcribe"),
+        SttPreset(id: "deepgram-nova3", displayName: "Deepgram \u{00B7} nova-3", provider: .deepgram, apiUrl: "https://api.deepgram.com/v1/listen", model: "nova-3"),
+        SttPreset(id: "deepgram-nova2", displayName: "Deepgram \u{00B7} nova-2", provider: .deepgram, apiUrl: "https://api.deepgram.com/v1/listen", model: "nova-2"),
+        SttPreset(id: "gemini-flash", displayName: "Gemini \u{00B7} gemini-2.5-flash (free)", provider: .gemini, apiUrl: "https://generativelanguage.googleapis.com/v1beta/models", model: "gemini-2.5-flash"),
+        SttPreset(id: "gemini-pro", displayName: "Gemini \u{00B7} gemini-2.5-pro (free)", provider: .gemini, apiUrl: "https://generativelanguage.googleapis.com/v1beta/models", model: "gemini-2.5-pro"),
+        // Phase 1 cloud expansion (2026-05-04 benchmark drove the model picks)
+        SttPreset(id: "fireworks-whisper-turbo", displayName: "Fireworks \u{00B7} whisper-v3-turbo", provider: .fireworks, apiUrl: "https://audio-turbo.api.fireworks.ai/v1/audio/transcriptions", model: "whisper-v3-turbo"),
+        SttPreset(id: "together-parakeet", displayName: "Together \u{00B7} parakeet-tdt-0.6b-v3", provider: .together, apiUrl: "https://api.together.xyz/v1/audio/transcriptions", model: "nvidia/parakeet-tdt-0.6b-v3"),
+        SttPreset(id: "together-whisper", displayName: "Together \u{00B7} whisper-large-v3", provider: .together, apiUrl: "https://api.together.xyz/v1/audio/transcriptions", model: "openai/whisper-large-v3"),
         SttPreset(id: "custom", displayName: "Custom endpoint", provider: .custom, apiUrl: "", model: ""),
     ]
 
@@ -181,14 +199,32 @@ struct LlmPreset: Identifiable, Hashable {
     let apiUrl: String
     let model: String
 
+    /// Asset Catalog imageset name in `Assets.xcassets/Providers/`, derived
+    /// from the API URL host. Empty for unknown / custom URLs (the UI swaps
+    /// in an SF Symbol fallback).
+    var iconAssetName: String {
+        if apiUrl.contains("groq.com") { return "groq" }
+        if apiUrl.contains("openai.com") { return "openai" }
+        if apiUrl.contains("openrouter.ai") { return "openrouter" }
+        if apiUrl.contains("googleapis.com") { return "gemini" }
+        if apiUrl.contains("anthropic.com") { return "anthropic" }
+        if apiUrl.contains("fireworks.ai") { return "fireworks" }
+        if apiUrl.contains("together.xyz") || apiUrl.contains("together.ai") { return "together" }
+        return ""
+    }
+
     static let presets: [LlmPreset] = [
-        LlmPreset(id: "groq-llama70b", displayName: "Groq \u{2014} llama-3.3-70b (free)", apiUrl: "https://api.groq.com/openai/v1/chat/completions", model: "llama-3.3-70b-versatile"),
-        LlmPreset(id: "openai-4o-mini", displayName: "OpenAI \u{2014} gpt-4o-mini", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-4o-mini"),
-        LlmPreset(id: "openrouter-llama70b", displayName: "OpenRouter \u{2014} llama-3.3-70b (free)", apiUrl: "https://openrouter.ai/api/v1/chat/completions", model: "meta-llama/llama-3.3-70b-instruct:free"),
-        LlmPreset(id: "openrouter-deepseek", displayName: "OpenRouter \u{2014} DeepSeek R1 (free)", apiUrl: "https://openrouter.ai/api/v1/chat/completions", model: "deepseek/deepseek-r1:free"),
-        LlmPreset(id: "gemini-flash", displayName: "Gemini \u{2014} gemini-2.5-flash (free)", apiUrl: "https://generativelanguage.googleapis.com/v1beta/models", model: "gemini-2.5-flash"),
-        LlmPreset(id: "anthropic-haiku", displayName: "Anthropic \u{2014} claude-haiku-4.5", apiUrl: "https://api.anthropic.com/v1/messages", model: "claude-haiku-4.5-20250315"),
-        LlmPreset(id: "anthropic-sonnet", displayName: "Anthropic \u{2014} claude-sonnet-4", apiUrl: "https://api.anthropic.com/v1/messages", model: "claude-sonnet-4-20250514"),
+        LlmPreset(id: "groq-llama70b", displayName: "Groq \u{00B7} llama-3.3-70b (free)", apiUrl: "https://api.groq.com/openai/v1/chat/completions", model: "llama-3.3-70b-versatile"),
+        LlmPreset(id: "openai-4o-mini", displayName: "OpenAI \u{00B7} gpt-4o-mini", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-4o-mini"),
+        LlmPreset(id: "openrouter-llama70b", displayName: "OpenRouter \u{00B7} llama-3.3-70b (free)", apiUrl: "https://openrouter.ai/api/v1/chat/completions", model: "meta-llama/llama-3.3-70b-instruct:free"),
+        LlmPreset(id: "openrouter-deepseek", displayName: "OpenRouter \u{00B7} DeepSeek R1 (free)", apiUrl: "https://openrouter.ai/api/v1/chat/completions", model: "deepseek/deepseek-r1:free"),
+        LlmPreset(id: "gemini-flash", displayName: "Gemini \u{00B7} gemini-2.5-flash (free)", apiUrl: "https://generativelanguage.googleapis.com/v1beta/models", model: "gemini-2.5-flash"),
+        LlmPreset(id: "anthropic-haiku", displayName: "Anthropic \u{00B7} claude-haiku-4.5", apiUrl: "https://api.anthropic.com/v1/messages", model: "claude-haiku-4.5-20250315"),
+        LlmPreset(id: "anthropic-sonnet", displayName: "Anthropic \u{00B7} claude-sonnet-4", apiUrl: "https://api.anthropic.com/v1/messages", model: "claude-sonnet-4-20250514"),
+        // Phase 1 cloud expansion (2026-05-04, sensible model picks for filler-removal/smart-format)
+        LlmPreset(id: "fireworks-kimi", displayName: "Fireworks \u{00B7} kimi-k2", apiUrl: "https://api.fireworks.ai/inference/v1/chat/completions", model: "accounts/fireworks/models/kimi-k2p6"),
+        LlmPreset(id: "together-llama70b", displayName: "Together \u{00B7} llama-3.3-70b", apiUrl: "https://api.together.xyz/v1/chat/completions", model: "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
+        LlmPreset(id: "together-qwen", displayName: "Together \u{00B7} qwen-2.5-7b", apiUrl: "https://api.together.xyz/v1/chat/completions", model: "Qwen/Qwen2.5-7B-Instruct-Turbo"),
         LlmPreset(id: "custom", displayName: "Custom endpoint", apiUrl: "", model: ""),
     ]
 
@@ -291,6 +327,8 @@ enum SttProvider: String, CaseIterable, Identifiable {
     case openai
     case deepgram
     case gemini
+    case fireworks
+    case together
     case custom
 
     var id: String { rawValue }
@@ -301,6 +339,8 @@ enum SttProvider: String, CaseIterable, Identifiable {
         case .openai: return "OpenAI"
         case .deepgram: return "Deepgram"
         case .gemini: return "Gemini"
+        case .fireworks: return "Fireworks"
+        case .together: return "Together"
         case .custom: return "Custom"
         }
     }
@@ -311,6 +351,8 @@ enum SttProvider: String, CaseIterable, Identifiable {
         case .openai: return "https://api.openai.com/v1/audio/transcriptions"
         case .deepgram: return "https://api.deepgram.com/v1/listen"
         case .gemini: return "https://generativelanguage.googleapis.com/v1beta/models"
+        case .fireworks: return "https://audio-turbo.api.fireworks.ai/v1/audio/transcriptions"
+        case .together: return "https://api.together.xyz/v1/audio/transcriptions"
         case .custom: return ""
         }
     }
@@ -321,6 +363,8 @@ enum SttProvider: String, CaseIterable, Identifiable {
         case .openai: return "whisper-1"
         case .deepgram: return "nova-2"
         case .gemini: return "gemini-2.0-flash"
+        case .fireworks: return "whisper-v3-turbo"
+        case .together: return "nvidia/parakeet-tdt-0.6b-v3"
         case .custom: return ""
         }
     }
@@ -331,6 +375,8 @@ enum SttProvider: String, CaseIterable, Identifiable {
         case .openai: return ["whisper-1", "gpt-4o-transcribe", "gpt-4o-mini-transcribe"]
         case .deepgram: return ["nova-2", "nova-3"]
         case .gemini: return ["gemini-2.0-flash", "gemini-2.0-flash-lite"]
+        case .fireworks: return ["whisper-v3-turbo"]  // whisper-v3 large rejected by 2026-05-04 benchmark (too slow)
+        case .together: return ["nvidia/parakeet-tdt-0.6b-v3", "openai/whisper-large-v3"]  // Voxtral skipped (lower match%)
         case .custom: return []
         }
     }
@@ -340,6 +386,8 @@ enum SttProvider: String, CaseIterable, Identifiable {
         if url.contains("openai.com") { return .openai }
         if url.contains("deepgram.com") { return .deepgram }
         if url.contains("googleapis.com") { return .gemini }
+        if url.contains("fireworks.ai") { return .fireworks }
+        if url.contains("together.xyz") || url.contains("together.ai") { return .together }
         return .custom
     }
 }
@@ -479,6 +527,15 @@ final class AppState: ObservableObject {
     @Published var shortcut: ModifierShortcut {
         didSet { UserDefaults.standard.set(shortcut.encoded, forKey: "shortcutEncoded") }
     }
+
+    /// Last email entered in the pre-checkout / activate modal. Persisted
+    /// across Sign out so the user doesn't have to re-type it. Distinct
+    /// from license.json (which Sign out drops): this is just a UX
+    /// convenience pre-fill, no auth weight. Mirrors UiPreferences.BuyerEmail
+    /// on the Win side.
+    @Published var buyerEmail: String? {
+        didSet { UserDefaults.standard.set(buyerEmail, forKey: "buyerEmail") }
+    }
     @Published var pillPosition: CGPoint? {
         didSet {
             if let pos = pillPosition {
@@ -499,6 +556,34 @@ final class AppState: ObservableObject {
     @Published var modelDownloadProgress: Double = 0.0
     @Published var isDownloadingModel: Bool = false
     @Published var fillerRemovalEnabled: Bool = true
+
+    /// Active local STT backend. Mirrors core's AppConfig.local_stt_backend.
+    /// "whisper" = whisper.cpp (ggml models, default); "parakeet" = NVIDIA
+    /// TDT v3 FP32 via ONNX Runtime. The two are mutually exclusive — the
+    /// dispatcher in transcribe.rs picks one based on this string.
+    @Published var localSttBackend: String = "whisper"
+    @Published var parakeetDownloadProgress: Double = 0.0
+    @Published var isDownloadingParakeet: Bool = false
+    @Published var parakeetBundlePresent: Bool = false
+
+    /// Show the floating subtitle window during recording when the
+    /// chunked engine is firing. Independent of `chunkStreamingEnabled`
+    /// — power users can keep the chunked transcriber on (better tail
+    /// latency on long recordings) while preferring no live captions.
+    /// Defaults to true to match the Win shipping behaviour.
+    @Published var liveCaptionsEnabled: Bool = true
+    /// Per-chunk delta pushed by the Rust core via `stt_chunk` events.
+    /// CaptionWindowController subscribes — UI publishers like a
+    /// status pill could subscribe too.
+    @Published var liveCaptionDelta: String = ""
+    /// Cumulative running transcript during chunked recording. Reset
+    /// when a new recording starts. Useful if any view wants the
+    /// full text without re-accumulating from deltas.
+    @Published var liveCaptionCumulative: String = ""
+    /// Bumped each time an `stt_chunk` event lands so observers can
+    /// react to "another chunk arrived" without diffing strings.
+    @Published var liveCaptionTick: Int = 0
+    @Published var liveCaptionIsFinal: Bool = false
 
     // MARK: - LLM Mode (local vs cloud)
 
@@ -583,6 +668,8 @@ final class AppState: ObservableObject {
     @Published var hasOpenaiKey: Bool = false
     @Published var hasGeminiKey: Bool = false
     @Published var hasDeepgramKey: Bool = false
+    @Published var hasFireworksKey: Bool = false
+    @Published var hasTogetherKey: Bool = false
     @Published var hasCustomKey: Bool = false
 
     // MARK: - Language list (display name → language code for Rust)
@@ -626,6 +713,7 @@ final class AppState: ObservableObject {
         } else {
             self.shortcut = .default
         }
+        self.buyerEmail = UserDefaults.standard.string(forKey: "buyerEmail")
     }
 
     // MARK: - Sync from Rust config JSON
@@ -657,6 +745,8 @@ final class AppState: ObservableObject {
         // Local STT
         if let v = config["stt_mode"] as? String { sttMode = v }
         if let v = config["local_model"] as? String { localModel = v }
+        if let v = config["local_stt_backend"] as? String { localSttBackend = v }
+        if let v = config["live_captions_enabled"] as? Bool { liveCaptionsEnabled = v }
         if let v = config["filler_removal_enabled"] as? Bool { fillerRemovalEnabled = v }
 
         // Local LLM
@@ -705,6 +795,8 @@ final class AppState: ObservableObject {
         if let v = config["has_openai_key"] as? Bool { hasOpenaiKey = v }
         if let v = config["has_gemini_key"] as? Bool { hasGeminiKey = v }
         if let v = config["has_deepgram_key"] as? Bool { hasDeepgramKey = v }
+        if let v = config["has_fireworks_key"] as? Bool { hasFireworksKey = v }
+        if let v = config["has_together_key"] as? Bool { hasTogetherKey = v }
         if let v = config["has_custom_key"] as? Bool { hasCustomKey = v }
     }
 
@@ -727,6 +819,8 @@ final class AppState: ObservableObject {
             "llm_log_enabled": llmLogEnabled,
             "stt_mode": sttMode,
             "local_model": localModel,
+            "local_stt_backend": localSttBackend,
+            "live_captions_enabled": liveCaptionsEnabled,
             "filler_removal_enabled": fillerRemovalEnabled,
             "llm_mode": llmMode,
             "local_llm_model": localLlmModel,

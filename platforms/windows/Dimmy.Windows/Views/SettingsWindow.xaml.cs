@@ -8,6 +8,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Dimmy.Windows.Helpers;
 using Dimmy.Windows.Interop;
+using Dimmy.Windows.Services;
 using Dimmy.Windows.ViewModels;
 
 namespace Dimmy.Windows.Views;
@@ -43,6 +44,33 @@ public sealed partial class SettingsWindow : Window
         }
         catch { }
 
+        // Refresh License page when the running Dimmy redeems via dimmy:// URL.
+        // The URL-scheme dispatch hits App.xaml.cs which calls LicenseService.RedeemAsync
+        // off-thread; firing LicenseChanged lets us update the visible status card
+        // without polling. We marshal back to UI thread via DispatcherQueue.
+        LicenseService.LicenseChanged += OnLicenseChangedExternal;
+        this.Closed += (_, __) => LicenseService.LicenseChanged -= OnLicenseChangedExternal;
+
+        // Auto-save on window close. The "Saved" InfoBar pulse already
+        // promises Win11-native auto-save UX — make it real, so closing
+        // the window via the X (or ESC) doesn't silently drop the user's
+        // edits. Save_Click stays for the explicit "Save & close" path.
+        this.Closed += (_, __) => AutoSaveOnClose();
+
+        // Subscribe to Parakeet download progress events routed through
+        // the App-level FFI callback. AppViewModel.HandleEvent already
+        // marshals onto the UI thread before invoking the event.
+        if (Application.Current is App app)
+        {
+            app.AppViewModel.ParakeetDownloadProgress += OnParakeetProgress;
+            app.AppViewModel.FileTranscribeProgress += OnFileTranscribeProgress;
+            this.Closed += (_, __) =>
+            {
+                app.AppViewModel.ParakeetDownloadProgress -= OnParakeetProgress;
+                app.AppViewModel.FileTranscribeProgress -= OnFileTranscribeProgress;
+            };
+        }
+
         LoadConfig();
         ViewModel.LoadGpuStatus();
         SyncProviderComboBox();
@@ -69,7 +97,740 @@ public sealed partial class SettingsWindow : Window
         // a visual hint that the form is dirty.
         ViewModel.PropertyChanged += (_, _) => PulseSavedInfoBar();
 
+        // Render waveform + load audio whenever the History selection
+        // changes. Hooked here (not in XAML) because rendering needs
+        // the Canvas's actual ActualWidth which isn't known until
+        // layout — ViewModel can't reach it from a binding.
+        ViewModel.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(ViewModel.SelectedHistoryItem))
+                _ = RefreshHistoryAudioAsync();
+        };
+
+        // App rules: pulse on collection change (add/remove/reorder) AND
+        // on any per-row property edit (pattern, style, ...). Without
+        // hooking the inner ObservableObjects' PropertyChanged the user
+        // wouldn't see the "Saved" hint when editing a row in place.
+        ViewModel.AppRules.CollectionChanged += (_, _) =>
+        {
+            PulseSavedInfoBar();
+            UpdateAppRulesEmptyHint();
+        };
+        foreach (var r in ViewModel.AppRules)
+            r.PropertyChanged += (_, _) => PulseSavedInfoBar();
+        ViewModel.AppRules.CollectionChanged += (_, e) =>
+        {
+            if (e.NewItems != null)
+                foreach (AppRuleViewModel r in e.NewItems)
+                    r.PropertyChanged += (_, _) => PulseSavedInfoBar();
+        };
+        UpdateAppRulesEmptyHint();
+
+        // WinUI 3 desktop's DragOver/Drop events never fire even with
+        // handledEventsToo=true (verified empirically — DragEnter logger
+        // never showed up in ptt.log on a real drop). Bypass with Win32
+        // OLE RegisterDragDrop bound to the Window's HWND. The drop
+        // target accepts file drops anywhere on the Settings window;
+        // we filter to .wav at TranscribeFileAsync time.
+        Activated += SettingsWindow_Activated;
+        Closed += (_, _) =>
+        {
+            try { _win32Drop?.Unregister(); } catch { }
+            _win32Drop = null;
+        };
+
+        // Parallel attempt #2: XAML-side handlers on the absolute
+        // root of the Window's Content (above any ScrollViewer that
+        // could intercept). handledEventsToo=true so even if some
+        // intermediate element marks the event handled, ours runs.
+        if (RootGrid != null)
+        {
+            RootGrid.AddHandler(UIElement.DragOverEvent,
+                new DragEventHandler(RootGrid_DragOver), handledEventsToo: true);
+            RootGrid.AddHandler(UIElement.DropEvent,
+                new DragEventHandler(RootGrid_Drop), handledEventsToo: true);
+            RootGrid.AddHandler(UIElement.DragEnterEvent,
+                new DragEventHandler((_, _) => App.Log("XAML root DragEnter", "FileLoad")),
+                handledEventsToo: true);
+        }
+
+        // Warm-up: extract real icons from currently-running processes
+        // so the App Rules list shows them immediately instead of the
+        // FontIcon fallback. Runs on a background thread; refreshes
+        // each row's IconAssetUri on the UI thread when done.
+        _ = WarmUpAppIconsAsync();
+
         _loaded = true;
+    }
+
+    private void RootGrid_DragOver(object sender, Microsoft.UI.Xaml.DragEventArgs e)
+    {
+        App.Log("XAML root DragOver", "FileLoad");
+        if (e.DataView.Contains(global::Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems))
+        {
+            e.AcceptedOperation = global::Windows.ApplicationModel.DataTransfer.DataPackageOperation.Copy;
+            if (e.DragUIOverride != null)
+            {
+                e.DragUIOverride.Caption = "Drop .wav to transcribe";
+                e.DragUIOverride.IsCaptionVisible = true;
+            }
+            e.Handled = true;
+        }
+    }
+
+    private async void RootGrid_Drop(object sender, Microsoft.UI.Xaml.DragEventArgs e)
+    {
+        App.Log("XAML root Drop fired", "FileLoad");
+        if (!e.DataView.Contains(global::Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems))
+            return;
+        e.Handled = true;
+        try
+        {
+            var items = await e.DataView.GetStorageItemsAsync();
+            var first = items.FirstOrDefault(i => i is global::Windows.Storage.StorageFile sf
+                && sf.FileType.Equals(".wav", StringComparison.OrdinalIgnoreCase))
+                as global::Windows.Storage.StorageFile;
+            if (first == null)
+            {
+                FileLoadStatus.Text = "Only .wav supported in this build";
+                return;
+            }
+            await TranscribeFileAsync(first.Path);
+        }
+        catch (Exception ex)
+        {
+            FileLoadStatus.Text = $"Drop error: {ex.Message}";
+            App.Log($"RootGrid Drop exc: {ex}", "FileLoad");
+        }
+    }
+
+    private async System.Threading.Tasks.Task WarmUpAppIconsAsync()
+    {
+        try
+        {
+            await System.Threading.Tasks.Task.Run(() =>
+            {
+                foreach (var proc in System.Diagnostics.Process.GetProcesses())
+                {
+                    try
+                    {
+                        var path = proc.MainModule?.FileName;
+                        if (!string.IsNullOrEmpty(path))
+                            Helpers.IconExtractor.EnsureCachedFromExePath(path);
+                    }
+                    catch
+                    {
+                        // MainModule throws on UAC-elevated processes
+                        // when we're non-elevated; skip and move on.
+                    }
+                    finally
+                    {
+                        proc.Dispose();
+                    }
+                }
+            });
+            // Hop back to UI thread to re-evaluate bindings.
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                foreach (var r in ViewModel.AppRules)
+                    r.RefreshIconAssetUri();
+            });
+        }
+        catch (Exception ex)
+        {
+            App.Log($"WarmUpAppIcons exc: {ex.Message}", "AppCtx");
+        }
+    }
+
+    private void OpenMeeting_Click(object sender, RoutedEventArgs e)
+    {
+        App.Log("OpenMeeting_Click fired", "Meeting");
+        App.Instance?.OpenMeetingWindow();
+    }
+
+    // ── App rules ─────────────────────────────────────────────────
+
+    private void UpdateAppRulesEmptyHint()
+    {
+        if (AppRulesEmptyHint != null)
+            AppRulesEmptyHint.Visibility = ViewModel.AppRules.Count == 0
+                ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void AppRuleAdd_Click(object sender, RoutedEventArgs e)
+    {
+        ViewModel.AppRules.Add(new AppRuleViewModel(
+            matchPattern: "",
+            matchType: "process_name",
+            llmStyle: "off",
+            llmTranslateTo: "",
+            label: "",
+            enabled: true));
+    }
+
+    private void AppRuleLoadDefaults_Click(object sender, RoutedEventArgs e)
+    {
+        ViewModel.LoadAppRulesDefaults();
+    }
+
+    private void AppRuleDelete_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.Tag is AppRuleViewModel rule)
+            ViewModel.AppRules.Remove(rule);
+    }
+
+    // ── File-load (offline transcribe) ────────────────────────────
+
+    private async void FileLoadPick_Click(object sender, RoutedEventArgs e)
+    {
+        App.Log("FileLoadPick_Click fired", "FileLoad");
+        // WinRT FileOpenPicker.PickSingleFileAsync silently returns
+        // null on some unpackaged WinUI 3 desktop builds. Win32
+        // IFileOpenDialog (the same dialog Explorer uses) is
+        // bulletproof — no async, no manifest capabilities, no STA
+        // gymnastics. Pump it on a background thread so Show() can
+        // run its modal loop without freezing the UI thread.
+        try
+        {
+            var hwnd = WindowHelper.GetHwnd(this);
+            App.Log($"FileLoadPick: opening Win32 picker (hwnd=0x{hwnd:X})", "FileLoad");
+            string? path = await System.Threading.Tasks.Task.Run(() =>
+                Helpers.Win32FileDialog.PickFile(hwnd, "Pick a WAV to transcribe",
+                    ("WAV audio", "*.wav"),
+                    ("All files", "*.*")));
+            App.Log($"FileLoadPick: picker returned {(path == null ? "null" : path)}", "FileLoad");
+            if (string.IsNullOrEmpty(path))
+            {
+                FileLoadStatus.Text = "Cancelled";
+                return;
+            }
+            await TranscribeFileAsync(path);
+        }
+        catch (Exception ex)
+        {
+            FileLoadStatus.Text = $"Picker error: {ex.Message}";
+            App.Log($"FileLoadPick exc: {ex}", "FileLoad");
+        }
+    }
+
+    /// Active Win32 drop target. Created lazily on first Activated
+    /// because RegisterDragDrop wants the HWND already alive.
+    private Helpers.Win32DropTarget? _win32Drop;
+
+    private void SettingsWindow_Activated(object sender,
+        Microsoft.UI.Xaml.WindowActivatedEventArgs e)
+    {
+        // Idempotent: only register once across the window's lifetime.
+        if (_win32Drop != null) return;
+        try
+        {
+            var hwnd = WindowHelper.GetHwnd(this);
+            _win32Drop = new Helpers.Win32DropTarget(hwnd, OnFilesDroppedFromWin32);
+            _win32Drop.Register();
+        }
+        catch (Exception ex)
+        {
+            App.Log($"Win32 drop register exc: {ex.Message}", "FileLoad");
+        }
+    }
+
+    private async void OnFilesDroppedFromWin32(string[] paths)
+    {
+        // Marshal back to UI thread — RegisterDragDrop callbacks run
+        // on the OLE STA but XAML wants the dispatcher.
+        var first = Array.Find(paths,
+            p => p.EndsWith(".wav", StringComparison.OrdinalIgnoreCase));
+        if (first == null)
+        {
+            DispatcherQueue.TryEnqueue(() =>
+                FileLoadStatus.Text = "Only .wav supported in this build");
+            return;
+        }
+        // Hop to UI dispatcher so TranscribeFileAsync can touch
+        // FileLoadProgress / FileLoadResult safely.
+        var tcs = new System.Threading.Tasks.TaskCompletionSource<bool>();
+        DispatcherQueue.TryEnqueue(async () =>
+        {
+            try { await TranscribeFileAsync(first); }
+            finally { tcs.TrySetResult(true); }
+        });
+        await tcs.Task;
+    }
+
+    private void FileLoadDropTarget_DragOver(object sender, Microsoft.UI.Xaml.DragEventArgs e)
+    {
+        // Accept any drag that carries a file-system item — we filter
+        // to .wav at Drop time. Setting both AcceptedOperation AND
+        // marking Handled=true is required on WinUI 3 desktop;
+        // omitting Handled lets the parent ScrollViewer steal the
+        // event back and the cursor shows a "no-entry" sign.
+        if (e.DataView.Contains(global::Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems))
+        {
+            e.AcceptedOperation = global::Windows.ApplicationModel.DataTransfer.DataPackageOperation.Copy;
+            if (e.DragUIOverride != null)
+            {
+                e.DragUIOverride.Caption = "Drop .wav to transcribe";
+                e.DragUIOverride.IsCaptionVisible = true;
+                e.DragUIOverride.IsContentVisible = true;
+                e.DragUIOverride.IsGlyphVisible = true;
+            }
+            e.Handled = true;
+        }
+    }
+
+    private async void FileLoadDropTarget_Drop(object sender, Microsoft.UI.Xaml.DragEventArgs e)
+    {
+        App.Log("FileLoadDropTarget_Drop fired", "FileLoad");
+        if (!e.DataView.Contains(global::Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems))
+        {
+            App.Log("Drop: no StorageItems in DataView", "FileLoad");
+            return;
+        }
+        e.Handled = true;
+        try
+        {
+            var items = await e.DataView.GetStorageItemsAsync();
+            App.Log($"Drop: got {items.Count} items", "FileLoad");
+            var first = items.FirstOrDefault(i => i is global::Windows.Storage.StorageFile sf
+                && sf.FileType.Equals(".wav", StringComparison.OrdinalIgnoreCase))
+                as global::Windows.Storage.StorageFile;
+            if (first == null)
+            {
+                FileLoadStatus.Text = "Only .wav supported in this build";
+                return;
+            }
+            await TranscribeFileAsync(first.Path);
+        }
+        catch (Exception ex)
+        {
+            FileLoadStatus.Text = $"Drop error: {ex.Message}";
+            App.Log($"Drop exc: {ex}", "FileLoad");
+        }
+    }
+
+    /// Returns approximate file metrics (duration in seconds, size in
+    /// bytes) by reading just the WAV RIFF/fmt header — no full decode.
+    /// Used by the "this file is large, continue?" confirmation gate.
+    private static (double durationSecs, long sizeBytes) PeekWavMetrics(string path)
+    {
+        try
+        {
+            var fi = new System.IO.FileInfo(path);
+            using var fs = fi.OpenRead();
+            using var br = new System.IO.BinaryReader(fs);
+            if (new string(br.ReadChars(4)) != "RIFF") return (0, fi.Length);
+            br.ReadUInt32(); // file size
+            if (new string(br.ReadChars(4)) != "WAVE") return (0, fi.Length);
+            uint sampleRate = 0; ushort channels = 1; ushort bits = 0;
+            while (fs.Position + 8 <= fs.Length)
+            {
+                var id = new string(br.ReadChars(4));
+                var sz = br.ReadUInt32();
+                if (id == "fmt ")
+                {
+                    br.ReadUInt16(); // fmt tag
+                    channels = br.ReadUInt16();
+                    sampleRate = br.ReadUInt32();
+                    br.ReadUInt32(); // byte rate
+                    br.ReadUInt16(); // block align
+                    bits = br.ReadUInt16();
+                    if (sz > 16) fs.Seek(sz - 16, System.IO.SeekOrigin.Current);
+                }
+                else if (id == "data")
+                {
+                    int frameSize = (bits / 8) * channels;
+                    if (frameSize > 0 && sampleRate > 0)
+                    {
+                        long frames = sz / (uint)frameSize;
+                        return (frames / (double)sampleRate, fi.Length);
+                    }
+                    break;
+                }
+                else fs.Seek(sz, System.IO.SeekOrigin.Current);
+            }
+            return (0, fi.Length);
+        }
+        catch { return (0, 0); }
+    }
+
+    /// Decides whether the user should be warned before running an
+    /// expensive transcription. Threshold: 5 minutes of audio OR 50 MB
+    /// on disk. For cloud mode we warn at any duration ≥ 5 min so the
+    /// user is aware of API cost before submitting.
+    private async System.Threading.Tasks.Task<bool> ConfirmLargeFileAsync(string path)
+    {
+        var (durationSecs, sizeBytes) = PeekWavMetrics(path);
+        bool isCloud = !string.Equals(ViewModel.SttMode, "local", StringComparison.OrdinalIgnoreCase);
+        bool large = durationSecs >= 300 || sizeBytes >= 50L * 1024 * 1024;
+        if (!large && !isCloud) return true; // small + local: no warning
+        if (!large && isCloud && durationSecs < 60) return true; // small cloud: no warning either
+
+        var mins = (int)Math.Round(durationSecs / 60.0);
+        var sizeMb = sizeBytes / (1024.0 * 1024.0);
+        var costHint = isCloud
+            ? "\nThis will be sent to your configured cloud provider — billing applies."
+            : "\nThis runs locally and may take a few minutes.";
+        var dlg = new ContentDialog
+        {
+            Title = "Long file",
+            Content = $"{System.IO.Path.GetFileName(path)}\n" +
+                      $"≈ {mins} min · {sizeMb:F1} MB{costHint}\n\nProceed?",
+            PrimaryButtonText = "Transcribe",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = (this.Content as FrameworkElement)?.XamlRoot,
+        };
+        var result = await dlg.ShowAsync();
+        return result == ContentDialogResult.Primary;
+    }
+
+    private async System.Threading.Tasks.Task TranscribeFileAsync(string path)
+    {
+        if (!await ConfirmLargeFileAsync(path))
+        {
+            FileLoadStatus.Text = "Cancelled";
+            return;
+        }
+        FileLoadProgress.IsActive = true;
+        FileLoadProgress.Visibility = Visibility.Visible;
+        FileLoadResult.Visibility = Visibility.Collapsed;
+        // Determinate bar starts at 0 — the first
+        // file_transcribe_progress event from Rust will land within ~30 s
+        // (one chunk window) and tick the bar forward.
+        FileLoadBar.Value = 0;
+        FileLoadBar.Visibility = Visibility.Visible;
+        FileLoadStatus.Text = $"Transcribing {System.IO.Path.GetFileName(path)}...";
+        FileLoadPickBtn.IsEnabled = false;
+        try
+        {
+            const int BufLen = 1 << 22;
+            var buf = new byte[BufLen];
+            int rc = await System.Threading.Tasks.Task.Run(() =>
+                DimmyNative.dimmy_transcribe_file(path, buf, BufLen));
+            if (rc < 0)
+            {
+                FileLoadStatus.Text = rc switch
+                {
+                    -1 => "Bad arguments",
+                    -2 => "Could not open / decode the WAV",
+                    -3 => "VAD removed all audio (file silent?)",
+                    -4 => "Cloud mode rejected — should not happen",
+                    -5 => "Backend produced empty transcript",
+                    -6 => "Cloud config incomplete — set provider URL/key/model in Settings",
+                    -7 => "Tokio runtime failed to start",
+                    -8 => "Cloud transcribe failed (see dimmy.log)",
+                    _ => $"Failed (code {rc})",
+                };
+                FileLoadResult.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                var text = System.Text.Encoding.UTF8.GetString(buf, 0, rc);
+                FileLoadResult.Text = text;
+                FileLoadResult.Visibility = Visibility.Visible;
+                FileLoadBar.Value = 100;
+                FileLoadStatus.Text = $"{text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length} words. Saved to History.";
+            }
+        }
+        catch (Exception ex)
+        {
+            FileLoadStatus.Text = $"Error: {ex.Message}";
+            App.Log($"file-load failed: {ex}", "FileLoad");
+        }
+        finally
+        {
+            FileLoadProgress.IsActive = false;
+            FileLoadProgress.Visibility = Visibility.Collapsed;
+            FileLoadBar.Visibility = Visibility.Collapsed;
+            FileLoadPickBtn.IsEnabled = true;
+        }
+    }
+
+    /// Progress event from Rust during chunked file transcribe.
+    /// Updates the determinate ProgressBar + status text. Fires on
+    /// the UI thread (AppViewModel.HandleEvent already marshals).
+    private void OnFileTranscribeProgress(double processedSecs, double totalSecs, double percent)
+    {
+        if (FileLoadBar.Visibility != Visibility.Visible) return;
+        FileLoadBar.Value = percent;
+        FileLoadStatus.Text =
+            $"Transcribing… {processedSecs:F0} / {totalSecs:F0} s ({percent:F0}%)";
+    }
+
+    // ── History ──────────────────────────────────────────────────────
+
+    /// Refresh the History list. Called on tab activation, on Refresh
+    /// click, on search submit, after delete. The FFI returns up to 200
+    /// rows newest-first; pagination beyond that is a follow-up.
+    private void LoadHistoryItems()
+    {
+        try
+        {
+            string? json;
+            var query = ViewModel.HistorySearchQuery?.Trim() ?? "";
+            const int Limit = 200;
+            const int BufLen = 1 << 18; // 256 KB
+            var buf = new byte[BufLen];
+            int len;
+            if (string.IsNullOrEmpty(query))
+                len = DimmyNative.dimmy_history_recent(Limit, buf, BufLen);
+            else
+                len = DimmyNative.dimmy_history_search(query, Limit, buf, BufLen);
+            if (len <= 0)
+            {
+                ViewModel.HistoryItems.Clear();
+                return;
+            }
+            json = System.Text.Encoding.UTF8.GetString(buf, 0, len);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            ViewModel.HistoryItems.Clear();
+            foreach (var el in doc.RootElement.EnumerateArray())
+            {
+                var item = new ViewModels.HistoryItemViewModel
+                {
+                    Id = el.GetProperty("id").GetInt64(),
+                    Text = el.GetProperty("text").GetString() ?? "",
+                    Language = el.GetProperty("language").GetString() ?? "",
+                    Timestamp = el.GetProperty("timestamp").GetDouble(),
+                    Duration = el.GetProperty("duration").GetDouble(),
+                    WordCount = el.GetProperty("word_count").GetInt32(),
+                };
+                if (el.TryGetProperty("enhanced_text", out var et) && et.ValueKind == System.Text.Json.JsonValueKind.String)
+                    item.EnhancedText = et.GetString();
+                if (el.TryGetProperty("audio_path", out var ap) && ap.ValueKind == System.Text.Json.JsonValueKind.String)
+                    item.AudioPath = ap.GetString();
+                if (el.TryGetProperty("app_process_name", out var apn) && apn.ValueKind == System.Text.Json.JsonValueKind.String)
+                    item.AppProcessName = apn.GetString();
+                if (el.TryGetProperty("app_bundle_id", out var abi) && abi.ValueKind == System.Text.Json.JsonValueKind.String)
+                    item.AppBundleId = abi.GetString();
+                if (el.TryGetProperty("llm_style", out var ls) && ls.ValueKind == System.Text.Json.JsonValueKind.String)
+                    item.LlmStyle = ls.GetString();
+                if (el.TryGetProperty("llm_translate_to", out var ltt) && ltt.ValueKind == System.Text.Json.JsonValueKind.String)
+                    item.LlmTranslateTo = ltt.GetString();
+                if (el.TryGetProperty("size_bytes", out var sb))
+                    item.SizeBytes = sb.GetInt64();
+                ViewModel.HistoryItems.Add(item);
+            }
+            App.Log($"History: loaded {ViewModel.HistoryItems.Count} rows (query='{query}')", "History");
+        }
+        catch (Exception ex)
+        {
+            App.Log($"History load failed: {ex.Message}", "History");
+        }
+    }
+
+    private void HistorySearchBox_KeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
+    {
+        if (e.Key == global::Windows.System.VirtualKey.Enter)
+        {
+            LoadHistoryItems();
+            e.Handled = true;
+        }
+    }
+
+    private void HistorySearch_Click(object sender, RoutedEventArgs e) => LoadHistoryItems();
+    private void HistoryRefresh_Click(object sender, RoutedEventArgs e)
+    {
+        ViewModel.HistorySearchQuery = "";
+        LoadHistoryItems();
+    }
+
+    private void HistoryCopyRaw_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.SelectedHistoryItem is { } item)
+            CopyToClipboard(item.Text);
+    }
+
+    private void HistoryCopyEnhanced_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.SelectedHistoryItem is { } item && !string.IsNullOrEmpty(item.EnhancedText))
+            CopyToClipboard(item.EnhancedText!);
+    }
+
+    private static void CopyToClipboard(string text)
+    {
+        try
+        {
+            var dp = new global::Windows.ApplicationModel.DataTransfer.DataPackage();
+            dp.SetText(text);
+            global::Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dp);
+        }
+        catch (Exception ex) { App.Log($"clipboard set failed: {ex.Message}", "History"); }
+    }
+
+    private void HistoryDelete_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.SelectedHistoryItem is not { } item) return;
+        var rc = DimmyNative.dimmy_history_delete((int)item.Id);
+        if (rc == 0)
+        {
+            ViewModel.HistoryItems.Remove(item);
+            ViewModel.SelectedHistoryItem = null;
+        }
+        else
+        {
+            App.Log($"history_delete returned {rc} for id {item.Id}", "History");
+        }
+    }
+
+    /// Render a waveform of the selected History row's audio file and
+    /// point the MediaPlayerElement at it. Called on every selection
+    /// change. No-ops cleanly when the row has no audio (HasAudio=false
+    /// hides the whole Grid via XAML binding) or the file is missing.
+    private async System.Threading.Tasks.Task RefreshHistoryAudioAsync()
+    {
+        try
+        {
+            HistoryWaveformCanvas?.Children.Clear();
+            if (HistoryAudioPlayer != null) HistoryAudioPlayer.Source = null;
+
+            var item = ViewModel.SelectedHistoryItem;
+            if (item == null || !item.HasAudio) return;
+            var path = item.AudioPath;
+            if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path)) return;
+
+            // Audio source — let WinUI's MediaPlayer handle decoding/seek.
+            try
+            {
+                var uri = new Uri(path);
+                if (HistoryAudioPlayer != null)
+                {
+                    HistoryAudioPlayer.Source =
+                        global::Windows.Media.Core.MediaSource.CreateFromUri(uri);
+                    // Hook PositionChanged once per source — drives the
+                    // orange playhead overlay on top of the waveform.
+                    var mp = HistoryAudioPlayer.MediaPlayer;
+                    if (mp != null)
+                    {
+                        mp.PlaybackSession.PositionChanged -= OnPlaybackPositionChanged;
+                        mp.PlaybackSession.PositionChanged += OnPlaybackPositionChanged;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                App.Log($"MediaPlayer setSource exc: {ex.Message}", "History");
+            }
+
+            // Waveform — read peaks on a background thread, then draw.
+            // Bucket count tracks the canvas width so bars are ~3px wide.
+            if (HistoryWaveformCanvas == null) return;
+            double width = HistoryWaveformCanvas.ActualWidth;
+            if (width <= 0) width = 600; // fallback before first layout pass
+            int buckets = (int)Math.Max(60, Math.Min(400, width / 3));
+            var peaks = await System.Threading.Tasks.Task.Run(()
+                => Helpers.WavPeaks.ReadPeaks(path, buckets));
+            if (peaks.Length == 0) return;
+            // Re-check selection: user may have switched to a different
+            // row while we were reading the WAV.
+            if (ViewModel.SelectedHistoryItem != item) return;
+
+            DrawWaveform(peaks);
+        }
+        catch (Exception ex)
+        {
+            App.Log($"RefreshHistoryAudioAsync exc: {ex.Message}", "History");
+        }
+    }
+
+    /// Vertical line that tracks current playback position. Created
+    /// on first DrawWaveform, repositioned in HistoryAudioPlayer's
+    /// PositionChanged handler. Kept as a field so it survives the
+    /// per-frame Canvas re-render.
+    private Microsoft.UI.Xaml.Shapes.Rectangle? _waveformPlayhead;
+
+    private void DrawWaveform(float[] peaks)
+    {
+        if (HistoryWaveformCanvas == null || peaks.Length == 0) return;
+        HistoryWaveformCanvas.Children.Clear();
+        double w = HistoryWaveformCanvas.ActualWidth;
+        double h = HistoryWaveformCanvas.ActualHeight;
+        if (w <= 0 || h <= 0) return;
+        double barWidth = Math.Max(1, w / peaks.Length - 1);
+        double mid = h / 2.0;
+        var brush = new Microsoft.UI.Xaml.Media.SolidColorBrush(
+            (Microsoft.UI.Colors.DodgerBlue));
+        for (int i = 0; i < peaks.Length; i++)
+        {
+            double barH = Math.Max(1, peaks[i] * (h - 2));
+            var rect = new Microsoft.UI.Xaml.Shapes.Rectangle
+            {
+                Width = barWidth,
+                Height = barH,
+                Fill = brush,
+                RadiusX = 1, RadiusY = 1,
+            };
+            Microsoft.UI.Xaml.Controls.Canvas.SetLeft(rect, i * (w / peaks.Length));
+            Microsoft.UI.Xaml.Controls.Canvas.SetTop(rect, mid - barH / 2.0);
+            HistoryWaveformCanvas.Children.Add(rect);
+        }
+
+        // Re-add the playhead on top of the bars. Solid orange, 2 px
+        // wide, positioned at x=0 until the player starts emitting
+        // PositionChanged events.
+        _waveformPlayhead = new Microsoft.UI.Xaml.Shapes.Rectangle
+        {
+            Width = 2,
+            Height = h,
+            Fill = new Microsoft.UI.Xaml.Media.SolidColorBrush(
+                Microsoft.UI.Colors.OrangeRed),
+            IsHitTestVisible = false,
+        };
+        Microsoft.UI.Xaml.Controls.Canvas.SetLeft(_waveformPlayhead, 0);
+        Microsoft.UI.Xaml.Controls.Canvas.SetTop(_waveformPlayhead, 0);
+        HistoryWaveformCanvas.Children.Add(_waveformPlayhead);
+    }
+
+    /// Tap on the waveform → seek the MediaPlayer to that fractional
+    /// position. Bound in XAML via Canvas.PointerPressed so the
+    /// affordance is "click anywhere on the bars to jump there".
+    private void HistoryWaveformCanvas_PointerPressed(object sender,
+        Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        try
+        {
+            if (HistoryWaveformCanvas == null || HistoryAudioPlayer?.MediaPlayer == null)
+                return;
+            var pt = e.GetCurrentPoint(HistoryWaveformCanvas).Position;
+            double w = HistoryWaveformCanvas.ActualWidth;
+            if (w <= 0) return;
+            double frac = Math.Max(0, Math.Min(1, pt.X / w));
+            var session = HistoryAudioPlayer.MediaPlayer.PlaybackSession;
+            var total = session.NaturalDuration;
+            if (total.TotalSeconds <= 0) return;
+            session.Position = TimeSpan.FromSeconds(total.TotalSeconds * frac);
+            UpdatePlayheadPosition(frac);
+        }
+        catch (Exception ex)
+        {
+            App.Log($"WaveformPointer exc: {ex.Message}", "History");
+        }
+    }
+
+    private void UpdatePlayheadPosition(double frac)
+    {
+        if (_waveformPlayhead == null || HistoryWaveformCanvas == null) return;
+        double w = HistoryWaveformCanvas.ActualWidth;
+        if (w <= 0) return;
+        Microsoft.UI.Xaml.Controls.Canvas.SetLeft(_waveformPlayhead,
+            Math.Max(0, Math.Min(w - 2, w * frac)));
+    }
+
+    /// MediaPlayer fires PositionChanged off the UI thread — hop back
+    /// to the dispatcher before touching the Canvas. Computes the
+    /// fractional position from the session's NaturalDuration and
+    /// drives the orange playhead overlay.
+    private void OnPlaybackPositionChanged(
+        global::Windows.Media.Playback.MediaPlaybackSession session, object args)
+    {
+        try
+        {
+            var total = session.NaturalDuration.TotalSeconds;
+            if (total <= 0) return;
+            double frac = session.Position.TotalSeconds / total;
+            DispatcherQueue.TryEnqueue(() => UpdatePlayheadPosition(frac));
+        }
+        catch { /* MediaPlayer races on source-swap; ignore. */ }
     }
 
     private void LoadConfig()
@@ -96,7 +857,10 @@ public sealed partial class SettingsWindow : Window
         ViewModel.PillShowOnHotkey = uiPrefs.PillShowOnHotkey;
 
         // Also read from FFI for runtime-only fields (has_key, has_llm_key, devices)
-        // that are NOT in config.json (Rust computes them from keystore)
+        // that are NOT in config.json (Rust computes them from keystore).
+        // We also cache the per-provider has_*_key flags so a dropdown
+        // change can refresh the green-check without first persisting
+        // config + waiting for Rust to round-trip.
         try
         {
             var ffiJson = DimmyNative.ReadBuffer(DimmyNative.dimmy_get_config_json, 16384);
@@ -108,6 +872,9 @@ public sealed partial class SettingsWindow : Window
                     ViewModel.HasApiKey = hk.GetBoolean();
                 if (r.TryGetProperty("has_llm_key", out var hlk))
                     ViewModel.HasLlmKey = hlk.GetBoolean();
+                _sttKeyByProvider.Clear();
+                _llmKeyByProvider.Clear();
+                CacheProviderKeyFlags(r);
                 if (r.TryGetProperty("devices", out var devArr) &&
                     devArr.ValueKind == System.Text.Json.JsonValueKind.Array)
                 {
@@ -202,7 +969,66 @@ public sealed partial class SettingsWindow : Window
                 LlmCustomUrlBox.Visibility = Visibility.Visible;
                 LlmCustomModelBox.Visibility = Visibility.Visible;
             }
+            // Refresh the green-check badge for the newly-selected provider.
+            // Without this, switching to a provider with a saved key still
+            // showed "no key" until the user closed + reopened Settings.
+            ViewModel.HasLlmKey = LookupLlmKeyForTag(tag);
         }
+    }
+
+    // Per-provider has_key flags cached at Settings open. Maps the
+    // ComboBox tag (provider Name lowercased) to true/false. Filled by
+    // CacheProviderKeyFlags() on Settings load.
+    private readonly System.Collections.Generic.Dictionary<string, bool> _sttKeyByProvider = new(StringComparer.OrdinalIgnoreCase);
+    private readonly System.Collections.Generic.Dictionary<string, bool> _llmKeyByProvider = new(StringComparer.OrdinalIgnoreCase);
+
+    private void CacheProviderKeyFlags(System.Text.Json.JsonElement r)
+    {
+        // STT — `has_<provider>_key` flag set per Provider variant.
+        // The dropdown tag is the lowercase provider name; the ProviderPreset
+        // table holds the exact Tag→Name mapping. We hash both forms so a
+        // tag like "groq-v3" still resolves to has_groq_key.
+        foreach (var (key, prov) in new[] {
+            ("has_groq_key", "groq"),
+            ("has_openai_key", "openai"),
+            ("has_gemini_key", "gemini"),
+            ("has_deepgram_key", "deepgram"),
+            ("has_fireworks_key", "fireworks"),
+            ("has_together_key", "together"),
+            ("has_custom_key", "custom"),
+        })
+        {
+            if (r.TryGetProperty(key, out var v)) _sttKeyByProvider[prov] = v.GetBoolean();
+        }
+        foreach (var (key, prov) in new[] {
+            ("has_groq_llm_key", "groq"),
+            ("has_openai_llm_key", "openai"),
+            ("has_anthropic_llm_key", "anthropic"),
+            ("has_gemini_llm_key", "gemini"),
+            ("has_openrouter_llm_key", "openrouter"),
+            ("has_fireworks_llm_key", "fireworks"),
+            ("has_together_llm_key", "together"),
+            ("has_custom_llm_key", "custom"),
+        })
+        {
+            if (r.TryGetProperty(key, out var v)) _llmKeyByProvider[prov] = v.GetBoolean();
+        }
+    }
+
+    private bool LookupSttKeyForTag(string tag)
+    {
+        // Tags like "groq-v3" / "groq-distil" resolve to has_groq_key.
+        // Custom is the catch-all.
+        var baseProv = tag.Split('-')[0];
+        if (_sttKeyByProvider.TryGetValue(baseProv, out var v)) return v;
+        return _sttKeyByProvider.TryGetValue("custom", out var c) && c;
+    }
+
+    private bool LookupLlmKeyForTag(string tag)
+    {
+        var baseProv = tag.Split('-')[0];
+        if (_llmKeyByProvider.TryGetValue(baseProv, out var v)) return v;
+        return _llmKeyByProvider.TryGetValue("custom", out var c) && c;
     }
 
     private void SyncLanguageComboBox()
@@ -242,8 +1068,15 @@ public sealed partial class SettingsWindow : Window
 
     private System.Collections.Generic.List<LocalModelInfo> _localModels = new();
 
+    /// Sentinel ComboBox tag identifying the Parakeet entry. Not a real
+    /// whisper-model filename — distinguished from `*.bin` by prefix.
+    private const string ParakeetTag = "parakeet:fp32";
+
     private void PopulateLocalModels()
     {
+        App.Log(
+            $"PopulateLocalModels enter: VM.LocalSttBackend={ViewModel.LocalSttBackend}, VM.LocalModel={ViewModel.LocalModel}",
+            "Settings");
         try
         {
             var json = DimmyNative.ListLocalModels();
@@ -253,8 +1086,8 @@ public sealed partial class SettingsWindow : Window
             _localModels.Clear();
             LocalModelComboBox.Items.Clear();
 
-            int selectedIdx = 0;
             int idx = 0;
+            int selectedIdx = -1;
             foreach (var el in doc.RootElement.EnumerateArray())
             {
                 var name = el.GetProperty("name").GetString() ?? "";
@@ -273,23 +1106,61 @@ public sealed partial class SettingsWindow : Window
                 };
                 LocalModelComboBox.Items.Add(item);
 
-                if (filename == ViewModel.LocalModel)
+                if (ViewModel.LocalSttBackend != "parakeet" && filename == ViewModel.LocalModel)
                     selectedIdx = idx;
                 idx++;
             }
 
+            // Append Parakeet as a virtual entry. The backend it picks
+            // is implicit — selecting this item flips ViewModel.LocalSttBackend
+            // to "parakeet"; selecting any whisper item flips it to "whisper".
+            bool parakeetDownloaded = false;
+            try { parakeetDownloaded = DimmyNative.dimmy_parakeet_bundle_present() == 1; }
+            catch { }
+            var parakeetStatus = parakeetDownloaded ? "Ready" : "2.5GB";
+            LocalModelComboBox.Items.Add(new ComboBoxItem
+            {
+                Content = $"Parakeet TDT v3 FP32 — fast, EU-language friendly ({parakeetStatus})",
+                Tag = ParakeetTag,
+            });
+            if (ViewModel.LocalSttBackend == "parakeet")
+                selectedIdx = idx;
+
             if (LocalModelComboBox.Items.Count > 0)
-                LocalModelComboBox.SelectedIndex = selectedIdx;
+            {
+                var finalIdx = selectedIdx >= 0 ? selectedIdx : 0;
+                App.Log(
+                    $"PopulateLocalModels SET SelectedIndex={finalIdx} (count={LocalModelComboBox.Items.Count}, parakeetIdx={idx})",
+                    "Settings");
+                LocalModelComboBox.SelectedIndex = finalIdx;
+            }
         }
-        catch { }
+        catch (Exception ex) { App.Log($"PopulateLocalModels EXC: {ex.Message}", "Settings"); }
     }
 
     private void LocalModel_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        App.Log(
+            $"LocalModel_SelectionChanged: _loaded={_loaded}, SelectedIndex={LocalModelComboBox.SelectedIndex}, " +
+            $"SelectedItem.Tag={(LocalModelComboBox.SelectedItem as ComboBoxItem)?.Tag}, " +
+            $"VM.LocalSttBackend={ViewModel.LocalSttBackend}, VM.LocalModel={ViewModel.LocalModel}",
+            "Settings");
         if (!_loaded) return;
-        if (LocalModelComboBox.SelectedItem is ComboBoxItem item && item.Tag is string filename)
+        if (LocalModelComboBox.SelectedItem is ComboBoxItem item && item.Tag is string tag)
         {
-            ViewModel.LocalModel = filename;
+            if (tag == ParakeetTag)
+            {
+                ViewModel.LocalSttBackend = "parakeet";
+                App.Log("→ set LocalSttBackend=parakeet", "Settings");
+                // Keep LocalModel pointing at the previous whisper choice
+                // so flipping back to a whisper entry restores it.
+            }
+            else
+            {
+                ViewModel.LocalSttBackend = "whisper";
+                ViewModel.LocalModel = tag;
+                App.Log($"→ set LocalSttBackend=whisper, LocalModel={tag}", "Settings");
+            }
             CheckModelStatus();
         }
     }
@@ -299,9 +1170,7 @@ public sealed partial class SettingsWindow : Window
         bool isLocal = ViewModel.SttMode == "local";
         SttModeLocal.IsChecked = isLocal;
         SttModeCloud.IsChecked = !isLocal;
-        LocalSttPanel.Visibility = isLocal ? Visibility.Visible : Visibility.Collapsed;
-        CloudSttPanel.Visibility = isLocal ? Visibility.Collapsed : Visibility.Visible;
-
+        ApplySttModeVisibility(isLocal);
         if (isLocal)
             CheckModelStatus();
     }
@@ -313,19 +1182,58 @@ public sealed partial class SettingsWindow : Window
         {
             ViewModel.SttMode = tag;
             bool isLocal = tag == "local";
-            LocalSttPanel.Visibility = isLocal ? Visibility.Visible : Visibility.Collapsed;
-            CloudSttPanel.Visibility = isLocal ? Visibility.Collapsed : Visibility.Visible;
-
+            ApplySttModeVisibility(isLocal);
             if (isLocal)
                 CheckModelStatus();
         }
     }
 
+    private void ApplySttModeVisibility(bool isLocal)
+    {
+        LocalSttPanel.Visibility = isLocal ? Visibility.Visible : Visibility.Collapsed;
+        CloudSttPanel.Visibility = isLocal ? Visibility.Collapsed : Visibility.Visible;
+        // Provider details + custom URL/model + prompt are cloud-only —
+        // they live inside CloudAdvancedPanel so a single toggle hides
+        // them all when the user switches to Local mode. Microphone +
+        // gain + preprocessing are general and stay visible.
+        CloudAdvancedPanel.Visibility = isLocal ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    /// Convenience: progress callback from Rust during a Parakeet
+    /// bundle download. Updates the same DownloadProgress bar used by
+    /// the whisper-model download path. Total is 0 when one of the
+    /// HEAD calls didn't return a Content-Length — fall back to
+    /// indeterminate in that case.
+    private void OnParakeetProgress(long downloaded, long total)
+    {
+        if (total <= 0)
+        {
+            DownloadProgress.IsIndeterminate = true;
+            LocalModelStatus.Text = $"Downloading... {FormatBytes(downloaded)} so far";
+            return;
+        }
+        DownloadProgress.IsIndeterminate = false;
+        double percent = Math.Min(100, downloaded * 100.0 / total);
+        DownloadProgress.Value = percent;
+        LocalModelStatus.Text =
+            $"Downloading... {FormatBytes(downloaded)} / {FormatBytes(total)} ({percent:F0}%)";
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        if (bytes >= 1024L * 1024L * 1024L)
+            return $"{bytes / 1024.0 / 1024.0 / 1024.0:F2} GB";
+        return $"{bytes / 1024.0 / 1024.0:F0} MB";
+    }
+
     private void CheckModelStatus()
     {
+        bool isParakeet = ViewModel.LocalSttBackend == "parakeet";
         try
         {
-            int exists = DimmyNative.dimmy_model_exists(ViewModel.LocalModel);
+            int exists = isParakeet
+                ? DimmyNative.dimmy_parakeet_bundle_present()
+                : DimmyNative.dimmy_model_exists(ViewModel.LocalModel);
             if (exists == 1)
             {
                 LocalModelStatus.Text = "Ready";
@@ -333,10 +1241,19 @@ public sealed partial class SettingsWindow : Window
             }
             else
             {
-                var model = _localModels.Find(m => m.Filename == ViewModel.LocalModel);
-                var sizeInfo = model != null ? $" ({model.SizeMb}MB)" : "";
+                string sizeInfo;
+                if (isParakeet)
+                {
+                    sizeInfo = " (2.5GB)";
+                }
+                else
+                {
+                    var model = _localModels.Find(m => m.Filename == ViewModel.LocalModel);
+                    sizeInfo = model != null ? $" ({model.SizeMb}MB)" : "";
+                }
                 LocalModelStatus.Text = $"Not downloaded{sizeInfo}";
                 DownloadModelBtn.Content = $"Download{sizeInfo}";
+                DownloadModelBtn.IsEnabled = true;
                 DownloadModelBtn.Visibility = Visibility.Visible;
             }
         }
@@ -349,19 +1266,24 @@ public sealed partial class SettingsWindow : Window
 
     private async void DownloadModel_Click(object sender, RoutedEventArgs e)
     {
+        bool isParakeet = ViewModel.LocalSttBackend == "parakeet";
         DownloadModelBtn.IsEnabled = false;
         DownloadModelBtn.Content = "Downloading...";
+        DownloadProgress.IsIndeterminate = true;
+        DownloadProgress.Value = 0;
         DownloadProgress.Visibility = Visibility.Visible;
-        LocalModelStatus.Text = "Downloading...";
+        LocalModelStatus.Text = "Starting download...";
 
         try
         {
-            int result = await Task.Run(() => DimmyNative.dimmy_download_model(ViewModel.LocalModel));
+            int result = await Task.Run(() => isParakeet
+                ? DimmyNative.dimmy_parakeet_download_bundle()
+                : DimmyNative.dimmy_download_model(ViewModel.LocalModel));
             if (result == 0)
             {
                 LocalModelStatus.Text = "Ready";
                 DownloadModelBtn.Visibility = Visibility.Collapsed;
-                // Refresh the ComboBox to show updated download status
+                // Refresh the ComboBox so the status suffix flips to (Ready).
                 PopulateLocalModels();
             }
             else
@@ -549,6 +1471,10 @@ public sealed partial class SettingsWindow : Window
                 CustomUrlBox.Visibility = Visibility.Visible;
                 CustomModelBox.Visibility = Visibility.Visible;
             }
+            // Refresh the green-check badge for the newly-selected provider.
+            // Without this, switching to a provider with a saved key still
+            // showed "no key" until the user closed + reopened Settings.
+            ViewModel.HasApiKey = LookupSttKeyForTag(tag);
         }
     }
 
@@ -566,8 +1492,10 @@ public sealed partial class SettingsWindow : Window
             OutputPanel.Visibility = Visibility.Collapsed;
             OverlayPanel.Visibility = Visibility.Collapsed;
             RulesPanel.Visibility = Visibility.Collapsed;
+            HistoryPanel.Visibility = Visibility.Collapsed;
             AboutPanel.Visibility = Visibility.Collapsed;
             PrivacyPanel.Visibility = Visibility.Collapsed;
+            LicensePanel.Visibility = Visibility.Collapsed;
             StatsPanel.Visibility = Visibility.Collapsed;
             DebugPanel.Visibility = Visibility.Collapsed;
 
@@ -578,20 +1506,952 @@ public sealed partial class SettingsWindow : Window
                 "output" => OutputPanel,
                 "pill" or "overlay" => OverlayPanel,
                 "rules" => RulesPanel,
+                "history" => HistoryPanel,
                 "shortcut" => ShortcutPanel,
                 "privacy" => PrivacyPanel,
+                "license" => LicensePanel,
                 "about" => AboutPanel,
                 "advanced" or "debug" => DebugPanel,
                 "stats" => StatsPanel,
                 _ => HomePanel,
             };
             panel.Visibility = Visibility.Visible;
+            if (tag == "history") LoadHistoryItems();
 
             if (tag == "privacy")
             {
                 RefreshAnonymousIdText();
             }
+            else if (tag == "license")
+            {
+                RefreshLicenseStatus();
+            }
         }
+    }
+
+    // ── License ────────────────────────────────────────────────────────
+
+    private void RefreshLicenseStatus()
+    {
+        try
+        {
+            var s = LicenseService.GetStatus();
+            (string head, string detail) = s.Kind switch
+            {
+                "Unrestricted" => ("Source build — no licensing",
+                                    "This binary was built without a licensing public key. All features are unlocked."),
+                "NotFound"     => ("No license on this device",
+                                    "Start a trial below or paste an activation code from your email."),
+                "TrialActive"  => ($"Trial — {s.DaysRemaining} day(s) left",
+                                    "You're in your free 14-day trial. Cloud + auto-update are enabled."),
+                "TrialExpired" => ("Trial expired",
+                                    "Your trial has ended. Cloud features are paused. Purchase a license to continue."),
+                "Active"       => ($"Active — {s.Tier} ({s.DaysRemaining} day(s) left)",
+                                    s.CancelsAt is long ca
+                                        ? $"Subscription scheduled to cancel on {DateTimeOffset.FromUnixTimeSeconds(ca).LocalDateTime:MMM d, yyyy}. You keep cloud features until then."
+                                        : "Thanks for supporting Dimmy. All cloud features are enabled."),
+                "Expired"      => ("License expired",
+                                    "Renew to re-enable cloud features."),
+                "Suspended"    => ($"Suspended — offline {s.DaysOffline} day(s)",
+                                    "Reconnect this device to refresh your license."),
+                "Invalid"      => ("License file invalid",
+                                    s.Error ?? "Re-activate this device."),
+                _              => (s.Kind, s.Error ?? string.Empty),
+            };
+            LicenseStatusHeadline.Text = head;
+            LicenseStatusDetail.Text = detail;
+
+            // Tier pill + trailing days + tinted border — mirrors the
+            // statusHero design from macOS MacLicensePage.swift. Drives
+            // four signals at a glance: state (color), tier (badge text),
+            // remaining time (trailing number), category (border tint).
+            ApplyLicenseHero(s);
+
+            // Stripe Customer Portal button — only meaningful for paid
+            // licenses. Trials and source-build have no Stripe billing
+            // attached. Lifetime DOES — the portal still surfaces
+            // invoices and lets the user update their payment method
+            // for future purchases on the same Stripe customer.
+            LicenseManageSubButton.Visibility =
+                s.Kind == "Active" && s.Tier is "monthly" or "annual" or "lifetime"
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+            ApplyBuyCardForStatus(s);
+            PopulateScopeGrid(s);
+            // Devices are server-side data — refresh asynchronously, only when
+            // we actually have a license to query against.
+            if (s.Kind is "TrialActive" or "Active" or "Suspended")
+                _ = RefreshDevicesAsync();
+            else
+            {
+                LicenseDevicesList.Children.Clear();
+                LicenseDeviceCountLabel.Text = string.Empty;
+            }
+        }
+        catch (Exception ex)
+        {
+            LicenseStatusHeadline.Text = "Status check failed";
+            LicenseStatusDetail.Text = ex.Message;
+        }
+    }
+
+    /// <summary>
+    /// Compute and render the "status hero" decorations: tier pill text +
+    /// color, trailing days counter, tinted border around the whole card.
+    /// Mirrors macOS MacLicensePage statusHero so both platforms feel
+    /// identical at a glance.
+    /// </summary>
+    private void ApplyLicenseHero(LicenseService.Status s)
+    {
+        // ── Tint per state ─────────────────────────────────────────────
+        // Color is reserved for *positive* state. TrialActive=orange
+        // ("act soon"), Active=green ("you're paid"), Unrestricted=purple
+        // ("dev"). Everything else (NotFound, TrialExpired, Expired,
+        // Invalid, Suspended) collapses to neutral gray — a license
+        // problem isn't an error to alarm about, it's just a state.
+        // Red was reading as "something is broken", wrong vibe for a
+        // user who simply hasn't activated yet.
+        global::Windows.UI.Color tint = s.Kind switch
+        {
+            "TrialActive"  => global::Windows.UI.Color.FromArgb(0xFF, 0xFF, 0x9F, 0x0A),
+            "Active"       => global::Windows.UI.Color.FromArgb(0xFF, 0x34, 0xC7, 0x59),
+            "Unrestricted" => global::Windows.UI.Color.FromArgb(0xFF, 0x9C, 0x5B, 0xFF),
+            _              => global::Windows.UI.Color.FromArgb(0xFF, 0x90, 0x90, 0x99),
+        };
+
+        // ── Badge text ─────────────────────────────────────────────────
+        // Active branches by tier so a paying user sees the SKU, not just
+        // a generic "PRO". Trial / Suspended / Expired collapse to the
+        // state name.
+        string badge = s.Kind switch
+        {
+            "Unrestricted" => "DEV",
+            "TrialActive" or "TrialExpired" => "TRIAL",
+            "Active" => s.Tier switch
+            {
+                "monthly"  => "PRO • MONTHLY",
+                "annual"   => "PRO • ANNUAL",
+                "lifetime" => "PRO • LIFETIME",
+                _          => "PRO",
+            },
+            "Expired"   => "EXPIRED",
+            "Suspended" => "SUSPENDED",
+            "Invalid"   => "INVALID",
+            "NotFound"  => "INACTIVE",
+            _           => s.Kind?.ToUpperInvariant() ?? "INACTIVE",
+        };
+        LicenseTierBadge.Text = badge;
+        // Win11 Fluent badge: 14% tinted fill, 35% tinted stroke, matching
+        // tint-colored text. Subtler than the prior solid fill + white
+        // text, matches the visual weight of native InfoBadge / accent
+        // pills in Settings / Edge / Store.
+        var badgeFill = tint;   badgeFill.A   = 0x24; // ~14%
+        var badgeStroke = tint; badgeStroke.A = 0x59; // ~35%
+        LicenseTierBadgeBorder.Background  = new Microsoft.UI.Xaml.Media.SolidColorBrush(badgeFill);
+        LicenseTierBadgeBorder.BorderBrush = new Microsoft.UI.Xaml.Media.SolidColorBrush(badgeStroke);
+        LicenseTierBadge.Foreground        = new Microsoft.UI.Xaml.Media.SolidColorBrush(tint);
+        LicenseTierBadgeBorder.Visibility = Visibility.Visible;
+
+        // ── Hero card ─────────────────────────────────────────────────
+        // Fluent prefers theme-aware surfaces over saturated colored
+        // borders. We use a faint 5% tint background and the standard
+        // ControlStrokeColorDefaultBrush for the border — the colored
+        // accent stays in the badge + trailing days counter.
+        var heroFill = tint; heroFill.A = 0x0D; // ~5%
+        LicenseStatusBorder.Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(heroFill);
+        LicenseStatusBorder.BorderBrush =
+            (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["ControlStrokeColorDefaultBrush"];
+
+        // ── Trailing big-number ───────────────────────────────────────
+        // TrialActive / Active → days remaining. Suspended → days offline.
+        // Everything else → no trailing column.
+        if (s.Kind is "TrialActive" or "Active" && s.DaysRemaining is long d)
+        {
+            LicenseTrailingValue.Text = d.ToString();
+            LicenseTrailingLabel.Text = d == 1 ? "DAY LEFT" : "DAYS LEFT";
+            LicenseTrailingPanel.Visibility = Visibility.Visible;
+        }
+        else if (s.Kind == "Suspended" && s.DaysOffline is int o)
+        {
+            LicenseTrailingValue.Text = o.ToString();
+            LicenseTrailingLabel.Text = o == 1 ? "DAY OFFLINE" : "DAYS OFFLINE";
+            LicenseTrailingPanel.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            LicenseTrailingPanel.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private void PopulateScopeGrid(LicenseService.Status s)
+    {
+        LicenseScopeGrid.Children.Clear();
+        var active = new System.Collections.Generic.HashSet<string>(s.Scopes,
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, display, descr) in LicenseService.ScopeNames.All)
+        {
+            bool granted = active.Contains(key);
+
+            // One row per capability. Three columns: glyph, name + description, status.
+            var row = new Grid { ColumnSpacing = 12 };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var glyph = new FontIcon
+            {
+                Glyph = granted ? "" : "", // CheckMark vs Cancel
+                FontSize = 16,
+                // System accent brushes are theme-aware AND high-contrast in
+                // both modes. Secondary at FontSize 16 was still rendering
+                // as ghost-faint on the LayerOnAcrylic light card. Critical
+                // (red) carries "missing/locked" without a wall of text.
+                Foreground = granted
+                    ? (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["SystemFillColorSuccessBrush"]
+                    : (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["SystemFillColorCriticalBrush"],
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0, 2, 0, 0),
+            };
+            Grid.SetColumn(glyph, 0);
+
+            var labelStack = new StackPanel { Spacing = 1 };
+            labelStack.Children.Add(new TextBlock
+            {
+                Text = display,
+                FontSize = 13,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            });
+            labelStack.Children.Add(new TextBlock
+            {
+                Text = descr,
+                FontSize = 12,
+                // Per-row description was 11/Secondary which renders as
+                // ghost on the LayerOnAcrylic light card. Bump to 12 +
+                // Primary so it actually reads in light mode.
+                Foreground = (Microsoft.UI.Xaml.Media.Brush)
+                    Application.Current.Resources["TextFillColorPrimaryBrush"],
+                Opacity = 0.85,
+                TextWrapping = TextWrapping.Wrap,
+            });
+            Grid.SetColumn(labelStack, 1);
+
+            var statusText = new TextBlock
+            {
+                Text = granted ? "Included" : "Not included",
+                FontSize = 11,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                // Match the glyph: green Success for Included, red Critical
+                // for missing. Plain Secondary was invisible in light theme.
+                Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
+                    granted ? "SystemFillColorSuccessBrush" : "SystemFillColorCriticalBrush"],
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0, 4, 0, 0),
+            };
+            Grid.SetColumn(statusText, 2);
+
+            row.Children.Add(glyph);
+            row.Children.Add(labelStack);
+            row.Children.Add(statusText);
+            LicenseScopeGrid.Children.Add(row);
+        }
+    }
+
+    private async void License_StartTrial_Click(object sender, RoutedEventArgs e)
+    {
+        var email = (LicenseTrialEmailBox.Text ?? string.Empty).Trim();
+        if (string.IsNullOrEmpty(email) || !email.Contains('@'))
+        {
+            ShowInfoBar(LicenseTrialInfoBar, InfoBarSeverity.Error, "Enter a valid email address.");
+            return;
+        }
+        LicenseTrialButton.IsEnabled = false;
+        try
+        {
+            ShowInfoBar(LicenseTrialInfoBar, InfoBarSeverity.Informational, "Requesting magic link…");
+            var r = await LicenseService.RequestTrialAsync(email);
+            if (!r.Ok)
+            {
+                ShowInfoBar(LicenseTrialInfoBar, InfoBarSeverity.Error, r.Error ?? "Request failed.");
+                return;
+            }
+
+            // Production: server emails the magic link, UI shows "check your inbox".
+            // Dev (local server): server returns the link directly — we open it via the
+            // OS to exercise the same dimmy:// path the email click would trigger.
+            var link = r.MagicLink;
+            if (string.IsNullOrEmpty(link))
+            {
+                ShowInfoBar(LicenseTrialInfoBar, InfoBarSeverity.Success,
+                    "Check your email. Click the magic link from the device you want to activate.");
+                return;
+            }
+
+            if (link.StartsWith("dimmy://", StringComparison.OrdinalIgnoreCase))
+            {
+                ShowInfoBar(LicenseTrialInfoBar, InfoBarSeverity.Informational,
+                    "Activating via magic link…");
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(link)
+                {
+                    UseShellExecute = true,
+                });
+
+                // Poll status — the URL-scheme dispatch hands the code to the
+                // running Dimmy via named pipe; redeem completes asynchronously.
+                if (await WaitForActivationAsync(TimeSpan.FromSeconds(8)))
+                {
+                    RefreshLicenseStatus();
+                    ShowInfoBar(LicenseTrialInfoBar, InfoBarSeverity.Success, "Activated. Welcome to Dimmy.");
+                }
+                else
+                {
+                    var fallback = r.Code ?? ExtractCode(link) ?? string.Empty;
+                    ShowInfoBar(LicenseTrialInfoBar, InfoBarSeverity.Warning,
+                        "Auto-activation didn't complete. Open the fallback below and paste this code: " + fallback);
+                }
+            }
+            else
+            {
+                // Production case — server returned an HTTPS link (e.g. license.dimmy.app/m/...).
+                // Email is the canonical delivery; just confirm.
+                ShowInfoBar(LicenseTrialInfoBar, InfoBarSeverity.Success,
+                    "Magic link sent to " + email + ". Click it from this device to activate.");
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowInfoBar(LicenseTrialInfoBar, InfoBarSeverity.Error, ex.Message);
+        }
+        finally
+        {
+            LicenseTrialButton.IsEnabled = true;
+        }
+    }
+
+    private void OnLicenseChangedExternal()
+    {
+        // Always refresh, regardless of which tab is currently visible.
+        // Pre-fix the check was `_currentTag == "license"` — that
+        // skipped the refresh whenever the dimmy:// activate flow fired
+        // NotifyChanged BEFORE NavigateToTag had set the tag to
+        // "license" (the order in App.xaml.cs HandleForwardedCommand:
+        // NotifyChanged → OpenSettingsWindowAt → NavigateToTag). The
+        // user landed on the License page with stale "NotFound" data
+        // and concluded activation hadn't worked.
+        // RefreshLicenseStatus is cheap (one FFI call + a few bindings)
+        // so always-running it on any LicenseChanged notification is
+        // correct and idempotent.
+        DispatcherQueue.TryEnqueue(RefreshLicenseStatus);
+    }
+
+    /// Navigate the SettingsWindow's NavigationView to the given tag.
+    /// Called by App.xaml.cs after a successful URL-scheme activation so
+    /// the user lands on the License page with the post-redeem status.
+    /// When navigating to "license" we also force-refresh the status
+    /// view so the badge reflects whatever the most recent activate /
+    /// refresh wrote to disk — even if the LicenseChanged event raced
+    /// past the page before this navigation completed.
+    public void NavigateToTag(string tag)
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            foreach (var item in NavView.MenuItems)
+            {
+                if (item is NavigationViewItem nv && nv.Tag is string t && t == tag)
+                {
+                    NavView.SelectedItem = nv;
+                    if (tag == "license")
+                    {
+                        try { RefreshLicenseStatus(); }
+                        catch { /* page bindings might not be ready yet */ }
+                    }
+                    return;
+                }
+            }
+        });
+    }
+
+    /// Poll dimmy_license_status until kind transitions into TrialActive/Active,
+    /// or timeout. Used right after triggering a dimmy:// magic link to surface
+    /// the activation result inline instead of forcing the user to click Refresh.
+    private static async Task<bool> WaitForActivationAsync(TimeSpan budget)
+    {
+        var start = DateTime.UtcNow;
+        while (DateTime.UtcNow - start < budget)
+        {
+            await Task.Delay(400);
+            var s = LicenseService.GetStatus();
+            if (s.Kind == "TrialActive" || s.Kind == "Active") return true;
+        }
+        return false;
+    }
+
+    private async void License_Activate_Click(object sender, RoutedEventArgs e)
+    {
+        var raw = (LicenseCodeBox.Text ?? string.Empty).Trim();
+        if (string.IsNullOrEmpty(raw))
+        {
+            ShowInfoBar(LicenseActivateInfoBar, InfoBarSeverity.Error, "Paste a code or magic-link URL.");
+            return;
+        }
+        var code = ExtractCode(raw) ?? raw;
+        var label = (LicenseDeviceLabelBox.Text ?? string.Empty).Trim();
+        if (string.IsNullOrEmpty(label)) label = Environment.MachineName;
+        try
+        {
+            ShowInfoBar(LicenseActivateInfoBar, InfoBarSeverity.Informational, "Activating…");
+            var r = await LicenseService.RedeemAsync(code, label);
+            if (r.Ok)
+            {
+                ShowInfoBar(LicenseActivateInfoBar, InfoBarSeverity.Success, "Activated. Welcome to Dimmy.");
+                RefreshLicenseStatus();
+            }
+            else
+            {
+                ShowInfoBar(LicenseActivateInfoBar, InfoBarSeverity.Error, r.Error ?? "Activation failed.");
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowInfoBar(LicenseActivateInfoBar, InfoBarSeverity.Error, ex.Message);
+        }
+    }
+
+    private async void License_Refresh_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var r = await LicenseService.RefreshAsync();
+            // Status either way — the user wants to see the result.
+            RefreshLicenseStatus();
+            if (!r.Ok)
+                ShowInfoBar(LicenseActivateInfoBar, InfoBarSeverity.Warning, r.Error ?? "Refresh failed.");
+        }
+        catch (Exception ex)
+        {
+            ShowInfoBar(LicenseActivateInfoBar, InfoBarSeverity.Error, ex.Message);
+        }
+    }
+
+    private async void License_Clear_Click(object sender, RoutedEventArgs e)
+    {
+        // Confirm dialog with the message users keep missing: signing out
+        // removes the license from THIS device only — the Stripe sub
+        // stays alive and keeps billing. To stop billing, use Manage
+        // subscription. Without this dialog, users sign out then click
+        // Buy expecting to "start over" and end up with a duplicate
+        // charge that the server-side gate has to refund.
+        var dlg = new ContentDialog
+        {
+            Title = "Sign out from this device?",
+            Content =
+                "Your subscription on Stripe will stay active and will keep " +
+                "billing on its renewal date. To cancel billing, use 'Manage subscription' instead.\n\n" +
+                "If you sign out, your activation token on this device is removed. " +
+                "You can sign in again from the same email — we'll resend the magic link.",
+            PrimaryButtonText = "Sign out",
+            SecondaryButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Secondary,
+            XamlRoot = this.Content?.XamlRoot,
+        };
+        if ((await dlg.ShowAsync()) != ContentDialogResult.Primary) return;
+        LicenseService.Clear();
+        RefreshLicenseStatus();
+    }
+
+    /// <summary>
+    /// "Manage subscription" — POST /api/billing-portal with the on-disk
+    /// token, open the returned Stripe Customer Portal URL in the
+    /// system browser. Read the token directly from the license file
+    /// rather than going through FFI: this is a one-shot operation
+    /// (no need for the Rust HTTP wrapper) and keeps the rebuild
+    /// surface to a UI-only change.
+    /// </summary>
+    private async void License_ManageSubscription_Click(object sender, RoutedEventArgs e)
+    {
+        // Goes through the licensing FFI so the call hits whichever
+        // server URL was embedded at build time via
+        // DIMMY_LICENSE_SERVER_URL (staging → license-staging.dimmy.app,
+        // prod → license.dimmy.app, debug → localhost mock). The
+        // runtime override that used to live behind a Settings text
+        // box has been removed for safety.
+        LicenseManageSubButton.IsEnabled = false;
+        try
+        {
+            var r = await LicenseService.BillingPortalUrlAsync();
+            if (!r.Ok || string.IsNullOrEmpty(r.Url))
+            {
+                ShowInfoBar(LicenseManageSubInfoBar, InfoBarSeverity.Error,
+                    r.Error ?? "Portal response missing URL.");
+                return;
+            }
+            await global::Windows.System.Launcher.LaunchUriAsync(new Uri(r.Url));
+        }
+        catch (Exception ex)
+        {
+            ShowInfoBar(LicenseManageSubInfoBar, InfoBarSeverity.Error,
+                $"Cannot open portal: {ex.Message}");
+        }
+        finally
+        {
+            LicenseManageSubButton.IsEnabled = true;
+        }
+    }
+
+    private async void License_DevicesReload_Click(object sender, RoutedEventArgs e)
+    {
+        await RefreshDevicesAsync();
+    }
+
+    /// Show / hide + relabel the Buy card and individual tier buttons
+    /// based on the current status. Tier-aware: hide buttons at-or-below
+    /// the active tier so an Active{Monthly} user only sees Annual +
+    /// Lifetime as upgrade options, an Active{Annual} user only sees
+    /// Lifetime, and an Active{Lifetime} user sees no Buy at all
+    /// (lifetime is the ceiling). Trial → all three (legitimate
+    /// trial→paid). NotFound / TrialExpired / Expired / Suspended → all
+    /// three (first purchase or repurchase). Unrestricted / Invalid →
+    /// the whole card stays hidden.
+    ///
+    /// Plan-change for active users (downgrade, cancel) goes through
+    /// the Stripe Customer Portal, NOT through these Buy buttons —
+    /// the portal hint TextBlock surfaces this when relevant so the
+    /// user doesn't accidentally start a duplicate subscription.
+    private void ApplyBuyCardForStatus(LicenseService.Status s)
+    {
+        string headline = string.Empty;
+        string detail = string.Empty;
+        bool show = false;
+        bool showMonthly = true, showAnnual = true, showLifetime = true;
+        string monthlyLabel = "Monthly";
+        string annualLabel = "Annual";
+        string lifetimeLabel = "Lifetime";
+        bool showPortalHint = false;
+
+        switch (s.Kind)
+        {
+            case "NotFound":
+                headline = "Buy a license";
+                detail = "Pick a plan and Stripe will email you a magic link to activate immediately. No trial required.";
+                show = true;
+                break;
+            case "TrialActive":
+                headline = "Upgrade to Pro";
+                detail = "Skip the trial and unlock cloud features without interruption.";
+                show = true;
+                break;
+            case "TrialExpired":
+                headline = "Trial ended — buy to continue";
+                detail = "Cloud features are paused. Pick a plan to re-activate. Local + BYOK keep working free either way.";
+                show = true;
+                break;
+            case "Expired":
+                headline = "Renew your license";
+                detail = "Cloud features are paused. Pick a plan to re-activate.";
+                show = true;
+                break;
+            case "Suspended":
+                headline = "Resume your license";
+                detail = "Pick a plan to restore cloud features.";
+                show = true;
+                break;
+            case "Active":
+                switch (s.Tier?.ToLowerInvariant())
+                {
+                    case "monthly":
+                        headline = "Upgrade your plan";
+                        detail = "Switch to Annual for the best value, or Lifetime to skip renewals entirely.";
+                        show = true;
+                        showMonthly = false;
+                        annualLabel = "Switch to Annual";
+                        lifetimeLabel = "Upgrade to Lifetime";
+                        showPortalHint = true;
+                        break;
+                    case "annual":
+                        headline = "Change your plan";
+                        detail = "Drop to Monthly (you'll get a credit on the next invoice) or jump to Lifetime for one final payment.";
+                        show = true;
+                        showMonthly = true;          // ← reveal Switch to Monthly
+                        showAnnual = false;
+                        monthlyLabel = "Switch to Monthly";
+                        lifetimeLabel = "Upgrade to Lifetime";
+                        showPortalHint = true;
+                        break;
+                    case "lifetime":
+                        // Ceiling tier — nothing above it.
+                        show = false;
+                        break;
+                    default:
+                        // Unknown tier (future-proof): stay hidden,
+                        // operator decides via portal.
+                        show = false;
+                        break;
+                }
+                break;
+            // Unrestricted, Invalid, anything else → hidden.
+        }
+
+        LicenseBuyCard.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        if (!show) return;
+
+        LicenseBuyHeadline.Text = headline;
+        LicenseBuyDetail.Text = detail;
+        LicenseBuyMonthlyButton.Visibility = showMonthly ? Visibility.Visible : Visibility.Collapsed;
+        LicenseBuyAnnualButton.Visibility = showAnnual ? Visibility.Visible : Visibility.Collapsed;
+        LicenseBuyLifetimeButton.Visibility = showLifetime ? Visibility.Visible : Visibility.Collapsed;
+        // Collapse the column too so a hidden button doesn't leave a
+        // gap in the row layout.
+        LicenseBuyButtonsGrid.ColumnDefinitions[0].Width =
+            showMonthly ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
+        LicenseBuyButtonsGrid.ColumnDefinitions[1].Width =
+            showAnnual ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
+        LicenseBuyButtonsGrid.ColumnDefinitions[2].Width =
+            showLifetime ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
+        LicenseBuyMonthlyLabel.Text = monthlyLabel;
+        LicenseBuyAnnualLabel.Text = annualLabel;
+        LicenseBuyLifetimeLabel.Text = lifetimeLabel;
+        LicenseBuyPortalHint.Visibility = showPortalHint ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void License_BuyMonthly_Click(object sender, RoutedEventArgs e) => _ = BuyTierAsync("monthly");
+    private void License_BuyAnnual_Click(object sender, RoutedEventArgs e)  => _ = BuyTierAsync("annual");
+    private void License_BuyLifetime_Click(object sender, RoutedEventArgs e) => _ = BuyTierAsync("lifetime");
+
+    private static string ToTitleCase(string s) =>
+        string.IsNullOrEmpty(s) ? s : char.ToUpperInvariant(s[0]) + s.Substring(1);
+
+    /// <summary>
+    /// Modal asking the user for the email tied to their Stripe purchase.
+    /// Used by the pre-checkout gate to look up an existing license server-side
+    /// before spinning up a Checkout session — closes the post-sign-out
+    /// double-charge edge case. Returns the trimmed lowercase email on
+    /// confirm, or null on cancel.
+    /// </summary>
+    private async Task<string?> PromptBuyerEmailAsync(string prefilled, string tier)
+    {
+        var emailBox = new TextBox
+        {
+            PlaceholderText = "you@example.com",
+            Text = prefilled ?? string.Empty,
+            MinWidth = 280,
+        };
+        var helpText = new TextBlock
+        {
+            Text =
+                "Used to look up an existing license + match the Stripe customer. " +
+                "If you've bought before with this email, we'll resend the magic link " +
+                "instead of charging you again.",
+            FontSize = 12,
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = (Microsoft.UI.Xaml.Media.Brush)
+                Application.Current.Resources["TextFillColorSecondaryBrush"],
+            Margin = new Thickness(0, 8, 0, 0),
+        };
+        var stack = new StackPanel { Spacing = 4 };
+        stack.Children.Add(emailBox);
+        stack.Children.Add(helpText);
+
+        var dlg = new ContentDialog
+        {
+            Title = $"Continue to {ToTitleCase(tier)} checkout",
+            Content = stack,
+            PrimaryButtonText = "Continue",
+            SecondaryButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = this.Content?.XamlRoot,
+        };
+        // Disable Continue until the input looks like an email.
+        dlg.IsPrimaryButtonEnabled = LooksLikeEmail(emailBox.Text);
+        emailBox.TextChanged += (_, _) =>
+            dlg.IsPrimaryButtonEnabled = LooksLikeEmail(emailBox.Text);
+
+        var result = await dlg.ShowAsync();
+        if (result != ContentDialogResult.Primary) return null;
+        var trimmed = (emailBox.Text ?? string.Empty).Trim().ToLowerInvariant();
+        return LooksLikeEmail(trimmed) ? trimmed : null;
+    }
+
+    private static bool LooksLikeEmail(string s) =>
+        !string.IsNullOrWhiteSpace(s)
+        && s.Contains('@')
+        && s.Contains('.')
+        && s.Length < 254;
+
+    private async Task BuyTierAsync(string tier)
+    {
+        // Distinguish "plan change" (Active monthly⇄annual) from "first
+        // purchase / lifetime upgrade". Plan change goes through
+        // /api/plan-change (subscription update + proration) so the user
+        // is NOT charged a fresh full-price invoice on top of their
+        // existing sub. Anything else (first purchase, trial→paid,
+        // sub→lifetime, expired/suspended renew) goes through Stripe
+        // Checkout as before.
+        try
+        {
+            DisableBuyButtons(true);
+            var status = LicenseService.GetStatus();
+            bool isPlanChange =
+                status.Kind == "Active" &&
+                (status.Tier == "monthly" || status.Tier == "annual") &&
+                (tier == "monthly" || tier == "annual");
+
+            if (isPlanChange)
+            {
+                // Confirm dialog so the user knows the click mutates an
+                // existing sub (proration on next invoice, no second
+                // card prompt) rather than opening a fresh Checkout.
+                // Without it, the click 'flagga istantaneamente' the
+                // new tier and the silent UX feels off.
+                var confirmDialog = new ContentDialog
+                {
+                    Title = $"Switch plan to {ToTitleCase(tier)}?",
+                    Content =
+                        $"You're already subscribed (current: {ToTitleCase(status.Tier ?? "")}). " +
+                        $"Switching to {tier} mutates your existing subscription:\n\n" +
+                        "• No new payment now — Stripe reuses your saved card.\n" +
+                        "• Stripe issues a prorated invoice on the next billing date " +
+                        "(credit for unused days of the old plan, debit for the new one).\n" +
+                        "• No magic-link email — your license stays active, just the tier changes.",
+                    PrimaryButtonText = $"Switch to {ToTitleCase(tier)}",
+                    SecondaryButtonText = "Cancel",
+                    DefaultButton = ContentDialogButton.Primary,
+                    XamlRoot = this.Content?.XamlRoot,
+                };
+                var result = await confirmDialog.ShowAsync();
+                if (result != ContentDialogResult.Primary)
+                {
+                    ShowInfoBar(LicenseBuyInfoBar, InfoBarSeverity.Informational,
+                        "Plan change cancelled.");
+                    return;
+                }
+                ShowInfoBar(LicenseBuyInfoBar, InfoBarSeverity.Informational,
+                    $"Switching plan to {tier}…");
+                var r = await LicenseService.PlanChangeAsync(tier);
+                if (!r.Ok)
+                {
+                    ShowInfoBar(LicenseBuyInfoBar, InfoBarSeverity.Error,
+                        r.Error ?? "Plan change failed.");
+                    return;
+                }
+                // Stripe webhook will fire customer.subscription.updated;
+                // give it a beat, then refresh + re-render UI. The
+                // refresh-and-render loop also renames the badge.
+                await Task.Delay(1500);
+                var refresh = await LicenseService.RefreshAsync();
+                RefreshLicenseStatus();
+                if (refresh.Ok)
+                {
+                    ShowInfoBar(LicenseBuyInfoBar, InfoBarSeverity.Success,
+                        $"Plan switched to {tier}. Stripe will issue a prorated invoice automatically.");
+                }
+                else
+                {
+                    ShowInfoBar(LicenseBuyInfoBar, InfoBarSeverity.Informational,
+                        $"Plan switched to {tier}. Refresh in a moment to see the new badge.");
+                }
+                return;
+            }
+
+            // Pre-checkout email gate: ask the user for their email
+            // before minting the Stripe Checkout URL. The server uses
+            // the email to look up an existing license and 409 BEFORE
+            // Stripe charges the card. Pre-fill with whatever we have
+            // saved in UiPreferences (survives Sign out — no auth, just
+            // UX convenience).
+            var prefs = Services.UiPreferences.Load();
+            var promptedEmail = await PromptBuyerEmailAsync(
+                prefilled: prefs.BuyerEmail ?? string.Empty,
+                tier: tier);
+            if (promptedEmail is null)
+            {
+                ShowInfoBar(LicenseBuyInfoBar, InfoBarSeverity.Informational,
+                    "Purchase cancelled.");
+                return;
+            }
+            // Persist for next time.
+            prefs.BuyerEmail = promptedEmail;
+            prefs.Save();
+
+            ShowInfoBar(LicenseBuyInfoBar, InfoBarSeverity.Informational, $"Opening Stripe checkout for {tier}…");
+            var c = await LicenseService.CreateCheckoutAsync(tier, promptedEmail);
+            if (!c.Ok || string.IsNullOrEmpty(c.Url))
+            {
+                // 409 path → license already exists for this email. Offer
+                // 'Send magic link instead' fallback (re-issues activation
+                // email for the existing license via /api/trial/start).
+                if (c.StatusCode == 409 && !string.IsNullOrEmpty(c.CurrentTier))
+                {
+                    var dlg = new ContentDialog
+                    {
+                        Title = $"You already have a {c.CurrentTier} license",
+                        Content =
+                            $"The email {promptedEmail} is already linked to an active {c.CurrentTier} license. " +
+                            "We can resend the activation magic link for that license — " +
+                            "no new payment, no second sub.",
+                        PrimaryButtonText = "Send magic link",
+                        SecondaryButtonText = "Cancel",
+                        DefaultButton = ContentDialogButton.Primary,
+                        XamlRoot = this.Content?.XamlRoot,
+                    };
+                    if ((await dlg.ShowAsync()) == ContentDialogResult.Primary)
+                    {
+                        var t = await LicenseService.RequestTrialAsync(promptedEmail);
+                        ShowInfoBar(LicenseBuyInfoBar,
+                            t.Ok ? InfoBarSeverity.Success : InfoBarSeverity.Error,
+                            t.Ok
+                                ? $"Magic link sent to {promptedEmail}. Check your inbox to activate."
+                                : (t.Error ?? "Could not resend magic link."));
+                    }
+                    else
+                    {
+                        ShowInfoBar(LicenseBuyInfoBar, InfoBarSeverity.Informational,
+                            "Cancelled.");
+                    }
+                    return;
+                }
+                ShowInfoBar(LicenseBuyInfoBar, InfoBarSeverity.Error, c.Error ?? "Could not start checkout.");
+                return;
+            }
+            await global::Windows.System.Launcher.LaunchUriAsync(new Uri(c.Url));
+            ShowInfoBar(LicenseBuyInfoBar, InfoBarSeverity.Success,
+                "Checkout opened in your browser. After payment, check your email for the magic link to activate.");
+        }
+        catch (Exception ex)
+        {
+            ShowInfoBar(LicenseBuyInfoBar, InfoBarSeverity.Error, ex.Message);
+        }
+        finally
+        {
+            DisableBuyButtons(false);
+        }
+    }
+
+    private void DisableBuyButtons(bool disabled)
+    {
+        LicenseBuyMonthlyButton.IsEnabled = !disabled;
+        LicenseBuyAnnualButton.IsEnabled = !disabled;
+        LicenseBuyLifetimeButton.IsEnabled = !disabled;
+    }
+
+    private async Task RefreshDevicesAsync()
+    {
+        try
+        {
+            LicenseDeviceCountLabel.Text = "Loading…";
+            var list = await LicenseService.ListDevicesAsync();
+            if (!list.Ok)
+            {
+                LicenseDeviceCountLabel.Text = list.Error ?? "Failed to fetch devices";
+                LicenseDevicesList.Children.Clear();
+                return;
+            }
+            int activeCount = list.Devices.Count(d => d.Status == "active");
+            LicenseDeviceCountLabel.Text =
+                $"{activeCount} active / {list.MaxDevices} max";
+            LicenseDevicesList.Children.Clear();
+            foreach (var d in list.Devices)
+            {
+                LicenseDevicesList.Children.Add(BuildDeviceRow(d));
+            }
+        }
+        catch (Exception ex)
+        {
+            LicenseDeviceCountLabel.Text = ex.Message;
+        }
+    }
+
+    private FrameworkElement BuildDeviceRow(LicenseService.DeviceInfo d)
+    {
+        bool active = d.Status == "active";
+        var row = new Border
+        {
+            Padding = new Thickness(12, 8, 12, 8),
+            CornerRadius = new CornerRadius(4),
+            Background = (Microsoft.UI.Xaml.Media.Brush)
+                Application.Current.Resources["SubtleFillColorSecondaryBrush"],
+        };
+        var grid = new Grid { ColumnSpacing = 12 };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var labelStack = new StackPanel { Spacing = 1 };
+        var nameRun = new TextBlock
+        {
+            Text = string.IsNullOrEmpty(d.Label) ? "(unnamed device)" : d.Label,
+            FontSize = 13,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+        };
+        if (d.IsSelf)
+        {
+            nameRun.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run
+            {
+                Text = "  · this device",
+                FontWeight = Microsoft.UI.Text.FontWeights.Normal,
+                Foreground = (Microsoft.UI.Xaml.Media.Brush)
+                    Application.Current.Resources["TextFillColorTertiaryBrush"],
+            });
+        }
+        labelStack.Children.Add(nameRun);
+        labelStack.Children.Add(new TextBlock
+        {
+            Text = active
+                ? $"Last seen: {DateTimeOffset.FromUnixTimeSeconds(d.LastSeen).LocalDateTime:g}"
+                : $"Status: {d.Status}",
+            FontSize = 11,
+            Foreground = (Microsoft.UI.Xaml.Media.Brush)
+                Application.Current.Resources["TextFillColorSecondaryBrush"],
+        });
+        Grid.SetColumn(labelStack, 0);
+
+        var btn = new Button
+        {
+            Content = d.IsSelf ? "Sign out this device" : "Sign out",
+            IsEnabled = active,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        btn.Click += async (_, _) => await DeactivateDeviceAsync(d);
+        Grid.SetColumn(btn, 1);
+
+        grid.Children.Add(labelStack);
+        grid.Children.Add(btn);
+        row.Child = grid;
+        return row;
+    }
+
+    private async Task DeactivateDeviceAsync(LicenseService.DeviceInfo d)
+    {
+        try
+        {
+            var r = await LicenseService.DeactivateDeviceAsync(d.IsSelf ? null : d.DeviceId);
+            if (!r.Ok)
+            {
+                LicenseDeviceCountLabel.Text = r.Error ?? "Deactivation failed";
+                return;
+            }
+            // Self-sign-out clears the local license file; refresh status will
+            // flip the page back to NotFound. Otherwise just reload the list.
+            RefreshLicenseStatus();
+        }
+        catch (Exception ex)
+        {
+            LicenseDeviceCountLabel.Text = ex.Message;
+        }
+    }
+
+    private static string? ExtractCode(string? input)
+    {
+        if (string.IsNullOrEmpty(input)) return null;
+        var idx = input.IndexOf("code=", StringComparison.OrdinalIgnoreCase);
+        if (idx < 0) return input.Trim();
+        var rest = input.Substring(idx + 5);
+        var amp = rest.IndexOf('&');
+        return amp >= 0 ? rest.Substring(0, amp) : rest;
+    }
+
+    private static void ShowInfoBar(InfoBar bar, InfoBarSeverity sev, string msg)
+    {
+        bar.Severity = sev;
+        bar.Message = msg;
+        bar.IsOpen = true;
     }
 
     /// <summary>
@@ -654,7 +2514,36 @@ public sealed partial class SettingsWindow : Window
 
         App.Instance?.ReloadConfig();
         App.Instance?.ApplySettings(ViewModel);
+        // Skip the Closed-handler save since we already wrote the
+        // current state — flag prevents a redundant FFI round-trip.
+        _autoSaveDone = true;
         this.Close();
+    }
+
+    private bool _autoSaveDone;
+
+    /// Catch-all auto-save fired by the Closed event so users who
+    /// dismiss Settings with the X (or ESC) don't silently lose their
+    /// edits. Same code path Save_Click uses, minus the Close() call.
+    private void AutoSaveOnClose()
+    {
+        if (_autoSaveDone) return;
+        try
+        {
+            if (!string.IsNullOrEmpty(CloudApiKeyBox?.Password))
+                ViewModel.ApiKey = CloudApiKeyBox.Password;
+            if (!string.IsNullOrEmpty(LlmApiKeyBox?.Password))
+                ViewModel.LlmApiKey = LlmApiKeyBox.Password;
+            var json = ViewModel.ToJson();
+            DimmyNative.dimmy_set_config_json(json);
+            App.Instance?.ReloadConfig();
+            App.Instance?.ApplySettings(ViewModel);
+            App.Log("AutoSaveOnClose: persisted ViewModel via X/ESC", "Settings");
+        }
+        catch (Exception ex)
+        {
+            App.Log($"AutoSaveOnClose failed: {ex.Message}", "Settings");
+        }
     }
 
     /// <summary>Apply the pill-visibility prefs immediately on toggle
@@ -940,8 +2829,19 @@ public sealed partial class SettingsWindow : Window
     {
         _currentVersion = DimmyNative.ReadBuffer(DimmyNative.dimmy_get_version, 64) ?? "0.0.0";
         VersionText.Text = $"v{_currentVersion}";
-        HeroTitleText.Text = $"Dimmy {_currentVersion}";
-        HeroSubText.Text = $"Version {_currentVersion}";
+        // Append " · STAGING" suffix on staging builds. The sidebar banner
+        // already announces the flavor loudly; this just makes sure About
+        // page screenshots can never be mistaken for prod ones.
+        var flavorSuffix = BuildInfo.IsStaging ? " · STAGING" : string.Empty;
+        HeroTitleText.Text = $"Dimmy {_currentVersion}{flavorSuffix}";
+        HeroSubText.Text = $"Version {_currentVersion}{flavorSuffix}";
+        // Sidebar staging banner — flip on once we know the flavor. Done
+        // here (rather than in the constructor) because XAML elements
+        // are initialised lazily.
+        if (StagingBanner is not null)
+            StagingBanner.Visibility = BuildInfo.IsStaging
+                ? Microsoft.UI.Xaml.Visibility.Visible
+                : Microsoft.UI.Xaml.Visibility.Collapsed;
         _ = CheckForUpdateAsync();
     }
 
