@@ -139,6 +139,21 @@ public sealed partial class SettingsWindow : Window
             _win32Drop = null;
         };
 
+        // Parallel attempt #2: XAML-side handlers on the absolute
+        // root of the Window's Content (above any ScrollViewer that
+        // could intercept). handledEventsToo=true so even if some
+        // intermediate element marks the event handled, ours runs.
+        if (RootGrid != null)
+        {
+            RootGrid.AddHandler(UIElement.DragOverEvent,
+                new DragEventHandler(RootGrid_DragOver), handledEventsToo: true);
+            RootGrid.AddHandler(UIElement.DropEvent,
+                new DragEventHandler(RootGrid_Drop), handledEventsToo: true);
+            RootGrid.AddHandler(UIElement.DragEnterEvent,
+                new DragEventHandler((_, _) => App.Log("XAML root DragEnter", "FileLoad")),
+                handledEventsToo: true);
+        }
+
         // Warm-up: extract real icons from currently-running processes
         // so the App Rules list shows them immediately instead of the
         // FontIcon fallback. Runs on a background thread; refreshes
@@ -146,6 +161,47 @@ public sealed partial class SettingsWindow : Window
         _ = WarmUpAppIconsAsync();
 
         _loaded = true;
+    }
+
+    private void RootGrid_DragOver(object sender, Microsoft.UI.Xaml.DragEventArgs e)
+    {
+        App.Log("XAML root DragOver", "FileLoad");
+        if (e.DataView.Contains(global::Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems))
+        {
+            e.AcceptedOperation = global::Windows.ApplicationModel.DataTransfer.DataPackageOperation.Copy;
+            if (e.DragUIOverride != null)
+            {
+                e.DragUIOverride.Caption = "Drop .wav to transcribe";
+                e.DragUIOverride.IsCaptionVisible = true;
+            }
+            e.Handled = true;
+        }
+    }
+
+    private async void RootGrid_Drop(object sender, Microsoft.UI.Xaml.DragEventArgs e)
+    {
+        App.Log("XAML root Drop fired", "FileLoad");
+        if (!e.DataView.Contains(global::Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems))
+            return;
+        e.Handled = true;
+        try
+        {
+            var items = await e.DataView.GetStorageItemsAsync();
+            var first = items.FirstOrDefault(i => i is global::Windows.Storage.StorageFile sf
+                && sf.FileType.Equals(".wav", StringComparison.OrdinalIgnoreCase))
+                as global::Windows.Storage.StorageFile;
+            if (first == null)
+            {
+                FileLoadStatus.Text = "Only .wav supported in this build";
+                return;
+            }
+            await TranscribeFileAsync(first.Path);
+        }
+        catch (Exception ex)
+        {
+            FileLoadStatus.Text = $"Drop error: {ex.Message}";
+            App.Log($"RootGrid Drop exc: {ex}", "FileLoad");
+        }
     }
 
     private async System.Threading.Tasks.Task WarmUpAppIconsAsync()
@@ -352,8 +408,89 @@ public sealed partial class SettingsWindow : Window
         }
     }
 
+    /// Returns approximate file metrics (duration in seconds, size in
+    /// bytes) by reading just the WAV RIFF/fmt header — no full decode.
+    /// Used by the "this file is large, continue?" confirmation gate.
+    private static (double durationSecs, long sizeBytes) PeekWavMetrics(string path)
+    {
+        try
+        {
+            var fi = new System.IO.FileInfo(path);
+            using var fs = fi.OpenRead();
+            using var br = new System.IO.BinaryReader(fs);
+            if (new string(br.ReadChars(4)) != "RIFF") return (0, fi.Length);
+            br.ReadUInt32(); // file size
+            if (new string(br.ReadChars(4)) != "WAVE") return (0, fi.Length);
+            uint sampleRate = 0; ushort channels = 1; ushort bits = 0;
+            while (fs.Position + 8 <= fs.Length)
+            {
+                var id = new string(br.ReadChars(4));
+                var sz = br.ReadUInt32();
+                if (id == "fmt ")
+                {
+                    br.ReadUInt16(); // fmt tag
+                    channels = br.ReadUInt16();
+                    sampleRate = br.ReadUInt32();
+                    br.ReadUInt32(); // byte rate
+                    br.ReadUInt16(); // block align
+                    bits = br.ReadUInt16();
+                    if (sz > 16) fs.Seek(sz - 16, System.IO.SeekOrigin.Current);
+                }
+                else if (id == "data")
+                {
+                    int frameSize = (bits / 8) * channels;
+                    if (frameSize > 0 && sampleRate > 0)
+                    {
+                        long frames = sz / (uint)frameSize;
+                        return (frames / (double)sampleRate, fi.Length);
+                    }
+                    break;
+                }
+                else fs.Seek(sz, System.IO.SeekOrigin.Current);
+            }
+            return (0, fi.Length);
+        }
+        catch { return (0, 0); }
+    }
+
+    /// Decides whether the user should be warned before running an
+    /// expensive transcription. Threshold: 5 minutes of audio OR 50 MB
+    /// on disk. For cloud mode we warn at any duration ≥ 5 min so the
+    /// user is aware of API cost before submitting.
+    private async System.Threading.Tasks.Task<bool> ConfirmLargeFileAsync(string path)
+    {
+        var (durationSecs, sizeBytes) = PeekWavMetrics(path);
+        bool isCloud = !string.Equals(ViewModel.SttMode, "local", StringComparison.OrdinalIgnoreCase);
+        bool large = durationSecs >= 300 || sizeBytes >= 50L * 1024 * 1024;
+        if (!large && !isCloud) return true; // small + local: no warning
+        if (!large && isCloud && durationSecs < 60) return true; // small cloud: no warning either
+
+        var mins = (int)Math.Round(durationSecs / 60.0);
+        var sizeMb = sizeBytes / (1024.0 * 1024.0);
+        var costHint = isCloud
+            ? "\nThis will be sent to your configured cloud provider — billing applies."
+            : "\nThis runs locally and may take a few minutes.";
+        var dlg = new ContentDialog
+        {
+            Title = "Long file",
+            Content = $"{System.IO.Path.GetFileName(path)}\n" +
+                      $"≈ {mins} min · {sizeMb:F1} MB{costHint}\n\nProceed?",
+            PrimaryButtonText = "Transcribe",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = (this.Content as FrameworkElement)?.XamlRoot,
+        };
+        var result = await dlg.ShowAsync();
+        return result == ContentDialogResult.Primary;
+    }
+
     private async System.Threading.Tasks.Task TranscribeFileAsync(string path)
     {
+        if (!await ConfirmLargeFileAsync(path))
+        {
+            FileLoadStatus.Text = "Cancelled";
+            return;
+        }
         FileLoadProgress.IsActive = true;
         FileLoadProgress.Visibility = Visibility.Visible;
         FileLoadResult.Visibility = Visibility.Collapsed;
@@ -377,8 +514,11 @@ public sealed partial class SettingsWindow : Window
                     -1 => "Bad arguments",
                     -2 => "Could not open / decode the WAV",
                     -3 => "VAD removed all audio (file silent?)",
-                    -4 => "Cloud mode is not supported here yet — switch to Local",
-                    -5 => "Backend transcribe failed (see dimmy.log)",
+                    -4 => "Cloud mode rejected — should not happen",
+                    -5 => "Backend produced empty transcript",
+                    -6 => "Cloud config incomplete — set provider URL/key/model in Settings",
+                    -7 => "Tokio runtime failed to start",
+                    -8 => "Cloud transcribe failed (see dimmy.log)",
                     _ => $"Failed (code {rc})",
                 };
                 FileLoadResult.Visibility = Visibility.Collapsed;

@@ -3216,17 +3216,101 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
         return -3;
     }
 
-    // ── Route per active local backend ──────────────────────────
+    // ── Route per active backend (local or cloud) ───────────────
     let st = state();
     let stt_mode = st
         .stt_mode
         .lock()
         .map(|m| m.clone())
         .unwrap_or_else(|_| "local".to_string());
+    let total_secs_pre = raw_samples_for_history.len() as f64 / spec.sample_rate as f64;
+
+    // ── Cloud branch: hand off to transcribe_chunked ──────────────
+    // Cloud STT routing reuses the same chunking machinery the live
+    // dictation path uses. We block on a one-shot tokio runtime
+    // because the FFI surface is sync and Velopack-installed apps
+    // don't have an ambient runtime running. Empty cloud config
+    // (missing key / URL) is treated as a configuration error so the
+    // user gets actionable feedback in the Settings status row.
     if stt_mode != "local" {
-        log("[FileLoad] cloud transcription via this entry point not yet supported");
-        return -4;
+        let api_url = st.api_url.lock().map(|u| u.clone()).unwrap_or_default();
+        let api_key_opt = st.api_key.lock().ok().and_then(|g| g.clone());
+        let api_key = api_key_opt.unwrap_or_default();
+        let model = st.api_model.lock().map(|m| m.clone()).unwrap_or_default();
+        let language_cloud = st.language.lock().map(|l| l.clone()).unwrap_or_default();
+        let language_cloud = if language_cloud.is_empty() {
+            "en".to_string()
+        } else {
+            language_cloud
+        };
+        if api_url.is_empty() || api_key.is_empty() || model.is_empty() {
+            log("[FileLoad] cloud config incomplete (url/key/model)");
+            return -6;
+        }
+        let provider = crate::provider::Provider::from_url(&api_url);
+        let max_wav_bytes = provider.max_file_bytes();
+        emit_event(
+            "file_transcribe_progress",
+            &serde_json::json!({
+                "processed_secs": 0.0,
+                "total_secs": total_secs_pre,
+                "percent": 0.0,
+            })
+            .to_string(),
+        );
+        let total_secs_for_progress = total_secs_pre;
+        let on_progress: Box<dyn Fn(usize, usize) + Send + Sync> =
+            Box::new(move |idx: usize, total: usize| {
+                let frac = idx as f64 / total.max(1) as f64;
+                emit_event(
+                    "file_transcribe_progress",
+                    &serde_json::json!({
+                        "processed_secs": frac * total_secs_for_progress,
+                        "total_secs": total_secs_for_progress,
+                        "percent": frac * 100.0,
+                        "chunk_index": idx,
+                        "chunk_total": total,
+                    })
+                    .to_string(),
+                );
+            });
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(r) => r,
+            Err(e) => {
+                log(&format!("[FileLoad] tokio runtime: {}", e));
+                return -7;
+            }
+        };
+        let result = rt.block_on(crate::transcribe::transcribe_chunked(
+            &api_url,
+            &model,
+            &api_key,
+            processed,
+            &language_cloud,
+            "",
+            max_wav_bytes,
+            Some(on_progress.as_ref()),
+        ));
+        match result {
+            Ok(text) => {
+                if text.trim().is_empty() {
+                    log("[FileLoad] cloud returned empty transcript");
+                    return -5;
+                }
+                if let Ok(guard) = st.history_store.lock() {
+                    if let Some(ref store) = *guard {
+                        let _ = store.save(&text, &language_cloud, total_secs_pre);
+                    }
+                }
+                return write_to_buf(&text, out_buf, buf_len);
+            }
+            Err(e) => {
+                log(&format!("[FileLoad] cloud transcribe failed: {}", e));
+                return -8;
+            }
+        }
     }
+
     let backend = st
         .local_stt_backend
         .lock()
