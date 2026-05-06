@@ -32,11 +32,13 @@ public static class IconExtractor
 
     /// Bumped whenever the extraction algorithm changes — old PNGs
     /// from a previous algorithm would otherwise be served forever.
-    /// v3 = IShellItemImageFactory at 256×256 (was 64×64; tiny icons
-    /// looked pixelated when scaled by the WinUI Image control even
-    /// at the small list size, because we were getting a low-res
-    /// variant from the icon resource and upscaling it).
-    private const int CACHE_VERSION = 3;
+    /// v4 = GetDIBits-based ARGB extraction. v3's GdipCreateBitmapFromHBITMAP
+    /// was discarding the alpha channel (GDI+ treats HBITMAP without
+    /// explicit format info as 32bppRgb, not 32bppArgb), producing
+    /// PNGs with opaque-black backgrounds. Now we copy the BGRA bits
+    /// out via GetDIBits and create a GDI+ bitmap from explicit ARGB
+    /// scan0, preserving transparency.
+    private const int CACHE_VERSION = 4;
 
     static IconExtractor()
     {
@@ -132,20 +134,7 @@ public static class IconExtractor
                     SIIGBF.SIIGBF_BIGGERSIZEOK | SIIGBF.SIIGBF_RESIZETOFIT,
                     out hbmp);
                 if (hr != 0 || hbmp == IntPtr.Zero) return;
-
-                if (GdipCreateBitmapFromHBITMAP(hbmp, IntPtr.Zero, out var bitmap) != 0
-                    || bitmap == IntPtr.Zero)
-                    return;
-                try
-                {
-                    var pngEncoder = new Guid("557CF406-1A04-11D3-9A73-0000F81EF32E");
-                    Directory.CreateDirectory(Path.GetDirectoryName(pngPath)!);
-                    GdipSaveImageToFile(bitmap, pngPath, ref pngEncoder, IntPtr.Zero);
-                }
-                finally
-                {
-                    GdipDisposeImage(bitmap);
-                }
+                SaveHbitmapAsPng(hbmp, pngPath);
             }
             finally
             {
@@ -155,6 +144,71 @@ public static class IconExtractor
         finally
         {
             if (hbmp != IntPtr.Zero) DeleteObject(hbmp);
+        }
+    }
+
+    /// HBITMAP → PNG with alpha preserved. GdipCreateBitmapFromHBITMAP
+    /// can't be used because it creates a 32bppRgb bitmap (no alpha)
+    /// regardless of the source's actual format. We instead pull the
+    /// raw BGRA bytes via GetDIBits with a top-down 32-bit
+    /// BITMAPINFOHEADER, then wrap them in a 32bppArgb GDI+ bitmap
+    /// via GdipCreateBitmapFromScan0 — that bitmap saves as a PNG
+    /// with the original transparency intact.
+    private static void SaveHbitmapAsPng(IntPtr hbmp, string pngPath)
+    {
+        var bm = default(BITMAP);
+        if (GetObject(hbmp, Marshal.SizeOf<BITMAP>(), ref bm) == 0) return;
+        int width = bm.bmWidth;
+        int height = bm.bmHeight;
+        if (width <= 0 || height <= 0) return;
+
+        int stride = width * 4;
+        var pixels = new byte[height * stride];
+        var bi = new BITMAPINFOHEADER
+        {
+            biSize = (uint)Marshal.SizeOf<BITMAPINFOHEADER>(),
+            biWidth = width,
+            biHeight = -height, // negative = top-down (no flip needed)
+            biPlanes = 1,
+            biBitCount = 32,
+            biCompression = 0, // BI_RGB
+        };
+        IntPtr hdc = GetDC(IntPtr.Zero);
+        try
+        {
+            int rows = GetDIBits(hdc, hbmp, 0, (uint)height, pixels,
+                ref bi, 0 /* DIB_RGB_COLORS */);
+            if (rows == 0) return;
+        }
+        finally
+        {
+            ReleaseDC(IntPtr.Zero, hdc);
+        }
+
+        // GDI+'s 32bppArgb wants premultiplied-style BGRA, which is
+        // exactly what GetDIBits produces from a 32-bit DIB. Pin the
+        // managed array and let GDI+ read it directly — no copy.
+        var pin = GCHandle.Alloc(pixels, GCHandleType.Pinned);
+        try
+        {
+            const int PixelFormat32bppArgb = 0x26200A;
+            int hr = GdipCreateBitmapFromScan0(width, height, stride,
+                PixelFormat32bppArgb, pin.AddrOfPinnedObject(), out IntPtr bitmap);
+            if (hr != 0 || bitmap == IntPtr.Zero) return;
+            try
+            {
+                var pngEncoder = new Guid("557CF406-1A04-11D3-9A73-0000F81EF32E");
+                Directory.CreateDirectory(Path.GetDirectoryName(pngPath)!);
+                GdipSaveImageToFile(bitmap, pngPath, ref pngEncoder, IntPtr.Zero);
+            }
+            finally
+            {
+                GdipDisposeImage(bitmap);
+            }
+        }
+        finally
+        {
+            pin.Free();
         }
     }
 
@@ -214,6 +268,56 @@ public static class IconExtractor
     private static extern bool DeleteObject(IntPtr hObject);
 
     [StructLayout(LayoutKind.Sequential)]
+    private struct BITMAP
+    {
+        public int bmType;
+        public int bmWidth;
+        public int bmHeight;
+        public int bmWidthBytes;
+        public ushort bmPlanes;
+        public ushort bmBitsPixel;
+        public IntPtr bmBits;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct BITMAPINFOHEADER
+    {
+        public uint biSize;
+        public int biWidth;
+        public int biHeight;
+        public ushort biPlanes;
+        public ushort biBitCount;
+        public uint biCompression;
+        public uint biSizeImage;
+        public int biXPelsPerMeter;
+        public int biYPelsPerMeter;
+        public uint biClrUsed;
+        public uint biClrImportant;
+        // Followed by a 256-entry color table for ≤8 bpp; not used at 32 bpp.
+        public uint quad0;
+        public uint quad1;
+        public uint quad2;
+        public uint quad3;
+    }
+
+    [DllImport("gdi32.dll")]
+    private static extern int GetObject(IntPtr h, int c, ref BITMAP bm);
+
+    [DllImport("gdi32.dll")]
+    private static extern int GetDIBits(IntPtr hdc, IntPtr hbm, uint start,
+        uint cLines, [Out] byte[] lpvBits, ref BITMAPINFOHEADER lpbi, uint usage);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetDC(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
+    private static extern int ReleaseDC(IntPtr hwnd, IntPtr hdc);
+
+    [DllImport("gdiplus.dll")]
+    private static extern int GdipCreateBitmapFromScan0(int width, int height,
+        int stride, int format, IntPtr scan0, out IntPtr bitmap);
+
+    [StructLayout(LayoutKind.Sequential)]
     private struct GdiplusStartupInput
     {
         public uint GdiplusVersion;
@@ -225,10 +329,6 @@ public static class IconExtractor
     [DllImport("gdiplus.dll")]
     private static extern int GdiplusStartup(out IntPtr token,
         ref GdiplusStartupInput input, IntPtr output);
-
-    [DllImport("gdiplus.dll")]
-    private static extern int GdipCreateBitmapFromHBITMAP(IntPtr hbm, IntPtr hpal,
-        out IntPtr bitmap);
 
     [DllImport("gdiplus.dll", CharSet = CharSet.Unicode)]
     private static extern int GdipSaveImageToFile(IntPtr image, string filename,
