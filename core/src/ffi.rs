@@ -3270,15 +3270,24 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
     ));
 
     let mut transcript_acc = String::new();
+    // Accumulated word timestamps across all chunks, with each chunk's
+    // local times offset by the chunk's start position in the file.
+    // Only populated for the parakeet backend — whisper word-timestamp
+    // extraction is a follow-up. Vec of `{"word","start","end"}` in JSON
+    // value form so we don't have to round-trip strings.
+    let mut word_ts_acc: Vec<serde_json::Value> = Vec::new();
     let chunk_secs = CHUNK_MAX_SECS as f64;
     for (idx, chunk) in chunks.into_iter().enumerate() {
-        let result = if backend == "parakeet" {
-            crate::transcribe::transcribe_audio_local_parakeet(&chunk)
+        let chunk_offset_secs = (idx as f64) * chunk_secs;
+        let result: Result<(String, Option<String>), _> = if backend == "parakeet" {
+            crate::transcribe::transcribe_audio_local_parakeet_with_word_ts(&chunk)
+                .map(|(t, j)| (t, Some(j)))
         } else {
             crate::transcribe::transcribe_audio_local(&chunk, &language, &model)
+                .map(|t| (t, None))
         };
         match result {
-            Ok(text) => {
+            Ok((text, ts_opt)) => {
                 let delta =
                     crate::chunked_stt::dedup_last_3_words(&transcript_acc, &text);
                 if !delta.is_empty() {
@@ -3286,6 +3295,26 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
                         transcript_acc.push(' ');
                     }
                     transcript_acc.push_str(&delta);
+                }
+                if let Some(ts_json) = ts_opt {
+                    if let Ok(serde_json::Value::Array(arr)) = serde_json::from_str(&ts_json) {
+                        for mut entry in arr {
+                            // Shift start/end into absolute file time.
+                            if let Some(obj) = entry.as_object_mut() {
+                                if let Some(s) = obj.get_mut("start") {
+                                    if let Some(v) = s.as_f64() {
+                                        *s = serde_json::json!(v + chunk_offset_secs);
+                                    }
+                                }
+                                if let Some(e) = obj.get_mut("end") {
+                                    if let Some(v) = e.as_f64() {
+                                        *e = serde_json::json!(v + chunk_offset_secs);
+                                    }
+                                }
+                            }
+                            word_ts_acc.push(entry);
+                        }
+                    }
                 }
             }
             Err(e) => {
@@ -3329,7 +3358,13 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
         if let Ok(guard) = st.history_store.lock() {
             if let Some(ref store) = *guard {
                 let duration = raw_samples_for_history.len() as f64 / spec.sample_rate as f64;
-                let _ = store.save(&text, &language, duration);
+                let saved_id = store.save(&text, &language, duration).ok();
+                // Attach word timestamps when the parakeet path produced
+                // them. Whisper backend leaves word_ts_acc empty → no-op.
+                if let (Some(id), false) = (saved_id, word_ts_acc.is_empty()) {
+                    let json = serde_json::Value::Array(word_ts_acc).to_string();
+                    let _ = store.update_word_timestamps(id, &json);
+                }
             }
         }
     }

@@ -44,6 +44,11 @@ pub const VOCAB_SIZE: usize = 8193;
 pub const NUM_DURATIONS: usize = 5;
 pub const BLANK_IDX: i64 = 8192;
 pub const MAX_TOKENS_PER_STEP: usize = 10;
+/// Encoder frame stride in seconds for Parakeet TDT v3: 10 ms mel hop ×
+/// 8× Conformer subsampling = 80 ms per encoder frame. Used when
+/// converting the per-token frame index emitted during TDT decoding
+/// into wall-clock seconds for word-level timestamps.
+pub const FRAME_SEC: f64 = 0.08;
 #[cfg(feature = "local-stt-parakeet")]
 const HIDDEN: usize = 640;
 
@@ -238,6 +243,29 @@ pub fn transcribe(pcm_16k: &[f32]) -> Result<String, TranscribeError> {
     transcribe_ort(pcm_16k)
 }
 
+/// Same as [`transcribe`] but also returns word-level timestamps as
+/// JSON (`[{"word":"hello","start":0.42,"end":0.94}, ...]`). On the
+/// macOS FluidAudio path, timestamps are unavailable today and we
+/// return `"[]"` alongside the text — caller should treat empty as
+/// "not produced" and skip the history update.
+pub fn transcribe_with_word_timestamps(
+    pcm_16k: &[f32],
+) -> Result<(String, String), TranscribeError> {
+    #[cfg(all(
+        feature = "local-stt-parakeet-fluid",
+        target_os = "macos",
+        target_arch = "aarch64"
+    ))]
+    {
+        if crate::parakeet_fluid::bundle_present() {
+            // Fluid path: no timestamps yet — return text + empty JSON.
+            let text = crate::parakeet_fluid::transcribe(pcm_16k)?;
+            return Ok((text, "[]".to_string()));
+        }
+    }
+    transcribe_with_word_timestamps_ort(pcm_16k)
+}
+
 /// Mirror of `transcribe` for warmup.
 pub fn warmup() -> Result<(), TranscribeError> {
     #[cfg(all(
@@ -263,6 +291,22 @@ fn transcribe_ort(_pcm_16k: &[f32]) -> Result<String, TranscribeError> {
 #[cfg(feature = "local-stt-parakeet")]
 fn transcribe_ort(pcm_16k: &[f32]) -> Result<String, TranscribeError> {
     inference::transcribe(pcm_16k)
+}
+
+#[cfg(not(feature = "local-stt-parakeet"))]
+fn transcribe_with_word_timestamps_ort(
+    _pcm_16k: &[f32],
+) -> Result<(String, String), TranscribeError> {
+    Err(TranscribeError::LocalModel(
+        "parakeet inference requires the `local-stt-parakeet` cargo feature".into(),
+    ))
+}
+
+#[cfg(feature = "local-stt-parakeet")]
+fn transcribe_with_word_timestamps_ort(
+    pcm_16k: &[f32],
+) -> Result<(String, String), TranscribeError> {
+    inference::transcribe_with_word_timestamps(pcm_16k)
 }
 
 #[cfg(not(feature = "local-stt-parakeet"))]
@@ -429,12 +473,25 @@ mod inference {
     }
 
     pub fn transcribe(pcm_16k: &[f32]) -> Result<String, TranscribeError> {
+        Ok(transcribe_with_word_timestamps(pcm_16k)?.0)
+    }
+
+    /// Same decode as `transcribe()` but also returns word-level
+    /// timestamps as JSON: `[{"word":"hello","start":0.42,"end":0.94}, ...]`.
+    /// TDT inherently predicts a per-emission duration, so the frame
+    /// index at which each BPE piece was emitted is captured in the
+    /// greedy loop and converted to seconds via FRAME_SEC. Words are
+    /// formed by grouping consecutive pieces, splitting on the BPE
+    /// word-marker `▁` (U+2581). Empty PCM yields ("","[]").
+    pub fn transcribe_with_word_timestamps(
+        pcm_16k: &[f32],
+    ) -> Result<(String, String), TranscribeError> {
         assert!(
             pcm_16k.iter().all(|s| s.is_finite()),
             "parakeet::transcribe: pcm_16k must be all-finite"
         );
         if pcm_16k.is_empty() {
-            return Ok(String::new());
+            return Ok((String::new(), "[]".to_string()));
         }
         if !bundle_present() {
             return Err(TranscribeError::LocalModel(
@@ -529,14 +586,17 @@ mod inference {
         let mut state1: Vec<f32> = vec![0.0; 2 * 1 * HIDDEN];
         #[allow(clippy::identity_op)]
         let mut state2: Vec<f32> = vec![0.0; 2 * 1 * HIDDEN];
-        let mut tokens: Vec<i64> = Vec::new();
+        // Tokens carry the encoder-frame index at which they were
+        // emitted so we can convert to wall-clock seconds for word
+        // timestamps. The final text-only output ignores the frame.
+        let mut tokens: Vec<(i64, usize)> = Vec::new();
         let mut frame_buf = vec![0f32; 1024];
         let mut t: usize = 0;
         let mut emitted: usize = 0;
 
         while t < valid_t_enc {
             enc_step(t, &mut frame_buf);
-            let prev_tok = *tokens.last().unwrap_or(&BLANK_IDX);
+            let prev_tok = tokens.last().map(|(tok, _)| *tok).unwrap_or(BLANK_IDX);
 
             let enc_t = Tensor::from_array((vec![1i64, 1024, 1], frame_buf.clone()))
                 .map_err(|e| TranscribeError::LocalModel(format!("mk enc[t]: {e}")))?;
@@ -605,7 +665,7 @@ mod inference {
                     .map_err(|e| TranscribeError::LocalModel(format!("s2 extract: {e}")))?;
                 state1 = s1_data.to_vec();
                 state2 = s2_data.to_vec();
-                tokens.push(best_tok);
+                tokens.push((best_tok, t));
                 emitted += 1;
             }
 
@@ -618,23 +678,79 @@ mod inference {
             }
         }
 
-        // ── 4. Vocab lookup: tokens → text ────────────────────────────
+        // ── 4. Vocab lookup: tokens → text + word timestamps ──────────
+        // Walk the (token, frame) pairs once, building text exactly
+        // as before AND maintaining a `(word, start_frame)` running
+        // list that's converted to JSON at the end. Words are split
+        // on the BPE word-marker U+2581 ("▁") that prefixes the first
+        // piece of each word in NeMo's SentencePiece vocab.
         let mut out = String::with_capacity(tokens.len() * 4);
-        for tok in tokens {
-            if let Some(piece) = inner.vocab.get(tok as usize) {
-                if let Some(rest) = piece.strip_prefix('\u{2581}') {
-                    if !out.is_empty() {
-                        out.push(' ');
+        let mut words: Vec<(String, usize)> = Vec::new();
+        let mut current_word = String::new();
+        let mut current_start: Option<usize> = None;
+        let push_word =
+            |words: &mut Vec<(String, usize)>, w: &mut String, start: &mut Option<usize>| {
+                if let Some(s) = start.take() {
+                    if !w.is_empty() {
+                        words.push((std::mem::take(w), s));
                     }
-                    out.push_str(rest);
-                } else if piece.starts_with('<') && piece.ends_with('>') {
-                    continue;
-                } else {
-                    out.push_str(piece);
                 }
+            };
+        for (tok, frame) in &tokens {
+            let Some(piece) = inner.vocab.get(*tok as usize) else {
+                continue;
+            };
+            if piece.starts_with('<') && piece.ends_with('>') {
+                continue;
+            }
+            if let Some(rest) = piece.strip_prefix('\u{2581}') {
+                push_word(&mut words, &mut current_word, &mut current_start);
+                if !out.is_empty() {
+                    out.push(' ');
+                }
+                out.push_str(rest);
+                current_word.push_str(rest);
+                current_start = Some(*frame);
+            } else {
+                if current_start.is_none() {
+                    current_start = Some(*frame);
+                }
+                out.push_str(piece);
+                current_word.push_str(piece);
             }
         }
-        Ok(out.trim().to_string())
+        push_word(&mut words, &mut current_word, &mut current_start);
+
+        let total_sec = (valid_t_enc as f64) * FRAME_SEC;
+        let mut json = String::from("[");
+        for (i, (word, start_frame)) in words.iter().enumerate() {
+            if i > 0 {
+                json.push(',');
+            }
+            let start_sec = (*start_frame as f64) * FRAME_SEC;
+            let end_sec = if i + 1 < words.len() {
+                (words[i + 1].1 as f64) * FRAME_SEC
+            } else {
+                total_sec
+            };
+            // Inline JSON string escape — only "\" and `"` matter for
+            // BPE pieces; control chars don't appear in this vocab.
+            let mut escaped = String::with_capacity(word.len());
+            for c in word.chars() {
+                match c {
+                    '\\' => escaped.push_str("\\\\"),
+                    '"' => escaped.push_str("\\\""),
+                    _ => escaped.push(c),
+                }
+            }
+            json.push_str(&format!(
+                "{{\"word\":\"{}\",\"start\":{:.3},\"end\":{:.3}}}",
+                escaped, start_sec, end_sec
+            ));
+        }
+        json.push(']');
+
+        Ok((out.trim().to_string(), json))
     }
 }
 
