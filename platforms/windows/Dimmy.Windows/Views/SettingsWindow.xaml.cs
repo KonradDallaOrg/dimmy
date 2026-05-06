@@ -93,6 +93,25 @@ public sealed partial class SettingsWindow : Window
         // a visual hint that the form is dirty.
         ViewModel.PropertyChanged += (_, _) => PulseSavedInfoBar();
 
+        // App rules: pulse on collection change (add/remove/reorder) AND
+        // on any per-row property edit (pattern, style, ...). Without
+        // hooking the inner ObservableObjects' PropertyChanged the user
+        // wouldn't see the "Saved" hint when editing a row in place.
+        ViewModel.AppRules.CollectionChanged += (_, _) =>
+        {
+            PulseSavedInfoBar();
+            UpdateAppRulesEmptyHint();
+        };
+        foreach (var r in ViewModel.AppRules)
+            r.PropertyChanged += (_, _) => PulseSavedInfoBar();
+        ViewModel.AppRules.CollectionChanged += (_, e) =>
+        {
+            if (e.NewItems != null)
+                foreach (AppRuleViewModel r in e.NewItems)
+                    r.PropertyChanged += (_, _) => PulseSavedInfoBar();
+        };
+        UpdateAppRulesEmptyHint();
+
         _loaded = true;
     }
 
@@ -100,6 +119,37 @@ public sealed partial class SettingsWindow : Window
     {
         App.Log("OpenMeeting_Click fired", "Meeting");
         App.Instance?.OpenMeetingWindow();
+    }
+
+    // ── App rules ─────────────────────────────────────────────────
+
+    private void UpdateAppRulesEmptyHint()
+    {
+        if (AppRulesEmptyHint != null)
+            AppRulesEmptyHint.Visibility = ViewModel.AppRules.Count == 0
+                ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void AppRuleAdd_Click(object sender, RoutedEventArgs e)
+    {
+        ViewModel.AppRules.Add(new AppRuleViewModel(
+            matchPattern: "",
+            matchType: "process_name",
+            llmStyle: "off",
+            llmTranslateTo: "",
+            label: "",
+            enabled: true));
+    }
+
+    private void AppRuleLoadDefaults_Click(object sender, RoutedEventArgs e)
+    {
+        ViewModel.LoadAppRulesDefaults();
+    }
+
+    private void AppRuleDelete_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.Tag is AppRuleViewModel rule)
+            ViewModel.AppRules.Remove(rule);
     }
 
     private void LoadConfig()

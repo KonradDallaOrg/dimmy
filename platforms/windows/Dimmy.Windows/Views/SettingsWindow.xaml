@@ -1004,28 +1004,112 @@
               </controls:SettingCard>
             </StackPanel>
 
-            <!-- ═══ App rules (placeholder pending PR-B backend) ═══ -->
-            <StackPanel x:Name="RulesPanel" Spacing="16" Visibility="Collapsed">
+            <!-- ═══ App rules ═══ -->
+            <StackPanel x:Name="RulesPanel" Spacing="12" Visibility="Collapsed">
               <StackPanel Spacing="2" Margin="0,0,0,4">
                 <TextBlock Text="App rules" FontSize="28" FontWeight="SemiBold" />
-                <TextBlock Text="Auto-switch the rewrite style based on the focused app."
-                           FontSize="13"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <TextBlock TextWrapping="Wrap"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           Text="Auto-switch the LLM style + translation target based on the foreground app at hotkey-down. First match wins, top-to-bottom. Disabled rules stay in the list but are skipped." />
               </StackPanel>
+
+              <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
+                <Button x:Name="AppRuleAddBtn" Click="AppRuleAdd_Click">
+                  <StackPanel Orientation="Horizontal" Spacing="6">
+                    <FontIcon Glyph="&#xE710;" FontSize="14"/>
+                    <TextBlock Text="Add rule" />
+                  </StackPanel>
+                </Button>
+                <Button x:Name="AppRuleLoadDefaultsBtn" Click="AppRuleLoadDefaults_Click">
+                  <StackPanel Orientation="Horizontal" Spacing="6">
+                    <FontIcon Glyph="&#xE74C;" FontSize="14"/>
+                    <TextBlock Text="Load defaults (v1)" />
+                  </StackPanel>
+                </Button>
+              </StackPanel>
+
               <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                       BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="8" Padding="20,16">
-                <StackPanel Spacing="6">
-                  <TextBlock Text="App rules" FontSize="16" FontWeight="SemiBold" />
-                  <TextBlock TextWrapping="Wrap"
-                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                             Text="Auto-switch the LLM rewrite style based on the focused app — Slack/Telegram → Casual, Outlook → Professional, VS Code → off, etc." />
-                  <TextBlock Margin="0,8,0,0"
-                             FontSize="12"
-                             Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
-                             Text="🚧 Coming in V21 — backend in development." />
-                </StackPanel>
+                      BorderThickness="1" CornerRadius="8" Padding="0">
+                <ListView x:Name="AppRulesListView"
+                          ItemsSource="{Binding AppRules}"
+                          SelectionMode="None"
+                          IsItemClickEnabled="False"
+                          HorizontalContentAlignment="Stretch">
+                  <ListView.ItemContainerStyle>
+                    <Style TargetType="ListViewItem">
+                      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                      <Setter Property="Padding" Value="0"/>
+                    </Style>
+                  </ListView.ItemContainerStyle>
+                  <ListView.ItemTemplate>
+                    <DataTemplate>
+                      <Grid ColumnSpacing="8" Padding="14,10" >
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="Auto"/>      <!-- enabled toggle -->
+                          <ColumnDefinition Width="2*"/>        <!-- pattern -->
+                          <ColumnDefinition Width="1.4*"/>      <!-- match type -->
+                          <ColumnDefinition Width="1.6*"/>      <!-- style -->
+                          <ColumnDefinition Width="1.4*"/>      <!-- translate -->
+                          <ColumnDefinition Width="Auto"/>      <!-- delete -->
+                        </Grid.ColumnDefinitions>
+                        <ToggleSwitch Grid.Column="0"
+                                      IsOn="{Binding Enabled, Mode=TwoWay}"
+                                      OnContent="" OffContent="" MinWidth="0"/>
+                        <TextBox Grid.Column="1"
+                                 Text="{Binding MatchPattern, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 PlaceholderText="slack.exe" />
+                        <ComboBox Grid.Column="2" SelectedValue="{Binding MatchType, Mode=TwoWay}"
+                                  SelectedValuePath="Tag" HorizontalAlignment="Stretch">
+                          <ComboBoxItem Tag="process_name" Content="Process (Win)"/>
+                          <ComboBoxItem Tag="bundle_id" Content="Bundle (Mac)"/>
+                          <ComboBoxItem Tag="wm_class" Content="WM_CLASS (Linux)"/>
+                        </ComboBox>
+                        <ComboBox Grid.Column="3" SelectedValue="{Binding LlmStyle, Mode=TwoWay}"
+                                  SelectedValuePath="Tag" HorizontalAlignment="Stretch">
+                          <ComboBoxItem Tag="off"            Content="Off (no LLM)"/>
+                          <ComboBoxItem Tag="correct"        Content="Correct"/>
+                          <ComboBoxItem Tag="summarize"      Content="Summarize"/>
+                          <ComboBoxItem Tag="elaborate"      Content="Elaborate"/>
+                          <ComboBoxItem Tag="comprehensible" Content="Comprehensible"/>
+                          <ComboBoxItem Tag="professional"   Content="Professional"/>
+                          <ComboBoxItem Tag="genz"           Content="Gen-Z"/>
+                          <ComboBoxItem Tag="boomer"         Content="Boomer"/>
+                          <ComboBoxItem Tag="emoji"          Content="Emoji"/>
+                          <ComboBoxItem Tag="acronyms"       Content="Acronyms"/>
+                          <ComboBoxItem Tag="imbruttito"     Content="Imbruttito"/>
+                          <ComboBoxItem Tag="prompt"         Content="Custom prompt"/>
+                        </ComboBox>
+                        <ComboBox Grid.Column="4" SelectedValue="{Binding LlmTranslateTo, Mode=TwoWay}"
+                                  SelectedValuePath="Tag" HorizontalAlignment="Stretch">
+                          <ComboBoxItem Tag=""    Content="No translation"/>
+                          <ComboBoxItem Tag="en"  Content="→ English"/>
+                          <ComboBoxItem Tag="it"  Content="→ Italiano"/>
+                          <ComboBoxItem Tag="es"  Content="→ Español"/>
+                          <ComboBoxItem Tag="fr"  Content="→ Français"/>
+                          <ComboBoxItem Tag="de"  Content="→ Deutsch"/>
+                          <ComboBoxItem Tag="pt"  Content="→ Português"/>
+                        </ComboBox>
+                        <Button Grid.Column="5"
+                                Click="AppRuleDelete_Click"
+                                Tag="{Binding}"
+                                ToolTipService.ToolTip="Remove rule"
+                                Background="Transparent"
+                                BorderThickness="0">
+                          <FontIcon Glyph="&#xE74D;" FontSize="14"/>
+                        </Button>
+                      </Grid>
+                    </DataTemplate>
+                  </ListView.ItemTemplate>
+                </ListView>
               </Border>
+
+              <TextBlock x:Name="AppRulesEmptyHint"
+                         Text="No rules yet. Click Load defaults (v1) to populate from the curated list, or Add rule to start from scratch."
+                         FontSize="12"
+                         Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                         TextWrapping="Wrap"
+                         Visibility="Collapsed"/>
             </StackPanel>
 
             <!-- ═══ About ═══ -->

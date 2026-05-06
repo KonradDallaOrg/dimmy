@@ -107,6 +107,20 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_parakeet_download_bundle();
 
+    // ── App context ──────────────────────────────────────────────
+    /// Push the foreground-app snapshot so the Rust core can resolve
+    /// app_rules at LLM-enhance time. JSON shape:
+    ///   { "process_name": "slack.exe", "bundle_id": "", "wm_class": "" }
+    /// Pass any subset of keys; missing ones default to empty string.
+    /// Returns 0 on success, non-zero on parse error.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl,
+        CharSet = CharSet.Ansi, BestFitMapping = false, ThrowOnUnmappableChar = true)]
+    public static extern int dimmy_set_app_context(
+        [MarshalAs(UnmanagedType.LPStr)] string json);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void dimmy_clear_app_context();
+
     // ── History ──────────────────────────────────────────────────
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_history_save(

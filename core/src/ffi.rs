@@ -1725,14 +1725,11 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
         return write_to_buf(text, out_buf, buf_len);
     }
 
-    let style = st
+    let mut style = st
         .llm_style
         .lock()
         .map(|s| *s)
         .unwrap_or(crate::llm::LlmStyle::Off);
-    if style == crate::llm::LlmStyle::Off {
-        return write_to_buf(text, out_buf, buf_len);
-    }
 
     let tone = st
         .llm_tone
@@ -1744,11 +1741,52 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
         .lock()
         .map(|p| p.clone())
         .unwrap_or_default();
-    let translate_to = st
+    let mut translate_to = st
         .llm_translate_to
         .lock()
         .map(|t| t.clone())
         .unwrap_or_default();
+
+    // Apply app-rule overrides if the foreground app captured at hotkey-
+    // down matches one of the user's configured rules. First-match wins.
+    // An empty override leaves style/translate as the user's defaults.
+    {
+        let rules = st
+            .app_rules
+            .lock()
+            .map(|r| r.clone())
+            .unwrap_or_default();
+        let ctx = st
+            .current_app_context
+            .lock()
+            .map(|c| c.clone())
+            .unwrap_or_default();
+        let ovr = crate::app_rules::resolve(&rules, &ctx);
+        if let Some(s) = ovr.llm_style.as_deref() {
+            let new_style = crate::llm::LlmStyle::from_str_lossy(s);
+            log(&format!(
+                "[AppRules] match #{} ctx={:?} style {:?} → {:?}",
+                ovr.matched_rule_index.unwrap_or(usize::MAX),
+                ctx.process_name,
+                style,
+                new_style
+            ));
+            style = new_style;
+        }
+        if let Some(t) = ovr.llm_translate_to {
+            log(&format!(
+                "[AppRules] match #{} translate_to '{}' → '{}'",
+                ovr.matched_rule_index.unwrap_or(usize::MAX),
+                translate_to,
+                t
+            ));
+            translate_to = t;
+        }
+    }
+
+    if style == crate::llm::LlmStyle::Off {
+        return write_to_buf(text, out_buf, buf_len);
+    }
 
     // ── Local LLM mode: bypass cloud entirely ─────────────────────
     let llm_mode = st
