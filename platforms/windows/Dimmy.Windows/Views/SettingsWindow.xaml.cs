@@ -116,6 +116,23 @@ public sealed partial class SettingsWindow : Window
         };
         UpdateAppRulesEmptyHint();
 
+        // Drag/drop has to be hooked via AddHandler with
+        // handledEventsToo=true. Otherwise the ScrollViewer wrapping
+        // the page swallows DragOver (built-in drag-to-scroll marks
+        // it handled before our Border's declarative handler runs).
+        if (FileLoadDropTarget != null)
+        {
+            FileLoadDropTarget.AddHandler(UIElement.DragOverEvent,
+                new DragEventHandler(FileLoadDropTarget_DragOver),
+                handledEventsToo: true);
+            FileLoadDropTarget.AddHandler(UIElement.DropEvent,
+                new DragEventHandler(FileLoadDropTarget_Drop),
+                handledEventsToo: true);
+            FileLoadDropTarget.AddHandler(UIElement.DragEnterEvent,
+                new DragEventHandler((_, _) => App.Log("DragEnter fired", "FileLoad")),
+                handledEventsToo: true);
+        }
+
         // Warm-up: extract real icons from currently-running processes
         // so the App Rules list shows them immediately instead of the
         // FontIcon fallback. Runs on a background thread; refreshes
@@ -205,28 +222,27 @@ public sealed partial class SettingsWindow : Window
     private async void FileLoadPick_Click(object sender, RoutedEventArgs e)
     {
         App.Log("FileLoadPick_Click fired", "FileLoad");
+        // WinRT FileOpenPicker.PickSingleFileAsync silently returns
+        // null on some unpackaged WinUI 3 desktop builds. Win32
+        // IFileOpenDialog (the same dialog Explorer uses) is
+        // bulletproof — no async, no manifest capabilities, no STA
+        // gymnastics. Pump it on a background thread so Show() can
+        // run its modal loop without freezing the UI thread.
         try
         {
-            var picker = new global::Windows.Storage.Pickers.FileOpenPicker();
             var hwnd = WindowHelper.GetHwnd(this);
-            WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
-            // PickerLocationId.MusicLibrary requires `musicLibrary`
-            // capability in Package.appxmanifest. Without it the call
-            // throws E_ACCESSDENIED on some Win10 builds and the
-            // picker silently doesn't appear. Downloads has no such
-            // requirement and is a sensible default for ad-hoc files.
-            picker.SuggestedStartLocation = global::Windows.Storage.Pickers.PickerLocationId.Downloads;
-            picker.ViewMode = global::Windows.Storage.Pickers.PickerViewMode.List;
-            picker.FileTypeFilter.Add(".wav");
-            App.Log("FileLoadPick: opening picker…", "FileLoad");
-            var file = await picker.PickSingleFileAsync();
-            App.Log($"FileLoadPick: picker returned {(file == null ? "null" : file.Path)}", "FileLoad");
-            if (file == null)
+            App.Log($"FileLoadPick: opening Win32 picker (hwnd=0x{hwnd:X})", "FileLoad");
+            string? path = await System.Threading.Tasks.Task.Run(() =>
+                Helpers.Win32FileDialog.PickFile(hwnd, "Pick a WAV to transcribe",
+                    ("WAV audio", "*.wav"),
+                    ("All files", "*.*")));
+            App.Log($"FileLoadPick: picker returned {(path == null ? "null" : path)}", "FileLoad");
+            if (string.IsNullOrEmpty(path))
             {
                 FileLoadStatus.Text = "Cancelled";
                 return;
             }
-            await TranscribeFileAsync(file.Path);
+            await TranscribeFileAsync(path);
         }
         catch (Exception ex)
         {

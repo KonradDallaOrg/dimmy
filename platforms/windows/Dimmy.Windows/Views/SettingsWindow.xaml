@@ -175,13 +175,15 @@
                          FontSize="12" FontWeight="SemiBold"
                          Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                          CharacterSpacing="40" Margin="2,20,0,8" />
+              <!-- DragOver/Drop are wired in code-behind via AddHandler
+                   with handledEventsToo=true: the parent ScrollViewer's
+                   built-in drag-to-scroll marks DragOver as handled,
+                   so the declarative attribute path never fires. -->
               <Border x:Name="FileLoadDropTarget"
                       Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                       BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
                       BorderThickness="1" CornerRadius="4" Padding="20,16"
-                      AllowDrop="True"
-                      DragOver="FileLoadDropTarget_DragOver"
-                      Drop="FileLoadDropTarget_Drop">
+                      AllowDrop="True">
                 <StackPanel Spacing="8">
                   <TextBlock Text="Transcribe a WAV file" FontSize="16" FontWeight="SemiBold" />
                   <TextBlock TextWrapping="Wrap"
