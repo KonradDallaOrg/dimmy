@@ -8,6 +8,15 @@ on:
 permissions:
   contents: write
 
+# Auto-cancel any earlier in-flight staging run when a new commit
+# lands on the branch. Without this, fast follow-up pushes (e.g.
+# pushing a fmt fix on top of a failing run) leave the prior run's
+# Win/Linux/Mac builds burning CI minutes for no reason — we already
+# know the head moved.
+concurrency:
+  group: staging-native-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # ── Rust core lint + test (runs in parallel with builds) ────────────
   rust-check:
