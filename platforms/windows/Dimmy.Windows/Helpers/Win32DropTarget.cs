@@ -5,64 +5,92 @@ using System.Runtime.InteropServices.ComTypes;
 
 namespace Dimmy.Windows.Helpers;
 
-/// Win32 OLE drag-drop bound directly to a Window's HWND. Bypasses
-/// WinUI 3 desktop's flaky DragOver/Drop pump (DragEnter never fires
-/// on the XAML side even with handledEventsToo=true on the
-/// ScrollViewer chain). Calls back with the dropped file paths
-/// once the user releases over the registered HWND.
+/// Win32 OLE drag-drop bound directly to a WinUI 3 Window's HWND
+/// chain. Bypasses WinUI 3 desktop's flaky DragOver/Drop pump
+/// (DragEnter never fires on the XAML side even with
+/// handledEventsToo=true on the ScrollViewer chain).
 ///
-/// Usage:
-///   var target = new Win32DropTarget(hwnd, paths => OnFilesDropped(paths));
-///   target.Register();
-///   // ... when window closes:
-///   target.Unregister();
-///
-/// One target per HWND. Re-registering on the same HWND is a no-op.
+/// Critical for WinUI 3: registering on the OUTER Window HWND
+/// is not enough — the visible content lives inside a child
+/// HWND ("Microsoft.UI.Content.DesktopChildSiteBridge"), and
+/// drops over that area go to the child first. We walk the
+/// entire HWND tree and register the same IDropTarget on every
+/// node. Each child gets RevokeDragDrop'd first to clear any
+/// internal registration WinUI 3 may have set up.
 public sealed class Win32DropTarget : IDisposable
 {
-    private readonly IntPtr _hwnd;
+    private readonly IntPtr _rootHwnd;
     private readonly Action<string[]> _onDrop;
     private readonly DropTargetImpl _impl;
-    private bool _registered;
+    private readonly System.Collections.Generic.List<IntPtr> _registeredHwnds = new();
     private bool _oleInited;
 
     public Win32DropTarget(IntPtr hwnd, Action<string[]> onDrop)
     {
         if (hwnd == IntPtr.Zero) throw new ArgumentException("hwnd is null");
-        _hwnd = hwnd;
+        _rootHwnd = hwnd;
         _onDrop = onDrop ?? throw new ArgumentNullException(nameof(onDrop));
         _impl = new DropTargetImpl(this);
     }
 
     public bool Register()
     {
-        if (_registered) return true;
-        // Each thread that calls RegisterDragDrop must have OleInitialize'd
-        // (not CoInitialize). Idempotent on the same thread.
+        if (_registeredHwnds.Count > 0) return true;
+        // Each thread that calls RegisterDragDrop must have
+        // OleInitialize'd (not CoInitialize). Idempotent.
         int hr = OleInitialize(IntPtr.Zero);
         _oleInited = (hr == 0 || hr == 1); // S_OK or S_FALSE (already inited)
 
-        hr = RegisterDragDrop(_hwnd, _impl);
-        _registered = (hr == 0);
-        if (!_registered)
-            App.Log($"RegisterDragDrop failed hr=0x{hr:X8}", "FileLoad");
-        else
-            App.Log($"RegisterDragDrop OK hwnd=0x{_hwnd:X}", "FileLoad");
-        return _registered;
+        // Collect the root + every descendant HWND, then register
+        // on each. Drops can target any of them depending on which
+        // window is under the cursor at release time.
+        var hwnds = new System.Collections.Generic.List<IntPtr> { _rootHwnd };
+        EnumChildWindows(_rootHwnd, (h, _) => { hwnds.Add(h); return true; }, IntPtr.Zero);
+
+        foreach (var h in hwnds)
+        {
+            var cls = GetClassName(h);
+            // Clear any existing target (XAML installs its own on
+            // the content-bridge HWND). RevokeDragDrop returns
+            // DRAGDROP_E_NOTREGISTERED (0x80040100) when there's
+            // nothing to revoke — ignore.
+            RevokeDragDrop(h);
+            int rh = RegisterDragDrop(h, _impl);
+            if (rh == 0)
+            {
+                _registeredHwnds.Add(h);
+                App.Log($"  + drop on hwnd=0x{h:X} class={cls}", "FileLoad");
+            }
+            else
+            {
+                // Some service-only HWNDs (tooltip thunks, etc.)
+                // refuse the registration. Don't bail on the first
+                // failure — keep walking the tree.
+                App.Log($"  - drop FAIL hwnd=0x{h:X} class={cls} hr=0x{rh:X8}",
+                    "FileLoad");
+            }
+        }
+        App.Log($"Win32 drop registered on {_registeredHwnds.Count}/{hwnds.Count} HWNDs",
+            "FileLoad");
+        return _registeredHwnds.Count > 0;
     }
 
     public void Unregister()
     {
-        if (_registered)
-        {
-            RevokeDragDrop(_hwnd);
-            _registered = false;
-        }
+        foreach (var h in _registeredHwnds) RevokeDragDrop(h);
+        _registeredHwnds.Clear();
         if (_oleInited)
         {
             OleUninitialize();
             _oleInited = false;
         }
+    }
+
+    private static string GetClassName(IntPtr hwnd)
+    {
+        var sb = new System.Text.StringBuilder(256);
+        int n = GetClassNameW(hwnd, sb, sb.Capacity);
+        return n > 0 ? sb.ToString(0, n) : "?";
     }
 
     public void Dispose() => Unregister();
@@ -71,17 +99,21 @@ public sealed class Win32DropTarget : IDisposable
 
     // --- IDropTarget implementation ---
 
+    // POINTL is passed BY VALUE in COM and the .NET CCW marshaller
+    // can corrupt its layout on x64 — declare as `long` (8 bytes
+    // packed: low 32 = x, high 32 = y) to bypass struct marshalling
+    // entirely. We never read the coords anyway.
     [ComVisible(true)]
     [Guid("00000122-0000-0000-C000-000000000046")]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     private interface IDropTarget
     {
         [PreserveSig] int DragEnter(IDataObject pDataObj, uint grfKeyState,
-            POINTL pt, ref uint pdwEffect);
-        [PreserveSig] int DragOver(uint grfKeyState, POINTL pt, ref uint pdwEffect);
+            long pt, ref uint pdwEffect);
+        [PreserveSig] int DragOver(uint grfKeyState, long pt, ref uint pdwEffect);
         [PreserveSig] int DragLeave();
         [PreserveSig] int Drop(IDataObject pDataObj, uint grfKeyState,
-            POINTL pt, ref uint pdwEffect);
+            long pt, ref uint pdwEffect);
     }
 
     [ComVisible(true)]
@@ -90,14 +122,14 @@ public sealed class Win32DropTarget : IDisposable
         private readonly Win32DropTarget _owner;
         public DropTargetImpl(Win32DropTarget owner) => _owner = owner;
 
-        public int DragEnter(IDataObject obj, uint keyState, POINTL pt, ref uint effect)
+        public int DragEnter(IDataObject obj, uint keyState, long pt, ref uint effect)
         {
             App.Log("Win32 DragEnter", "FileLoad");
             effect = HasFiles(obj) ? DROPEFFECT_COPY : DROPEFFECT_NONE;
             return 0;
         }
 
-        public int DragOver(uint keyState, POINTL pt, ref uint effect)
+        public int DragOver(uint keyState, long pt, ref uint effect)
         {
             // Keep the cursor showing "+ copy" while hovering over the
             // window. Effect is set per-frame; without this the OS
@@ -108,7 +140,7 @@ public sealed class Win32DropTarget : IDisposable
 
         public int DragLeave() => 0;
 
-        public int Drop(IDataObject obj, uint keyState, POINTL pt, ref uint effect)
+        public int Drop(IDataObject obj, uint keyState, long pt, ref uint effect)
         {
             App.Log("Win32 Drop fired", "FileLoad");
             try
@@ -134,7 +166,10 @@ public sealed class Win32DropTarget : IDisposable
                 lindex = -1,
                 tymed = TYMED.TYMED_HGLOBAL,
             };
-            try { obj.QueryGetData(ref fmt); return true; }
+            // QueryGetData on System.Runtime.InteropServices.ComTypes
+            // is [PreserveSig] — returns HRESULT, never throws. S_OK=0
+            // means the format is available.
+            try { return obj.QueryGetData(ref fmt) == 0; }
             catch { return false; }
         }
 
@@ -171,12 +206,19 @@ public sealed class Win32DropTarget : IDisposable
         }
     }
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct POINTL { public int x; public int y; }
-
     private const uint CF_HDROP = 15;
     private const uint DROPEFFECT_NONE = 0;
     private const uint DROPEFFECT_COPY = 1;
+
+    private delegate bool EnumChildProc(IntPtr hwnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern bool EnumChildWindows(IntPtr parent,
+        EnumChildProc lpEnumFunc, IntPtr lParam);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetClassNameW")]
+    private static extern int GetClassNameW(IntPtr hwnd,
+        System.Text.StringBuilder lpClassName, int nMaxCount);
 
     [DllImport("ole32.dll")]
     private static extern int OleInitialize(IntPtr pvReserved);
