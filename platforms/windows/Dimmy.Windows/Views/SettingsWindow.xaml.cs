@@ -79,6 +79,7 @@ public sealed partial class SettingsWindow : Window
         SyncLlmProviderComboBox();
         SyncLanguageComboBox();
         SyncThemeRadioButtons();
+        SyncAudioSourceRadio();
         PopulateLocalModels();
         SyncSttMode();
         PopulateLocalLlmModels();
@@ -2567,6 +2568,26 @@ public sealed partial class SettingsWindow : Window
     {
         if (!_loaded) return;
         App.Instance?.ApplySettings(ViewModel);
+    }
+
+    private void SyncAudioSourceRadio()
+    {
+        var src = ViewModel.AudioSource ?? "mic";
+        switch (src)
+        {
+            case "system": AudioSourceSystem.IsChecked = true; break;
+            case "mix": AudioSourceMix.IsChecked = true; break;
+            default: AudioSourceMic.IsChecked = true; break;
+        }
+    }
+
+    private void AudioSource_Checked(object sender, RoutedEventArgs e)
+    {
+        if (sender is RadioButton rb && rb.Tag is string tag)
+        {
+            ViewModel.AudioSource = tag;
+            if (_loaded) App.Instance?.ApplySettings(ViewModel);
+        }
     }
 
     private void Theme_Checked(object sender, RoutedEventArgs e)

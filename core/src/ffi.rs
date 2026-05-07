@@ -270,6 +270,7 @@ fn dimmy_init_inner() -> c_int {
         overlay_position: Mutex::new(file_cfg.overlay_position),
         keep_in_clipboard: Mutex::new(file_cfg.keep_in_clipboard),
         input_gain: input_gain_atomic,
+        audio_source: Mutex::new(file_cfg.audio_source),
         key_store,
         audio_debug_session_dir: Mutex::new(None),
         window_anchor: Mutex::new(None),
@@ -497,10 +498,21 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
         *sr = device_sr;
     }
 
-    let _ = st
-        .audio_tx
+    // Resolve audio source: mic (default) | system (loopback) | mix.
+    // Stored as a string in AppConfig so the JSON config round-trips
+    // cleanly across UI / disk / FFI; AudioSource enum is the
+    // internal representation.
+    let source = st
+        .audio_source
         .lock()
-        .map(|tx| tx.send(AudioCommand::Start(selected_device)));
+        .map(|s| crate::audio::AudioSource::from_str_lossy(&s))
+        .unwrap_or(crate::audio::AudioSource::Mic);
+    let _ = st.audio_tx.lock().map(|tx| {
+        tx.send(AudioCommand::Start {
+            device_name: selected_device,
+            source,
+        })
+    });
 
     // Spawn the realtime chunked transcriber when the user has it
     // turned on AND the active local backend is Parakeet. Whisper.cpp
@@ -1147,6 +1159,7 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "overlay_position": *st.overlay_position.lock().unwrap_or_else(|e| e.into_inner()),
         "keep_in_clipboard": *st.keep_in_clipboard.lock().unwrap_or_else(|e| e.into_inner()),
         "input_gain": f32::from_bits(st.input_gain.load(std::sync::atomic::Ordering::Relaxed)),
+        "audio_source": st.audio_source.lock().map(|s| s.clone()).unwrap_or_else(|_| "mic".to_string()),
         "stats_total_words": *st.stats_total_words.lock().unwrap_or_else(|e| e.into_inner()),
         "stats_total_speaking_secs": *st.stats_total_speaking_secs.lock().unwrap_or_else(|e| e.into_inner()),
         // Per-provider key flags — STT
@@ -1532,6 +1545,16 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
         st.input_gain
             .store(gain.to_bits(), std::sync::atomic::Ordering::Relaxed);
         log(&format!("[Config] input_gain set to {:.2}", gain));
+    }
+    if let Some(s) = v["audio_source"].as_str() {
+        let normalised = match s.to_ascii_lowercase().as_str() {
+            "system" | "mix" | "mic" => s.to_ascii_lowercase(),
+            _ => "mic".to_string(),
+        };
+        if let Ok(mut slot) = st.audio_source.lock() {
+            *slot = normalised.clone();
+        }
+        log(&format!("[Config] audio_source set to {}", normalised));
     }
     if !v["app_rules"].is_null() {
         if let Ok(rules) =
@@ -2290,10 +2313,17 @@ pub unsafe extern "C" fn dimmy_meeting_start(out_buf: *mut c_char, buf_len: c_in
     if let Ok(mut b) = st.audio_buffer.lock() {
         b.clear();
     }
-    let _ = st
-        .audio_tx
+    let mt_source = st
+        .audio_source
         .lock()
-        .map(|tx| tx.send(crate::audio::AudioCommand::Start(selected_device)));
+        .map(|s| crate::audio::AudioSource::from_str_lossy(&s))
+        .unwrap_or(crate::audio::AudioSource::Mic);
+    let _ = st.audio_tx.lock().map(|tx| {
+        tx.send(crate::audio::AudioCommand::Start {
+            device_name: selected_device,
+            source: mt_source,
+        })
+    });
 
     let session = match crate::meeting::MeetingSession::start(st.audio_buffer.clone(), device_sr) {
         Ok(s) => s,
@@ -4663,6 +4693,7 @@ mod tests {
                 overlay_position: Mutex::new("Bottom Right".to_string()),
                 keep_in_clipboard: Mutex::new(false),
                 input_gain: Arc::new(std::sync::atomic::AtomicU32::new(1.0f32.to_bits())),
+                audio_source: Mutex::new("mic".to_string()),
                 key_store: crate::keystore::KeyStore::new(),
                 audio_debug_session_dir: Mutex::new(None),
                 window_anchor: Mutex::new(None),

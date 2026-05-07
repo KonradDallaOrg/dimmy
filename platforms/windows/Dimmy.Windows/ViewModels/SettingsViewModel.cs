@@ -241,6 +241,7 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _theme = "Default";
     [ObservableProperty] private bool _keepInClipboard;
     [ObservableProperty] private int _inputGainPercent = 100;
+    [ObservableProperty] private string _audioSource = "mic";
     [ObservableProperty] private bool _showInTaskbar;
     [ObservableProperty] private string _sttMode = "cloud";
     [ObservableProperty] private string _localModel = "ggml-base-q8_0.bin";
@@ -382,6 +383,7 @@ public partial class SettingsViewModel : ObservableObject
             Theme = r.TryGetProperty("theme", out var pt) ? pt.GetString() ?? "Default" : "Default";
             KeepInClipboard = r.TryGetProperty("keep_in_clipboard", out var kc) && kc.GetBoolean();
             InputGainPercent = r.TryGetProperty("input_gain", out var ig) ? (int)(ig.GetDouble() * 100) : 100;
+            AudioSource = r.TryGetProperty("audio_source", out var asrc) ? asrc.GetString() ?? "mic" : "mic";
             StatsTotalWords = r.TryGetProperty("stats_total_words", out var stw) ? stw.GetInt64() : 0;
             StatsTotalSpeakingSecs = r.TryGetProperty("stats_total_speaking_secs", out var sts) ? sts.GetDouble() : 0;
 
@@ -439,6 +441,7 @@ public partial class SettingsViewModel : ObservableObject
             ["theme"] = Theme,
             ["keep_in_clipboard"] = KeepInClipboard,
             ["input_gain"] = InputGainPercent / 100.0,
+            ["audio_source"] = AudioSource,
         };
         if (!string.IsNullOrEmpty(ApiKey)) dict["api_key"] = ApiKey;
         if (!string.IsNullOrEmpty(LlmApiKey)) dict["llm_api_key"] = LlmApiKey;

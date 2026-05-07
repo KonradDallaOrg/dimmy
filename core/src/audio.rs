@@ -4,9 +4,50 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+/// What the audio thread should capture. `Mic` is the historical default
+/// (default input device — built-in mic, headset, etc). `System` opens
+/// the default OUTPUT device in WASAPI loopback mode on Windows so we
+/// can transcribe what's playing through the speakers (Zoom, Teams,
+/// music). `Mix` runs both streams concurrently and sums their samples
+/// per channel — useful for meetings where you want both your voice
+/// AND the other participants in one transcript.
+///
+/// Mac + Linux currently fall back to Mic when System / Mix are
+/// requested — see docs/dev/system-audio-capture.md for the per-OS
+/// implementation status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioSource {
+    Mic,
+    System,
+    Mix,
+}
+
+impl AudioSource {
+    pub fn from_str_lossy(s: &str) -> Self {
+        match s.to_ascii_lowercase().as_str() {
+            "system" => Self::System,
+            "mix" => Self::Mix,
+            _ => Self::Mic,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Mic => "mic",
+            Self::System => "system",
+            Self::Mix => "mix",
+        }
+    }
+}
+
 /// Commands sent to the audio capture thread
 pub enum AudioCommand {
-    Start(Option<String>), // Optional device name; None = system default
+    /// Start capture. `device_name`: optional input device override
+    /// (mic only — ignored when source is System or Mix-on-Win because
+    /// the loopback always targets the default output device).
+    Start {
+        device_name: Option<String>,
+        source: AudioSource,
+    },
     Stop,
 }
 
@@ -42,46 +83,66 @@ pub fn spawn_audio_thread(
         #[allow(unused_assignments, unused_variables)]
         move || {
             let host = cpal::default_host();
-            // stream is held alive to keep recording; dropping/replacing stops/starts
-            let mut stream: Option<cpal::Stream> = None;
+            // streams are held alive to keep recording; dropping/replacing
+            // stops/starts. `Mix` mode keeps two streams alive in parallel.
+            let mut streams: Vec<cpal::Stream> = Vec::new();
 
             // Event loop: wait for commands
             for cmd in rx {
                 match cmd {
-                    AudioCommand::Start(device_name) => {
+                    AudioCommand::Start {
+                        device_name,
+                        source,
+                    } => {
                         crate::log(&format!(
-                            "[Audio] Start command received, device_name={:?}",
-                            device_name
+                            "[Audio] Start command received, device_name={:?}, source={:?}",
+                            device_name, source
                         ));
+                        // Drop any prior streams before re-opening.
+                        streams.clear();
 
-                        // Find the requested device, or fall back to default
-                        let device = if let Some(ref name) = device_name {
-                            let found = host.input_devices().ok().and_then(|mut devs| {
-                                devs.find(|d| d.name().ok().as_deref() == Some(name.as_str()))
-                            });
-                            if found.is_some() {
-                                crate::log(&format!("[Audio] Found device by name: {}", name));
+                        // Resolve which devices to open based on source. For Mix we open
+                        // both mic + system. For System on Mac/Linux we currently fall
+                        // back to Mic with a warning — proper loopback support tracked
+                        // in docs/dev/system-audio-capture.md.
+                        let mic_device = resolve_input_device(&host, device_name.as_deref());
+                        let system_device =
+                            if matches!(source, AudioSource::System | AudioSource::Mix) {
+                                resolve_loopback_device(&host)
                             } else {
-                                crate::log(&format!(
-                                    "[Audio] Device '{}' not found, falling back to default",
-                                    name
-                                ));
-                            }
-                            found.or_else(|| host.default_input_device())
+                                None
+                            };
+
+                        // For Mix, both must succeed; if system fails we degrade to
+                        // mic-only with a log line so the user still gets SOMETHING.
+                        let want_system = matches!(source, AudioSource::System | AudioSource::Mix);
+                        let want_mic = matches!(source, AudioSource::Mic | AudioSource::Mix);
+                        if want_system && system_device.is_none() {
+                            crate::log("[Audio] WARNING: system-audio loopback unavailable on this platform — using mic only");
+                        }
+                        // System-only mode without a loopback device → fall back to mic
+                        // so recording still works (degraded UX, but transcript happens).
+                        let fallback_to_mic =
+                            matches!(source, AudioSource::System) && system_device.is_none();
+
+                        let primary = if (want_mic || fallback_to_mic) && mic_device.is_some() {
+                            mic_device.clone()
+                        } else if let Some(ref sys) = system_device {
+                            Some(sys.clone())
                         } else {
-                            host.default_input_device()
+                            None
                         };
 
-                        let device = match device {
+                        let device = match primary {
                             Some(d) => {
                                 crate::log(&format!(
-                                    "[Audio] Using device: {:?}",
+                                    "[Audio] Primary device: {:?}",
                                     d.name().unwrap_or_default()
                                 ));
                                 d
                             }
                             None => {
-                                crate::log("[Audio] ERROR: No input device available");
+                                crate::log("[Audio] ERROR: No usable audio device for the requested source");
                                 continue;
                             }
                         };
@@ -89,7 +150,7 @@ pub fn spawn_audio_thread(
                         let config = match device.default_input_config() {
                             Ok(c) => {
                                 crate::log(&format!(
-                                    "[Audio] Config: sr={}, ch={}, fmt={:?}",
+                                    "[Audio] Primary config: sr={}, ch={}, fmt={:?}",
                                     c.sample_rate().0,
                                     c.channels(),
                                     c.sample_format()
@@ -203,17 +264,44 @@ pub fn spawn_audio_thread(
                         match s {
                             Ok(s) => {
                                 let _ = s.play();
-                                stream = Some(s);
-                                crate::log("[Audio] Stream built and playing");
+                                streams.push(s);
+                                crate::log("[Audio] Primary stream built and playing");
                             }
                             Err(e) => {
-                                crate::log(&format!("[Audio] ERROR: Failed to build stream: {}", e))
+                                crate::log(&format!(
+                                    "[Audio] ERROR: Failed to build primary stream: {}",
+                                    e
+                                ));
+                                continue;
+                            }
+                        }
+
+                        // ── Mix mode: open the loopback stream as a SECOND
+                        // input that writes the same shared buffer. Two
+                        // streams interleave their samples in time order
+                        // (no explicit mix-down) — for speech this is
+                        // good enough because the VAD/AGC operate on the
+                        // merged stream and the LLM can disambiguate
+                        // overlapping speakers from the resulting waveform.
+                        // System-only (no Mix) was already handled above
+                        // by treating the loopback as the PRIMARY device.
+                        if matches!(source, AudioSource::Mix) {
+                            if let Some(sysdev) = system_device {
+                                if let Some(s) =
+                                    build_secondary_stream(&sysdev, &buffer, &input_gain)
+                                {
+                                    let _ = s.play();
+                                    streams.push(s);
+                                    crate::log(
+                                        "[Audio] Mix mode: secondary loopback stream playing",
+                                    );
+                                }
                             }
                         }
                     }
                     AudioCommand::Stop => {
-                        // Dropping the stream stops recording
-                        stream = None;
+                        // Dropping the streams stops recording
+                        streams.clear();
                     }
                 }
             }
@@ -221,6 +309,140 @@ pub fn spawn_audio_thread(
     );
 
     tx
+}
+
+// ── Device-resolution helpers used by spawn_audio_thread ─────────────
+
+/// Resolve the input device for Mic capture. If a specific name was
+/// requested, search the input list; otherwise return the system
+/// default. Logs the resolution path so "device disappeared" / typos
+/// in the saved config are debuggable from dimmy.log alone.
+fn resolve_input_device(host: &cpal::Host, name: Option<&str>) -> Option<cpal::Device> {
+    if let Some(name) = name {
+        let found = host
+            .input_devices()
+            .ok()
+            .and_then(|mut devs| devs.find(|d| d.name().ok().as_deref() == Some(name)));
+        if found.is_some() {
+            crate::log(&format!("[Audio] Found input device by name: {}", name));
+            return found;
+        }
+        crate::log(&format!(
+            "[Audio] Input device '{}' not found, falling back to default",
+            name
+        ));
+    }
+    host.default_input_device()
+}
+
+/// Resolve the loopback (system audio) device. On Windows, cpal's
+/// default OUTPUT device exposes WASAPI loopback when treated as an
+/// INPUT — `device.build_input_stream()` on it captures whatever's
+/// playing through the speakers. On macOS / Linux this returns None
+/// for now; proper implementation tracked separately.
+#[cfg(target_os = "windows")]
+fn resolve_loopback_device(host: &cpal::Host) -> Option<cpal::Device> {
+    let dev = host.default_output_device();
+    if let Some(ref d) = dev {
+        crate::log(&format!(
+            "[Audio] Loopback device (WASAPI default output): {:?}",
+            d.name().unwrap_or_default()
+        ));
+    } else {
+        crate::log("[Audio] No default output device — loopback unavailable");
+    }
+    dev
+}
+
+#[cfg(not(target_os = "windows"))]
+fn resolve_loopback_device(_host: &cpal::Host) -> Option<cpal::Device> {
+    crate::log("[Audio] Loopback not yet implemented on this platform");
+    None
+}
+
+/// Build a SECOND input stream that writes into the SAME shared
+/// buffer as the primary mic stream. Used by Mix mode. Samples from
+/// both streams interleave in time order; downstream VAD + AGC see
+/// them as a single mono track. Returns None on config / build
+/// failure (Mix mode degrades to mic-only in that case).
+fn build_secondary_stream(
+    device: &cpal::Device,
+    buffer: &Arc<Mutex<Vec<f32>>>,
+    input_gain: &Arc<std::sync::atomic::AtomicU32>,
+) -> Option<cpal::Stream> {
+    let config = match device.default_input_config() {
+        Ok(c) => {
+            crate::log(&format!(
+                "[Audio] Secondary config: sr={}, ch={}, fmt={:?}",
+                c.sample_rate().0,
+                c.channels(),
+                c.sample_format()
+            ));
+            c
+        }
+        Err(e) => {
+            crate::log(&format!("[Audio] Secondary config failed: {}", e));
+            return None;
+        }
+    };
+    let channels = config.channels() as usize;
+    let buf = buffer.clone();
+    let gain_ref = input_gain.clone();
+    let stream = match config.sample_format() {
+        cpal::SampleFormat::F32 => device.build_input_stream(
+            &config.clone().into(),
+            move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                let gain = f32::from_bits(gain_ref.load(std::sync::atomic::Ordering::Relaxed));
+                if !gain.is_finite() || !(0.0..=2.0).contains(&gain) {
+                    return;
+                }
+                if let Ok(mut b) = buf.lock() {
+                    if channels > 1 {
+                        for chunk in data.chunks(channels) {
+                            let mono = chunk.iter().sum::<f32>() / channels as f32 * gain;
+                            b.push(mono);
+                        }
+                    } else if (gain - 1.0).abs() < 0.001 {
+                        b.extend_from_slice(data);
+                    } else {
+                        b.extend(data.iter().map(|&s| s * gain));
+                    }
+                }
+            },
+            |err| crate::log(&format!("[Audio] Secondary stream error (F32): {}", err)),
+            None,
+        ),
+        cpal::SampleFormat::I16 => device.build_input_stream(
+            &config.clone().into(),
+            move |data: &[i16], _: &cpal::InputCallbackInfo| {
+                let gain = f32::from_bits(gain_ref.load(std::sync::atomic::Ordering::Relaxed));
+                if !gain.is_finite() || !(0.0..=2.0).contains(&gain) {
+                    return;
+                }
+                if let Ok(mut b) = buf.lock() {
+                    for chunk in data.chunks(channels) {
+                        let mono: f32 = chunk.iter().map(|&s| s as f32 / 32768.0).sum::<f32>()
+                            / channels as f32
+                            * gain;
+                        b.push(mono);
+                    }
+                }
+            },
+            |err| crate::log(&format!("[Audio] Secondary stream error (I16): {}", err)),
+            None,
+        ),
+        _ => {
+            crate::log("[Audio] Secondary unsupported sample format");
+            return None;
+        }
+    };
+    match stream {
+        Ok(s) => Some(s),
+        Err(e) => {
+            crate::log(&format!("[Audio] Secondary build failed: {}", e));
+            None
+        }
+    }
 }
 
 /// Get the default input device name

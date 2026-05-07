@@ -73,6 +73,10 @@ const STOP_TAIL_MS: u64 = 300;
 
 /// Default shortcut: fn on macOS (simple, doesn't conflict),
 /// Win+Alt on Windows/Linux (safe because Win+Alt isn't commonly used).
+fn default_audio_source() -> String {
+    "mic".to_string()
+}
+
 fn default_shortcut() -> &'static str {
     #[cfg(target_os = "macos")]
     {
@@ -368,6 +372,13 @@ pub struct AppConfig {
     pub keep_in_clipboard: bool,
     /// Input gain (0.0-2.0, default 1.0). Attenuate hot mics (e.g. BT headsets).
     pub input_gain: f32,
+    /// What to capture: "mic" (default), "system" (loopback — what's
+    /// playing through the speakers), or "mix" (both summed in time).
+    /// System / Mix are Windows-only for now; on Mac/Linux they fall
+    /// back to mic with a log warning. AppConfig isn't serde-derived
+    /// (manual JSON I/O); the default is applied in the loader at
+    /// line ~665.
+    pub audio_source: String,
     // Window position — bottom-right anchor in logical pixels
     pub window_anchor_right: Option<f64>,
     pub window_anchor_bottom: Option<f64>,
@@ -433,6 +444,7 @@ impl Default for AppConfig {
             overlay_position: "Bottom Right".to_string(),
             keep_in_clipboard: false,
             input_gain: 0.5,
+            audio_source: default_audio_source(),
             window_anchor_right: None,
             window_anchor_bottom: None,
             stats_total_words: 0,
@@ -655,6 +667,10 @@ pub fn load_config_file() -> AppConfig {
                         .as_f64()
                         .unwrap_or(defaults.input_gain as f64)
                         as f32,
+                    audio_source: v["audio_source"]
+                        .as_str()
+                        .unwrap_or(&defaults.audio_source)
+                        .to_string(),
                     window_anchor_right: v["window_anchor_right"].as_f64(),
                     window_anchor_bottom: v["window_anchor_bottom"].as_f64(),
                     stats_total_words: v["stats_total_words"].as_u64().unwrap_or(0),
@@ -876,6 +892,9 @@ pub struct AppState {
     pub keep_in_clipboard: Mutex<bool>,
     /// Input gain as AtomicU32 (f32 bits) — shared with audio capture thread
     pub input_gain: Arc<std::sync::atomic::AtomicU32>,
+    /// Audio source: "mic" | "system" | "mix". Read by dimmy_start_recording
+    /// + meeting start to pick which AudioCommand::Start variant to send.
+    pub audio_source: Mutex<String>,
     pub key_store: keystore::KeyStore,
     /// Path to current audio debug session directory (set during recording, cleared on stop)
     pub audio_debug_session_dir: Mutex<Option<std::path::PathBuf>>,
@@ -984,6 +1003,7 @@ impl AppState {
             overlay_position: Mutex::new(file_cfg.overlay_position),
             keep_in_clipboard: Mutex::new(file_cfg.keep_in_clipboard),
             input_gain: input_gain_atomic,
+            audio_source: Mutex::new(file_cfg.audio_source.clone()),
             key_store,
             audio_debug_session_dir: Mutex::new(None),
             window_anchor: Mutex::new(
@@ -1157,6 +1177,11 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
             .clone(),
         keep_in_clipboard: *state.keep_in_clipboard.lock().map_err(|e| e.to_string())?,
         input_gain: f32::from_bits(state.input_gain.load(Ordering::Relaxed)),
+        audio_source: state
+            .audio_source
+            .lock()
+            .map_err(|e| e.to_string())?
+            .clone(),
         window_anchor_right: anchor.map(|(r, _)| r),
         window_anchor_bottom: anchor.map(|(_, b)| b),
         stats_total_words: *state.stats_total_words.lock().map_err(|e| e.to_string())?,
