@@ -45,10 +45,41 @@ public sealed partial class MeetingWindow : Window
         App.Log("ctor enter", "Meeting");
         this.InitializeComponent();
         Title = "Dimmy Meeting";
+
+        // Apply the saved Settings-window theme so the meeting window
+        // matches the rest of the app (Light/Dark/Auto from
+        // UiPreferences). Same pattern Settings uses; reading from
+        // UiPrefs (NOT config.json) — see the theme-bug fix in this
+        // branch for why config.json doesn't carry the theme.
+        try
+        {
+            var prefs = Services.UiPreferences.Load();
+            if (Content is FrameworkElement root)
+            {
+                root.RequestedTheme = prefs.Theme switch
+                {
+                    "Light" => ElementTheme.Light,
+                    "Dark" => ElementTheme.Dark,
+                    _ => ElementTheme.Default,
+                };
+            }
+        }
+        catch (Exception ex) { App.Log($"theme apply exc: {ex.Message}", "Meeting"); }
+
         try
         {
             var appWindow = WindowHelper.GetAppWindow(this);
             WindowHelper.ResizeLogical(this, 800, 720);
+            // App icon — reuse the same .ico Settings uses so the
+            // meeting window shows the Dimmy logo on the taskbar +
+            // alt-tab thumbnail instead of the generic WinUI 3
+            // placeholder.
+            try
+            {
+                var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "dimmy.ico");
+                if (File.Exists(iconPath)) appWindow?.SetIcon(iconPath);
+            }
+            catch { }
             if (appWindow?.Presenter is OverlappedPresenter presenter)
             {
                 presenter.IsResizable = true;
@@ -223,7 +254,7 @@ public sealed partial class MeetingWindow : Window
             DoneMeta.Text = $"{FormatDuration(dur)} · {chunks} chunks · {DateTime.Now:yyyy-MM-dd HH:mm}";
             RawTranscriptText.Text = string.IsNullOrEmpty(transcript)
                 ? "(no transcript: VAD may have removed all audio)"
-                : transcript;
+                : HumanizeTranscript(transcript);
 
             // Show audio waveform card if audio.wav exists
             await LoadDoneAudioAsync(dir);
@@ -333,7 +364,7 @@ public sealed partial class MeetingWindow : Window
             App.Log($"poll: {fi.Length} bytes from {latest.Name[..8]}", "Meeting");
             TranscriptText.Foreground = (Brush)
                 Application.Current.Resources["TextFillColorPrimaryBrush"];
-            TranscriptText.Text = content;
+            TranscriptText.Text = HumanizeTranscript(content);
             var nChunks = content.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length;
             RecChunks.Text = $"{nChunks} chunks";
             HudChunks.Text = $"{nChunks} chunks";
@@ -409,20 +440,39 @@ public sealed partial class MeetingWindow : Window
 
     // ── Done audio waveform card ──────────────────────────────────
 
+    /// Cached peaks for the currently-displayed audio. When the
+    /// canvas first becomes visible (panel transition Collapsed →
+    /// Visible) its ActualWidth is still 0 — DrawDoneWaveform exits
+    /// silently. We re-draw from this cache on the first SizeChanged
+    /// that produces a positive width.
+    private float[]? _cachedDonePeaks;
+
     private async Task LoadDoneAudioAsync(string dir)
     {
         if (string.IsNullOrEmpty(dir)) return;
         var wavPath = Path.Combine(dir, "audio.wav");
-        if (!File.Exists(wavPath)) return;
+        if (!File.Exists(wavPath))
+        {
+            DoneWaveCard.Visibility = Visibility.Collapsed;
+            _cachedDonePeaks = null;
+            return;
+        }
         try
         {
             DoneWaveCard.Visibility = Visibility.Visible;
             DoneAudioPlayer.Source = global::Windows.Media.Core.MediaSource.CreateFromUri(new Uri(wavPath));
+            var mp = DoneAudioPlayer.MediaPlayer;
+            if (mp != null)
+            {
+                mp.PlaybackSession.PositionChanged -= OnDonePlaybackPositionChanged;
+                mp.PlaybackSession.PositionChanged += OnDonePlaybackPositionChanged;
+            }
 
             double width = DoneWaveformCanvas.ActualWidth;
-            if (width <= 0) width = 700;
+            if (width <= 0) width = 700; // fallback for first measure pass
             int buckets = (int)Math.Max(80, Math.Min(500, width / 3));
             var peaks = await Task.Run(() => Helpers.WavPeaks.ReadPeaks(wavPath, buckets));
+            _cachedDonePeaks = peaks;
             if (peaks.Length > 0) DrawDoneWaveform(peaks);
         }
         catch (Exception ex)
@@ -431,10 +481,66 @@ public sealed partial class MeetingWindow : Window
         }
     }
 
+    /// Redraw on the first layout pass where the canvas has real
+    /// dimensions. Without this, opening Meeting → History → first
+    /// item shows an empty waveform area because DrawDoneWaveform's
+    /// width-zero guard fires silently.
+    private void DoneWaveformCanvas_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (_cachedDonePeaks == null) return;
+        if (e.NewSize.Width <= 0 || e.NewSize.Height <= 0) return;
+        // Only redraw if the canvas was previously empty or sized
+        // differently — avoids a redraw storm during animations.
+        if (DoneWaveformCanvas.Children.Count <= 1)
+        {
+            DrawDoneWaveform(_cachedDonePeaks);
+        }
+    }
+
+    /// Vertical orange playhead overlaid on the DoneWaveformCanvas.
+    /// Tracks current MediaPlayer position; user can also tap the
+    /// canvas to seek (DoneWaveform_PointerPressed).
+    private Microsoft.UI.Xaml.Shapes.Rectangle? _donePlayhead;
+
+    private void OnDonePlaybackPositionChanged(
+        global::Windows.Media.Playback.MediaPlaybackSession session, object args)
+    {
+        try
+        {
+            var total = session.NaturalDuration.TotalSeconds;
+            if (total <= 0) return;
+            double frac = session.Position.TotalSeconds / total;
+            DispatcherQueue.TryEnqueue(() => UpdateDonePlayhead(frac));
+        }
+        catch { /* MediaPlayer races on source-swap; ignore. */ }
+    }
+
+    private void UpdateDonePlayhead(double frac)
+    {
+        if (DoneWaveformCanvas == null) return;
+        double w = DoneWaveformCanvas.ActualWidth;
+        double h = DoneWaveformCanvas.ActualHeight;
+        if (w <= 0 || h <= 0) return;
+        if (_donePlayhead == null || !DoneWaveformCanvas.Children.Contains(_donePlayhead))
+        {
+            _donePlayhead = new Microsoft.UI.Xaml.Shapes.Rectangle
+            {
+                Width = 2, Height = h,
+                Fill = new SolidColorBrush(Microsoft.UI.Colors.OrangeRed),
+                IsHitTestVisible = false,
+            };
+            Microsoft.UI.Xaml.Controls.Canvas.SetTop(_donePlayhead, 0);
+            DoneWaveformCanvas.Children.Add(_donePlayhead);
+        }
+        Microsoft.UI.Xaml.Controls.Canvas.SetLeft(_donePlayhead,
+            Math.Max(0, Math.Min(w - 2, w * frac)));
+    }
+
     private void DrawDoneWaveform(float[] peaks)
     {
         if (DoneWaveformCanvas == null || peaks.Length == 0) return;
         DoneWaveformCanvas.Children.Clear();
+        _donePlayhead = null; // re-created on next position update
         double w = DoneWaveformCanvas.ActualWidth;
         double h = DoneWaveformCanvas.ActualHeight;
         if (w <= 0 || h <= 0) return;
@@ -452,6 +558,9 @@ public sealed partial class MeetingWindow : Window
             Microsoft.UI.Xaml.Controls.Canvas.SetTop(rect, mid - bh / 2.0);
             DoneWaveformCanvas.Children.Add(rect);
         }
+        // Seed the playhead at 0 so the bar appears immediately
+        // (without waiting for the user to press Play).
+        UpdateDonePlayhead(0);
     }
 
     private void DoneWaveform_PointerPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
@@ -467,6 +576,10 @@ public sealed partial class MeetingWindow : Window
             var total = session.NaturalDuration;
             if (total.TotalSeconds <= 0) return;
             session.Position = TimeSpan.FromSeconds(total.TotalSeconds * frac);
+            // Move the playhead immediately so the user gets visual
+            // feedback even if PositionChanged hasn't fired yet
+            // (MediaPlayer can lag by ~50 ms on a fresh seek).
+            UpdateDonePlayhead(frac);
         }
         catch { }
     }
@@ -785,6 +898,13 @@ public sealed partial class MeetingWindow : Window
             DoneTitle.Text = Path.GetFileName(row.Dir);
             DoneMeta.Text = row.Subtitle;
             ClearDoneCards();
+            // Switch to Done state FIRST so the canvas is laid out
+            // before LoadDoneAudio runs DrawDoneWaveform — otherwise
+            // ActualWidth=0 and the waveform never appears on the
+            // first history-select after window open.
+            TabLive_Click(this, new RoutedEventArgs());
+            SetState(MeetingState.Done);
+
             // Load recap.md if present
             var recapPath = Path.Combine(row.Dir, "recap.md");
             if (File.Exists(recapPath))
@@ -793,21 +913,39 @@ public sealed partial class MeetingWindow : Window
                 TldrText.Text = text;
                 TldrCard.Visibility = Visibility.Visible;
             }
-            // Load transcripts.txt
+            // Load transcripts.txt with human-readable timestamps
             var txt = Path.Combine(row.Dir, "transcripts.txt");
             if (File.Exists(txt))
             {
-                RawTranscriptText.Text = await File.ReadAllTextAsync(txt);
+                RawTranscriptText.Text = HumanizeTranscript(
+                    await File.ReadAllTextAsync(txt));
             }
             await LoadDoneAudioAsync(row.Dir);
-            // Switch to Live tab + Done state to show details
-            TabLive_Click(this, new RoutedEventArgs());
-            SetState(MeetingState.Done);
         }
         catch (Exception ex)
         {
             App.Log($"history select exc: {ex.Message}", "Meeting");
         }
+    }
+
+    /// Convert the Rust core's transcripts.txt format
+    /// "[ 22557 ms] hello world" into "[00:00:22] hello world".
+    /// Pure regex pass; tolerates leading/trailing whitespace and
+    /// big numbers (h:mm:ss for >1h meetings).
+    private static string HumanizeTranscript(string raw)
+    {
+        if (string.IsNullOrEmpty(raw)) return raw;
+        return System.Text.RegularExpressions.Regex.Replace(
+            raw,
+            @"\[\s*(\d+)\s*ms\s*\]",
+            m =>
+            {
+                if (!long.TryParse(m.Groups[1].Value, out var ms)) return m.Value;
+                var ts = TimeSpan.FromMilliseconds(ms);
+                return ts.TotalHours >= 1
+                    ? $"[{(int)ts.TotalHours}:{ts.Minutes:D2}:{ts.Seconds:D2}]"
+                    : $"[{ts.Minutes:D2}:{ts.Seconds:D2}]";
+            });
     }
 
     // ── Misc actions ──────────────────────────────────────────────
