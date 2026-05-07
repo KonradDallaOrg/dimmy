@@ -5,109 +5,521 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     Title="Dimmy Meeting">
 
-    <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
-          Padding="24" RowSpacing="14">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
+  <!-- 4-state meeting window — Idle / Recording / Processing / Done.
+       Tabs switch between the active meeting and history of past
+       meetings. UI structure mirrors the standalone HTML mockup
+       at docs/dev/refs/meeting-standalone.html (CSS m-* classes),
+       backend wired to the existing dimmy_meeting_* FFI.
 
-        <StackPanel Grid.Row="0" Spacing="2">
-            <TextBlock Text="Meeting mode" FontSize="24" FontWeight="SemiBold"/>
-            <TextBlock TextWrapping="Wrap" FontSize="12"
+       State transitions live in code-behind via SetState(). Panels
+       are stacked + Visibility-toggled so the same window swaps
+       layouts without a child-window flicker. -->
+  <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>  <!-- titlebar -->
+      <RowDefinition Height="Auto"/>  <!-- tabs -->
+      <RowDefinition Height="*"/>     <!-- main -->
+    </Grid.RowDefinitions>
+
+    <!-- ── TITLE BAR ── -->
+    <Grid Grid.Row="0" Padding="20,16,20,12" ColumnSpacing="12">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="Auto"/>
+        <ColumnDefinition Width="*"/>
+        <ColumnDefinition Width="Auto"/>
+      </Grid.ColumnDefinitions>
+      <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="10"
+                  VerticalAlignment="Center">
+        <FontIcon Glyph="&#xE720;" FontSize="20"
+                  Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
+        <StackPanel Spacing="0">
+          <TextBlock Text="Meeting" FontSize="18" FontWeight="SemiBold"/>
+          <TextBlock x:Name="TitlebarSubText" Text="Capture, transcribe, recap"
+                     FontSize="11"
+                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+        </StackPanel>
+      </StackPanel>
+      <!-- Compact recording HUD shown only during Recording / Processing
+           — keeps the timer visible even after the user scrolls in the
+           transcript. Hidden in Idle / Done. -->
+      <StackPanel x:Name="TitlebarHud" Grid.Column="1"
+                  Orientation="Horizontal" Spacing="8"
+                  HorizontalAlignment="Center" VerticalAlignment="Center"
+                  Visibility="Collapsed">
+        <Ellipse x:Name="HudDot" Width="8" Height="8" Fill="Crimson"/>
+        <TextBlock x:Name="HudTimer" Text="00:00:00" FontFamily="Consolas"
+                   FontSize="13" VerticalAlignment="Center"/>
+        <TextBlock x:Name="HudChunks" Text="" FontSize="11"
+                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                   VerticalAlignment="Center"/>
+      </StackPanel>
+      <Button x:Name="StopBtn" Grid.Column="2" Click="Stop_Click"
+              IsEnabled="False" Visibility="Collapsed">
+        <StackPanel Orientation="Horizontal" Spacing="6">
+          <FontIcon Glyph="&#xE71A;" FontSize="13"/>
+          <TextBlock Text="Stop &amp; process"/>
+        </StackPanel>
+      </Button>
+    </Grid>
+
+    <!-- ── TABS ── -->
+    <Border Grid.Row="1" BorderThickness="0,0,0,1"
+            BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+            Padding="20,0,20,0">
+      <StackPanel Orientation="Horizontal" Spacing="4">
+        <ToggleButton x:Name="TabLive" Click="TabLive_Click"
+                      IsChecked="True"
+                      Background="Transparent" BorderThickness="0,0,0,2"
+                      BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"
+                      Padding="14,8" CornerRadius="0">
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <FontIcon Glyph="&#xEC4F;" FontSize="13"/>
+            <TextBlock Text="Current"/>
+          </StackPanel>
+        </ToggleButton>
+        <ToggleButton x:Name="TabHistory" Click="TabHistory_Click"
+                      Background="Transparent" BorderThickness="0,0,0,2"
+                      BorderBrush="Transparent"
+                      Padding="14,8" CornerRadius="0">
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <FontIcon Glyph="&#xE81C;" FontSize="13"/>
+            <TextBlock Text="History"/>
+          </StackPanel>
+        </ToggleButton>
+      </StackPanel>
+    </Border>
+
+    <!-- ── MAIN CONTENT ── -->
+    <Grid Grid.Row="2">
+
+      <!-- ─────── LIVE TAB ─────── -->
+      <Grid x:Name="LiveTab" Padding="20">
+
+        <!-- IDLE state -->
+        <StackPanel x:Name="IdlePanel" Spacing="20"
+                    HorizontalAlignment="Center" VerticalAlignment="Center"
+                    Visibility="Visible">
+          <Border Width="96" Height="96" CornerRadius="48"
+                  HorizontalAlignment="Center"
+                  Background="{ThemeResource AccentFillColorTertiaryBrush}">
+            <FontIcon Glyph="&#xE720;" FontSize="44"
+                      Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
+          </Border>
+          <StackPanel Spacing="6" HorizontalAlignment="Center">
+            <TextBlock Text="Ready to capture" FontSize="22" FontWeight="SemiBold"
+                       HorizontalAlignment="Center"/>
+            <TextBlock TextWrapping="Wrap" MaxWidth="440" TextAlignment="Center"
+                       FontSize="13"
                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                       Text="Long-form recording. Streamed to disk so memory stays bounded; live transcript appears every ~15 s. Stop to generate recap + action items."/>
+                       Text="Long-form recording. Streamed to disk so memory stays bounded; live transcript appears every ~15 s. Stop to generate a structured recap with decisions, topics, action items and risks."/>
+          </StackPanel>
+          <Button x:Name="StartBtn" Click="Start_Click"
+                  Style="{ThemeResource AccentButtonStyle}"
+                  HorizontalAlignment="Center" Padding="20,10">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <FontIcon Glyph="&#xE7C8;" FontSize="14"/>
+              <TextBlock Text="Start meeting" FontSize="14" FontWeight="SemiBold"/>
+            </StackPanel>
+          </Button>
+          <CheckBox x:Name="GenerateRecapCheck" IsChecked="True"
+                    HorizontalAlignment="Center"
+                    Content="Generate recap + action items on stop"/>
+          <StackPanel Spacing="4" HorizontalAlignment="Center">
+            <TextBlock Text="HINTS" FontSize="10" FontWeight="SemiBold"
+                       CharacterSpacing="60" HorizontalAlignment="Center"
+                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+            <TextBlock TextWrapping="Wrap" MaxWidth="380" TextAlignment="Center"
+                       FontSize="12"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                       Text="• You can keep working — the foreground app is captured at start. • The dictation hotkey is ignored while a meeting is recording. • Audio + transcripts live under &lt;config&gt;/meetings/&lt;id&gt;/."/>
+          </StackPanel>
         </StackPanel>
 
-        <!-- Status row: dot + timer + chunk count -->
+        <!-- RECORDING state -->
+        <Grid x:Name="RecordingPanel" Visibility="Collapsed" RowSpacing="12">
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>  <!-- waveform card -->
+            <RowDefinition Height="*"/>     <!-- transcript -->
+            <RowDefinition Height="Auto"/>  <!-- bookmark bar -->
+          </Grid.RowDefinitions>
+
+          <!-- Live waveform card -->
+          <Border Grid.Row="0"
+                  Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                  BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                  BorderThickness="1" CornerRadius="8" Padding="14,10">
+            <Grid ColumnSpacing="14">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+              </Grid.ColumnDefinitions>
+              <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="10"
+                          VerticalAlignment="Center">
+                <Image x:Name="AppContextIcon" Width="24" Height="24"
+                       Visibility="Collapsed"/>
+                <FontIcon x:Name="AppContextFallback" Glyph="&#xE7E8;" FontSize="20"
+                          Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                          Visibility="Visible"/>
+                <StackPanel Spacing="0">
+                  <TextBlock x:Name="AppContextName" Text="(no app)"
+                             FontSize="13" FontWeight="SemiBold"/>
+                  <TextBlock Text="Foreground at start" FontSize="10"
+                             Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                </StackPanel>
+              </StackPanel>
+              <Canvas x:Name="LiveWaveformCanvas" Grid.Column="1"
+                      Background="Transparent" Height="40"
+                      VerticalAlignment="Center"/>
+              <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="10"
+                          VerticalAlignment="Center">
+                <TextBlock x:Name="RecTimer" Text="00:00:00"
+                           FontFamily="Consolas" FontSize="18" FontWeight="SemiBold"
+                           Foreground="Crimson" VerticalAlignment="Center"/>
+                <TextBlock x:Name="RecChunks" Text="0 chunks"
+                           FontSize="11"
+                           Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                           VerticalAlignment="Center"/>
+              </StackPanel>
+            </Grid>
+          </Border>
+
+          <!-- Live transcript -->
+          <Border Grid.Row="1"
+                  Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                  BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                  BorderThickness="1" CornerRadius="8" Padding="0">
+            <Grid>
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+              </Grid.RowDefinitions>
+              <Border Grid.Row="0" Padding="14,10"
+                      BorderThickness="0,0,0,1"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}">
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                  <Border CornerRadius="3" Padding="6,2" Background="Crimson">
+                    <TextBlock Text="LIVE" FontSize="10" FontWeight="SemiBold"
+                               Foreground="White"/>
+                  </Border>
+                  <TextBlock Text="Live transcript" FontSize="13" FontWeight="SemiBold"
+                             VerticalAlignment="Center"/>
+                  <TextBlock x:Name="LiveLagText" Text=""
+                             FontSize="11" VerticalAlignment="Center"
+                             Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                </StackPanel>
+              </Border>
+              <ScrollViewer x:Name="TranscriptScroll" Grid.Row="1"
+                            VerticalScrollBarVisibility="Auto"
+                            HorizontalScrollBarVisibility="Disabled">
+                <StackPanel Padding="14" Spacing="10">
+                  <TextBlock x:Name="TranscriptText"
+                             Text="🎙️ Listening… first chunk lands in ~15 s."
+                             TextWrapping="Wrap" FontSize="14"
+                             IsTextSelectionEnabled="True"
+                             Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                </StackPanel>
+              </ScrollViewer>
+            </Grid>
+          </Border>
+
+          <!-- Bookmark bar (shell — backend not yet wired) -->
+          <Border Grid.Row="2" CornerRadius="6" Padding="10,8"
+                  Background="{ThemeResource LayerFillColorDefaultBrush}"
+                  BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                  BorderThickness="1">
+            <StackPanel Orientation="Horizontal" Spacing="10">
+              <Button x:Name="BookmarkBtn" IsEnabled="False"
+                      ToolTipService.ToolTip="Coming soon">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <FontIcon Glyph="&#xE8A4;" FontSize="13"/>
+                  <TextBlock Text="Bookmark moment"/>
+                </StackPanel>
+              </Button>
+              <TextBlock Text="Mark a key moment to revisit later (in development)."
+                         FontSize="11" VerticalAlignment="Center"
+                         Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+            </StackPanel>
+          </Border>
+        </Grid>
+
+        <!-- PROCESSING state -->
+        <StackPanel x:Name="ProcessingPanel" Spacing="20"
+                    HorizontalAlignment="Center" VerticalAlignment="Center"
+                    Visibility="Collapsed">
+          <ProgressRing x:Name="ProcSpinner" IsActive="True"
+                        Width="56" Height="56" HorizontalAlignment="Center"/>
+          <TextBlock Text="Wrapping up…" FontSize="20" FontWeight="SemiBold"
+                     HorizontalAlignment="Center"/>
+          <StackPanel Spacing="6" HorizontalAlignment="Center" MinWidth="320">
+            <StackPanel Orientation="Horizontal" Spacing="10">
+              <FontIcon x:Name="ProcStep1Icon" Glyph="&#xE73E;" FontSize="14"
+                        Foreground="ForestGreen"/>
+              <TextBlock x:Name="ProcStep1Text" Text="Saved audio + transcripts"/>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="10">
+              <FontIcon x:Name="ProcStep2Icon" Glyph="&#xE76C;" FontSize="14"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+              <TextBlock x:Name="ProcStep2Text" Text="Generating recap with LLM…"/>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="10">
+              <FontIcon x:Name="ProcStep3Icon" Glyph="&#xE76C;" FontSize="14"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+              <TextBlock x:Name="ProcStep3Text" Text="Extracting action items"/>
+            </StackPanel>
+          </StackPanel>
+        </StackPanel>
+
+        <!-- DONE state -->
+        <ScrollViewer x:Name="DonePanel" Visibility="Collapsed"
+                      VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled">
+          <StackPanel Spacing="14" Padding="0,0,0,20">
+
+            <!-- Header card: title + duration + chunks + open folder -->
+            <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                    BorderThickness="1" CornerRadius="8" Padding="14">
+              <Grid ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" Spacing="2">
+                  <TextBlock x:Name="DoneTitle" Text="Meeting"
+                             FontSize="18" FontWeight="SemiBold"/>
+                  <TextBlock x:Name="DoneMeta" FontSize="11"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                             Text=""/>
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
+                  <Button x:Name="CopyRecapBtn" Click="CopyRecap_Click"
+                          ToolTipService.ToolTip="Copy recap to clipboard">
+                    <FontIcon Glyph="&#xE8C8;" FontSize="13"/>
+                  </Button>
+                  <Button x:Name="OpenFolderBtn" Click="OpenFolder_Click"
+                          ToolTipService.ToolTip="Open meeting folder">
+                    <FontIcon Glyph="&#xE838;" FontSize="13"/>
+                  </Button>
+                  <Button x:Name="NewMeetingBtn" Click="NewMeeting_Click"
+                          Style="{ThemeResource AccentButtonStyle}">
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                      <FontIcon Glyph="&#xE710;" FontSize="13"/>
+                      <TextBlock Text="New"/>
+                    </StackPanel>
+                  </Button>
+                </StackPanel>
+              </Grid>
+            </Border>
+
+            <!-- Audio waveform card -->
+            <Border x:Name="DoneWaveCard"
+                    Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                    BorderThickness="1" CornerRadius="8" Padding="0"
+                    Visibility="Collapsed">
+              <Grid>
+                <Grid.RowDefinitions>
+                  <RowDefinition Height="Auto"/>
+                  <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <Border Grid.Row="0" Padding="6,4" Height="64">
+                  <Canvas x:Name="DoneWaveformCanvas"
+                          Background="Transparent"
+                          SizeChanged="DoneWaveformCanvas_SizeChanged"
+                          PointerPressed="DoneWaveform_PointerPressed"/>
+                </Border>
+                <MediaPlayerElement x:Name="DoneAudioPlayer" Grid.Row="1"
+                                    AreTransportControlsEnabled="True"
+                                    AutoPlay="False"
+                                    Margin="0,0,0,0" MaxHeight="110">
+                  <!-- Hide buttons that have no effect for audio
+                       playback. The cast button is part of the
+                       default MTC and isn't separately removable in
+                       WinUI 3 desktop — left visible. -->
+                  <MediaPlayerElement.TransportControls>
+                    <MediaTransportControls IsCompact="True"
+                                            IsZoomButtonVisible="False"/>
+                  </MediaPlayerElement.TransportControls>
+                </MediaPlayerElement>
+              </Grid>
+            </Border>
+
+            <!-- TLDR -->
+            <Border x:Name="TldrCard" Visibility="Collapsed"
+                    Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"
+                    BorderThickness="2" CornerRadius="8" Padding="14">
+              <StackPanel Spacing="6">
+                <TextBlock Text="TL;DR" FontSize="11" FontWeight="SemiBold"
+                           CharacterSpacing="80"
+                           Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
+                <TextBlock x:Name="TldrText" TextWrapping="Wrap" FontSize="14"
+                           IsTextSelectionEnabled="True"/>
+              </StackPanel>
+            </Border>
+
+            <!-- Key decisions -->
+            <Border x:Name="DecisionsCard" Visibility="Collapsed"
+                    Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                    BorderThickness="1" CornerRadius="8" Padding="14">
+              <StackPanel Spacing="8">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <FontIcon Glyph="&#xE73E;" FontSize="14"
+                            Foreground="ForestGreen"/>
+                  <TextBlock Text="Key decisions" FontSize="14" FontWeight="SemiBold"/>
+                </StackPanel>
+                <TextBlock x:Name="DecisionsText" TextWrapping="Wrap" FontSize="13"
+                           IsTextSelectionEnabled="True"/>
+              </StackPanel>
+            </Border>
+
+            <!-- Topics -->
+            <Border x:Name="TopicsCard" Visibility="Collapsed"
+                    Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                    BorderThickness="1" CornerRadius="8" Padding="14">
+              <StackPanel Spacing="8">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <FontIcon Glyph="&#xE8FD;" FontSize="14"/>
+                  <TextBlock Text="Topics discussed" FontSize="14" FontWeight="SemiBold"/>
+                </StackPanel>
+                <TextBlock x:Name="TopicsText" TextWrapping="Wrap" FontSize="13"
+                           IsTextSelectionEnabled="True"/>
+              </StackPanel>
+            </Border>
+
+            <!-- Action items -->
+            <Border x:Name="ActionsCard" Visibility="Collapsed"
+                    Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                    BorderThickness="1" CornerRadius="8" Padding="14">
+              <StackPanel Spacing="8">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <FontIcon Glyph="&#xE762;" FontSize="14"
+                            Foreground="DarkOrange"/>
+                  <TextBlock Text="Action items" FontSize="14" FontWeight="SemiBold"/>
+                </StackPanel>
+                <TextBlock x:Name="ActionsText" TextWrapping="Wrap"
+                           FontSize="13" FontFamily="Consolas"
+                           IsTextSelectionEnabled="True"/>
+              </StackPanel>
+            </Border>
+
+            <!-- Open questions / Risks / Next steps (collapsed by default; only shown if non-empty) -->
+            <Border x:Name="OpenQuestionsCard" Visibility="Collapsed"
+                    Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                    BorderThickness="1" CornerRadius="8" Padding="14">
+              <StackPanel Spacing="8">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <FontIcon Glyph="&#xE9CE;" FontSize="14"/>
+                  <TextBlock Text="Open questions" FontSize="14" FontWeight="SemiBold"/>
+                </StackPanel>
+                <TextBlock x:Name="OpenQuestionsText" TextWrapping="Wrap" FontSize="13"
+                           IsTextSelectionEnabled="True"/>
+              </StackPanel>
+            </Border>
+            <Border x:Name="RisksCard" Visibility="Collapsed"
+                    Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource SystemFillColorCautionBrush}"
+                    BorderThickness="1" CornerRadius="8" Padding="14">
+              <StackPanel Spacing="8">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <FontIcon Glyph="&#xE7BA;" FontSize="14"
+                            Foreground="{ThemeResource SystemFillColorCautionBrush}"/>
+                  <TextBlock Text="Risks &amp; blockers" FontSize="14" FontWeight="SemiBold"/>
+                </StackPanel>
+                <TextBlock x:Name="RisksText" TextWrapping="Wrap" FontSize="13"
+                           IsTextSelectionEnabled="True"/>
+              </StackPanel>
+            </Border>
+            <Border x:Name="NextStepsCard" Visibility="Collapsed"
+                    Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                    BorderThickness="1" CornerRadius="8" Padding="14">
+              <StackPanel Spacing="8">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <FontIcon Glyph="&#xE893;" FontSize="14"/>
+                  <TextBlock Text="Next steps" FontSize="14" FontWeight="SemiBold"/>
+                </StackPanel>
+                <TextBlock x:Name="NextStepsText" TextWrapping="Wrap" FontSize="13"
+                           IsTextSelectionEnabled="True"/>
+              </StackPanel>
+            </Border>
+
+            <!-- Raw transcript (collapsible) -->
+            <Expander Header="Raw transcript" IsExpanded="False">
+              <TextBlock x:Name="RawTranscriptText" TextWrapping="Wrap"
+                         FontSize="12" Padding="0,8,0,0"
+                         IsTextSelectionEnabled="True"/>
+            </Expander>
+          </StackPanel>
+        </ScrollViewer>
+      </Grid>
+
+      <!-- ─────── HISTORY TAB ─────── -->
+      <Grid x:Name="HistoryTab" Padding="20" Visibility="Collapsed" RowSpacing="12">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- Search bar -->
+        <Grid Grid.Row="0" ColumnSpacing="8">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="Auto"/>
+          </Grid.ColumnDefinitions>
+          <TextBox x:Name="HistorySearchBox" Grid.Column="0"
+                   PlaceholderText="Filter past meetings by name…"
+                   TextChanged="HistorySearch_Changed"/>
+          <Button Grid.Column="1" Click="HistoryRefresh_Click"
+                  ToolTipService.ToolTip="Refresh">
+            <FontIcon Glyph="&#xE72C;" FontSize="13"/>
+          </Button>
+        </Grid>
+
+        <!-- List -->
         <Border Grid.Row="1"
                 Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                BorderThickness="1" CornerRadius="6" Padding="14,10">
-            <StackPanel Orientation="Horizontal" Spacing="14">
-                <Ellipse x:Name="StatusDot" Width="10" Height="10" Fill="#888"/>
-                <TextBlock x:Name="StatusText" Text="Ready"
-                           VerticalAlignment="Center" FontWeight="SemiBold"/>
-                <TextBlock x:Name="TimerText" Text="00:00:00"
-                           VerticalAlignment="Center"
-                           FontFamily="Consolas" FontSize="14"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                <TextBlock x:Name="ChunkCountText" Text=""
-                           VerticalAlignment="Center"
-                           FontSize="12"
-                           Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
-            </StackPanel>
+                BorderThickness="1" CornerRadius="8" Padding="0">
+          <ListView x:Name="HistoryList" SelectionMode="Single"
+                    SelectionChanged="HistoryList_SelectionChanged">
+            <ListView.ItemContainerStyle>
+              <Style TargetType="ListViewItem">
+                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+              </Style>
+            </ListView.ItemContainerStyle>
+            <ListView.ItemTemplate>
+              <DataTemplate>
+                <Grid ColumnSpacing="12" Padding="6,8">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                  </Grid.ColumnDefinitions>
+                  <FontIcon Grid.Column="0" Glyph="&#xE7C8;" FontSize="14"
+                            Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                            VerticalAlignment="Center"/>
+                  <StackPanel Grid.Column="1" Spacing="2">
+                    <TextBlock Text="{Binding Title}" FontSize="13" FontWeight="SemiBold"
+                               TextTrimming="CharacterEllipsis"/>
+                    <TextBlock Text="{Binding Subtitle}" FontSize="11"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               TextTrimming="CharacterEllipsis"/>
+                  </StackPanel>
+                  <TextBlock Grid.Column="2" Text="{Binding RightLabel}" FontSize="11"
+                             Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                             VerticalAlignment="Center"/>
+                </Grid>
+              </DataTemplate>
+            </ListView.ItemTemplate>
+          </ListView>
         </Border>
-
-        <!-- Action row -->
-        <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8">
-            <Button x:Name="StartBtn" Click="Start_Click"
-                    Style="{ThemeResource AccentButtonStyle}">
-                <StackPanel Orientation="Horizontal" Spacing="6">
-                    <FontIcon Glyph="&#xE7C8;" FontSize="14"/>
-                    <TextBlock Text="Start meeting"/>
-                </StackPanel>
-            </Button>
-            <Button x:Name="StopBtn" Click="Stop_Click" IsEnabled="False">
-                <StackPanel Orientation="Horizontal" Spacing="6">
-                    <FontIcon Glyph="&#xE71A;" FontSize="14"/>
-                    <TextBlock Text="Stop &amp; process"/>
-                </StackPanel>
-            </Button>
-            <CheckBox x:Name="GenerateRecapCheck" Content="Generate recap + actions on stop"
-                      IsChecked="True" VerticalAlignment="Center"/>
-        </StackPanel>
-
-        <!-- Transcript live view -->
-        <Border Grid.Row="3"
-                Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                BorderThickness="1" CornerRadius="6" Padding="0">
-            <ScrollViewer x:Name="TranscriptScroll"
-                          VerticalScrollBarVisibility="Auto"
-                          HorizontalScrollBarVisibility="Disabled">
-                <StackPanel Padding="14" Spacing="10">
-                    <TextBlock x:Name="TranscriptText"
-                               Text="(transcript will appear here as the meeting progresses)"
-                               TextWrapping="Wrap"
-                               FontSize="14"
-                               Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
-                    <Border x:Name="RecapBorder" Visibility="Collapsed"
-                            Background="{ThemeResource LayerFillColorDefaultBrush}"
-                            CornerRadius="4" Padding="12">
-                        <StackPanel Spacing="6">
-                            <TextBlock Text="RECAP" FontWeight="SemiBold" FontSize="12"
-                                       Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
-                            <TextBlock x:Name="RecapText" TextWrapping="Wrap" FontSize="13"/>
-                        </StackPanel>
-                    </Border>
-                    <Border x:Name="ActionsBorder" Visibility="Collapsed"
-                            Background="{ThemeResource LayerFillColorDefaultBrush}"
-                            CornerRadius="4" Padding="12">
-                        <StackPanel Spacing="6">
-                            <TextBlock Text="ACTION ITEMS" FontWeight="SemiBold" FontSize="12"
-                                       Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
-                            <TextBlock x:Name="ActionsText" TextWrapping="Wrap"
-                                       FontFamily="Consolas" FontSize="12"/>
-                        </StackPanel>
-                    </Border>
-                </StackPanel>
-            </ScrollViewer>
-        </Border>
-
-        <!-- Footer: meeting dir + open folder -->
-        <StackPanel Grid.Row="4" Orientation="Horizontal" Spacing="8">
-            <TextBlock x:Name="DirText" Text=""
-                       FontSize="11"
-                       FontFamily="Consolas"
-                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                       VerticalAlignment="Center"
-                       TextTrimming="CharacterEllipsis"/>
-            <Button x:Name="OpenFolderBtn" Click="OpenFolder_Click"
-                    IsEnabled="False" Content="Open folder"/>
-        </StackPanel>
+      </Grid>
     </Grid>
+  </Grid>
 </Window>

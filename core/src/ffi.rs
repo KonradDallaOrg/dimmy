@@ -1953,11 +1953,7 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
 
     let st = state();
 
-    // Check if LLM is enabled
-    let enabled = st.llm_enabled.lock().map(|e| *e).unwrap_or(false);
-    if !enabled {
-        return write_to_buf(text, out_buf, buf_len);
-    }
+    let global_enabled = st.llm_enabled.lock().map(|e| *e).unwrap_or(false);
 
     let mut style = st
         .llm_style
@@ -1984,6 +1980,12 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
     // Apply app-rule overrides if the foreground app captured at hotkey-
     // down matches one of the user's configured rules. First-match wins.
     // An empty override leaves style/translate as the user's defaults.
+    //
+    // Important: rule resolution runs BEFORE the global llm_enabled gate
+    // so a per-app rule can FORCE enhance for a specific app even when
+    // the user has the global LLM toggle off (their default mode is
+    // "no enhancement", but Notepad++ specifically gets Acronyms style).
+    let mut rule_forced_enhance = false;
     {
         let rules = st.app_rules.lock().map(|r| r.clone()).unwrap_or_default();
         let ctx = st
@@ -2014,6 +2016,12 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
                 new_style
             ));
             style = new_style;
+            // Rule fired with a non-off style → enhance even if the
+            // global llm_enabled is false. The per-app rule is a
+            // user-explicit override.
+            if new_style != crate::llm::LlmStyle::Off {
+                rule_forced_enhance = true;
+            }
         }
         if let Some(t) = ovr.llm_translate_to {
             log(&format!(
@@ -2026,6 +2034,14 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
         }
     }
 
+    // Final gate: enhance only if either the global toggle is on, or
+    // an app rule forced a non-off style for this specific app. If
+    // style is still Off (no rule fired and global is off, OR rule
+    // explicitly set style=off), pass the raw transcript through.
+    if !global_enabled && !rule_forced_enhance {
+        log("[LLM] global disabled and no rule forced enhance — pass-through");
+        return write_to_buf(text, out_buf, buf_len);
+    }
     if style == crate::llm::LlmStyle::Off {
         return write_to_buf(text, out_buf, buf_len);
     }
