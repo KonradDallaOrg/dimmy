@@ -344,7 +344,15 @@
                 <controls:SettingCard Glyph="&#xE968;"
                                       Label="Local model"
                                       Description="Whisper.cpp sizes run entirely offline; Parakeet TDT v3 is faster + EU-language friendly but is a one-time 2.5 GB download.">
-                  <ComboBox x:Name="LocalModelComboBox" MinWidth="280"
+                  <!-- Width is FIXED (not MinWidth) so long model names
+                       like "ggml-large-v3-turbo-q5_0.bin" don't expand
+                       the combo and shove the SettingCard layout out of
+                       alignment. Header truncates with TextTrimming on
+                       the item template; full text shows in the popup. -->
+                  <ComboBox x:Name="LocalModelComboBox"
+                            Width="280" MaxWidth="280"
+                            HorizontalAlignment="Left"
+                            HorizontalContentAlignment="Left"
                             SelectionChanged="LocalModel_SelectionChanged" />
                 </controls:SettingCard>
                 <controls:SettingCard Glyph="&#xE946;"
@@ -663,7 +671,13 @@
                 <controls:SettingCard Glyph="&#xE968;"
                                       Label="Local LLM model"
                                       Description="Runs entirely on your device.">
-                  <ComboBox x:Name="LocalLlmModelComboBox" MinWidth="240"
+                  <!-- Same width-locking pattern as LocalModelComboBox:
+                       prevents long quantization suffixes like
+                       "gemma-3-4b-it-q4_0.gguf" from expanding the row. -->
+                  <ComboBox x:Name="LocalLlmModelComboBox"
+                            Width="280" MaxWidth="280"
+                            HorizontalAlignment="Left"
+                            HorizontalContentAlignment="Left"
                             SelectionChanged="LocalLlmModel_SelectionChanged" />
                 </controls:SettingCard>
                 <controls:SettingCard Glyph="&#xE946;"
@@ -859,7 +873,7 @@
             <StackPanel x:Name="OverlayPanel" Spacing="4" Visibility="Collapsed">
               <StackPanel Spacing="2" Margin="0,0,0,16">
                 <TextBlock Text="Pill overlay" FontSize="28" FontWeight="SemiBold" />
-                <TextBlock Text="The floating pill — where it lives and how it looks."
+                <TextBlock Text="The floating pill. Where it lives and how it looks."
                            FontSize="13"
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
               </StackPanel>
@@ -946,7 +960,7 @@
                          CharacterSpacing="40" Margin="2,20,0,8" />
               <controls:SettingCard Glyph="&#xE7E8;"
                                     Label="Show pill on app start"
-                                    Description="When off, Dimmy boots in 'taskbar only' mode — the pill stays hidden and recording status is shown only on the taskbar icon.">
+                                    Description="When off, Dimmy boots in 'taskbar only' mode. The pill stays hidden and recording status shows only on the taskbar icon.">
                 <ToggleSwitch IsOn="{Binding PillShowOnStartup, Mode=TwoWay}"
                               Toggled="PillVisibilityToggle_Toggled" />
               </controls:SettingCard>
@@ -1104,47 +1118,49 @@
                   </ListView.ItemContainerStyle>
                   <ListView.ItemTemplate>
                     <DataTemplate>
-                      <Grid ColumnSpacing="8" Padding="14,10" >
+                      <!-- Padding cut from 14,10 to 8,4 so the row
+                           shrinks from ~56 px to ~36 px. TextBox /
+                           ComboBox MinHeight=28 keeps Fluent default
+                           hit area without padding the row. -->
+                      <Grid ColumnSpacing="8" Padding="8,4" >
+                        <!-- Order: icon, pattern (compact), match type,
+                             style, translate, ENABLE TOGGLE, delete.
+                             Toggle near delete so the row reads
+                             "what app → what to do → on/off → remove". -->
+                        <!-- Match-type column dropped: this is a Win
+                             build, the field is forced to
+                             "process_name" at rule-add time. Showing
+                             a "Process (Win) / Bundle (Mac) / WM_CLASS
+                             (Linux)" combo on every row was making
+                             users pick between options that never
+                             applied on this OS — pure friction. The
+                             field stays in the data model so a
+                             Mac-shared config still round-trips. -->
                         <Grid.ColumnDefinitions>
-                          <ColumnDefinition Width="Auto"/>      <!-- enabled toggle -->
                           <ColumnDefinition Width="Auto"/>      <!-- icon -->
                           <ColumnDefinition Width="2*"/>        <!-- pattern -->
-                          <ColumnDefinition Width="1.4*"/>      <!-- match type -->
-                          <ColumnDefinition Width="1.6*"/>      <!-- style -->
-                          <ColumnDefinition Width="1.4*"/>      <!-- translate -->
+                          <ColumnDefinition Width="2*"/>        <!-- style -->
+                          <ColumnDefinition Width="1.6*"/>      <!-- translate -->
+                          <ColumnDefinition Width="Auto"/>      <!-- enabled toggle -->
                           <ColumnDefinition Width="Auto"/>      <!-- delete -->
                         </Grid.ColumnDefinitions>
-                        <ToggleSwitch Grid.Column="0"
-                                      IsOn="{Binding Enabled, Mode=TwoWay}"
-                                      OnContent="" OffContent="" MinWidth="0"/>
-                        <Grid Grid.Column="1" Width="32" Height="32"
-                              VerticalAlignment="Center" Margin="2,0,6,0">
-                          <!-- Real Windows icon extracted from the .exe
-                               at 256×256 via IShellItemImageFactory,
-                               cached as PNG; the Image control
-                               downscales to 32 with bilinear filtering
-                               so even apps with mediocre source icons
-                               look crisp. Segoe Fluent glyph fallback
-                               when no exe has been seen for this rule. -->
-                          <Image Width="32" Height="32"
+                        <Grid Grid.Column="0" Width="22" Height="22"
+                              VerticalAlignment="Center" Margin="2,0,4,0">
+                          <Image Width="22" Height="22"
                                  Source="{Binding IconAssetUri, Mode=OneWay}"
                                  Visibility="{Binding IconAssetUri, Mode=OneWay, Converter={StaticResource NotNullToVisibilityConverter}}"/>
                           <FontIcon Glyph="{Binding IconGlyph, Mode=OneWay}"
-                                    FontSize="22"
+                                    FontSize="14"
                                     Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
                                     Visibility="{Binding IconAssetUri, Mode=OneWay, Converter={StaticResource NotNullToVisibilityConverter}, ConverterParameter=Invert}"/>
                         </Grid>
-                        <TextBox Grid.Column="2"
+                        <TextBox Grid.Column="1"
+                                 VerticalAlignment="Center"
                                  Text="{Binding MatchPattern, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                  PlaceholderText="slack.exe" />
-                        <ComboBox Grid.Column="3" SelectedValue="{Binding MatchType, Mode=TwoWay}"
-                                  SelectedValuePath="Tag" HorizontalAlignment="Stretch">
-                          <ComboBoxItem Tag="process_name" Content="Process (Win)"/>
-                          <ComboBoxItem Tag="bundle_id" Content="Bundle (Mac)"/>
-                          <ComboBoxItem Tag="wm_class" Content="WM_CLASS (Linux)"/>
-                        </ComboBox>
-                        <ComboBox Grid.Column="4" SelectedValue="{Binding LlmStyle, Mode=TwoWay}"
-                                  SelectedValuePath="Tag" HorizontalAlignment="Stretch">
+                        <ComboBox Grid.Column="2" SelectedValue="{Binding LlmStyle, Mode=TwoWay}"
+                                  SelectedValuePath="Tag" HorizontalAlignment="Stretch"
+                                  VerticalAlignment="Center">
                           <ComboBoxItem Tag="off"            Content="Off (no LLM)"/>
                           <ComboBoxItem Tag="correct"        Content="Correct"/>
                           <ComboBoxItem Tag="summarize"      Content="Summarize"/>
@@ -1158,8 +1174,9 @@
                           <ComboBoxItem Tag="imbruttito"     Content="Imbruttito"/>
                           <ComboBoxItem Tag="prompt"         Content="Custom prompt"/>
                         </ComboBox>
-                        <ComboBox Grid.Column="5" SelectedValue="{Binding LlmTranslateTo, Mode=TwoWay}"
-                                  SelectedValuePath="Tag" HorizontalAlignment="Stretch">
+                        <ComboBox Grid.Column="3" SelectedValue="{Binding LlmTranslateTo, Mode=TwoWay}"
+                                  SelectedValuePath="Tag" HorizontalAlignment="Stretch"
+                                  VerticalAlignment="Center">
                           <ComboBoxItem Tag=""    Content="No translation"/>
                           <ComboBoxItem Tag="en"  Content="→ English"/>
                           <ComboBoxItem Tag="it"  Content="→ Italiano"/>
@@ -1168,7 +1185,12 @@
                           <ComboBoxItem Tag="de"  Content="→ Deutsch"/>
                           <ComboBoxItem Tag="pt"  Content="→ Português"/>
                         </ComboBox>
-                        <Button Grid.Column="6"
+                        <ToggleSwitch Grid.Column="4"
+                                      IsOn="{Binding Enabled, Mode=TwoWay}"
+                                      OnContent="" OffContent="" MinWidth="0"
+                                      VerticalAlignment="Center"
+                                      ToolTipService.ToolTip="Enable rule"/>
+                        <Button Grid.Column="5"
                                 Click="AppRuleDelete_Click"
                                 Tag="{Binding}"
                                 ToolTipService.ToolTip="Remove rule"
@@ -1268,7 +1290,7 @@
                          CharacterSpacing="40" Margin="2,20,0,8" />
               <controls:SettingCard Glyph="&#xE71B;"
                                     Label="Website"
-                                    Description="dimmy.app — features, downloads, and docs.">
+                                    Description="dimmy.app: features, downloads, and docs.">
                 <HyperlinkButton Content="Open" NavigateUri="https://dimmy.app" />
               </controls:SettingCard>
               <controls:SettingCard Glyph="&#xE943;"
@@ -1300,7 +1322,7 @@
                 <TextBlock Text="Recordings" FontSize="28" FontWeight="SemiBold" />
                 <TextBlock TextWrapping="Wrap"
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                           Text="Past transcriptions — dictations, file-load, meetings. Full-text searchable. Audio retention is opt-in (off by default for privacy). Meeting recordings live separately in &lt;config&gt;/meetings/&lt;id&gt;/." />
+                           Text="Past transcriptions: dictations, file-load, meetings. Full-text searchable. Audio retention is opt-in (off by default for privacy). Meeting recordings live separately in &lt;config&gt;/meetings/&lt;id&gt;/." />
               </StackPanel>
 
               <Grid ColumnSpacing="8" Margin="0,4,0,0">
@@ -1730,7 +1752,7 @@
                              Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                              TextWrapping="Wrap"
                              Visibility="Collapsed"
-                             Text="Need to downgrade, cancel, or update payment? Use the &quot;Manage subscription&quot; button above — it opens the secure Stripe billing portal." />
+                             Text="Need to downgrade, cancel, or update payment? Use the &quot;Manage subscription&quot; button above. It opens the secure Stripe billing portal." />
                   <InfoBar x:Name="LicenseBuyInfoBar" IsOpen="False" IsClosable="True"
                            Severity="Informational" Message="" />
                 </StackPanel>
@@ -1760,7 +1782,7 @@
                   <TextBlock FontSize="12"
                              Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                              TextWrapping="Wrap"
-                             Text="Enter your email. We'll send you a magic link — clicking it opens Dimmy and activates the license automatically. New device on the same email? Same flow, the device joins your existing license." />
+                             Text="Enter your email. We'll send you a magic link. Clicking it opens Dimmy and activates the license automatically. New device on the same email? Same flow, the device joins your existing license." />
                   <Grid ColumnSpacing="8">
                     <Grid.ColumnDefinitions>
                       <ColumnDefinition Width="*" />
@@ -1836,7 +1858,7 @@
               </controls:SettingCard>
               <controls:SettingCard Glyph="&#xE7B5;"
                                     Label="ggml debug logging"
-                                    Description="Verbose model load output from ggml — useful when local models fail to start.">
+                                    Description="Verbose model load output from ggml. Useful when local models fail to start.">
                 <ToggleSwitch IsOn="{Binding GgmlDebugLogging, Mode=TwoWay}"
                               OnContent="" OffContent="" />
               </controls:SettingCard>
@@ -1884,12 +1906,12 @@
                   </TextBlock>
                   <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                              TextWrapping="Wrap"
-                             Text="Driver fingerprint matches the crash — Dimmy will keep using CPU. If you've updated drivers, click Retry GPU and restart Dimmy."
+                             Text="Driver fingerprint matches the crash. Dimmy will keep using CPU. If you've updated drivers, click Retry GPU and restart Dimmy."
                              Visibility="{Binding GpuFingerprintMatches, Mode=OneWay,
                                           Converter={StaticResource BoolToVisibilityConverter}}" />
                   <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                              TextWrapping="Wrap"
-                             Text="Driver fingerprint changed since the crash — GPU will be retried automatically on next launch."
+                             Text="Driver fingerprint changed since the crash. GPU will be retried automatically on next launch."
                              Visibility="{Binding GpuFingerprintMatches, Mode=OneWay,
                                           Converter={StaticResource BoolToVisibilityConverter},
                                           ConverterParameter=Invert}" />
@@ -1903,22 +1925,29 @@
     </NavigationView>
 
     <!-- Footer -->
-    <Grid Grid.Row="1" Margin="16">
-      <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="*" />
-        <ColumnDefinition Width="Auto" />
-      </Grid.ColumnDefinitions>
-      <!-- Auto-save InfoBar — appears briefly when a setting is changed so
-           the user gets confirmation that the change persisted. Win11-native
-           pattern; pairs with the existing Save button for explicit commits. -->
-      <InfoBar x:Name="SavedInfoBar" Grid.Column="0"
-               IsOpen="False" IsClosable="False" Severity="Success"
-               Message="Saved"
-               HorizontalAlignment="Left" VerticalAlignment="Center" />
-      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
-        <Button Content="Cancel" Click="Cancel_Click" />
-        <Button Content="Save" Click="Save_Click" Style="{ThemeResource AccentButtonStyle}" />
-      </StackPanel>
-    </Grid>
+    <!-- Bottom action bar: auto-save badge as a button-height pill
+         (WinUI's stock InfoBar is ~50 px tall and dwarfs Cancel/Save).
+         Same 32 px height as the buttons it sits next to. -->
+    <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8"
+                HorizontalAlignment="Right" Margin="16">
+      <Border x:Name="SavedInfoBar"
+              Visibility="Collapsed"
+              Background="#1A4CAF50"
+              BorderBrush="#4CAF50"
+              BorderThickness="1"
+              CornerRadius="4"
+              Padding="10,0"
+              Height="32"
+              VerticalAlignment="Center">
+        <StackPanel Orientation="Horizontal" Spacing="6"
+                    VerticalAlignment="Center">
+          <FontIcon Glyph="&#xE73E;" FontSize="14" Foreground="#2E7D32"/>
+          <TextBlock Text="Saved" FontSize="13" Foreground="#1B5E20"
+                     VerticalAlignment="Center"/>
+        </StackPanel>
+      </Border>
+      <Button Content="Cancel" Click="Cancel_Click" />
+      <Button Content="Save" Click="Save_Click" Style="{ThemeResource AccentButtonStyle}" />
+    </StackPanel>
   </Grid>
 </Window>

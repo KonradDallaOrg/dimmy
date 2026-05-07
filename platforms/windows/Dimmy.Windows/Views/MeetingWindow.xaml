@@ -3,7 +3,7 @@
     x:Class="Dimmy.Windows.Views.MeetingWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    Title="Dimmy — Meeting">
+    Title="Dimmy Meeting">
 
     <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
           Padding="24" RowSpacing="14">

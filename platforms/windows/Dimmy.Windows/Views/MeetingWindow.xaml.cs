@@ -27,7 +27,7 @@ public sealed partial class MeetingWindow : Window
     {
         App.Log("ctor enter", "Meeting");
         this.InitializeComponent();
-        Title = "Dimmy — Meeting";
+        Title = "Dimmy Meeting";
         try
         {
             var appWindow = WindowHelper.GetAppWindow(this);
@@ -134,7 +134,7 @@ public sealed partial class MeetingWindow : Window
             DirText.Text = dir;
             OpenFolderBtn.IsEnabled = !string.IsNullOrEmpty(dir);
             TranscriptText.Text = string.IsNullOrEmpty(transcript)
-                ? "(no transcript — VAD may have removed all audio)"
+                ? "(no transcript: VAD may have removed all audio)"
                 : transcript;
             StatusDot.Fill = new SolidColorBrush(Microsoft.UI.Colors.SeaGreen);
             StatusText.Text = $"Done · {dur:F0}s · {chunks} chunks" + (err != null ? $" · err: {err}" : "");
@@ -280,7 +280,7 @@ public sealed partial class MeetingWindow : Window
                 StatusText.Text = rc switch
                 {
                     -2 => "Configure an LLM API key + URL first",
-                    -3 => "LLM HTTP call failed — see dimmy.log",
+                    -3 => "LLM HTTP call failed (see dimmy.log)",
                     _ => $"LLM call returned {rc}",
                 };
                 return;

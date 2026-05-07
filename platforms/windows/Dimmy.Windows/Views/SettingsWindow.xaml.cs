@@ -468,7 +468,7 @@ public sealed partial class SettingsWindow : Window
         var mins = (int)Math.Round(durationSecs / 60.0);
         var sizeMb = sizeBytes / (1024.0 * 1024.0);
         var costHint = isCloud
-            ? "\nThis will be sent to your configured cloud provider — billing applies."
+            ? "\nThis will be sent to your configured cloud provider. Billing applies."
             : "\nThis runs locally and may take a few minutes.";
         var dlg = new ContentDialog
         {
@@ -514,9 +514,9 @@ public sealed partial class SettingsWindow : Window
                     -1 => "Bad arguments",
                     -2 => "Could not open / decode the WAV",
                     -3 => "VAD removed all audio (file silent?)",
-                    -4 => "Cloud mode rejected — should not happen",
+                    -4 => "Cloud mode rejected (should not happen)",
                     -5 => "Backend produced empty transcript",
-                    -6 => "Cloud config incomplete — set provider URL/key/model in Settings",
+                    -6 => "Cloud config incomplete. Set provider URL, key, and model in Settings.",
                     -7 => "Tokio runtime failed to start",
                     -8 => "Cloud transcribe failed (see dimmy.log)",
                     _ => $"Failed (code {rc})",
@@ -961,6 +961,10 @@ public sealed partial class SettingsWindow : Window
             {
                 ViewModel.LlmApiUrl = preset.Url;
                 ViewModel.LlmApiModel = preset.DefaultModel;
+                // Refresh the green ✓ for the newly-picked provider — without
+                // this the badge shows the previous provider's state until the
+                // user clicks Save (and Rust echoes back a fresh config).
+                ViewModel.HasLlmKey = ViewModel.HasLlmKeyForUrl(preset.Url);
                 LlmCustomUrlBox.Visibility = Visibility.Collapsed;
                 LlmCustomModelBox.Visibility = Visibility.Collapsed;
             }
@@ -968,6 +972,7 @@ public sealed partial class SettingsWindow : Window
             {
                 LlmCustomUrlBox.Visibility = Visibility.Visible;
                 LlmCustomModelBox.Visibility = Visibility.Visible;
+                ViewModel.HasLlmKey = ViewModel.HasLlmKeyForUrl(ViewModel.LlmApiUrl);
             }
             // Refresh the green-check badge for the newly-selected provider.
             // Without this, switching to a provider with a saved key still
@@ -1101,7 +1106,7 @@ public sealed partial class SettingsWindow : Window
                 var status = downloaded ? "Ready" : $"{sizeMb}MB";
                 var item = new ComboBoxItem
                 {
-                    Content = $"{name} — {desc} ({status})",
+                    Content = $"{name}: {desc} ({status})",
                     Tag = filename
                 };
                 LocalModelComboBox.Items.Add(item);
@@ -1120,7 +1125,7 @@ public sealed partial class SettingsWindow : Window
             var parakeetStatus = parakeetDownloaded ? "Ready" : "2.5GB";
             LocalModelComboBox.Items.Add(new ComboBoxItem
             {
-                Content = $"Parakeet TDT v3 FP32 — fast, EU-language friendly ({parakeetStatus})",
+                Content = $"Parakeet TDT v3 FP32: fast, EU-language friendly ({parakeetStatus})",
                 Tag = ParakeetTag,
             });
             if (ViewModel.LocalSttBackend == "parakeet")
@@ -1357,7 +1362,7 @@ public sealed partial class SettingsWindow : Window
                 var status = downloaded ? "Ready" : $"{sizeMb}MB";
                 var item = new ComboBoxItem
                 {
-                    Content = $"{name} — {desc} ({status})",
+                    Content = $"{name}: {desc} ({status})",
                     Tag = filename
                 };
                 LocalLlmModelComboBox.Items.Add(item);
@@ -1538,21 +1543,21 @@ public sealed partial class SettingsWindow : Window
             var s = LicenseService.GetStatus();
             (string head, string detail) = s.Kind switch
             {
-                "Unrestricted" => ("Source build — no licensing",
+                "Unrestricted" => ("Source build (no licensing)",
                                     "This binary was built without a licensing public key. All features are unlocked."),
                 "NotFound"     => ("No license on this device",
                                     "Start a trial below or paste an activation code from your email."),
-                "TrialActive"  => ($"Trial — {s.DaysRemaining} day(s) left",
+                "TrialActive"  => ($"Trial: {s.DaysRemaining} day(s) left",
                                     "You're in your free 14-day trial. Cloud + auto-update are enabled."),
                 "TrialExpired" => ("Trial expired",
                                     "Your trial has ended. Cloud features are paused. Purchase a license to continue."),
-                "Active"       => ($"Active — {s.Tier} ({s.DaysRemaining} day(s) left)",
+                "Active"       => ($"Active: {s.Tier} ({s.DaysRemaining} day(s) left)",
                                     s.CancelsAt is long ca
                                         ? $"Subscription scheduled to cancel on {DateTimeOffset.FromUnixTimeSeconds(ca).LocalDateTime:MMM d, yyyy}. You keep cloud features until then."
                                         : "Thanks for supporting Dimmy. All cloud features are enabled."),
                 "Expired"      => ("License expired",
                                     "Renew to re-enable cloud features."),
-                "Suspended"    => ($"Suspended — offline {s.DaysOffline} day(s)",
+                "Suspended"    => ($"Suspended: offline {s.DaysOffline} day(s)",
                                     "Reconnect this device to refresh your license."),
                 "Invalid"      => ("License file invalid",
                                     s.Error ?? "Re-activate this device."),
@@ -1947,7 +1952,7 @@ public sealed partial class SettingsWindow : Window
                 "Your subscription on Stripe will stay active and will keep " +
                 "billing on its renewal date. To cancel billing, use 'Manage subscription' instead.\n\n" +
                 "If you sign out, your activation token on this device is removed. " +
-                "You can sign in again from the same email — we'll resend the magic link.",
+                "You can sign in again from the same email; we'll resend the magic link.",
             PrimaryButtonText = "Sign out",
             SecondaryButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Secondary,
@@ -2040,7 +2045,7 @@ public sealed partial class SettingsWindow : Window
                 show = true;
                 break;
             case "TrialExpired":
-                headline = "Trial ended — buy to continue";
+                headline = "Trial ended. Buy to continue.";
                 detail = "Cloud features are paused. Pick a plan to re-activate. Local + BYOK keep working free either way.";
                 show = true;
                 break;
@@ -2207,10 +2212,10 @@ public sealed partial class SettingsWindow : Window
                     Content =
                         $"You're already subscribed (current: {ToTitleCase(status.Tier ?? "")}). " +
                         $"Switching to {tier} mutates your existing subscription:\n\n" +
-                        "• No new payment now — Stripe reuses your saved card.\n" +
+                        "• No new payment now. Stripe reuses your saved card.\n" +
                         "• Stripe issues a prorated invoice on the next billing date " +
                         "(credit for unused days of the old plan, debit for the new one).\n" +
-                        "• No magic-link email — your license stays active, just the tier changes.",
+                        "• No magic-link email; your license stays active, just the tier changes.",
                     PrimaryButtonText = $"Switch to {ToTitleCase(tier)}",
                     SecondaryButtonText = "Cancel",
                     DefaultButton = ContentDialogButton.Primary,
@@ -2285,7 +2290,7 @@ public sealed partial class SettingsWindow : Window
                         Title = $"You already have a {c.CurrentTier} license",
                         Content =
                             $"The email {promptedEmail} is already linked to an active {c.CurrentTier} license. " +
-                            "We can resend the activation magic link for that license — " +
+                            "We can resend the activation magic link for that license. " +
                             "no new payment, no second sub.",
                         PrimaryButtonText = "Send magic link",
                         SecondaryButtonText = "Cancel",
@@ -2483,7 +2488,7 @@ public sealed partial class SettingsWindow : Window
     private void PulseSavedInfoBar()
     {
         if (!_loaded) return;
-        SavedInfoBar.IsOpen = true;
+        SavedInfoBar.Visibility = Visibility.Visible;
         _savedPulseTimer ??= DispatcherQueue.CreateTimer();
         _savedPulseTimer.Stop();
         _savedPulseTimer.Interval = TimeSpan.FromMilliseconds(1500);
@@ -2494,7 +2499,7 @@ public sealed partial class SettingsWindow : Window
     }
     private void OnSavedPulseTick(DispatcherQueueTimer sender, object args)
     {
-        SavedInfoBar.IsOpen = false;
+        SavedInfoBar.Visibility = Visibility.Collapsed;
         sender.Stop();
     }
 
@@ -2930,7 +2935,7 @@ public sealed partial class SettingsWindow : Window
         try
         {
             DimmyNative.TelemetryResetAnonymousId();
-            AnonymousIdText.Text = "(reset — restart Dimmy to apply)";
+            AnonymousIdText.Text = "(reset; restart Dimmy to apply)";
         }
         catch { /* best-effort, this is a privacy action */ }
     }

@@ -735,30 +735,38 @@ public partial class App : Application
     /// Rust core. The Rust matcher uses it later (LLM-enhance time) to
     /// resolve any user-defined app_rules. Empty string is fine — Rust
     /// treats it as "no rule matches" and falls back to user defaults.
+    /// Snapshot of the foreground window taken at the moment the user
+    /// pressed the hotkey. Captured once in CaptureAndPushAppContext
+    /// and consumed in the PASTE phase to detect "focus drift" (window
+    /// switched between record and paste — paste lands somewhere
+    /// unexpected). Cleared after PASTE so the next press starts fresh.
+    private Helpers.AppContextCapture.CapturedTargetContext? _targetContext;
+
     private void CaptureAndPushAppContext()
     {
         try
         {
-            var fg = Helpers.AppContextCapture.GetForegroundApp();
-            // Bundle id + wm_class are macOS / Linux specific — leave
-            // empty on Windows. The Rust core matches first-non-empty.
-            var json = "{\"process_name\":\""
-                + System.Text.Json.JsonEncodedText.Encode(fg.ProcessName).ToString()
-                + "\",\"bundle_id\":\"\",\"wm_class\":\"\"}";
-            var rc = DimmyNative.dimmy_set_app_context(json);
+            var snap = Helpers.AppContextCapture.SnapshotForeground();
+            _targetContext = snap.IsEmpty ? null : snap;
+            PttLog($"PRESS target: {snap.ToLogString()}");
+            // ToCoreJson stays privacy-safe (process_name only — no
+            // window title, no exe path crosses FFI). Mac/Linux bundle
+            // ids stay empty here.
+            var rc = DimmyNative.dimmy_set_app_context(snap.ToCoreJson());
             // Fire-and-forget icon extraction: SHGetFileInfo on the exe
             // path → PNG cache. Future Settings → App Rules renders
             // pull the cached PNG instead of a hand-rolled SVG.
-            if (fg.HasValue && !string.IsNullOrEmpty(fg.ExePath))
+            if (!snap.IsEmpty && !string.IsNullOrEmpty(snap.ExecutablePath))
             {
+                var exePath = snap.ExecutablePath;
                 System.Threading.Tasks.Task.Run(() =>
-                    Helpers.IconExtractor.EnsureCachedFromExePath(fg.ExePath));
+                    Helpers.IconExtractor.EnsureCachedFromExePath(exePath));
             }
             // Always log the captured value so diagnosing "rules don't
             // match" only requires reading ptt.log: empty = capture
             // failed (UAC-elevated foreground, exotic shell), non-empty
             // = what we sent to Rust for the resolve() lookup.
-            Log($"captured process='{fg.ProcessName}' rc={rc}", "AppCtx");
+            Log($"captured process='{snap.ProcessName}' rc={rc}", "AppCtx");
         }
         catch (Exception ex)
         {
@@ -847,8 +855,31 @@ public partial class App : Application
                     var result = DimmyNative.dimmy_start_recording();
                     if (result == -1)
                         _appViewModel.SetError("No API key configured");
+                    else if (result == -2)
+                    {
+                        // Race: Rust thinks it's already recording (a previous
+                        // start that we initiated is still spinning up the
+                        // audio stream and hasn't fired recording_started yet
+                        // → ViewModel still shows IsRecording=false → we
+                        // mistook this press as a "start" instead of "stop").
+                        // Auto-recover: treat as the intended stop. This is
+                        // the difference between a frustrating "Recording
+                        // failed (-2)" toast and the user's intent.
+                        PttLog("Toggle race: dimmy_start_recording returned -2 (already recording) — treating as stop");
+                        await StopAndProcess();
+                    }
                     else if (result < 0)
                         _appViewModel.SetError($"Recording failed ({result})");
+                    else
+                    {
+                        // Optimistic state update: Rust is now recording, but
+                        // the recording_started event roundtrip can take ~1s
+                        // (audio stream build time). Without this, a quick
+                        // second toggle press during the build window would
+                        // see IsRecording=false and try to start AGAIN — the
+                        // -2 race above. Setting state here closes the gap.
+                        _appViewModel.SetState(AppState.Recording);
+                    }
                 }
             }
         });
@@ -889,10 +920,26 @@ public partial class App : Application
             PttLog($"StopAndProcess: IsSuccess={result.IsSuccess}, IsEmpty={result.IsEmpty}, IsTimeout={result.IsTimeout}, Text={result.Text?.Length ?? 0} chars, Error={result.Error}");
             if (result.IsSuccess)
             {
+                // Focus drift diagnostic: did the foreground window
+                // change between PRESS (CaptureAndPushAppContext) and
+                // now (PASTE)? If so the user clicked away during the
+                // STT/LLM round-trip and our Ctrl+V will land in the
+                // wrong app — log it explicitly so debugging "paste
+                // disappeared" doesn't require ptt.log archaeology.
+                var prePaste = Helpers.AppContextCapture.SnapshotForeground();
+                var target = _targetContext;
+                if (target == null)
+                    PttLog($"PASTE pre: no target snapshot recorded; current fg={prePaste.ToLogString()}");
+                else if (prePaste.Hwnd != target.Hwnd)
+                    PttLog($"PASTE pre: FOCUS DRIFT — target was 0x{target.Hwnd.ToInt64():X} '{target.WindowTitle}', now 0x{prePaste.Hwnd.ToInt64():X} '{prePaste.WindowTitle}' (proc='{prePaste.ProcessName}')");
+                else
+                    PttLog($"PASTE pre: foreground unchanged ({prePaste.ToLogString()})");
+
                 PttLog($"StopAndProcess: pasting text ({result.Text!.Length} chars)");
                 await TextInjectionService.PasteText(result.Text!, _appViewModel.KeepInClipboard);
                 // Show completing state (checkmark) AFTER paste — PillWindow timer returns to Idle
                 _appViewModel.SetState(AppState.Completing);
+                _targetContext = null; // consumed
             }
             else if (result.IsTimeout)
             {
