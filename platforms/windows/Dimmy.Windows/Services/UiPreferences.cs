@@ -40,6 +40,13 @@ public sealed class UiPreferences
     /// this is just a UX convenience pre-fill, no auth weight.</summary>
     public string? BuyerEmail { get; set; }
 
+    /// <summary>Settings-window theme: "Default" (system / auto), "Light",
+    /// or "Dark". Lives here instead of config.json because the Rust core
+    /// has no Theme field — pushing it via dimmy_set_config_json silently
+    /// drops on Rust's re-serialise, which is the root cause of the
+    /// "set Light → reverts to Auto on reopen" bug.</summary>
+    public string Theme { get; set; } = "Default";
+
     private static string PrefsPath
     {
         get

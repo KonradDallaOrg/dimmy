@@ -25,7 +25,9 @@ public sealed partial class SettingsWindow : Window
 
         if (Content is FrameworkElement root)
         {
-            root.RequestedTheme = ElementTheme.Light;
+            // Theme is applied later from UiPreferences via
+            // SyncThemeRadioButtons; setting it here would override
+            // the saved value before LoadConfig runs.
             root.DataContext = ViewModel;
         }
 
@@ -855,6 +857,11 @@ public sealed partial class SettingsWindow : Window
         var uiPrefs = Services.UiPreferences.Load();
         ViewModel.PillShowOnStartup = uiPrefs.PillShowOnStartup;
         ViewModel.PillShowOnHotkey = uiPrefs.PillShowOnHotkey;
+        // Theme lives in UiPreferences, not config.json — see
+        // UiPreferences.Theme docstring for the bug history. Override
+        // any value LoadFromJson may have produced (which would always
+        // be the "Default" fallback because Rust strips unknown keys).
+        ViewModel.Theme = uiPrefs.Theme;
 
         // Also read from FFI for runtime-only fields (has_key, has_llm_key, devices)
         // that are NOT in config.json (Rust computes them from keystore).
@@ -2574,7 +2581,24 @@ public sealed partial class SettingsWindow : Window
             };
             // Save theme choice and apply to pill (Light → glass, Dark/Default → dark)
             ViewModel.Theme = tag;
-            if (_loaded) App.Instance?.ApplySettings(ViewModel);
+            if (_loaded)
+            {
+                // Persist to UiPreferences (NOT config.json — Rust core
+                // has no Theme field and would silently drop it). The
+                // pill-prefs save path is already wired separately so
+                // we just touch the Theme key here.
+                try
+                {
+                    var prefs = Services.UiPreferences.Load();
+                    prefs.Theme = tag;
+                    prefs.Save();
+                }
+                catch (Exception ex)
+                {
+                    App.Log($"Theme persist failed: {ex.Message}", "Settings");
+                }
+                App.Instance?.ApplySettings(ViewModel);
+            }
         }
     }
 
