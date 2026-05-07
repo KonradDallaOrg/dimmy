@@ -80,6 +80,25 @@ cargo test --release --test ffi_e2e --features local-stt,test-ffi -- --test-thre
 
 CI treats clippy warnings as errors. CI uses the same feature flags — mismatching will go green locally and red in CI. If you touched Linux UI, also `cd platforms/linux && cargo clippy -- -D warnings && cargo test`. If you touched Windows UI / onboarding / XAML, also run the FlaUI smoke tests (see [`docs/dev/testing.md`](docs/dev/testing.md)).
 
+## v2 surfaces — what shipped on `feat/v2-unified` (2026-05)
+
+The current `staging` is **v0.6.29** with the v2 unified feature set.
+A fresh Claude session needs to know these modules + FFI surfaces
+exist before touching anything:
+
+| Surface | Rust module | FFI entries | UI mirror (Win) |
+|---|---|---|---|
+| **App-context rules** — per-app LLM style override | `app_rules.rs` | `dimmy_set_app_context`, `dimmy_clear_app_context` | `Helpers/AppContextCapture.cs` (rich: HWND + focus drift), `ViewModels/AppRuleViewModel.cs` |
+| **History v2 schema** — enhanced text, audio path, app process, word timestamps, retention | `history.rs` (idempotent ALTER TABLE) | `dimmy_history_recent`, `_search`, `_update_enhanced`, `_update_audio`, `_update_word_timestamps` | `ViewModels/HistoryItemViewModel.cs`, History detail panel in `SettingsWindow.xaml` |
+| **File load** (drop / picker → transcribe, local OR cloud) | extends `ffi.rs` (chunked + cloud branch) | `dimmy_transcribe_file` (rc -1..-8) | `Helpers/Win32FileDialog.cs`, `Helpers/Win32DropTarget.cs` (UIPI bypass), `Helpers/WavPeaks.cs`, ConfirmLargeFileAsync |
+| **Meeting mode** — long-form record + LLM recap | `meeting.rs` (worker thread, streaming WAV, transcripts.txt) | `dimmy_meeting_start/_stop/_save_post_process/_list_orphans/_is_active` | `Views/MeetingWindow.xaml` (poll 2 s) |
+| **LLM raw** (bypass dictation prompt for recap) | `llm.rs::process_raw_prompt` | `dimmy_llm_call_raw` | meeting recap auto-trigger |
+| **Parakeet TDT v3 STT** + word timestamps | `parakeet.rs::transcribe_with_word_timestamps` | inside `dimmy_transcribe_file` | (Mac uses `parakeet_fluid.rs` via FluidAudio) |
+| **App icons from .exe** — alpha-preserved 256×256 PNGs | (no Rust) | (no FFI) | `Helpers/IconExtractor.cs` (`IShellItemImageFactory` + `GetDIBits` ARGB) |
+| **Pill / Taskbar / JumpList** | (no Rust) | (no FFI) | `Services/TaskbarService.cs`, `JumpListService.cs`, `CommandPipeServer.cs` |
+
+Hardening status: see [`docs/dev/v2-test-hardening-plan.md`](docs/dev/v2-test-hardening-plan.md) — the new surfaces above shipped without coverage; that plan is the next-up TDD pass.
+
 ## Decision tree — where does this change go?
 
 | You want to... | Go here |
@@ -87,10 +106,15 @@ CI treats clippy warnings as errors. CI uses the same feature flags — mismatch
 | Add a cloud STT provider | `core/src/provider.rs` + routing in `transcribe.rs` |
 | Add an LLM post-processing style | `core/src/llm.rs` + UI dropdown in each platform |
 | Add a config field | `core/src/lib.rs` (struct) → `ffi.rs` getter/setter → each platform UI |
+| Add an FFI entry | `core/src/ffi.rs` + `core/tests/v2_ffi.rs` (round-trip) + each platform's interop wrapper |
+| Add an app-rule trigger | `core/src/app_rules.rs::resolve` + UI capture (Win: `Helpers/AppContextCapture.cs`, Mac: `NSWorkspace`) |
 | Fix audio bug | Reproduce in `preprocess.rs` test FIRST, read `docs/dev/audio-pipeline.md`, then fix |
+| Add a meeting feature | `core/src/meeting.rs` (worker + transcripts.txt) + UI window + LLM raw handoff |
+| Touch the file-load pipeline | `dimmy_transcribe_file` in `ffi.rs` — rc table is contractual, don't renumber |
 | Touch macOS FFI | Read `docs/dev/known-bugs.md` MACOS-001/002/003 first |
 | Touch Windows CI / installer | Read `docs/dev/windows-ci.md` — 10 invariants, all paid in blood |
-| Add a doc | Put it in `docs/dev/`. Don't duplicate content in `CLAUDE.md` or `README.md` — link. |
+| Add a test | Read `docs/dev/testing.md` (tier definitions) + `docs/dev/v2-test-hardening-plan.md` (Phase 7+8 hardening) |
+| Add a doc | `docs/dev/` (permanent) or `docs/superpowers/handoffs/` (time-bound). DO NOT link handoffs from `CLAUDE.md` — they decay; this file describes the codebase, not work-in-progress. |
 
 ## Critical invariants (beyond the philosophy)
 

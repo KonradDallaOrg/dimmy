@@ -3,19 +3,26 @@ name: Staging Release
 on:
   push:
     branches: [staging]
+    # Doc-only / mockup / markdown commits don't need a 30-min
+    # installer build. The actual sources we ship live under
+    # core/, platforms/, scripts/, .github/. Anything else can be
+    # committed without burning CI runners.
+    paths-ignore:
+      - 'docs/**'
+      - 'mockup/**'
+      - '**/*.md'
+      - 'CLAUDE.md'
   workflow_dispatch:
 
 permissions:
   contents: write
 
-# Auto-cancel any earlier in-flight staging run when a new commit
-# lands on the branch. Without this, fast follow-up pushes (e.g.
-# pushing a fmt fix on top of a failing run) leave the prior run's
-# Win/Linux/Mac builds burning CI minutes for no reason — we already
-# know the head moved.
-concurrency:
-  group: staging-native-${{ github.ref }}
-  cancel-in-progress: true
+# NOTE: cancel-in-progress=true was tried earlier (commit 0bd2209)
+# and reverted — it killed long-running builds the user was waiting
+# on whenever a follow-up commit landed (e.g. doc tweaks). The
+# paths-ignore above keeps doc commits from triggering at all,
+# solving the same problem without the destructive behavior.
+# Manual `gh run cancel` is the explicit alternative.
 
 jobs:
   # ── Rust core lint + test (runs in parallel with builds) ────────────
