@@ -521,6 +521,7 @@ pub fn save_config_file(cfg: &AppConfig) {
             "overlay_position": cfg.overlay_position,
             "keep_in_clipboard": cfg.keep_in_clipboard,
             "input_gain": cfg.input_gain,
+            "audio_source": cfg.audio_source,
             "stats_total_words": cfg.stats_total_words,
             "stats_total_speaking_secs": cfg.stats_total_speaking_secs,
         });

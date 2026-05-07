@@ -556,7 +556,7 @@
                            CharacterSpacing="40" Margin="2,20,0,8" />
                 <controls:SettingCard Glyph="&#xE767;"
                                       Label="Audio source"
-                                      Description="Microphone (default), system audio (loopback — captures what's playing through speakers, useful for Zoom / Teams), or both summed in time. Mac / Linux fall back to mic for now.">
+                                      Description="Microphone (default). System captures what's playing through your speakers (Zoom calls, Teams, YouTube). Mix runs both streams concurrently — note: experimental, timestamps are ~2× faster because the streams interleave. Mac / Linux fall back to mic for now.">
                   <StackPanel Orientation="Horizontal" Spacing="8">
                     <RadioButton x:Name="AudioSourceMic" Content="Microphone"
                                  GroupName="AudioSource" Tag="mic"

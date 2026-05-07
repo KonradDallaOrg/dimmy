@@ -125,19 +125,28 @@ pub fn spawn_audio_thread(
                         let fallback_to_mic =
                             matches!(source, AudioSource::System) && system_device.is_none();
 
+                        // Decide PRIMARY: mic when available + wanted; otherwise the
+                        // loopback (system-only mode, or System fallback to mic
+                        // failed up-stream). Track is_primary_loopback so we read
+                        // the right cpal config endpoint below.
+                        let primary_is_loopback;
                         let primary = if (want_mic || fallback_to_mic) && mic_device.is_some() {
+                            primary_is_loopback = false;
                             mic_device.clone()
                         } else if let Some(ref sys) = system_device {
+                            primary_is_loopback = true;
                             Some(sys.clone())
                         } else {
+                            primary_is_loopback = false;
                             None
                         };
 
                         let device = match primary {
                             Some(d) => {
                                 crate::log(&format!(
-                                    "[Audio] Primary device: {:?}",
-                                    d.name().unwrap_or_default()
+                                    "[Audio] Primary device: {:?} loopback={}",
+                                    d.name().unwrap_or_default(),
+                                    primary_is_loopback
                                 ));
                                 d
                             }
@@ -147,7 +156,17 @@ pub fn spawn_audio_thread(
                             }
                         };
 
-                        let config = match device.default_input_config() {
+                        // cpal Windows host rejects default_input_config() on
+                        // output devices ("stream type not supported"). For
+                        // loopback we must read default_output_config() and pass
+                        // its config to build_input_stream — that activates
+                        // WASAPI loopback mode silently.
+                        let config_result = if primary_is_loopback {
+                            device.default_output_config()
+                        } else {
+                            device.default_input_config()
+                        };
+                        let config = match config_result {
                             Ok(c) => {
                                 crate::log(&format!(
                                     "[Audio] Primary config: sr={}, ch={}, fmt={:?}",
@@ -159,7 +178,7 @@ pub fn spawn_audio_thread(
                             }
                             Err(e) => {
                                 crate::log(&format!(
-                                    "[Audio] ERROR: Failed to get input config: {}",
+                                    "[Audio] ERROR: Failed to get primary config: {}",
                                     e
                                 ));
                                 continue;
@@ -287,9 +306,12 @@ pub fn spawn_audio_thread(
                         // by treating the loopback as the PRIMARY device.
                         if matches!(source, AudioSource::Mix) {
                             if let Some(sysdev) = system_device {
-                                if let Some(s) =
-                                    build_secondary_stream(&sysdev, &buffer, &input_gain)
-                                {
+                                if let Some(s) = build_secondary_stream(
+                                    &sysdev,
+                                    &buffer,
+                                    &input_gain,
+                                    /* is_loopback */ true,
+                                ) {
                                     let _ = s.play();
                                     streams.push(s);
                                     crate::log(
@@ -365,24 +387,53 @@ fn resolve_loopback_device(_host: &cpal::Host) -> Option<cpal::Device> {
 /// both streams interleave in time order; downstream VAD + AGC see
 /// them as a single mono track. Returns None on config / build
 /// failure (Mix mode degrades to mic-only in that case).
+///
+/// `is_loopback`: when true, the device is the default OUTPUT device
+/// being treated as a loopback INPUT — on Windows we must read its
+/// `default_output_config()` because cpal's Windows host rejects
+/// `default_input_config()` on output devices ("stream type not
+/// supported"), but `build_input_stream` with the OUTPUT config
+/// activates WASAPI loopback mode silently.
 fn build_secondary_stream(
     device: &cpal::Device,
     buffer: &Arc<Mutex<Vec<f32>>>,
     input_gain: &Arc<std::sync::atomic::AtomicU32>,
+    is_loopback: bool,
 ) -> Option<cpal::Stream> {
-    let config = match device.default_input_config() {
-        Ok(c) => {
-            crate::log(&format!(
-                "[Audio] Secondary config: sr={}, ch={}, fmt={:?}",
-                c.sample_rate().0,
-                c.channels(),
-                c.sample_format()
-            ));
-            c
+    let config = if is_loopback {
+        match device.default_output_config() {
+            Ok(c) => {
+                crate::log(&format!(
+                    "[Audio] Secondary loopback config: sr={}, ch={}, fmt={:?}",
+                    c.sample_rate().0,
+                    c.channels(),
+                    c.sample_format()
+                ));
+                c
+            }
+            Err(e) => {
+                crate::log(&format!(
+                    "[Audio] Secondary loopback default_output_config failed: {}",
+                    e
+                ));
+                return None;
+            }
         }
-        Err(e) => {
-            crate::log(&format!("[Audio] Secondary config failed: {}", e));
-            return None;
+    } else {
+        match device.default_input_config() {
+            Ok(c) => {
+                crate::log(&format!(
+                    "[Audio] Secondary input config: sr={}, ch={}, fmt={:?}",
+                    c.sample_rate().0,
+                    c.channels(),
+                    c.sample_format()
+                ));
+                c
+            }
+            Err(e) => {
+                crate::log(&format!("[Audio] Secondary config failed: {}", e));
+                return None;
+            }
         }
     };
     let channels = config.channels() as usize;
