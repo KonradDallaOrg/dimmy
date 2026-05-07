@@ -29,7 +29,13 @@ fi
 
 echo "[pre-commit] checking cargo fmt on staged Rust files…"
 cd core
-if ! cargo fmt --check 2>&1 | tail -20; then
+# Capture cargo fmt's exit status separately — `cargo ... | tail` would
+# mask the failure because `tail` always returns 0. We tee the diff
+# output for visibility AND propagate the original exit code.
+FMT_OUT=$(cargo fmt --check 2>&1)
+FMT_RC=$?
+if [ $FMT_RC -ne 0 ]; then
+    echo "$FMT_OUT" | tail -30
     echo ""
     echo "✗ cargo fmt --check FAILED — CI's Format step would reject this commit."
     echo ""
