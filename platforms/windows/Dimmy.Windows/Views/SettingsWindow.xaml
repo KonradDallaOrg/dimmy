@@ -1118,49 +1118,49 @@
                   </ListView.ItemContainerStyle>
                   <ListView.ItemTemplate>
                     <DataTemplate>
-                      <Grid ColumnSpacing="8" Padding="14,10" >
+                      <!-- Padding cut from 14,10 to 8,4 so the row
+                           shrinks from ~56 px to ~36 px. TextBox /
+                           ComboBox MinHeight=28 keeps Fluent default
+                           hit area without padding the row. -->
+                      <Grid ColumnSpacing="8" Padding="8,4" >
                         <!-- Order: icon, pattern (compact), match type,
                              style, translate, ENABLE TOGGLE, delete.
-                             Toggle moved to the right (just before
-                             delete) so the row reads left-to-right
-                             "what app → what to do → on/off → remove".
-                             Pattern shrunk from 2* to 1.4* — exe names
-                             are short and the field was eating layout. -->
+                             Toggle near delete so the row reads
+                             "what app → what to do → on/off → remove". -->
+                        <!-- Match-type column dropped: this is a Win
+                             build, the field is forced to
+                             "process_name" at rule-add time. Showing
+                             a "Process (Win) / Bundle (Mac) / WM_CLASS
+                             (Linux)" combo on every row was making
+                             users pick between options that never
+                             applied on this OS — pure friction. The
+                             field stays in the data model so a
+                             Mac-shared config still round-trips. -->
                         <Grid.ColumnDefinitions>
                           <ColumnDefinition Width="Auto"/>      <!-- icon -->
-                          <ColumnDefinition Width="1.4*"/>      <!-- pattern -->
-                          <ColumnDefinition Width="1.4*"/>      <!-- match type -->
-                          <ColumnDefinition Width="1.6*"/>      <!-- style -->
-                          <ColumnDefinition Width="1.4*"/>      <!-- translate -->
+                          <ColumnDefinition Width="2*"/>        <!-- pattern -->
+                          <ColumnDefinition Width="2*"/>        <!-- style -->
+                          <ColumnDefinition Width="1.6*"/>      <!-- translate -->
                           <ColumnDefinition Width="Auto"/>      <!-- enabled toggle -->
                           <ColumnDefinition Width="Auto"/>      <!-- delete -->
                         </Grid.ColumnDefinitions>
-                        <Grid Grid.Column="0" Width="24" Height="24"
+                        <Grid Grid.Column="0" Width="22" Height="22"
                               VerticalAlignment="Center" Margin="2,0,4,0">
-                          <!-- Real Windows icon extracted from the .exe
-                               at 256×256 via IShellItemImageFactory.
-                               Displayed at 24 px to match the remote
-                               model combo icons; cell size cut from 32
-                               so the row chrome doesn't dominate. -->
-                          <Image Width="24" Height="24"
+                          <Image Width="22" Height="22"
                                  Source="{Binding IconAssetUri, Mode=OneWay}"
                                  Visibility="{Binding IconAssetUri, Mode=OneWay, Converter={StaticResource NotNullToVisibilityConverter}}"/>
                           <FontIcon Glyph="{Binding IconGlyph, Mode=OneWay}"
-                                    FontSize="16"
+                                    FontSize="14"
                                     Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
                                     Visibility="{Binding IconAssetUri, Mode=OneWay, Converter={StaticResource NotNullToVisibilityConverter}, ConverterParameter=Invert}"/>
                         </Grid>
                         <TextBox Grid.Column="1"
+                                 VerticalAlignment="Center"
                                  Text="{Binding MatchPattern, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                  PlaceholderText="slack.exe" />
-                        <ComboBox Grid.Column="2" SelectedValue="{Binding MatchType, Mode=TwoWay}"
-                                  SelectedValuePath="Tag" HorizontalAlignment="Stretch">
-                          <ComboBoxItem Tag="process_name" Content="Process (Win)"/>
-                          <ComboBoxItem Tag="bundle_id" Content="Bundle (Mac)"/>
-                          <ComboBoxItem Tag="wm_class" Content="WM_CLASS (Linux)"/>
-                        </ComboBox>
-                        <ComboBox Grid.Column="3" SelectedValue="{Binding LlmStyle, Mode=TwoWay}"
-                                  SelectedValuePath="Tag" HorizontalAlignment="Stretch">
+                        <ComboBox Grid.Column="2" SelectedValue="{Binding LlmStyle, Mode=TwoWay}"
+                                  SelectedValuePath="Tag" HorizontalAlignment="Stretch"
+                                  VerticalAlignment="Center">
                           <ComboBoxItem Tag="off"            Content="Off (no LLM)"/>
                           <ComboBoxItem Tag="correct"        Content="Correct"/>
                           <ComboBoxItem Tag="summarize"      Content="Summarize"/>
@@ -1174,8 +1174,9 @@
                           <ComboBoxItem Tag="imbruttito"     Content="Imbruttito"/>
                           <ComboBoxItem Tag="prompt"         Content="Custom prompt"/>
                         </ComboBox>
-                        <ComboBox Grid.Column="4" SelectedValue="{Binding LlmTranslateTo, Mode=TwoWay}"
-                                  SelectedValuePath="Tag" HorizontalAlignment="Stretch">
+                        <ComboBox Grid.Column="3" SelectedValue="{Binding LlmTranslateTo, Mode=TwoWay}"
+                                  SelectedValuePath="Tag" HorizontalAlignment="Stretch"
+                                  VerticalAlignment="Center">
                           <ComboBoxItem Tag=""    Content="No translation"/>
                           <ComboBoxItem Tag="en"  Content="→ English"/>
                           <ComboBoxItem Tag="it"  Content="→ Italiano"/>
@@ -1184,12 +1185,12 @@
                           <ComboBoxItem Tag="de"  Content="→ Deutsch"/>
                           <ComboBoxItem Tag="pt"  Content="→ Português"/>
                         </ComboBox>
-                        <ToggleSwitch Grid.Column="5"
+                        <ToggleSwitch Grid.Column="4"
                                       IsOn="{Binding Enabled, Mode=TwoWay}"
                                       OnContent="" OffContent="" MinWidth="0"
                                       VerticalAlignment="Center"
                                       ToolTipService.ToolTip="Enable rule"/>
-                        <Button Grid.Column="6"
+                        <Button Grid.Column="5"
                                 Click="AppRuleDelete_Click"
                                 Tag="{Binding}"
                                 ToolTipService.ToolTip="Remove rule"
@@ -1924,16 +1925,27 @@
     </NavigationView>
 
     <!-- Footer -->
-    <!-- Bottom action bar: the auto-save badge sits flush-right next
-         to Cancel/Save instead of stretching the full bottom strip
-         and overlapping the sidebar's "Advanced mode" toggle when
-         the window is narrowed. -->
+    <!-- Bottom action bar: auto-save badge as a button-height pill
+         (WinUI's stock InfoBar is ~50 px tall and dwarfs Cancel/Save).
+         Same 32 px height as the buttons it sits next to. -->
     <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8"
                 HorizontalAlignment="Right" Margin="16">
-      <InfoBar x:Name="SavedInfoBar"
-               IsOpen="False" IsClosable="False" Severity="Success"
-               Message="Saved"
-               VerticalAlignment="Center" />
+      <Border x:Name="SavedInfoBar"
+              Visibility="Collapsed"
+              Background="#1A4CAF50"
+              BorderBrush="#4CAF50"
+              BorderThickness="1"
+              CornerRadius="4"
+              Padding="10,0"
+              Height="32"
+              VerticalAlignment="Center">
+        <StackPanel Orientation="Horizontal" Spacing="6"
+                    VerticalAlignment="Center">
+          <FontIcon Glyph="&#xE73E;" FontSize="14" Foreground="#2E7D32"/>
+          <TextBlock Text="Saved" FontSize="13" Foreground="#1B5E20"
+                     VerticalAlignment="Center"/>
+        </StackPanel>
+      </Border>
       <Button Content="Cancel" Click="Cancel_Click" />
       <Button Content="Save" Click="Save_Click" Style="{ThemeResource AccentButtonStyle}" />
     </StackPanel>

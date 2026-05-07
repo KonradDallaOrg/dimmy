@@ -2488,7 +2488,7 @@ public sealed partial class SettingsWindow : Window
     private void PulseSavedInfoBar()
     {
         if (!_loaded) return;
-        SavedInfoBar.IsOpen = true;
+        SavedInfoBar.Visibility = Visibility.Visible;
         _savedPulseTimer ??= DispatcherQueue.CreateTimer();
         _savedPulseTimer.Stop();
         _savedPulseTimer.Interval = TimeSpan.FromMilliseconds(1500);
@@ -2499,7 +2499,7 @@ public sealed partial class SettingsWindow : Window
     }
     private void OnSavedPulseTick(DispatcherQueueTimer sender, object args)
     {
-        SavedInfoBar.IsOpen = false;
+        SavedInfoBar.Visibility = Visibility.Collapsed;
         sender.Stop();
     }
 

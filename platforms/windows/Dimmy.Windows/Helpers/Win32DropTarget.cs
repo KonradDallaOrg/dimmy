@@ -53,12 +53,26 @@ public sealed class Win32DropTarget : IDisposable
         foreach (var h in hwnds)
         {
             var cls = GetClassName(h);
-            // CRITICAL: WinUI 3 installs its own IDropTarget on these
-            // HWNDs (especially InputSiteWindowClass). The OLE→
-            // WM_DROPFILES translation Windows does for WS_EX_ACCEPTFILES
-            // windows only kicks in when no IDropTarget is registered.
-            // Revoke first so the legacy path actually fires.
-            RevokeDragDrop(h);
+            // WinUI 3 uses InputSiteWindowClass + DesktopChildSiteBridge
+            // for its internal OLE drag-drop (XAML drag events,
+            // ListView reorder). RevokeDragDrop'ing those HWNDs kills
+            // ListView CanReorderItems entirely — observed by the user
+            // when rule rows refused to drag-reorder. Only revoke on
+            // the outer Win32 window class which doesn't host XAML
+            // content-level drag/drop.
+            if (cls != "WinUIDesktopWin32WindowClass" && cls != "InputNonClientPointerSource")
+            {
+                // For content-host HWNDs we still install
+                // DragAcceptFiles + WM_DROPFILES subclass below, but
+                // we LEAVE WinUI 3's IDropTarget alone. The OS routes
+                // a file drop to whichever responds first; ListView
+                // reorder uses XAML drag types that aren't CF_HDROP
+                // so they don't conflict.
+            }
+            else
+            {
+                RevokeDragDrop(h);
+            }
             // Enable WM_DROPFILES delivery on this HWND. Without this
             // the OS doesn't even tell the wndproc about file drops.
             DragAcceptFiles(h, true);
