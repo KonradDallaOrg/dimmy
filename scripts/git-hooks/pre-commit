@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Dimmy pre-commit hook — refuses commits that would fail CI's
+# `cargo fmt --check` step. Activated by:
+#
+#   ./scripts/install-hooks.sh
+#
+# which sets `core.hooksPath` to scripts/git-hooks/. The hook is
+# committed to the repo (unlike .git/hooks which is per-clone) so
+# every contributor gets the same enforcement after running the
+# installer once.
+#
+# Why we need it: every cherry-pick / merge / external PR brings
+# in code whose rustfmt opinion may differ from this repo's
+# rustfmt.toml output. Without this hook, the only place that
+# catches the drift is CI — 1-2 minutes of runner time wasted per
+# accidental fmt-bad commit, plus the user-visible red badge.
+#
+# Skip this hook ad-hoc with `git commit --no-verify`. Don't make
+# that a habit — CI will fail anyway and you'll feel silly.
+
+set -e
+
+# Only run if we have staged Rust changes. Pure docs / XAML / C#
+# commits skip the rustfmt step entirely.
+STAGED_RUST=$(git diff --cached --name-only --diff-filter=ACM | grep -E '^core/.*\.rs$' || true)
+if [ -z "$STAGED_RUST" ]; then
+    exit 0
+fi
+
+echo "[pre-commit] checking cargo fmt on staged Rust files…"
+cd core
+if ! cargo fmt --check 2>&1 | tail -20; then
+    echo ""
+    echo "✗ cargo fmt --check FAILED — CI's Format step would reject this commit."
+    echo ""
+    echo "Fix it now with:"
+    echo "    cd core && cargo fmt"
+    echo "    git add -u"
+    echo "    git commit"
+    echo ""
+    echo "Or skip with --no-verify if you really mean it (CI will still fail)."
+    exit 1
+fi
+echo "[pre-commit] cargo fmt OK ✓"

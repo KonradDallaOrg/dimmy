@@ -68,6 +68,12 @@ Every feature, fix, or change MUST work identically on Windows, macOS, Linux. If
 
 ## Pre-push checklist — run BEFORE every push
 
+**One-time setup** after cloning: activate the committed git hooks
+with `./scripts/install-hooks.sh`. The pre-commit hook runs
+`cargo fmt --check` on every commit that touches `core/**.rs` and
+refuses unformatted code — kills the recurring "cherry-picked
+unformatted code → CI Format step red" loop at the source.
+
 From `core/`:
 
 ```bash

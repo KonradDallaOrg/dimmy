@@ -4941,10 +4941,7 @@ mod tests {
         }
 
         // UI sends the URL change without a key (PasswordBox empty).
-        let json = format!(
-            r#"{{"llm_api_url":"{}"}}"#,
-            ANTHROPIC_URL
-        );
+        let json = format!(r#"{{"llm_api_url":"{}"}}"#, ANTHROPIC_URL);
         let c = CString::new(json).unwrap();
         let rc = unsafe { dimmy_set_config_json(c.as_ptr()) };
         assert_eq!(rc, 0, "valid JSON should return 0");
@@ -5046,10 +5043,9 @@ mod tests {
     fn get_config_json_reports_per_provider_has_llm_keys() {
         ensure_test_state();
         // Seed: only Anthropic LLM has a key.
-        state().key_store.replace_cache_for_testing(&[(
-            KeyringScope::Llm(Provider::Anthropic),
-            "sk-ant-only",
-        )]);
+        state()
+            .key_store
+            .replace_cache_for_testing(&[(KeyringScope::Llm(Provider::Anthropic), "sk-ant-only")]);
 
         let mut buf = vec![0u8; 8192];
         let ptr = buf.as_mut_ptr() as *mut c_char;
@@ -5057,8 +5053,7 @@ mod tests {
         assert!(len > 0, "get_config_json should produce output");
 
         let json_str = unsafe { CStr::from_ptr(ptr).to_str().unwrap() };
-        let v: serde_json::Value =
-            serde_json::from_str(json_str).expect("config JSON must parse");
+        let v: serde_json::Value = serde_json::from_str(json_str).expect("config JSON must parse");
 
         assert_eq!(
             v["has_llm_anthropic_key"], true,
