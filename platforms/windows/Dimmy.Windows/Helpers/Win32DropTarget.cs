@@ -53,28 +53,31 @@ public sealed class Win32DropTarget : IDisposable
         foreach (var h in hwnds)
         {
             var cls = GetClassName(h);
-            // WinUI 3 uses InputSiteWindowClass + DesktopChildSiteBridge
-            // for its internal OLE drag-drop (XAML drag events,
-            // ListView reorder). RevokeDragDrop'ing those HWNDs kills
-            // ListView CanReorderItems entirely — observed by the user
-            // when rule rows refused to drag-reorder. Only revoke on
-            // the outer Win32 window class which doesn't host XAML
-            // content-level drag/drop.
-            if (cls != "WinUIDesktopWin32WindowClass" && cls != "InputNonClientPointerSource")
+            // WinUI 3 hosts XAML drag-drop (incl. ListView CanReorderItems)
+            // on InputSiteWindowClass + DesktopChildSiteBridge via its
+            // own IDropTarget. Touching those HWNDs at all — RevokeDragDrop,
+            // DragAcceptFiles, or WM_DROPFILES subclass — destabilises
+            // the XAML drag pipeline. Observed symptoms:
+            //   • CanReorderItems silently no-ops (May 2026 v1)
+            //   • drag-reorder hard-crashes the renderer mid-drag (May 9
+            //     2026, current report — likely WS_EX_ACCEPTFILES on the
+            //     content-host HWND collides with WinUI's own drop-target
+            //     state)
+            // Restrict ALL Win32 drop-target wiring (revoke + accept +
+            // subclass + UIPI filter) to the outer chrome HWNDs that
+            // don't host XAML drag/drop. WinUI 3 still propagates a
+            // dropped file from the content layer up to the chrome
+            // layer through its own AllowDrop chain, so file drops keep
+            // working from this narrower attach point.
+            bool isChromeHwnd = cls == "WinUIDesktopWin32WindowClass"
+                || cls == "InputNonClientPointerSource";
+            if (!isChromeHwnd)
             {
-                // For content-host HWNDs we still install
-                // DragAcceptFiles + WM_DROPFILES subclass below, but
-                // we LEAVE WinUI 3's IDropTarget alone. The OS routes
-                // a file drop to whichever responds first; ListView
-                // reorder uses XAML drag types that aren't CF_HDROP
-                // so they don't conflict.
+                App.Log($"  ~ skipping content-host hwnd=0x{h:X} class={cls} (XAML drag-drop owns it)",
+                    "FileLoad");
+                continue;
             }
-            else
-            {
-                RevokeDragDrop(h);
-            }
-            // Enable WM_DROPFILES delivery on this HWND. Without this
-            // the OS doesn't even tell the wndproc about file drops.
+            RevokeDragDrop(h);
             DragAcceptFiles(h, true);
             // UIPI bypass: when Dimmy runs at higher integrity level
             // than the drag source (Explorer = Medium IL, Dimmy =
