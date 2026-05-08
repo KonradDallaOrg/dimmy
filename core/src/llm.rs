@@ -467,11 +467,15 @@ pub async fn process_raw_prompt(
         return Err(crate::error::LlmError::Network(reason));
     }
 
-    // Longer timeout than the dictation rewrite path: meeting recaps
-    // can take 5-15 s on a hot LLM. 60 s gives headroom for cold
-    // model wakes on free tiers (Groq especially).
+    // Meeting-recap timeout. Opus 4.7 with adaptive thinking + effort=high
+    // on a 15-20k-char transcript routinely needs 60-180 s of wall time
+    // (the model is genuinely thinking, not stalled). The previous 60 s
+    // ceiling was clipping every long-meeting recap at exactly the
+    // 60 s mark — observed twice on 2026-05-08. 600 s matches the
+    // CLAUDE.md "30s + 1s/MB capped at 600s" rule and gives flagship
+    // reasoning models actual room to finish.
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
+        .timeout(std::time::Duration::from_secs(600))
         .build()?;
 
     let is_anthropic = crate::provider::Provider::from_url(api_url).is_anthropic();
