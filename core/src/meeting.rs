@@ -137,19 +137,38 @@ impl MeetingSession {
         )
         .map_err(|e| format!("meta write: {}", e))?;
 
-        // Open audio.wav writer at 16 kHz int16 mono. The cpal buffer
-        // arrives at the device's native rate; we downsample on the
-        // fly before writing so the on-disk file is uniform regardless
-        // of the device.
-        let wav_path = dir.join("audio.wav");
+        // Audio capture is now stored at the device's NATIVE sample
+        // rate (typically 48 kHz on modern systems) instead of being
+        // downsampled to 16 kHz on disk. Music / YouTube no longer
+        // sounds telephone-ish on playback. STT chunks are downsampled
+        // to 16 kHz only at inference time; what's on disk is the full
+        // bandwidth signal.
+        //
+        // In Mix mode we also write two separate per-track files so
+        // the user (and a future diarization pass) can reprocess the
+        // streams independently:
+        //   - audio.wav         = mix (mic + system, what you hear)
+        //   - audio_mic.wav     = AEC-cleaned mic only
+        //   - audio_system.wav  = raw loopback only (Mix mode only)
+        let mix_active = matches!(source, crate::audio::AudioSource::Mix);
         let spec = hound::WavSpec {
             channels: 1,
-            sample_rate: 16_000,
+            sample_rate: device_sample_rate,
             bits_per_sample: 16,
             sample_format: hound::SampleFormat::Int,
         };
-        let writer = hound::WavWriter::create(&wav_path, spec)
-            .map_err(|e| format!("wav create {:?}: {}", wav_path, e))?;
+        let writer = hound::WavWriter::create(dir.join("audio.wav"), spec.clone())
+            .map_err(|e| format!("wav create audio.wav: {}", e))?;
+        let writer_mic = hound::WavWriter::create(dir.join("audio_mic.wav"), spec.clone())
+            .map_err(|e| format!("wav create audio_mic.wav: {}", e))?;
+        let writer_system = if mix_active {
+            Some(
+                hound::WavWriter::create(dir.join("audio_system.wav"), spec.clone())
+                    .map_err(|e| format!("wav create audio_system.wav: {}", e))?,
+            )
+        } else {
+            None
+        };
 
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel_w = cancel.clone();
@@ -166,6 +185,8 @@ impl MeetingSession {
                     source,
                     stt,
                     writer,
+                    writer_mic,
+                    writer_system,
                     dir_w,
                     id_w,
                     cancel_w,
@@ -224,6 +245,8 @@ fn worker_loop(
     source: crate::audio::AudioSource,
     stt: SttSnapshot,
     mut writer: hound::WavWriter<std::io::BufWriter<File>>,
+    mut writer_mic: hound::WavWriter<std::io::BufWriter<File>>,
+    mut writer_system: Option<hound::WavWriter<std::io::BufWriter<File>>>,
     dir: PathBuf,
     id: String,
     cancel: Arc<AtomicBool>,
@@ -381,35 +404,68 @@ fn worker_loop(
             None => continue,
         };
 
-        // Stream new samples into the WAV file. We always copy
-        // [samples_written..buf_len_now] regardless of chunk timing
-        // so the on-disk audio is always up-to-date.
+        // Stream new samples into the WAV files at NATIVE sample rate
+        // (no downsample). Three writers fan out:
+        //   audio.wav         = mix (synth = primary + secondary clamped)
+        //   audio_mic.wav     = primary buffer (cleaned mic post-AEC)
+        //   audio_system.wav  = secondary buffer (raw loopback) — Mix only
         if buf_len_now > samples_written {
-            let new_slice = read_synth(
+            let new_synth = read_synth(
                 samples_written,
                 buf_len_now,
                 &audio_buffer,
                 &audio_buffer_secondary,
             );
-            if !new_slice.is_empty() {
-                let pcm_16k = if device_sample_rate == 16_000 {
-                    new_slice
-                } else {
-                    crate::preprocess::downsample_to_16k(&new_slice, device_sample_rate)
-                };
-                for s in &pcm_16k {
+            // Per-track slices read straight from each buffer (no mixing).
+            let new_mic: Vec<f32> = match audio_buffer.lock() {
+                Ok(b) if buf_len_now <= b.len() => b[samples_written..buf_len_now].to_vec(),
+                _ => Vec::new(),
+            };
+            let new_system: Vec<f32> = if mix_active {
+                match audio_buffer_secondary.lock() {
+                    Ok(b) if buf_len_now <= b.len() => b[samples_written..buf_len_now].to_vec(),
+                    _ => Vec::new(),
+                }
+            } else {
+                Vec::new()
+            };
+
+            // Helper: write an f32 buffer to a hound int16 WAV writer.
+            let write_buf = |w: &mut hound::WavWriter<std::io::BufWriter<File>>,
+                             samples: &[f32]|
+             -> Result<(), hound::Error> {
+                for s in samples {
                     let clamped = s.clamp(-1.0, 1.0);
                     let i = (clamped * i16::MAX as f32) as i16;
-                    if let Err(e) = writer.write_sample(i) {
-                        crate::log(&format!("[Meeting] write_sample failed: {}", e));
-                        break;
-                    }
+                    w.write_sample(i)?;
                 }
-                samples_written = buf_len_now;
+                Ok(())
+            };
+
+            if let Err(e) = write_buf(&mut writer, &new_synth) {
+                crate::log(&format!("[Meeting] audio.wav write failed: {}", e));
             }
+            if let Err(e) = write_buf(&mut writer_mic, &new_mic) {
+                crate::log(&format!("[Meeting] audio_mic.wav write failed: {}", e));
+            }
+            if let Some(ref mut w) = writer_system {
+                if let Err(e) = write_buf(w, &new_system) {
+                    crate::log(&format!("[Meeting] audio_system.wav write failed: {}", e));
+                }
+            }
+            samples_written = buf_len_now;
+
             if last_fsync.elapsed() >= FSYNC_INTERVAL {
                 if let Err(e) = writer.flush() {
-                    crate::log(&format!("[Meeting] wav flush: {}", e));
+                    crate::log(&format!("[Meeting] audio.wav flush: {}", e));
+                }
+                if let Err(e) = writer_mic.flush() {
+                    crate::log(&format!("[Meeting] audio_mic.wav flush: {}", e));
+                }
+                if let Some(ref mut w) = writer_system {
+                    if let Err(e) = w.flush() {
+                        crate::log(&format!("[Meeting] audio_system.wav flush: {}", e));
+                    }
                 }
                 last_fsync = Instant::now();
             }
@@ -508,9 +564,17 @@ fn worker_loop(
         }
     }
 
-    // Finalize WAV + meta.
+    // Finalize all three WAVs + meta.
     if let Err(e) = writer.finalize() {
-        crate::log(&format!("[Meeting] wav finalize: {}", e));
+        crate::log(&format!("[Meeting] audio.wav finalize: {}", e));
+    }
+    if let Err(e) = writer_mic.finalize() {
+        crate::log(&format!("[Meeting] audio_mic.wav finalize: {}", e));
+    }
+    if let Some(w) = writer_system {
+        if let Err(e) = w.finalize() {
+            crate::log(&format!("[Meeting] audio_system.wav finalize: {}", e));
+        }
     }
     let duration_secs = started.elapsed().as_secs_f64();
     let meta = serde_json::json!({
