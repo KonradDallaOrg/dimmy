@@ -465,13 +465,17 @@ impl Default for AppConfig {
             overlay_position: "Bottom Right".to_string(),
             keep_in_clipboard: false,
             input_gain: 0.5,
-            // 1.5 = +3.5 dB makeup. tanh saturates above ~0.85 so this
-            // keeps speech-level peaks (~0.5 source) at ~0.65 in the
-            // mix — present and clearly audible without flattening
-            // dynamics. Empirically peak 0.99 with gain=2.0 means tanh
-            // is hitting the ceiling constantly; better to give back
-            // dynamic range and let the user dial up if needed.
-            loopback_gain: 1.5,
+            // 1.0 = no makeup (passthrough). The "system audio
+            // bassissimo" complaint that justified earlier defaults
+            // (1.5 / 2.0) turned out to be Volume-Mixer-dependent:
+            // when Teams / browser sit at 70-100% the loopback
+            // already lands at 0.7-1.0 peak and any boost saturates
+            // tanh. When they're at 30-50% the user can dial this up
+            // to 1.5 / 2.0 / 3.0 via config without recompiling. Tanh
+            // soft-clip stays in the callback as a safety net for
+            // user-boosted setups; at gain=1.0 it's effectively
+            // identity for in-range samples.
+            loopback_gain: 1.0,
             meeting_chunk_secs: 15.0,
             audio_source: default_audio_source(),
             window_anchor_right: None,
