@@ -2430,10 +2430,24 @@ pub unsafe extern "C" fn dimmy_meeting_start(out_buf: *mut c_char, buf_len: c_in
             .unwrap_or_else(|| "auto".to_string()),
         chunk_secs: st.meeting_chunk_secs.lock().ok().map(|s| *s),
     };
+    // Loopback device runs at its OWN native rate which may differ from
+    // the mic (typical: BT mic 16k HFP + speakers 48k A2DP). meeting.rs
+    // writes audio_system.wav with this rate so playback is correct
+    // regardless of the mic/system mismatch.
+    let system_sr = if matches!(mt_source, crate::audio::AudioSource::Mix) {
+        crate::audio::secondary_sample_rate()
+    } else {
+        device_sr
+    };
+    log(&format!(
+        "[Meeting] mic_sr={} system_sr={} source={:?}",
+        device_sr, system_sr, mt_source
+    ));
     let session = match crate::meeting::MeetingSession::start(
         st.audio_buffer.clone(),
         st.audio_buffer_secondary.clone(),
         device_sr,
+        system_sr,
         mt_source,
         stt_snapshot,
     ) {

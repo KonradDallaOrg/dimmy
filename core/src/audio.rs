@@ -207,25 +207,19 @@ pub fn spawn_audio_thread(
 
                         let channels = config.channels() as usize;
 
-                        // Force canonical 48 kHz on the cpal stream regardless
-                        // of the device's native rate. Windows WASAPI shared
-                        // mode resamples internally for any rate. This kills
-                        // the BT-HFP/A2DP mismatch (mic 16k HFP + loopback
-                        // 48k A2DP) where audio_system.wav was getting written
-                        // with mic's 16k header but contained 48k-sampled
-                        // data → 3x slow "mumbling" playback. Both streams
-                        // now fill the buffers at the same 48k wall-time
-                        // rate so meeting.rs's per-sample mix is aligned and
-                        // the WAV headers match the data.
-                        const CANONICAL_SR: u32 = 48_000;
-                        let canonical_config = cpal::StreamConfig {
-                            channels: config.channels(),
-                            sample_rate: cpal::SampleRate(CANONICAL_SR),
-                            buffer_size: cpal::BufferSize::Default,
-                        };
+                        // Use the primary device's native config — some
+                        // devices (notably BT HFP/SCO mic) reject any rate
+                        // other than their native, even via cpal's shared-mode
+                        // path. Native config is guaranteed to build. The
+                        // SECONDARY stream then gets forced to MATCH this
+                        // primary rate so meeting.rs's WAV writer + per-sample
+                        // mix stay consistent. See build_secondary_stream
+                        // for the matching-rate fallback chain.
+                        let primary_actual_sr = config.sample_rate().0;
+                        let canonical_config: cpal::StreamConfig = config.clone().into();
                         crate::log(&format!(
-                            "[Audio] Primary forced to canonical config: sr={} ch={}",
-                            CANONICAL_SR,
+                            "[Audio] Primary cpal config (native): sr={} ch={}",
+                            primary_actual_sr,
                             config.channels()
                         ));
 
@@ -377,6 +371,8 @@ pub fn spawn_audio_thread(
                                     &input_gain,
                                     &loopback_gain,
                                     /* is_loopback */ true,
+                                    /* prefer_sr */
+                                    None, // use native — fewest failures
                                 ) {
                                     let _ = s.play();
                                     streams.push(s);
@@ -467,6 +463,7 @@ fn build_secondary_stream(
     input_gain: &Arc<std::sync::atomic::AtomicU32>,
     loopback_gain: &Arc<std::sync::atomic::AtomicU32>,
     is_loopback: bool,
+    prefer_sr: Option<u32>,
 ) -> Option<cpal::Stream> {
     let config = if is_loopback {
         match device.default_output_config() {
@@ -506,21 +503,36 @@ fn build_secondary_stream(
     };
     let channels = config.channels() as usize;
     let buf = buffer.clone();
-    // Force canonical 48 kHz on the secondary stream too. Pair with the
-    // primary's canonical_config so both buffers fill at the same wall-time
-    // rate — kills the BT-HFP/A2DP rate-mismatch bug where audio_system.wav
-    // ended up at 3x slow playback.
-    const CANONICAL_SR: u32 = 48_000;
-    let canonical_config = cpal::StreamConfig {
-        channels: config.channels(),
-        sample_rate: cpal::SampleRate(CANONICAL_SR),
-        buffer_size: cpal::BufferSize::Default,
+    // Build the secondary cpal config: prefer matching the primary's
+    // sample rate (so meeting.rs's per-sample mix and WAV headers stay
+    // aligned). If the device rejects the primary rate (some BT loopback
+    // configurations only accept native), fall back to the device's
+    // native config and accept that audio_system.wav may need to be
+    // played back at its own rate — the WAV header is correct either
+    // way.
+    let native_config: cpal::StreamConfig = config.clone().into();
+    let canonical_config = match prefer_sr {
+        Some(sr) if sr != config.sample_rate().0 => {
+            crate::log(&format!(
+                "[Audio] Secondary trying preferred sr={} (native was {})",
+                sr,
+                config.sample_rate().0
+            ));
+            cpal::StreamConfig {
+                channels: config.channels(),
+                sample_rate: cpal::SampleRate(sr),
+                buffer_size: cpal::BufferSize::Default,
+            }
+        }
+        _ => {
+            crate::log(&format!(
+                "[Audio] Secondary using native config: sr={} ch={}",
+                config.sample_rate().0,
+                config.channels()
+            ));
+            native_config.clone()
+        }
     };
-    crate::log(&format!(
-        "[Audio] Secondary forced to canonical config: sr={} ch={}",
-        CANONICAL_SR,
-        config.channels()
-    ));
     // Optional second destination: in Mix mode the AEC worker needs the
     // SAME loopback samples as a `render` reference so it can subtract
     // the speaker echo from the mic capture. We push to both buffers
@@ -717,15 +729,62 @@ pub fn device_sample_rate(device_name: &Option<String>) -> u32 {
 ///   tracked separately).
 /// - System: native OUTPUT rate of the default output device, since
 ///   that's the device cpal opens in WASAPI loopback mode.
-pub fn primary_sample_rate(_device_name: &Option<String>, _source: &AudioSource) -> u32 {
-    // Both primary and secondary cpal streams are now opened with a
-    // forced `canonical_config` at 48 kHz inside spawn_audio_thread,
-    // regardless of the device's native rate (Windows WASAPI shared
-    // mode resamples for free). So the meeting writer / WAV header
-    // always sees 48 kHz on disk. Returning anything else here would
-    // silently drift the WAV header from the real wall-time fill rate
-    // and reproduce the BT-HFP "3x slow playback" bug.
-    48_000
+pub fn primary_sample_rate(device_name: &Option<String>, source: &AudioSource) -> u32 {
+    let host = cpal::default_host();
+    let rate = match source {
+        AudioSource::System => {
+            #[cfg(target_os = "windows")]
+            let r = host
+                .default_output_device()
+                .and_then(|d| d.default_output_config().ok())
+                .map(|c| c.sample_rate().0);
+            #[cfg(not(target_os = "windows"))]
+            let r: Option<u32> = None;
+            r.unwrap_or_else(|| primary_sample_rate(device_name, &AudioSource::Mic))
+        }
+        AudioSource::Mic | AudioSource::Mix => {
+            let device = if let Some(ref name) = device_name {
+                host.input_devices()
+                    .ok()
+                    .and_then(|mut devs| {
+                        devs.find(|d| d.name().ok().as_deref() == Some(name.as_str()))
+                    })
+                    .or_else(|| host.default_input_device())
+            } else {
+                host.default_input_device()
+            };
+            device
+                .and_then(|d| d.default_input_config().ok())
+                .map(|c| c.sample_rate().0)
+                .unwrap_or(44100)
+        }
+    };
+    assert!(
+        (8000..=192_000).contains(&rate),
+        "primary_sample_rate: rate {} out of range",
+        rate
+    );
+    rate
+}
+
+/// Native sample rate of the loopback (system audio) device. Used by
+/// meeting.rs in Mix mode to write `audio_system.wav` with the correct
+/// header rate when the mic and loopback devices have different native
+/// rates (typical: BT mic in HFP at 16 kHz + speakers loopback at 48 kHz).
+/// Returns 48000 as fallback when no output device exists or non-Windows.
+pub fn secondary_sample_rate() -> u32 {
+    #[cfg(target_os = "windows")]
+    {
+        let host = cpal::default_host();
+        host.default_output_device()
+            .and_then(|d| d.default_output_config().ok())
+            .map(|c| c.sample_rate().0)
+            .unwrap_or(48_000)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        48_000
+    }
 }
 
 // ── Typed audio pipeline ─────────────────────────────────────────────

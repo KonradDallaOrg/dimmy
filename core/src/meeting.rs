@@ -107,6 +107,7 @@ impl MeetingSession {
         audio_buffer: Arc<Mutex<Vec<f32>>>,
         audio_buffer_secondary: Arc<Mutex<Vec<f32>>>,
         device_sample_rate: u32,
+        system_sample_rate: u32,
         source: crate::audio::AudioSource,
         stt: SttSnapshot,
     ) -> Result<Self, String> {
@@ -154,19 +155,40 @@ impl MeetingSession {
         //   - audio_mic.wav     = AEC-cleaned mic only
         //   - audio_system.wav  = raw loopback only (Mix mode only)
         let mix_active = matches!(source, crate::audio::AudioSource::Mix);
-        let spec = hound::WavSpec {
+        // Per-track WAV files use their RESPECTIVE device's native rate.
+        // audio_mic.wav  -> primary device (the mic) sr
+        // audio_system.wav -> loopback device sr (typically 48 kHz on
+        //                     speakers, but lower with some BT setups)
+        // audio.wav (mix) -> primary's sr; per-sample mix synchronises to
+        //                    primary's clock so mic content is correct.
+        //                    System content in the mix may be slightly
+        //                    rate-distorted when system_sample_rate differs;
+        //                    the per-track audio_system.wav stays the
+        //                    source of truth for system audio and plays
+        //                    back at correct speed.
+        let mic_spec = hound::WavSpec {
             channels: 1,
             sample_rate: device_sample_rate,
             bits_per_sample: 16,
             sample_format: hound::SampleFormat::Int,
         };
-        let writer = hound::WavWriter::create(dir.join("audio.wav"), spec.clone())
+        let system_spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: system_sample_rate,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        crate::log(&format!(
+            "[Meeting] WAV rates: mic={} Hz, system={} Hz, mix(audio.wav)={} Hz",
+            device_sample_rate, system_sample_rate, device_sample_rate
+        ));
+        let writer = hound::WavWriter::create(dir.join("audio.wav"), mic_spec.clone())
             .map_err(|e| format!("wav create audio.wav: {}", e))?;
-        let writer_mic = hound::WavWriter::create(dir.join("audio_mic.wav"), spec.clone())
+        let writer_mic = hound::WavWriter::create(dir.join("audio_mic.wav"), mic_spec.clone())
             .map_err(|e| format!("wav create audio_mic.wav: {}", e))?;
         let writer_system = if mix_active {
             Some(
-                hound::WavWriter::create(dir.join("audio_system.wav"), spec.clone())
+                hound::WavWriter::create(dir.join("audio_system.wav"), system_spec.clone())
                     .map_err(|e| format!("wav create audio_system.wav: {}", e))?,
             )
         } else {
