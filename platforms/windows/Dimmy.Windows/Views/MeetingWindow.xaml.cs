@@ -150,17 +150,22 @@ public sealed partial class MeetingWindow : Window
             StopPolling();
             StopAmplitudePoll();
 
+            // Stop any audio.wav playback (MediaPlayerElement). Without
+            // this, the underlying MediaPlayer keeps holding the audio
+            // session and the file plays out in background even though
+            // the window is gone — user has no UI to pause it. Standard
+            // best practice for media UI: window close = playback stop.
+            StopDoneMediaPlayback();
+
             // Defense-in-depth: if the window is being closed while a
-            // recording is still active in the Rust core (this should
-            // be impossible because AppWindow.Closing cancels in that
-            // case, but if Win11 / WindowsAppSDK ever lets a close
-            // sneak through — alt+f4 in some configs, runtime exit,
-            // a future API change), force-stop the meeting in core
-            // so we don't leak a zombie that keeps writing audio
-            // and won't let the user start a new meeting on next
-            // dimmy://meeting open. We discard the result bundle —
-            // the WAVs and transcripts.txt are already on disk and
-            // can be recovered via the orphan-recovery flow.
+            // RECORDING is still active in the Rust core (different
+            // from the playback case — this guards Mix-mode capture,
+            // not audio.wav playback), force-stop the meeting in core
+            // so we don't leak a zombie. AppWindow.Closing should have
+            // cancelled the close upstream when _recordingActive, but
+            // if it slipped through (alt+f4 timing, runtime exit, a
+            // future API change), this catches it. WAVs + transcripts
+            // are already on disk via the streaming writer.
             try
             {
                 if (_recordingActive || DimmyNative.dimmy_meeting_is_active() == 1)
@@ -401,12 +406,53 @@ public sealed partial class MeetingWindow : Window
             ShowToast("Stop the current recording first to start a new one.");
             return;
         }
+        StopDoneMediaPlayback();
         HistoryList.SelectedItem = null;
         SetState(MeetingState.Idle);
         StartBtn.IsEnabled = true;
         ClearDoneCards();
         TranscriptText.Text = "🎙️ Listening… first transcript appears in ~15 s.";
         TitlebarTitle.Text = "New meeting";
+    }
+
+    /// Stop and release the MediaPlayerElement's playback so audio
+    /// doesn't keep playing in the background. Called from:
+    ///   - Window Closed handler (window goes away → audio must too)
+    ///   - NewMeeting_Click (user navigates back to Idle)
+    ///   - HistoryList_SelectionChanged (selecting a different past meeting
+    ///     before LoadDoneAudioAsync swaps the source)
+    /// Best practice for media UI: closing the surface releases the
+    /// audio session. Same pattern Spotify / browsers / podcast apps
+    /// use — no surprise lingering audio.
+    private void StopDoneMediaPlayback()
+    {
+        try
+        {
+            if (DoneAudioPlayer == null) return;
+            var mp = DoneAudioPlayer.MediaPlayer;
+            if (mp != null)
+            {
+                // Detach the position-changed listener so we don't get
+                // late callbacks after the window/state has moved on.
+                try { mp.PlaybackSession.PositionChanged -= OnDonePlaybackPositionChanged; }
+                catch { }
+                if (mp.PlaybackSession.PlaybackState
+                    == global::Windows.Media.Playback.MediaPlaybackState.Playing)
+                {
+                    mp.Pause();
+                }
+                // Releasing Source releases the SMTC entry (volume mixer
+                // / lockscreen now-playing) and the underlying file
+                // handle. Without this, MediaPlayer keeps the audio
+                // session alive even after the visual element is gone.
+                mp.Source = null;
+            }
+            DoneAudioPlayer.Source = null;
+        }
+        catch (Exception ex)
+        {
+            App.Log($"StopDoneMediaPlayback exc: {ex.Message}", "Meeting");
+        }
     }
 
     private void BackToLive_Click(object sender, RoutedEventArgs e)
@@ -1231,6 +1277,13 @@ public sealed partial class MeetingWindow : Window
 
         try
         {
+            // Stop any in-flight playback from the PREVIOUS meeting
+            // before we swap in the new audio.wav source. Without this
+            // step, the previous track would keep playing out via the
+            // MediaPlayer audio session until LoadDoneAudioAsync fully
+            // populates the new Source — and on a slow disk that gap
+            // can be a couple of seconds.
+            StopDoneMediaPlayback();
             _viewingMeetingDir = row.Dir;
             DoneTitle.Text = row.Title;
             DoneMeta.Text = row.Subtitle;
