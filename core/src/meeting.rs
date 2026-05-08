@@ -531,8 +531,12 @@ fn worker_loop(
             }
             continue;
         }
-        if was_paused && !is_paused_now {
-            // Resume edge: drop the gap.
+        if was_paused && (!is_paused_now || cancelled) {
+            // Resume edge OR stop-while-paused. In both cases drop the
+            // paused window: advance the cursors past whatever cpal has
+            // accumulated, so the audio captured during the user's
+            // bathroom break / call interruption never lands in the
+            // WAV files or the chunked transcript.
             was_paused = false;
             let dur_ms = pause_started_at
                 .map(|t| t.elapsed().as_millis())
@@ -543,7 +547,12 @@ fn worker_loop(
                 None => 0,
             };
             crate::log(&format!(
-                "[Meeting] resumed after {} ms — skipping {} mic-rate samples",
+                "[Meeting] {}{} ms — skipping {} mic-rate samples",
+                if cancelled {
+                    "stop while paused after "
+                } else {
+                    "resumed after "
+                },
                 dur_ms,
                 snap.saturating_sub(samples_written)
             ));
