@@ -1015,15 +1015,22 @@ public partial class App : Application
                 _meetingWindow.Closed += (_, __) => _meetingWindow = null;
             }
             _meetingWindow.Activate();
-            // Bring to foreground — Activate() alone doesn't always
-            // raise above other apps on Win11 if some other process
-            // recently called SetForegroundWindow.
             var hwnd = WindowHelper.GetHwnd(_meetingWindow);
             if (hwnd != IntPtr.Zero)
             {
+                // Same topmost-toggle the Settings window uses — the
+                // bare SetForegroundWindow loses to Win11's foreground
+                // lock when the URL-launched transient process forwards
+                // the command via pipe. Restore-if-minimised + promote
+                // wins reliably.
+                ShowWindow(hwnd, SW_RESTORE);
+                SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
                 SetForegroundWindow(hwnd);
             }
-            Log($"OpenMeetingWindow activated, hwnd={hwnd}", "Meeting");
+            Log($"OpenMeetingWindow activated + foregrounded, hwnd={hwnd}", "Meeting");
         }
         catch (Exception ex)
         {

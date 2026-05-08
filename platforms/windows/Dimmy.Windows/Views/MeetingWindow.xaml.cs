@@ -15,28 +15,39 @@ using Dimmy.Windows.Interop;
 
 namespace Dimmy.Windows.Views;
 
-/// Dedicated meeting-mode UI. Distinct from the dictation pill so the
-/// user can leave it open, glance at the live transcript, and grab
-/// the recap + actions when the meeting wraps. State is kept on the
-/// Rust side (MEETING static) — this window is the front-end with a
-/// 4-state machine (Idle / Recording / Processing / Done).
-///
-/// Layout mirrors the standalone HTML mockup at
-/// docs/dev/refs/meeting-standalone.html.
+/// Split-pane meeting window: sidebar with past meetings on the left,
+/// state-driven main panel on the right (Idle / Recording / Processing
+/// / Done). Recording controls live in a persistent bar at the top of
+/// the main panel — visible whenever a recording is active, regardless
+/// of which content panel is showing — so the user cannot lose access
+/// to Stop by clicking around.
 public sealed partial class MeetingWindow : Window
 {
     private enum MeetingState { Idle, Recording, Processing, Done }
 
     private DispatcherQueueTimer? _pollTimer;
     private DispatcherQueueTimer? _ampTimer;
+    private DispatcherQueueTimer? _toastTimer;
     private DateTime _startedAt;
-    private string? _activeMeetingDir;
+    private string? _activeMeetingDir;       // dir of the LIVE recording (set on Start)
+    private string? _viewingMeetingDir;      // dir currently shown in main panel (may differ)
     private long _lastTranscriptLen = -1;
     private MeetingState _state = MeetingState.Idle;
+    // Decoupled from _state so the user can browse past meetings
+    // (state == Done) while a recording is still active. RecordingBar
+    // visibility, close-blocking and the Back-to-Live affordance all
+    // key off this flag rather than the visible UI panel.
+    private bool _recordingActive;
 
-    // Live waveform rolling buffer (40 samples = ~3 s at 12 Hz poll).
     private readonly Queue<float> _ampHistory = new();
-    private const int AMP_HISTORY = 40;
+    // Dynamic bar count — keeps each bar at a fixed pixel width so the
+    // waveform doesn't stretch when the window is resized to fullscreen.
+    // Recomputed in LiveWaveformCanvas_SizeChanged.
+    private const double AMP_BAR_PX = 4.0;
+    private const double AMP_GAP_PX = 2.0;
+    private const int AMP_MIN_HISTORY = 20;
+    private const int AMP_MAX_HISTORY = 240;
+    private int _ampHistorySize = 40;
 
     public ObservableCollection<HistoryRow> HistoryItems { get; } = new();
 
@@ -46,11 +57,7 @@ public sealed partial class MeetingWindow : Window
         this.InitializeComponent();
         Title = "Dimmy Meeting";
 
-        // Apply the saved Settings-window theme so the meeting window
-        // matches the rest of the app (Light/Dark/Auto from
-        // UiPreferences). Same pattern Settings uses; reading from
-        // UiPrefs (NOT config.json) — see the theme-bug fix in this
-        // branch for why config.json doesn't carry the theme.
+        // Match settings-window theme (Light/Dark/Auto from UiPreferences)
         try
         {
             var prefs = Services.UiPreferences.Load();
@@ -69,11 +76,7 @@ public sealed partial class MeetingWindow : Window
         try
         {
             var appWindow = WindowHelper.GetAppWindow(this);
-            WindowHelper.ResizeLogical(this, 800, 720);
-            // App icon — reuse the same .ico Settings uses so the
-            // meeting window shows the Dimmy logo on the taskbar +
-            // alt-tab thumbnail instead of the generic WinUI 3
-            // placeholder.
+            WindowHelper.ResizeLogical(this, 980, 720);
             try
             {
                 var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "dimmy.ico");
@@ -107,11 +110,58 @@ public sealed partial class MeetingWindow : Window
         }
 
         HistoryList.ItemsSource = HistoryItems;
+        LoadHistory(); // sidebar populated immediately so user sees past meetings
+
+        // ── Close-blocking: while a recording is in progress, refuse
+        //    to let the user close the window. Otherwise the Rust core
+        //    keeps recording (zombie state) and on reopen Start fails
+        //    silently with rc=-1. AppWindow.Closing fires BEFORE Closed
+        //    and lets us cancel.
+        try
+        {
+            var aw = WindowHelper.GetAppWindow(this);
+            if (aw != null)
+            {
+                aw.Closing += (_, args) =>
+                {
+                    if (_recordingActive || _state == MeetingState.Processing)
+                    {
+                        args.Cancel = true;
+                        ShowToast("Recording in progress. Click Stop & finish first.");
+                    }
+                };
+            }
+        }
+        catch (Exception ex) { App.Log($"closing-hook exc: {ex.Message}", "Meeting"); }
+
         Closed += (_, __) =>
         {
             StopPolling();
             StopAmplitudePoll();
         };
+
+        // ── Re-sync UI to the Rust core. If a meeting is already
+        //    active (e.g. user previously closed the meeting window
+        //    without stopping, or hit it from a different surface),
+        //    skip Idle and jump straight to Recording so the Stop
+        //    button is reachable instead of leaking a zombie.
+        try
+        {
+            if (DimmyNative.dimmy_meeting_is_active() == 1)
+            {
+                _startedAt = DateTime.UtcNow;       // best-effort; Rust holds the truth
+                _lastTranscriptLen = -1;
+                _ampHistory.Clear();
+                _recordingActive = true;
+                AppContextName.Text = "Microphone";
+                SetState(MeetingState.Recording);
+                TranscriptText.Text = "🎙️ Re-attached to ongoing recording…";
+                StartPolling();
+                StartAmplitudePoll();
+                App.Log("ctor: re-attached to active meeting", "Meeting");
+            }
+        }
+        catch (Exception ex) { App.Log($"resync exc: {ex.Message}", "Meeting"); }
     }
 
     // ── State machine ──────────────────────────────────────────────
@@ -123,42 +173,29 @@ public sealed partial class MeetingWindow : Window
         RecordingPanel.Visibility = s == MeetingState.Recording ? Visibility.Visible : Visibility.Collapsed;
         ProcessingPanel.Visibility = s == MeetingState.Processing ? Visibility.Visible : Visibility.Collapsed;
         DonePanel.Visibility = s == MeetingState.Done ? Visibility.Visible : Visibility.Collapsed;
-
-        TitlebarHud.Visibility = s == MeetingState.Recording || s == MeetingState.Processing
+        // RecordingBar lifecycle is keyed off _recordingActive (not the
+        // visible panel) so the user can navigate to a past meeting
+        // while still seeing — and being able to stop — the live one.
+        RecordingBar.Visibility = (_recordingActive || s == MeetingState.Processing)
             ? Visibility.Visible : Visibility.Collapsed;
-        StopBtn.Visibility = s == MeetingState.Recording ? Visibility.Visible : Visibility.Collapsed;
-        StopBtn.IsEnabled = s == MeetingState.Recording;
-        TitlebarSubText.Text = s switch
+        StopBtn.IsEnabled = _recordingActive && s != MeetingState.Processing;
+        BackToLiveBtn.Visibility = (_recordingActive
+            && s != MeetingState.Recording
+            && s != MeetingState.Processing)
+            ? Visibility.Visible : Visibility.Collapsed;
+        // Hide "New meeting" while a capture is in flight — clicking it
+        // would only show the toast block. Stop is the actual action.
+        TitlebarNewBtn.Visibility = (_recordingActive || s == MeetingState.Processing)
+            ? Visibility.Collapsed : Visibility.Visible;
+        NewMeetingHeaderBtn.IsEnabled = !_recordingActive && s != MeetingState.Processing;
+        TitlebarTitle.Text = s switch
         {
-            MeetingState.Idle => "Capture, transcribe, recap",
-            MeetingState.Recording => "Recording — talk freely, transcript builds in the background",
-            MeetingState.Processing => "Saving + generating recap…",
-            MeetingState.Done => "Recap ready",
-            _ => "",
+            MeetingState.Idle => HistoryList.SelectedItem is HistoryRow r ? r.Title : "New meeting",
+            MeetingState.Recording => "Recording in progress",
+            MeetingState.Processing => "Wrapping up…",
+            MeetingState.Done => DoneTitle.Text,
+            _ => "Meeting",
         };
-    }
-
-    // ── Tabs ───────────────────────────────────────────────────────
-
-    private void TabLive_Click(object sender, RoutedEventArgs e)
-    {
-        TabLive.IsChecked = true;
-        TabHistory.IsChecked = false;
-        TabLive.BorderBrush = (Brush)Application.Current.Resources["AccentFillColorDefaultBrush"];
-        TabHistory.BorderBrush = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
-        LiveTab.Visibility = Visibility.Visible;
-        HistoryTab.Visibility = Visibility.Collapsed;
-    }
-
-    private void TabHistory_Click(object sender, RoutedEventArgs e)
-    {
-        TabLive.IsChecked = false;
-        TabHistory.IsChecked = true;
-        TabHistory.BorderBrush = (Brush)Application.Current.Resources["AccentFillColorDefaultBrush"];
-        TabLive.BorderBrush = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
-        LiveTab.Visibility = Visibility.Collapsed;
-        HistoryTab.Visibility = Visibility.Visible;
-        LoadHistory();
     }
 
     // ── Lifecycle ─────────────────────────────────────────────────
@@ -173,6 +210,26 @@ public sealed partial class MeetingWindow : Window
             if (rc <= 0)
             {
                 App.Log($"meeting start failed rc={rc}", "Meeting");
+                // Most common cause: a meeting is already active in the
+                // Rust core (zombie from a previous close). Recover by
+                // re-attaching the UI to it instead of leaving the user
+                // stuck with a non-responsive Start button.
+                if (DimmyNative.dimmy_meeting_is_active() == 1)
+                {
+                    _startedAt = DateTime.UtcNow;
+                    _lastTranscriptLen = -1;
+                    _ampHistory.Clear();
+                    _recordingActive = true;
+                    HistoryList.SelectedItem = null;
+                    AppContextName.Text = "Microphone";
+                    SetState(MeetingState.Recording);
+                    TranscriptText.Text = "🎙️ Re-attached to ongoing recording…";
+                    StartPolling();
+                    StartAmplitudePoll();
+                    ShowToast("Re-attached to an ongoing recording.");
+                    return;
+                }
+                ShowToast("Could not start the meeting. Check the log.");
                 StartBtn.IsEnabled = true;
                 return;
             }
@@ -180,11 +237,9 @@ public sealed partial class MeetingWindow : Window
             _startedAt = DateTime.UtcNow;
             _lastTranscriptLen = -1;
             _ampHistory.Clear();
+            _activeMeetingDir = null;       // poll fills it once Rust creates the dir
+            _viewingMeetingDir = null;
 
-            // Capture foreground app context BEFORE switching state so
-            // user sees what the meeting "belongs to". The capture is
-            // best-effort; missing data falls back to the FontIcon
-            // placeholder.
             var fg = Helpers.AppContextCapture.SnapshotForeground();
             if (!fg.IsEmpty)
             {
@@ -203,13 +258,14 @@ public sealed partial class MeetingWindow : Window
             }
             else
             {
-                AppContextName.Text = "(no foreground app)";
+                AppContextName.Text = "Microphone";
             }
 
+            // Clear any sidebar selection from a previous "browse" session.
+            HistoryList.SelectedItem = null;
+            _recordingActive = true;
             SetState(MeetingState.Recording);
             TranscriptText.Text = "🎙️ Listening… first transcript appears in ~15 s.";
-            TranscriptText.Foreground = (Brush)
-                Application.Current.Resources["TextFillColorTertiaryBrush"];
             StartPolling();
             StartAmplitudePoll();
             App.Log($"meeting started: {id}", "Meeting");
@@ -227,12 +283,15 @@ public sealed partial class MeetingWindow : Window
         StopBtn.IsEnabled = false;
         StopPolling();
         StopAmplitudePoll();
+        // Recording is being torn down — flip the flag NOW so close
+        // is unblocked even if the Rust stop call hangs.
+        _recordingActive = false;
         SetState(MeetingState.Processing);
         ResetProcSteps();
-        SetProcStep(1, true);  // saving step done — stop is synchronous
+        SetProcStep(1, true);
         try
         {
-            var buf = new byte[1 << 22]; // 4 MB — supports very long transcripts
+            var buf = new byte[1 << 22];
             int rc = await Task.Run(() => DimmyNative.dimmy_meeting_stop(buf, buf.Length));
             if (rc <= 0)
             {
@@ -249,19 +308,18 @@ public sealed partial class MeetingWindow : Window
             var dur = root.GetProperty("duration_secs").GetDouble();
             var chunks = root.GetProperty("chunk_count").GetInt32();
             _activeMeetingDir = dir;
+            _viewingMeetingDir = dir;
 
             DoneTitle.Text = string.IsNullOrEmpty(dir) ? "Meeting" : Path.GetFileName(dir);
             DoneMeta.Text = $"{FormatDuration(dur)} · {chunks} chunks · {DateTime.Now:yyyy-MM-dd HH:mm}";
             RawTranscriptText.Text = string.IsNullOrEmpty(transcript)
                 ? "(no transcript: VAD may have removed all audio)"
                 : HumanizeTranscript(transcript);
-
-            // Show audio waveform card if audio.wav exists
             await LoadDoneAudioAsync(dir);
 
             if (GenerateRecapCheck.IsChecked == true && !string.IsNullOrWhiteSpace(transcript))
             {
-                SetProcStep(2, false); // active
+                SetProcStep(2, false);
                 await GeneratePostProcessAsync(dir, transcript);
                 SetProcStep(2, true);
                 SetProcStep(3, true);
@@ -273,6 +331,7 @@ public sealed partial class MeetingWindow : Window
             }
 
             SetState(MeetingState.Done);
+            LoadHistory(); // freshly-finished meeting appears at top of sidebar
         }
         catch (Exception ex)
         {
@@ -285,15 +344,40 @@ public sealed partial class MeetingWindow : Window
         }
     }
 
+    private void Pause_Click(object sender, RoutedEventArgs e)
+    {
+        // Pause requires AudioCommand::Pause + meeting.rs hooks in
+        // the Rust core that aren't there yet. Button stays disabled
+        // (IsEnabled="False" in XAML) until the backend is wired —
+        // tracked as a follow-up.
+        ShowToast("Pause is not yet wired — coming soon.");
+    }
+
     private void NewMeeting_Click(object sender, RoutedEventArgs e)
     {
-        // Reset to Idle for a fresh meeting. Don't touch _activeMeetingDir
-        // from the previous session — the Done view remains accessible
-        // via the History tab.
+        // While recording, "New meeting" makes no sense — we'd lose
+        // the current capture. Block with a toast.
+        if (_recordingActive || _state == MeetingState.Processing)
+        {
+            ShowToast("Stop the current recording first to start a new one.");
+            return;
+        }
+        HistoryList.SelectedItem = null;
         SetState(MeetingState.Idle);
         StartBtn.IsEnabled = true;
-        TranscriptText.Text = "🎙️ Listening… first transcript appears in ~15 s.";
         ClearDoneCards();
+        TranscriptText.Text = "🎙️ Listening… first transcript appears in ~15 s.";
+        TitlebarTitle.Text = "New meeting";
+    }
+
+    private void BackToLive_Click(object sender, RoutedEventArgs e)
+    {
+        // Return to the live transcript view without touching the
+        // recording. Polling never stopped — only the UI panel was
+        // hidden — so flipping state back is enough.
+        if (!_recordingActive) return;
+        HistoryList.SelectedItem = null;
+        SetState(MeetingState.Recording);
     }
 
     private void ClearDoneCards()
@@ -308,7 +392,7 @@ public sealed partial class MeetingWindow : Window
         DoneWaveCard.Visibility = Visibility.Collapsed;
     }
 
-    // ── Live transcript polling ───────────────────────────────────
+    // ── Polling + amplitude ──────────────────────────────────────
 
     private void StartPolling()
     {
@@ -331,9 +415,7 @@ public sealed partial class MeetingWindow : Window
     private void OnPollTick(DispatcherQueueTimer sender, object args)
     {
         var elapsed = DateTime.UtcNow - _startedAt;
-        var t = $"{(int)elapsed.TotalHours:D2}:{elapsed.Minutes:D2}:{elapsed.Seconds:D2}";
-        RecTimer.Text = t;
-        HudTimer.Text = t;
+        RecTimer.Text = $"{(int)elapsed.TotalHours:D2}:{elapsed.Minutes:D2}:{elapsed.Seconds:D2}";
 
         try
         {
@@ -362,12 +444,10 @@ public sealed partial class MeetingWindow : Window
             if (string.IsNullOrWhiteSpace(content)) return;
 
             App.Log($"poll: {fi.Length} bytes from {latest.Name[..8]}", "Meeting");
-            TranscriptText.Foreground = (Brush)
-                Application.Current.Resources["TextFillColorPrimaryBrush"];
             TranscriptText.Text = HumanizeTranscript(content);
             var nChunks = content.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length;
             RecChunks.Text = $"{nChunks} chunks";
-            HudChunks.Text = $"{nChunks} chunks";
+            TranscriptMeta.Text = $"{nChunks} chunks";
             TranscriptScroll?.ChangeView(null, double.MaxValue, null, true);
         }
         catch (Exception ex)
@@ -376,13 +456,11 @@ public sealed partial class MeetingWindow : Window
         }
     }
 
-    // ── Live waveform amplitude poll ──────────────────────────────
-
     private void StartAmplitudePoll()
     {
         var dq = DispatcherQueue.GetForCurrentThread();
         _ampTimer = dq.CreateTimer();
-        _ampTimer.Interval = TimeSpan.FromMilliseconds(83); // ~12 Hz
+        _ampTimer.Interval = TimeSpan.FromMilliseconds(83);
         _ampTimer.IsRepeating = true;
         _ampTimer.Tick += OnAmpTick;
         _ampTimer.Start();
@@ -402,13 +480,27 @@ public sealed partial class MeetingWindow : Window
         {
             float amp = DimmyNative.dimmy_get_amplitude();
             if (!float.IsFinite(amp)) amp = 0;
-            // Soft compression so quiet voices still show movement.
             amp = (float)Math.Min(1.0, Math.Sqrt(amp) * 1.4);
-            if (_ampHistory.Count >= AMP_HISTORY) _ampHistory.Dequeue();
+            while (_ampHistory.Count >= _ampHistorySize) _ampHistory.Dequeue();
             _ampHistory.Enqueue(amp);
             DrawLiveWaveform();
         }
-        catch { /* amplitude is best-effort */ }
+        catch { }
+    }
+
+    private void LiveWaveformCanvas_SizeChanged(object sender,
+        Microsoft.UI.Xaml.SizeChangedEventArgs e)
+    {
+        // Recompute bar count to keep bars at a fixed pixel width
+        // regardless of window size. Without this, going fullscreen
+        // stretches the existing 40 bars across the whole canvas.
+        double w = LiveWaveformCanvas.ActualWidth;
+        if (w <= 0) return;
+        int n = (int)(w / (AMP_BAR_PX + AMP_GAP_PX));
+        n = Math.Clamp(n, AMP_MIN_HISTORY, AMP_MAX_HISTORY);
+        _ampHistorySize = n;
+        while (_ampHistory.Count > n) _ampHistory.Dequeue();
+        DrawLiveWaveform();
     }
 
     private void DrawLiveWaveform()
@@ -419,32 +511,33 @@ public sealed partial class MeetingWindow : Window
         double h = LiveWaveformCanvas.ActualHeight;
         if (w <= 0 || h <= 0) return;
         var samples = _ampHistory.ToArray();
-        double bar = w / AMP_HISTORY;
+        // Right-align: newest sample is at the rightmost slot, so the
+        // waveform "scrolls in" from the right rather than stretching
+        // across the whole canvas as samples accumulate.
+        double pitch = AMP_BAR_PX + AMP_GAP_PX;
         double mid = h / 2.0;
-        var brush = new SolidColorBrush(Microsoft.UI.Colors.Crimson);
-        for (int i = 0; i < samples.Length; i++)
+        var brush = new SolidColorBrush(Microsoft.UI.Colors.DodgerBlue);
+        int n = samples.Length;
+        for (int i = 0; i < n; i++)
         {
+            double x = w - (n - i) * pitch;
+            if (x + AMP_BAR_PX < 0) continue;
             double height = Math.Max(2, samples[i] * (h - 4));
             var rect = new Microsoft.UI.Xaml.Shapes.Rectangle
             {
-                Width = Math.Max(1, bar - 2),
+                Width = AMP_BAR_PX,
                 Height = height,
                 Fill = brush,
                 RadiusX = 1, RadiusY = 1,
             };
-            Microsoft.UI.Xaml.Controls.Canvas.SetLeft(rect, i * bar);
+            Microsoft.UI.Xaml.Controls.Canvas.SetLeft(rect, x);
             Microsoft.UI.Xaml.Controls.Canvas.SetTop(rect, mid - height / 2.0);
             LiveWaveformCanvas.Children.Add(rect);
         }
     }
 
-    // ── Done audio waveform card ──────────────────────────────────
+    // ── Done-state audio waveform card ────────────────────────────
 
-    /// Cached peaks for the currently-displayed audio. When the
-    /// canvas first becomes visible (panel transition Collapsed →
-    /// Visible) its ActualWidth is still 0 — DrawDoneWaveform exits
-    /// silently. We re-draw from this cache on the first SizeChanged
-    /// that produces a positive width.
     private float[]? _cachedDonePeaks;
 
     private async Task LoadDoneAudioAsync(string dir)
@@ -457,6 +550,22 @@ public sealed partial class MeetingWindow : Window
             _cachedDonePeaks = null;
             return;
         }
+        // Refuse to load a 0-byte audio.wav — that's the "interrupted
+        // recording" scenario where the WAV writer never finalised.
+        // Hide the card cleanly instead of feeding the MediaPlayer
+        // garbage. (Recording is now shielded from sidebar clicks
+        // during capture, so this should be rare.)
+        try
+        {
+            if (new FileInfo(wavPath).Length < 64)
+            {
+                DoneWaveCard.Visibility = Visibility.Collapsed;
+                _cachedDonePeaks = null;
+                return;
+            }
+        }
+        catch { }
+
         try
         {
             DoneWaveCard.Visibility = Visibility.Visible;
@@ -469,7 +578,7 @@ public sealed partial class MeetingWindow : Window
             }
 
             double width = DoneWaveformCanvas.ActualWidth;
-            if (width <= 0) width = 700; // fallback for first measure pass
+            if (width <= 0) width = 700;
             int buckets = (int)Math.Max(80, Math.Min(500, width / 3));
             var peaks = await Task.Run(() => Helpers.WavPeaks.ReadPeaks(wavPath, buckets));
             _cachedDonePeaks = peaks;
@@ -481,25 +590,6 @@ public sealed partial class MeetingWindow : Window
         }
     }
 
-    /// Redraw on the first layout pass where the canvas has real
-    /// dimensions. Without this, opening Meeting → History → first
-    /// item shows an empty waveform area because DrawDoneWaveform's
-    /// width-zero guard fires silently.
-    private void DoneWaveformCanvas_SizeChanged(object sender, SizeChangedEventArgs e)
-    {
-        if (_cachedDonePeaks == null) return;
-        if (e.NewSize.Width <= 0 || e.NewSize.Height <= 0) return;
-        // Only redraw if the canvas was previously empty or sized
-        // differently — avoids a redraw storm during animations.
-        if (DoneWaveformCanvas.Children.Count <= 1)
-        {
-            DrawDoneWaveform(_cachedDonePeaks);
-        }
-    }
-
-    /// Vertical orange playhead overlaid on the DoneWaveformCanvas.
-    /// Tracks current MediaPlayer position; user can also tap the
-    /// canvas to seek (DoneWaveform_PointerPressed).
     private Microsoft.UI.Xaml.Shapes.Rectangle? _donePlayhead;
 
     private void OnDonePlaybackPositionChanged(
@@ -512,7 +602,7 @@ public sealed partial class MeetingWindow : Window
             double frac = session.Position.TotalSeconds / total;
             DispatcherQueue.TryEnqueue(() => UpdateDonePlayhead(frac));
         }
-        catch { /* MediaPlayer races on source-swap; ignore. */ }
+        catch { }
     }
 
     private void UpdateDonePlayhead(double frac)
@@ -540,7 +630,7 @@ public sealed partial class MeetingWindow : Window
     {
         if (DoneWaveformCanvas == null || peaks.Length == 0) return;
         DoneWaveformCanvas.Children.Clear();
-        _donePlayhead = null; // re-created on next position update
+        _donePlayhead = null;
         double w = DoneWaveformCanvas.ActualWidth;
         double h = DoneWaveformCanvas.ActualHeight;
         if (w <= 0 || h <= 0) return;
@@ -558,9 +648,17 @@ public sealed partial class MeetingWindow : Window
             Microsoft.UI.Xaml.Controls.Canvas.SetTop(rect, mid - bh / 2.0);
             DoneWaveformCanvas.Children.Add(rect);
         }
-        // Seed the playhead at 0 so the bar appears immediately
-        // (without waiting for the user to press Play).
         UpdateDonePlayhead(0);
+    }
+
+    private void DoneWaveformCanvas_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (_cachedDonePeaks == null) return;
+        if (e.NewSize.Width <= 0 || e.NewSize.Height <= 0) return;
+        if (DoneWaveformCanvas.Children.Count <= 1)
+        {
+            DrawDoneWaveform(_cachedDonePeaks);
+        }
     }
 
     private void DoneWaveform_PointerPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
@@ -576,15 +674,12 @@ public sealed partial class MeetingWindow : Window
             var total = session.NaturalDuration;
             if (total.TotalSeconds <= 0) return;
             session.Position = TimeSpan.FromSeconds(total.TotalSeconds * frac);
-            // Move the playhead immediately so the user gets visual
-            // feedback even if PositionChanged hasn't fired yet
-            // (MediaPlayer can lag by ~50 ms on a fresh seek).
             UpdateDonePlayhead(frac);
         }
         catch { }
     }
 
-    // ── Processing step indicators ────────────────────────────────
+    // ── Processing steps ──────────────────────────────────────────
 
     private void ResetProcSteps()
     {
@@ -595,15 +690,15 @@ public sealed partial class MeetingWindow : Window
 
     private void SetProcStep(int n, bool done)
     {
-        var (icon, _) = n switch
+        var icon = n switch
         {
-            1 => (ProcStep1Icon, ProcStep1Text),
-            2 => (ProcStep2Icon, ProcStep2Text),
-            3 => (ProcStep3Icon, ProcStep3Text),
-            _ => (null!, null!),
+            1 => ProcStep1Icon,
+            2 => ProcStep2Icon,
+            3 => ProcStep3Icon,
+            _ => null,
         };
         if (icon == null) return;
-        icon.Glyph = done ? "" : "";
+        icon.Glyph = done ? "" : "";
         icon.Foreground = done
             ? new SolidColorBrush(Microsoft.UI.Colors.ForestGreen)
             : (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
@@ -637,10 +732,6 @@ public sealed partial class MeetingWindow : Window
 
             ApplyDoneSections(sections);
 
-            // Save to disk via the existing FFI: we serialise the
-            // sections back into recap.md / actions.json. Recap is
-            // markdown (TLDR + Decisions + Topics + ...); actions is
-            // a plain-text numbered list (as today).
             var recapMarkdown = BuildMarkdownFromSections(sections);
             var actionsPlain = sections.GetValueOrDefault("ACTIONS", "");
             DimmyNative.dimmy_meeting_save_post_process(dir, recapMarkdown, actionsPlain, null);
@@ -701,9 +792,6 @@ public sealed partial class MeetingWindow : Window
         return sb.ToString();
     }
 
-    /// Pick the strongest LLM available given what's configured. Only
-    /// the model NAME is overridden — the URL + key still come from
-    /// the user's main LLM config.
     private static string PickRecapModel()
     {
         try
@@ -727,10 +815,6 @@ public sealed partial class MeetingWindow : Window
         }
     }
 
-    /// New 7-section structured recap prompt. Replaces the previous
-    /// 2-section RECAP+ACTIONS shape. Sized to beat Notion / Granola
-    /// recap quality — see docs/dev/meeting-ui-port-plan.md for the
-    /// design rationale.
     private static string BuildStructuredRecapPrompt(string transcript)
     {
         return
@@ -780,9 +864,6 @@ public sealed partial class MeetingWindow : Window
             "Transcript:\n" + transcript;
     }
 
-    /// Parse the LLM response into a section→content map. Tolerates
-    /// minor variation in marker formatting (with or without ## prefix,
-    /// extra whitespace) — but the markers themselves must be present.
     private static Dictionary<string, string> ParseStructuredRecap(string raw)
     {
         var keys = new[] { "TLDR", "KEY_DECISIONS", "TOPICS", "ACTIONS", "OPEN_QUESTIONS", "RISKS", "NEXT_STEPS" };
@@ -796,8 +877,6 @@ public sealed partial class MeetingWindow : Window
         }
         if (indices.Count == 0)
         {
-            // No markers — best-effort: dump everything into TLDR so
-            // the user at least sees something.
             result["TLDR"] = raw.Trim();
             return result;
         }
@@ -809,18 +888,14 @@ public sealed partial class MeetingWindow : Window
             int contentStart = start + marker.Length;
             int contentEnd = i + 1 < ordered.Count ? ordered[i + 1].Key : raw.Length;
             var content = raw.Substring(contentStart, contentEnd - contentStart).Trim();
-            // Strip leading "##" if the LLM kept the markdown-header form.
             content = content.TrimStart('#', ' ', '\n', '\r');
             result[key] = content;
         }
         return result;
     }
 
-    // ── History tab ────────────────────────────────────────────────
+    // ── History sidebar ────────────────────────────────────────────
 
-    /// History list row — class (not record) so XAML binding's reflection
-    /// can read the public mutable getters; init-only records trigger
-    /// CS8852 inside the generated XamlTypeInfo.
     public sealed class HistoryRow
     {
         public string Dir { get; set; } = "";
@@ -829,13 +904,13 @@ public sealed partial class MeetingWindow : Window
         public string RightLabel { get; set; } = "";
     }
 
-    private void HistoryRefresh_Click(object sender, RoutedEventArgs e) => LoadHistory();
-
     private void HistorySearch_Changed(object sender, Microsoft.UI.Xaml.Controls.TextChangedEventArgs e)
         => LoadHistory();
 
     private void LoadHistory()
     {
+        // Snapshot current selection so it survives a refresh.
+        var prev = (HistoryList.SelectedItem as HistoryRow)?.Dir;
         HistoryItems.Clear();
         try
         {
@@ -850,7 +925,7 @@ public sealed partial class MeetingWindow : Window
             foreach (var d in dirs)
             {
                 var meta = Path.Combine(d.FullName, "meta.json");
-                string title = d.Name[..Math.Min(8, d.Name.Length)];
+                string title = $"Meeting {d.Name[..Math.Min(8, d.Name.Length)]}";
                 string subtitle = d.LastWriteTime.ToString("yyyy-MM-dd HH:mm");
                 if (File.Exists(meta))
                 {
@@ -878,8 +953,13 @@ public sealed partial class MeetingWindow : Window
                     Dir = d.FullName,
                     Title = title,
                     Subtitle = subtitle,
-                    RightLabel = File.Exists(Path.Combine(d.FullName, "recap.md")) ? "Recap ✓" : "",
+                    RightLabel = File.Exists(Path.Combine(d.FullName, "recap.md")) ? "✓" : "",
                 });
+            }
+            if (!string.IsNullOrEmpty(prev))
+            {
+                var match = HistoryItems.FirstOrDefault(r => r.Dir == prev);
+                if (match != null) HistoryList.SelectedItem = match;
             }
         }
         catch (Exception ex)
@@ -892,20 +972,26 @@ public sealed partial class MeetingWindow : Window
         Microsoft.UI.Xaml.Controls.SelectionChangedEventArgs e)
     {
         if (HistoryList.SelectedItem is not HistoryRow row) return;
+
+        // While a recording is in flight, browsing a past meeting is
+        // OK — the recording continues in the background and the
+        // RecordingBar (with Stop + Back-to-live) stays pinned at the
+        // top of the main panel. Block only during the brief Processing
+        // window where the UI is committed to the Stop animation.
+        if (_state == MeetingState.Processing)
+        {
+            ShowToast("Wrapping up the current meeting — wait a moment.");
+            HistoryList.SelectedItem = null;
+            return;
+        }
+
         try
         {
-            _activeMeetingDir = row.Dir;
-            DoneTitle.Text = Path.GetFileName(row.Dir);
+            _viewingMeetingDir = row.Dir;
+            DoneTitle.Text = row.Title;
             DoneMeta.Text = row.Subtitle;
             ClearDoneCards();
-            // Switch to Done state FIRST so the canvas is laid out
-            // before LoadDoneAudio runs DrawDoneWaveform — otherwise
-            // ActualWidth=0 and the waveform never appears on the
-            // first history-select after window open.
-            TabLive_Click(this, new RoutedEventArgs());
-            SetState(MeetingState.Done);
 
-            // Load recap.md if present
             var recapPath = Path.Combine(row.Dir, "recap.md");
             if (File.Exists(recapPath))
             {
@@ -913,14 +999,13 @@ public sealed partial class MeetingWindow : Window
                 TldrText.Text = text;
                 TldrCard.Visibility = Visibility.Visible;
             }
-            // Load transcripts.txt with human-readable timestamps
             var txt = Path.Combine(row.Dir, "transcripts.txt");
             if (File.Exists(txt))
             {
-                RawTranscriptText.Text = HumanizeTranscript(
-                    await File.ReadAllTextAsync(txt));
+                RawTranscriptText.Text = HumanizeTranscript(await File.ReadAllTextAsync(txt));
             }
             await LoadDoneAudioAsync(row.Dir);
+            SetState(MeetingState.Done);
         }
         catch (Exception ex)
         {
@@ -928,32 +1013,28 @@ public sealed partial class MeetingWindow : Window
         }
     }
 
-    /// Convert the Rust core's transcripts.txt format
-    /// "[ 22557 ms] hello world" into "[00:00:22] hello world".
-    /// Pure regex pass; tolerates leading/trailing whitespace and
-    /// big numbers (h:mm:ss for >1h meetings).
-    private static string HumanizeTranscript(string raw)
+    // ── Toast (transient notice at bottom of main panel) ─────────
+
+    private void ShowToast(string message)
     {
-        if (string.IsNullOrEmpty(raw)) return raw;
-        return System.Text.RegularExpressions.Regex.Replace(
-            raw,
-            @"\[\s*(\d+)\s*ms\s*\]",
-            m =>
-            {
-                if (!long.TryParse(m.Groups[1].Value, out var ms)) return m.Value;
-                var ts = TimeSpan.FromMilliseconds(ms);
-                return ts.TotalHours >= 1
-                    ? $"[{(int)ts.TotalHours}:{ts.Minutes:D2}:{ts.Seconds:D2}]"
-                    : $"[{ts.Minutes:D2}:{ts.Seconds:D2}]";
-            });
+        ToastText.Text = message;
+        ToastBar.Visibility = Visibility.Visible;
+        var dq = DispatcherQueue.GetForCurrentThread();
+        _toastTimer?.Stop();
+        _toastTimer = dq.CreateTimer();
+        _toastTimer.Interval = TimeSpan.FromSeconds(3);
+        _toastTimer.IsRepeating = false;
+        _toastTimer.Tick += (_, _) => ToastBar.Visibility = Visibility.Collapsed;
+        _toastTimer.Start();
     }
 
     // ── Misc actions ──────────────────────────────────────────────
 
     private void OpenFolder_Click(object sender, RoutedEventArgs e)
     {
-        if (string.IsNullOrEmpty(_activeMeetingDir)) return;
-        try { Process.Start(new ProcessStartInfo { FileName = _activeMeetingDir, UseShellExecute = true }); }
+        var dir = _viewingMeetingDir ?? _activeMeetingDir;
+        if (string.IsNullOrEmpty(dir)) return;
+        try { Process.Start(new ProcessStartInfo { FileName = dir, UseShellExecute = true }); }
         catch (Exception ex) { App.Log($"open folder failed: {ex.Message}", "Meeting"); }
     }
 
@@ -995,5 +1076,21 @@ public sealed partial class MeetingWindow : Window
         if (ts.TotalMinutes >= 1)
             return $"{(int)ts.TotalMinutes}m {ts.Seconds}s";
         return $"{(int)ts.TotalSeconds}s";
+    }
+
+    private static string HumanizeTranscript(string raw)
+    {
+        if (string.IsNullOrEmpty(raw)) return raw;
+        return System.Text.RegularExpressions.Regex.Replace(
+            raw,
+            @"\[\s*(\d+)\s*ms\s*\]",
+            m =>
+            {
+                if (!long.TryParse(m.Groups[1].Value, out var ms)) return m.Value;
+                var ts = TimeSpan.FromMilliseconds(ms);
+                return ts.TotalHours >= 1
+                    ? $"[{(int)ts.TotalHours}:{ts.Minutes:D2}:{ts.Seconds:D2}]"
+                    : $"[{ts.Minutes:D2}:{ts.Seconds:D2}]";
+            });
     }
 }
