@@ -539,6 +539,20 @@ fn worker_loop(
                     let wav = pcm16k_to_wav_bytes(&pcm_16k);
                     match (&cloud_rt, &stt.api_key) {
                         (Some(rt), Some(key)) => {
+                            // First call only: dump url/model/key-present
+                            // so 404s and auth bugs are debuggable.
+                            static LOGGED: std::sync::Once = std::sync::Once::new();
+                            LOGGED.call_once(|| {
+                                let key_tail = if key.len() > 4 {
+                                    &key[key.len() - 4..]
+                                } else {
+                                    "?"
+                                };
+                                crate::log(&format!(
+                                    "[Meeting] cloud STT: POST {} model={} lang={} key_suffix=...{} wav_bytes={}",
+                                    stt.api_url, stt.api_model, language, key_tail, wav.len()
+                                ));
+                            });
                             let result = rt.block_on(async {
                                 crate::transcribe::transcribe_audio(
                                     &stt.api_url,
