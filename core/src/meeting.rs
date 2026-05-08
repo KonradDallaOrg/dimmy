@@ -316,14 +316,26 @@ fn worker_loop(
     };
 
     // `samples_written` tracks how many SOURCE-RATE samples have been
-    // streamed into the WAV (after downsample they map to fewer 16k
-    // samples; we keep the source-rate offset for chunk boundaries).
+    // streamed into the WAV (per-track WAVs all advance in lockstep
+    // with the synth stream, so a single cursor covers all three).
     let mut samples_written: usize = 0;
     let mut last_processed: usize = 0;
     let mut last_fsync = Instant::now();
-    let mut transcript_accum = String::new();
+    // Per-speaker accumulators. dedup_last_3_words is stateful per
+    // speaker so they get independent contexts. The merged ordered
+    // transcript lives in transcripts.txt (one labeled line per chunk
+    // emitted in time order).
+    let mut mic_accum = String::new();
+    let mut system_accum = String::new();
     let mut chunk_count: u32 = 0;
     let started = Instant::now();
+    // Speaker labels routed by AudioSource. Mic-only and Mix put the
+    // user-mic stream as "mic"; System-only puts the loopback as
+    // "system" since there's no mic in that mode.
+    let mic_label = match source {
+        crate::audio::AudioSource::System => "system",
+        _ => "mic",
+    };
 
     let transcripts_path = dir.join("transcripts.txt");
     let mut transcripts_file = match OpenOptions::new()
@@ -483,18 +495,40 @@ fn worker_loop(
             } else {
                 want_end.min(buf_len_now)
             };
-            let chunk = read_synth(start, end, &audio_buffer, &audio_buffer_secondary);
-            if !chunk.is_empty() {
+
+            // Per-track chunk reads. mic_chunk = primary buffer slice
+            // (cleaned mic in Mix mode, raw input in Mic-only or the
+            // loopback in System-only). system_chunk = secondary buffer
+            // slice — only populated in Mix mode.
+            let mic_chunk: Vec<f32> = match audio_buffer.lock() {
+                Ok(b) if end <= b.len() => b[start..end].to_vec(),
+                _ => Vec::new(),
+            };
+            let system_chunk: Vec<f32> = if mix_active {
+                match audio_buffer_secondary.lock() {
+                    Ok(b) if end <= b.len() => b[start..end].to_vec(),
+                    _ => Vec::new(),
+                }
+            } else {
+                Vec::new()
+            };
+
+            // Helper: downsample a slice (if needed) and run STT through
+            // whichever backend the user has configured. Returns the
+            // raw transcript text from the engine.
+            let transcribe = |slice: Vec<f32>| -> String {
+                if slice.is_empty() {
+                    return String::new();
+                }
                 let pcm_16k = if device_sample_rate == 16_000 {
-                    chunk
+                    slice
                 } else {
-                    crate::preprocess::downsample_to_16k(&chunk, device_sample_rate)
+                    crate::preprocess::downsample_to_16k(&slice, device_sample_rate)
                 };
-                let chunk_text = if pcm_16k.is_empty() {
-                    String::new()
-                } else if stt.mode == "cloud" {
-                    // Encode pcm_16k → WAV bytes (16 kHz mono int16) then
-                    // ship to the user's configured cloud provider.
+                if pcm_16k.is_empty() {
+                    return String::new();
+                }
+                if stt.mode == "cloud" {
                     let wav = pcm16k_to_wav_bytes(&pcm_16k);
                     match (&cloud_rt, &stt.api_key) {
                         (Some(rt), Some(key)) => {
@@ -540,22 +574,43 @@ fn worker_loop(
                             String::new()
                         }
                     }
-                };
-                if !chunk_text.trim().is_empty() {
-                    let delta =
-                        crate::chunked_stt::dedup_last_3_words(&transcript_accum, &chunk_text);
-                    if !delta.is_empty() {
-                        if !transcript_accum.is_empty() && !transcript_accum.ends_with(' ') {
-                            transcript_accum.push(' ');
-                        }
-                        transcript_accum.push_str(&delta);
-                        chunk_count += 1;
-                        let line = format!("[{:>6} ms] {}\n", started.elapsed().as_millis(), delta);
-                        let _ = transcripts_file.write_all(line.as_bytes());
-                        let _ = transcripts_file.flush();
-                    }
                 }
+            };
+
+            let mic_text = transcribe(mic_chunk);
+            let system_text = if mix_active {
+                transcribe(system_chunk)
+            } else {
+                String::new()
+            };
+            let elapsed_ms = started.elapsed().as_millis();
+
+            // Append helper: dedup vs the per-speaker accumulator,
+            // append the delta to the speaker's accumulator, and
+            // emit a labeled line into transcripts.txt.
+            let mut emit = |speaker: &str, text: &str, accum: &mut String| {
+                if text.trim().is_empty() {
+                    return;
+                }
+                let delta = crate::chunked_stt::dedup_last_3_words(accum, text);
+                if delta.is_empty() {
+                    return;
+                }
+                if !accum.is_empty() && !accum.ends_with(' ') {
+                    accum.push(' ');
+                }
+                accum.push_str(&delta);
+                chunk_count += 1;
+                let line = format!("[{:>6} ms] [{}] {}\n", elapsed_ms, speaker, delta);
+                let _ = transcripts_file.write_all(line.as_bytes());
+                let _ = transcripts_file.flush();
+            };
+
+            emit(mic_label, &mic_text, &mut mic_accum);
+            if mix_active {
+                emit("system", &system_text, &mut system_accum);
             }
+
             last_processed = end;
         }
 
@@ -591,10 +646,29 @@ fn worker_loop(
         serde_json::to_string_pretty(&meta).unwrap_or_default(),
     );
 
+    // Build the final transcript: time-ordered labeled stream read
+    // back from transcripts.txt (one line per chunk, format
+    // `[ts ms] [speaker] text`). The `[ts ms]` prefix is preserved
+    // so the LLM recap can use timestamps for diarization context.
+    // Falls back to a per-speaker concat if the file read fails.
+    let merged_transcript = std::fs::read_to_string(&transcripts_path)
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| {
+            let mut s = String::new();
+            if !mic_accum.trim().is_empty() {
+                s.push_str(&format!("[{}] {}\n", mic_label, mic_accum));
+            }
+            if !system_accum.trim().is_empty() {
+                s.push_str(&format!("[system] {}\n", system_accum));
+            }
+            s
+        });
+
     MeetingResult {
         id,
         dir,
-        transcript: transcript_accum,
+        transcript: merged_transcript,
         duration_secs,
         chunk_count,
         error: None,
