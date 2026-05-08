@@ -1446,17 +1446,14 @@
                 <StackPanel Spacing="8">
                   <TextBlock Text="Raw transcript" FontSize="12" FontWeight="SemiBold"
                              Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                  <RichTextBlock x:Name="HistoryRawTextRich"
-                                 TextWrapping="Wrap" FontSize="13" LineHeight="22"
-                                 IsTextSelectionEnabled="True" />
-                  <TextBlock x:Name="HistoryEnhancedHeader"
-                             Text="LLM-enhanced" FontSize="12" FontWeight="SemiBold" Margin="0,8,0,0"
+                  <TextBlock Text="{Binding SelectedHistoryItem.Text, Mode=OneWay}"
+                             TextWrapping="Wrap" FontSize="14" />
+                  <TextBlock Text="LLM-enhanced" FontSize="12" FontWeight="SemiBold" Margin="0,8,0,0"
                              Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                              Visibility="{Binding SelectedHistoryItem.EnhancedText, Mode=OneWay, Converter={StaticResource NotNullToVisibilityConverter}}" />
-                  <RichTextBlock x:Name="HistoryEnhancedTextRich"
-                                 TextWrapping="Wrap" FontSize="13" LineHeight="22"
-                                 IsTextSelectionEnabled="True"
-                                 Visibility="{Binding SelectedHistoryItem.EnhancedText, Mode=OneWay, Converter={StaticResource NotNullToVisibilityConverter}}" />
+                  <TextBlock Text="{Binding SelectedHistoryItem.EnhancedText, Mode=OneWay}"
+                             TextWrapping="Wrap" FontSize="14"
+                             Visibility="{Binding SelectedHistoryItem.EnhancedText, Mode=OneWay, Converter={StaticResource NotNullToVisibilityConverter}}" />
                   <StackPanel Orientation="Horizontal" Spacing="14" Margin="0,8,0,0">
                     <TextBlock Text="{Binding SelectedHistoryItem.AppDisplay, Mode=OneWay, FallbackValue=''}"
                                FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
