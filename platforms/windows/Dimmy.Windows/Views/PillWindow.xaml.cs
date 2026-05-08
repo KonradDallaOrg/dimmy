@@ -688,7 +688,18 @@ public sealed partial class PillWindow : Window
         {
             _amplitudeTimer.Tick += (_, _) =>
             {
-                var amp = DimmyNative.dimmy_get_amplitude();
+                // Always-mix: take the LARGER of mic and system loopback
+                // amplitude so the pill bars react to either source. This
+                // gives the user a single visual "signal is being captured"
+                // indicator regardless of whether they're dictating into
+                // the mic, listening to a meeting through speakers, or
+                // both. Per-source distinction lives in the meeting view's
+                // dual-band waveform; the pill stays minimal.
+                var ampMic = DimmyNative.dimmy_get_amplitude();
+                var ampSys = DimmyNative.dimmy_get_loopback_amplitude();
+                if (!float.IsFinite(ampMic)) ampMic = 0;
+                if (!float.IsFinite(ampSys)) ampSys = 0;
+                var amp = Math.Max(ampMic, ampSys);
 
                 // Display AGC: smoothly track the peak level, then normalize against it.
                 // - When loud: _displayPeak rises fast → normalized value stays <1.0
