@@ -54,6 +54,12 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern float dimmy_get_amplitude();
 
+    /// Peak amplitude of the SECONDARY (loopback / system) audio buffer.
+    /// Returns 0.0 when no Mix recording is active. Used by the meeting
+    /// window dual-band waveform to draw mic + system as separate bands.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern float dimmy_get_loopback_amplitude();
+
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_list_devices_json(byte[] outBuf, int bufLen);
 

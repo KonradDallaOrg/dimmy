@@ -222,10 +222,14 @@ fn dimmy_init_inner() -> c_int {
     let input_gain_atomic = Arc::new(std::sync::atomic::AtomicU32::new(
         file_cfg.input_gain.to_bits(),
     ));
+    let loopback_gain_atomic = Arc::new(std::sync::atomic::AtomicU32::new(
+        file_cfg.loopback_gain.to_bits(),
+    ));
     let audio_tx = crate::audio::spawn_audio_thread(
         audio_buffer.clone(),
         audio_buffer_secondary.clone(),
         input_gain_atomic.clone(),
+        loopback_gain_atomic.clone(),
     );
 
     let app_state = AppState {
@@ -275,6 +279,8 @@ fn dimmy_init_inner() -> c_int {
         overlay_position: Mutex::new(file_cfg.overlay_position),
         keep_in_clipboard: Mutex::new(file_cfg.keep_in_clipboard),
         input_gain: input_gain_atomic,
+        loopback_gain: loopback_gain_atomic,
+        meeting_chunk_secs: Mutex::new(file_cfg.meeting_chunk_secs),
         audio_source: Mutex::new(file_cfg.audio_source),
         key_store,
         audio_debug_session_dir: Mutex::new(None),
@@ -1551,6 +1557,19 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
             .store(gain.to_bits(), std::sync::atomic::Ordering::Relaxed);
         log(&format!("[Config] input_gain set to {:.2}", gain));
     }
+    if let Some(g) = v["loopback_gain"].as_f64() {
+        let gain = (g as f32).clamp(0.5, 4.0);
+        st.loopback_gain
+            .store(gain.to_bits(), std::sync::atomic::Ordering::Relaxed);
+        log(&format!("[Config] loopback_gain set to {:.2}", gain));
+    }
+    if let Some(s) = v["meeting_chunk_secs"].as_f64() {
+        let secs = (s as f32).clamp(5.0, 60.0);
+        if let Ok(mut slot) = st.meeting_chunk_secs.lock() {
+            *slot = secs;
+        }
+        log(&format!("[Config] meeting_chunk_secs set to {:.1}", secs));
+    }
     if let Some(s) = v["audio_source"].as_str() {
         let normalised = match s.to_ascii_lowercase().as_str() {
             "system" | "mix" | "mic" => s.to_ascii_lowercase(),
@@ -1763,6 +1782,33 @@ pub extern "C" fn dimmy_get_amplitude() -> c_float {
         }
     });
     // clamp guarantees [0.0, 1.0]; NaN filtered in fold above
+    peak.clamp(0.0, 1.0)
+}
+
+/// Peak amplitude of the SECONDARY audio buffer (the loopback / system
+/// audio stream populated in Mix mode). Returns 0.0 when no Mix
+/// recording is active or the buffer hasn't been fed yet. Used by the
+/// meeting-window dual-band waveform to draw mic + system as separate
+/// bands so the user can see both streams at a glance.
+#[no_mangle]
+pub extern "C" fn dimmy_get_loopback_amplitude() -> c_float {
+    let st = state();
+    let buffer = match st.audio_buffer_secondary.lock() {
+        Ok(b) => b,
+        Err(_) => return 0.0,
+    };
+    if buffer.is_empty() {
+        return 0.0;
+    }
+    let start = buffer.len().saturating_sub(800);
+    let peak = buffer[start..].iter().fold(0.0f32, |max, &s| {
+        let abs = s.abs();
+        if abs.is_finite() {
+            max.max(abs)
+        } else {
+            max
+        }
+    });
     peak.clamp(0.0, 1.0)
 }
 
@@ -2382,6 +2428,7 @@ pub unsafe extern "C" fn dimmy_meeting_start(out_buf: *mut c_char, buf_len: c_in
             .ok()
             .map(|s| s.clone())
             .unwrap_or_else(|| "auto".to_string()),
+        chunk_secs: st.meeting_chunk_secs.lock().ok().map(|s| *s),
     };
     let session = match crate::meeting::MeetingSession::start(
         st.audio_buffer.clone(),

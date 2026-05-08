@@ -385,6 +385,14 @@ pub struct AppConfig {
     /// callback BEFORE they hit the buffer / AEC ring; soft-clipped
     /// via tanh so peaks don't distort.
     pub loopback_gain: f32,
+    /// Meeting chunk window in seconds. The meeting worker waits for
+    /// this much new audio before firing one STT inference call.
+    /// Longer chunks = better LLM context per segment, fewer API
+    /// calls (cheaper on cloud), but later visibility of the live
+    /// transcript. Range 5.0-60.0, default 15.0. Cloud providers
+    /// accept up to ~25 MB so 60 s @ 16k mono int16 (~1.9 MB) is
+    /// well within limits.
+    pub meeting_chunk_secs: f32,
     /// What to capture: "mic" (default), "system" (loopback — what's
     /// playing through the speakers), or "mix" (both summed in time).
     /// System / Mix are Windows-only for now; on Mac/Linux they fall
@@ -464,6 +472,7 @@ impl Default for AppConfig {
             // is hitting the ceiling constantly; better to give back
             // dynamic range and let the user dial up if needed.
             loopback_gain: 1.5,
+            meeting_chunk_secs: 15.0,
             audio_source: default_audio_source(),
             window_anchor_right: None,
             window_anchor_bottom: None,
@@ -542,6 +551,7 @@ pub fn save_config_file(cfg: &AppConfig) {
             "keep_in_clipboard": cfg.keep_in_clipboard,
             "input_gain": cfg.input_gain,
             "loopback_gain": cfg.loopback_gain,
+            "meeting_chunk_secs": cfg.meeting_chunk_secs,
             "audio_source": cfg.audio_source,
             "stats_total_words": cfg.stats_total_words,
             "stats_total_speaking_secs": cfg.stats_total_speaking_secs,
@@ -692,6 +702,10 @@ pub fn load_config_file() -> AppConfig {
                     loopback_gain: v["loopback_gain"]
                         .as_f64()
                         .unwrap_or(defaults.loopback_gain as f64)
+                        as f32,
+                    meeting_chunk_secs: v["meeting_chunk_secs"]
+                        .as_f64()
+                        .unwrap_or(defaults.meeting_chunk_secs as f64)
                         as f32,
                     audio_source: v["audio_source"]
                         .as_str()
@@ -924,6 +938,7 @@ pub struct AppState {
     /// Input gain as AtomicU32 (f32 bits) — shared with audio capture thread
     pub input_gain: Arc<std::sync::atomic::AtomicU32>,
     pub loopback_gain: Arc<std::sync::atomic::AtomicU32>,
+    pub meeting_chunk_secs: Mutex<f32>,
     /// Audio source: "mic" | "system" | "mix". Read by dimmy_start_recording
     /// + meeting start to pick which AudioCommand::Start variant to send.
     pub audio_source: Mutex<String>,
@@ -1046,6 +1061,7 @@ impl AppState {
             keep_in_clipboard: Mutex::new(file_cfg.keep_in_clipboard),
             input_gain: input_gain_atomic,
             loopback_gain: loopback_gain_atomic,
+            meeting_chunk_secs: Mutex::new(file_cfg.meeting_chunk_secs),
             audio_source: Mutex::new(file_cfg.audio_source.clone()),
             key_store,
             audio_debug_session_dir: Mutex::new(None),
@@ -1221,6 +1237,7 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         keep_in_clipboard: *state.keep_in_clipboard.lock().map_err(|e| e.to_string())?,
         input_gain: f32::from_bits(state.input_gain.load(Ordering::Relaxed)),
         loopback_gain: f32::from_bits(state.loopback_gain.load(Ordering::Relaxed)),
+        meeting_chunk_secs: *state.meeting_chunk_secs.lock().map_err(|e| e.to_string())?,
         audio_source: state
             .audio_source
             .lock()

@@ -40,6 +40,9 @@ public sealed partial class MeetingWindow : Window
     private bool _recordingActive;
 
     private readonly Queue<float> _ampHistory = new();
+    // Second history for the loopback (system) stream so the live
+    // waveform can draw mic and system as two distinct bands.
+    private readonly Queue<float> _ampHistorySystem = new();
     // Dynamic bar count — keeps each bar at a fixed pixel width so the
     // waveform doesn't stretch when the window is resized to fullscreen.
     // Recomputed in LiveWaveformCanvas_SizeChanged.
@@ -152,6 +155,7 @@ public sealed partial class MeetingWindow : Window
                 _startedAt = DateTime.UtcNow;       // best-effort; Rust holds the truth
                 _lastTranscriptLen = -1;
                 _ampHistory.Clear();
+                _ampHistorySystem.Clear();
                 _recordingActive = true;
                 AppContextName.Text = "Microphone";
                 SetState(MeetingState.Recording);
@@ -219,6 +223,7 @@ public sealed partial class MeetingWindow : Window
                     _startedAt = DateTime.UtcNow;
                     _lastTranscriptLen = -1;
                     _ampHistory.Clear();
+                    _ampHistorySystem.Clear();
                     _recordingActive = true;
                     HistoryList.SelectedItem = null;
                     AppContextName.Text = "Microphone";
@@ -237,6 +242,7 @@ public sealed partial class MeetingWindow : Window
             _startedAt = DateTime.UtcNow;
             _lastTranscriptLen = -1;
             _ampHistory.Clear();
+            _ampHistorySystem.Clear();
             _activeMeetingDir = null;       // poll fills it once Rust creates the dir
             _viewingMeetingDir = null;
 
@@ -478,11 +484,22 @@ public sealed partial class MeetingWindow : Window
     {
         try
         {
-            float amp = DimmyNative.dimmy_get_amplitude();
-            if (!float.IsFinite(amp)) amp = 0;
-            amp = (float)Math.Min(1.0, Math.Sqrt(amp) * 1.4);
+            float ampMic = DimmyNative.dimmy_get_amplitude();
+            if (!float.IsFinite(ampMic)) ampMic = 0;
+            ampMic = (float)Math.Min(1.0, Math.Sqrt(ampMic) * 1.4);
             while (_ampHistory.Count >= _ampHistorySize) _ampHistory.Dequeue();
-            _ampHistory.Enqueue(amp);
+            _ampHistory.Enqueue(ampMic);
+
+            // Loopback (system) amplitude — populated only in Mix mode.
+            // In Mic-only / System-only modes this is 0, which collapses
+            // the bottom band to invisible and the canvas effectively
+            // shows just the mic band.
+            float ampSys = DimmyNative.dimmy_get_loopback_amplitude();
+            if (!float.IsFinite(ampSys)) ampSys = 0;
+            ampSys = (float)Math.Min(1.0, Math.Sqrt(ampSys) * 1.4);
+            while (_ampHistorySystem.Count >= _ampHistorySize) _ampHistorySystem.Dequeue();
+            _ampHistorySystem.Enqueue(ampSys);
+
             DrawLiveWaveform();
         }
         catch { }
@@ -500,35 +517,49 @@ public sealed partial class MeetingWindow : Window
         n = Math.Clamp(n, AMP_MIN_HISTORY, AMP_MAX_HISTORY);
         _ampHistorySize = n;
         while (_ampHistory.Count > n) _ampHistory.Dequeue();
+        while (_ampHistorySystem.Count > n) _ampHistorySystem.Dequeue();
         DrawLiveWaveform();
     }
 
     private void DrawLiveWaveform()
     {
-        if (LiveWaveformCanvas == null || _ampHistory.Count == 0) return;
+        if (LiveWaveformCanvas == null) return;
         LiveWaveformCanvas.Children.Clear();
         double w = LiveWaveformCanvas.ActualWidth;
         double h = LiveWaveformCanvas.ActualHeight;
         if (w <= 0 || h <= 0) return;
-        var samples = _ampHistory.ToArray();
-        // Right-align: newest sample is at the rightmost slot, so the
-        // waveform "scrolls in" from the right rather than stretching
-        // across the whole canvas as samples accumulate.
+
+        // Two stacked bands so mic and system are clearly readable
+        // at a glance. Mic on top half (DodgerBlue), system on bottom
+        // half (LimeGreen). Each band centered on its own midline so
+        // bars grow up + down equally within their half.
         double pitch = AMP_BAR_PX + AMP_GAP_PX;
-        double mid = h / 2.0;
-        var brush = new SolidColorBrush(Microsoft.UI.Colors.DodgerBlue);
+        double bandHeight = h / 2.0;
+        double midTop = bandHeight / 2.0;
+        double midBottom = bandHeight + bandHeight / 2.0;
+        var brushMic = new SolidColorBrush(Microsoft.UI.Colors.DodgerBlue);
+        var brushSys = new SolidColorBrush(Microsoft.UI.Colors.LimeGreen);
+
+        DrawBand(_ampHistory.ToArray(), brushMic, midTop, bandHeight - 4, w, pitch);
+        DrawBand(_ampHistorySystem.ToArray(), brushSys, midBottom, bandHeight - 4, w, pitch);
+    }
+
+    private void DrawBand(float[] samples, SolidColorBrush brush, double mid, double maxHeight, double w, double pitch)
+    {
+        if (samples.Length == 0) return;
         int n = samples.Length;
         for (int i = 0; i < n; i++)
         {
             double x = w - (n - i) * pitch;
             if (x + AMP_BAR_PX < 0) continue;
-            double height = Math.Max(2, samples[i] * (h - 4));
+            double height = Math.Max(2, samples[i] * maxHeight);
             var rect = new Microsoft.UI.Xaml.Shapes.Rectangle
             {
                 Width = AMP_BAR_PX,
                 Height = height,
                 Fill = brush,
-                RadiusX = 1, RadiusY = 1,
+                RadiusX = 1,
+                RadiusY = 1,
             };
             Microsoft.UI.Xaml.Controls.Canvas.SetLeft(rect, x);
             Microsoft.UI.Xaml.Controls.Canvas.SetTop(rect, mid - height / 2.0);
