@@ -1202,6 +1202,7 @@
                           SelectionMode="None"
                           IsItemClickEnabled="False"
                           HorizontalContentAlignment="Stretch"
+                          CanDragItems="True"
                           CanReorderItems="True"
                           AllowDrop="True"
                           ReorderMode="Enabled">

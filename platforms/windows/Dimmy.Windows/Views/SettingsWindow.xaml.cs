@@ -118,15 +118,27 @@ public sealed partial class SettingsWindow : Window
         // on any per-row property edit (pattern, style, ...). Without
         // hooking the inner ObservableObjects' PropertyChanged the user
         // wouldn't see the "Saved" hint when editing a row in place.
-        ViewModel.AppRules.CollectionChanged += (_, _) =>
+        ViewModel.AppRules.CollectionChanged += (_, e) =>
         {
             PulseSavedInfoBar();
             UpdateAppRulesEmptyHint();
+            // Persist on every collection change, including a drag-
+            // reorder Move (which would otherwise stay UI-only and get
+            // lost on next ReloadConfig). _loaded gate prevents the
+            // initial bulk-add during config load from triggering a
+            // save storm.
+            if (_loaded) App.Instance?.ApplySettings(ViewModel);
         };
         foreach (var r in ViewModel.AppRules)
             r.PropertyChanged += (_, _) => PulseSavedInfoBar();
         ViewModel.AppRules.CollectionChanged += (_, e) =>
         {
+            // Only hook PropertyChanged on NEWLY-added rules. A Move
+            // event also sets NewItems but the moved instance is the
+            // same one we hooked at Add time — re-hooking would leak
+            // duplicate subscriptions on every drag-reorder.
+            if (e.Action != System.Collections.Specialized.NotifyCollectionChangedAction.Add)
+                return;
             if (e.NewItems != null)
                 foreach (AppRuleViewModel r in e.NewItems)
                     r.PropertyChanged += (_, _) => PulseSavedInfoBar();
