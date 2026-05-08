@@ -4,6 +4,7 @@
 // silently break the build.
 #![recursion_limit = "256"]
 
+pub mod aec;
 pub mod app_rules;
 pub mod audio;
 pub mod autostart;

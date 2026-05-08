@@ -80,6 +80,24 @@ pub fn spawn_audio_thread(
 ) -> mpsc::Sender<AudioCommand> {
     let (tx, rx) = mpsc::channel::<AudioCommand>();
 
+    // ── AEC plumbing ─────────────────────────────────────────────
+    // Mix mode routes mic and loopback through these per-stream rings.
+    // The dimmy-aec worker thread drains 480-sample frames from each in
+    // lockstep, runs WebRTC AEC3, and pushes cleaned mic samples to the
+    // primary `buffer`. In Mic-only / System-only modes the rings stay
+    // empty (callbacks write directly to `buffer`) so the worker idles
+    // at zero CPU.
+    let aec_mic_ring: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+    let aec_ref_ring: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+    let aec_shutdown: Arc<std::sync::atomic::AtomicBool> =
+        Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let _aec_handle = crate::aec::spawn_aec_thread(
+        aec_mic_ring.clone(),
+        aec_ref_ring.clone(),
+        buffer.clone(),
+        aec_shutdown.clone(),
+    );
+
     thread::spawn(
         #[allow(unused_assignments, unused_variables)]
         move || {
@@ -188,19 +206,35 @@ pub fn spawn_audio_thread(
 
                         let channels = config.channels() as usize;
 
-                        // Clear both buffers — Mix uses a separate secondary
-                        // buffer for the loopback so meeting.rs can mix
-                        // primary+secondary per-sample (instead of having
-                        // them race-interleave into one buffer, which made
-                        // playback half-speed and acoustically garbled).
+                        // Clear all buffers + AEC rings — Mix uses a separate
+                        // secondary buffer for the loopback so meeting.rs can
+                        // mix primary+secondary per-sample, and the AEC rings
+                        // must start empty so WebRTC's delay estimator
+                        // converges from a clean slate.
                         if let Ok(mut b) = buffer.lock() {
                             b.clear();
                         }
                         if let Ok(mut b) = buffer_secondary.lock() {
                             b.clear();
                         }
+                        if let Ok(mut r) = aec_mic_ring.lock() {
+                            r.clear();
+                        }
+                        if let Ok(mut r) = aec_ref_ring.lock() {
+                            r.clear();
+                        }
 
-                        let buf = buffer.clone();
+                        // In Mix mode the mic primary feeds the AEC mic ring
+                        // (NOT audio_buffer directly) — the AEC worker writes
+                        // the cleaned output to audio_buffer. In Mic-only and
+                        // System-only modes the primary writes to audio_buffer
+                        // as before; AEC stays idle.
+                        let mix_mode = matches!(source, AudioSource::Mix);
+                        let buf = if mix_mode {
+                            aec_mic_ring.clone()
+                        } else {
+                            buffer.clone()
+                        };
                         let gain_ref = input_gain.clone();
                         let sample_count =
                             std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -316,13 +350,14 @@ pub fn spawn_audio_thread(
                                 if let Some(s) = build_secondary_stream(
                                     &sysdev,
                                     &buffer_secondary,
+                                    Some(&aec_ref_ring),
                                     &input_gain,
                                     /* is_loopback */ true,
                                 ) {
                                     let _ = s.play();
                                     streams.push(s);
                                     crate::log(
-                                        "[Audio] Mix mode: secondary loopback stream playing into dedicated buffer",
+                                        "[Audio] Mix mode: secondary loopback stream playing into dedicated buffer + AEC ref ring",
                                     );
                                 }
                             }
@@ -404,6 +439,7 @@ fn resolve_loopback_device(_host: &cpal::Host) -> Option<cpal::Device> {
 fn build_secondary_stream(
     device: &cpal::Device,
     buffer: &Arc<Mutex<Vec<f32>>>,
+    aec_ref_ring: Option<&Arc<Mutex<Vec<f32>>>>,
     input_gain: &Arc<std::sync::atomic::AtomicU32>,
     is_loopback: bool,
 ) -> Option<cpal::Stream> {
@@ -445,6 +481,11 @@ fn build_secondary_stream(
     };
     let channels = config.channels() as usize;
     let buf = buffer.clone();
+    // Optional second destination: in Mix mode the AEC worker needs the
+    // SAME loopback samples as a `render` reference so it can subtract
+    // the speaker echo from the mic capture. We push to both buffers
+    // (raw record + AEC ref ring) inside the cpal callback.
+    let aec_ref = aec_ref_ring.cloned();
     // NOTE: secondary stream path = loopback (system audio). We deliberately
     // DO NOT apply `input_gain` here (that knob is calibrated for mic peak
     // levels) and DO NOT divide by `channels` on stereo→mono downmix. The
@@ -457,15 +498,18 @@ fn build_secondary_stream(
         cpal::SampleFormat::F32 => device.build_input_stream(
             &config.clone().into(),
             move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                let mono_samples: Vec<f32> = if channels > 1 {
+                    data.chunks(channels)
+                        .map(|chunk| chunk.iter().sum::<f32>().clamp(-1.0, 1.0))
+                        .collect()
+                } else {
+                    data.to_vec()
+                };
                 if let Ok(mut b) = buf.lock() {
-                    if channels > 1 {
-                        for chunk in data.chunks(channels) {
-                            let mono = chunk.iter().sum::<f32>().clamp(-1.0, 1.0);
-                            b.push(mono);
-                        }
-                    } else {
-                        b.extend_from_slice(data);
-                    }
+                    b.extend_from_slice(&mono_samples);
+                }
+                if let Some(ref aec) = aec_ref {
+                    crate::aec::push_to_ring(aec, &mono_samples);
                 }
             },
             |err| crate::log(&format!("[Audio] Secondary stream error (F32): {}", err)),
@@ -474,15 +518,21 @@ fn build_secondary_stream(
         cpal::SampleFormat::I16 => device.build_input_stream(
             &config.clone().into(),
             move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                if let Ok(mut b) = buf.lock() {
-                    for chunk in data.chunks(channels) {
-                        let mono: f32 = chunk
+                let mono_samples: Vec<f32> = data
+                    .chunks(channels)
+                    .map(|chunk| {
+                        chunk
                             .iter()
                             .map(|&s| s as f32 / 32768.0)
                             .sum::<f32>()
-                            .clamp(-1.0, 1.0);
-                        b.push(mono);
-                    }
+                            .clamp(-1.0, 1.0)
+                    })
+                    .collect();
+                if let Ok(mut b) = buf.lock() {
+                    b.extend_from_slice(&mono_samples);
+                }
+                if let Some(ref aec) = aec_ref {
+                    crate::aec::push_to_ring(aec, &mono_samples);
                 }
             },
             |err| crate::log(&format!("[Audio] Secondary stream error (I16): {}", err)),

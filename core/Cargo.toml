@@ -139,6 +139,12 @@ base64 = "0.22"
 nnnoiseless = "0.5"
 biquad = "0.4"
 dagc = "0.1"
+# Acoustic echo cancellation — pure Rust port of WebRTC AEC3.
+# Used in meeting Mix mode to subtract the system loopback (reference)
+# from the mic capture so speakers→mic feedback doesn't produce a
+# delay-mixed echo when both streams are summed. Includes HPF+NS+AGC
+# in its `linear` pipeline.
+aec3 = "0.2.0"
 whisper-rs = { version = "0.16", optional = true }
 # ONNX Runtime Rust bindings — used by the local-stt-parakeet path
 # to load Parakeet TDT v3 FP32 (encoder + decoder_joint + mel
