@@ -105,6 +105,7 @@
                   <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
                   </Grid.ColumnDefinitions>
                   <StackPanel Grid.Column="0" Spacing="2">
                     <TextBlock Text="{Binding Title}" FontSize="13"
@@ -119,6 +120,15 @@
                              Padding="6,2"
                              VerticalAlignment="Center"
                              Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                  <Button Grid.Column="2"
+                          Click="HistoryRowDelete_Click"
+                          DataContext="{Binding}"
+                          Background="Transparent" BorderThickness="0"
+                          Padding="4" MinWidth="0" MinHeight="0"
+                          ToolTipService.ToolTip="Delete meeting">
+                    <FontIcon Glyph="&#xE74D;" FontSize="11"
+                              Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                  </Button>
                 </Grid>
               </DataTemplate>
             </ListView.ItemTemplate>

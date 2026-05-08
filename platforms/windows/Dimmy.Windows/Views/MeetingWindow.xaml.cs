@@ -130,10 +130,22 @@ public sealed partial class MeetingWindow : Window
                     App.Log(
                         $"Closing event: _recordingActive={_recordingActive} _state={_state}",
                         "Meeting");
-                    if (_recordingActive || _state == MeetingState.Processing)
+                    // Always-mix architecture (2026-05-08): the meeting
+                    // recording is now decoupled from this window. The
+                    // Rust core keeps capturing and transcribing whether
+                    // the window is open, hidden, or destroyed; the pill
+                    // is the persistent indicator. Closing this window
+                    // is a UI-only action — no Cancel, no force-stop.
+                    // When the user reopens MeetingWindow, the ctor's
+                    // dimmy_meeting_is_active() probe re-attaches the
+                    // UI to the in-flight session (existing logic).
+                    if (_state == MeetingState.Processing)
                     {
+                        // The narrow case where we're mid stop-flow
+                        // (LLM recap in progress) — let it finish so we
+                        // don't lose the recap output.
                         args.Cancel = true;
-                        ShowToast("Recording in progress. Click Stop & finish first.");
+                        ShowToast("Wrapping up — wait a moment.");
                     }
                 };
                 App.Log("Closing handler attached to AppWindow", "Meeting");
@@ -157,28 +169,19 @@ public sealed partial class MeetingWindow : Window
             // best practice for media UI: window close = playback stop.
             StopDoneMediaPlayback();
 
-            // Defense-in-depth: if the window is being closed while a
-            // RECORDING is still active in the Rust core (different
-            // from the playback case — this guards Mix-mode capture,
-            // not audio.wav playback), force-stop the meeting in core
-            // so we don't leak a zombie. AppWindow.Closing should have
-            // cancelled the close upstream when _recordingActive, but
-            // if it slipped through (alt+f4 timing, runtime exit, a
-            // future API change), this catches it. WAVs + transcripts
-            // are already on disk via the streaming writer.
-            try
+            // Recording is decoupled from this window — DO NOT force-stop
+            // the meeting in core. The Rust worker keeps writing the
+            // streaming WAVs + transcripts.txt independently. Reopening
+            // MeetingWindow re-attaches via dimmy_meeting_is_active() in
+            // the ctor. To stop a meeting, the user must reopen this
+            // window and click Stop (or, future, use a tray-menu / pill
+            // affordance — not yet wired).
+            if (_recordingActive)
             {
-                if (_recordingActive || DimmyNative.dimmy_meeting_is_active() == 1)
-                {
-                    App.Log(
-                        "Closed: recording still active in core — force-stopping to prevent zombie",
-                        "Meeting");
-                    var buf = new byte[1 << 22];
-                    int rc = DimmyNative.dimmy_meeting_stop(buf, buf.Length);
-                    App.Log($"Closed: force-stop rc={rc}", "Meeting");
-                }
+                App.Log(
+                    "Closed: meeting still active in core — leaving capture running, will re-attach on reopen",
+                    "Meeting");
             }
-            catch (Exception ex) { App.Log($"Closed force-stop exc: {ex}", "Meeting"); }
         };
 
         // ── Re-sync UI to the Rust core. If a meeting is already
@@ -1290,6 +1293,62 @@ public sealed partial class MeetingWindow : Window
 
     private void HistorySearch_Changed(object sender, Microsoft.UI.Xaml.Controls.TextChangedEventArgs e)
         => LoadHistory();
+
+    private async void HistoryRowDelete_Click(object sender, RoutedEventArgs e)
+    {
+        // The Delete button lives inside each row's DataTemplate, so we
+        // pick the bound HistoryRow off DataContext rather than the
+        // selected item — the user might delete a row they haven't
+        // opened. Confirms before destroying the meeting dir on disk.
+        if (sender is not Microsoft.UI.Xaml.Controls.Button btn) return;
+        if (btn.DataContext is not HistoryRow row) return;
+        if (string.IsNullOrEmpty(row.Dir)) return;
+
+        var dlg = new Microsoft.UI.Xaml.Controls.ContentDialog
+        {
+            Title = "Delete this meeting?",
+            Content = $"This will permanently remove:\n\n{Path.GetFileName(row.Dir)}\n\n" +
+                      "Includes audio (audio.wav, per-track WAVs), transcripts.txt, and recap.md.",
+            PrimaryButtonText = "Delete",
+            CloseButtonText = "Cancel",
+            DefaultButton = Microsoft.UI.Xaml.Controls.ContentDialogButton.Close,
+            XamlRoot = this.Content.XamlRoot,
+        };
+        var result = await dlg.ShowAsync();
+        if (result != Microsoft.UI.Xaml.Controls.ContentDialogResult.Primary) return;
+
+        // Stop in-flight playback if the deleted meeting is the one the
+        // MediaPlayer is currently sourcing. Avoids a brief MEDIA_OPEN
+        // race when the file disappears mid-decode.
+        if (string.Equals(_viewingMeetingDir, row.Dir, StringComparison.OrdinalIgnoreCase))
+        {
+            StopDoneMediaPlayback();
+            ClearDoneCards();
+            _viewingMeetingDir = null;
+        }
+
+        try
+        {
+            if (Directory.Exists(row.Dir))
+            {
+                // Recursive: includes audio_*.wav, transcripts.txt,
+                // recap.md, meta.json, plus any future per-meeting
+                // artifacts we add (word_timestamps, follow-ups…).
+                Directory.Delete(row.Dir, recursive: true);
+                App.Log($"deleted meeting dir {row.Dir}", "Meeting");
+            }
+        }
+        catch (Exception ex)
+        {
+            App.Log($"delete meeting dir failed: {ex.Message}", "Meeting");
+            ShowToast($"Delete failed: {ex.Message}");
+            return;
+        }
+
+        HistoryItems.Remove(row);
+        if (HistoryList.SelectedItem == row) HistoryList.SelectedItem = null;
+        ShowToast("Meeting deleted.");
+    }
 
     private void LoadHistory()
     {
