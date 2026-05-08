@@ -53,7 +53,11 @@ pub struct SttSnapshot {
     pub api_model: String,
     pub api_key: Option<String>, // None for local
     pub prompt: String,
-    pub local_model: String, // filename, looked up in models/ dir
+    pub local_model: String, // whisper filename, looked up in models/ dir
+    /// Local STT backend: "whisper" | "parakeet". Mirrors the
+    /// `local_stt_backend` config knob the dictation chunked path
+    /// already honours. Defaults to "whisper" when missing.
+    pub local_backend: String,
     pub language: String,
     /// User-configurable chunk window — falls back to DEFAULT_CHUNK_SECS
     /// when None (e.g. older callers).
@@ -289,8 +293,8 @@ fn worker_loop(
     let local_model_filename = stt.local_model.clone();
     let language = stt.language.clone();
     crate::log(&format!(
-        "[Meeting] worker source={:?} mix_active={} stt_mode={} model={} lang={}",
-        source, mix_active, stt.mode, local_model_filename, language
+        "[Meeting] worker source={:?} mix_active={} stt_mode={} local_backend={} model={} lang={}",
+        source, mix_active, stt.mode, stt.local_backend, local_model_filename, language
     ));
 
     // Resolve a usable local-whisper model up-front. If the user has a
@@ -638,7 +642,22 @@ fn worker_loop(
                             String::new()
                         }
                     }
+                } else if stt.local_backend == "parakeet" {
+                    // Parakeet TDT v3 — same path the dictation chunked
+                    // worker uses. The 3 ONNX sessions live in a global
+                    // OnceLock cache so each call only pays mel/encoder/
+                    // decoder inference, not model load. No .bin file
+                    // needed — the bundle ships separately.
+                    match crate::parakeet::transcribe(&pcm_16k) {
+                        Ok(t) => t,
+                        Err(e) => {
+                            crate::log(&format!("[Meeting] parakeet error: {}", e));
+                            String::new()
+                        }
+                    }
                 } else {
+                    // Default = whisper. Routes through the cached
+                    // WhisperContext via local_stt::transcribe_local.
                     match &resolved_local_model {
                         Some(model_path) => {
                             match crate::local_stt::transcribe_local(

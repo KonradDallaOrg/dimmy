@@ -2447,6 +2447,12 @@ pub unsafe extern "C" fn dimmy_meeting_start(out_buf: *mut c_char, buf_len: c_in
             .ok()
             .map(|s| s.clone())
             .unwrap_or_default(),
+        local_backend: st
+            .local_stt_backend
+            .lock()
+            .ok()
+            .map(|s| s.clone())
+            .unwrap_or_else(|| "whisper".to_string()),
         language: st
             .language
             .lock()
