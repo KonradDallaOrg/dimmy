@@ -356,9 +356,10 @@ public sealed partial class MeetingWindow : Window
 
             DoneTitle.Text = string.IsNullOrEmpty(dir) ? "Meeting" : Path.GetFileName(dir);
             DoneMeta.Text = $"{FormatDuration(dur)} · {chunks} chunks · {DateTime.Now:yyyy-MM-dd HH:mm}";
-            RawTranscriptText.Text = string.IsNullOrEmpty(transcript)
-                ? "(no transcript: VAD may have removed all audio)"
-                : HumanizeTranscript(transcript);
+            Helpers.TranscriptRenderer.Render(RawTranscriptText,
+                string.IsNullOrEmpty(transcript)
+                    ? "(no transcript: VAD may have removed all audio)"
+                    : HumanizeTranscript(transcript));
             await LoadDoneAudioAsync(dir);
 
             if (GenerateRecapCheck.IsChecked == true && !string.IsNullOrWhiteSpace(transcript))
@@ -475,6 +476,14 @@ public sealed partial class MeetingWindow : Window
         RisksCard.Visibility = Visibility.Collapsed;
         NextStepsCard.Visibility = Visibility.Collapsed;
         DoneWaveCard.Visibility = Visibility.Collapsed;
+        _lastDoneSections = new();
+        TldrText.Blocks.Clear();
+        DecisionsText.Blocks.Clear();
+        TopicsText.Blocks.Clear();
+        ActionsText.Blocks.Clear();
+        OpenQuestionsText.Blocks.Clear();
+        RisksText.Blocks.Clear();
+        NextStepsText.Blocks.Clear();
     }
 
     // ── Polling + amplitude ──────────────────────────────────────
@@ -918,14 +927,21 @@ public sealed partial class MeetingWindow : Window
         }
     }
 
+    /// Last parsed/displayed Done-view sections. Kept around so
+    /// CopyRecap_Click can rebuild the markdown without having to
+    /// re-introspect the rendered RichTextBlocks (which only hold
+    /// formatted Inline trees, not the source markdown).
+    private Dictionary<string, string> _lastDoneSections = new();
+
     private void ShowDoneFallback(string transcript, string note)
     {
-        TldrText.Text = note;
+        SetPlainText(TldrText, note);
         TldrCard.Visibility = Visibility.Visible;
     }
 
     private void ApplyDoneSections(Dictionary<string, string> sections)
     {
+        _lastDoneSections = sections;
         ApplyDoneSection(sections, "TLDR", TldrText, TldrCard);
         ApplyDoneSection(sections, "KEY_DECISIONS", DecisionsText, DecisionsCard);
         ApplyDoneSection(sections, "TOPICS", TopicsText, TopicsCard);
@@ -937,7 +953,7 @@ public sealed partial class MeetingWindow : Window
 
     private static void ApplyDoneSection(
         Dictionary<string, string> sections, string key,
-        Microsoft.UI.Xaml.Controls.TextBlock target,
+        Microsoft.UI.Xaml.Controls.RichTextBlock target,
         Microsoft.UI.Xaml.Controls.Border card)
     {
         if (!sections.TryGetValue(key, out var value) || string.IsNullOrWhiteSpace(value) || value.Trim() == "—")
@@ -945,8 +961,86 @@ public sealed partial class MeetingWindow : Window
             card.Visibility = Visibility.Collapsed;
             return;
         }
-        target.Text = value.Trim();
+        Helpers.MarkdownRenderer.Render(target, value.Trim());
         card.Visibility = Visibility.Visible;
+    }
+
+    /// Set a plain-text string into a RichTextBlock as a single
+    /// paragraph — used for fallback / error messages where
+    /// markdown rendering would be overkill.
+    private static void SetPlainText(Microsoft.UI.Xaml.Controls.RichTextBlock target, string text)
+    {
+        target.Blocks.Clear();
+        var p = new Microsoft.UI.Xaml.Documents.Paragraph();
+        p.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = text ?? "" });
+        target.Blocks.Add(p);
+    }
+
+    /// Reverse of BuildMarkdownFromSections: split a persisted recap.md
+    /// back into the canonical section-key dictionary so the Done-view
+    /// cards can re-render. Heading lookup is case/space insensitive
+    /// so "## Topics", "## Topics discussed", "##  topics" all match.
+    private static Dictionary<string, string> SplitMarkdownIntoSections(string markdown)
+    {
+        var headingMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "context", "CONTEXT" },
+            { "tldr", "TLDR" },
+            { "tl;dr", "TLDR" },
+            { "highlights", "HIGHLIGHTS" },
+            { "narrative", "NARRATIVE" },
+            { "key decisions", "KEY_DECISIONS" },
+            { "decisions", "KEY_DECISIONS" },
+            { "topics", "TOPICS" },
+            { "topics discussed", "TOPICS" },
+            { "actions", "ACTIONS" },
+            { "action items", "ACTIONS" },
+            { "open questions", "OPEN_QUESTIONS" },
+            { "questions", "OPEN_QUESTIONS" },
+            { "risks", "RISKS" },
+            { "risks & blockers", "RISKS" },
+            { "blockers", "RISKS" },
+            { "next steps", "NEXT_STEPS" },
+            { "follow-ups", "FOLLOWUPS" },
+            { "followups", "FOLLOWUPS" },
+        };
+
+        var result = new Dictionary<string, string>();
+        if (string.IsNullOrWhiteSpace(markdown)) return result;
+
+        string? currentKey = null;
+        var sb = new System.Text.StringBuilder();
+        var lines = markdown.Replace("\r\n", "\n").Split('\n');
+
+        void Flush()
+        {
+            if (currentKey != null)
+            {
+                var body = sb.ToString().Trim();
+                if (!string.IsNullOrEmpty(body)) result[currentKey] = body;
+            }
+            sb.Clear();
+        }
+
+        foreach (var line in lines)
+        {
+            var trimmed = line.TrimStart();
+            if (trimmed.StartsWith("## "))
+            {
+                Flush();
+                var heading = trimmed.Substring(3).Trim();
+                if (headingMap.TryGetValue(heading, out var key))
+                    currentKey = key;
+                else
+                    currentKey = null;
+            }
+            else if (currentKey != null)
+            {
+                sb.AppendLine(line);
+            }
+        }
+        Flush();
+        return result;
     }
 
     private static string BuildMarkdownFromSections(Dictionary<string, string> s)
@@ -1293,13 +1387,27 @@ public sealed partial class MeetingWindow : Window
             if (File.Exists(recapPath))
             {
                 var text = await File.ReadAllTextAsync(recapPath);
-                TldrText.Text = text;
-                TldrCard.Visibility = Visibility.Visible;
+                // Parse the persisted markdown back into the same section
+                // shape the LLM produces, so each heading lights up its
+                // own card. Falls back to a single TLDR-card dump if the
+                // file isn't heading-structured.
+                var parsed = SplitMarkdownIntoSections(text);
+                if (parsed.Count > 0)
+                {
+                    ApplyDoneSections(parsed);
+                }
+                else
+                {
+                    Helpers.MarkdownRenderer.Render(TldrText, text);
+                    TldrCard.Visibility = Visibility.Visible;
+                }
             }
             var txt = Path.Combine(row.Dir, "transcripts.txt");
             if (File.Exists(txt))
             {
-                RawTranscriptText.Text = HumanizeTranscript(await File.ReadAllTextAsync(txt));
+                Helpers.TranscriptRenderer.Render(
+                    RawTranscriptText,
+                    HumanizeTranscript(await File.ReadAllTextAsync(txt)));
             }
             await LoadDoneAudioAsync(row.Dir);
             SetState(MeetingState.Done);
@@ -1339,23 +1447,28 @@ public sealed partial class MeetingWindow : Window
     {
         try
         {
-            var sb = new System.Text.StringBuilder();
-            void Append(Microsoft.UI.Xaml.Controls.Border card, string heading,
-                Microsoft.UI.Xaml.Controls.TextBlock body)
+            // RichTextBlock doesn't expose a flat .Text — instead we
+            // rebuild the markdown from the cached section dict that
+            // ApplyDoneSections populated. This keeps the original
+            // bullets / bold / italic intact when pasting elsewhere.
+            string md;
+            if (_lastDoneSections.Count > 0)
             {
-                if (card.Visibility != Visibility.Visible) return;
-                sb.AppendLine($"## {heading}").AppendLine(body.Text).AppendLine();
+                md = BuildMarkdownFromSections(_lastDoneSections);
             }
-            Append(TldrCard, "TL;DR", TldrText);
-            Append(DecisionsCard, "Key decisions", DecisionsText);
-            Append(TopicsCard, "Topics", TopicsText);
-            Append(ActionsCard, "Actions", ActionsText);
-            Append(OpenQuestionsCard, "Open questions", OpenQuestionsText);
-            Append(RisksCard, "Risks", RisksText);
-            Append(NextStepsCard, "Next steps", NextStepsText);
+            else
+            {
+                md = "";
+            }
+            if (string.IsNullOrWhiteSpace(md))
+            {
+                ShowToast("Nothing to copy yet.");
+                return;
+            }
             var dp = new global::Windows.ApplicationModel.DataTransfer.DataPackage();
-            dp.SetText(sb.ToString());
+            dp.SetText(md);
             global::Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dp);
+            ShowToast("Recap copied as markdown.");
         }
         catch (Exception ex)
         {
@@ -1402,7 +1515,7 @@ public sealed partial class MeetingWindow : Window
 
             var txtPath = Path.Combine(dir, "transcripts.txt");
             await File.WriteAllTextAsync(txtPath, merged);
-            RawTranscriptText.Text = HumanizeTranscript(merged);
+            Helpers.TranscriptRenderer.Render(RawTranscriptText, HumanizeTranscript(merged));
             ShowToast("Transcript regenerated.");
         }
         catch (Exception ex)

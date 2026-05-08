@@ -406,8 +406,8 @@
                   <TextBlock Text="TL;DR" FontSize="11" FontWeight="SemiBold"
                              CharacterSpacing="80"
                              Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
-                  <TextBlock x:Name="TldrText" TextWrapping="Wrap" FontSize="14"
-                             IsTextSelectionEnabled="True"/>
+                  <RichTextBlock x:Name="TldrText" TextWrapping="Wrap" FontSize="14"
+                                 IsTextSelectionEnabled="True"/>
                 </StackPanel>
               </Border>
 
@@ -420,8 +420,8 @@
                     <FontIcon Glyph="&#xE73E;" FontSize="14" Foreground="ForestGreen"/>
                     <TextBlock Text="Key decisions" FontSize="14" FontWeight="SemiBold"/>
                   </StackPanel>
-                  <TextBlock x:Name="DecisionsText" TextWrapping="Wrap" FontSize="13"
-                             IsTextSelectionEnabled="True"/>
+                  <RichTextBlock x:Name="DecisionsText" TextWrapping="Wrap" FontSize="13"
+                                 IsTextSelectionEnabled="True"/>
                 </StackPanel>
               </Border>
 
@@ -434,8 +434,8 @@
                     <FontIcon Glyph="&#xE8FD;" FontSize="14"/>
                     <TextBlock Text="Topics discussed" FontSize="14" FontWeight="SemiBold"/>
                   </StackPanel>
-                  <TextBlock x:Name="TopicsText" TextWrapping="Wrap" FontSize="13"
-                             IsTextSelectionEnabled="True"/>
+                  <RichTextBlock x:Name="TopicsText" TextWrapping="Wrap" FontSize="13"
+                                 IsTextSelectionEnabled="True"/>
                 </StackPanel>
               </Border>
 
@@ -448,8 +448,8 @@
                     <FontIcon Glyph="&#xE762;" FontSize="14" Foreground="DarkOrange"/>
                     <TextBlock Text="Action items" FontSize="14" FontWeight="SemiBold"/>
                   </StackPanel>
-                  <TextBlock x:Name="ActionsText" TextWrapping="Wrap" FontSize="13"
-                             FontFamily="Consolas" IsTextSelectionEnabled="True"/>
+                  <RichTextBlock x:Name="ActionsText" TextWrapping="Wrap" FontSize="13"
+                                 IsTextSelectionEnabled="True"/>
                 </StackPanel>
               </Border>
 
@@ -462,8 +462,8 @@
                     <FontIcon Glyph="&#xE9CE;" FontSize="14"/>
                     <TextBlock Text="Open questions" FontSize="14" FontWeight="SemiBold"/>
                   </StackPanel>
-                  <TextBlock x:Name="OpenQuestionsText" TextWrapping="Wrap" FontSize="13"
-                             IsTextSelectionEnabled="True"/>
+                  <RichTextBlock x:Name="OpenQuestionsText" TextWrapping="Wrap" FontSize="13"
+                                 IsTextSelectionEnabled="True"/>
                 </StackPanel>
               </Border>
 
@@ -477,8 +477,8 @@
                               Foreground="{ThemeResource SystemFillColorCautionBrush}"/>
                     <TextBlock Text="Risks &amp; blockers" FontSize="14" FontWeight="SemiBold"/>
                   </StackPanel>
-                  <TextBlock x:Name="RisksText" TextWrapping="Wrap" FontSize="13"
-                             IsTextSelectionEnabled="True"/>
+                  <RichTextBlock x:Name="RisksText" TextWrapping="Wrap" FontSize="13"
+                                 IsTextSelectionEnabled="True"/>
                 </StackPanel>
               </Border>
 
@@ -491,15 +491,17 @@
                     <FontIcon Glyph="&#xE893;" FontSize="14"/>
                     <TextBlock Text="Next steps" FontSize="14" FontWeight="SemiBold"/>
                   </StackPanel>
-                  <TextBlock x:Name="NextStepsText" TextWrapping="Wrap" FontSize="13"
-                             IsTextSelectionEnabled="True"/>
+                  <RichTextBlock x:Name="NextStepsText" TextWrapping="Wrap" FontSize="13"
+                                 IsTextSelectionEnabled="True"/>
                 </StackPanel>
               </Border>
 
               <Expander Header="Raw transcript" IsExpanded="False">
-                <TextBlock x:Name="RawTranscriptText" TextWrapping="Wrap"
-                           FontSize="12" Padding="0,8,0,0"
-                           IsTextSelectionEnabled="True"/>
+                <Border Padding="0,8,0,0">
+                  <RichTextBlock x:Name="RawTranscriptText" TextWrapping="Wrap"
+                                 FontSize="13" LineHeight="22"
+                                 IsTextSelectionEnabled="True"/>
+                </Border>
               </Expander>
             </StackPanel>
           </ScrollViewer>
