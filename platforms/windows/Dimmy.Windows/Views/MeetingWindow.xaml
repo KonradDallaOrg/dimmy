@@ -184,11 +184,10 @@
                 </StackPanel>
               </Button>
               <Button x:Name="PauseBtn" Click="Pause_Click"
-                      ToolTipService.ToolTip="Pause (coming soon)"
-                      IsEnabled="False">
+                      ToolTipService.ToolTip="Pause / resume the meeting recording">
                 <StackPanel Orientation="Horizontal" Spacing="6">
-                  <FontIcon Glyph="&#xE769;" FontSize="13"/>
-                  <TextBlock Text="Pause"/>
+                  <FontIcon x:Name="PauseBtnIcon" Glyph="&#xE769;" FontSize="13"/>
+                  <TextBlock x:Name="PauseBtnLabel" Text="Pause"/>
                 </StackPanel>
               </Button>
               <Button x:Name="StopBtn" Click="Stop_Click"

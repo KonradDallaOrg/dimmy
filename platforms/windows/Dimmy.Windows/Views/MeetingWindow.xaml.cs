@@ -394,11 +394,48 @@ public sealed partial class MeetingWindow : Window
 
     private void Pause_Click(object sender, RoutedEventArgs e)
     {
-        // Pause requires AudioCommand::Pause + meeting.rs hooks in
-        // the Rust core that aren't there yet. Button stays disabled
-        // (IsEnabled="False" in XAML) until the backend is wired —
-        // tracked as a follow-up.
-        ShowToast("Pause is not yet wired — coming soon.");
+        // Toggle pause/resume on the in-flight meeting. The Rust
+        // worker keeps cpal capturing in the background but stops
+        // writing WAVs / emitting STT chunks while paused. On
+        // resume the worker advances past the gap (no zombie audio
+        // in audio.wav) and writes a `[paused N ms]` line into
+        // transcripts.txt at the seam.
+        if (!_recordingActive)
+        {
+            ShowToast("No active meeting to pause.");
+            return;
+        }
+        try
+        {
+            int currentlyPaused = DimmyNative.dimmy_meeting_is_paused();
+            if (currentlyPaused == 1)
+            {
+                int rc = DimmyNative.dimmy_meeting_resume();
+                App.Log($"meeting resume rc={rc}", "Meeting");
+                UpdatePauseButtonUi(paused: false);
+                ShowToast("Resumed.");
+            }
+            else
+            {
+                int rc = DimmyNative.dimmy_meeting_pause();
+                App.Log($"meeting pause rc={rc}", "Meeting");
+                UpdatePauseButtonUi(paused: true);
+                ShowToast("Paused — audio + transcript skipped until you resume.");
+            }
+        }
+        catch (Exception ex)
+        {
+            App.Log($"pause/resume exc: {ex.Message}", "Meeting");
+        }
+    }
+
+    private void UpdatePauseButtonUi(bool paused)
+    {
+        // E769 = pause glyph, E768 = play glyph. Keep StopBtn separate.
+        if (PauseBtnIcon != null)
+            PauseBtnIcon.Glyph = paused ? "" : "";
+        if (PauseBtnLabel != null)
+            PauseBtnLabel.Text = paused ? "Resume" : "Pause";
     }
 
     private void NewMeeting_Click(object sender, RoutedEventArgs e)

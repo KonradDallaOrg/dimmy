@@ -200,6 +200,23 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_meeting_is_active();
 
+    /// Pause / resume the in-flight meeting. cpal streams keep running
+    /// in the background, but the meeting worker stops writing the WAV
+    /// files / emitting STT chunks. On resume the worker advances past
+    /// the paused window so the gap is excluded from the audio + the
+    /// transcript timeline; a `[paused N ms]` marker is written into
+    /// transcripts.txt at the seam.
+    /// Returns 1 if state flipped, 0 if no-op (already in target state
+    /// or no meeting active), -1 internal failure.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_meeting_pause();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_meeting_resume();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_meeting_is_paused();
+
     /// Raw LLM call — bypasses the dictation rewrite wrapper. Pass
     /// empty string for `modelOverride` to use the user-configured
     /// llm_api_model. Used by meeting recap + audio-load summarizer.

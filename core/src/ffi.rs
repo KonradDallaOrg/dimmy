@@ -2636,6 +2636,68 @@ pub extern "C" fn dimmy_meeting_is_active() -> c_int {
     MEETING.lock().map(|g| g.is_some() as c_int).unwrap_or(0)
 }
 
+/// Pause the in-flight meeting. While paused, the meeting worker
+/// stops draining the audio buffers, stops writing to the WAV files,
+/// and stops emitting STT chunks. cpal callbacks keep firing — we
+/// don't bounce the streams (avoids a device-acquisition race on
+/// resume). On resume, the worker advances its write/read cursors
+/// past the paused window so the gap doesn't end up in the audio or
+/// transcript timeline; a `[paused N ms]` marker lands in
+/// transcripts.txt at the seam so the recap LLM sees the gap.
+///
+/// Returns:
+///   1  state flipped (meeting was running, now paused)
+///   0  no-op (meeting was already paused, or no meeting active)
+///  -1  internal lock failure
+#[no_mangle]
+pub extern "C" fn dimmy_meeting_pause() -> c_int {
+    match MEETING.lock() {
+        Ok(g) => match g.as_ref() {
+            Some(s) => {
+                if s.pause() {
+                    1
+                } else {
+                    0
+                }
+            }
+            None => 0,
+        },
+        Err(_) => -1,
+    }
+}
+
+/// Resume a paused meeting. Idempotent: returns 0 if the meeting
+/// wasn't paused. See dimmy_meeting_pause for the gap-skip semantics.
+#[no_mangle]
+pub extern "C" fn dimmy_meeting_resume() -> c_int {
+    match MEETING.lock() {
+        Ok(g) => match g.as_ref() {
+            Some(s) => {
+                if s.resume() {
+                    1
+                } else {
+                    0
+                }
+            }
+            None => 0,
+        },
+        Err(_) => -1,
+    }
+}
+
+/// Returns 1 if the active meeting is paused, 0 otherwise (including
+/// no meeting active).
+#[no_mangle]
+pub extern "C" fn dimmy_meeting_is_paused() -> c_int {
+    match MEETING.lock() {
+        Ok(g) => match g.as_ref() {
+            Some(s) => s.is_paused() as c_int,
+            None => 0,
+        },
+        Err(_) => 0,
+    }
+}
+
 /// Raw LLM call: send `prompt` to the configured LLM endpoint without
 /// the dictation rewrite wrapper. Used by meeting-mode post-process
 /// (recap + actions extraction) and any other caller that owns its

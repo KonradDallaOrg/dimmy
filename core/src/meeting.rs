@@ -89,6 +89,14 @@ pub struct MeetingSession {
     id: String,
     dir: PathBuf,
     cancel: Arc<AtomicBool>,
+    /// User-driven pause toggle. While true, the worker leaves
+    /// audio_buffer / audio_buffer_secondary growing (cpal callbacks
+    /// keep firing — we don't bounce the streams) but stops draining
+    /// them, stops writing to the WAV files, and stops emitting STT
+    /// chunks. On resume the worker advances last_processed +
+    /// samples_written past the paused window so the gap doesn't end
+    /// up in the audio file or in the transcript timeline.
+    paused: Arc<AtomicBool>,
     handle: Option<JoinHandle<MeetingResult>>,
 }
 
@@ -200,7 +208,9 @@ impl MeetingSession {
         };
 
         let cancel = Arc::new(AtomicBool::new(false));
+        let paused = Arc::new(AtomicBool::new(false));
         let cancel_w = cancel.clone();
+        let paused_w = paused.clone();
         let dir_w = dir.clone();
         let id_w = id.clone();
 
@@ -220,6 +230,7 @@ impl MeetingSession {
                     dir_w,
                     id_w,
                     cancel_w,
+                    paused_w,
                 )
             })
             .map_err(|e| format!("spawn meeting worker: {}", e))?;
@@ -229,8 +240,39 @@ impl MeetingSession {
             id,
             dir,
             cancel,
+            paused,
             handle: Some(handle),
         })
+    }
+
+    /// Pause the meeting. Idempotent: a second pause while already
+    /// paused is a no-op (no double markers in transcripts.txt).
+    /// Returns true if the state actually flipped, false if it was
+    /// already paused.
+    pub fn pause(&self) -> bool {
+        let was_paused = self.paused.swap(true, Ordering::SeqCst);
+        if !was_paused {
+            crate::log(&format!("[Meeting] pause id={}", self.id));
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Resume after pause. Idempotent. Returns true if the state
+    /// actually flipped (i.e. we WERE paused).
+    pub fn resume(&self) -> bool {
+        let was_paused = self.paused.swap(false, Ordering::SeqCst);
+        if was_paused {
+            crate::log(&format!("[Meeting] resume id={}", self.id));
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::SeqCst)
     }
 
     /// Signal the worker, join, finalize. Returns the result bundle —
@@ -281,6 +323,7 @@ fn worker_loop(
     dir: PathBuf,
     id: String,
     cancel: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
 ) -> MeetingResult {
     let chunk_secs = stt
         .chunk_secs
@@ -461,9 +504,61 @@ fn worker_loop(
         Some(p.min(s_in_mic_rate))
     };
 
+    // Track pause transitions so we can both (a) skip the paused
+    // window when writing/transcribing and (b) emit a [paused N s]
+    // marker to transcripts.txt on resume.
+    let mut was_paused = false;
+    let mut pause_started_at: Option<Instant> = None;
+
     loop {
         let cancelled = cancel.load(Ordering::SeqCst);
         thread::sleep(POLL_INTERVAL);
+
+        // Pause gate. While paused: cpal is still filling the audio
+        // buffers (we don't bounce the streams — that would race with
+        // device acquisition on resume) but the worker simply doesn't
+        // drain or transcribe. On resume, advance samples_written +
+        // last_processed to the current buffer length so the paused
+        // window doesn't end up in the WAV files or in the chunked
+        // transcript timeline. A `[paused Ns]` marker is written
+        // into transcripts.txt at the seam so the recap LLM sees the
+        // discontinuity.
+        let is_paused_now = paused.load(Ordering::SeqCst);
+        if is_paused_now && !cancelled {
+            if !was_paused {
+                was_paused = true;
+                pause_started_at = Some(Instant::now());
+            }
+            continue;
+        }
+        if was_paused && !is_paused_now {
+            // Resume edge: drop the gap.
+            was_paused = false;
+            let dur_ms = pause_started_at
+                .map(|t| t.elapsed().as_millis())
+                .unwrap_or(0);
+            pause_started_at = None;
+            let snap = match synth_len(&audio_buffer, &audio_buffer_secondary) {
+                Some(n) => n,
+                None => 0,
+            };
+            crate::log(&format!(
+                "[Meeting] resumed after {} ms — skipping {} mic-rate samples",
+                dur_ms,
+                snap.saturating_sub(samples_written)
+            ));
+            samples_written = snap;
+            last_processed = snap;
+            // Note the gap in the transcripts file so the recap LLM
+            // sees the timeline jump.
+            let elapsed_ms = started.elapsed().as_millis();
+            let line = format!(
+                "[{:>6} ms] [paused] (resumed after {} ms)\n",
+                elapsed_ms, dur_ms
+            );
+            let _ = transcripts_file.write_all(line.as_bytes());
+            let _ = transcripts_file.flush();
+        }
 
         // Take a snapshot of the SYNCED stream length up to which we'll
         // process this iteration.
