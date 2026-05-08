@@ -569,7 +569,15 @@ public sealed partial class MeetingWindow : Window
 
     // ── Done-state audio waveform card ────────────────────────────
 
+    // Done-view waveform peaks. _cachedDonePeaks = mix (audio.wav,
+    // legacy / fallback when per-track files are absent). _cachedMicPeaks
+    // = audio_mic.wav (Phase 3+ recordings). _cachedSystemPeaks =
+    // audio_system.wav (Phase 3+ Mix-mode recordings). DrawDoneWaveform
+    // prefers the per-track pair when both exist, drawing them as dual
+    // bands matching the live waveform colors.
     private float[]? _cachedDonePeaks;
+    private float[]? _cachedMicPeaks;
+    private float[]? _cachedSystemPeaks;
 
     private async Task LoadDoneAudioAsync(string dir)
     {
@@ -579,6 +587,8 @@ public sealed partial class MeetingWindow : Window
         {
             DoneWaveCard.Visibility = Visibility.Collapsed;
             _cachedDonePeaks = null;
+            _cachedMicPeaks = null;
+            _cachedSystemPeaks = null;
             return;
         }
         // Refuse to load a 0-byte audio.wav — that's the "interrupted
@@ -592,6 +602,8 @@ public sealed partial class MeetingWindow : Window
             {
                 DoneWaveCard.Visibility = Visibility.Collapsed;
                 _cachedDonePeaks = null;
+                _cachedMicPeaks = null;
+                _cachedSystemPeaks = null;
                 return;
             }
         }
@@ -611,9 +623,25 @@ public sealed partial class MeetingWindow : Window
             double width = DoneWaveformCanvas.ActualWidth;
             if (width <= 0) width = 700;
             int buckets = (int)Math.Max(80, Math.Min(500, width / 3));
-            var peaks = await Task.Run(() => Helpers.WavPeaks.ReadPeaks(wavPath, buckets));
-            _cachedDonePeaks = peaks;
-            if (peaks.Length > 0) DrawDoneWaveform(peaks);
+
+            // Read all three tracks in parallel where present. Phase 3+
+            // recordings have audio_mic.wav and audio_system.wav as
+            // separate files; older recordings have only audio.wav.
+            var micPath = Path.Combine(dir, "audio_mic.wav");
+            var systemPath = Path.Combine(dir, "audio_system.wav");
+            var mixTask = Task.Run(() => Helpers.WavPeaks.ReadPeaks(wavPath, buckets));
+            var micTask = File.Exists(micPath)
+                ? Task.Run(() => Helpers.WavPeaks.ReadPeaks(micPath, buckets))
+                : Task.FromResult(System.Array.Empty<float>());
+            var sysTask = File.Exists(systemPath)
+                ? Task.Run(() => Helpers.WavPeaks.ReadPeaks(systemPath, buckets))
+                : Task.FromResult(System.Array.Empty<float>());
+            await Task.WhenAll(mixTask, micTask, sysTask);
+
+            _cachedDonePeaks = mixTask.Result;
+            _cachedMicPeaks = micTask.Result.Length > 0 ? micTask.Result : null;
+            _cachedSystemPeaks = sysTask.Result.Length > 0 ? sysTask.Result : null;
+            DrawDoneWaveform();
         }
         catch (Exception ex)
         {
@@ -657,38 +685,71 @@ public sealed partial class MeetingWindow : Window
             Math.Max(0, Math.Min(w - 2, w * frac)));
     }
 
-    private void DrawDoneWaveform(float[] peaks)
+    private void DrawDoneWaveform()
     {
-        if (DoneWaveformCanvas == null || peaks.Length == 0) return;
+        if (DoneWaveformCanvas == null) return;
         DoneWaveformCanvas.Children.Clear();
         _donePlayhead = null;
         double w = DoneWaveformCanvas.ActualWidth;
         double h = DoneWaveformCanvas.ActualHeight;
         if (w <= 0 || h <= 0) return;
-        double barW = Math.Max(1, w / peaks.Length - 1);
-        double mid = h / 2.0;
-        var brush = new SolidColorBrush(Microsoft.UI.Colors.DodgerBlue);
+
+        bool dual = _cachedMicPeaks != null && _cachedSystemPeaks != null;
+        if (dual)
+        {
+            // Phase 3+ recording with both per-track files. Top half =
+            // mic (DodgerBlue, AEC-cleaned), bottom half = system
+            // (LimeGreen, raw loopback). Same palette as the live
+            // waveform so the two views are visually consistent.
+            double bandH = h / 2.0;
+            DrawDoneBand(_cachedMicPeaks!,
+                new SolidColorBrush(Microsoft.UI.Colors.DodgerBlue),
+                bandH / 2.0, bandH - 2, w);
+            DrawDoneBand(_cachedSystemPeaks!,
+                new SolidColorBrush(Microsoft.UI.Colors.LimeGreen),
+                bandH + bandH / 2.0, bandH - 2, w);
+        }
+        else if (_cachedDonePeaks != null && _cachedDonePeaks.Length > 0)
+        {
+            // Pre-Phase-3 recording (or Mic-only / System-only mode where
+            // one track file is absent). Single-band centered.
+            DrawDoneBand(_cachedDonePeaks,
+                new SolidColorBrush(Microsoft.UI.Colors.DodgerBlue),
+                h / 2.0, h - 2, w);
+        }
+
+        UpdateDonePlayhead(0);
+    }
+
+    private void DrawDoneBand(float[] peaks, SolidColorBrush brush, double mid, double maxHeight, double w)
+    {
+        if (peaks.Length == 0) return;
+        double slot = w / peaks.Length;
+        double barW = Math.Max(1, slot - 1);
         for (int i = 0; i < peaks.Length; i++)
         {
-            double bh = Math.Max(1, peaks[i] * (h - 2));
+            double bh = Math.Max(1, peaks[i] * maxHeight);
             var rect = new Microsoft.UI.Xaml.Shapes.Rectangle
             {
-                Width = barW, Height = bh, Fill = brush, RadiusX = 1, RadiusY = 1,
+                Width = barW,
+                Height = bh,
+                Fill = brush,
+                RadiusX = 1,
+                RadiusY = 1,
             };
-            Microsoft.UI.Xaml.Controls.Canvas.SetLeft(rect, i * (w / peaks.Length));
+            Microsoft.UI.Xaml.Controls.Canvas.SetLeft(rect, i * slot);
             Microsoft.UI.Xaml.Controls.Canvas.SetTop(rect, mid - bh / 2.0);
             DoneWaveformCanvas.Children.Add(rect);
         }
-        UpdateDonePlayhead(0);
     }
 
     private void DoneWaveformCanvas_SizeChanged(object sender, SizeChangedEventArgs e)
     {
-        if (_cachedDonePeaks == null) return;
+        if (_cachedDonePeaks == null && _cachedMicPeaks == null && _cachedSystemPeaks == null) return;
         if (e.NewSize.Width <= 0 || e.NewSize.Height <= 0) return;
         if (DoneWaveformCanvas.Children.Count <= 1)
         {
-            DrawDoneWaveform(_cachedDonePeaks);
+            DrawDoneWaveform();
         }
     }
 
