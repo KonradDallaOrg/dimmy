@@ -806,8 +806,12 @@ public sealed partial class MeetingWindow : Window
             var modelOverride = PickRecapModel();
             App.Log($"recap with model='{modelOverride}', prompt {prompt.Length} chars", "Meeting");
             var buf = new byte[1 << 18];
+            // 16000 max_tokens leaves room for the Anthropic extended-thinking
+            // budget (10000) + the actual response (~4-6k tokens for a rich
+            // Notion-style recap). Without enough headroom Anthropic rejects
+            // the request with "max_tokens must be greater than budget_tokens".
             int rc = await Task.Run(() =>
-                DimmyNative.dimmy_llm_call_raw(prompt, modelOverride, 4096, buf, buf.Length));
+                DimmyNative.dimmy_llm_call_raw(prompt, modelOverride, 16000, buf, buf.Length));
             if (rc <= 0)
             {
                 var msg = rc switch
@@ -868,24 +872,40 @@ public sealed partial class MeetingWindow : Window
 
     private static string BuildMarkdownFromSections(Dictionary<string, string> s)
     {
+        // Persisted recap.md gets ALL sections present in the parser output,
+        // in their canonical Notion-style order. The Done-view UI displays
+        // a subset (the 7 cards from Phase 4); the new sections (CONTEXT,
+        // HIGHLIGHTS, NARRATIVE, FOLLOWUPS) are stored on disk and shown
+        // by the upcoming Settings/UI revision (Phase C). Until then they
+        // live in recap.md and the user can read them via Open Folder.
         var sb = new System.Text.StringBuilder();
-        if (s.TryGetValue("TLDR", out var t) && !string.IsNullOrWhiteSpace(t))
-            sb.AppendLine("## TL;DR\n").AppendLine(t.Trim()).AppendLine();
-        if (s.TryGetValue("KEY_DECISIONS", out var k) && !string.IsNullOrWhiteSpace(k))
-            sb.AppendLine("## Key decisions\n").AppendLine(k.Trim()).AppendLine();
-        if (s.TryGetValue("TOPICS", out var top) && !string.IsNullOrWhiteSpace(top))
-            sb.AppendLine("## Topics discussed\n").AppendLine(top.Trim()).AppendLine();
-        if (s.TryGetValue("OPEN_QUESTIONS", out var oq) && !string.IsNullOrWhiteSpace(oq))
-            sb.AppendLine("## Open questions\n").AppendLine(oq.Trim()).AppendLine();
-        if (s.TryGetValue("RISKS", out var r) && !string.IsNullOrWhiteSpace(r))
-            sb.AppendLine("## Risks & blockers\n").AppendLine(r.Trim()).AppendLine();
-        if (s.TryGetValue("NEXT_STEPS", out var n) && !string.IsNullOrWhiteSpace(n))
-            sb.AppendLine("## Next steps\n").AppendLine(n.Trim()).AppendLine();
+        void AppendSection(string key, string heading)
+        {
+            if (s.TryGetValue(key, out var v) && !string.IsNullOrWhiteSpace(v) && v.Trim() != "—")
+            {
+                sb.AppendLine($"## {heading}\n").AppendLine(v.Trim()).AppendLine();
+            }
+        }
+        AppendSection("CONTEXT", "Context");
+        AppendSection("TLDR", "TL;DR");
+        AppendSection("HIGHLIGHTS", "Highlights");
+        AppendSection("NARRATIVE", "Narrative");
+        AppendSection("KEY_DECISIONS", "Key decisions");
+        AppendSection("TOPICS", "Topics discussed");
+        AppendSection("ACTIONS", "Action items");
+        AppendSection("OPEN_QUESTIONS", "Open questions");
+        AppendSection("RISKS", "Risks & blockers");
+        AppendSection("NEXT_STEPS", "Next steps");
+        AppendSection("FOLLOWUPS", "Follow-ups");
         return sb.ToString();
     }
 
     private static string PickRecapModel()
     {
+        // Map provider URL -> the strongest reasoning-tier model that
+        // provider exposes in May 2026. process_raw_prompt in the Rust
+        // core auto-enables extended thinking on these by name (Opus +
+        // Sonnet 4/5 for Anthropic; Pro + Gemini-3.x for Google).
         try
         {
             var cfgPath = Path.Combine(
@@ -898,7 +918,9 @@ public sealed partial class MeetingWindow : Window
             if (url.Contains("anthropic.com", StringComparison.OrdinalIgnoreCase))
                 return "claude-opus-4-7";
             if (url.Contains("googleapis.com", StringComparison.OrdinalIgnoreCase))
-                return "gemini-2.5-pro";
+                return "gemini-3-1-pro"; // flagship reasoning, supersedes 2.5-pro
+            if (url.Contains("openai.com", StringComparison.OrdinalIgnoreCase))
+                return "gpt-5"; // uses o1-style reasoning by default
             return "";
         }
         catch
@@ -909,56 +931,145 @@ public sealed partial class MeetingWindow : Window
 
     private static string BuildStructuredRecapPrompt(string transcript)
     {
+        // Notion-quality meeting recap prompt. Designed for reasoning-tier
+        // models (Opus 4.7 + extended thinking, Gemini 3.1 Pro thinkingLevel=high,
+        // GPT-5). Asks for richer analysis: context inference, narrative
+        // prose summary, sentiment/tone, sentiment-tagged topics, priority
+        // inference on actions, time-stamped highlights, follow-ups list.
         return
-            "You are an expert meeting analyst. Output ONLY the markdown sections " +
-            "below in the SAME LANGUAGE as the transcript (auto-detect, do not translate). " +
-            "Use the EXACT marker headings shown so a downstream parser can split the response.\n\n" +
+            "You are a senior meeting analyst writing a polished, Notion-style " +
+            "summary of an audio recording. Output ONLY markdown with the EXACT " +
+            "marker headings shown — a downstream parser splits on them.\n\n" +
+
+            "## Transcript format\n" +
+            "Each line: `[ELAPSED_MS ms] [SPEAKER_LABEL] text`.\n" +
+            "Speaker labels: `[mic]` = the user recording (treat as \"you\" / first person " +
+            "when the language allows), `[system]` = remote participant(s) coming through " +
+            "speakers/loopback (treat as \"the remote party\" / \"interlocutor\" / specific " +
+            "name only if explicitly mentioned in the transcript). When only `[mic]` is " +
+            "present, the recording is monologue / dictation; when only `[system]` is " +
+            "present, the user was a silent listener.\n\n" +
+
+            "## Output language\n" +
+            "Auto-detect from the transcript. For mixed languages, pick the dominant one. " +
+            "Do NOT translate. If the transcript is in Italian, write the recap in Italian.\n\n" +
+
+            "## Sections (emit ALL of them, in this order)\n\n" +
+
+            "## ===CONTEXT===\n" +
+            "2-4 sentences inferring the SETTING of the meeting from cues in the " +
+            "transcript: how many distinct voices, the apparent purpose (status sync? " +
+            "kickoff? interview? decision-making? brainstorm?), the apparent domain " +
+            "(engineering / sales / product / personal / academic). Don't invent names — " +
+            "say \"the user\" / \"the remote participant\" unless explicitly named.\n\n" +
 
             "## ===TLDR===\n" +
-            "1-2 sentence executive summary of the meeting.\n\n" +
+            "1-2 sentences. The single most important thing a busy reader needs to know. " +
+            "Ruthless filtering: if you removed everything else, what would they still need?\n\n" +
+
+            "## ===HIGHLIGHTS===\n" +
+            "3-5 most pivotal moments, one per line:\n" +
+            "- `[MM:SS]` **Topic shorthand** — why this matters in one sentence.\n" +
+            "Convert ELAPSED_MS to MM:SS. Pick highlights that change the meeting's " +
+            "trajectory: a decision, a conflict, a key reveal, a commitment, a moment of " +
+            "alignment after debate. Skip routine status updates. If fewer than 3 pivotal " +
+            "moments exist, list only what genuinely qualifies.\n\n" +
+
+            "## ===NARRATIVE===\n" +
+            "2-4 paragraphs of FLOWING PROSE (NOT bullets). Tell the story of the meeting: " +
+            "what was discussed, in which order, with which tone, who pushed for what, " +
+            "where alignment came easy and where it was contested. Reference `[mic]` / " +
+            "`[system]` inline when attribution matters. Quote a memorable phrase verbatim " +
+            "when it captures a moment (`\"...\"`). This is the section a busy stakeholder " +
+            "would read INSTEAD of listening to the recording.\n\n" +
 
             "## ===KEY_DECISIONS===\n" +
-            "Bullet list. Each item: \"**[topic]** : [decision verbatim or paraphrased] " +
-            "([owner] decided)\". Skip the section with \"—\" if no decisions were made.\n\n" +
+            "Bullet list of decisions actually MADE in the meeting (not proposed, not " +
+            "considered). Each item:\n" +
+            "- **[topic]** : [decision verbatim or paraphrased] — decided by " +
+            "[owner if known else \"consensus\"]; impact: [low/medium/high] with one-sentence " +
+            "rationale.\n" +
+            "Use a single line `—` if no decisions were reached.\n\n" +
 
             "## ===TOPICS===\n" +
-            "Group the discussion into 3-7 topics. For each:\n" +
+            "Group the discussion into 3-7 distinct topics, sorted by importance (NOT " +
+            "chronological). For each:\n" +
             "- ### Topic title (1-3 words)\n" +
-            "- 2-4 bullet points capturing what was discussed\n" +
-            "- Quote the most important sentence verbatim (\"> ...\") if one exists.\n\n" +
+            "- 2-4 bullets capturing what was discussed\n" +
+            "- _Sentiment_: aligned / debated / blocked / open\n" +
+            "- _Quote_: `\"verbatim sentence from transcript\"` — only if a single " +
+            "sentence captures the moment; omit otherwise (do NOT approximate).\n\n" +
 
             "## ===ACTIONS===\n" +
-            "Numbered list of action items. Each: \"N. **[owner]** : [task] (due: " +
-            "[date / event / 'unspecified'])\". Include only actions explicitly spoken; " +
-            "do NOT invent. Use \"—\" if none.\n\n" +
+            "Numbered list of action items EXPLICITLY committed to in the transcript. " +
+            "Never invent. Each action:\n" +
+            "N. **[owner]** : [task] — due: [explicit date / event / \"unspecified\"]; " +
+            "priority: [P0/P1/P2 inferred from urgency cues like \"asap\", \"this week\", " +
+            "\"eventually\"].\n" +
+            "Use `—` if no actions.\n\n" +
 
             "## ===OPEN_QUESTIONS===\n" +
-            "Bullet list. Things raised but not resolved. Use \"—\" if none.\n\n" +
+            "Genuine questions raised but NOT resolved. Phrase as the question itself, " +
+            "not as \"they asked about X\". One bullet per question. Use `—` if none.\n\n" +
 
             "## ===RISKS===\n" +
-            "Bullet list. Risks, blockers, dependencies surfaced. Use \"—\" if none.\n\n" +
+            "Risks, blockers, dependencies surfaced. Each:\n" +
+            "- **[topic]** — [risk in 1 sentence]; likelihood [low/med/high], impact [low/med/high].\n" +
+            "Use `—` if none.\n\n" +
 
             "## ===NEXT_STEPS===\n" +
-            "Numbered list of immediate next steps (different from Actions: these are " +
-            "the meeting's overall trajectory, not assigned tasks). Use \"—\" if none.\n\n" +
+            "Numbered list of the 3-5 immediate next things that should happen for the " +
+            "meeting's trajectory (NOT the same as Actions — those are owned tasks; " +
+            "Next Steps is the work's direction). Use `—` if none.\n\n" +
 
-            "Hard rules:\n" +
-            "- Output the sections in the exact order above.\n" +
-            "- Same language as the transcript; if mixed, pick the dominant one.\n" +
-            "- Never invent participants, dates, amounts, project names, or technical " +
-            "terms not in the transcript.\n" +
-            "- Skip a section entirely (still emit the marker + \"—\") when the " +
-            "transcript has no content for it.\n" +
-            "- No filler: \"the meeting discussed\", \"various topics were covered\", etc.\n" +
-            "- No em-dashes (—) in prose outside the markers — they read as AI slop. " +
-            "Use periods or commas.\n\n" +
+            "## ===FOLLOWUPS===\n" +
+            "Things to ASK / CLARIFY offline because the meeting didn't fully resolve them:\n" +
+            "- **[topic]** — ask [person if mentioned else \"the relevant party\"] about " +
+            "[specific thing].\n" +
+            "Use `—` if none.\n\n" +
 
-            "Transcript:\n" + transcript;
+            "## Hard rules\n" +
+            "- Output the sections in the exact order above. ALL section markers must " +
+            "appear, even if the section content is just `—`.\n" +
+            "- Output language follows the transcript dominant language.\n" +
+            "- NEVER invent: participants, dates, amounts, project names, technical terms, " +
+            "deadlines, organizational affiliations, or anything not directly evidenced in " +
+            "the transcript. If unsure, omit rather than fabricate.\n" +
+            "- Quotes (`\"...\"`) must be VERBATIM from the transcript. If you can't find " +
+            "an exact match, do NOT include the quote — paraphrase outside of quote marks " +
+            "or omit entirely.\n" +
+            "- Convert ELAPSED_MS timestamps to MM:SS for display only. Use the original " +
+            "[N ms] only for internal reasoning if needed.\n" +
+            "- No filler phrases (\"the meeting discussed\", \"various topics were covered\", " +
+            "\"in conclusion\", \"overall\").\n" +
+            "- No em-dashes (`—`) in prose outside the markers and bullet separators. " +
+            "Use periods, commas, or colons instead.\n" +
+            "- Be SHARP and CONCISE. Senior leaders read these summaries — every sentence " +
+            "must earn its place.\n\n" +
+
+            "## Transcript\n" + transcript;
     }
 
     private static Dictionary<string, string> ParseStructuredRecap(string raw)
     {
-        var keys = new[] { "TLDR", "KEY_DECISIONS", "TOPICS", "ACTIONS", "OPEN_QUESTIONS", "RISKS", "NEXT_STEPS" };
+        // Extended set: includes the new Notion-style sections (CONTEXT,
+        // HIGHLIGHTS, NARRATIVE, FOLLOWUPS) added in the v2 prompt. Older
+        // recaps without these sections still parse cleanly — missing
+        // markers just leave their dictionary entries unset.
+        var keys = new[]
+        {
+            "CONTEXT",
+            "TLDR",
+            "HIGHLIGHTS",
+            "NARRATIVE",
+            "KEY_DECISIONS",
+            "TOPICS",
+            "ACTIONS",
+            "OPEN_QUESTIONS",
+            "RISKS",
+            "NEXT_STEPS",
+            "FOLLOWUPS",
+        };
         var result = new Dictionary<string, string>();
         var indices = new SortedDictionary<int, string>();
         foreach (var k in keys)

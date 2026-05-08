@@ -475,18 +475,92 @@ pub async fn process_raw_prompt(
         .build()?;
 
     let is_anthropic = crate::provider::Provider::from_url(api_url).is_anthropic();
+    // Gemini's NATIVE generateContent endpoint uses a completely different
+    // request schema than OpenAI-compatible — detect by URL shape so we
+    // can route to the right body construction. The OpenAI-compat layer
+    // at /openai/v1/chat/completions still falls through to the
+    // OpenAI-style branch.
+    let is_gemini_native = api_url.contains("generativelanguage.googleapis.com")
+        && (api_url.contains("generateContent") || api_url.contains(":streamGenerateContent"));
+
+    // Auto-enable extended thinking on flagship reasoning-tier models —
+    // worth the +30-60 s for meeting recap quality. Detection by model
+    // name so we don't have to plumb a flag from every caller.
+    let model_lc = model.to_ascii_lowercase();
+    let wants_thinking_anthropic = is_anthropic
+        && (model_lc.contains("opus")
+            || model_lc.contains("sonnet-4")
+            || model_lc.contains("sonnet-5"));
+    let wants_thinking_gemini =
+        is_gemini_native && (model_lc.contains("pro") || model_lc.starts_with("gemini-3"));
+
+    // Anthropic max_tokens MUST be > thinking budget. Bump if needed so
+    // the API doesn't reject the request.
+    const ANTHROPIC_THINKING_BUDGET: u64 = 10_000;
+    let effective_max_tokens = if wants_thinking_anthropic {
+        max_tokens.max(ANTHROPIC_THINKING_BUDGET + 4_096)
+    } else {
+        max_tokens
+    };
+
     let response = if is_anthropic {
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": model,
-            "max_tokens": max_tokens,
+            "max_tokens": effective_max_tokens,
             "messages": [
                 { "role": "user", "content": user_prompt },
             ],
         });
+        if wants_thinking_anthropic {
+            body["thinking"] = serde_json::json!({
+                "type": "enabled",
+                "budget_tokens": ANTHROPIC_THINKING_BUDGET
+            });
+            crate::log(&format!(
+                "[LLM] Anthropic extended thinking ENABLED (budget={}, max_tokens={})",
+                ANTHROPIC_THINKING_BUDGET, effective_max_tokens
+            ));
+        }
         client
             .post(api_url)
             .header("x-api-key", api_key)
             .header("anthropic-version", "2023-06-01")
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await?
+    } else if is_gemini_native {
+        // Gemini native generateContent. Schema is contents/parts +
+        // generationConfig. Thinking config goes under
+        // generationConfig.thinkingConfig per the May 2026 API:
+        //   - Gemini 3.x: thinkingLevel "low" | "medium" | "high"
+        //   - Gemini 2.5: thinkingBudget int (128..=32768) or -1 dynamic
+        let mut gen_config = serde_json::json!({
+            "temperature": 0.3,
+            "maxOutputTokens": max_tokens,
+        });
+        if wants_thinking_gemini {
+            if model_lc.starts_with("gemini-3") {
+                gen_config["thinkingConfig"] = serde_json::json!({
+                    "thinkingLevel": "high"
+                });
+                crate::log("[LLM] Gemini 3.x extended thinking ENABLED (level=high)");
+            } else {
+                gen_config["thinkingConfig"] = serde_json::json!({
+                    "thinkingBudget": 16_000
+                });
+                crate::log("[LLM] Gemini 2.5 Pro extended thinking ENABLED (budget=16000)");
+            }
+        }
+        let body = serde_json::json!({
+            "contents": [{
+                "parts": [{ "text": user_prompt }]
+            }],
+            "generationConfig": gen_config,
+        });
+        client
+            .post(api_url)
+            .header("x-goog-api-key", api_key)
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
@@ -521,24 +595,48 @@ pub async fn process_raw_prompt(
     }
 
     if is_anthropic {
-        // Anthropic: { "content": [{"type": "text", "text": "..."}] }
+        // Anthropic: content is Vec of blocks; each block has a type
+        // ("text" | "thinking" | "tool_use" | ...). When extended thinking
+        // is enabled, the array contains a "thinking" block BEFORE the
+        // "text" block — we skip thinking blocks (their reasoning traces
+        // are useful for debugging but not for the user-visible recap).
         #[derive(serde::Deserialize)]
         struct AnthropicResponse {
             content: Vec<AnthropicContent>,
         }
         #[derive(serde::Deserialize)]
         struct AnthropicContent {
-            text: String,
+            #[serde(rename = "type")]
+            block_type: String,
+            #[serde(default)]
+            text: Option<String>,
         }
         let parsed: AnthropicResponse = response.json().await?;
         Ok(parsed
             .content
             .into_iter()
-            .map(|c| c.text)
+            .filter(|c| c.block_type == "text")
+            .filter_map(|c| c.text)
             .collect::<Vec<_>>()
             .join("\n")
             .trim()
             .to_string())
+    } else if is_gemini_native {
+        // Gemini native: { candidates: [{ content: { parts: [{ text }] } }] }
+        let raw: serde_json::Value = response.json().await?;
+        let text = raw["candidates"][0]["content"]["parts"]
+            .as_array()
+            .map(|parts| {
+                parts
+                    .iter()
+                    .filter_map(|p| p["text"].as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        Ok(text)
     } else {
         // OpenAI-compatible
         #[derive(serde::Deserialize)]
