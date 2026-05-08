@@ -229,10 +229,18 @@ public partial class App : Application
             // 3. Load config into ViewModel
             LoadConfigIntoViewModel();
 
-            // 3b. Load Win-only UI prefs (pill visibility toggles)
+            // 3b. Load Win-only UI prefs (pill visibility toggles + theme).
+            // Theme MUST be applied to the AppViewModel here at startup —
+            // PillWindow reads _vm.Theme to decide glass-vs-dark in its
+            // first render. Without this line the pill defaulted to
+            // "Default" and only refreshed when the user opened Settings
+            // (which triggered ApplySettings → AppViewModel.Theme write
+            // → PillWindow PropertyChanged → re-render). Bug surfaced
+            // 2026-05-08: "all'avvio la pill non prende il tema settato".
             _uiPrefs = UiPreferences.Load();
             _appViewModel.PillShowOnHotkey = _uiPrefs.PillShowOnHotkey;
             _appViewModel.PillShowOnStartup = _uiPrefs.PillShowOnStartup;
+            _appViewModel.Theme = _uiPrefs.Theme;
             _appViewModel.PropertyChanged += OnUiPrefsRelevantPropertyChanged;
 
 
