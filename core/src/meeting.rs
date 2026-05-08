@@ -207,6 +207,7 @@ impl MeetingSession {
                     audio_buffer,
                     audio_buffer_secondary,
                     device_sample_rate,
+                    system_sample_rate,
                     source,
                     stt,
                     writer,
@@ -267,6 +268,7 @@ fn worker_loop(
     audio_buffer: Arc<Mutex<Vec<f32>>>,
     audio_buffer_secondary: Arc<Mutex<Vec<f32>>>,
     device_sample_rate: u32,
+    system_sample_rate: u32,
     source: crate::audio::AudioSource,
     stt: SttSnapshot,
     mut writer: hound::WavWriter<std::io::BufWriter<File>>,
@@ -385,10 +387,17 @@ fn worker_loop(
         }
     };
 
-    // Helper: read a slice from the synthesized stream. In Mix mode,
-    // returns per-sample mix of primary + secondary buffers (clamped),
-    // synced to min(primary.len(), secondary.len()). In Mic / System
-    // mode, returns just the primary slice.
+    // Helper: read a slice of the SYNTHESIZED mix stream at the
+    // primary's sample rate. Indices `start..end` are in mic-rate
+    // samples. When the system loopback runs at a different rate
+    // (typical: BT-HFP mic 16k + speakers A2DP 48k), the secondary
+    // buffer fills `system_sample_rate / device_sample_rate` times
+    // faster — we map each mic-rate sample to its time-aligned
+    // secondary index via the rate ratio so the mix is
+    // time-coherent. Without this, the mix WAV plays system content
+    // at the wrong speed (3x slow mumbling at low pitch when
+    // mic_sr=16k & system_sr=48k were mixed into a 16k container).
+    let rate_ratio = system_sample_rate as f64 / device_sample_rate as f64;
     let read_synth = |start: usize,
                       end: usize,
                       audio_buffer: &Arc<Mutex<Vec<f32>>>,
@@ -401,19 +410,30 @@ fn worker_loop(
         if !mix_active {
             return primary;
         }
+        // Read the time-aligned window from the secondary buffer.
+        // start_sys / end_sys are computed via rate_ratio so that
+        // primary[i] and secondary[i*ratio] correspond to the same
+        // wall-time instant.
+        let start_sys = (start as f64 * rate_ratio) as usize;
+        let end_sys = (end as f64 * rate_ratio) as usize;
         let secondary = match audio_buffer_secondary.lock() {
-            Ok(b) if end <= b.len() => b[start..end].to_vec(),
+            Ok(b) if end_sys <= b.len() => b[start_sys..end_sys].to_vec(),
             _ => Vec::new(),
         };
-        // Per-sample mix. If secondary lags (fewer samples) we fall
-        // back to primary-only for the missing tail to avoid silent
-        // gaps. Clamp to [-1, 1] to stop the sum from blowing past
-        // unit range when both sources are loud.
         let n = primary.len();
         let mut out = Vec::with_capacity(n);
         for i in 0..n {
             let p = primary[i];
-            let s = secondary.get(i).copied().unwrap_or(0.0);
+            // Pick the system sample at the corresponding wall-time
+            // index. Simple nearest-neighbour decimation; for typical
+            // 3:1 ratios (48k → 16k) this is ~equivalent to taking
+            // every 3rd sample, which is good enough for voice
+            // playback. A proper anti-aliased filter could replace
+            // this if/when audio quality needs to match the per-track
+            // audio_system.wav (which stays at native rate as the
+            // source of truth).
+            let sys_idx = (i as f64 * rate_ratio) as usize;
+            let s = secondary.get(sys_idx).copied().unwrap_or(0.0);
             out.push((p + s).clamp(-1.0, 1.0));
         }
         out
@@ -431,7 +451,10 @@ fn worker_loop(
             return Some(p);
         }
         let s = audio_buffer_secondary.lock().ok().map(|b| b.len())?;
-        Some(p.min(s))
+        // s is in system-rate samples; convert to mic-rate equivalent so
+        // the lockstep min() is comparing apples to apples.
+        let s_in_mic_rate = (s as f64 / rate_ratio) as usize;
+        Some(p.min(s_in_mic_rate))
     };
 
     loop {
@@ -458,13 +481,19 @@ fn worker_loop(
                 &audio_buffer_secondary,
             );
             // Per-track slices read straight from each buffer (no mixing).
+            // mic indices are at primary's rate (= device_sample_rate).
+            // system indices are at secondary's rate (= system_sample_rate)
+            // and may differ by `rate_ratio` from mic indices when devices
+            // run at different native rates.
             let new_mic: Vec<f32> = match audio_buffer.lock() {
                 Ok(b) if buf_len_now <= b.len() => b[samples_written..buf_len_now].to_vec(),
                 _ => Vec::new(),
             };
             let new_system: Vec<f32> = if mix_active {
+                let sys_start = (samples_written as f64 * rate_ratio) as usize;
+                let sys_end = (buf_len_now as f64 * rate_ratio) as usize;
                 match audio_buffer_secondary.lock() {
-                    Ok(b) if buf_len_now <= b.len() => b[samples_written..buf_len_now].to_vec(),
+                    Ok(b) if sys_end <= b.len() => b[sys_start..sys_end].to_vec(),
                     _ => Vec::new(),
                 }
             } else {
@@ -533,9 +562,14 @@ fn worker_loop(
                 Ok(b) if end <= b.len() => b[start..end].to_vec(),
                 _ => Vec::new(),
             };
+            // System chunk is read at SYSTEM rate from secondary buffer —
+            // window indices scaled by rate_ratio so it covers the same
+            // wall-time as the mic chunk (when rates differ).
             let system_chunk: Vec<f32> = if mix_active {
+                let sys_start = (start as f64 * rate_ratio) as usize;
+                let sys_end = (end as f64 * rate_ratio) as usize;
                 match audio_buffer_secondary.lock() {
-                    Ok(b) if end <= b.len() => b[start..end].to_vec(),
+                    Ok(b) if sys_end <= b.len() => b[sys_start..sys_end].to_vec(),
                     _ => Vec::new(),
                 }
             } else {
@@ -543,16 +577,21 @@ fn worker_loop(
             };
 
             // Helper: downsample a slice (if needed) and run STT through
-            // whichever backend the user has configured. Returns the
-            // raw transcript text from the engine.
-            let transcribe = |slice: Vec<f32>| -> String {
+            // whichever backend the user has configured. The caller MUST
+            // pass the source rate of THE SPECIFIC slice — mic chunks
+            // come at device_sample_rate, system chunks at system_sample_rate
+            // (different in BT-HFP-mic + speakers-A2DP-loopback setups).
+            // Mixing them up = sending 48k-sampled data with a 16k WAV
+            // header to the cloud STT, which Gemini returns as empty
+            // because the speech is 3x compressed and unintelligible.
+            let transcribe = |slice: Vec<f32>, source_sr: u32| -> String {
                 if slice.is_empty() {
                     return String::new();
                 }
-                let pcm_16k = if device_sample_rate == 16_000 {
+                let pcm_16k = if source_sr == 16_000 {
                     slice
                 } else {
-                    crate::preprocess::downsample_to_16k(&slice, device_sample_rate)
+                    crate::preprocess::downsample_to_16k(&slice, source_sr)
                 };
                 if pcm_16k.is_empty() {
                     return String::new();
@@ -620,9 +659,9 @@ fn worker_loop(
                 }
             };
 
-            let mic_text = transcribe(mic_chunk);
+            let mic_text = transcribe(mic_chunk, device_sample_rate);
             let system_text = if mix_active {
-                transcribe(system_chunk)
+                transcribe(system_chunk, system_sample_rate)
             } else {
                 String::new()
             };
