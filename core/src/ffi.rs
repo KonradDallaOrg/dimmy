@@ -3425,13 +3425,20 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
         mono.len() as f64 / spec.sample_rate as f64,
     ));
 
-    // ── Preprocess (same pipeline the recording path uses) ──────
+    // ── Preprocess: file-load mode (highpass only, no VAD, no AGC) ──
+    // The live-recording pipeline normalises level via dagc, but on a
+    // long recorded file dagc encounters natural silence stretches and
+    // emits NaN, permanently corrupting all downstream samples (CLAUDE.md
+    // AUDIO-001). On a 95-min meeting WAV this destroyed 97 % of the
+    // audio, leaving only the first ~150 s transcribable. File-load
+    // audio is already at a recorded level — only de-rumble is needed.
     let raw_samples_for_history = mono.clone();
-    let raw = crate::audio::RawAudio {
-        samples: mono,
+    let processed_samples =
+        crate::preprocess::process_buffer_for_file_load(&mono, spec.sample_rate);
+    let processed = crate::audio::ProcessedAudio {
+        samples: processed_samples,
         sample_rate: spec.sample_rate,
     };
-    let processed = raw.preprocess(true);
     if processed.samples.is_empty() {
         log("[FileLoad] preprocess produced 0 samples (silent input?)");
         return -3;

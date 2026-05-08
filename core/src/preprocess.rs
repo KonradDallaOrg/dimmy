@@ -410,6 +410,89 @@ impl AudioPreprocessor {
     }
 }
 
+/// File-load preprocess: highpass only, NO VAD, NO AGC.
+///
+/// The full `process_buffer` pipeline is tuned for live mic capture where
+/// the level is unpredictable, so AGC normalises to target=0.2. On a long
+/// recorded file (e.g. a 90-min meeting WAV) this AGC pass is actively
+/// destructive: any natural pause in the recording has near-zero samples,
+/// dagc produces NaN on those, and although the post-AGC clamp turns NaN
+/// into 0, the AGC's *internal state* is now corrupted and outputs NaN
+/// for every subsequent sample. End result: 97% of a 95-min file becomes
+/// silent zeros, Parakeet correctly emits empty for every chunk after the
+/// first NaN burst, and the user sees only the first ~2 minutes of
+/// transcript. CLAUDE.md AUDIO-001 / known-bugs.md.
+///
+/// File-load audio doesn't need AGC — it's already at a recorded level.
+/// Highpass at 80 Hz removes mic rumble without touching the level
+/// envelope. VAD is also disabled because the chunker downstream
+/// (`split_at_silence`) already handles silence boundaries.
+pub fn process_buffer_for_file_load(samples: &[f32], sample_rate: u32) -> Vec<f32> {
+    assert!(
+        sample_rate > 0,
+        "process_buffer_for_file_load: sample_rate must be > 0, got {}",
+        sample_rate
+    );
+    if samples.is_empty() {
+        return Vec::new();
+    }
+
+    // Sanitise: any non-finite input becomes 0 (defensive — file loaders
+    // shouldn't emit NaN/Inf but cheap to enforce). Clamp finite values
+    // to [-1, 1] before filtering so the highpass biquad never sees
+    // extreme magnitudes that could push it into a numerically unstable
+    // regime over a long stream.
+    let sanitized: Vec<f32> = samples
+        .iter()
+        .map(|&s| {
+            if s.is_finite() {
+                s.clamp(-1.0, 1.0)
+            } else {
+                0.0
+            }
+        })
+        .collect();
+
+    // 80 Hz Butterworth highpass — same coefficients as the live path.
+    if sample_rate < 1000 {
+        return sanitized;
+    }
+    let coeffs = match Coefficients::<f32>::from_params(
+        FilterType::HighPass,
+        (sample_rate as f32).hz(),
+        80.0.hz(),
+        Q_BUTTERWORTH_F32,
+    ) {
+        Ok(c) => c,
+        Err(_) => return sanitized,
+    };
+    let mut hp = DirectForm2Transposed::<f32>::new(coeffs);
+
+    let mut out: Vec<f32> = sanitized
+        .into_iter()
+        .map(|s| {
+            let v = hp.run(s);
+            if v.is_finite() {
+                v.clamp(-1.0, 1.0)
+            } else {
+                0.0
+            }
+        })
+        .collect();
+
+    // Post-condition: same length, all finite, in range.
+    assert_eq!(
+        out.len(),
+        samples.len(),
+        "process_buffer_for_file_load preserves sample count"
+    );
+    debug_assert!(out.iter().all(|s| s.is_finite()));
+    debug_assert!(out.iter().all(|&s| (-1.0..=1.0).contains(&s)));
+    // Touch via mut to avoid "useless mut" lint when assertions are off.
+    out.shrink_to_fit();
+    out
+}
+
 /// Process a complete audio buffer (used for final transcription on stop_recording).
 /// Creates a fresh preprocessor, processes the entire buffer, returns cleaned audio.
 pub fn process_buffer(samples: &[f32], sample_rate: u32) -> Vec<f32> {
