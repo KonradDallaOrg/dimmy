@@ -111,27 +111,66 @@ fn run(
     let mut dfn_frame = vec![0.0f32; FRAME_SAMPLES];
     let mut output_frame = vec![0.0f32; FRAME_SAMPLES];
 
+    // Track whether we've ever seen a ref frame. Required for the
+    // "always-on capture" architecture: when the loopback stream fails
+    // to open or the system isn't producing any audio, ref_ring stays
+    // empty forever. Blocking the AEC loop on that = mic_ring fills
+    // unbounded and audio_buffer never gets populated, so the pill /
+    // dictation captures NOTHING. Instead: process each mic frame
+    // immediately, padding the ref with zeros if no ref samples have
+    // arrived in time. AEC3 with a zero ref ≈ mic passthrough with the
+    // pre-DFN/HPF/AGC2 chain still in effect.
+    let mut ref_seen_ever = false;
+    let mut last_ref_log: Option<std::time::Instant> = None;
+
     loop {
         if shutdown.load(Ordering::Relaxed) {
             crate::log("[AEC] shutdown signalled — worker exiting");
             return;
         }
 
-        // Lockstep drain: only proceed when BOTH rings have a full
-        // frame. Otherwise sleep and retry.
+        // Drain mic at its own rate. We never block on ref availability.
         let (mic_have, ref_have) = current_lengths(&mic_ring, &ref_ring);
-        if mic_have < FRAME_SAMPLES || ref_have < FRAME_SAMPLES {
+        if mic_have < FRAME_SAMPLES {
             thread::sleep(POLL_SLEEP);
             continue;
         }
 
-        // Drain ref first because aec3 expects render-then-capture
-        // for a given time window. (The internal delay estimator
-        // tolerates moderate misalignment but the convention helps.)
-        if !drain_frame(&ref_ring, &mut render_frame) {
-            thread::sleep(POLL_SLEEP);
-            continue;
+        // Take ref frame if we have one; else use zeros. This lets the
+        // pipeline keep producing cleaned mic samples even when the
+        // loopback delivers no data (e.g. nothing playing on speakers,
+        // no default-output device, or BT routed away from loopback).
+        let mut ref_frame_zeroed = false;
+        if ref_have >= FRAME_SAMPLES {
+            if !drain_frame(&ref_ring, &mut render_frame) {
+                thread::sleep(POLL_SLEEP);
+                continue;
+            }
+            if !ref_seen_ever {
+                ref_seen_ever = true;
+                crate::log("[AEC] first ref frame received — full echo cancellation active");
+            }
+        } else {
+            // Zero-fill render frame.
+            for s in render_frame.iter_mut() {
+                *s = 0.0;
+            }
+            ref_frame_zeroed = true;
+            // Periodic info log so prolonged ref starvation is visible
+            // without spamming. Only emit once every 30 s.
+            let now = std::time::Instant::now();
+            let should_log = match last_ref_log {
+                None => true,
+                Some(t) => now.duration_since(t).as_secs() >= 30,
+            };
+            if should_log && !ref_seen_ever {
+                crate::log(
+                    "[AEC] ref ring empty — running mic-only (no echo cancellation reference)",
+                );
+                last_ref_log = Some(now);
+            }
         }
+        let _ = ref_frame_zeroed; // info-only flag, may be useful later
         if !drain_frame(&mic_ring, &mut capture_frame) {
             thread::sleep(POLL_SLEEP);
             continue;

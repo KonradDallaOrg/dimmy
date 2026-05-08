@@ -527,15 +527,20 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
         *sr = device_sr;
     }
 
-    // Dictation ALWAYS captures from the mic only — the user wants
-    // their dictated voice on the clipboard, not whatever Spotify
-    // happens to be playing. The config's `audio_source` field is a
-    // MEETING-only setting (see dimmy_meeting_start) — using it here
-    // would break dictation whenever the user is set up for Mix
-    // recording: in Mix mode the primary mic callback feeds the AEC
-    // ring instead of audio_buffer, so dimmy_stop_recording would
-    // find an empty buffer and time out with "buffer 0 samples".
-    let source = crate::audio::AudioSource::Mic;
+    // Always-mix architecture (2026-05-08): the audio capture session
+    // ALWAYS opens both mic + system loopback, AEC3 always processes
+    // the mic with the loopback as far-end reference. Pill dictation
+    // still consumes only the cleaned mic buffer (audio_buffer) — the
+    // loopback samples flow into audio_buffer_secondary which the
+    // dictation chunked-stt worker simply ignores. Net effect:
+    //   • no more "Mic vs Mix vs System" decision at the call site
+    //   • AEC3 cleans up speaker echo even during pill dictation
+    //   • the pill amplitude visualizer can read MAX(mic, loopback) so
+    //     the user sees activity from either source
+    //   • robustness: aec.rs no longer blocks on missing ref, so a
+    //     loopback that never delivers (no default output, no audio
+    //     playing) gracefully falls back to mic-only behavior
+    let source = crate::audio::AudioSource::Mix;
     let _ = st.audio_tx.lock().map(|tx| {
         tx.send(AudioCommand::Start {
             device_name: selected_device,
@@ -2380,11 +2385,13 @@ pub unsafe extern "C" fn dimmy_meeting_start(out_buf: *mut c_char, buf_len: c_in
 
     let st = state();
     let selected_device = st.selected_device.lock().ok().and_then(|d| d.clone());
-    let mt_source = st
-        .audio_source
-        .lock()
-        .map(|s| crate::audio::AudioSource::from_str_lossy(&s))
-        .unwrap_or(crate::audio::AudioSource::Mic);
+    // Always-mix (2026-05-08). The legacy `audio_source` config field
+    // is honoured only for the rate-probe call below where some
+    // backward-compat tests still set it explicitly. Capture itself
+    // always opens both mic + loopback so the meeting worker has both
+    // tracks regardless of what the user had configured pre-refactor.
+    let mt_source = crate::audio::AudioSource::Mix;
+    let _legacy_source_unused = st.audio_source.lock();
     // CRITICAL: when source = System, the primary capture stream is the
     // OUTPUT device in WASAPI loopback mode (~48 kHz on most systems),
     // NOT the mic. Querying the mic's rate here and feeding it to the
