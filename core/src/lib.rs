@@ -322,6 +322,13 @@ pub struct AppConfig {
     pub llm_api_model: String,
     pub llm_use_same_key: bool,
     pub llm_log_enabled: bool,
+    /// Model ID override for the meeting recap call (empty = use the
+    /// provider-default flagship reasoning model picked by the C# side
+    /// via PickRecapModel — claude-opus-4-7 / gemini-3-1-pro / gpt-5).
+    /// Lets the user dial down to faster/cheaper models (e.g.
+    /// claude-haiku-4-5, gemini-2-5-flash) when meeting recap quality
+    /// matters less than turnaround time or cost.
+    pub recap_model_override: String,
     pub chunk_streaming_enabled: bool,
     pub preprocessing_enabled: bool,
     pub audio_debug_enabled: bool,
@@ -439,6 +446,7 @@ impl Default for AppConfig {
             llm_api_model: DEFAULT_LLM_MODEL.to_string(),
             llm_use_same_key: true,
             llm_log_enabled: false,
+            recap_model_override: String::new(),
             chunk_streaming_enabled: false,
             preprocessing_enabled: true,
             audio_debug_enabled: false,
@@ -533,6 +541,7 @@ pub fn save_config_file(cfg: &AppConfig) {
             "llm_api_model": cfg.llm_api_model,
             "llm_use_same_key": cfg.llm_use_same_key,
             "llm_log_enabled": cfg.llm_log_enabled,
+            "recap_model_override": cfg.recap_model_override,
             "chunk_streaming_enabled": cfg.chunk_streaming_enabled,
             "preprocessing_enabled": cfg.preprocessing_enabled,
             "audio_debug_enabled": cfg.audio_debug_enabled,
@@ -636,6 +645,10 @@ pub fn load_config_file() -> AppConfig {
                     llm_log_enabled: v["llm_log_enabled"]
                         .as_bool()
                         .unwrap_or(defaults.llm_log_enabled),
+                    recap_model_override: v["recap_model_override"]
+                        .as_str()
+                        .unwrap_or(&defaults.recap_model_override)
+                        .to_string(),
                     chunk_streaming_enabled: v["chunk_streaming_enabled"]
                         .as_bool()
                         .unwrap_or(defaults.chunk_streaming_enabled),
@@ -914,6 +927,7 @@ pub struct AppState {
     pub llm_api_url: Mutex<String>,
     pub llm_api_model: Mutex<String>,
     pub llm_use_same_key: Mutex<bool>,
+    pub recap_model_override: Mutex<String>,
     pub llm_api_key: Mutex<Option<String>>,
     pub llm_log_enabled: Mutex<bool>,
     pub chunk_streaming_enabled: Mutex<bool>,
@@ -1041,6 +1055,7 @@ impl AppState {
             llm_api_url: Mutex::new(file_cfg.llm_api_url),
             llm_api_model: Mutex::new(file_cfg.llm_api_model),
             llm_use_same_key: Mutex::new(file_cfg.llm_use_same_key),
+            recap_model_override: Mutex::new(file_cfg.recap_model_override),
             llm_api_key: Mutex::new(stored_llm_key),
             llm_log_enabled: Mutex::new(file_cfg.llm_log_enabled),
             chunk_streaming_enabled: Mutex::new(file_cfg.chunk_streaming_enabled),
@@ -1140,6 +1155,11 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         .clone();
     let llm_use_same_key = *state.llm_use_same_key.lock().map_err(|e| e.to_string())?;
     let llm_log_enabled = *state.llm_log_enabled.lock().map_err(|e| e.to_string())?;
+    let recap_model_override = state
+        .recap_model_override
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     let chunk_streaming_enabled = *state
         .chunk_streaming_enabled
         .lock()
@@ -1203,6 +1223,7 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         llm_api_model,
         llm_use_same_key,
         llm_log_enabled,
+        recap_model_override,
         chunk_streaming_enabled,
         preprocessing_enabled,
         audio_debug_enabled,

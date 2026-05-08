@@ -258,6 +258,7 @@ fn dimmy_init_inner() -> c_int {
         llm_use_same_key: Mutex::new(file_cfg.llm_use_same_key),
         llm_api_key: Mutex::new(stored_llm_key),
         llm_log_enabled: Mutex::new(file_cfg.llm_log_enabled),
+        recap_model_override: Mutex::new(file_cfg.recap_model_override),
         chunk_streaming_enabled: Mutex::new(file_cfg.chunk_streaming_enabled),
         preprocessing_enabled: Mutex::new(file_cfg.preprocessing_enabled),
         audio_debug_enabled: Mutex::new(file_cfg.audio_debug_enabled),
@@ -1153,6 +1154,7 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "llm_use_same_key": *st.llm_use_same_key.lock().unwrap_or_else(|e| e.into_inner()),
         "has_llm_key": has_llm_key,
         "llm_log_enabled": *st.llm_log_enabled.lock().unwrap_or_else(|e| e.into_inner()),
+        "recap_model_override": st.recap_model_override.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         "chunk_streaming_enabled": *st.chunk_streaming_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "preprocessing_enabled": *st.preprocessing_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "audio_debug_enabled": *st.audio_debug_enabled.lock().unwrap_or_else(|e| e.into_inner()),
@@ -1431,6 +1433,12 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
         if let Ok(mut l) = st.llm_log_enabled.lock() {
             *l = b;
         }
+    }
+    if let Some(s) = v["recap_model_override"].as_str() {
+        if let Ok(mut slot) = st.recap_model_override.lock() {
+            *slot = s.to_string();
+        }
+        log(&format!("[Config] recap_model_override set to {:?}", s));
     }
 
     // Audio / appearance
@@ -4797,6 +4805,7 @@ mod tests {
                 llm_use_same_key: Mutex::new(true),
                 llm_api_key: Mutex::new(None),
                 llm_log_enabled: Mutex::new(false),
+                recap_model_override: Mutex::new(String::new()),
                 chunk_streaming_enabled: Mutex::new(false),
                 preprocessing_enabled: Mutex::new(true),
                 audio_debug_enabled: Mutex::new(false),

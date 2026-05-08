@@ -838,6 +838,13 @@
                               Visibility="{Binding HasLlmKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
                   </StackPanel>
                 </controls:SettingCard>
+                <controls:SettingCard Glyph="&#xE8B5;"
+                                      Label="Meeting recap model"
+                                      Description="Override the LLM used for meeting summaries (the click-Stop pipeline). Empty = use the provider's flagship reasoning-tier model automatically (Opus 4.7 / Gemini 3.1 Pro / GPT-5). Type any model ID supported by your LLM endpoint to override.">
+                  <TextBox x:Name="RecapModelOverrideBox" MinWidth="240"
+                           PlaceholderText="auto (provider default)"
+                           Text="{Binding RecapModelOverride, Mode=TwoWay}" />
+                </controls:SettingCard>
               </StackPanel>
 
               <TextBlock Text="CLIPBOARD"

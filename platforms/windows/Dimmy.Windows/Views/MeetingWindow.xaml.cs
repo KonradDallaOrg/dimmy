@@ -902,10 +902,10 @@ public sealed partial class MeetingWindow : Window
 
     private static string PickRecapModel()
     {
-        // Map provider URL -> the strongest reasoning-tier model that
-        // provider exposes in May 2026. process_raw_prompt in the Rust
-        // core auto-enables extended thinking on these by name (Opus +
-        // Sonnet 4/5 for Anthropic; Pro + Gemini-3.x for Google).
+        // Order of precedence:
+        //   1. user override from Settings (recap_model_override field)
+        //   2. provider-default flagship reasoning model based on llm_api_url
+        //   3. empty (Rust falls back to llm_api_model from config)
         try
         {
             var cfgPath = Path.Combine(
@@ -913,14 +913,22 @@ public sealed partial class MeetingWindow : Window
                 "dimmy", "config.json");
             if (!File.Exists(cfgPath)) return "";
             using var doc = JsonDocument.Parse(File.ReadAllText(cfgPath));
+            // 1. User override
+            if (doc.RootElement.TryGetProperty("recap_model_override", out var ovEl))
+            {
+                var ov = ovEl.GetString();
+                if (!string.IsNullOrWhiteSpace(ov))
+                    return ov.Trim();
+            }
+            // 2. Provider-default flagship reasoning model (May 2026)
             if (!doc.RootElement.TryGetProperty("llm_api_url", out var urlEl)) return "";
             var url = urlEl.GetString() ?? "";
             if (url.Contains("anthropic.com", StringComparison.OrdinalIgnoreCase))
                 return "claude-opus-4-7";
             if (url.Contains("googleapis.com", StringComparison.OrdinalIgnoreCase))
-                return "gemini-3-1-pro"; // flagship reasoning, supersedes 2.5-pro
+                return "gemini-3-1-pro";
             if (url.Contains("openai.com", StringComparison.OrdinalIgnoreCase))
-                return "gpt-5"; // uses o1-style reasoning by default
+                return "gpt-5";
             return "";
         }
         catch

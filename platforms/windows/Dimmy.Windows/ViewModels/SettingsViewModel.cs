@@ -141,6 +141,10 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _llmUseSameKey = true;
     [ObservableProperty] private string _llmApiKey = "";
     [ObservableProperty] private bool _hasLlmKey;
+    /// User override for the model ID used by the meeting recap LLM call.
+    /// Empty = let PickRecapModel pick the provider-default flagship
+    /// reasoning model (Opus 4.7 / Gemini 3.1 Pro / GPT-5).
+    [ObservableProperty] private string _recapModelOverride = "";
 
     /// Per-provider snapshot of "is an LLM key already stored?" — sourced from
     /// the `has_llm_*_key` fields of `dimmy_get_config_json`. Used by the
@@ -336,6 +340,8 @@ public partial class SettingsViewModel : ObservableObject
             LlmApiUrl = r.TryGetProperty("llm_api_url", out var lu) ? lu.GetString() ?? "" : "";
             LlmApiModel = r.TryGetProperty("llm_api_model", out var lm) ? lm.GetString() ?? "" : "";
             LlmUseSameKey = !r.TryGetProperty("llm_use_same_key", out var lsk) || lsk.GetBoolean();
+            RecapModelOverride = r.TryGetProperty("recap_model_override", out var rmo)
+                ? rmo.GetString() ?? "" : "";
             HasLlmKey = r.TryGetProperty("has_llm_key", out var hlk) && hlk.GetBoolean();
             // Per-provider snapshot — drives real-time green ✓ when user picks
             // another LLM provider in the dropdown before saving.
@@ -424,6 +430,7 @@ public partial class SettingsViewModel : ObservableObject
             ["llm_api_url"] = LlmApiUrl,
             ["llm_api_model"] = LlmApiModel,
             ["llm_use_same_key"] = LlmUseSameKey,
+            ["recap_model_override"] = RecapModelOverride,
             ["llm_custom_prompt"] = LlmCustomPrompt,
             ["llm_translate_to"] = LlmTranslateTo,
             ["llm_log_enabled"] = LlmLogEnabled,
