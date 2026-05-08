@@ -47,6 +47,7 @@ pub mod parakeet;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub mod parakeet_fluid;
 pub mod preprocess;
+pub mod process_loopback;
 pub mod provider;
 pub mod telemetry;
 pub mod transcribe;
@@ -374,6 +375,16 @@ pub struct AppConfig {
     pub keep_in_clipboard: bool,
     /// Input gain (0.0-2.0, default 1.0). Attenuate hot mics (e.g. BT headsets).
     pub input_gain: f32,
+    /// Loopback (system audio) makeup gain (0.5-4.0, default 2.0).
+    /// WASAPI loopback captures post-volume samples — if Windows
+    /// volume / per-app Volume Mixer / BT codec are conservative, the
+    /// raw signal lands at ~0.1-0.3 peak, way below the mic which
+    /// peaks at 0.5-0.9 on consonants. In Mix mode the mic dominates
+    /// the sum and system audio sounds "bassissimo". This knob
+    /// multiplies the loopback samples in the secondary stream
+    /// callback BEFORE they hit the buffer / AEC ring; soft-clipped
+    /// via tanh so peaks don't distort.
+    pub loopback_gain: f32,
     /// What to capture: "mic" (default), "system" (loopback — what's
     /// playing through the speakers), or "mix" (both summed in time).
     /// System / Mix are Windows-only for now; on Mac/Linux they fall
@@ -446,6 +457,13 @@ impl Default for AppConfig {
             overlay_position: "Bottom Right".to_string(),
             keep_in_clipboard: false,
             input_gain: 0.5,
+            // 1.5 = +3.5 dB makeup. tanh saturates above ~0.85 so this
+            // keeps speech-level peaks (~0.5 source) at ~0.65 in the
+            // mix — present and clearly audible without flattening
+            // dynamics. Empirically peak 0.99 with gain=2.0 means tanh
+            // is hitting the ceiling constantly; better to give back
+            // dynamic range and let the user dial up if needed.
+            loopback_gain: 1.5,
             audio_source: default_audio_source(),
             window_anchor_right: None,
             window_anchor_bottom: None,
@@ -523,6 +541,7 @@ pub fn save_config_file(cfg: &AppConfig) {
             "overlay_position": cfg.overlay_position,
             "keep_in_clipboard": cfg.keep_in_clipboard,
             "input_gain": cfg.input_gain,
+            "loopback_gain": cfg.loopback_gain,
             "audio_source": cfg.audio_source,
             "stats_total_words": cfg.stats_total_words,
             "stats_total_speaking_secs": cfg.stats_total_speaking_secs,
@@ -669,6 +688,10 @@ pub fn load_config_file() -> AppConfig {
                     input_gain: v["input_gain"]
                         .as_f64()
                         .unwrap_or(defaults.input_gain as f64)
+                        as f32,
+                    loopback_gain: v["loopback_gain"]
+                        .as_f64()
+                        .unwrap_or(defaults.loopback_gain as f64)
                         as f32,
                     audio_source: v["audio_source"]
                         .as_str()
@@ -900,6 +923,7 @@ pub struct AppState {
     pub keep_in_clipboard: Mutex<bool>,
     /// Input gain as AtomicU32 (f32 bits) — shared with audio capture thread
     pub input_gain: Arc<std::sync::atomic::AtomicU32>,
+    pub loopback_gain: Arc<std::sync::atomic::AtomicU32>,
     /// Audio source: "mic" | "system" | "mix". Read by dimmy_start_recording
     /// + meeting start to pick which AudioCommand::Start variant to send.
     pub audio_source: Mutex<String>,
@@ -964,10 +988,14 @@ impl AppState {
         let input_gain_atomic = Arc::new(std::sync::atomic::AtomicU32::new(
             file_cfg.input_gain.to_bits(),
         ));
+        let loopback_gain_atomic = Arc::new(std::sync::atomic::AtomicU32::new(
+            file_cfg.loopback_gain.to_bits(),
+        ));
         let audio_tx = audio::spawn_audio_thread(
             audio_buffer.clone(),
             audio_buffer_secondary.clone(),
             input_gain_atomic.clone(),
+            loopback_gain_atomic.clone(),
         );
 
         let state = AppState {
@@ -1017,6 +1045,7 @@ impl AppState {
             overlay_position: Mutex::new(file_cfg.overlay_position),
             keep_in_clipboard: Mutex::new(file_cfg.keep_in_clipboard),
             input_gain: input_gain_atomic,
+            loopback_gain: loopback_gain_atomic,
             audio_source: Mutex::new(file_cfg.audio_source.clone()),
             key_store,
             audio_debug_session_dir: Mutex::new(None),
@@ -1191,6 +1220,7 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
             .clone(),
         keep_in_clipboard: *state.keep_in_clipboard.lock().map_err(|e| e.to_string())?,
         input_gain: f32::from_bits(state.input_gain.load(Ordering::Relaxed)),
+        loopback_gain: f32::from_bits(state.loopback_gain.load(Ordering::Relaxed)),
         audio_source: state
             .audio_source
             .lock()

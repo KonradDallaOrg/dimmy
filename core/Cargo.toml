@@ -176,6 +176,20 @@ tokio-stream = "0.1"
 # Used only by the dimmy_smoke binary (smoke-test feature) to runtime-load
 # the installed dimmy_lib.dll. Optional so default builds don't pull it in.
 libloading = { version = "0.8", optional = true }
+# Windows API bindings — used by process_loopback.rs (Phase 5) for the
+# AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK API + IAudioSession*
+# enumeration. Win32_Media_Audio for WASAPI core, Win32_System_Com
+# for COM init / IUnknown plumbing, Win32_System_ProcessStatus for
+# enumerating running processes by name. Other platforms ignore.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_Threading",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_Media_Audio",
+    "Win32_Media_KernelStreaming",
+] }
 # Sentry crash + manual capture + structured logs. Optional behind
 # telemetry-sentry feature.
 #
