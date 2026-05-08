@@ -575,7 +575,13 @@ public sealed partial class SettingsWindow : Window
             string? json;
             var query = ViewModel.HistorySearchQuery?.Trim() ?? "";
             const int Limit = 200;
-            const int BufLen = 1 << 18; // 256 KB
+            // 4 MB. The previous 256 KB ceiling was overflowed by a single
+            // long file-load row: 95-min meeting → 50 KB transcript +
+            // 13 KB word_timestamps in one row, so 200 such rows easily
+            // top 256 KB and the FFI returns a TRUNCATED JSON blob that
+            // System.Text.Json then fails to parse with "Expected end of
+            // string … BytePositionInLine: 262143" → empty list.
+            const int BufLen = 4 << 20;
             var buf = new byte[BufLen];
             int len;
             if (string.IsNullOrEmpty(query))
