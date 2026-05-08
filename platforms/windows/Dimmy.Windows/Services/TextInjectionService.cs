@@ -12,8 +12,30 @@ public static class TextInjectionService
     [DllImport("user32.dll")]
     private static extern uint MapVirtualKey(uint uCode, uint uMapType);
 
+    [DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int vKey);
+
     /// MAPVK_VK_TO_VSC — translate a virtual key to a scan code.
     private const uint MAPVK_VK_TO_VSC = 0;
+
+    /// All modifier virtual-key codes we want to defensively release
+    /// before sending a synthetic Ctrl+V. Hotkey hooks (PTT) sometimes
+    /// leave the OS thinking a modifier is still pressed even after
+    /// the user has released it — when that happens, our Ctrl+V gets
+    /// merged with the held modifier and the chord (e.g. Ctrl+Win+Alt+V)
+    /// isn't recognised by the target app, producing the Windows
+    /// "default beep" instead of a paste.
+    private static readonly ushort[] ModifierVks = new ushort[]
+    {
+        0x5B, // VK_LWIN
+        0x5C, // VK_RWIN
+        0xA0, // VK_LSHIFT
+        0xA1, // VK_RSHIFT
+        0xA2, // VK_LCONTROL
+        0xA3, // VK_RCONTROL
+        0xA4, // VK_LMENU (Left Alt)
+        0xA5, // VK_RMENU (Right Alt / AltGr)
+    };
 
     [DllImport("user32.dll")]
     private static extern bool OpenClipboard(IntPtr hWndNewOwner);
@@ -124,6 +146,44 @@ public static class TextInjectionService
 
         // Small delay for clipboard to settle
         await Task.Delay(50);
+
+        // Defensively release any modifier key the OS might still
+        // consider held. PTT hotkey hooks intermittently swallow the
+        // KEY_UP event of a Win+Alt-style chord, so when our Ctrl+V
+        // arrives Windows merges it with the phantom-held modifier
+        // and the target app sees a chord it doesn't know — producing
+        // the user-reported "Windows beep + clipboard has the text
+        // but Notepad++ didn't paste". GetAsyncKeyState's 0x8000 bit
+        // tells us if the key is currently down.
+        var modifierReleases = new System.Collections.Generic.List<INPUT>();
+        var releasedMods = new System.Collections.Generic.List<string>();
+        foreach (var vk in ModifierVks)
+        {
+            if ((GetAsyncKeyState(vk) & 0x8000) != 0)
+            {
+                modifierReleases.Add(MakeKeyUp(vk));
+                releasedMods.Add($"0x{vk:X2}");
+            }
+        }
+        if (modifierReleases.Count > 0)
+        {
+            var mods = modifierReleases.ToArray();
+            SendInput((uint)mods.Length, mods, Marshal.SizeOf<INPUT>());
+            // Tiny pause for the synthetic releases to land before
+            // we send Ctrl+V; without it the new chord can race the
+            // previous release in the input queue.
+            await Task.Delay(20);
+            try
+            {
+                var line = $"[{DateTime.Now:HH:mm:ss.fff}] [PTT] released phantom-held modifiers: " +
+                           string.Join(",", releasedMods);
+                var path = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "dimmy", "ptt.log");
+                System.IO.File.AppendAllText(path, line + Environment.NewLine);
+            }
+            catch { }
+        }
 
         // Send Ctrl+V
         var inputs = new INPUT[]
