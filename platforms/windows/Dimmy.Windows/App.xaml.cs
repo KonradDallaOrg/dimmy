@@ -858,6 +858,15 @@ public partial class App : Application
                         _pttStarted = false;
                         _appViewModel.SetError("No API key configured");
                     }
+                    else if (result == -7)
+                    {
+                        // Meeting recording is active — silent suppress per
+                        // user spec. The pill stays at idle, no error toast,
+                        // ptt.log gets the diagnostic line so it's debuggable
+                        // if the user wonders why the hotkey didn't engage.
+                        _pttStarted = false;
+                        PttLog("PTT hotkey suppressed: meeting recording active (rc=-7)");
+                    }
                     else if (result < 0)
                     {
                         _pttStarted = false;
@@ -896,6 +905,11 @@ public partial class App : Application
                     var result = DimmyNative.dimmy_start_recording();
                     if (result == -1)
                         _appViewModel.SetError("No API key configured");
+                    else if (result == -7)
+                    {
+                        // Meeting in progress — silent no-op, log only.
+                        PttLog("Toggle suppressed: meeting recording active (rc=-7)");
+                    }
                     else if (result == -2)
                     {
                         // Race: Rust thinks it's already recording (a previous

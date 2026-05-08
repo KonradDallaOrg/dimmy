@@ -762,11 +762,18 @@ public static class JumpListService
             return _meetingIconPath;
         var dir = Path.Combine(Path.GetTempPath(), "dimmy_misc_icons_v2");
         try { Directory.CreateDirectory(dir); } catch { return ""; }
-        var path = Path.Combine(dir, "meeting_mic.ico");
+        // _v3 in the filename so existing _v2 caches don't shadow the
+        // colour change. Recording-red mic — same hue convention as the
+        // pill's "Recording" state (Crimson) so the visual link
+        // jumplist-row → recording-state-in-pill is immediate.
+        var path = Path.Combine(dir, "meeting_mic_v3_red.ico");
         try
         {
             if (!File.Exists(path))
-                File.WriteAllBytes(path, BuildMicIco(32, 0x52, 0x52, 0x52));
+                // BGR order: b=0x3C, g=0x14, r=0xDC -> #DC143C "crimson",
+                // matches the pill recording-state Crimson + the
+                // RecordingBar Stop button background.
+                File.WriteAllBytes(path, BuildMicIco(32, 0x3C, 0x14, 0xDC));
             _meetingIconPath = path;
             return path;
         }

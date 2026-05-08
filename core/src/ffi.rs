@@ -476,10 +476,27 @@ pub extern "C" fn dimmy_set_event_callback(cb: extern "C" fn(*const c_char)) {
 
 // ── Recording ───────────────────────────────────────────────────────
 
-/// Start recording. Returns 0=OK, -1=no API key, -2=already recording.
+/// Start recording. Returns 0=OK, -1=no API key, -2=already recording,
+/// -3=lock poisoned, -7=meeting in progress (caller should suppress
+/// the dictation hotkey — having two captures running concurrently
+/// would clobber the meeting's audio_buffer / aec_mic_ring and corrupt
+/// the active meeting recording).
 #[no_mangle]
 pub extern "C" fn dimmy_start_recording() -> c_int {
     let st = state();
+
+    // Block dictation when a meeting is recording. The audio thread
+    // can only host one capture configuration at a time — letting the
+    // pill hijack it would silently truncate the meeting's WAV files
+    // (synth_len would peg at 0 and the worker would write nothing
+    // until the user clicks Stop). User-explicit fix request 2026-05-08.
+    {
+        let meeting_active = MEETING.lock().map(|g| g.is_some()).unwrap_or(false);
+        if meeting_active {
+            log("[StartRec] suppressed — meeting recording in progress (rc=-7)");
+            return -7;
+        }
+    }
 
     let mut recording = match st.recording.lock() {
         Ok(r) => r,
