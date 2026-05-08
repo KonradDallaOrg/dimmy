@@ -494,11 +494,26 @@ pub async fn process_raw_prompt(
     let wants_thinking_gemini =
         is_gemini_native && (model_lc.contains("pro") || model_lc.starts_with("gemini-3"));
 
-    // Anthropic max_tokens MUST be > thinking budget. Bump if needed so
-    // the API doesn't reject the request.
+    // Anthropic API split: Opus 4.7 / Sonnet 5+ removed extended-thinking
+    // budgets. They require `thinking.type=adaptive` + `output_config.effort`
+    // and reject `temperature/top_p/top_k`. Older Opus 4.x / Sonnet 4
+    // still use the budget_tokens form. Detect by model id so a config
+    // pinning a specific older model still works.
+    let is_anthropic_adaptive_only = model_lc.contains("opus-4-7")
+        || model_lc.contains("opus-4.7")
+        || model_lc.contains("sonnet-5")
+        || model_lc.contains("sonnet-6"); // future-proof
+                                          // max_tokens sizing — adaptive-only models need 32k headroom (the new
+                                          // Opus 4.7 tokenizer uses ~1.0-1.35× more tokens, and adaptive
+                                          // thinking writes a reasoning trace inline). Old budget mode keeps
+                                          // its tighter ceiling (budget + 4k headroom).
     const ANTHROPIC_THINKING_BUDGET: u64 = 10_000;
     let effective_max_tokens = if wants_thinking_anthropic {
-        max_tokens.max(ANTHROPIC_THINKING_BUDGET + 4_096)
+        if is_anthropic_adaptive_only {
+            max_tokens.max(32_000)
+        } else {
+            max_tokens.max(ANTHROPIC_THINKING_BUDGET + 4_096)
+        }
     } else {
         max_tokens
     };
@@ -512,14 +527,30 @@ pub async fn process_raw_prompt(
             ],
         });
         if wants_thinking_anthropic {
-            body["thinking"] = serde_json::json!({
-                "type": "enabled",
-                "budget_tokens": ANTHROPIC_THINKING_BUDGET
-            });
-            crate::log(&format!(
-                "[LLM] Anthropic extended thinking ENABLED (budget={}, max_tokens={})",
-                ANTHROPIC_THINKING_BUDGET, effective_max_tokens
-            ));
+            if is_anthropic_adaptive_only {
+                // Opus 4.7 / Sonnet 5: adaptive thinking + effort=high.
+                // Setting `thinking.type=enabled` + `budget_tokens` here
+                // returns 400 with "thinking.type.enabled is not supported
+                // for this model. Use thinking.type.adaptive". The API
+                // also rejects temperature/top_p/top_k on these models —
+                // we don't set them on the Anthropic branch anyway.
+                body["thinking"] = serde_json::json!({ "type": "adaptive" });
+                body["output_config"] = serde_json::json!({ "effort": "high" });
+                crate::log(&format!(
+                    "[LLM] Anthropic adaptive thinking ENABLED (model={} max_tokens={} effort=high)",
+                    model, effective_max_tokens
+                ));
+            } else {
+                // Opus 4.6 / Sonnet 4: legacy extended-thinking budget.
+                body["thinking"] = serde_json::json!({
+                    "type": "enabled",
+                    "budget_tokens": ANTHROPIC_THINKING_BUDGET
+                });
+                crate::log(&format!(
+                    "[LLM] Anthropic extended thinking ENABLED (budget={}, max_tokens={})",
+                    ANTHROPIC_THINKING_BUDGET, effective_max_tokens
+                ));
+            }
         }
         client
             .post(api_url)
