@@ -554,16 +554,24 @@
                            FontSize="12" FontWeight="SemiBold"
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                            CharacterSpacing="40" Margin="2,20,0,8" />
-                <!-- Audio source picker removed 2026-05-08: the capture
-                     pipeline now ALWAYS opens both mic + system loopback
-                     (always-mix architecture, commit 3eddac3). Pill
-                     consumes mic-only, meeting consumes both, AEC3
-                     gracefully degrades when loopback is silent. The
-                     legacy `audio_source` config field is preserved on
-                     disk for backward compat but ignored at runtime. -->
+                <controls:SettingCard Glyph="&#xE767;"
+                                      Label="Audio source"
+                                      Description="Microphone (default). System captures what's playing through your speakers (Zoom calls, Teams, YouTube). Mix runs both streams concurrently — note: experimental, timestamps are ~2× faster because the streams interleave. Mac / Linux fall back to mic for now.">
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <RadioButton x:Name="AudioSourceMic" Content="Microphone"
+                                 GroupName="AudioSource" Tag="mic"
+                                 Checked="AudioSource_Checked"/>
+                    <RadioButton x:Name="AudioSourceSystem" Content="System"
+                                 GroupName="AudioSource" Tag="system"
+                                 Checked="AudioSource_Checked"/>
+                    <RadioButton x:Name="AudioSourceMix" Content="Mic + System"
+                                 GroupName="AudioSource" Tag="mix"
+                                 Checked="AudioSource_Checked"/>
+                  </StackPanel>
+                </controls:SettingCard>
                 <controls:SettingCard Glyph="&#xE720;"
                                       Label="Input device"
-                                      Description="Microphone Dimmy listens to. System audio loopback always uses the default playback device.">
+                                      Description="Pick which microphone Dimmy listens to. Ignored when Audio source is System (loopback always uses the default playback device).">
                   <ComboBox MinWidth="240"
                             SelectedItem="{Binding SelectedDevice, Mode=TwoWay}"
                             ItemsSource="{Binding Devices}" />
@@ -832,91 +840,10 @@
                 </controls:SettingCard>
                 <controls:SettingCard Glyph="&#xE8B5;"
                                       Label="Meeting recap model"
-                                      Description="Which LLM writes the recap when a meeting ends.">
-                  <ComboBox x:Name="RecapModelComboBox" MinWidth="280"
-                            SelectionChanged="RecapModel_SelectionChanged">
-                    <ComboBoxItem Tag="">
-                      <TextBlock Text="Auto · pick best for your provider" VerticalAlignment="Center"/>
-                    </ComboBoxItem>
-                    <ComboBoxItem Tag="claude-opus-4-7">
-                      <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Image Width="16" Height="16">
-                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/anthropic.svg"/></Image.Source>
-                        </Image>
-                        <TextBlock Text="Anthropic · Opus 4.7 (best, slow)" VerticalAlignment="Center"/>
-                      </StackPanel>
-                    </ComboBoxItem>
-                    <ComboBoxItem Tag="claude-sonnet-4-6">
-                      <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Image Width="16" Height="16">
-                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/anthropic.svg"/></Image.Source>
-                        </Image>
-                        <TextBlock Text="Anthropic · Sonnet 4.6 (balanced)" VerticalAlignment="Center"/>
-                      </StackPanel>
-                    </ComboBoxItem>
-                    <ComboBoxItem Tag="claude-haiku-4-5-20251001">
-                      <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Image Width="16" Height="16">
-                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/anthropic.svg"/></Image.Source>
-                        </Image>
-                        <TextBlock Text="Anthropic · Haiku 4.5 (fast)" VerticalAlignment="Center"/>
-                      </StackPanel>
-                    </ComboBoxItem>
-                    <ComboBoxItem Tag="gemini-3.1-pro">
-                      <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Image Width="16" Height="16">
-                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
-                        </Image>
-                        <TextBlock Text="Google · Gemini 3.1 Pro (best)" VerticalAlignment="Center"/>
-                      </StackPanel>
-                    </ComboBoxItem>
-                    <ComboBoxItem Tag="gemini-2.5-pro">
-                      <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Image Width="16" Height="16">
-                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
-                        </Image>
-                        <TextBlock Text="Google · Gemini 2.5 Pro" VerticalAlignment="Center"/>
-                      </StackPanel>
-                    </ComboBoxItem>
-                    <ComboBoxItem Tag="gemini-2.5-flash">
-                      <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Image Width="16" Height="16">
-                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
-                        </Image>
-                        <TextBlock Text="Google · Gemini 2.5 Flash (fast)" VerticalAlignment="Center"/>
-                      </StackPanel>
-                    </ComboBoxItem>
-                    <ComboBoxItem Tag="gpt-5">
-                      <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Image Width="16" Height="16">
-                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/openai.svg"/></Image.Source>
-                        </Image>
-                        <TextBlock Text="OpenAI · GPT-5 (best)" VerticalAlignment="Center"/>
-                      </StackPanel>
-                    </ComboBoxItem>
-                    <ComboBoxItem Tag="gpt-4o">
-                      <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Image Width="16" Height="16">
-                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/openai.svg"/></Image.Source>
-                        </Image>
-                        <TextBlock Text="OpenAI · GPT-4o" VerticalAlignment="Center"/>
-                      </StackPanel>
-                    </ComboBoxItem>
-                    <ComboBoxItem Tag="__custom__">
-                      <TextBlock Text="Custom… (type model id below)" VerticalAlignment="Center"
-                                 FontStyle="Italic"
-                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                    </ComboBoxItem>
-                  </ComboBox>
-                </controls:SettingCard>
-                <controls:SettingCard Glyph="&#xE932;"
-                                      Label="Custom recap model id"
-                                      Description="Used only when the picker above is set to Custom."
-                                      x:Name="RecapModelCustomCard">
-                  <TextBox x:Name="RecapModelOverrideBox" MinWidth="280"
-                           PlaceholderText="e.g. claude-opus-4-7-thinking-extra"
-                           Text="{Binding RecapModelOverride, Mode=TwoWay}"
-                           LostFocus="RecapModelCustom_LostFocus" />
+                                      Description="Override the LLM used for meeting summaries (the click-Stop pipeline). Empty = use the provider's flagship reasoning-tier model automatically (Opus 4.7 / Gemini 3.1 Pro / GPT-5). Type any model ID supported by your LLM endpoint to override.">
+                  <TextBox x:Name="RecapModelOverrideBox" MinWidth="240"
+                           PlaceholderText="auto (provider default)"
+                           Text="{Binding RecapModelOverride, Mode=TwoWay}" />
                 </controls:SettingCard>
               </StackPanel>
 

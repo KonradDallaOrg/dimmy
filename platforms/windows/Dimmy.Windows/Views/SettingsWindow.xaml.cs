@@ -80,7 +80,6 @@ public sealed partial class SettingsWindow : Window
         SyncLanguageComboBox();
         SyncThemeRadioButtons();
         SyncAudioSourceRadio();
-        SyncRecapModelPicker();
         PopulateLocalModels();
         SyncSttMode();
         PopulateLocalLlmModels();
@@ -2619,85 +2618,24 @@ public sealed partial class SettingsWindow : Window
         App.Instance?.ApplySettings(ViewModel);
     }
 
-    /// 2026-05-08: AudioSource radio buttons removed from Settings —
-    /// always-mix architecture means the user no longer picks between
-    /// Mic / System / Mix. Stub kept (and called from the loader) so a
-    /// stale binding doesn't NRE; sets a sensible default on the
-    /// view model for backward compat with config.json that still has
-    /// an `audio_source` field.
     private void SyncAudioSourceRadio()
     {
-        if (string.IsNullOrEmpty(ViewModel.AudioSource))
-            ViewModel.AudioSource = "mix";
-    }
-
-    private static readonly string[] _recapModelKnownTags = new[]
-    {
-        "",
-        "claude-opus-4-7",
-        "claude-sonnet-4-6",
-        "claude-haiku-4-5-20251001",
-        "gemini-3.1-pro",
-        "gemini-2.5-pro",
-        "gemini-2.5-flash",
-        "gpt-5",
-        "gpt-4o",
-    };
-
-    /// Snap the recap-model picker + custom textbox to whatever the
-    /// view-model currently holds. Called once after config load.
-    /// If the persisted model id matches a curated entry, select it;
-    /// otherwise mark the picker as "__custom__" and reveal the
-    /// textbox. Empty = "Auto" (first item).
-    private void SyncRecapModelPicker()
-    {
-        if (RecapModelComboBox == null) return;
-        var current = ViewModel.RecapModelOverride ?? "";
-        int idx = -1;
-        for (int i = 0; i < _recapModelKnownTags.Length; i++)
+        var src = ViewModel.AudioSource ?? "mic";
+        switch (src)
         {
-            if (string.Equals(_recapModelKnownTags[i], current, StringComparison.OrdinalIgnoreCase))
-            {
-                idx = i;
-                break;
-            }
-        }
-        if (idx >= 0)
-        {
-            RecapModelComboBox.SelectedIndex = idx;
-            RecapModelCustomCard.Visibility = Visibility.Collapsed;
-        }
-        else
-        {
-            // Custom model — pick the placeholder Custom entry (last
-            // ComboBoxItem) and show the textbox so the user can edit.
-            RecapModelComboBox.SelectedIndex = _recapModelKnownTags.Length;
-            RecapModelCustomCard.Visibility = Visibility.Visible;
+            case "system": AudioSourceSystem.IsChecked = true; break;
+            case "mix": AudioSourceMix.IsChecked = true; break;
+            default: AudioSourceMic.IsChecked = true; break;
         }
     }
 
-    private void RecapModel_SelectionChanged(object sender,
-        Microsoft.UI.Xaml.Controls.SelectionChangedEventArgs e)
+    private void AudioSource_Checked(object sender, RoutedEventArgs e)
     {
-        if (RecapModelComboBox?.SelectedItem is not Microsoft.UI.Xaml.Controls.ComboBoxItem item) return;
-        var tag = item.Tag as string ?? "";
-        if (tag == "__custom__")
+        if (sender is RadioButton rb && rb.Tag is string tag)
         {
-            RecapModelCustomCard.Visibility = Visibility.Visible;
-            // Don't overwrite the existing custom value — let the user
-            // pick up where they left off in the textbox.
-            return;
+            ViewModel.AudioSource = tag;
+            if (_loaded) App.Instance?.ApplySettings(ViewModel);
         }
-        RecapModelCustomCard.Visibility = Visibility.Collapsed;
-        ViewModel.RecapModelOverride = tag;
-        if (_loaded) App.Instance?.ApplySettings(ViewModel);
-    }
-
-    private void RecapModelCustom_LostFocus(object sender, RoutedEventArgs e)
-    {
-        // The TextBox is Two-Way bound, so RecapModelOverride is already
-        // up to date by the time we get here. Just push the config.
-        if (_loaded) App.Instance?.ApplySettings(ViewModel);
     }
 
     private void Theme_Checked(object sender, RoutedEventArgs e)
