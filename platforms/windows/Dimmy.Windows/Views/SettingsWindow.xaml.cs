@@ -107,7 +107,10 @@ public sealed partial class SettingsWindow : Window
         ViewModel.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(ViewModel.SelectedHistoryItem))
+            {
                 _ = RefreshHistoryAudioAsync();
+                RefreshHistoryTextRendering();
+            }
         };
 
         // App rules: pulse on collection change (add/remove/reorder) AND
@@ -674,6 +677,33 @@ public sealed partial class SettingsWindow : Window
         {
             App.Log($"history_delete returned {rc} for id {item.Id}", "History");
         }
+    }
+
+    /// Render the selected History row's transcript + enhanced text into
+    /// their RichTextBlocks. Called whenever SelectedHistoryItem changes.
+    ///
+    /// Why not bind directly to .Text like the v1 layout did: a single
+    /// TextBlock with TextWrapping=Wrap and a 50 KB string of paragraph
+    /// text (e.g. a 95-min meeting transcript) chokes WinUI's text
+    /// engine — the layout pass either takes minutes or shows blank.
+    /// TranscriptRenderer breaks the text into paragraphs at line
+    /// breaks and styles [mic]/[system] markers + timestamps, which
+    /// WinUI handles smoothly even at hundreds of kilobytes.
+    private void RefreshHistoryTextRendering()
+    {
+        var item = ViewModel.SelectedHistoryItem;
+        if (item == null)
+        {
+            HistoryRawTextRich?.Blocks.Clear();
+            HistoryEnhancedTextRich?.Blocks.Clear();
+            return;
+        }
+        if (HistoryRawTextRich != null)
+            Helpers.TranscriptRenderer.Render(HistoryRawTextRich, item.Text ?? "");
+        if (HistoryEnhancedTextRich != null)
+            Helpers.TranscriptRenderer.Render(
+                HistoryEnhancedTextRich,
+                item.EnhancedText ?? "");
     }
 
     /// Render a waveform of the selected History row's audio file and
