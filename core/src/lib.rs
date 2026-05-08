@@ -855,6 +855,11 @@ pub struct AppState {
     pub audio_sample_rate: Mutex<u32>,
     pub transcript: Mutex<String>,
     pub audio_buffer: Arc<Mutex<Vec<f32>>>,
+    /// Dedicated buffer for the loopback (system audio) stream when
+    /// audio_source = Mix. Stays empty in Mic / System modes. meeting.rs
+    /// reads both buffers and mixes per-sample so playback timing
+    /// matches reality and sources are coherently combined.
+    pub audio_buffer_secondary: Arc<Mutex<Vec<f32>>>,
     pub audio_tx: Mutex<Sender<AudioCommand>>,
     pub streaming_active: Arc<AtomicBool>,
     // LLM post-processing state
@@ -953,10 +958,15 @@ impl AppState {
         ));
 
         let audio_buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
+        let audio_buffer_secondary = Arc::new(Mutex::new(Vec::<f32>::new()));
         let input_gain_atomic = Arc::new(std::sync::atomic::AtomicU32::new(
             file_cfg.input_gain.to_bits(),
         ));
-        let audio_tx = audio::spawn_audio_thread(audio_buffer.clone(), input_gain_atomic.clone());
+        let audio_tx = audio::spawn_audio_thread(
+            audio_buffer.clone(),
+            audio_buffer_secondary.clone(),
+            input_gain_atomic.clone(),
+        );
 
         let state = AppState {
             recording: Mutex::new(false),
@@ -971,6 +981,7 @@ impl AppState {
             audio_sample_rate: Mutex::new(audio::device_sample_rate(&file_cfg.selected_device)),
             transcript: Mutex::new(String::new()),
             audio_buffer,
+            audio_buffer_secondary,
             audio_tx: Mutex::new(audio_tx),
             streaming_active: Arc::new(AtomicBool::new(false)),
             llm_enabled: Mutex::new(file_cfg.llm_enabled),

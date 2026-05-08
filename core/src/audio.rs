@@ -75,6 +75,7 @@ pub fn list_input_devices() -> Vec<String> {
 /// `input_gain` is shared so it can be updated at runtime (0.0-2.0, default 1.0).
 pub fn spawn_audio_thread(
     buffer: Arc<Mutex<Vec<f32>>>,
+    buffer_secondary: Arc<Mutex<Vec<f32>>>,
     input_gain: Arc<std::sync::atomic::AtomicU32>,
 ) -> mpsc::Sender<AudioCommand> {
     let (tx, rx) = mpsc::channel::<AudioCommand>();
@@ -187,8 +188,15 @@ pub fn spawn_audio_thread(
 
                         let channels = config.channels() as usize;
 
-                        // Clear buffer
+                        // Clear both buffers — Mix uses a separate secondary
+                        // buffer for the loopback so meeting.rs can mix
+                        // primary+secondary per-sample (instead of having
+                        // them race-interleave into one buffer, which made
+                        // playback half-speed and acoustically garbled).
                         if let Ok(mut b) = buffer.lock() {
+                            b.clear();
+                        }
+                        if let Ok(mut b) = buffer_secondary.lock() {
                             b.clear();
                         }
 
@@ -296,26 +304,25 @@ pub fn spawn_audio_thread(
                         }
 
                         // ── Mix mode: open the loopback stream as a SECOND
-                        // input that writes the same shared buffer. Two
-                        // streams interleave their samples in time order
-                        // (no explicit mix-down) — for speech this is
-                        // good enough because the VAD/AGC operate on the
-                        // merged stream and the LLM can disambiguate
-                        // overlapping speakers from the resulting waveform.
+                        // input that writes the SECONDARY buffer (separate
+                        // from the mic's primary buffer). meeting.rs reads
+                        // both buffers, takes min length, and mixes per-sample
+                        // → correct playback speed and a real per-sample mix
+                        // of the two sources instead of race-interleaved chaos.
                         // System-only (no Mix) was already handled above
                         // by treating the loopback as the PRIMARY device.
                         if matches!(source, AudioSource::Mix) {
                             if let Some(sysdev) = system_device {
                                 if let Some(s) = build_secondary_stream(
                                     &sysdev,
-                                    &buffer,
+                                    &buffer_secondary,
                                     &input_gain,
                                     /* is_loopback */ true,
                                 ) {
                                     let _ = s.play();
                                     streams.push(s);
                                     crate::log(
-                                        "[Audio] Mix mode: secondary loopback stream playing",
+                                        "[Audio] Mix mode: secondary loopback stream playing into dedicated buffer",
                                     );
                                 }
                             }
@@ -438,25 +445,26 @@ fn build_secondary_stream(
     };
     let channels = config.channels() as usize;
     let buf = buffer.clone();
-    let gain_ref = input_gain.clone();
+    // NOTE: secondary stream path = loopback (system audio). We deliberately
+    // DO NOT apply `input_gain` here (that knob is calibrated for mic peak
+    // levels) and DO NOT divide by `channels` on stereo→mono downmix. The
+    // sum-clamp form preserves perceived loudness for center-panned voice
+    // (typical YouTube/Teams content) instead of giving up 6dB to match the
+    // mic stream — the bug the user described as "system practically
+    // inaudible" with mic-quality vs system-quality wildly mismatched.
+    let _ = input_gain; // intentionally unused on the loopback path
     let stream = match config.sample_format() {
         cpal::SampleFormat::F32 => device.build_input_stream(
             &config.clone().into(),
             move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                let gain = f32::from_bits(gain_ref.load(std::sync::atomic::Ordering::Relaxed));
-                if !gain.is_finite() || !(0.0..=2.0).contains(&gain) {
-                    return;
-                }
                 if let Ok(mut b) = buf.lock() {
                     if channels > 1 {
                         for chunk in data.chunks(channels) {
-                            let mono = chunk.iter().sum::<f32>() / channels as f32 * gain;
+                            let mono = chunk.iter().sum::<f32>().clamp(-1.0, 1.0);
                             b.push(mono);
                         }
-                    } else if (gain - 1.0).abs() < 0.001 {
-                        b.extend_from_slice(data);
                     } else {
-                        b.extend(data.iter().map(|&s| s * gain));
+                        b.extend_from_slice(data);
                     }
                 }
             },
@@ -466,15 +474,13 @@ fn build_secondary_stream(
         cpal::SampleFormat::I16 => device.build_input_stream(
             &config.clone().into(),
             move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                let gain = f32::from_bits(gain_ref.load(std::sync::atomic::Ordering::Relaxed));
-                if !gain.is_finite() || !(0.0..=2.0).contains(&gain) {
-                    return;
-                }
                 if let Ok(mut b) = buf.lock() {
                     for chunk in data.chunks(channels) {
-                        let mono: f32 = chunk.iter().map(|&s| s as f32 / 32768.0).sum::<f32>()
-                            / channels as f32
-                            * gain;
+                        let mono: f32 = chunk
+                            .iter()
+                            .map(|&s| s as f32 / 32768.0)
+                            .sum::<f32>()
+                            .clamp(-1.0, 1.0);
                         b.push(mono);
                     }
                 }
@@ -506,29 +512,61 @@ pub fn default_input_device_name() -> String {
 
 /// Get sample rate for a specific device (by name), falling back to default
 pub fn device_sample_rate(device_name: &Option<String>) -> u32 {
+    primary_sample_rate(device_name, &AudioSource::Mic)
+}
+
+/// Sample rate of the PRIMARY capture stream — i.e. the rate at which
+/// the shared audio buffer fills in wall time. The meeting writer needs
+/// THIS rate (not the mic's input rate) to downsample correctly,
+/// otherwise a System-mode recording plays back at the wrong speed
+/// (loopback runs at 48 kHz on most systems, mic is often 16 kHz).
+///
+/// - Mic / Mix: native input rate of the selected mic (primary stream
+///   is the mic; in Mix the loopback is a secondary that interleaves
+///   into the same buffer, which has its own time-compression caveat
+///   tracked separately).
+/// - System: native OUTPUT rate of the default output device, since
+///   that's the device cpal opens in WASAPI loopback mode.
+pub fn primary_sample_rate(device_name: &Option<String>, source: &AudioSource) -> u32 {
     let host = cpal::default_host();
-    let device = if let Some(ref name) = device_name {
-        host.input_devices()
-            .ok()
-            .and_then(|mut devs| devs.find(|d| d.name().ok().as_deref() == Some(name.as_str())))
-            .or_else(|| host.default_input_device())
-    } else {
-        host.default_input_device()
+    let rate = match source {
+        AudioSource::System => {
+            #[cfg(target_os = "windows")]
+            let r = host
+                .default_output_device()
+                .and_then(|d| d.default_output_config().ok())
+                .map(|c| c.sample_rate().0);
+            #[cfg(not(target_os = "windows"))]
+            let r: Option<u32> = None;
+            r.unwrap_or_else(|| primary_sample_rate(device_name, &AudioSource::Mic))
+        }
+        AudioSource::Mic | AudioSource::Mix => {
+            let device = if let Some(ref name) = device_name {
+                host.input_devices()
+                    .ok()
+                    .and_then(|mut devs| {
+                        devs.find(|d| d.name().ok().as_deref() == Some(name.as_str()))
+                    })
+                    .or_else(|| host.default_input_device())
+            } else {
+                host.default_input_device()
+            };
+            device
+                .and_then(|d| d.default_input_config().ok())
+                .map(|c| c.sample_rate().0)
+                .unwrap_or(44100)
+        }
     };
-    let rate = device
-        .and_then(|d| d.default_input_config().ok())
-        .map(|c| c.sample_rate().0)
-        .unwrap_or(44100);
 
     // Returned rate must be within valid audio hardware range
     assert!(
         rate >= 8000,
-        "device_sample_rate: rate {} below 8kHz minimum",
+        "primary_sample_rate: rate {} below 8kHz minimum",
         rate
     );
     assert!(
         rate <= 192000,
-        "device_sample_rate: rate {} above 192kHz maximum",
+        "primary_sample_rate: rate {} above 192kHz maximum",
         rate
     );
 
@@ -883,7 +921,8 @@ mod tests {
     fn spawn_audio_thread_responds_to_stop() {
         let buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
         let gain = Arc::new(std::sync::atomic::AtomicU32::new(1.0f32.to_bits()));
-        let tx = spawn_audio_thread(buffer.clone(), gain);
+        let secondary = Arc::new(Mutex::new(Vec::<f32>::new()));
+        let tx = spawn_audio_thread(buffer.clone(), secondary, gain);
         // Sending Stop should not panic even with no prior Start
         let _ = tx.send(AudioCommand::Stop);
         // Drop sender — thread should exit cleanly
@@ -895,7 +934,8 @@ mod tests {
         // gain=0.5 should not panic on Stop
         let buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
         let gain = Arc::new(std::sync::atomic::AtomicU32::new(0.5f32.to_bits()));
-        let tx = spawn_audio_thread(buffer.clone(), gain);
+        let secondary = Arc::new(Mutex::new(Vec::<f32>::new()));
+        let tx = spawn_audio_thread(buffer.clone(), secondary, gain);
         let _ = tx.send(AudioCommand::Stop);
         drop(tx);
     }
@@ -905,7 +945,8 @@ mod tests {
         // gain=0.0 should not panic on Stop
         let buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
         let gain = Arc::new(std::sync::atomic::AtomicU32::new(0.0f32.to_bits()));
-        let tx = spawn_audio_thread(buffer.clone(), gain);
+        let secondary = Arc::new(Mutex::new(Vec::<f32>::new()));
+        let tx = spawn_audio_thread(buffer.clone(), secondary, gain);
         let _ = tx.send(AudioCommand::Stop);
         drop(tx);
     }

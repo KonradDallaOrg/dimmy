@@ -42,6 +42,42 @@ const DEFAULT_OVERLAP_MS: u32 = 500;
 const FSYNC_INTERVAL: Duration = Duration::from_secs(1);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
+/// Snapshot of the user's STT preferences taken at meeting-start time.
+/// Worker uses this to route each chunk to the SAME backend the
+/// dictation pipeline would use (cloud or local), so meeting and
+/// dictation never disagree on which engine transcribes.
+#[derive(Clone, Debug)]
+pub struct SttSnapshot {
+    pub mode: String, // "cloud" | "local"
+    pub api_url: String,
+    pub api_model: String,
+    pub api_key: Option<String>, // None for local
+    pub prompt: String,
+    pub local_model: String, // filename, looked up in models/ dir
+    pub language: String,
+}
+
+/// Encode 16 kHz mono f32 PCM into an in-memory WAV byte buffer suitable
+/// for cloud STT upload. No I/O — pure computation.
+fn pcm16k_to_wav_bytes(pcm_16k: &[f32]) -> Vec<u8> {
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 16_000,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut cursor = std::io::Cursor::new(Vec::<u8>::new());
+    if let Ok(mut w) = hound::WavWriter::new(&mut cursor, spec) {
+        for s in pcm_16k {
+            let clamped = s.clamp(-1.0, 1.0);
+            let i = (clamped * i16::MAX as f32) as i16;
+            let _ = w.write_sample(i);
+        }
+        let _ = w.finalize();
+    }
+    cursor.into_inner()
+}
+
 pub struct MeetingSession {
     id: String,
     dir: PathBuf,
@@ -66,7 +102,10 @@ impl MeetingSession {
     /// and writes / transcribes incrementally until `stop()` is called.
     pub fn start(
         audio_buffer: Arc<Mutex<Vec<f32>>>,
+        audio_buffer_secondary: Arc<Mutex<Vec<f32>>>,
         device_sample_rate: u32,
+        source: crate::audio::AudioSource,
+        stt: SttSnapshot,
     ) -> Result<Self, String> {
         assert!(
             device_sample_rate > 0,
@@ -122,7 +161,10 @@ impl MeetingSession {
             .spawn(move || {
                 worker_loop(
                     audio_buffer,
+                    audio_buffer_secondary,
                     device_sample_rate,
+                    source,
+                    stt,
                     writer,
                     dir_w,
                     id_w,
@@ -177,7 +219,10 @@ impl MeetingSession {
 
 fn worker_loop(
     audio_buffer: Arc<Mutex<Vec<f32>>>,
+    audio_buffer_secondary: Arc<Mutex<Vec<f32>>>,
     device_sample_rate: u32,
+    source: crate::audio::AudioSource,
+    stt: SttSnapshot,
     mut writer: hound::WavWriter<std::io::BufWriter<File>>,
     dir: PathBuf,
     id: String,
@@ -186,6 +231,66 @@ fn worker_loop(
     let chunk_samples = (DEFAULT_CHUNK_SECS * device_sample_rate as f32) as usize;
     let overlap_samples =
         ((DEFAULT_OVERLAP_MS as f32 / 1000.0) * device_sample_rate as f32) as usize;
+    let mix_active = matches!(source, crate::audio::AudioSource::Mix);
+    let local_model_filename = stt.local_model.clone();
+    let language = stt.language.clone();
+    crate::log(&format!(
+        "[Meeting] worker source={:?} mix_active={} stt_mode={} model={} lang={}",
+        source, mix_active, stt.mode, local_model_filename, language
+    ));
+
+    // Resolve a usable local-whisper model up-front. If the user has a
+    // configured `local_model` that doesn't exist on disk, fall back to
+    // any other .bin in the models dir — better than silently producing
+    // empty transcripts. Cloud mode ignores this.
+    let resolved_local_model: Option<std::path::PathBuf> = if stt.mode == "cloud" {
+        None
+    } else {
+        let primary = crate::local_stt::model_path(&local_model_filename);
+        if primary.is_file() {
+            Some(primary)
+        } else {
+            let dir = primary.parent().map(|p| p.to_path_buf());
+            let alt = dir.and_then(|d| {
+                std::fs::read_dir(&d).ok().and_then(|rd| {
+                    rd.filter_map(|e| e.ok().map(|e| e.path()))
+                        .filter(|p| {
+                            p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("bin")
+                        })
+                        .next()
+                })
+            });
+            if let Some(ref p) = alt {
+                crate::log(&format!(
+                    "[Meeting] configured local_model='{}' missing — falling back to '{}'",
+                    local_model_filename,
+                    p.file_name().and_then(|s| s.to_str()).unwrap_or("?")
+                ));
+            } else {
+                crate::log(&format!(
+                    "[Meeting] configured local_model='{}' missing and no fallback found in models/",
+                    local_model_filename
+                ));
+            }
+            alt
+        }
+    };
+
+    // Tokio runtime for cloud STT calls (built only if needed).
+    let cloud_rt: Option<tokio::runtime::Runtime> = if stt.mode == "cloud" {
+        match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => Some(rt),
+            Err(e) => {
+                crate::log(&format!("[Meeting] tokio runtime build failed: {}", e));
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     // `samples_written` tracks how many SOURCE-RATE samples have been
     // streamed into the WAV (after downsample they map to fewer 16k
@@ -216,31 +321,76 @@ fn worker_loop(
         }
     };
 
+    // Helper: read a slice from the synthesized stream. In Mix mode,
+    // returns per-sample mix of primary + secondary buffers (clamped),
+    // synced to min(primary.len(), secondary.len()). In Mic / System
+    // mode, returns just the primary slice.
+    let read_synth = |start: usize,
+                      end: usize,
+                      audio_buffer: &Arc<Mutex<Vec<f32>>>,
+                      audio_buffer_secondary: &Arc<Mutex<Vec<f32>>>|
+     -> Vec<f32> {
+        let primary = match audio_buffer.lock() {
+            Ok(b) if end <= b.len() => b[start..end].to_vec(),
+            _ => Vec::new(),
+        };
+        if !mix_active {
+            return primary;
+        }
+        let secondary = match audio_buffer_secondary.lock() {
+            Ok(b) if end <= b.len() => b[start..end].to_vec(),
+            _ => Vec::new(),
+        };
+        // Per-sample mix. If secondary lags (fewer samples) we fall
+        // back to primary-only for the missing tail to avoid silent
+        // gaps. Clamp to [-1, 1] to stop the sum from blowing past
+        // unit range when both sources are loud.
+        let n = primary.len();
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let p = primary[i];
+            let s = secondary.get(i).copied().unwrap_or(0.0);
+            out.push((p + s).clamp(-1.0, 1.0));
+        }
+        out
+    };
+
+    // Helper: snapshot the synced length of the synth stream. In Mix
+    // mode this is the min of both buffers (so we never advance past
+    // what BOTH have produced). In single-source modes it's just the
+    // primary length.
+    let synth_len = |audio_buffer: &Arc<Mutex<Vec<f32>>>,
+                     audio_buffer_secondary: &Arc<Mutex<Vec<f32>>>|
+     -> Option<usize> {
+        let p = audio_buffer.lock().ok().map(|b| b.len())?;
+        if !mix_active {
+            return Some(p);
+        }
+        let s = audio_buffer_secondary.lock().ok().map(|b| b.len())?;
+        Some(p.min(s))
+    };
+
     loop {
         let cancelled = cancel.load(Ordering::SeqCst);
         thread::sleep(POLL_INTERVAL);
 
-        // Take a snapshot of the buffer length up to which we'll
-        // process this iteration. Holding the lock only for the read.
-        let buf_len_now = match audio_buffer.lock() {
-            Ok(b) => b.len(),
-            Err(_) => continue,
+        // Take a snapshot of the SYNCED stream length up to which we'll
+        // process this iteration.
+        let buf_len_now = match synth_len(&audio_buffer, &audio_buffer_secondary) {
+            Some(n) => n,
+            None => continue,
         };
 
         // Stream new samples into the WAV file. We always copy
         // [samples_written..buf_len_now] regardless of chunk timing
         // so the on-disk audio is always up-to-date.
         if buf_len_now > samples_written {
-            let new_slice: Vec<f32> = match audio_buffer.lock() {
-                Ok(b) => {
-                    if buf_len_now <= b.len() {
-                        b[samples_written..buf_len_now].to_vec()
-                    } else {
-                        Vec::new()
-                    }
-                }
-                Err(_) => Vec::new(),
-            };
+            let new_slice = read_synth(
+                samples_written,
+                buf_len_now,
+                &audio_buffer,
+                &audio_buffer_secondary,
+            );
             if !new_slice.is_empty() {
                 let pcm_16k = if device_sample_rate == 16_000 {
                     new_slice
@@ -266,11 +416,9 @@ fn worker_loop(
         }
 
         // Fire a chunk transcribe if enough new audio has accumulated.
-        // Same dedup logic the live caption path uses, but we don't
-        // emit events — we append to transcripts.txt + the in-memory
-        // accumulator. The post-process pipeline later reads from
-        // transcripts.txt so a mid-meeting crash retains everything
-        // that was already transcribed.
+        // Whisper.cpp via local_stt::transcribe_local — the same path
+        // dictation uses. Falls in line with whatever local model the
+        // user has configured (no hardcoded engine).
         let want_end = last_processed + chunk_samples;
         if buf_len_now >= want_end || (cancelled && buf_len_now > last_processed) {
             let start = last_processed.saturating_sub(overlap_samples);
@@ -279,27 +427,62 @@ fn worker_loop(
             } else {
                 want_end.min(buf_len_now)
             };
-            let chunk: Vec<f32> = match audio_buffer.lock() {
-                Ok(b) => {
-                    if end > b.len() {
-                        Vec::new()
-                    } else {
-                        b[start..end].to_vec()
-                    }
-                }
-                Err(_) => Vec::new(),
-            };
+            let chunk = read_synth(start, end, &audio_buffer, &audio_buffer_secondary);
             if !chunk.is_empty() {
                 let pcm_16k = if device_sample_rate == 16_000 {
                     chunk
                 } else {
                     crate::preprocess::downsample_to_16k(&chunk, device_sample_rate)
                 };
-                let chunk_text = match crate::parakeet::transcribe(&pcm_16k) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        crate::log(&format!("[Meeting] parakeet error: {}", e));
-                        String::new()
+                let chunk_text = if pcm_16k.is_empty() {
+                    String::new()
+                } else if stt.mode == "cloud" {
+                    // Encode pcm_16k → WAV bytes (16 kHz mono int16) then
+                    // ship to the user's configured cloud provider.
+                    let wav = pcm16k_to_wav_bytes(&pcm_16k);
+                    match (&cloud_rt, &stt.api_key) {
+                        (Some(rt), Some(key)) => {
+                            let result = rt.block_on(async {
+                                crate::transcribe::transcribe_audio(
+                                    &stt.api_url,
+                                    &stt.api_model,
+                                    key,
+                                    &wav,
+                                    &language,
+                                    &stt.prompt,
+                                )
+                                .await
+                            });
+                            match result {
+                                Ok(t) => t,
+                                Err(e) => {
+                                    crate::log(&format!("[Meeting] cloud STT error: {}", e));
+                                    String::new()
+                                }
+                            }
+                        }
+                        _ => {
+                            crate::log("[Meeting] cloud STT unavailable: missing key or runtime");
+                            String::new()
+                        }
+                    }
+                } else {
+                    match &resolved_local_model {
+                        Some(model_path) => {
+                            match crate::local_stt::transcribe_local(
+                                model_path, &pcm_16k, &language,
+                            ) {
+                                Ok(t) => t,
+                                Err(e) => {
+                                    crate::log(&format!("[Meeting] whisper error: {}", e));
+                                    String::new()
+                                }
+                            }
+                        }
+                        None => {
+                            crate::log("[Meeting] local STT skipped: no usable .bin model");
+                            String::new()
+                        }
                     }
                 };
                 if !chunk_text.trim().is_empty() {

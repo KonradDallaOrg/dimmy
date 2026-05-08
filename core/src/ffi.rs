@@ -218,11 +218,15 @@ fn dimmy_init_inner() -> c_int {
 
     // Audio thread
     let audio_buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
+    let audio_buffer_secondary = Arc::new(Mutex::new(Vec::<f32>::new()));
     let input_gain_atomic = Arc::new(std::sync::atomic::AtomicU32::new(
         file_cfg.input_gain.to_bits(),
     ));
-    let audio_tx =
-        crate::audio::spawn_audio_thread(audio_buffer.clone(), input_gain_atomic.clone());
+    let audio_tx = crate::audio::spawn_audio_thread(
+        audio_buffer.clone(),
+        audio_buffer_secondary.clone(),
+        input_gain_atomic.clone(),
+    );
 
     let app_state = AppState {
         recording: Mutex::new(false),
@@ -237,6 +241,7 @@ fn dimmy_init_inner() -> c_int {
         audio_sample_rate: Mutex::new(crate::audio::device_sample_rate(&file_cfg.selected_device)),
         transcript: Mutex::new(String::new()),
         audio_buffer,
+        audio_buffer_secondary,
         audio_tx: Mutex::new(audio_tx),
         streaming_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         llm_enabled: Mutex::new(file_cfg.llm_enabled),
@@ -2304,20 +2309,33 @@ pub unsafe extern "C" fn dimmy_meeting_start(out_buf: *mut c_char, buf_len: c_in
 
     let st = state();
     let selected_device = st.selected_device.lock().ok().and_then(|d| d.clone());
-    let device_sr = crate::audio::device_sample_rate(&selected_device);
-    if let Ok(mut sr) = st.audio_sample_rate.lock() {
-        *sr = device_sr;
-    }
-    // Clear any stale buffer from a previous recording so the meeting
-    // worker starts at offset 0.
-    if let Ok(mut b) = st.audio_buffer.lock() {
-        b.clear();
-    }
     let mt_source = st
         .audio_source
         .lock()
         .map(|s| crate::audio::AudioSource::from_str_lossy(&s))
         .unwrap_or(crate::audio::AudioSource::Mic);
+    // CRITICAL: when source = System, the primary capture stream is the
+    // OUTPUT device in WASAPI loopback mode (~48 kHz on most systems),
+    // NOT the mic. Querying the mic's rate here and feeding it to the
+    // meeting writer makes audio.wav play back at 1/3 speed ("metallic,
+    // very slow") because the WAV header advertises 16 kHz but the
+    // shared buffer was actually filling at 48 kHz.
+    let device_sr = crate::audio::primary_sample_rate(&selected_device, &mt_source);
+    log(&format!(
+        "[Meeting] primary_sample_rate={} source={:?}",
+        device_sr, mt_source
+    ));
+    if let Ok(mut sr) = st.audio_sample_rate.lock() {
+        *sr = device_sr;
+    }
+    // Clear any stale buffers from a previous recording so the meeting
+    // worker starts at offset 0 on both primary and secondary streams.
+    if let Ok(mut b) = st.audio_buffer.lock() {
+        b.clear();
+    }
+    if let Ok(mut b) = st.audio_buffer_secondary.lock() {
+        b.clear();
+    }
     let _ = st.audio_tx.lock().map(|tx| {
         tx.send(crate::audio::AudioCommand::Start {
             device_name: selected_device,
@@ -2325,7 +2343,53 @@ pub unsafe extern "C" fn dimmy_meeting_start(out_buf: *mut c_char, buf_len: c_in
         })
     });
 
-    let session = match crate::meeting::MeetingSession::start(st.audio_buffer.clone(), device_sr) {
+    // Snapshot the user's STT configuration so the meeting worker uses
+    // the SAME backend (cloud or local) the dictation pipeline does.
+    // Avoids the previous trap where meeting hardcoded a backend and
+    // silently produced empty transcripts when the user's setup didn't
+    // match (cloud user → meeting tried local; missing local model file
+    // → meeting tried whisper anyway → "model not found" loop).
+    let stt_snapshot = crate::meeting::SttSnapshot {
+        mode: st
+            .stt_mode
+            .lock()
+            .ok()
+            .map(|s| s.clone())
+            .unwrap_or_else(|| "local".to_string()),
+        api_url: st
+            .api_url
+            .lock()
+            .ok()
+            .map(|s| s.clone())
+            .unwrap_or_default(),
+        api_model: st
+            .api_model
+            .lock()
+            .ok()
+            .map(|s| s.clone())
+            .unwrap_or_default(),
+        api_key: st.api_key.lock().ok().and_then(|k| k.clone()),
+        prompt: st.prompt.lock().ok().map(|s| s.clone()).unwrap_or_default(),
+        local_model: st
+            .local_model
+            .lock()
+            .ok()
+            .map(|s| s.clone())
+            .unwrap_or_default(),
+        language: st
+            .language
+            .lock()
+            .ok()
+            .map(|s| s.clone())
+            .unwrap_or_else(|| "auto".to_string()),
+    };
+    let session = match crate::meeting::MeetingSession::start(
+        st.audio_buffer.clone(),
+        st.audio_buffer_secondary.clone(),
+        device_sr,
+        mt_source,
+        stt_snapshot,
+    ) {
         Ok(s) => s,
         Err(e) => {
             log(&format!("[Meeting] start failed: {}", e));

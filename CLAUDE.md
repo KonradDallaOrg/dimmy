@@ -86,6 +86,17 @@ cargo test --release --test ffi_e2e --features local-stt,test-ffi -- --test-thre
 
 CI treats clippy warnings as errors. CI uses the same feature flags — mismatching will go green locally and red in CI. If you touched Linux UI, also `cd platforms/linux && cargo clippy -- -D warnings && cargo test`. If you touched Windows UI / onboarding / XAML, also run the FlaUI smoke tests (see [`docs/dev/testing.md`](docs/dev/testing.md)).
 
+### Windows local DLL build — feature flag set is FROZEN
+
+**`cargo build --release --lib --features local-stt-vulkan,local-stt-parakeet,local-llm-vulkan`** is the canonical local Windows build for `dimmy_lib.dll`. Dropping any of these features = silently breaks production code paths:
+- `local-stt-vulkan` → whisper.cpp Vulkan STT (used by dictation when `stt_mode=local && local_stt_backend=whisper`, by meeting STT chunks, by file-load).
+- `local-stt-parakeet` → Parakeet TDT v3 STT (used by dictation chunked-stt worker when `local_stt_backend=parakeet`, default for many users; ALSO referenced by meeting follow-ups in v2).
+- `local-llm-vulkan` → llama.cpp Vulkan LLM (used for local recap, local rewrite, future meeting-recap-local path).
+
+**NEVER** rebuild with a subset just because the diff "doesn't touch parakeet" or "the recap is cloud-only". The user's *runtime config* decides which path runs — drop the feature and the path becomes a silent trap (`local model: parakeet inference requires the local-stt-parakeet cargo feature` looped on every chunk while telemetry says `transcription.failed`). Burned 2026-05-07 twice (meeting empty transcript, then dictation empty transcript). The feature set was frozen after the second incident.
+
+**RULE (user-explicit, 2026-05-07): If the user has not EXPLICITLY asked for a feature to be removed, KEEP IT. Always rebuild with the full set above. The user wants all features always — "le voglio tutte. sempre."** Removing a feature on your own initiative is a regression, not an optimization.
+
 ## v2 surfaces — what shipped on `feat/v2-unified` (2026-05)
 
 The current `staging` is **v0.6.29** with the v2 unified feature set.
