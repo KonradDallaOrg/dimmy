@@ -127,12 +127,20 @@ public sealed partial class MeetingWindow : Window
             {
                 aw.Closing += (_, args) =>
                 {
+                    App.Log(
+                        $"Closing event: _recordingActive={_recordingActive} _state={_state}",
+                        "Meeting");
                     if (_recordingActive || _state == MeetingState.Processing)
                     {
                         args.Cancel = true;
                         ShowToast("Recording in progress. Click Stop & finish first.");
                     }
                 };
+                App.Log("Closing handler attached to AppWindow", "Meeting");
+            }
+            else
+            {
+                App.Log("WARNING: WindowHelper.GetAppWindow returned null — Closing handler NOT attached", "Meeting");
             }
         }
         catch (Exception ex) { App.Log($"closing-hook exc: {ex.Message}", "Meeting"); }
@@ -141,6 +149,31 @@ public sealed partial class MeetingWindow : Window
         {
             StopPolling();
             StopAmplitudePoll();
+
+            // Defense-in-depth: if the window is being closed while a
+            // recording is still active in the Rust core (this should
+            // be impossible because AppWindow.Closing cancels in that
+            // case, but if Win11 / WindowsAppSDK ever lets a close
+            // sneak through — alt+f4 in some configs, runtime exit,
+            // a future API change), force-stop the meeting in core
+            // so we don't leak a zombie that keeps writing audio
+            // and won't let the user start a new meeting on next
+            // dimmy://meeting open. We discard the result bundle —
+            // the WAVs and transcripts.txt are already on disk and
+            // can be recovered via the orphan-recovery flow.
+            try
+            {
+                if (_recordingActive || DimmyNative.dimmy_meeting_is_active() == 1)
+                {
+                    App.Log(
+                        "Closed: recording still active in core — force-stopping to prevent zombie",
+                        "Meeting");
+                    var buf = new byte[1 << 22];
+                    int rc = DimmyNative.dimmy_meeting_stop(buf, buf.Length);
+                    App.Log($"Closed: force-stop rc={rc}", "Meeting");
+                }
+            }
+            catch (Exception ex) { App.Log($"Closed force-stop exc: {ex}", "Meeting"); }
         };
 
         // ── Re-sync UI to the Rust core. If a meeting is already
