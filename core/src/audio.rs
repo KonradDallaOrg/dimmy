@@ -77,6 +77,7 @@ pub fn spawn_audio_thread(
     buffer: Arc<Mutex<Vec<f32>>>,
     buffer_secondary: Arc<Mutex<Vec<f32>>>,
     input_gain: Arc<std::sync::atomic::AtomicU32>,
+    loopback_gain: Arc<std::sync::atomic::AtomicU32>,
 ) -> mpsc::Sender<AudioCommand> {
     let (tx, rx) = mpsc::channel::<AudioCommand>();
 
@@ -206,6 +207,28 @@ pub fn spawn_audio_thread(
 
                         let channels = config.channels() as usize;
 
+                        // Force canonical 48 kHz on the cpal stream regardless
+                        // of the device's native rate. Windows WASAPI shared
+                        // mode resamples internally for any rate. This kills
+                        // the BT-HFP/A2DP mismatch (mic 16k HFP + loopback
+                        // 48k A2DP) where audio_system.wav was getting written
+                        // with mic's 16k header but contained 48k-sampled
+                        // data → 3x slow "mumbling" playback. Both streams
+                        // now fill the buffers at the same 48k wall-time
+                        // rate so meeting.rs's per-sample mix is aligned and
+                        // the WAV headers match the data.
+                        const CANONICAL_SR: u32 = 48_000;
+                        let canonical_config = cpal::StreamConfig {
+                            channels: config.channels(),
+                            sample_rate: cpal::SampleRate(CANONICAL_SR),
+                            buffer_size: cpal::BufferSize::Default,
+                        };
+                        crate::log(&format!(
+                            "[Audio] Primary forced to canonical config: sr={} ch={}",
+                            CANONICAL_SR,
+                            config.channels()
+                        ));
+
                         // Clear all buffers + AEC rings — Mix uses a separate
                         // secondary buffer for the loopback so meeting.rs can
                         // mix primary+secondary per-sample, and the AEC rings
@@ -241,7 +264,7 @@ pub fn spawn_audio_thread(
                         let sc1 = sample_count.clone();
                         let s = match config.sample_format() {
                             cpal::SampleFormat::F32 => device.build_input_stream(
-                                &config.clone().into(),
+                                &canonical_config,
                                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                                     let prev = sc1.fetch_add(
                                         data.len(),
@@ -289,7 +312,7 @@ pub fn spawn_audio_thread(
                                 let gain_ref2 = input_gain.clone();
                                 let sc2 = sample_count.clone();
                                 device.build_input_stream(
-                                    &config.clone().into(),
+                                    &canonical_config,
                                     move |data: &[i16], _: &cpal::InputCallbackInfo| {
                                         let prev = sc2.fetch_add(data.len(), std::sync::atomic::Ordering::Relaxed);
                                         if prev == 0 {
@@ -352,6 +375,7 @@ pub fn spawn_audio_thread(
                                     &buffer_secondary,
                                     Some(&aec_ref_ring),
                                     &input_gain,
+                                    &loopback_gain,
                                     /* is_loopback */ true,
                                 ) {
                                     let _ = s.play();
@@ -441,6 +465,7 @@ fn build_secondary_stream(
     buffer: &Arc<Mutex<Vec<f32>>>,
     aec_ref_ring: Option<&Arc<Mutex<Vec<f32>>>>,
     input_gain: &Arc<std::sync::atomic::AtomicU32>,
+    loopback_gain: &Arc<std::sync::atomic::AtomicU32>,
     is_loopback: bool,
 ) -> Option<cpal::Stream> {
     let config = if is_loopback {
@@ -481,6 +506,21 @@ fn build_secondary_stream(
     };
     let channels = config.channels() as usize;
     let buf = buffer.clone();
+    // Force canonical 48 kHz on the secondary stream too. Pair with the
+    // primary's canonical_config so both buffers fill at the same wall-time
+    // rate — kills the BT-HFP/A2DP rate-mismatch bug where audio_system.wav
+    // ended up at 3x slow playback.
+    const CANONICAL_SR: u32 = 48_000;
+    let canonical_config = cpal::StreamConfig {
+        channels: config.channels(),
+        sample_rate: cpal::SampleRate(CANONICAL_SR),
+        buffer_size: cpal::BufferSize::Default,
+    };
+    crate::log(&format!(
+        "[Audio] Secondary forced to canonical config: sr={} ch={}",
+        CANONICAL_SR,
+        config.channels()
+    ));
     // Optional second destination: in Mix mode the AEC worker needs the
     // SAME loopback samples as a `render` reference so it can subtract
     // the speaker echo from the mic capture. We push to both buffers
@@ -494,50 +534,150 @@ fn build_secondary_stream(
     // mic stream — the bug the user described as "system practically
     // inaudible" with mic-quality vs system-quality wildly mismatched.
     let _ = input_gain; // intentionally unused on the loopback path
+                        // Loopback makeup gain — soft-clipped via tanh so high peaks
+                        // don't produce clamp clicks. Read fresh each callback so a
+                        // runtime config change takes effect immediately. Bounds check
+                        // enforces sane range; outside it we treat as 1.0 (no change).
+    let loopback_gain_ref = loopback_gain.clone();
+    // Periodic loopback diagnostics. Every ~5 s of wall time the
+    // callback emits ONE log line with the peak amplitude observed
+    // in that window. Lets the user see in dimmy.log whether the
+    // loopback is actually receiving audio (peak > 0.001) or pure
+    // silence (peak == 0) — useful when debugging Bluetooth profile
+    // switches (HSP vs A2DP) and per-app device routing.
+    let diag_sr = config.sample_rate().0 as u64;
+    let diag_window_samples = (diag_sr * 5) as usize;
+    let diag_peak = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let diag_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let diag_window = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let stream = match config.sample_format() {
-        cpal::SampleFormat::F32 => device.build_input_stream(
-            &config.clone().into(),
-            move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                let mono_samples: Vec<f32> = if channels > 1 {
-                    data.chunks(channels)
-                        .map(|chunk| chunk.iter().sum::<f32>().clamp(-1.0, 1.0))
-                        .collect()
-                } else {
-                    data.to_vec()
-                };
-                if let Ok(mut b) = buf.lock() {
-                    b.extend_from_slice(&mono_samples);
-                }
-                if let Some(ref aec) = aec_ref {
-                    crate::aec::push_to_ring(aec, &mono_samples);
-                }
-            },
-            |err| crate::log(&format!("[Audio] Secondary stream error (F32): {}", err)),
-            None,
-        ),
-        cpal::SampleFormat::I16 => device.build_input_stream(
-            &config.clone().into(),
-            move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                let mono_samples: Vec<f32> = data
-                    .chunks(channels)
-                    .map(|chunk| {
-                        chunk
-                            .iter()
-                            .map(|&s| s as f32 / 32768.0)
-                            .sum::<f32>()
-                            .clamp(-1.0, 1.0)
-                    })
-                    .collect();
-                if let Ok(mut b) = buf.lock() {
-                    b.extend_from_slice(&mono_samples);
-                }
-                if let Some(ref aec) = aec_ref {
-                    crate::aec::push_to_ring(aec, &mono_samples);
-                }
-            },
-            |err| crate::log(&format!("[Audio] Secondary stream error (I16): {}", err)),
-            None,
-        ),
+        cpal::SampleFormat::F32 => {
+            let dp = diag_peak.clone();
+            let dc = diag_count.clone();
+            let dw = diag_window.clone();
+            let lg = loopback_gain_ref.clone();
+            device.build_input_stream(
+                &canonical_config,
+                move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                    let g = f32::from_bits(lg.load(std::sync::atomic::Ordering::Relaxed));
+                    let g = if g.is_finite() && (0.5..=4.0).contains(&g) {
+                        g
+                    } else {
+                        1.0
+                    };
+                    let mono_samples: Vec<f32> = if channels > 1 {
+                        data.chunks(channels)
+                            .map(|chunk| {
+                                // Sum stereo to mono, apply makeup gain,
+                                // soft-clip via tanh so peaks don't click.
+                                (chunk.iter().sum::<f32>() * g).tanh()
+                            })
+                            .collect()
+                    } else {
+                        data.iter().map(|&s| (s * g).tanh()).collect()
+                    };
+                    // Update diagnostic peak (atomic max via CAS loop) and
+                    // sample count. Cheap; runs on every callback.
+                    let chunk_peak = mono_samples
+                        .iter()
+                        .fold(0.0f32, |m, &s| m.max(s.abs()));
+                    let mut prev = dp.load(std::sync::atomic::Ordering::Relaxed);
+                    while chunk_peak.to_bits() > prev {
+                        match dp.compare_exchange_weak(
+                            prev,
+                            chunk_peak.to_bits(),
+                            std::sync::atomic::Ordering::Relaxed,
+                            std::sync::atomic::Ordering::Relaxed,
+                        ) {
+                            Ok(_) => break,
+                            Err(p) => prev = p,
+                        }
+                    }
+                    dc.fetch_add(mono_samples.len(), std::sync::atomic::Ordering::Relaxed);
+                    let win =
+                        dw.fetch_add(mono_samples.len(), std::sync::atomic::Ordering::Relaxed)
+                            + mono_samples.len();
+                    if win >= diag_window_samples {
+                        let total = dc.load(std::sync::atomic::Ordering::Relaxed);
+                        let peak_bits = dp.swap(0, std::sync::atomic::Ordering::Relaxed);
+                        let peak = f32::from_bits(peak_bits);
+                        dw.store(0, std::sync::atomic::Ordering::Relaxed);
+                        crate::log(&format!(
+                            "[Audio] Loopback diag: total_samples={}, last_5s_peak={:.4} (>0.001 means signal, ~0 means silence)",
+                            total, peak
+                        ));
+                    }
+                    if let Ok(mut b) = buf.lock() {
+                        b.extend_from_slice(&mono_samples);
+                    }
+                    if let Some(ref aec) = aec_ref {
+                        crate::aec::push_to_ring(aec, &mono_samples);
+                    }
+                },
+                |err| crate::log(&format!("[Audio] Secondary stream error (F32): {}", err)),
+                None,
+            )
+        }
+        cpal::SampleFormat::I16 => {
+            let dp = diag_peak.clone();
+            let dc = diag_count.clone();
+            let dw = diag_window.clone();
+            let lg = loopback_gain_ref.clone();
+            device.build_input_stream(
+                &canonical_config,
+                move |data: &[i16], _: &cpal::InputCallbackInfo| {
+                    let g = f32::from_bits(lg.load(std::sync::atomic::Ordering::Relaxed));
+                    let g = if g.is_finite() && (0.5..=4.0).contains(&g) {
+                        g
+                    } else {
+                        1.0
+                    };
+                    let mono_samples: Vec<f32> = data
+                        .chunks(channels)
+                        .map(|chunk| {
+                            (chunk.iter().map(|&s| s as f32 / 32768.0).sum::<f32>() * g).tanh()
+                        })
+                        .collect();
+                    let chunk_peak = mono_samples
+                        .iter()
+                        .fold(0.0f32, |m, &s| m.max(s.abs()));
+                    let mut prev = dp.load(std::sync::atomic::Ordering::Relaxed);
+                    while chunk_peak.to_bits() > prev {
+                        match dp.compare_exchange_weak(
+                            prev,
+                            chunk_peak.to_bits(),
+                            std::sync::atomic::Ordering::Relaxed,
+                            std::sync::atomic::Ordering::Relaxed,
+                        ) {
+                            Ok(_) => break,
+                            Err(p) => prev = p,
+                        }
+                    }
+                    dc.fetch_add(mono_samples.len(), std::sync::atomic::Ordering::Relaxed);
+                    let win =
+                        dw.fetch_add(mono_samples.len(), std::sync::atomic::Ordering::Relaxed)
+                            + mono_samples.len();
+                    if win >= diag_window_samples {
+                        let total = dc.load(std::sync::atomic::Ordering::Relaxed);
+                        let peak_bits = dp.swap(0, std::sync::atomic::Ordering::Relaxed);
+                        let peak = f32::from_bits(peak_bits);
+                        dw.store(0, std::sync::atomic::Ordering::Relaxed);
+                        crate::log(&format!(
+                            "[Audio] Loopback diag: total_samples={}, last_5s_peak={:.4} (>0.001 means signal, ~0 means silence)",
+                            total, peak
+                        ));
+                    }
+                    if let Ok(mut b) = buf.lock() {
+                        b.extend_from_slice(&mono_samples);
+                    }
+                    if let Some(ref aec) = aec_ref {
+                        crate::aec::push_to_ring(aec, &mono_samples);
+                    }
+                },
+                |err| crate::log(&format!("[Audio] Secondary stream error (I16): {}", err)),
+                None,
+            )
+        }
         _ => {
             crate::log("[Audio] Secondary unsupported sample format");
             return None;
@@ -577,50 +717,15 @@ pub fn device_sample_rate(device_name: &Option<String>) -> u32 {
 ///   tracked separately).
 /// - System: native OUTPUT rate of the default output device, since
 ///   that's the device cpal opens in WASAPI loopback mode.
-pub fn primary_sample_rate(device_name: &Option<String>, source: &AudioSource) -> u32 {
-    let host = cpal::default_host();
-    let rate = match source {
-        AudioSource::System => {
-            #[cfg(target_os = "windows")]
-            let r = host
-                .default_output_device()
-                .and_then(|d| d.default_output_config().ok())
-                .map(|c| c.sample_rate().0);
-            #[cfg(not(target_os = "windows"))]
-            let r: Option<u32> = None;
-            r.unwrap_or_else(|| primary_sample_rate(device_name, &AudioSource::Mic))
-        }
-        AudioSource::Mic | AudioSource::Mix => {
-            let device = if let Some(ref name) = device_name {
-                host.input_devices()
-                    .ok()
-                    .and_then(|mut devs| {
-                        devs.find(|d| d.name().ok().as_deref() == Some(name.as_str()))
-                    })
-                    .or_else(|| host.default_input_device())
-            } else {
-                host.default_input_device()
-            };
-            device
-                .and_then(|d| d.default_input_config().ok())
-                .map(|c| c.sample_rate().0)
-                .unwrap_or(44100)
-        }
-    };
-
-    // Returned rate must be within valid audio hardware range
-    assert!(
-        rate >= 8000,
-        "primary_sample_rate: rate {} below 8kHz minimum",
-        rate
-    );
-    assert!(
-        rate <= 192000,
-        "primary_sample_rate: rate {} above 192kHz maximum",
-        rate
-    );
-
-    rate
+pub fn primary_sample_rate(_device_name: &Option<String>, _source: &AudioSource) -> u32 {
+    // Both primary and secondary cpal streams are now opened with a
+    // forced `canonical_config` at 48 kHz inside spawn_audio_thread,
+    // regardless of the device's native rate (Windows WASAPI shared
+    // mode resamples for free). So the meeting writer / WAV header
+    // always sees 48 kHz on disk. Returning anything else here would
+    // silently drift the WAV header from the real wall-time fill rate
+    // and reproduce the BT-HFP "3x slow playback" bug.
+    48_000
 }
 
 // ── Typed audio pipeline ─────────────────────────────────────────────
@@ -972,7 +1077,8 @@ mod tests {
         let buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
         let gain = Arc::new(std::sync::atomic::AtomicU32::new(1.0f32.to_bits()));
         let secondary = Arc::new(Mutex::new(Vec::<f32>::new()));
-        let tx = spawn_audio_thread(buffer.clone(), secondary, gain);
+        let lgain = Arc::new(std::sync::atomic::AtomicU32::new(2.0f32.to_bits()));
+        let tx = spawn_audio_thread(buffer.clone(), secondary, gain, lgain);
         // Sending Stop should not panic even with no prior Start
         let _ = tx.send(AudioCommand::Stop);
         // Drop sender — thread should exit cleanly
@@ -985,7 +1091,8 @@ mod tests {
         let buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
         let gain = Arc::new(std::sync::atomic::AtomicU32::new(0.5f32.to_bits()));
         let secondary = Arc::new(Mutex::new(Vec::<f32>::new()));
-        let tx = spawn_audio_thread(buffer.clone(), secondary, gain);
+        let lgain = Arc::new(std::sync::atomic::AtomicU32::new(2.0f32.to_bits()));
+        let tx = spawn_audio_thread(buffer.clone(), secondary, gain, lgain);
         let _ = tx.send(AudioCommand::Stop);
         drop(tx);
     }
@@ -996,7 +1103,8 @@ mod tests {
         let buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
         let gain = Arc::new(std::sync::atomic::AtomicU32::new(0.0f32.to_bits()));
         let secondary = Arc::new(Mutex::new(Vec::<f32>::new()));
-        let tx = spawn_audio_thread(buffer.clone(), secondary, gain);
+        let lgain = Arc::new(std::sync::atomic::AtomicU32::new(2.0f32.to_bits()));
+        let tx = spawn_audio_thread(buffer.clone(), secondary, gain, lgain);
         let _ = tx.send(AudioCommand::Stop);
         drop(tx);
     }
