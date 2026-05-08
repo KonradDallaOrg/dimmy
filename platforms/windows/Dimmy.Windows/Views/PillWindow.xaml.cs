@@ -22,6 +22,17 @@ public sealed partial class PillWindow : Window
     private readonly AppViewModel _vm;
     private DispatcherTimer? _amplitudeTimer;
     private DispatcherTimer? _recordingTimer;
+    /// Long-running poll that watches the Rust core's meeting state so
+    /// the pill mirrors a meeting that was started/stopped from
+    /// MeetingWindow (or any other surface). Without this the pill
+    /// would stay Idle while a meeting is recording in the background,
+    /// the user couldn't see signal capture and couldn't Stop from
+    /// here. 2 Hz is plenty — meeting transitions are user-initiated.
+    private DispatcherTimer? _meetingStatePollTimer;
+    /// Track whether the current pill Recording state was driven by a
+    /// meeting (so we know to clear it back to Idle when the meeting
+    /// ends, without stomping on a concurrent dictation flow).
+    private bool _pillRecordingDueToMeeting;
     private DateTime _recordingStartTime;
     private DispatcherTimer? _completingTimer;
     private DispatcherTimer? _errorTimer;
@@ -64,6 +75,47 @@ public sealed partial class PillWindow : Window
         Waveform.StyleMode = _vm.WaveformStyle;
         ColorBorder.SizeChanged += ColorBorder_SizeChanged;
         UpdateVisualState();
+        StartMeetingStatePoll();
+    }
+
+    private void StartMeetingStatePoll()
+    {
+        _meetingStatePollTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+        _meetingStatePollTimer.Tick += (_, _) =>
+        {
+            int active;
+            try { active = DimmyNative.dimmy_meeting_is_active(); }
+            catch { return; }
+            bool meetingActive = active == 1;
+
+            if (meetingActive)
+            {
+                // Pill should be in Recording while meeting is active.
+                // Don't stomp on dictation: if AppState is anything
+                // other than Idle (i.e. dictation flow already drove
+                // it), leave it alone.
+                if (_vm.CurrentState == AppState.Idle)
+                {
+                    _pillRecordingDueToMeeting = true;
+                    _vm.SetState(AppState.Recording);
+                }
+            }
+            else
+            {
+                // Meeting just ended. If WE put the pill into Recording,
+                // clean up. If dictation owns the state, leave alone.
+                if (_pillRecordingDueToMeeting && _vm.CurrentState == AppState.Recording)
+                {
+                    _pillRecordingDueToMeeting = false;
+                    _vm.SetState(AppState.Idle);
+                }
+                else if (!meetingActive && _vm.CurrentState != AppState.Recording)
+                {
+                    _pillRecordingDueToMeeting = false;
+                }
+            }
+        };
+        _meetingStatePollTimer.Start();
     }
 
     private void SetupWindow()
@@ -1060,8 +1112,29 @@ public sealed partial class PillWindow : Window
 
     private async void Stop_Click(object sender, RoutedEventArgs e)
     {
+        // Pill Stop is the universal "end whatever recording is going"
+        // affordance. Two paths converge here:
+        //   • dictation in flight  → end via TranscriptionService and
+        //     paste the transcript into the focused app.
+        //   • meeting in flight    → end via dimmy_meeting_stop and
+        //     hand off to MeetingWindow's post-process flow if open,
+        //     otherwise just log and let the on-disk artefacts speak
+        //     for themselves (the user can reopen MeetingWindow later
+        //     to view recap/transcript/audio).
+        // The pill never owns the meeting state — we ask the Rust
+        // core whether a meeting is active and route accordingly.
         try
         {
+            bool meetingActive = false;
+            try { meetingActive = DimmyNative.dimmy_meeting_is_active() == 1; }
+            catch { /* missing FFI symbol on older DLL — fall through */ }
+
+            if (meetingActive)
+            {
+                await StopMeetingFromPillAsync();
+                return;
+            }
+
             var result = await Services.TranscriptionService.StopAndProcessAsync();
             if (result.IsSuccess)
                 await TextInjectionService.PasteText(result.Text!, _vm.KeepInClipboard);
@@ -1071,5 +1144,33 @@ public sealed partial class PillWindow : Window
                 _vm.SetError("Empty transcription");
         }
         catch (Exception ex) { _vm.SetError(ex.Message); }
+    }
+
+    /// Stop a meeting from the pill. Behaviour:
+    /// - Always calls dimmy_meeting_stop on a background thread (the
+    ///   Rust side does the LLM-recap / WAV finalisation; can take a
+    ///   few seconds).
+    /// - If a MeetingWindow is open, it'll re-poll dimmy_meeting_is_active()
+    ///   and flip to Done state on its own (existing logic).
+    /// - On error: surface a brief pill error tag.
+    private async System.Threading.Tasks.Task StopMeetingFromPillAsync()
+    {
+        try
+        {
+            App.Log("Pill Stop while meeting active — calling dimmy_meeting_stop", "Pill");
+            int rc = await System.Threading.Tasks.Task.Run(() =>
+            {
+                var buf = new byte[1 << 22];
+                return DimmyNative.dimmy_meeting_stop(buf, buf.Length);
+            });
+            if (rc <= 0)
+                _vm.SetError($"Meeting stop rc={rc}");
+            App.Log($"Pill Stop meeting result rc={rc}", "Pill");
+        }
+        catch (Exception ex)
+        {
+            App.Log($"Pill Stop meeting exc: {ex.Message}", "Pill");
+            _vm.SetError(ex.Message);
+        }
     }
 }
