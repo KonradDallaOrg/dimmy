@@ -510,15 +510,15 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
         *sr = device_sr;
     }
 
-    // Resolve audio source: mic (default) | system (loopback) | mix.
-    // Stored as a string in AppConfig so the JSON config round-trips
-    // cleanly across UI / disk / FFI; AudioSource enum is the
-    // internal representation.
-    let source = st
-        .audio_source
-        .lock()
-        .map(|s| crate::audio::AudioSource::from_str_lossy(&s))
-        .unwrap_or(crate::audio::AudioSource::Mic);
+    // Dictation ALWAYS captures from the mic only — the user wants
+    // their dictated voice on the clipboard, not whatever Spotify
+    // happens to be playing. The config's `audio_source` field is a
+    // MEETING-only setting (see dimmy_meeting_start) — using it here
+    // would break dictation whenever the user is set up for Mix
+    // recording: in Mix mode the primary mic callback feeds the AEC
+    // ring instead of audio_buffer, so dimmy_stop_recording would
+    // find an empty buffer and time out with "buffer 0 samples".
+    let source = crate::audio::AudioSource::Mic;
     let _ = st.audio_tx.lock().map(|tx| {
         tx.send(AudioCommand::Start {
             device_name: selected_device,
