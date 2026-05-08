@@ -101,6 +101,12 @@ local-stt-parakeet-coreml = ["local-stt-parakeet", "ort/coreml"]
 # documented at 100-300x; intended as the Mac-only fast path while
 # Win/Linux stay on ort.
 local-stt-parakeet-fluid = ["dep:fluidaudio-rs"]
+# DeepFilterNet ML noise suppression on the mic capture path. The
+# scaffolding (`dfn.rs` module + AEC worker hook) is in place but the
+# `deep_filter` crate dependency is currently commented out due to
+# upstream build issues with `tract` feature. Re-enable by adding
+# `dep:deep_filter` here and uncommenting the dependency above.
+local-dfn = []
 local-llm = ["dep:llama-cpp-4"]
 local-llm-metal = ["local-llm", "llama-cpp-4/metal", "llama-cpp-4/dynamic-link"]
 local-llm-cuda = ["local-llm", "llama-cpp-4/cuda"]
@@ -145,6 +151,16 @@ dagc = "0.1"
 # delay-mixed echo when both streams are summed. Includes HPF+NS+AGC
 # in its `linear` pipeline.
 aec3 = "0.2.0"
+# DeepFilterNet (Rikorose/DeepFilterNet libDF) — ML-based real-time
+# speech enhancement / noise suppression. Optional behind the
+# `local-dfn` feature. Currently DEFERRED for activation: crates.io
+# 0.2.5 doesn't expose the `tract` runtime feature, and the GitHub
+# master pulls a `liquid-derive` version that fails to compile with
+# current Rust. The `dfn.rs` module is wired and feature-gated so
+# we can flip it on as soon as the upstream re-publishes a usable
+# tract-enabled crate, or we swap in `deepfilter-rt` (uses the
+# existing `ort` runtime).
+# deep_filter = { ... optional = true, features = ["tract"] }
 whisper-rs = { version = "0.16", optional = true }
 # ONNX Runtime Rust bindings — used by the local-stt-parakeet path
 # to load Parakeet TDT v3 FP32 (encoder + decoder_joint + mel

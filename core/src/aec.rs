@@ -97,8 +97,18 @@ fn run(
     };
     crate::log("[AEC] pipeline ready (10ms @ 48kHz mono, HPF+AEC3+NS+AGC2)");
 
+    // DeepFilterNet — optional ML noise suppressor stacked upstream of
+    // AEC. try_init returns None if the feature is off OR the model
+    // bundle isn't present, in which case the mic frame goes straight
+    // into AEC capture unchanged.
+    let mut dfn = crate::dfn::DfnProcessor::try_init();
+    if dfn.is_some() {
+        crate::log("[AEC] DeepFilterNet active on mic capture (DFN -> AEC3)");
+    }
+
     let mut render_frame = vec![0.0f32; FRAME_SAMPLES];
     let mut capture_frame = vec![0.0f32; FRAME_SAMPLES];
+    let mut dfn_frame = vec![0.0f32; FRAME_SAMPLES];
     let mut output_frame = vec![0.0f32; FRAME_SAMPLES];
 
     loop {
@@ -127,8 +137,16 @@ fn run(
             continue;
         }
 
-        // Process. handle_render_frame stores reference; process_capture_frame
-        // does the actual AEC against the recent render history.
+        // Stage 1: DFN noise suppression on the mic capture (if loaded).
+        // Output overwrites capture_frame so the AEC sees the cleaned
+        // signal as its near-end.
+        if let Some(ref mut p) = dfn {
+            p.process_frame(&capture_frame, &mut dfn_frame);
+            capture_frame.copy_from_slice(&dfn_frame);
+        }
+
+        // Stage 2: AEC. handle_render_frame stores reference; process_capture_frame
+        // does the actual echo cancellation against the recent render history.
         if let Err(e) = pipeline.handle_render_frame(&render_frame) {
             crate::log(&format!("[AEC] handle_render_frame: {} (skipping)", e));
             continue;
