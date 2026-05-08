@@ -1399,6 +1399,27 @@ public sealed partial class MeetingWindow : Window
         ShowToast("Meeting deleted.");
     }
 
+    /// Public entry point used by App.NotifyMeetingRecapSaved when the
+    /// pill-Stop recap pipeline completes while this window is open.
+    /// Refreshes the sidebar from disk and auto-selects the row whose
+    /// Dir matches `dir` — driving HistoryList_SelectionChanged which
+    /// loads recap.md, transcripts.txt, audio waveform into the Done
+    /// view. No-op if the row isn't found (very unlikely — the recap
+    /// path just wrote to that dir before calling us).
+    public void RefreshAndSelectDir(string dir)
+    {
+        if (string.IsNullOrEmpty(dir)) return;
+        LoadHistory();
+        foreach (var row in HistoryItems)
+        {
+            if (string.Equals(row.Dir, dir, StringComparison.OrdinalIgnoreCase))
+            {
+                HistoryList.SelectedItem = row;
+                return;
+            }
+        }
+    }
+
     private void LoadHistory()
     {
         // Snapshot current selection so it survives a refresh.

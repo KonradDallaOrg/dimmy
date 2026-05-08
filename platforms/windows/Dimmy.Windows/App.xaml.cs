@@ -1059,6 +1059,34 @@ public partial class App : Application
     /// Open the dedicated MeetingWindow (or activate it if already
     /// open). Triggered from the tray menu's "Start meeting…" item
     /// and from the Settings home → Meeting card.
+    /// Called by PillWindow.StopMeetingFromPillAsync after the recap
+    /// pipeline successfully writes recap.md / actions to disk. If a
+    /// MeetingWindow is open, dispatches it to refresh its history
+    /// sidebar and auto-select the just-completed meeting so the user
+    /// sees the recap cards populated without having to click around.
+    /// No-op when no MeetingWindow is open — the artefacts are on
+    /// disk and visible next time it's opened.
+    public void NotifyMeetingRecapSaved(string dir)
+    {
+        try
+        {
+            var w = _meetingWindow;
+            if (w == null || string.IsNullOrEmpty(dir)) return;
+            w.DispatcherQueue?.TryEnqueue(() =>
+            {
+                try { w.RefreshAndSelectDir(dir); }
+                catch (Exception ex)
+                {
+                    Log($"NotifyMeetingRecapSaved dispatch exc: {ex.Message}", "Meeting");
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            Log($"NotifyMeetingRecapSaved exc: {ex.Message}", "Meeting");
+        }
+    }
+
     public void OpenMeetingWindow()
     {
         Log("OpenMeetingWindow called", "Meeting");

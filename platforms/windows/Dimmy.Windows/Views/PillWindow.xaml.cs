@@ -1163,6 +1163,14 @@ public sealed partial class PillWindow : Window
         try
         {
             App.Log("Pill Stop while meeting active — calling dimmy_meeting_stop", "Pill");
+            // Visual feedback: pill flips to Transcribing state for the
+            // duration of the recap pipeline (~10-30 s with Anthropic
+            // Opus 4.7 adaptive thinking on a typical meeting). Without
+            // this the pill silently disappears as the meeting state
+            // poll sees is_active=0 and the user wonders if anything
+            // happened. Reverts to Idle in the finally block.
+            _vm.SetState(AppState.Transcribing);
+
             var (rc, dir, transcript) = await System.Threading.Tasks.Task.Run(() =>
             {
                 var buf = new byte[1 << 22];
@@ -1187,24 +1195,30 @@ public sealed partial class PillWindow : Window
                 return;
             }
 
-            // Fire the recap pipeline on a background thread. We don't
-            // await the result on the UI critical path — the user has
-            // closed MeetingWindow, the artefacts will be visible next
-            // time they open it. SetError surfaces a quick failure tag.
+            // Fire the recap pipeline. We AWAIT it here so the pill
+            // stays in Transcribing state with its spinner visible
+            // until the LLM call returns — gives the user real visual
+            // feedback ("yes, something is happening"). Without this
+            // the pill flipped back to Idle in 1-2 s while the recap
+            // ran silently in the background, and the user had no
+            // signal that the recap was being generated.
             if (!string.IsNullOrEmpty(dir) && !string.IsNullOrWhiteSpace(transcript))
             {
-                _ = System.Threading.Tasks.Task.Run(async () =>
+                var result = await Services.MeetingPostProcessService.RunRecapAsync(dir, transcript);
+                if (!result.Success)
                 {
-                    var result = await Services.MeetingPostProcessService.RunRecapAsync(dir, transcript);
-                    if (!result.Success)
-                    {
-                        App.Log($"Pill Stop: recap failed: {result.Error}", "Pill");
-                    }
-                    else
-                    {
-                        App.Log($"Pill Stop: recap saved to {result.Dir}", "Pill");
-                    }
-                });
+                    App.Log($"Pill Stop: recap failed: {result.Error}", "Pill");
+                    _vm.SetError(result.Error ?? "Recap failed");
+                }
+                else
+                {
+                    App.Log($"Pill Stop: recap saved to {result.Dir}", "Pill");
+                    // If MeetingWindow is open, refresh its sidebar +
+                    // jump straight to the just-finished meeting so the
+                    // user sees the recap cards populated without
+                    // having to click anything.
+                    App.Instance?.NotifyMeetingRecapSaved(result.Dir);
+                }
             }
             else
             {
@@ -1215,6 +1229,17 @@ public sealed partial class PillWindow : Window
         {
             App.Log($"Pill Stop meeting exc: {ex.Message}", "Pill");
             _vm.SetError(ex.Message);
+        }
+        finally
+        {
+            // Always exit the Transcribing state — Idle on success, Error
+            // already sets its own state.
+            if (_vm.CurrentState == AppState.Transcribing)
+                _vm.SetState(AppState.Idle);
+            // The meeting just ended; clear our internal flag so the
+            // meeting-state poll doesn't immediately push us back to
+            // Recording on the next tick.
+            _pillRecordingDueToMeeting = false;
         }
     }
 }
