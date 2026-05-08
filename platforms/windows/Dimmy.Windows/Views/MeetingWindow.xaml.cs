@@ -1113,6 +1113,18 @@ public sealed partial class MeetingWindow : Window
         return sb.ToString();
     }
 
+    /// Internal-visibility wrappers so MeetingPostProcessService can
+    /// reuse the prompt + parser without duplicating the strings.
+    /// Keeping the originals private static and exposing thin pass-
+    /// throughs keeps the call surface explicit.
+    internal static string BuildStructuredRecapPromptInternal(string transcript) =>
+        BuildStructuredRecapPrompt(transcript);
+    internal static Dictionary<string, string> ParseStructuredRecapInternal(string raw) =>
+        ParseStructuredRecap(raw);
+    internal static string BuildMarkdownFromSectionsInternal(Dictionary<string, string> s) =>
+        BuildMarkdownFromSections(s);
+    internal static string PickRecapModelInternal() => PickRecapModel();
+
     private static string PickRecapModel()
     {
         // Order of precedence:

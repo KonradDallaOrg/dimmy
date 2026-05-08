@@ -1146,26 +1146,70 @@ public sealed partial class PillWindow : Window
         catch (Exception ex) { _vm.SetError(ex.Message); }
     }
 
-    /// Stop a meeting from the pill. Behaviour:
-    /// - Always calls dimmy_meeting_stop on a background thread (the
-    ///   Rust side does the LLM-recap / WAV finalisation; can take a
-    ///   few seconds).
-    /// - If a MeetingWindow is open, it'll re-poll dimmy_meeting_is_active()
-    ///   and flip to Done state on its own (existing logic).
+    /// Stop a meeting from the pill, then trigger the recap pipeline.
+    /// Behaviour:
+    /// - dimmy_meeting_stop on a background thread → returns transcript
+    ///   + dir as JSON (the Rust side finalises WAVs, deletes the
+    ///   .recording marker, joins the worker thread).
+    /// - Hand off to MeetingPostProcessService.RunRecapAsync which
+    ///   builds the Notion-style prompt, calls the LLM, and persists
+    ///   recap.md + actions plaintext via dimmy_meeting_save_post_process.
+    /// - If MeetingWindow is open, it re-polls dimmy_meeting_is_active
+    ///   and flips to Done state independently — no UI sync needed
+    ///   from here.
     /// - On error: surface a brief pill error tag.
     private async System.Threading.Tasks.Task StopMeetingFromPillAsync()
     {
         try
         {
             App.Log("Pill Stop while meeting active — calling dimmy_meeting_stop", "Pill");
-            int rc = await System.Threading.Tasks.Task.Run(() =>
+            var (rc, dir, transcript) = await System.Threading.Tasks.Task.Run(() =>
             {
                 var buf = new byte[1 << 22];
-                return DimmyNative.dimmy_meeting_stop(buf, buf.Length);
+                int code = DimmyNative.dimmy_meeting_stop(buf, buf.Length);
+                if (code <= 0) return (code, "", "");
+                var json = System.Text.Encoding.UTF8.GetString(buf, 0, code);
+                try
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(json);
+                    var root = doc.RootElement;
+                    var d = root.GetProperty("dir").GetString() ?? "";
+                    var t = root.GetProperty("transcript").GetString() ?? "";
+                    return (code, d, t);
+                }
+                catch { return (code, "", ""); }
             });
+            App.Log($"Pill Stop meeting rc={rc} dir='{dir}' transcript={transcript.Length} chars", "Pill");
+
             if (rc <= 0)
+            {
                 _vm.SetError($"Meeting stop rc={rc}");
-            App.Log($"Pill Stop meeting result rc={rc}", "Pill");
+                return;
+            }
+
+            // Fire the recap pipeline on a background thread. We don't
+            // await the result on the UI critical path — the user has
+            // closed MeetingWindow, the artefacts will be visible next
+            // time they open it. SetError surfaces a quick failure tag.
+            if (!string.IsNullOrEmpty(dir) && !string.IsNullOrWhiteSpace(transcript))
+            {
+                _ = System.Threading.Tasks.Task.Run(async () =>
+                {
+                    var result = await Services.MeetingPostProcessService.RunRecapAsync(dir, transcript);
+                    if (!result.Success)
+                    {
+                        App.Log($"Pill Stop: recap failed: {result.Error}", "Pill");
+                    }
+                    else
+                    {
+                        App.Log($"Pill Stop: recap saved to {result.Dir}", "Pill");
+                    }
+                });
+            }
+            else
+            {
+                App.Log("Pill Stop: no transcript / dir — skipping recap", "Pill");
+            }
         }
         catch (Exception ex)
         {
