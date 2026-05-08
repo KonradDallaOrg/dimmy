@@ -351,6 +351,14 @@
                                Text=""/>
                   </StackPanel>
                   <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
+                    <Button x:Name="RegenTranscriptBtn" Click="RegenerateTranscript_Click"
+                            ToolTipService.ToolTip="(Re)generate transcript from audio">
+                      <FontIcon Glyph="&#xE720;" FontSize="13"/>
+                    </Button>
+                    <Button x:Name="RegenRecapBtn" Click="RegenerateRecap_Click"
+                            ToolTipService.ToolTip="(Re)generate recap from transcript">
+                      <FontIcon Glyph="&#xE8D4;" FontSize="13"/>
+                    </Button>
                     <Button x:Name="CopyRecapBtn" Click="CopyRecap_Click"
                             ToolTipService.ToolTip="Copy recap to clipboard">
                       <FontIcon Glyph="&#xE8C8;" FontSize="13"/>

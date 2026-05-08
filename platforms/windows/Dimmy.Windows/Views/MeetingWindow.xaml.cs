@@ -1363,6 +1363,154 @@ public sealed partial class MeetingWindow : Window
         }
     }
 
+    // ── Regenerate transcript / recap from on-disk artifacts ─────
+    //
+    // The Done view is reached two ways: (1) right after a fresh stop,
+    // (2) by selecting a row in the sidebar history. In both cases the
+    // backing files live in `_viewingMeetingDir`. These handlers reuse
+    // the existing `dimmy_transcribe_file` FFI (which itself chunks at
+    // ~25 MB internally for cloud providers) and the existing
+    // `GeneratePostProcessAsync` recap pipeline — they're "fix-up"
+    // affordances when the user catches that one of those steps failed
+    // or was disabled at record time.
+
+    private async void RegenerateTranscript_Click(object sender, RoutedEventArgs e)
+    {
+        var dir = _viewingMeetingDir ?? _activeMeetingDir;
+        if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir))
+        {
+            ShowToast("No meeting selected.");
+            return;
+        }
+        if (_recordingActive)
+        {
+            ShowToast("Stop the current recording first.");
+            return;
+        }
+
+        var btn = sender as Microsoft.UI.Xaml.Controls.Button;
+        if (btn != null) btn.IsEnabled = false;
+        try
+        {
+            ShowToast("Transcribing audio…");
+            var merged = await Task.Run(() => TranscribeMeetingDir(dir));
+            if (string.IsNullOrWhiteSpace(merged))
+            {
+                ShowToast("No audio found in meeting folder.");
+                return;
+            }
+
+            var txtPath = Path.Combine(dir, "transcripts.txt");
+            await File.WriteAllTextAsync(txtPath, merged);
+            RawTranscriptText.Text = HumanizeTranscript(merged);
+            ShowToast("Transcript regenerated.");
+        }
+        catch (Exception ex)
+        {
+            App.Log($"regen transcript exc: {ex}", "Meeting");
+            ShowToast($"Regenerate transcript failed: {ex.Message}");
+        }
+        finally
+        {
+            if (btn != null) btn.IsEnabled = true;
+        }
+    }
+
+    private async void RegenerateRecap_Click(object sender, RoutedEventArgs e)
+    {
+        var dir = _viewingMeetingDir ?? _activeMeetingDir;
+        if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir))
+        {
+            ShowToast("No meeting selected.");
+            return;
+        }
+
+        var txtPath = Path.Combine(dir, "transcripts.txt");
+        if (!File.Exists(txtPath))
+        {
+            ShowToast("No transcript yet — regenerate transcript first.");
+            return;
+        }
+
+        var btn = sender as Microsoft.UI.Xaml.Controls.Button;
+        if (btn != null) btn.IsEnabled = false;
+        try
+        {
+            var transcript = await File.ReadAllTextAsync(txtPath);
+            if (string.IsNullOrWhiteSpace(transcript))
+            {
+                ShowToast("Transcript is empty — regenerate transcript first.");
+                return;
+            }
+            ClearDoneCards();
+            ShowToast("Generating recap…");
+            await GeneratePostProcessAsync(dir, transcript);
+            ShowToast("Recap regenerated.");
+        }
+        catch (Exception ex)
+        {
+            App.Log($"regen recap exc: {ex}", "Meeting");
+            ShowToast($"Regenerate recap failed: {ex.Message}");
+        }
+        finally
+        {
+            if (btn != null) btn.IsEnabled = true;
+        }
+    }
+
+    /// Run STT over whatever audio files exist in `dir`, returning the
+    /// merged transcript. Mix recordings keep mic and system as separate
+    /// WAVs and we label them so the LLM downstream can attribute lines;
+    /// older recordings have only `audio.wav` and we transcribe that.
+    /// Returns "" if no audio file is present.
+    private static string TranscribeMeetingDir(string dir)
+    {
+        var sb = new System.Text.StringBuilder();
+        var buf = new byte[1 << 22]; // 4 MB transcript ceiling
+
+        string TranscribeOne(string path)
+        {
+            int rc = DimmyNative.dimmy_transcribe_file(path, buf, buf.Length);
+            if (rc <= 0)
+            {
+                App.Log($"transcribe_file '{Path.GetFileName(path)}' rc={rc}", "Meeting");
+                return "";
+            }
+            return System.Text.Encoding.UTF8.GetString(buf, 0, rc);
+        }
+
+        var micPath = Path.Combine(dir, "audio_mic.wav");
+        var systemPath = Path.Combine(dir, "audio_system.wav");
+        var monoPath = Path.Combine(dir, "audio.wav");
+
+        bool hasMic = File.Exists(micPath) && new FileInfo(micPath).Length > 44;
+        bool hasSystem = File.Exists(systemPath) && new FileInfo(systemPath).Length > 44;
+
+        if (hasMic || hasSystem)
+        {
+            if (hasMic)
+            {
+                var mic = TranscribeOne(micPath);
+                if (!string.IsNullOrWhiteSpace(mic))
+                    sb.AppendLine("[mic]").AppendLine(mic.Trim()).AppendLine();
+            }
+            if (hasSystem)
+            {
+                var sys = TranscribeOne(systemPath);
+                if (!string.IsNullOrWhiteSpace(sys))
+                    sb.AppendLine("[system]").AppendLine(sys.Trim()).AppendLine();
+            }
+        }
+        else if (File.Exists(monoPath) && new FileInfo(monoPath).Length > 44)
+        {
+            var mono = TranscribeOne(monoPath);
+            if (!string.IsNullOrWhiteSpace(mono))
+                sb.Append(mono.Trim());
+        }
+
+        return sb.ToString().TrimEnd();
+    }
+
     // ── Helpers ────────────────────────────────────────────────────
 
     private static string FormatDuration(double secs)
