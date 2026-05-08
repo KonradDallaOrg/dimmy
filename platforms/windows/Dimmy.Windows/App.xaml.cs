@@ -407,6 +407,14 @@ public partial class App : Application
             {
                 if (command == "toggle-pill") { TogglePill(); return; }
                 if (command == "open-settings") { OpenSettings(); return; }
+                if (command.StartsWith("open-settings:", StringComparison.Ordinal))
+                {
+                    // dimmy://settings/<tag> deep link — open Settings
+                    // and navigate to the named nav tag (e.g. "license").
+                    var tag = command["open-settings:".Length..];
+                    OpenSettingsWindowAt(tag);
+                    return;
+                }
                 if (command == "open-meeting") { OpenMeetingWindow(); return; }
                 if (command == "quit") { Quit(); return; }
                 if (command.StartsWith("set-style:", StringComparison.Ordinal))
@@ -517,9 +525,34 @@ public partial class App : Application
             var raw = args[i];
             if (string.IsNullOrEmpty(raw)) continue;
             if (!raw.StartsWith("dimmy://", StringComparison.OrdinalIgnoreCase)) continue;
+
+            // First try the activation flow (license magic links).
             var (code, token) = UrlSchemeRegistrar.ParseActivationUrl(raw);
             if (code is not null) return $"activate-code:{code}";
             if (token is not null) return $"activate-token:{token}";
+
+            // Then fall through to host-only "open this surface" routes.
+            // dimmy://meeting        -> open the Meeting window
+            // dimmy://settings       -> open Settings (default tab)
+            // dimmy://settings/license -> open Settings on the License tab
+            // The pipe command IDs match HandleForwardedCommand's switch
+            // (line 410-ish in this file). Add a new host here +
+            // matching case there to expose more deeplinks.
+            if (Uri.TryCreate(raw, UriKind.Absolute, out var uri)
+                && string.Equals(uri.Scheme, "dimmy", StringComparison.OrdinalIgnoreCase))
+            {
+                var host = uri.Host?.ToLowerInvariant();
+                switch (host)
+                {
+                    case "meeting":
+                        return "open-meeting";
+                    case "settings":
+                        var path = uri.AbsolutePath?.Trim('/').ToLowerInvariant();
+                        if (!string.IsNullOrEmpty(path))
+                            return $"open-settings:{path}";
+                        return "open-settings";
+                }
+            }
         }
         return null;
     }
