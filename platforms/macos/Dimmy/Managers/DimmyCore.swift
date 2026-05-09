@@ -675,6 +675,16 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
     case "recording_cancelled":
         appState.recordingState = .idle
 
+    case "meeting_state":
+        // Replaces the 0.5 s `meetingStatePollTimer` on PillWindowController.
+        // Rust emits this exactly once per state transition (start /
+        // pause / resume / stop), so we get instant updates with zero
+        // idle CPU. See CLAUDE.md "No FFI-state polling rule".
+        let active = (payload["active"] as? Bool) ?? false
+        let paused = (payload["paused"] as? Bool) ?? false
+        if appState.meetingActive != active { appState.meetingActive = active }
+        if appState.meetingIsPaused != paused { appState.meetingIsPaused = paused }
+
     case "model_download_progress":
         if let downloaded = payload["downloaded"] as? Int,
            let total = payload["total"] as? Int,

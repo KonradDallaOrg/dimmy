@@ -48,6 +48,20 @@ pub fn emit_event(event_name: &str, payload_json: &str) {
     }
 }
 
+/// Emit a `meeting_state` event with the current (active, paused) flags
+/// so the native UI doesn't have to poll `dimmy_meeting_is_active` /
+/// `dimmy_meeting_is_paused` to mirror state in the pill / taskbar.
+///
+/// Pattern: every meeting state transition (start / stop / pause /
+/// resume) calls this exactly once. UIs subscribe via
+/// `dimmy_set_event_callback` and update their view state on the
+/// envelope, NOT on a `DispatcherTimer` / `NSTimer` polling loop. See
+/// CLAUDE.md "No FFI-state polling rule".
+fn emit_meeting_state_event(active: bool, paused: bool) {
+    let payload = format!(r#"{{"active":{},"paused":{}}}"#, active, paused);
+    emit_event("meeting_state", &payload);
+}
+
 // ── Helper: write string into caller-provided buffer ────────────────
 
 fn write_to_buf(s: &str, buf: *mut c_char, buf_len: c_int) -> c_int {
@@ -2506,6 +2520,7 @@ pub unsafe extern "C" fn dimmy_meeting_start(out_buf: *mut c_char, buf_len: c_in
         *g = Some(session);
     }
     log(&format!("[Meeting] active id={}", id));
+    emit_meeting_state_event(true, false);
     write_to_buf(&id, out_buf, buf_len)
 }
 
@@ -2533,6 +2548,11 @@ pub unsafe extern "C" fn dimmy_meeting_stop(out_buf: *mut c_char, buf_len: c_int
             None => return -1,
         }
     };
+    // Notify subscribers BEFORE the (potentially seconds-long) drain
+    // happens — the pill should leave the meeting-active visual the
+    // instant the user clicked Stop, not after the worker finishes
+    // its last STT chunk.
+    emit_meeting_state_event(false, false);
 
     // Stop audio capture in parallel with the worker drain — the
     // worker's stop() blocks for up to one chunk's transcribe time
@@ -2655,6 +2675,7 @@ pub extern "C" fn dimmy_meeting_pause() -> c_int {
         Ok(g) => match g.as_ref() {
             Some(s) => {
                 if s.pause() {
+                    emit_meeting_state_event(true, true);
                     1
                 } else {
                     0
@@ -2674,6 +2695,7 @@ pub extern "C" fn dimmy_meeting_resume() -> c_int {
         Ok(g) => match g.as_ref() {
             Some(s) => {
                 if s.resume() {
+                    emit_meeting_state_event(true, false);
                     1
                 } else {
                     0
@@ -5387,6 +5409,139 @@ mod tests {
         if let Ok(mut guard) = EVENT_CALLBACK.lock() {
             *guard = None;
         }
+    }
+
+    // ── meeting_state event tests ──────────────────────────────────
+    // Replaces the 500 ms `_meetingStatePollTimer` (Win) / 0.5 s
+    // `meetingStatePollTimer` (Mac) on the pill. Each meeting state
+    // transition fires a `meeting_state` envelope so the host UI
+    // updates exactly when state changes — no wasted FFI calls per
+    // second when nothing's happening, and no perceived latency.
+
+    use std::sync::OnceLock as TestOnceLock;
+
+    fn captured_events_slot() -> &'static Mutex<Vec<String>> {
+        static SLOT: TestOnceLock<Mutex<Vec<String>>> = TestOnceLock::new();
+        SLOT.get_or_init(|| Mutex::new(Vec::new()))
+    }
+
+    extern "C" fn capture_event_to_slot(json_ptr: *const c_char) {
+        if json_ptr.is_null() {
+            return;
+        }
+        let cstr = unsafe { CStr::from_ptr(json_ptr) };
+        if let Ok(s) = cstr.to_str() {
+            if let Ok(mut v) = captured_events_slot().lock() {
+                v.push(s.to_string());
+            }
+        }
+    }
+
+    fn reset_event_capture() {
+        if let Ok(mut v) = captured_events_slot().lock() {
+            v.clear();
+        }
+        dimmy_set_event_callback(capture_event_to_slot);
+    }
+
+    fn drain_event_capture() -> Vec<String> {
+        let out = captured_events_slot()
+            .lock()
+            .map(|v| v.clone())
+            .unwrap_or_default();
+        if let Ok(mut guard) = EVENT_CALLBACK.lock() {
+            *guard = None;
+        }
+        out
+    }
+
+    fn last_meeting_state_event(events: &[String]) -> Option<(bool, bool)> {
+        for ev in events.iter().rev() {
+            let v: serde_json::Value = match serde_json::from_str(ev) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if v.get("event").and_then(|e| e.as_str()) == Some("meeting_state") {
+                let p = v.get("payload")?;
+                let active = p.get("active")?.as_bool()?;
+                let paused = p.get("paused")?.as_bool()?;
+                return Some((active, paused));
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn emit_meeting_state_event_emits_envelope_on_running() {
+        reset_event_capture();
+        emit_meeting_state_event(true, false);
+        let events = drain_event_capture();
+        let state =
+            last_meeting_state_event(&events).expect("meeting_state event must be in the capture");
+        assert_eq!(state, (true, false), "running ⇒ active=true, paused=false");
+    }
+
+    #[test]
+    fn emit_meeting_state_event_emits_envelope_on_paused() {
+        reset_event_capture();
+        emit_meeting_state_event(true, true);
+        let events = drain_event_capture();
+        let state =
+            last_meeting_state_event(&events).expect("meeting_state event must be in the capture");
+        assert_eq!(state, (true, true), "paused ⇒ active=true, paused=true");
+    }
+
+    #[test]
+    fn emit_meeting_state_event_emits_envelope_on_stopped() {
+        reset_event_capture();
+        emit_meeting_state_event(false, false);
+        let events = drain_event_capture();
+        let state =
+            last_meeting_state_event(&events).expect("meeting_state event must be in the capture");
+        assert_eq!(
+            state,
+            (false, false),
+            "stopped ⇒ active=false, paused=false"
+        );
+    }
+
+    #[test]
+    fn meeting_pause_resume_no_meeting_does_not_emit_event() {
+        // Without an active meeting, dimmy_meeting_pause / _resume must
+        // be silent no-ops — no event fires (avoids confusing the host
+        // UI with bogus "paused" notifications when nothing is running).
+        reset_event_capture();
+        let pause_rc = dimmy_meeting_pause();
+        let resume_rc = dimmy_meeting_resume();
+        let events = drain_event_capture();
+
+        assert_eq!(pause_rc, 0, "pause without meeting must return 0");
+        assert_eq!(resume_rc, 0, "resume without meeting must return 0");
+        assert_eq!(
+            last_meeting_state_event(&events),
+            None,
+            "no meeting_state event should fire on no-op transitions"
+        );
+    }
+
+    #[test]
+    fn emit_meeting_state_payload_is_valid_json_with_correct_keys() {
+        reset_event_capture();
+        emit_meeting_state_event(true, true);
+        let events = drain_event_capture();
+        assert!(!events.is_empty(), "must capture at least one event");
+        let v: serde_json::Value =
+            serde_json::from_str(&events[events.len() - 1]).expect("envelope must be valid JSON");
+        assert_eq!(v["event"], "meeting_state");
+        assert_eq!(v["payload"]["active"], true);
+        assert_eq!(v["payload"]["paused"], true);
+        // Hard-asserts the payload SHAPE the C# / Swift / GTK4 host
+        // parsers depend on — drift would silently break the no-poll
+        // pill state mirror without surfacing during compilation.
+        assert!(
+            v["payload"].as_object().unwrap().len() == 2,
+            "payload must have exactly active + paused keys"
+        );
     }
 
     // ── Negative space: invalid input returns error codes ──────────

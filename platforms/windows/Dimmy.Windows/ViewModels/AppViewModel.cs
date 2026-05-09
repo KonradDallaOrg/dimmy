@@ -47,6 +47,18 @@ public partial class AppViewModel : ObservableObject
     [ObservableProperty] private bool _liveCaptionsEnabled = true;
     [ObservableProperty] private int _chunkCurrent;
     [ObservableProperty] private int _chunkTotal;
+
+    /// <summary>True while a meeting recording is active in the Rust
+    /// core. Updated ONLY in response to the `meeting_state` envelope
+    /// from `dimmy_set_event_callback` — never via polling. Replaces
+    /// the previous 500 ms <c>_meetingStatePollTimer</c> on the pill
+    /// (CLAUDE.md "No FFI-state polling rule").</summary>
+    [ObservableProperty] private bool _meetingActive;
+
+    /// <summary>True while the active meeting is paused. Same source
+    /// as <see cref="MeetingActive"/> — set from the `meeting_state`
+    /// envelope, never polled.</summary>
+    [ObservableProperty] private bool _meetingPaused;
     [ObservableProperty] private string _llmStyle = "off";
     [ObservableProperty] private string _deviceName = "";
     [ObservableProperty] private string _language = "";
@@ -193,6 +205,14 @@ public partial class AppViewModel : ObservableObject
                 case "error":
                     var msg = payload.GetProperty("message").GetString() ?? "Unknown error";
                     SetError(msg);
+                    break;
+                case "meeting_state":
+                    // Replaces the 500 ms _meetingStatePollTimer on
+                    // PillWindow. Rust emits this exactly once per state
+                    // transition (start / pause / resume / stop), so we
+                    // get instant updates with zero idle CPU.
+                    MeetingActive = payload.GetProperty("active").GetBoolean();
+                    MeetingPaused = payload.GetProperty("paused").GetBoolean();
                     break;
             }
         }
