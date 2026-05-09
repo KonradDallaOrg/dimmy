@@ -231,10 +231,10 @@ public static class JumpListService
                     // (null icon) → the EXE's own dimmy.ico.
                     Task("Toggle pill",    "toggle-pill",   icon: null),
                     // Open the dedicated long-form meeting window —
-                    // streamed-to-disk recording + LLM recap. Uses the
-                    // "settings" gear icon as a sensible neutral; a
-                    // dedicated meeting glyph is a nice-to-have.
-                    Task("Start meeting…", "open-meeting",  icon: SettingsIcon()),
+                    // streamed-to-disk recording + LLM recap. Microphone
+                    // glyph reads as a distinct action vs the three-dots
+                    // Settings entry below.
+                    Task("Start meeting…", "open-meeting",  icon: MeetingIcon()),
                     // Settings = three horizontal dots (universal
                     // "more / configure" affordance, reads cleaner
                     // than a custom-drawn gear at 16px).
@@ -725,6 +725,7 @@ public static class JumpListService
 
     private static string? _quitIconPath;
     private static string? _settingsIconPath;
+    private static string? _meetingIconPath;
 
     /// <summary>Path to a 32×32 grey-X close glyph. Mirrors the
     /// "destructive but neutral" affordance Spotify / Slack use for
@@ -749,6 +750,123 @@ public static class JumpListService
             return path;
         }
         catch (Exception ex) { Log($"QuitIcon: {ex.Message}"); return ""; }
+    }
+
+    /// <summary>Path to a 32×32 microphone glyph for the "Start meeting"
+    /// jump-list entry. Distinct from the "Settings" three-dots so the
+    /// Meeting row reads as a different action at a glance instead of
+    /// looking like a sub-item of Settings.</summary>
+    private static string MeetingIcon()
+    {
+        if (_meetingIconPath is not null && File.Exists(_meetingIconPath))
+            return _meetingIconPath;
+        var dir = Path.Combine(Path.GetTempPath(), "dimmy_misc_icons_v2");
+        try { Directory.CreateDirectory(dir); } catch { return ""; }
+        // _v3 in the filename so existing _v2 caches don't shadow the
+        // colour change. Recording-red mic — same hue convention as the
+        // pill's "Recording" state (Crimson) so the visual link
+        // jumplist-row → recording-state-in-pill is immediate.
+        var path = Path.Combine(dir, "meeting_mic_v3_red.ico");
+        try
+        {
+            if (!File.Exists(path))
+                // BGR order: b=0x3C, g=0x14, r=0xDC -> #DC143C "crimson",
+                // matches the pill recording-state Crimson + the
+                // RecordingBar Stop button background.
+                File.WriteAllBytes(path, BuildMicIco(32, 0x3C, 0x14, 0xDC));
+            _meetingIconPath = path;
+            return path;
+        }
+        catch (Exception ex) { Log($"MeetingIcon: {ex.Message}"); return ""; }
+    }
+
+    /// <summary>Build a 32×32 microphone glyph: vertical capsule head +
+    /// short stem + horizontal base. Anti-aliased via 4×4 super-sampling
+    /// (same routine as BuildDotsIco / BuildXIco). Proportions tuned so
+    /// each part remains legible after Windows' 32→16 downscale —
+    /// thicker stem, wider base than a literal mic outline.</summary>
+    private static byte[] BuildMicIco(int size, byte b, byte g, byte r)
+    {
+        var pixels = new byte[size * size * 4];
+        const int Samples = 4;
+
+        // Capsule (mic head): 28% width × 50% height, vertically rounded ends.
+        double capLeft = size * 0.36;
+        double capRight = size * 0.64;
+        double capTop = size * 0.16;
+        double capBottom = size * 0.62;
+        double capCx = (capLeft + capRight) / 2.0;
+        double capRadius = (capRight - capLeft) / 2.0;
+        // Stem connecting capsule bottom to base.
+        double stemLeft = size * 0.475;
+        double stemRight = size * 0.525;
+        double stemTop = size * 0.62;
+        double stemBottom = size * 0.82;
+        // Horizontal base (mic stand foot).
+        double baseLeft = size * 0.30;
+        double baseRight = size * 0.70;
+        double baseTop = size * 0.82;
+        double baseBottom = size * 0.88;
+
+        for (int y = 0; y < size; y++)
+        {
+            for (int x = 0; x < size; x++)
+            {
+                int hits = 0;
+                for (int sy = 0; sy < Samples; sy++)
+                {
+                    for (int sx = 0; sx < Samples; sx++)
+                    {
+                        double px = x + (sx + 0.5) / Samples;
+                        double py = y + (sy + 0.5) / Samples;
+                        bool inside = false;
+
+                        // Capsule body (rounded rectangle).
+                        if (px >= capLeft && px <= capRight && py >= capTop && py <= capBottom)
+                        {
+                            if (py >= capTop + capRadius && py <= capBottom - capRadius)
+                            {
+                                inside = true;
+                            }
+                            else
+                            {
+                                double curveCy = py < capTop + capRadius
+                                    ? capTop + capRadius
+                                    : capBottom - capRadius;
+                                double dx = px - capCx;
+                                double dy = py - curveCy;
+                                if (dx * dx + dy * dy <= capRadius * capRadius)
+                                    inside = true;
+                            }
+                        }
+                        // Stem (vertical line below capsule).
+                        if (!inside
+                            && px >= stemLeft && px <= stemRight
+                            && py >= stemTop && py <= stemBottom)
+                        {
+                            inside = true;
+                        }
+                        // Base (horizontal line at the bottom).
+                        if (!inside
+                            && px >= baseLeft && px <= baseRight
+                            && py >= baseTop && py <= baseBottom)
+                        {
+                            inside = true;
+                        }
+
+                        if (inside) hits++;
+                    }
+                }
+                if (hits == 0) continue;
+                int alpha = (hits * 255) / (Samples * Samples);
+                int i = (y * size + x) * 4;
+                pixels[i] = (byte)(b * alpha / 255);
+                pixels[i + 1] = (byte)(g * alpha / 255);
+                pixels[i + 2] = (byte)(r * alpha / 255);
+                pixels[i + 3] = (byte)alpha;
+            }
+        }
+        return EncodeBgraAsIco(size, pixels);
     }
 
     /// <summary>Path to a 32×32 "•••" three-horizontal-dots glyph.

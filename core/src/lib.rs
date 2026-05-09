@@ -4,10 +4,12 @@
 // silently break the build.
 #![recursion_limit = "256"]
 
+pub mod aec;
 pub mod app_rules;
 pub mod audio;
 pub mod autostart;
 pub mod chunked_stt;
+pub mod dfn;
 pub mod error;
 pub mod ffi;
 pub mod filler;
@@ -45,6 +47,7 @@ pub mod parakeet;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub mod parakeet_fluid;
 pub mod preprocess;
+pub mod process_loopback;
 pub mod provider;
 pub mod telemetry;
 pub mod transcribe;
@@ -73,6 +76,10 @@ const STOP_TAIL_MS: u64 = 300;
 
 /// Default shortcut: fn on macOS (simple, doesn't conflict),
 /// Win+Alt on Windows/Linux (safe because Win+Alt isn't commonly used).
+fn default_audio_source() -> String {
+    "mic".to_string()
+}
+
 fn default_shortcut() -> &'static str {
     #[cfg(target_os = "macos")]
     {
@@ -315,6 +322,13 @@ pub struct AppConfig {
     pub llm_api_model: String,
     pub llm_use_same_key: bool,
     pub llm_log_enabled: bool,
+    /// Model ID override for the meeting recap call (empty = use the
+    /// provider-default flagship reasoning model picked by the C# side
+    /// via PickRecapModel — claude-opus-4-7 / gemini-3-1-pro / gpt-5).
+    /// Lets the user dial down to faster/cheaper models (e.g.
+    /// claude-haiku-4-5, gemini-2-5-flash) when meeting recap quality
+    /// matters less than turnaround time or cost.
+    pub recap_model_override: String,
     pub chunk_streaming_enabled: bool,
     pub preprocessing_enabled: bool,
     pub audio_debug_enabled: bool,
@@ -368,6 +382,31 @@ pub struct AppConfig {
     pub keep_in_clipboard: bool,
     /// Input gain (0.0-2.0, default 1.0). Attenuate hot mics (e.g. BT headsets).
     pub input_gain: f32,
+    /// Loopback (system audio) makeup gain (0.5-4.0, default 2.0).
+    /// WASAPI loopback captures post-volume samples — if Windows
+    /// volume / per-app Volume Mixer / BT codec are conservative, the
+    /// raw signal lands at ~0.1-0.3 peak, way below the mic which
+    /// peaks at 0.5-0.9 on consonants. In Mix mode the mic dominates
+    /// the sum and system audio sounds "bassissimo". This knob
+    /// multiplies the loopback samples in the secondary stream
+    /// callback BEFORE they hit the buffer / AEC ring; soft-clipped
+    /// via tanh so peaks don't distort.
+    pub loopback_gain: f32,
+    /// Meeting chunk window in seconds. The meeting worker waits for
+    /// this much new audio before firing one STT inference call.
+    /// Longer chunks = better LLM context per segment, fewer API
+    /// calls (cheaper on cloud), but later visibility of the live
+    /// transcript. Range 5.0-60.0, default 15.0. Cloud providers
+    /// accept up to ~25 MB so 60 s @ 16k mono int16 (~1.9 MB) is
+    /// well within limits.
+    pub meeting_chunk_secs: f32,
+    /// What to capture: "mic" (default), "system" (loopback — what's
+    /// playing through the speakers), or "mix" (both summed in time).
+    /// System / Mix are Windows-only for now; on Mac/Linux they fall
+    /// back to mic with a log warning. AppConfig isn't serde-derived
+    /// (manual JSON I/O); the default is applied in the loader at
+    /// line ~665.
+    pub audio_source: String,
     // Window position — bottom-right anchor in logical pixels
     pub window_anchor_right: Option<f64>,
     pub window_anchor_bottom: Option<f64>,
@@ -407,6 +446,7 @@ impl Default for AppConfig {
             llm_api_model: DEFAULT_LLM_MODEL.to_string(),
             llm_use_same_key: true,
             llm_log_enabled: false,
+            recap_model_override: String::new(),
             chunk_streaming_enabled: false,
             preprocessing_enabled: true,
             audio_debug_enabled: false,
@@ -433,6 +473,19 @@ impl Default for AppConfig {
             overlay_position: "Bottom Right".to_string(),
             keep_in_clipboard: false,
             input_gain: 0.5,
+            // 1.0 = no makeup (passthrough). The "system audio
+            // bassissimo" complaint that justified earlier defaults
+            // (1.5 / 2.0) turned out to be Volume-Mixer-dependent:
+            // when Teams / browser sit at 70-100% the loopback
+            // already lands at 0.7-1.0 peak and any boost saturates
+            // tanh. When they're at 30-50% the user can dial this up
+            // to 1.5 / 2.0 / 3.0 via config without recompiling. Tanh
+            // soft-clip stays in the callback as a safety net for
+            // user-boosted setups; at gain=1.0 it's effectively
+            // identity for in-range samples.
+            loopback_gain: 1.0,
+            meeting_chunk_secs: 15.0,
+            audio_source: default_audio_source(),
             window_anchor_right: None,
             window_anchor_bottom: None,
             stats_total_words: 0,
@@ -488,6 +541,7 @@ pub fn save_config_file(cfg: &AppConfig) {
             "llm_api_model": cfg.llm_api_model,
             "llm_use_same_key": cfg.llm_use_same_key,
             "llm_log_enabled": cfg.llm_log_enabled,
+            "recap_model_override": cfg.recap_model_override,
             "chunk_streaming_enabled": cfg.chunk_streaming_enabled,
             "preprocessing_enabled": cfg.preprocessing_enabled,
             "audio_debug_enabled": cfg.audio_debug_enabled,
@@ -509,6 +563,9 @@ pub fn save_config_file(cfg: &AppConfig) {
             "overlay_position": cfg.overlay_position,
             "keep_in_clipboard": cfg.keep_in_clipboard,
             "input_gain": cfg.input_gain,
+            "loopback_gain": cfg.loopback_gain,
+            "meeting_chunk_secs": cfg.meeting_chunk_secs,
+            "audio_source": cfg.audio_source,
             "stats_total_words": cfg.stats_total_words,
             "stats_total_speaking_secs": cfg.stats_total_speaking_secs,
         });
@@ -588,6 +645,10 @@ pub fn load_config_file() -> AppConfig {
                     llm_log_enabled: v["llm_log_enabled"]
                         .as_bool()
                         .unwrap_or(defaults.llm_log_enabled),
+                    recap_model_override: v["recap_model_override"]
+                        .as_str()
+                        .unwrap_or(&defaults.recap_model_override)
+                        .to_string(),
                     chunk_streaming_enabled: v["chunk_streaming_enabled"]
                         .as_bool()
                         .unwrap_or(defaults.chunk_streaming_enabled),
@@ -655,6 +716,18 @@ pub fn load_config_file() -> AppConfig {
                         .as_f64()
                         .unwrap_or(defaults.input_gain as f64)
                         as f32,
+                    loopback_gain: v["loopback_gain"]
+                        .as_f64()
+                        .unwrap_or(defaults.loopback_gain as f64)
+                        as f32,
+                    meeting_chunk_secs: v["meeting_chunk_secs"]
+                        .as_f64()
+                        .unwrap_or(defaults.meeting_chunk_secs as f64)
+                        as f32,
+                    audio_source: v["audio_source"]
+                        .as_str()
+                        .unwrap_or(&defaults.audio_source)
+                        .to_string(),
                     window_anchor_right: v["window_anchor_right"].as_f64(),
                     window_anchor_bottom: v["window_anchor_bottom"].as_f64(),
                     stats_total_words: v["stats_total_words"].as_u64().unwrap_or(0),
@@ -838,6 +911,11 @@ pub struct AppState {
     pub audio_sample_rate: Mutex<u32>,
     pub transcript: Mutex<String>,
     pub audio_buffer: Arc<Mutex<Vec<f32>>>,
+    /// Dedicated buffer for the loopback (system audio) stream when
+    /// audio_source = Mix. Stays empty in Mic / System modes. meeting.rs
+    /// reads both buffers and mixes per-sample so playback timing
+    /// matches reality and sources are coherently combined.
+    pub audio_buffer_secondary: Arc<Mutex<Vec<f32>>>,
     pub audio_tx: Mutex<Sender<AudioCommand>>,
     pub streaming_active: Arc<AtomicBool>,
     // LLM post-processing state
@@ -849,6 +927,7 @@ pub struct AppState {
     pub llm_api_url: Mutex<String>,
     pub llm_api_model: Mutex<String>,
     pub llm_use_same_key: Mutex<bool>,
+    pub recap_model_override: Mutex<String>,
     pub llm_api_key: Mutex<Option<String>>,
     pub llm_log_enabled: Mutex<bool>,
     pub chunk_streaming_enabled: Mutex<bool>,
@@ -876,6 +955,11 @@ pub struct AppState {
     pub keep_in_clipboard: Mutex<bool>,
     /// Input gain as AtomicU32 (f32 bits) — shared with audio capture thread
     pub input_gain: Arc<std::sync::atomic::AtomicU32>,
+    pub loopback_gain: Arc<std::sync::atomic::AtomicU32>,
+    pub meeting_chunk_secs: Mutex<f32>,
+    /// Audio source: "mic" | "system" | "mix". Read by dimmy_start_recording
+    /// + meeting start to pick which AudioCommand::Start variant to send.
+    pub audio_source: Mutex<String>,
     pub key_store: keystore::KeyStore,
     /// Path to current audio debug session directory (set during recording, cleared on stop)
     pub audio_debug_session_dir: Mutex<Option<std::path::PathBuf>>,
@@ -933,10 +1017,19 @@ impl AppState {
         ));
 
         let audio_buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
+        let audio_buffer_secondary = Arc::new(Mutex::new(Vec::<f32>::new()));
         let input_gain_atomic = Arc::new(std::sync::atomic::AtomicU32::new(
             file_cfg.input_gain.to_bits(),
         ));
-        let audio_tx = audio::spawn_audio_thread(audio_buffer.clone(), input_gain_atomic.clone());
+        let loopback_gain_atomic = Arc::new(std::sync::atomic::AtomicU32::new(
+            file_cfg.loopback_gain.to_bits(),
+        ));
+        let audio_tx = audio::spawn_audio_thread(
+            audio_buffer.clone(),
+            audio_buffer_secondary.clone(),
+            input_gain_atomic.clone(),
+            loopback_gain_atomic.clone(),
+        );
 
         let state = AppState {
             recording: Mutex::new(false),
@@ -951,6 +1044,7 @@ impl AppState {
             audio_sample_rate: Mutex::new(audio::device_sample_rate(&file_cfg.selected_device)),
             transcript: Mutex::new(String::new()),
             audio_buffer,
+            audio_buffer_secondary,
             audio_tx: Mutex::new(audio_tx),
             streaming_active: Arc::new(AtomicBool::new(false)),
             llm_enabled: Mutex::new(file_cfg.llm_enabled),
@@ -961,6 +1055,7 @@ impl AppState {
             llm_api_url: Mutex::new(file_cfg.llm_api_url),
             llm_api_model: Mutex::new(file_cfg.llm_api_model),
             llm_use_same_key: Mutex::new(file_cfg.llm_use_same_key),
+            recap_model_override: Mutex::new(file_cfg.recap_model_override),
             llm_api_key: Mutex::new(stored_llm_key),
             llm_log_enabled: Mutex::new(file_cfg.llm_log_enabled),
             chunk_streaming_enabled: Mutex::new(file_cfg.chunk_streaming_enabled),
@@ -984,6 +1079,9 @@ impl AppState {
             overlay_position: Mutex::new(file_cfg.overlay_position),
             keep_in_clipboard: Mutex::new(file_cfg.keep_in_clipboard),
             input_gain: input_gain_atomic,
+            loopback_gain: loopback_gain_atomic,
+            meeting_chunk_secs: Mutex::new(file_cfg.meeting_chunk_secs),
+            audio_source: Mutex::new(file_cfg.audio_source.clone()),
             key_store,
             audio_debug_session_dir: Mutex::new(None),
             window_anchor: Mutex::new(
@@ -1057,6 +1155,11 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         .clone();
     let llm_use_same_key = *state.llm_use_same_key.lock().map_err(|e| e.to_string())?;
     let llm_log_enabled = *state.llm_log_enabled.lock().map_err(|e| e.to_string())?;
+    let recap_model_override = state
+        .recap_model_override
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     let chunk_streaming_enabled = *state
         .chunk_streaming_enabled
         .lock()
@@ -1120,6 +1223,7 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         llm_api_model,
         llm_use_same_key,
         llm_log_enabled,
+        recap_model_override,
         chunk_streaming_enabled,
         preprocessing_enabled,
         audio_debug_enabled,
@@ -1157,6 +1261,13 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
             .clone(),
         keep_in_clipboard: *state.keep_in_clipboard.lock().map_err(|e| e.to_string())?,
         input_gain: f32::from_bits(state.input_gain.load(Ordering::Relaxed)),
+        loopback_gain: f32::from_bits(state.loopback_gain.load(Ordering::Relaxed)),
+        meeting_chunk_secs: *state.meeting_chunk_secs.lock().map_err(|e| e.to_string())?,
+        audio_source: state
+            .audio_source
+            .lock()
+            .map_err(|e| e.to_string())?
+            .clone(),
         window_anchor_right: anchor.map(|(r, _)| r),
         window_anchor_bottom: anchor.map(|(_, b)| b),
         stats_total_words: *state.stats_total_words.lock().map_err(|e| e.to_string())?,

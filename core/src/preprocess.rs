@@ -410,6 +410,89 @@ impl AudioPreprocessor {
     }
 }
 
+/// File-load preprocess: highpass only, NO VAD, NO AGC.
+///
+/// The full `process_buffer` pipeline is tuned for live mic capture where
+/// the level is unpredictable, so AGC normalises to target=0.2. On a long
+/// recorded file (e.g. a 90-min meeting WAV) this AGC pass is actively
+/// destructive: any natural pause in the recording has near-zero samples,
+/// dagc produces NaN on those, and although the post-AGC clamp turns NaN
+/// into 0, the AGC's *internal state* is now corrupted and outputs NaN
+/// for every subsequent sample. End result: 97% of a 95-min file becomes
+/// silent zeros, Parakeet correctly emits empty for every chunk after the
+/// first NaN burst, and the user sees only the first ~2 minutes of
+/// transcript. CLAUDE.md AUDIO-001 / known-bugs.md.
+///
+/// File-load audio doesn't need AGC — it's already at a recorded level.
+/// Highpass at 80 Hz removes mic rumble without touching the level
+/// envelope. VAD is also disabled because the chunker downstream
+/// (`split_at_silence`) already handles silence boundaries.
+pub fn process_buffer_for_file_load(samples: &[f32], sample_rate: u32) -> Vec<f32> {
+    assert!(
+        sample_rate > 0,
+        "process_buffer_for_file_load: sample_rate must be > 0, got {}",
+        sample_rate
+    );
+    if samples.is_empty() {
+        return Vec::new();
+    }
+
+    // Sanitise: any non-finite input becomes 0 (defensive — file loaders
+    // shouldn't emit NaN/Inf but cheap to enforce). Clamp finite values
+    // to [-1, 1] before filtering so the highpass biquad never sees
+    // extreme magnitudes that could push it into a numerically unstable
+    // regime over a long stream.
+    let sanitized: Vec<f32> = samples
+        .iter()
+        .map(|&s| {
+            if s.is_finite() {
+                s.clamp(-1.0, 1.0)
+            } else {
+                0.0
+            }
+        })
+        .collect();
+
+    // 80 Hz Butterworth highpass — same coefficients as the live path.
+    if sample_rate < 1000 {
+        return sanitized;
+    }
+    let coeffs = match Coefficients::<f32>::from_params(
+        FilterType::HighPass,
+        (sample_rate as f32).hz(),
+        80.0.hz(),
+        Q_BUTTERWORTH_F32,
+    ) {
+        Ok(c) => c,
+        Err(_) => return sanitized,
+    };
+    let mut hp = DirectForm2Transposed::<f32>::new(coeffs);
+
+    let mut out: Vec<f32> = sanitized
+        .into_iter()
+        .map(|s| {
+            let v = hp.run(s);
+            if v.is_finite() {
+                v.clamp(-1.0, 1.0)
+            } else {
+                0.0
+            }
+        })
+        .collect();
+
+    // Post-condition: same length, all finite, in range.
+    assert_eq!(
+        out.len(),
+        samples.len(),
+        "process_buffer_for_file_load preserves sample count"
+    );
+    debug_assert!(out.iter().all(|s| s.is_finite()));
+    debug_assert!(out.iter().all(|&s| (-1.0..=1.0).contains(&s)));
+    // Touch via mut to avoid "useless mut" lint when assertions are off.
+    out.shrink_to_fit();
+    out
+}
+
 /// Process a complete audio buffer (used for final transcription on stop_recording).
 /// Creates a fresh preprocessor, processes the entire buffer, returns cleaned audio.
 pub fn process_buffer(samples: &[f32], sample_rate: u32) -> Vec<f32> {
@@ -1073,6 +1156,134 @@ mod tests {
                     s
                 );
             }
+        }
+    }
+
+    // ── process_buffer_for_file_load ─────────────────────────────────
+    // Regression coverage for the 2026-05-08 file-load AGC NaN bug
+    // (commit 0ed682b). The live-recording pipeline (process_buffer)
+    // walks dagc over the entire input — on a long pre-recorded WAV
+    // dagc emits NaN on natural silence stretches, the post-AGC
+    // clamp turns those NaN into 0, and from that point all
+    // subsequent samples are zero. process_buffer_for_file_load is
+    // highpass-only to skip that booby trap.
+
+    #[test]
+    fn file_load_empty_input_returns_empty() {
+        let out = process_buffer_for_file_load(&[], 16_000);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn file_load_preserves_sample_count() {
+        // Input is 1 second of speech-shaped audio; output must have
+        // EXACTLY the same length — no VAD trimming, no AGC
+        // expansion, no chunk-boundary loss.
+        let sr = 16_000u32;
+        let input = generate_speech_like(sr, 1.0, 0.3);
+        let n_in = input.len();
+        let out = process_buffer_for_file_load(&input, sr);
+        assert_eq!(
+            out.len(),
+            n_in,
+            "file-load preprocess must preserve sample count"
+        );
+    }
+
+    #[test]
+    fn file_load_replaces_nan_inf_with_zero() {
+        let mut input = vec![0.5f32; 1000];
+        input[100] = f32::NAN;
+        input[200] = f32::INFINITY;
+        input[300] = f32::NEG_INFINITY;
+        let out = process_buffer_for_file_load(&input, 16_000);
+        assert_eq!(out.len(), input.len());
+        // Output is finite everywhere.
+        assert!(
+            out.iter().all(|s| s.is_finite()),
+            "file-load output must be all-finite"
+        );
+        // Output is in [-1, 1] everywhere.
+        assert!(
+            out.iter().all(|&s| (-1.0..=1.0).contains(&s)),
+            "file-load output must be clamped to [-1, 1]"
+        );
+    }
+
+    #[test]
+    fn file_load_clamps_extreme_values() {
+        let input = vec![10.0f32, -10.0, 1.5, -1.5, 0.5, -0.5];
+        let out = process_buffer_for_file_load(&input, 16_000);
+        assert_eq!(out.len(), input.len());
+        assert!(out.iter().all(|&s| (-1.0..=1.0).contains(&s)));
+    }
+
+    #[test]
+    fn file_load_handles_zero_sample_rate() {
+        // Defensive: assert was added because divide-by-zero hit at
+        // a previous call site. Without an assert / sane fallback the
+        // function would create a NaN biquad and corrupt the output.
+        let result = std::panic::catch_unwind(|| process_buffer_for_file_load(&[0.5f32; 100], 0));
+        assert!(result.is_err(), "sr=0 must panic via assert");
+    }
+
+    #[test]
+    fn file_load_long_silence_does_not_corrupt_subsequent_audio() {
+        // The exact bug AGC introduced: long silence stretch in the
+        // middle of the file would corrupt all samples AFTER it.
+        // file-load preprocess must NOT do this — silence is just
+        // silence, audio after it is unchanged.
+        let sr = 16_000u32;
+        let speech_a = generate_speech_like(sr, 0.5, 0.3);
+        let silence = vec![0.0f32; sr as usize * 5]; // 5 s silence
+        let speech_b = generate_speech_like(sr, 0.5, 0.3);
+
+        let mut input = Vec::new();
+        input.extend_from_slice(&speech_a);
+        input.extend_from_slice(&silence);
+        input.extend_from_slice(&speech_b);
+
+        let out = process_buffer_for_file_load(&input, sr);
+        assert_eq!(out.len(), input.len());
+
+        // Tail (post-silence) speech must NOT be all zeros.
+        let tail_start = speech_a.len() + silence.len();
+        let tail = &out[tail_start..];
+        let tail_peak = tail.iter().fold(0f32, |m, &s| m.max(s.abs()));
+        assert!(
+            tail_peak > 0.05,
+            "post-silence audio must be preserved, peak={:.4}",
+            tail_peak
+        );
+
+        // No NaN/Inf anywhere.
+        assert!(out.iter().all(|s| s.is_finite()));
+    }
+
+    #[test]
+    fn file_load_skips_highpass_for_low_sample_rates() {
+        // Input below 1 kHz is below our biquad's Nyquist coherence;
+        // function returns sanitized passthrough.
+        let input = vec![0.5f32, -0.5, 0.5, -0.5];
+        let out = process_buffer_for_file_load(&input, 500);
+        assert_eq!(out.len(), input.len());
+        // Should be byte-identical (no HP applied).
+        for (a, b) in input.iter().zip(out.iter()) {
+            assert_eq!(*a, *b);
+        }
+    }
+
+    #[test]
+    fn file_load_works_at_common_sample_rates() {
+        for &sr in &[8_000u32, 16_000, 22_050, 44_100, 48_000, 96_000] {
+            let input = generate_speech_like(sr, 0.2, 0.3);
+            let out = process_buffer_for_file_load(&input, sr);
+            assert_eq!(out.len(), input.len(), "sr={} sample count drift", sr);
+            assert!(
+                out.iter().all(|s| s.is_finite()),
+                "sr={} produced non-finite samples",
+                sr
+            );
         }
     }
 }

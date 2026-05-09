@@ -4,9 +4,50 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+/// What the audio thread should capture. `Mic` is the historical default
+/// (default input device — built-in mic, headset, etc). `System` opens
+/// the default OUTPUT device in WASAPI loopback mode on Windows so we
+/// can transcribe what's playing through the speakers (Zoom, Teams,
+/// music). `Mix` runs both streams concurrently and sums their samples
+/// per channel — useful for meetings where you want both your voice
+/// AND the other participants in one transcript.
+///
+/// Mac + Linux currently fall back to Mic when System / Mix are
+/// requested — see docs/dev/system-audio-capture.md for the per-OS
+/// implementation status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioSource {
+    Mic,
+    System,
+    Mix,
+}
+
+impl AudioSource {
+    pub fn from_str_lossy(s: &str) -> Self {
+        match s.to_ascii_lowercase().as_str() {
+            "system" => Self::System,
+            "mix" => Self::Mix,
+            _ => Self::Mic,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Mic => "mic",
+            Self::System => "system",
+            Self::Mix => "mix",
+        }
+    }
+}
+
 /// Commands sent to the audio capture thread
 pub enum AudioCommand {
-    Start(Option<String>), // Optional device name; None = system default
+    /// Start capture. `device_name`: optional input device override
+    /// (mic only — ignored when source is System or Mix-on-Win because
+    /// the loopback always targets the default output device).
+    Start {
+        device_name: Option<String>,
+        source: AudioSource,
+    },
     Stop,
 }
 
@@ -34,62 +75,121 @@ pub fn list_input_devices() -> Vec<String> {
 /// `input_gain` is shared so it can be updated at runtime (0.0-2.0, default 1.0).
 pub fn spawn_audio_thread(
     buffer: Arc<Mutex<Vec<f32>>>,
+    buffer_secondary: Arc<Mutex<Vec<f32>>>,
     input_gain: Arc<std::sync::atomic::AtomicU32>,
+    loopback_gain: Arc<std::sync::atomic::AtomicU32>,
 ) -> mpsc::Sender<AudioCommand> {
     let (tx, rx) = mpsc::channel::<AudioCommand>();
+
+    // ── AEC plumbing ─────────────────────────────────────────────
+    // Mix mode routes mic and loopback through these per-stream rings.
+    // The dimmy-aec worker thread drains 480-sample frames from each in
+    // lockstep, runs WebRTC AEC3, and pushes cleaned mic samples to the
+    // primary `buffer`. In Mic-only / System-only modes the rings stay
+    // empty (callbacks write directly to `buffer`) so the worker idles
+    // at zero CPU.
+    let aec_mic_ring: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+    let aec_ref_ring: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+    let aec_shutdown: Arc<std::sync::atomic::AtomicBool> =
+        Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let _aec_handle = crate::aec::spawn_aec_thread(
+        aec_mic_ring.clone(),
+        aec_ref_ring.clone(),
+        buffer.clone(),
+        aec_shutdown.clone(),
+    );
 
     thread::spawn(
         #[allow(unused_assignments, unused_variables)]
         move || {
             let host = cpal::default_host();
-            // stream is held alive to keep recording; dropping/replacing stops/starts
-            let mut stream: Option<cpal::Stream> = None;
+            // streams are held alive to keep recording; dropping/replacing
+            // stops/starts. `Mix` mode keeps two streams alive in parallel.
+            let mut streams: Vec<cpal::Stream> = Vec::new();
 
             // Event loop: wait for commands
             for cmd in rx {
                 match cmd {
-                    AudioCommand::Start(device_name) => {
+                    AudioCommand::Start {
+                        device_name,
+                        source,
+                    } => {
                         crate::log(&format!(
-                            "[Audio] Start command received, device_name={:?}",
-                            device_name
+                            "[Audio] Start command received, device_name={:?}, source={:?}",
+                            device_name, source
                         ));
+                        // Drop any prior streams before re-opening.
+                        streams.clear();
 
-                        // Find the requested device, or fall back to default
-                        let device = if let Some(ref name) = device_name {
-                            let found = host.input_devices().ok().and_then(|mut devs| {
-                                devs.find(|d| d.name().ok().as_deref() == Some(name.as_str()))
-                            });
-                            if found.is_some() {
-                                crate::log(&format!("[Audio] Found device by name: {}", name));
+                        // Resolve which devices to open based on source. For Mix we open
+                        // both mic + system. For System on Mac/Linux we currently fall
+                        // back to Mic with a warning — proper loopback support tracked
+                        // in docs/dev/system-audio-capture.md.
+                        let mic_device = resolve_input_device(&host, device_name.as_deref());
+                        let system_device =
+                            if matches!(source, AudioSource::System | AudioSource::Mix) {
+                                resolve_loopback_device(&host)
                             } else {
-                                crate::log(&format!(
-                                    "[Audio] Device '{}' not found, falling back to default",
-                                    name
-                                ));
-                            }
-                            found.or_else(|| host.default_input_device())
+                                None
+                            };
+
+                        // For Mix, both must succeed; if system fails we degrade to
+                        // mic-only with a log line so the user still gets SOMETHING.
+                        let want_system = matches!(source, AudioSource::System | AudioSource::Mix);
+                        let want_mic = matches!(source, AudioSource::Mic | AudioSource::Mix);
+                        if want_system && system_device.is_none() {
+                            crate::log("[Audio] WARNING: system-audio loopback unavailable on this platform — using mic only");
+                        }
+                        // System-only mode without a loopback device → fall back to mic
+                        // so recording still works (degraded UX, but transcript happens).
+                        let fallback_to_mic =
+                            matches!(source, AudioSource::System) && system_device.is_none();
+
+                        // Decide PRIMARY: mic when available + wanted; otherwise the
+                        // loopback (system-only mode, or System fallback to mic
+                        // failed up-stream). Track is_primary_loopback so we read
+                        // the right cpal config endpoint below.
+                        let primary_is_loopback;
+                        let primary = if (want_mic || fallback_to_mic) && mic_device.is_some() {
+                            primary_is_loopback = false;
+                            mic_device.clone()
+                        } else if let Some(ref sys) = system_device {
+                            primary_is_loopback = true;
+                            Some(sys.clone())
                         } else {
-                            host.default_input_device()
+                            primary_is_loopback = false;
+                            None
                         };
 
-                        let device = match device {
+                        let device = match primary {
                             Some(d) => {
                                 crate::log(&format!(
-                                    "[Audio] Using device: {:?}",
-                                    d.name().unwrap_or_default()
+                                    "[Audio] Primary device: {:?} loopback={}",
+                                    d.name().unwrap_or_default(),
+                                    primary_is_loopback
                                 ));
                                 d
                             }
                             None => {
-                                crate::log("[Audio] ERROR: No input device available");
+                                crate::log("[Audio] ERROR: No usable audio device for the requested source");
                                 continue;
                             }
                         };
 
-                        let config = match device.default_input_config() {
+                        // cpal Windows host rejects default_input_config() on
+                        // output devices ("stream type not supported"). For
+                        // loopback we must read default_output_config() and pass
+                        // its config to build_input_stream — that activates
+                        // WASAPI loopback mode silently.
+                        let config_result = if primary_is_loopback {
+                            device.default_output_config()
+                        } else {
+                            device.default_input_config()
+                        };
+                        let config = match config_result {
                             Ok(c) => {
                                 crate::log(&format!(
-                                    "[Audio] Config: sr={}, ch={}, fmt={:?}",
+                                    "[Audio] Primary config: sr={}, ch={}, fmt={:?}",
                                     c.sample_rate().0,
                                     c.channels(),
                                     c.sample_format()
@@ -98,7 +198,7 @@ pub fn spawn_audio_thread(
                             }
                             Err(e) => {
                                 crate::log(&format!(
-                                    "[Audio] ERROR: Failed to get input config: {}",
+                                    "[Audio] ERROR: Failed to get primary config: {}",
                                     e
                                 ));
                                 continue;
@@ -107,19 +207,58 @@ pub fn spawn_audio_thread(
 
                         let channels = config.channels() as usize;
 
-                        // Clear buffer
+                        // Use the primary device's native config — some
+                        // devices (notably BT HFP/SCO mic) reject any rate
+                        // other than their native, even via cpal's shared-mode
+                        // path. Native config is guaranteed to build. The
+                        // SECONDARY stream then gets forced to MATCH this
+                        // primary rate so meeting.rs's WAV writer + per-sample
+                        // mix stay consistent. See build_secondary_stream
+                        // for the matching-rate fallback chain.
+                        let primary_actual_sr = config.sample_rate().0;
+                        let canonical_config: cpal::StreamConfig = config.clone().into();
+                        crate::log(&format!(
+                            "[Audio] Primary cpal config (native): sr={} ch={}",
+                            primary_actual_sr,
+                            config.channels()
+                        ));
+
+                        // Clear all buffers + AEC rings — Mix uses a separate
+                        // secondary buffer for the loopback so meeting.rs can
+                        // mix primary+secondary per-sample, and the AEC rings
+                        // must start empty so WebRTC's delay estimator
+                        // converges from a clean slate.
                         if let Ok(mut b) = buffer.lock() {
                             b.clear();
                         }
+                        if let Ok(mut b) = buffer_secondary.lock() {
+                            b.clear();
+                        }
+                        if let Ok(mut r) = aec_mic_ring.lock() {
+                            r.clear();
+                        }
+                        if let Ok(mut r) = aec_ref_ring.lock() {
+                            r.clear();
+                        }
 
-                        let buf = buffer.clone();
+                        // In Mix mode the mic primary feeds the AEC mic ring
+                        // (NOT audio_buffer directly) — the AEC worker writes
+                        // the cleaned output to audio_buffer. In Mic-only and
+                        // System-only modes the primary writes to audio_buffer
+                        // as before; AEC stays idle.
+                        let mix_mode = matches!(source, AudioSource::Mix);
+                        let buf = if mix_mode {
+                            aec_mic_ring.clone()
+                        } else {
+                            buffer.clone()
+                        };
                         let gain_ref = input_gain.clone();
                         let sample_count =
                             std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
                         let sc1 = sample_count.clone();
                         let s = match config.sample_format() {
                             cpal::SampleFormat::F32 => device.build_input_stream(
-                                &config.clone().into(),
+                                &canonical_config,
                                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                                     let prev = sc1.fetch_add(
                                         data.len(),
@@ -167,7 +306,7 @@ pub fn spawn_audio_thread(
                                 let gain_ref2 = input_gain.clone();
                                 let sc2 = sample_count.clone();
                                 device.build_input_stream(
-                                    &config.clone().into(),
+                                    &canonical_config,
                                     move |data: &[i16], _: &cpal::InputCallbackInfo| {
                                         let prev = sc2.fetch_add(data.len(), std::sync::atomic::Ordering::Relaxed);
                                         if prev == 0 {
@@ -203,17 +342,50 @@ pub fn spawn_audio_thread(
                         match s {
                             Ok(s) => {
                                 let _ = s.play();
-                                stream = Some(s);
-                                crate::log("[Audio] Stream built and playing");
+                                streams.push(s);
+                                crate::log("[Audio] Primary stream built and playing");
                             }
                             Err(e) => {
-                                crate::log(&format!("[Audio] ERROR: Failed to build stream: {}", e))
+                                crate::log(&format!(
+                                    "[Audio] ERROR: Failed to build primary stream: {}",
+                                    e
+                                ));
+                                continue;
+                            }
+                        }
+
+                        // ── Mix mode: open the loopback stream as a SECOND
+                        // input that writes the SECONDARY buffer (separate
+                        // from the mic's primary buffer). meeting.rs reads
+                        // both buffers, takes min length, and mixes per-sample
+                        // → correct playback speed and a real per-sample mix
+                        // of the two sources instead of race-interleaved chaos.
+                        // System-only (no Mix) was already handled above
+                        // by treating the loopback as the PRIMARY device.
+                        if matches!(source, AudioSource::Mix) {
+                            if let Some(sysdev) = system_device {
+                                if let Some(s) = build_secondary_stream(
+                                    &sysdev,
+                                    &buffer_secondary,
+                                    Some(&aec_ref_ring),
+                                    &input_gain,
+                                    &loopback_gain,
+                                    /* is_loopback */ true,
+                                    /* prefer_sr */
+                                    None, // use native — fewest failures
+                                ) {
+                                    let _ = s.play();
+                                    streams.push(s);
+                                    crate::log(
+                                        "[Audio] Mix mode: secondary loopback stream playing into dedicated buffer + AEC ref ring",
+                                    );
+                                }
                             }
                         }
                     }
                     AudioCommand::Stop => {
-                        // Dropping the stream stops recording
-                        stream = None;
+                        // Dropping the streams stops recording
+                        streams.clear();
                     }
                 }
             }
@@ -221,6 +393,315 @@ pub fn spawn_audio_thread(
     );
 
     tx
+}
+
+// ── Device-resolution helpers used by spawn_audio_thread ─────────────
+
+/// Resolve the input device for Mic capture. If a specific name was
+/// requested, search the input list; otherwise return the system
+/// default. Logs the resolution path so "device disappeared" / typos
+/// in the saved config are debuggable from dimmy.log alone.
+fn resolve_input_device(host: &cpal::Host, name: Option<&str>) -> Option<cpal::Device> {
+    if let Some(name) = name {
+        let found = host
+            .input_devices()
+            .ok()
+            .and_then(|mut devs| devs.find(|d| d.name().ok().as_deref() == Some(name)));
+        if found.is_some() {
+            crate::log(&format!("[Audio] Found input device by name: {}", name));
+            return found;
+        }
+        crate::log(&format!(
+            "[Audio] Input device '{}' not found, falling back to default",
+            name
+        ));
+    }
+    host.default_input_device()
+}
+
+/// Resolve the loopback (system audio) device. On Windows, cpal's
+/// default OUTPUT device exposes WASAPI loopback when treated as an
+/// INPUT — `device.build_input_stream()` on it captures whatever's
+/// playing through the speakers. On macOS / Linux this returns None
+/// for now; proper implementation tracked separately.
+#[cfg(target_os = "windows")]
+fn resolve_loopback_device(host: &cpal::Host) -> Option<cpal::Device> {
+    let dev = host.default_output_device();
+    if let Some(ref d) = dev {
+        crate::log(&format!(
+            "[Audio] Loopback device (WASAPI default output): {:?}",
+            d.name().unwrap_or_default()
+        ));
+    } else {
+        crate::log("[Audio] No default output device — loopback unavailable");
+    }
+    dev
+}
+
+#[cfg(not(target_os = "windows"))]
+fn resolve_loopback_device(_host: &cpal::Host) -> Option<cpal::Device> {
+    crate::log("[Audio] Loopback not yet implemented on this platform");
+    None
+}
+
+/// Build a SECOND input stream that writes into the SAME shared
+/// buffer as the primary mic stream. Used by Mix mode. Samples from
+/// both streams interleave in time order; downstream VAD + AGC see
+/// them as a single mono track. Returns None on config / build
+/// failure (Mix mode degrades to mic-only in that case).
+///
+/// `is_loopback`: when true, the device is the default OUTPUT device
+/// being treated as a loopback INPUT — on Windows we must read its
+/// `default_output_config()` because cpal's Windows host rejects
+/// `default_input_config()` on output devices ("stream type not
+/// supported"), but `build_input_stream` with the OUTPUT config
+/// activates WASAPI loopback mode silently.
+fn build_secondary_stream(
+    device: &cpal::Device,
+    buffer: &Arc<Mutex<Vec<f32>>>,
+    aec_ref_ring: Option<&Arc<Mutex<Vec<f32>>>>,
+    input_gain: &Arc<std::sync::atomic::AtomicU32>,
+    loopback_gain: &Arc<std::sync::atomic::AtomicU32>,
+    is_loopback: bool,
+    prefer_sr: Option<u32>,
+) -> Option<cpal::Stream> {
+    let config = if is_loopback {
+        match device.default_output_config() {
+            Ok(c) => {
+                crate::log(&format!(
+                    "[Audio] Secondary loopback config: sr={}, ch={}, fmt={:?}",
+                    c.sample_rate().0,
+                    c.channels(),
+                    c.sample_format()
+                ));
+                c
+            }
+            Err(e) => {
+                crate::log(&format!(
+                    "[Audio] Secondary loopback default_output_config failed: {}",
+                    e
+                ));
+                return None;
+            }
+        }
+    } else {
+        match device.default_input_config() {
+            Ok(c) => {
+                crate::log(&format!(
+                    "[Audio] Secondary input config: sr={}, ch={}, fmt={:?}",
+                    c.sample_rate().0,
+                    c.channels(),
+                    c.sample_format()
+                ));
+                c
+            }
+            Err(e) => {
+                crate::log(&format!("[Audio] Secondary config failed: {}", e));
+                return None;
+            }
+        }
+    };
+    let channels = config.channels() as usize;
+    let buf = buffer.clone();
+    // Build the secondary cpal config: prefer matching the primary's
+    // sample rate (so meeting.rs's per-sample mix and WAV headers stay
+    // aligned). If the device rejects the primary rate (some BT loopback
+    // configurations only accept native), fall back to the device's
+    // native config and accept that audio_system.wav may need to be
+    // played back at its own rate — the WAV header is correct either
+    // way.
+    let native_config: cpal::StreamConfig = config.clone().into();
+    let canonical_config = match prefer_sr {
+        Some(sr) if sr != config.sample_rate().0 => {
+            crate::log(&format!(
+                "[Audio] Secondary trying preferred sr={} (native was {})",
+                sr,
+                config.sample_rate().0
+            ));
+            cpal::StreamConfig {
+                channels: config.channels(),
+                sample_rate: cpal::SampleRate(sr),
+                buffer_size: cpal::BufferSize::Default,
+            }
+        }
+        _ => {
+            crate::log(&format!(
+                "[Audio] Secondary using native config: sr={} ch={}",
+                config.sample_rate().0,
+                config.channels()
+            ));
+            native_config.clone()
+        }
+    };
+    // Optional second destination: in Mix mode the AEC worker needs the
+    // SAME loopback samples as a `render` reference so it can subtract
+    // the speaker echo from the mic capture. We push to both buffers
+    // (raw record + AEC ref ring) inside the cpal callback.
+    let aec_ref = aec_ref_ring.cloned();
+    // NOTE: secondary stream path = loopback (system audio). We deliberately
+    // DO NOT apply `input_gain` here (that knob is calibrated for mic peak
+    // levels) and DO NOT divide by `channels` on stereo→mono downmix. The
+    // sum-clamp form preserves perceived loudness for center-panned voice
+    // (typical YouTube/Teams content) instead of giving up 6dB to match the
+    // mic stream — the bug the user described as "system practically
+    // inaudible" with mic-quality vs system-quality wildly mismatched.
+    let _ = input_gain; // intentionally unused on the loopback path
+                        // Loopback makeup gain — soft-clipped via tanh so high peaks
+                        // don't produce clamp clicks. Read fresh each callback so a
+                        // runtime config change takes effect immediately. Bounds check
+                        // enforces sane range; outside it we treat as 1.0 (no change).
+    let loopback_gain_ref = loopback_gain.clone();
+    // Periodic loopback diagnostics. Every ~5 s of wall time the
+    // callback emits ONE log line with the peak amplitude observed
+    // in that window. Lets the user see in dimmy.log whether the
+    // loopback is actually receiving audio (peak > 0.001) or pure
+    // silence (peak == 0) — useful when debugging Bluetooth profile
+    // switches (HSP vs A2DP) and per-app device routing.
+    let diag_sr = config.sample_rate().0 as u64;
+    let diag_window_samples = (diag_sr * 5) as usize;
+    let diag_peak = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let diag_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let diag_window = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let stream = match config.sample_format() {
+        cpal::SampleFormat::F32 => {
+            let dp = diag_peak.clone();
+            let dc = diag_count.clone();
+            let dw = diag_window.clone();
+            let lg = loopback_gain_ref.clone();
+            device.build_input_stream(
+                &canonical_config,
+                move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                    let g = f32::from_bits(lg.load(std::sync::atomic::Ordering::Relaxed));
+                    let g = if g.is_finite() && (0.5..=4.0).contains(&g) {
+                        g
+                    } else {
+                        1.0
+                    };
+                    let mono_samples: Vec<f32> = if channels > 1 {
+                        data.chunks(channels)
+                            .map(|chunk| {
+                                // Sum stereo to mono, apply makeup gain,
+                                // soft-clip via tanh so peaks don't click.
+                                (chunk.iter().sum::<f32>() * g).tanh()
+                            })
+                            .collect()
+                    } else {
+                        data.iter().map(|&s| (s * g).tanh()).collect()
+                    };
+                    // Update diagnostic peak (atomic max via CAS loop) and
+                    // sample count. Cheap; runs on every callback.
+                    let chunk_peak = mono_samples
+                        .iter()
+                        .fold(0.0f32, |m, &s| m.max(s.abs()));
+                    let mut prev = dp.load(std::sync::atomic::Ordering::Relaxed);
+                    while chunk_peak.to_bits() > prev {
+                        match dp.compare_exchange_weak(
+                            prev,
+                            chunk_peak.to_bits(),
+                            std::sync::atomic::Ordering::Relaxed,
+                            std::sync::atomic::Ordering::Relaxed,
+                        ) {
+                            Ok(_) => break,
+                            Err(p) => prev = p,
+                        }
+                    }
+                    dc.fetch_add(mono_samples.len(), std::sync::atomic::Ordering::Relaxed);
+                    let win =
+                        dw.fetch_add(mono_samples.len(), std::sync::atomic::Ordering::Relaxed)
+                            + mono_samples.len();
+                    if win >= diag_window_samples {
+                        let total = dc.load(std::sync::atomic::Ordering::Relaxed);
+                        let peak_bits = dp.swap(0, std::sync::atomic::Ordering::Relaxed);
+                        let peak = f32::from_bits(peak_bits);
+                        dw.store(0, std::sync::atomic::Ordering::Relaxed);
+                        crate::log(&format!(
+                            "[Audio] Loopback diag: total_samples={}, last_5s_peak={:.4} (>0.001 means signal, ~0 means silence)",
+                            total, peak
+                        ));
+                    }
+                    if let Ok(mut b) = buf.lock() {
+                        b.extend_from_slice(&mono_samples);
+                    }
+                    if let Some(ref aec) = aec_ref {
+                        crate::aec::push_to_ring(aec, &mono_samples);
+                    }
+                },
+                |err| crate::log(&format!("[Audio] Secondary stream error (F32): {}", err)),
+                None,
+            )
+        }
+        cpal::SampleFormat::I16 => {
+            let dp = diag_peak.clone();
+            let dc = diag_count.clone();
+            let dw = diag_window.clone();
+            let lg = loopback_gain_ref.clone();
+            device.build_input_stream(
+                &canonical_config,
+                move |data: &[i16], _: &cpal::InputCallbackInfo| {
+                    let g = f32::from_bits(lg.load(std::sync::atomic::Ordering::Relaxed));
+                    let g = if g.is_finite() && (0.5..=4.0).contains(&g) {
+                        g
+                    } else {
+                        1.0
+                    };
+                    let mono_samples: Vec<f32> = data
+                        .chunks(channels)
+                        .map(|chunk| {
+                            (chunk.iter().map(|&s| s as f32 / 32768.0).sum::<f32>() * g).tanh()
+                        })
+                        .collect();
+                    let chunk_peak = mono_samples
+                        .iter()
+                        .fold(0.0f32, |m, &s| m.max(s.abs()));
+                    let mut prev = dp.load(std::sync::atomic::Ordering::Relaxed);
+                    while chunk_peak.to_bits() > prev {
+                        match dp.compare_exchange_weak(
+                            prev,
+                            chunk_peak.to_bits(),
+                            std::sync::atomic::Ordering::Relaxed,
+                            std::sync::atomic::Ordering::Relaxed,
+                        ) {
+                            Ok(_) => break,
+                            Err(p) => prev = p,
+                        }
+                    }
+                    dc.fetch_add(mono_samples.len(), std::sync::atomic::Ordering::Relaxed);
+                    let win =
+                        dw.fetch_add(mono_samples.len(), std::sync::atomic::Ordering::Relaxed)
+                            + mono_samples.len();
+                    if win >= diag_window_samples {
+                        let total = dc.load(std::sync::atomic::Ordering::Relaxed);
+                        let peak_bits = dp.swap(0, std::sync::atomic::Ordering::Relaxed);
+                        let peak = f32::from_bits(peak_bits);
+                        dw.store(0, std::sync::atomic::Ordering::Relaxed);
+                        crate::log(&format!(
+                            "[Audio] Loopback diag: total_samples={}, last_5s_peak={:.4} (>0.001 means signal, ~0 means silence)",
+                            total, peak
+                        ));
+                    }
+                    if let Ok(mut b) = buf.lock() {
+                        b.extend_from_slice(&mono_samples);
+                    }
+                    if let Some(ref aec) = aec_ref {
+                        crate::aec::push_to_ring(aec, &mono_samples);
+                    }
+                },
+                |err| crate::log(&format!("[Audio] Secondary stream error (I16): {}", err)),
+                None,
+            )
+        }
+        _ => {
+            crate::log("[Audio] Secondary unsupported sample format");
+            return None;
+        }
+    };
+    match stream {
+        Ok(s) => Some(s),
+        Err(e) => {
+            crate::log(&format!("[Audio] Secondary build failed: {}", e));
+            None
+        }
+    }
 }
 
 /// Get the default input device name
@@ -233,33 +714,80 @@ pub fn default_input_device_name() -> String {
 
 /// Get sample rate for a specific device (by name), falling back to default
 pub fn device_sample_rate(device_name: &Option<String>) -> u32 {
+    primary_sample_rate(device_name, &AudioSource::Mic)
+}
+
+/// Sample rate of the PRIMARY capture stream — i.e. the rate at which
+/// the shared audio buffer fills in wall time. The meeting writer needs
+/// THIS rate (not the mic's input rate) to downsample correctly,
+/// otherwise a System-mode recording plays back at the wrong speed
+/// (loopback runs at 48 kHz on most systems, mic is often 16 kHz).
+///
+/// - Mic / Mix: native input rate of the selected mic (primary stream
+///   is the mic; in Mix the loopback is a secondary that interleaves
+///   into the same buffer, which has its own time-compression caveat
+///   tracked separately).
+/// - System: native OUTPUT rate of the default output device, since
+///   that's the device cpal opens in WASAPI loopback mode.
+pub fn primary_sample_rate(device_name: &Option<String>, source: &AudioSource) -> u32 {
     let host = cpal::default_host();
-    let device = if let Some(ref name) = device_name {
-        host.input_devices()
-            .ok()
-            .and_then(|mut devs| devs.find(|d| d.name().ok().as_deref() == Some(name.as_str())))
-            .or_else(|| host.default_input_device())
-    } else {
-        host.default_input_device()
+    let rate = match source {
+        AudioSource::System => {
+            #[cfg(target_os = "windows")]
+            {
+                host.default_output_device()
+                    .and_then(|d| d.default_output_config().ok())
+                    .map(|c| c.sample_rate().0)
+                    .unwrap_or_else(|| primary_sample_rate(device_name, &AudioSource::Mic))
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                primary_sample_rate(device_name, &AudioSource::Mic)
+            }
+        }
+        AudioSource::Mic | AudioSource::Mix => {
+            let device = if let Some(ref name) = device_name {
+                host.input_devices()
+                    .ok()
+                    .and_then(|mut devs| {
+                        devs.find(|d| d.name().ok().as_deref() == Some(name.as_str()))
+                    })
+                    .or_else(|| host.default_input_device())
+            } else {
+                host.default_input_device()
+            };
+            device
+                .and_then(|d| d.default_input_config().ok())
+                .map(|c| c.sample_rate().0)
+                .unwrap_or(44100)
+        }
     };
-    let rate = device
-        .and_then(|d| d.default_input_config().ok())
-        .map(|c| c.sample_rate().0)
-        .unwrap_or(44100);
-
-    // Returned rate must be within valid audio hardware range
     assert!(
-        rate >= 8000,
-        "device_sample_rate: rate {} below 8kHz minimum",
+        (8000..=192_000).contains(&rate),
+        "primary_sample_rate: rate {} out of range",
         rate
     );
-    assert!(
-        rate <= 192000,
-        "device_sample_rate: rate {} above 192kHz maximum",
-        rate
-    );
-
     rate
+}
+
+/// Native sample rate of the loopback (system audio) device. Used by
+/// meeting.rs in Mix mode to write `audio_system.wav` with the correct
+/// header rate when the mic and loopback devices have different native
+/// rates (typical: BT mic in HFP at 16 kHz + speakers loopback at 48 kHz).
+/// Returns 48000 as fallback when no output device exists or non-Windows.
+pub fn secondary_sample_rate() -> u32 {
+    #[cfg(target_os = "windows")]
+    {
+        let host = cpal::default_host();
+        host.default_output_device()
+            .and_then(|d| d.default_output_config().ok())
+            .map(|c| c.sample_rate().0)
+            .unwrap_or(48_000)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        48_000
+    }
 }
 
 // ── Typed audio pipeline ─────────────────────────────────────────────
@@ -610,7 +1138,9 @@ mod tests {
     fn spawn_audio_thread_responds_to_stop() {
         let buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
         let gain = Arc::new(std::sync::atomic::AtomicU32::new(1.0f32.to_bits()));
-        let tx = spawn_audio_thread(buffer.clone(), gain);
+        let secondary = Arc::new(Mutex::new(Vec::<f32>::new()));
+        let lgain = Arc::new(std::sync::atomic::AtomicU32::new(2.0f32.to_bits()));
+        let tx = spawn_audio_thread(buffer.clone(), secondary, gain, lgain);
         // Sending Stop should not panic even with no prior Start
         let _ = tx.send(AudioCommand::Stop);
         // Drop sender — thread should exit cleanly
@@ -622,7 +1152,9 @@ mod tests {
         // gain=0.5 should not panic on Stop
         let buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
         let gain = Arc::new(std::sync::atomic::AtomicU32::new(0.5f32.to_bits()));
-        let tx = spawn_audio_thread(buffer.clone(), gain);
+        let secondary = Arc::new(Mutex::new(Vec::<f32>::new()));
+        let lgain = Arc::new(std::sync::atomic::AtomicU32::new(2.0f32.to_bits()));
+        let tx = spawn_audio_thread(buffer.clone(), secondary, gain, lgain);
         let _ = tx.send(AudioCommand::Stop);
         drop(tx);
     }
@@ -632,7 +1164,9 @@ mod tests {
         // gain=0.0 should not panic on Stop
         let buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
         let gain = Arc::new(std::sync::atomic::AtomicU32::new(0.0f32.to_bits()));
-        let tx = spawn_audio_thread(buffer.clone(), gain);
+        let secondary = Arc::new(Mutex::new(Vec::<f32>::new()));
+        let lgain = Arc::new(std::sync::atomic::AtomicU32::new(2.0f32.to_bits()));
+        let tx = spawn_audio_thread(buffer.clone(), secondary, gain, lgain);
         let _ = tx.send(AudioCommand::Stop);
         drop(tx);
     }

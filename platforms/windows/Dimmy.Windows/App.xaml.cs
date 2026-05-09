@@ -229,10 +229,18 @@ public partial class App : Application
             // 3. Load config into ViewModel
             LoadConfigIntoViewModel();
 
-            // 3b. Load Win-only UI prefs (pill visibility toggles)
+            // 3b. Load Win-only UI prefs (pill visibility toggles + theme).
+            // Theme MUST be applied to the AppViewModel here at startup —
+            // PillWindow reads _vm.Theme to decide glass-vs-dark in its
+            // first render. Without this line the pill defaulted to
+            // "Default" and only refreshed when the user opened Settings
+            // (which triggered ApplySettings → AppViewModel.Theme write
+            // → PillWindow PropertyChanged → re-render). Bug surfaced
+            // 2026-05-08: "all'avvio la pill non prende il tema settato".
             _uiPrefs = UiPreferences.Load();
             _appViewModel.PillShowOnHotkey = _uiPrefs.PillShowOnHotkey;
             _appViewModel.PillShowOnStartup = _uiPrefs.PillShowOnStartup;
+            _appViewModel.Theme = _uiPrefs.Theme;
             _appViewModel.PropertyChanged += OnUiPrefsRelevantPropertyChanged;
 
 
@@ -407,6 +415,14 @@ public partial class App : Application
             {
                 if (command == "toggle-pill") { TogglePill(); return; }
                 if (command == "open-settings") { OpenSettings(); return; }
+                if (command.StartsWith("open-settings:", StringComparison.Ordinal))
+                {
+                    // dimmy://settings/<tag> deep link — open Settings
+                    // and navigate to the named nav tag (e.g. "license").
+                    var tag = command["open-settings:".Length..];
+                    OpenSettingsWindowAt(tag);
+                    return;
+                }
                 if (command == "open-meeting") { OpenMeetingWindow(); return; }
                 if (command == "quit") { Quit(); return; }
                 if (command.StartsWith("set-style:", StringComparison.Ordinal))
@@ -517,9 +533,34 @@ public partial class App : Application
             var raw = args[i];
             if (string.IsNullOrEmpty(raw)) continue;
             if (!raw.StartsWith("dimmy://", StringComparison.OrdinalIgnoreCase)) continue;
+
+            // First try the activation flow (license magic links).
             var (code, token) = UrlSchemeRegistrar.ParseActivationUrl(raw);
             if (code is not null) return $"activate-code:{code}";
             if (token is not null) return $"activate-token:{token}";
+
+            // Then fall through to host-only "open this surface" routes.
+            // dimmy://meeting        -> open the Meeting window
+            // dimmy://settings       -> open Settings (default tab)
+            // dimmy://settings/license -> open Settings on the License tab
+            // The pipe command IDs match HandleForwardedCommand's switch
+            // (line 410-ish in this file). Add a new host here +
+            // matching case there to expose more deeplinks.
+            if (Uri.TryCreate(raw, UriKind.Absolute, out var uri)
+                && string.Equals(uri.Scheme, "dimmy", StringComparison.OrdinalIgnoreCase))
+            {
+                var host = uri.Host?.ToLowerInvariant();
+                switch (host)
+                {
+                    case "meeting":
+                        return "open-meeting";
+                    case "settings":
+                        var path = uri.AbsolutePath?.Trim('/').ToLowerInvariant();
+                        if (!string.IsNullOrEmpty(path))
+                            return $"open-settings:{path}";
+                        return "open-settings";
+                }
+            }
         }
         return null;
     }
@@ -817,6 +858,15 @@ public partial class App : Application
                         _pttStarted = false;
                         _appViewModel.SetError("No API key configured");
                     }
+                    else if (result == -7)
+                    {
+                        // Meeting recording is active — silent suppress per
+                        // user spec. The pill stays at idle, no error toast,
+                        // ptt.log gets the diagnostic line so it's debuggable
+                        // if the user wonders why the hotkey didn't engage.
+                        _pttStarted = false;
+                        PttLog("PTT hotkey suppressed: meeting recording active (rc=-7)");
+                    }
                     else if (result < 0)
                     {
                         _pttStarted = false;
@@ -855,6 +905,11 @@ public partial class App : Application
                     var result = DimmyNative.dimmy_start_recording();
                     if (result == -1)
                         _appViewModel.SetError("No API key configured");
+                    else if (result == -7)
+                    {
+                        // Meeting in progress — silent no-op, log only.
+                        PttLog("Toggle suppressed: meeting recording active (rc=-7)");
+                    }
                     else if (result == -2)
                     {
                         // Race: Rust thinks it's already recording (a previous
@@ -1004,6 +1059,34 @@ public partial class App : Application
     /// Open the dedicated MeetingWindow (or activate it if already
     /// open). Triggered from the tray menu's "Start meeting…" item
     /// and from the Settings home → Meeting card.
+    /// Called by PillWindow.StopMeetingFromPillAsync after the recap
+    /// pipeline successfully writes recap.md / actions to disk. If a
+    /// MeetingWindow is open, dispatches it to refresh its history
+    /// sidebar and auto-select the just-completed meeting so the user
+    /// sees the recap cards populated without having to click around.
+    /// No-op when no MeetingWindow is open — the artefacts are on
+    /// disk and visible next time it's opened.
+    public void NotifyMeetingRecapSaved(string dir)
+    {
+        try
+        {
+            var w = _meetingWindow;
+            if (w == null || string.IsNullOrEmpty(dir)) return;
+            w.DispatcherQueue?.TryEnqueue(() =>
+            {
+                try { w.RefreshAndSelectDir(dir); }
+                catch (Exception ex)
+                {
+                    Log($"NotifyMeetingRecapSaved dispatch exc: {ex.Message}", "Meeting");
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            Log($"NotifyMeetingRecapSaved exc: {ex.Message}", "Meeting");
+        }
+    }
+
     public void OpenMeetingWindow()
     {
         Log("OpenMeetingWindow called", "Meeting");
@@ -1015,15 +1098,22 @@ public partial class App : Application
                 _meetingWindow.Closed += (_, __) => _meetingWindow = null;
             }
             _meetingWindow.Activate();
-            // Bring to foreground — Activate() alone doesn't always
-            // raise above other apps on Win11 if some other process
-            // recently called SetForegroundWindow.
             var hwnd = WindowHelper.GetHwnd(_meetingWindow);
             if (hwnd != IntPtr.Zero)
             {
+                // Same topmost-toggle the Settings window uses — the
+                // bare SetForegroundWindow loses to Win11's foreground
+                // lock when the URL-launched transient process forwards
+                // the command via pipe. Restore-if-minimised + promote
+                // wins reliably.
+                ShowWindow(hwnd, SW_RESTORE);
+                SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
                 SetForegroundWindow(hwnd);
             }
-            Log($"OpenMeetingWindow activated, hwnd={hwnd}", "Meeting");
+            Log($"OpenMeetingWindow activated + foregrounded, hwnd={hwnd}", "Meeting");
         }
         catch (Exception ex)
         {

@@ -268,4 +268,98 @@ public class SettingsViewModelTests
         vm.LoadFromJson(json);
         Assert.Equal(expected, vm.LlmTranslateTo);
     }
+
+    // ── Recap-model override (meeting picker) ─────────────────────────
+    // Coverage for the dropdown landed in commit 4e8e611 / re-applied
+    // 5f4b918 after a debug-roundtrip revert. The view-model carries
+    // the chosen model id (or "" for "auto"); the field has to survive
+    // a load/save round-trip so a user pinning Opus 4.7 doesn't lose
+    // their pick on next config reload.
+
+    [Fact]
+    public void RecapModelOverride_defaults_to_empty()
+    {
+        var vm = new SettingsViewModel();
+        Assert.Equal("", vm.RecapModelOverride);
+    }
+
+    [Fact]
+    public void LoadFromJson_parses_recap_model_override()
+    {
+        var vm = new SettingsViewModel();
+        vm.LoadFromJson("{\"recap_model_override\":\"claude-opus-4-7\"}");
+        Assert.Equal("claude-opus-4-7", vm.RecapModelOverride);
+    }
+
+    [Fact]
+    public void LoadFromJson_recap_model_override_missing_keeps_empty()
+    {
+        var vm = new SettingsViewModel();
+        vm.RecapModelOverride = "claude-opus-4-7"; // some prior value
+        vm.LoadFromJson("{}");
+        Assert.Equal("", vm.RecapModelOverride);
+    }
+
+    [Fact]
+    public void ToJson_includes_recap_model_override()
+    {
+        var vm = new SettingsViewModel { RecapModelOverride = "gemini-3.1-pro" };
+        var json = vm.ToJson();
+        Assert.Contains("\"recap_model_override\"", json);
+        Assert.Contains("gemini-3.1-pro", json);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("claude-opus-4-7")]
+    [InlineData("claude-sonnet-4-6")]
+    [InlineData("claude-haiku-4-5-20251001")]
+    [InlineData("gemini-3.1-pro")]
+    [InlineData("gemini-2.5-pro")]
+    [InlineData("gemini-2.5-flash")]
+    [InlineData("gpt-5")]
+    [InlineData("gpt-4o")]
+    [InlineData("custom-model-id-from-future")]
+    public void RecapModelOverride_round_trips_through_json(string modelId)
+    {
+        // The dropdown's curated tags + the Custom escape hatch must all
+        // round-trip cleanly. Whatever the user picks, that's exactly
+        // what should land in config.json and come back out on reload.
+        var vm = new SettingsViewModel { RecapModelOverride = modelId };
+        var json = vm.ToJson();
+        var vm2 = new SettingsViewModel();
+        vm2.LoadFromJson(json);
+        Assert.Equal(modelId, vm2.RecapModelOverride);
+    }
+
+    // ── Audio-source dead config field (always-mix architecture) ──
+    // Commit 4e8e611 dropped the AudioSource radio buttons from
+    // Settings, but the field stays in config.json for backward read
+    // compat. The view-model still serialises it as a string the
+    // Rust core ignores at runtime.
+
+    [Fact]
+    public void AudioSource_default_does_not_break_load()
+    {
+        var vm = new SettingsViewModel();
+        // Old configs predating always-mix have audio_source="mic"
+        vm.LoadFromJson("{\"audio_source\":\"mic\"}");
+        Assert.Equal("mic", vm.AudioSource);
+        // And still serialise it on save so a downgrade is non-destructive
+        var json = vm.ToJson();
+        Assert.Contains("\"audio_source\"", json);
+    }
+
+    [Theory]
+    [InlineData("mic")]
+    [InlineData("system")]
+    [InlineData("mix")]
+    public void AudioSource_round_trips_through_json(string source)
+    {
+        var vm = new SettingsViewModel { AudioSource = source };
+        var json = vm.ToJson();
+        var vm2 = new SettingsViewModel();
+        vm2.LoadFromJson(json);
+        Assert.Equal(source, vm2.AudioSource);
+    }
 }
