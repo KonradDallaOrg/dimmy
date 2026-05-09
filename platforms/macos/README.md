@@ -12,10 +12,22 @@ The macOS native UI. SwiftUI + Xcode, calling the Rust core via C FFI (static li
 Dimmy/                           Main app
 ├── DimmyApp.swift               @main entry — Settings scene branches on
 │                                appState.useTahoeSettings (default true)
-├── AppDelegate.swift            NSApplicationDelegate — lifecycle, applyActivationPolicy
+├── AppDelegate.swift            NSApplicationDelegate — lifecycle, applyActivationPolicy.
+│                                Single-instance guard bypassed under XCTest
+│                                (XCTestConfigurationFilePath env var).
 ├── DimmyFFI.h                   C header for the Rust core FFI
 ├── Views/
 │   ├── PillView.swift               Floating overlay
+│   ├── MeetingView.swift            Meeting window host (delegates to Meeting/ subviews)
+│   ├── Meeting/                     v0.6.31 long-form meeting UI
+│   │   ├── MeetingViewModel.swift           State machine + FFI orchestration
+│   │   ├── MeetingIdleView.swift            Pre-record state
+│   │   ├── MeetingRecordingView.swift       Timer / chunks / Pause / Stop / Back-to-live
+│   │   ├── MeetingProcessingView.swift      Stepwise checkmarks + spinner
+│   │   ├── MeetingDoneView.swift            7 recap cards + transcript playhead
+│   │   ├── MeetingSidebar.swift             Past meetings list (search + delete)
+│   │   ├── AudioPlaybackBar.swift           AVAudioPlayer + click-drag seek
+│   │   └── WavPeaks.swift                   Centre-mirrored 220-bucket peaks
 │   ├── MenuBarPopover.swift         Legacy SwiftUI popover (unreferenced — see below)
 │   ├── OnboardingContainerView.swift
 │   └── Settings/
@@ -24,22 +36,35 @@ Dimmy/                           Main app
 │       ├── MacSettingsContainerView.swift   v3 sidebar + 9 tabs + toolbar
 │       ├── MacHomePage.swift / MacVoicePage.swift / MacOutputPage.swift
 │       ├── MacPillPage.swift / MacShortcutPage.swift / MacPrivacyPage.swift
-│       ├── MacRulesPage.swift / MacAboutPage.swift / MacAdvancedPage.swift
+│       ├── MacRulesPage.swift / MacAboutPage.swift / MacAdvancedPage.swift (recap-model picker)
 │       ├── MacPermissionsPage.swift
 │       └── *Settings*View.swift     Legacy v1/v2 (used when useTahoeSettings=false)
 ├── Controllers/
-│   └── StatusBarController.swift    NSStatusItem owner — native NSMenu (NOT popover)
-│                                    with Translate-to / Style submenus
-├── Managers/                    Services: HotkeyManager, DimmyCore, PermissionsManager
+│   ├── StatusBarController.swift    NSStatusItem owner — native NSMenu (NOT popover)
+│   │                                with Translate-to / Style submenus
+│   ├── PillWindowController.swift   Pill window + 500 ms NSTimer mirroring
+│   │                                dimmy_meeting_is_active / _is_paused
+│   └── MeetingWindowController.swift Window lifecycle (decoupled from FFI —
+│                                    closing doesn't stop the recording)
+├── Services/
+│   └── MeetingPostProcessService.swift  Recap pipeline mirror of Win impl
+├── Managers/                    Services: HotkeyManager (rc=-7 silent no-op),
+│                                DimmyCore (+V2 surface), PermissionsManager
 ├── State/                       AppState ObservableObject + UserDefaults persistence
-│                                (showInDock, showInMenuBar, useTahoeSettings, etc.)
-├── Utilities/                   Extensions, helpers, SelfTests
+│                                (showInDock, showInMenuBar, useTahoeSettings,
+│                                recap_model_override, etc.)
+├── Utilities/
+│   └── RecapModel.swift             Curated picker list + resolve fallthrough
 ├── Assets.xcassets/             App icons, ClaudeMark, DimmyLogo
 ├── Dimmy.entitlements           Microphone, Accessibility, Accessory mode
 ├── Info.plist                   LSUIElement=true (accessory), privacy usage strings
 
-Dimmy.xcodeproj/                 Xcode project
-DimmyTests/                      XCTest unit tests
+Dimmy.xcodeproj/                 Xcode project (XCTest target wired in pbxproj —
+                                 productType bundle.unit-test, ad-hoc signing)
+DimmyTests/                      XCTest unit tests (69 funcs):
+                                 MeetingPostProcessServiceTests,
+                                 RecapModelTests, MeetingHistoryRowTests,
+                                 AppStateRecapModelTests + legacy AppState tests
 dmg-assets/                      DMG installer background + layout
 ```
 

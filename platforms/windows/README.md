@@ -10,27 +10,56 @@ The Windows native UI. WinUI 3 + C# / .NET 8, calling the Rust core via P/Invoke
 
 ```
 Dimmy.Windows/                   Main app
-├── App.xaml, App.xaml.cs        WinUI App shell + jump-list arg parsing
+├── App.xaml, App.xaml.cs        WinUI App shell + jump-list arg parsing.
+│                                Polls dimmy_meeting_is_active / _is_paused (500 ms)
+│                                so the pill auto-shows the recording bar when a
+│                                meeting starts from any surface. Stop on the pill
+│                                routes to the meeting recap pipeline when active.
 ├── Program.cs                   Entry point
 ├── Views/
-│   ├── PillWindow.xaml(.cs)        Floating overlay (recording UI)
-│   ├── SettingsWindow.xaml(.cs)    Settings + Pill / Tasks / Visibility cards
+│   ├── PillWindow.xaml(.cs)        Floating overlay (recording UI). Stop branches
+│   │                                on dimmy_meeting_is_active.
+│   ├── MeetingWindow.xaml(.cs)     Long-form meeting UI: idle / recording (timer +
+│   │                                Pause + Stop + Back-to-live) / processing /
+│   │                                done (7 recap cards + transcript playhead).
+│   │                                Lifecycle decoupled from FFI — closing the
+│   │                                window does NOT stop the recording.
+│   ├── SettingsWindow.xaml(.cs)    Settings + recap-model picker + history detail
 │   ├── OnboardingWindow.xaml(.cs)  Welcome flow
 │   └── TaskbarAnchorWindow.xaml    Invisible 1×1 anchor — owns the taskbar entry
 │       └─ click → TogglePill, right-click → jump list
-├── ViewModels/                  MVVM layer (AppViewModel, SettingsViewModel)
+├── ViewModels/                  MVVM layer (AppViewModel, SettingsViewModel,
+│                                AppRuleViewModel, HistoryItemViewModel)
 ├── Services/
 │   ├── TrayService.cs              System-tray icon (small, near clock)
-│   ├── TaskbarService.cs           Taskbar overlay icon + amplitude bar (ITaskbarList3)
+│   ├── TaskbarService.cs           Taskbar overlay icon + amplitude bar (ITaskbarList3).
+│   │                                Bar shows max(mic, sys) — reacts to loopback
+│   │                                even when mic is silent.
 │   ├── JumpListService.cs          Right-click menu (ICustomDestinationList) + AUMI
 │   ├── CommandPipeServer.cs        Named-pipe IPC for jump-list commands
+│   ├── MeetingPostProcessService.cs Recap pipeline orchestration. Reads
+│   │                                transcripts.txt, calls dimmy_llm_call_raw with
+│   │                                the 11-section structured prompt (recap_model_
+│   │                                override → URL heuristic), writes recap.md +
+│   │                                actions.json, raises App.NotifyMeetingRecapSaved
+│   │                                so MeetingWindow can refresh + auto-select.
 │   ├── UiPreferences.cs            Win-only UI prefs (ui_prefs.json)
 │   ├── HotkeyService.cs            Low-level keyboard hook → AppViewModel
-│   ├── TextInjectionService.cs     Cmd+V via SendInput
+│   ├── TextInjectionService.cs     Cmd+V via SendInput (wScan + wVk for Electron / IME)
 │   └── TranscriptionService.cs     FFI orchestration around dimmy_*
 ├── Interop/
 │   └── DimmyNative.cs           P/Invoke declarations → dimmy_lib.dll
-├── Helpers/                     WinUI glue, DPI, transparency
+│                                (incl. dimmy_meeting_pause/_resume/_is_paused, rc=-7)
+├── Helpers/
+│   ├── MarkdownRenderer.cs         Block-level markdown (headings, bullets,
+│   │                                numbered lists, blockquotes, code) into
+│   │                                Microsoft.UI.Xaml.Documents tree
+│   ├── TranscriptRenderer.cs       Selectable transcript with playhead binding
+│   ├── WavPeaks.cs                 220-bucket centre-mirrored amplitude peaks
+│   ├── AppContextCapture.cs        HWND + focus drift capture for app-rule resolve
+│   ├── IconExtractor.cs            256×256 alpha-preserved app icons (SHFileInfo)
+│   ├── Win32FileDialog.cs / Win32DropTarget.cs  File-load picker + UIPI bypass
+│   └── ...                         WinUI glue, DPI, transparency
 ├── Converters/                  XAML value converters
 ├── Strings/                     Localizable resources
 ├── Assets/                      Icons, pill graphics
@@ -38,7 +67,10 @@ Dimmy.Windows/                   Main app
 ├── Dimmy.Windows.csproj         The project file
 └── NuGet.config                 Feed config
 
-Dimmy.Windows.Tests/             41 C# tests
+Dimmy.Windows.Tests/             ~100 xUnit Fact/Theory tests (incl. 13 added by
+                                 the system-audio-capture branch for
+                                 RecapModelOverride round-trip + AudioSource
+                                 backward-compat)
 Dimmy.Windows.UiTests/           FlaUI UIA3 smoke tests
 installer.nsi                    NSIS installer config (legacy — Velopack is now canonical)
 verify-self-contained.ps1        CI gate: asserts the publish folder contains only what it should

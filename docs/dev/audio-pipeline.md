@@ -2,10 +2,17 @@
 
 This audio pipeline is shared across all native UI platforms (Windows WinUI3, macOS SwiftUI, Linux GTK4). The Rust core modules are identical; only the integration layer differs per platform.
 
-## Pipeline Overview
+## Pipeline Overview — dictation
 
 ```
-Mic (cpal, 48kHz mono) → Raw samples buffer
+Mic (cpal, 48 kHz mono)        → mic ring buffer
++ Loopback (cpal, native rate) → loopback ring buffer  [Mix mode, Win-only]
+    │
+    │  Mix mode: aec.rs worker drains 480-sample frames in lockstep,
+    │            runs WebRTC AEC3 (mic = capture, loopback = render),
+    │            pushes mic - speaker_echo to audio_buffer.
+    │            If loopback ring is empty: zero-pad ref, never block.
+    │  Mic-only mode: mic samples go straight to audio_buffer.
     ↓ stop_recording
 RawAudio { samples, sample_rate }
     ↓ preprocess(enabled)
@@ -13,8 +20,8 @@ ProcessedAudio { samples, sample_rate }
     │
     ├── stt_mode == "local":
     │       ↓ downsample_to_16k()
-    │       f32 16kHz mono samples
-    │       ↓ whisper-rs transcribe_local()
+    │       f32 16 kHz mono samples
+    │       ↓ whisper-rs / parakeet / parakeet_fluid (Mac)
     │       String (transcript)
     │
     └── stt_mode == "cloud":
@@ -25,10 +32,76 @@ ProcessedAudio { samples, sample_rate }
             String (transcript)
     │
     ↓ filler::remove_fillers() (if enabled)
+    ↓ app_rules::resolve(captured_app_id) — optional style override
     ↓ optional LLM post-processing
-    ↓ history::save() (auto-save)
+    ↓ history::save() (auto-save, v2 schema)
 String (final text) → paste
 ```
+
+## Pipeline Overview — meeting mode (long-form)
+
+The meeting worker runs alongside the live capture and consumes the
+same `audio_buffer`, but with different chunking + persistence:
+
+```
+Mic + Loopback rings (same as dictation, AEC if Mix mode)
+    ↓
+audio_buffer (process-wide, ring-style)
+    ↓ meeting worker (every ~100 ms)
+    │
+    │  Pause check: if paused, skip drain/write/STT this tick.
+    │  Otherwise drain `meeting_chunk_secs` worth of samples
+    │  (default 15 s). On resume: advance samples_written +
+    │  last_processed past the paused window so it's excluded
+    │  from audio.wav AND from the chunked timeline; emit a
+    │  [paused] line in transcripts.txt at the seam.
+    ↓
+streaming WAV write (16 kHz mono int16) → audio.wav
++ chunked transcribe (same backend as dictation: cloud or local)
++ meta.json updated with last_chunk_ts
++ transcripts.txt appended (one line per chunk)
+    ↓ stop or pill Stop while meeting active
+LLM raw post-process (process_raw_prompt with the 11-section
+                      structured-recap prompt; recap_model_override
+                      first, URL heuristic fallback;
+                      Anthropic Opus 4.7+ uses thinking.type=adaptive)
+    ↓
+recap.md + actions.json written
+.recording marker deleted
+```
+
+The meeting `MEETING` static lives in `ffi.rs` independently of any UI
+window — closing the UI doesn't stop the recording. UIs probe
+`dimmy_meeting_is_active` on open and re-attach.
+
+## Pipeline Overview — file load
+
+`dimmy_transcribe_file` (drag-drop / picker → transcribe) uses a
+**different preprocess path** (`preprocess::process_buffer_for_file_load`):
+
+```
+WAV / file bytes
+    ↓ hound decode → f32 samples + sample_rate
+    ↓ process_buffer_for_file_load(samples, sample_rate)
+    │   - Clamp to [-1.0, 1.0] (NaN/Inf → 0.0)
+    │   - 80 Hz highpass (skipped if sample_rate < 8 kHz)
+    │   - NO VAD
+    │   - NO AGC
+    │   - Final NaN/Inf guard
+    ↓
+ProcessedAudio
+    ↓ chunk if > provider limit, or single-shot to whisper/parakeet
+    ↓
+String (transcript)
+```
+
+**Why no AGC for files**: dagc emits NaN on long-silence stretches
+(meetings have many of them) and the post-AGC clamp turns NaN into 0.
+Once dagc's internal gain state is corrupted, every subsequent sample
+outputs NaN forever. Burned 2026-05-08: 97 % of a 95-min WAV became
+silent zeros, Parakeet emitted empty for 186 of 191 chunks. Fix in
+commit `0ed682b`. See `known-bugs.md` AUDIO-001 for the dictation-side
+counterpart.
 
 ## Type Safety
 
@@ -139,3 +212,47 @@ The processed WAV is at the original sample rate (typically 48kHz), not 16kHz. D
 - Input range: [-32768.0, 32767.0] (we scale from [-1.0, 1.0])
 - Returns voice probability [0.0, 1.0] per frame
 - RNN-based: state can drift on very long recordings (hence energy floor fallback)
+
+## Always-mix capture (`feat/system-audio-capture`)
+
+Pre-2026-05, the user could pick `AudioSource = Mic | System | Mix`.
+Post-`3eddac3`, the pill and meeting paths force `AudioSource::Mix`
+unconditionally. The enum is dead at call sites but kept on disk for
+backward-compat with old `config.json` files. The C# `AudioSource`
+view-model still reads/writes the field and the Mac mirror does the
+same; the Rust runtime ignores it.
+
+**Why "always mix"**: users opening a meeting expected to capture both
+their voice and the remote participants' voices in one stream. Picking
+between Mic / System / Mix every time produced a class of
+"silent recording" support tickets. Always-mix gets the right behaviour
+by default; AEC3 (`aec.rs`) keeps it from sounding like a feedback loop.
+
+**Failure-mode safety** (load-bearing — guarded by
+`worker_processes_mic_when_ref_ring_empty`): if the loopback ring stays
+empty (no default output, BT routed away in HFP profile, headset
+unplugged mid-meeting), the AEC worker zero-pads the reference frame
+rather than blocking on lockstep mic+ref drain. Pre-`3eddac3` this
+class of setup hung the audio buffer forever.
+
+## AEC3 in Mix mode
+
+See `core/src/aec.rs` for the implementation. Headline:
+
+- 10 ms frames @ 48 kHz mono (480 samples). cpal callbacks PUSH samples
+  into mic + ref ring buffers; the AEC worker DRAINS in lockstep.
+- Bounded rings (`MAX_RING_SAMPLES = 48_000`, 1 s headroom). Overflow
+  drops oldest samples and AEC resyncs via its delay estimator —
+  better than unbounded growth.
+- Pipeline: `aec3::pipelines::linear` (HPF + NS + AGC + linear AEC
+  filter). Output is mic minus speaker echo.
+- DFN noise suppression upstream of AEC is wired but DEFERRED — see
+  `dfn.rs` for activation criteria.
+
+## Taskbar amplitude — dual-source (Win)
+
+`TaskbarService` polls both `dimmy_get_amplitude()` (mic) and
+`dimmy_get_loopback_amplitude()` (system) at 12 Hz and draws
+`max(mic, sys)` on the taskbar progress bar. So the bar reacts to
+remote-participant audio even when the local mic is silent — the
+free VU meter that's visible when the pill is hidden.

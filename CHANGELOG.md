@@ -6,66 +6,290 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.6.31] - 2026-05-09
 
-### Added
-- **Mac Meeting window — full system-audio-capture parity port.** Mac
-  catches up to Win for the meeting feature shipped on `feat/system-
-  audio-capture`. SwiftUI rewrite of `MeetingWindow` with the full
-  state machine (idle / recording / processing / done), translucent
-  sidebar of past meetings (search + delete with NSAlert confirm),
-  persistent recording bar (timer / chunks / Pause / Stop / Back-to-
-  live), processing spinner with stepwise checkmarks, and the seven
-  recap cards (TLDR + Context + Highlights + Narrative + Decisions +
-  Topics + Actions + Open Questions + Risks + Next Steps + Followups).
-- **Mac block-level markdown renderer.** Replaces the flat-text recap
-  render. Bullets (`- ` / `* `), numbered lists (`1. `), sub-headings
-  (`### `), and block quotes (`> `) all render with native SwiftUI
-  shapes; inline (`**bold**`, `*italic*`, `` `code` ``) still flows
-  through `AttributedString.markdown`.
+This release combines two parallel work streams that landed back-to-back:
+the Win-side `feat/system-audio-capture` branch (PR #45, merged into
+`staging` at `ef2f998`) and the Mac `staging-mac-v2-parity` port (PR #46).
+
+### Added — cross-platform core (`feat/system-audio-capture`)
+
+- **Always-mix capture architecture.** The pill and meeting paths force
+  `AudioSource::Mix` everywhere; the Mic / System / Mix enum is dead at
+  call sites (kept on disk for forward-compat with old `config.json`).
+  AEC worker zero-pads the reference ring when loopback is empty so a
+  silent system / no default output / BT routed-away never hangs the
+  audio buffer (`core/src/aec.rs::worker_processes_mic_when_ref_ring_empty`).
+- **Meeting pause/resume FFI.** Three new exports —
+  `dimmy_meeting_pause`, `dimmy_meeting_resume`, `dimmy_meeting_is_paused`.
+  Return-code contract: 1 = state flipped, 0 = no-op (already in target
+  state, or no meeting active), -1 = lock failure. While paused, cpal
+  callbacks keep filling buffers but the worker skips drain / WAV write /
+  STT chunks; on resume the paused window is excluded from `audio.wav`
+  and the chunked timeline, with a `[paused] (resumed after N ms)` line
+  in `transcripts.txt` at the seam.
+- **`dimmy_start_recording` rc = -7.** Silent-noop return code emitted
+  when a meeting is active, blocking the pill dictation path from
+  corrupting an in-flight meeting capture. C# / Swift hosts treat -7 as
+  expected, not as an error.
+- **WebRTC AEC3 acoustic echo cancellation** (`core/src/aec.rs`,
+  Phase 1 of the meeting Mix mode). Pure-Rust `aec3 = 0.2` port of the
+  WebRTC AEC3 algorithm. Mic frames as `capture`, loopback frames as
+  `render` reference; output = mic − speaker echo. Operates on 10 ms
+  frames at 48 kHz mono with bounded ring buffers (1 s headroom);
+  worker sleeps in 5 ms ticks when not active (zero CPU when idle).
+- **DeepFilterNet noise-suppression scaffolding** (`core/src/dfn.rs`,
+  Phase 2). Module wired upstream of the AEC stage; activation deferred
+  pending an upstream `deep_filter` crate that exposes the `tract`
+  feature (or a swap to `deepfilter-rt` riding the existing `ort`
+  runtime). The `local-dfn` feature is currently a no-op gate.
+- **Per-process loopback scaffolding** (`core/src/process_loopback.rs`,
+  Phase 5a, Windows-only). `list_meeting_processes()` enumerates known
+  meeting apps via `Toolhelp32` snapshot; `auto_detect_meeting_pid()`
+  picks one heuristically. The actual `AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK`
+  capture path (`spawn_process_capture`) is a stub returning `Err` —
+  caller falls back to default-output loopback. Lays the groundwork for
+  the BT/HFP meeting-app case where standard loopback returns silence.
+- **Anthropic adaptive-thinking dispatch** (`core/src/llm.rs`). Opus 4.7+
+  and Sonnet 5+ now use `thinking.type=adaptive` (no `budget_tokens`)
+  per Anthropic's API change; Sonnet 4 / 4.5 / 4.6 still get the legacy
+  `budget_tokens` form. Helpers extracted for unit-testability:
+  `anthropic_wants_thinking`, `anthropic_uses_adaptive_thinking`,
+  `gemini_wants_thinking`, `is_gemini_native_url`. Caught a latent bug
+  where `sonnet-6` fell through to plain budget mode.
+- **File-load preprocess separate code path**
+  (`preprocess::process_buffer_for_file_load`). Highpass-only — skips
+  VAD + AGC. Fixes the 2026-05-08 file-load bug where dagc emitted NaN
+  on long-silence stretches and corrupted 97 % of a 95-min WAV. The
+  live mic path keeps full preprocess; only `dimmy_transcribe_file`
+  uses the lighter pipeline. (See `known-bugs.md` AUDIO-001.)
+
+### Added — Win UI (PR #45)
+
+- **MeetingWindow lifecycle decoupled from recording.** Closing the
+  window no longer calls `dimmy_meeting_stop`; state lives in the Rust
+  `MEETING` static. Reopen probes `dimmy_meeting_is_active` and
+  re-attaches polling, pause state, and active dir.
+- **Pill Stop branches on meeting active.** When a meeting is in flight
+  the pill Stop runs the recap pipeline through the new shared
+  `MeetingPostProcessService` (transcribing spinner + auto-refresh of
+  MeetingWindow if reopened). Otherwise normal dictation Stop runs.
+- **Sidebar Delete on past meetings** with `ContentDialog` confirm +
+  filesystem cleanup of the meeting dir.
+- **Recap-model override dropdown** (Settings → Recap). Curated picker
+  (Auto + Anthropic Opus 4.7 / Sonnet 4.6 / Haiku 4.5 + Gemini 3.1 Pro /
+  2.5 Pro / 2.5 Flash + GPT-5 / GPT-4o + Custom) bound to
+  `recap_model_override`; honoured by `process_raw_prompt` before the
+  URL-heuristic fallback.
+- **Taskbar amp = max(mic, system)** so the progress bar reacts to
+  loopback even when the mic is silent.
+- **MarkdownRenderer + TranscriptRenderer.** Block-level markdown for
+  the recap card (bullets, numbered lists, sub-headings, blockquotes)
+  + selectable transcript with playhead binding.
+- **40 net new tests.** 23 Rust unit + 4 Rust integration
+  (`core/tests/meeting_pause_resume.rs`) + 13 C# xUnit. Inventory and
+  manual-sweep checklist in [`docs/dev/system-audio-capture-tests.md`].
+  Caught + fixed the latent Anthropic-adaptive-thinking dispatch bug.
+
+### Added — Mac UI (PR #46)
+
+- **Mac MeetingWindow port.** SwiftUI rewrite of the meeting window with
+  the full state machine (idle / recording / processing / done),
+  translucent sidebar of past meetings (search + delete with `NSAlert`
+  confirm), persistent recording bar (timer / chunks / Pause / Stop /
+  Back-to-live), processing spinner with stepwise checkmarks, and the
+  seven recap cards (TLDR + Context + Highlights + Narrative + Decisions
+  + Topics + Actions + Open Questions + Risks + Next Steps + Followups).
+- **Mac block-level markdown renderer.** Bullets (`- ` / `* `), numbered
+  lists (`1. `), sub-headings (`### `), and block quotes (`> `) render
+  via native SwiftUI shapes; inline (`**bold**`, `*italic*`, `` `code` ``)
+  flows through `AttributedString.markdown`.
 - **Mac waveform strip with click/drag seek.** New `AudioPlaybackBar`
-  + `WavPeaks` (Swift port of Win's `WavPeaks.cs`). Renders 220-bucket
-  centre-mirrored amplitude bars in a SwiftUI `Canvas`; played portion
-  fills with the accent colour, unplayed stays in `macTextSecondary`.
-  Single `DragGesture(minimumDistance: 0)` covers both tap-to-jump and
-  continuous scrubbing. AVAudioPlayer-backed (AVKit's `VideoPlayer`
-  was the source of a SwiftUI layout-loop SIGABRT on audio-only
-  assets — fixed-height waveform avoids the size-computation that
-  triggered it).
-- **Mac recap-model dropdown** in Advanced settings. Curated picker
-  (Auto + Anthropic Opus 4.7 / Sonnet 4.6 / Haiku 4.5 + Gemini 3.1
-  Pro / 2.5 Pro / 2.5 Flash + GPT-5 / GPT-4o + Custom) bound to
-  `recap_model_override` in config.json. `pickRecapModel()` honours
-  the override before the URL-heuristic fallback.
+  + `WavPeaks` (Swift port of Win's `WavPeaks.cs`). 220-bucket centre-
+  mirrored amplitude bars in a SwiftUI `Canvas`; played portion fills
+  with accent, unplayed stays in `macTextSecondary`. Single
+  `DragGesture(minimumDistance: 0)` covers tap-to-jump + scrubbing.
+  AVAudioPlayer-backed because AVKit's `VideoPlayer` triggered a
+  SwiftUI layout-loop SIGABRT on audio-only assets.
+- **Mac recap-model dropdown** in Advanced settings. Same curated list
+  as Win, bound to `recap_model_override` in `config.json`.
+  `pickRecapModel()` honours the override before URL-heuristic fallback.
 - **Mac Pill ↔ Meeting routing.** Stop button on the pill branches:
   when a meeting is active, Stop spins up the recap pipeline through
-  the new shared `MeetingPostProcessService`; otherwise the existing
-  dictation toggle stop runs. A 500 ms `NSTimer` in
-  `PillWindowController` mirrors `dimmy_meeting_is_active` /
-  `_is_paused` into `AppState` so the pill auto-shows the recording
-  bar when a meeting is started from any surface.
+  the new shared `MeetingPostProcessService`; otherwise the dictation
+  toggle stop runs. A 500 ms `NSTimer` in `PillWindowController`
+  mirrors `dimmy_meeting_is_active` / `_is_paused` into `AppState`.
 - **Mac XCTest target + 69 unit tests.** New `DimmyTests` bundle wired
   into the pbxproj (productType `bundle.unit-test`, ad-hoc signing).
-  Coverage: structured-recap prompt + parser + markdown round-trip
-  (17), curated picker list integrity + resolve fallthrough (12),
-  history-row title/subtitle pretty-printing (7), AppState
-  recap_model_override round-trip (6), plus the existing AppState
-  language/preset tests (27).
+  Coverage: structured-recap prompt + parser + markdown round-trip,
+  curated picker list integrity + resolve fallthrough, history-row
+  title/subtitle pretty-printing, AppState recap_model_override
+  round-trip, plus the existing AppState language/preset tests.
 
 ### Changed
-- **Mac MeetingWindow lifecycle decoupled from FFI.** Closing the
-  window no longer stops the recording (state lives in the Rust
-  `MEETING` static). Reopening probes `dimmy_meeting_is_active` and
-  re-attaches polling, pause state, and active dir.
+
+- **Mac MeetingWindow lifecycle decoupled from FFI** (mirrors Win).
+  Closing the window no longer stops the recording. Reopening probes
+  `dimmy_meeting_is_active` and re-attaches.
 - **Mac `AppDelegate` single-instance guard bypassed under XCTest.**
   `XCTestConfigurationFilePath` env var indicates the host is a test
-  runner — without the bypass the runner would terminate before
-  XCTest could attach if a dev-build instance was already running.
+  runner; without the bypass the runner would terminate before XCTest
+  could attach if a dev-build instance was already running.
+- **Cargo.toml dependency scoping fix.** Phase 5a's
+  `[target.'cfg(target_os = "windows")'.dependencies]` block was
+  silently swallowing `sentry`, `auto-launch`, `ed25519-dalek`, `sha2`
+  and `clap` — TOML sections continue to the next header. Moved the
+  Windows-only block to the end so cross-platform deps stay in
+  `[dependencies]`. Verified with `cargo metadata`.
 
 ### Fixed
+
 - **Mac dictation hotkey race vs in-flight meeting.** `HotkeyManager`
-  now handles `dimmy_start_recording` rc=-7 (meeting active) as a
-  silent no-op (log only) instead of bubbling an error. Mac already
-  pre-flighted with `meetingIsActive`; the rc=-7 branch closes the
-  race where a meeting is started between the check and the call.
+  handles `dimmy_start_recording` rc = -7 as a silent no-op instead of
+  surfacing an error. Mac already pre-flighted with `meetingIsActive`;
+  the rc = -7 branch closes the race where a meeting is started
+  between the check and the call.
+
+## [0.6.30] - 2026-05-07
+
+### Added
+- **Win MeetingWindow — full UI port from the standalone HTML mockup.**
+  Browser-style sidebar of past meetings, idle / recording / processing /
+  done state machine, recap cards with playhead-bound transcript, and
+  the chrome that the system-audio-capture branch then layered pause/
+  resume / sidebar Delete / pill routing on top of.
+
+### Fixed
+- Theme persistence across app restarts.
+- App-rule override gate when no rule matches the foreground app
+  (was applying the previous match).
+- Selectable transcript + playhead behaviour.
+- Pre-commit hook pipe-mask bug that let unformatted Rust through.
+
+## [0.6.29] - 2026-05-07
+
+### Added
+- **CLAUDE.md "v2 surfaces" section** — 8-row table of new modules + FFI
+  entries + UI mirrors so a fresh Claude session can find rules /
+  history-v2 / file-load / meeting / parakeet / icons / taskbar without
+  grep-archaeology.
+- **Workflow `paths-ignore`** — doc-only / mockup / markdown commits no
+  longer trigger the 30 min installer build (reverts the 0bd2209
+  `cancel-in-progress` experiment that killed long-running builds).
+
+### Fixed (PR #44 cherry-picks onto staging)
+- **`SendInput` paste populates `wScan` with the scan code.** Without
+  it Electron / Chrome / IME apps drop synthetic events that carry only
+  `wVk`. Hardware drivers always set both — now we do too.
+- **Toggle-mode race auto-recovery.** When the Rust core returns -2
+  (already recording), the C# layer resets local state instead of
+  bubbling the error.
+- **Per-provider LLM key UX.** Badge refreshes when the LLM provider
+  dropdown changes, surfacing the right key state for the new provider.
+- **Rich AppContextCapture port from PR #44.** HWND tracking + focus
+  drift detection so app-rule resolution doesn't flap when the user
+  briefly tabs away during dictation.
+- **Win Settings UI polish.** Rule-row reorder slim pattern, drop the
+  match-type combo, lock model combo widths, strip em-dash AI-slop
+  from labels.
+
+## [0.6.28] - 2026-05-07
+
+### Added
+- **Onboarding Parakeet preload.** Onboarding now warms the Parakeet
+  bundle so the first dictation chunk doesn't pay cold-start latency.
+
+### Fixed
+- **Mac v2-unified parity** — app rules + history v2 + file load +
+  meeting all wired through Mac's SwiftUI surface (`feat/v2-unified`
+  → Mac).
+- **`get_config_json` exposes v2 retention + auto_recap fields.**
+  C# / Swift / Linux UIs were reading 0 / false on round-trip.
+- **Win Tests project missing files** + clippy `unsafe-doc` lint.
+- **Parallel CI builds** (Win + Linux + Mac, no Mac gate). Brings Mac
+  release into the same flow as the others.
+
+## [0.6.27] - 2026-05-04
+
+### Added
+- **Long-form meeting mode (Win).** `core/src/meeting.rs` — streaming
+  WAV (~115 MB / hour at 16 kHz mono int16), `transcripts.txt`
+  per-chunk lines, `meta.json` with `last_chunk_ts`, `.recording`
+  marker (deleted on clean stop) for crash recovery. At stop, the
+  full transcript is sent to the LLM once for `recap.md` +
+  `actions.json`. Identifiers are RFC4122 v4 UUIDs.
+- **File load (drop / picker → transcribe), Win.** `dimmy_transcribe_file`
+  with rc table -1..-8. UIPI bypass for elevated drag sources, Win32
+  drop-target on the whole HWND tree, large-file confirmation dialog,
+  cloud + local branches, `Helpers/WavPeaks.cs` for waveform preview.
+- **History v2 schema.** Idempotent `ALTER TABLE` migration adds
+  `enhanced_text`, `audio_path`, `app_process`, retention horizon, and
+  word timestamps. Detail panel in `SettingsWindow.xaml` shows
+  waveform + audio playback for past dictations.
+- **App-context rules (Win).** Per-app LLM style / translate-to
+  override. `core/src/app_rules.rs::resolve` resolves the captured app
+  id (process name, bundle id, or X11 WM_CLASS) against the user's
+  rule list. `Helpers/AppContextCapture.cs` captures the foreground
+  HWND + focus drift; tray meeting menu + drag-reorder UI in Settings.
+- **Parakeet TDT v3 local STT** (`core/src/parakeet.rs`). Pure-Rust
+  port over ONNX Runtime — `nemo128.onnx` + `encoder-model.onnx` +
+  `decoder_joint-model.onnx` + `vocab.txt`, ~2.5 GB bundle downloaded
+  to `<config>/parakeet-fp32/` on first use. Greedy TDT decoder with
+  LSTM state (`[2, 1, 640]` × 2). Selectable in Win Settings + bundled
+  in the release pipeline (`onnxruntime.dll` next to `dimmy_lib.dll`).
+- **Realtime chunked Parakeet** (`core/src/chunked_stt.rs`). Worker
+  thread slices the most recent N seconds + overlap, dedups
+  last-3-words against the cumulative text, emits FFI events. 5 s
+  chunks for the realtime path; benchmarked at 8.7× realtime on WSL
+  CPU over 272 min of LibriVox audio.
+- **Word-level timestamps end-to-end** (Phase 7.4). `transcribe_with_word_timestamps`
+  + history schema.
+- **Real app icons via `SHGetFileInfo`** for app rules + history rows
+  (Phase 7.1). Phase 8.5 bumped to 256 × 256, Phase 8.6 preserved alpha.
+- **Live captions floating window** (Win). Subtitle-style overlay fed
+  by chunked Parakeet during recording.
+- **Mac Parakeet on the Apple Neural Engine via FluidAudio**
+  (`core/src/parakeet_fluid.rs`, feature `local-stt-parakeet-fluid`).
+  Documented RTF: 100-300×; first `init_asr()` downloads the ~3 GB
+  CoreML bundle to `~/.cache/fluidaudio/`.
+- **CI: parallel Mac + Win + Linux release flows** with FluidAudio
+  Parakeet path wired through all three.
+
+### Fixed
+- Drag/drop registers on the whole HWND tree + correct POINTL→long
+  marshal so drops work over child controls.
+- LLM raw FFI for the meeting recap path.
+- Mac pill scroll-cycle crash + self-contained bundle + FluidAudio
+  download flow + onboarding auto-pick.
+
+## [0.6.26] - 2026-04-30
+
+### Added
+- **Win taskbar overhaul.** `TaskbarService` (overlay icon + amplitude
+  bar via `ITaskbarList3`) + `JumpListService` (right-click submenus
+  for Style / Translate to with custom 32 × 32 BGRA glyphs) +
+  `CommandPipeServer` (named-pipe IPC for jump-list commands) +
+  `UiPreferences` (Win-only `ui_prefs.json` for taskbar-only mode).
+- **Sentry user feedback envelope v2.** `capture_feedback` in
+  `core/src/telemetry/sentry_pipeline.rs` sends a manually-built
+  envelope with `type=feedback` so reports land in Sentry's Feedback
+  tab (not Issues). Replaces `capture_message` + tag.
+
+### Fixed
+- **Win11 jump list silently failed without matching `.lnk`.** Need
+  process AUMI + per-window AUMI (`SHGetPropertyStoreForWindow`) +
+  Start-menu shortcut with matching AUMI. Velopack handles it in prod
+  via `--packId Dimmy`; dev builds get `JumpListService.EnsureStartMenuShortcut()`.
+  CommitList success ≠ menu shows.
+
+## [0.6.25] - 2026-04-30
+
+Internal staging cut between v0.6.20 (last public release before the
+v2 / Phase-7 series) and v0.6.26 (taskbar overhaul). Carries the early
+Win Parakeet integration commits (`feat(stt/win)`: bundle
+`onnxruntime.dll`, Parakeet selectable in Settings, real download
+progress, ABI snapshot refresh, unify into the local-model ComboBox)
+plus a handful of stability fixes (drain chunked transcriber before
+clearing audio buffer, persist Parakeet selection, transparent
+`CaptionWindow`).
 
 ## [0.6.24] - 2026-04-29
 

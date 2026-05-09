@@ -97,24 +97,49 @@ CI treats clippy warnings as errors. CI uses the same feature flags — mismatch
 
 **RULE (user-explicit, 2026-05-07): If the user has not EXPLICITLY asked for a feature to be removed, KEEP IT. Always rebuild with the full set above. The user wants all features always — "le voglio tutte. sempre."** Removing a feature on your own initiative is a regression, not an optimization.
 
-## v2 surfaces — what shipped on `feat/v2-unified` (2026-05)
+## v2 surfaces — what shipped on `feat/v2-unified` + `feat/system-audio-capture` (2026-05)
 
-The current `staging` is **v0.6.29** with the v2 unified feature set.
-A fresh Claude session needs to know these modules + FFI surfaces
-exist before touching anything:
+Current `staging` is **v0.6.31** carrying the cumulative v2 feature set.
+Two big merges define the surface area:
 
-| Surface | Rust module | FFI entries | UI mirror (Win) |
+- `feat/v2-unified` (Apr–May 2026) — app rules, history v2, file load,
+  meeting mode, Parakeet local STT, taskbar / jumplist / pill chrome.
+- `feat/system-audio-capture` (May 2026, PR #45) — always-mix capture,
+  meeting pause/resume, AEC3, recap-model override, pill ↔ meeting
+  routing, MeetingWindow lifecycle decoupling, file-load preprocess fix.
+- `staging-mac-v2-parity` (PR #46) — Mac port of the meeting / pause /
+  recap-model surface to keep cross-platform parity.
+
+A fresh Claude session needs to know these modules + FFI surfaces exist
+before touching anything:
+
+### Core / dictation surfaces (`feat/v2-unified`)
+
+| Surface | Rust module | FFI entries | UI mirror |
 |---|---|---|---|
-| **App-context rules** — per-app LLM style override | `app_rules.rs` | `dimmy_set_app_context`, `dimmy_clear_app_context` | `Helpers/AppContextCapture.cs` (rich: HWND + focus drift), `ViewModels/AppRuleViewModel.cs` |
-| **History v2 schema** — enhanced text, audio path, app process, word timestamps, retention | `history.rs` (idempotent ALTER TABLE) | `dimmy_history_recent`, `_search`, `_update_enhanced`, `_update_audio`, `_update_word_timestamps` | `ViewModels/HistoryItemViewModel.cs`, History detail panel in `SettingsWindow.xaml` |
-| **File load** (drop / picker → transcribe, local OR cloud) | extends `ffi.rs` (chunked + cloud branch) | `dimmy_transcribe_file` (rc -1..-8) | `Helpers/Win32FileDialog.cs`, `Helpers/Win32DropTarget.cs` (UIPI bypass), `Helpers/WavPeaks.cs`, ConfirmLargeFileAsync |
-| **Meeting mode** — long-form record + LLM recap | `meeting.rs` (worker thread, streaming WAV, transcripts.txt) | `dimmy_meeting_start/_stop/_save_post_process/_list_orphans/_is_active` | `Views/MeetingWindow.xaml` (poll 2 s) |
-| **LLM raw** (bypass dictation prompt for recap) | `llm.rs::process_raw_prompt` | `dimmy_llm_call_raw` | meeting recap auto-trigger |
-| **Parakeet TDT v3 STT** + word timestamps | `parakeet.rs::transcribe_with_word_timestamps` | inside `dimmy_transcribe_file` | (Mac uses `parakeet_fluid.rs` via FluidAudio) |
-| **App icons from .exe** — alpha-preserved 256×256 PNGs | (no Rust) | (no FFI) | `Helpers/IconExtractor.cs` (`IShellItemImageFactory` + `GetDIBits` ARGB) |
-| **Pill / Taskbar / JumpList** | (no Rust) | (no FFI) | `Services/TaskbarService.cs`, `JumpListService.cs`, `CommandPipeServer.cs` |
+| **App-context rules** — per-app LLM style override | `app_rules.rs` | `dimmy_set_app_context`, `dimmy_clear_app_context` | Win: `Helpers/AppContextCapture.cs` (HWND + focus drift), `ViewModels/AppRuleViewModel.cs`. Mac: `MacRulesPage.swift` |
+| **History v2 schema** — enhanced text, audio path, app process, word timestamps, retention | `history.rs` (idempotent ALTER TABLE) | `dimmy_history_recent`, `_search`, `_update_enhanced`, `_update_audio`, `_update_word_timestamps` | Win: `ViewModels/HistoryItemViewModel.cs`, History detail panel in `SettingsWindow.xaml` |
+| **File load** (drop / picker → transcribe, local OR cloud) | extends `ffi.rs` + uses `preprocess::process_buffer_for_file_load` (highpass-only, no AGC) | `dimmy_transcribe_file` (rc -1..-8) | Win: `Helpers/Win32FileDialog.cs`, `Helpers/Win32DropTarget.cs` (UIPI bypass), `Helpers/WavPeaks.cs`, ConfirmLargeFileAsync |
+| **Meeting mode** — long-form record + LLM recap | `meeting.rs` (worker, streaming WAV, transcripts.txt, recovery marker) | `dimmy_meeting_start/_stop/_save_post_process/_list_orphans/_is_active` | Win: `Views/MeetingWindow.xaml` (lifecycle decoupled). Mac: `Views/Meeting/MeetingViewModel.swift` + 7 sub-views |
+| **LLM raw** (bypass dictation prompt for recap) | `llm.rs::process_raw_prompt` (Anthropic adaptive thinking, Gemini Pro auto-think) | `dimmy_llm_call_raw` | Auto-fired by `MeetingPostProcessService` after stop |
+| **Parakeet TDT v3 STT** + word timestamps | `parakeet.rs::transcribe_with_word_timestamps`, realtime via `chunked_stt.rs` | inside `dimmy_transcribe_file`, `dimmy_parakeet_warmup`, `_bundle_present`, `_download_bundle` | Win: bundled `onnxruntime.dll` + Parakeet picker. Mac: `parakeet_fluid.rs` via FluidAudio (Apple Neural Engine, 100–300× RTF) |
+| **App icons from .exe** — alpha-preserved 256×256 PNGs | (no Rust) | (no FFI) | Win: `Helpers/IconExtractor.cs` (`IShellItemImageFactory` + `GetDIBits` ARGB) |
+| **Pill / Taskbar / JumpList** | (no Rust) | (no FFI) | Win: `Services/TaskbarService.cs`, `JumpListService.cs`, `CommandPipeServer.cs`, `UiPreferences.cs` |
 
-Hardening status: see [`docs/dev/v2-test-hardening-plan.md`](docs/dev/v2-test-hardening-plan.md) — the new surfaces above shipped without coverage; that plan is the next-up TDD pass.
+### Meeting / system-audio-capture surfaces (`feat/system-audio-capture`)
+
+| Surface | Rust module | FFI entries | UI mirror |
+|---|---|---|---|
+| **Always-mix capture** — pill + meeting force `AudioSource::Mix`, AEC tolerant of empty ref | `audio.rs`, `aec.rs` (10 ms frames, 480 samples @ 48 kHz, capped rings) | (existing capture FFI) | C# `AudioSource` enum kept for backward-compat with old `config.json` |
+| **Meeting pause/resume** — gap-skip semantics | `meeting.rs::MeetingSession::{pause,resume,is_paused}` | `dimmy_meeting_pause`, `dimmy_meeting_resume`, `dimmy_meeting_is_paused` (1=flipped, 0=no-op, -1=lock failure) | Win: `MeetingWindow.xaml.cs::Pause_Click` (E768 ↔ E769 glyph). Mac: pause button on meeting window |
+| **Pill blocked when meeting active** | `dimmy_start_recording` returns -7 | C#/Swift hosts treat as silent no-op |
+| **AEC3 acoustic echo cancellation** | `aec.rs` (WebRTC AEC3 via `aec3 = 0.2`) | (none — internal worker) | (none) |
+| **DeepFilterNet noise suppression** — DEFERRED | `dfn.rs` (stub gated by `local-dfn` feature) | (none) | (none) |
+| **Per-process loopback** — Phase 5a SCAFFOLDING (BT/HFP unblocker) | `process_loopback.rs` (Win-only, `spawn_process_capture` returns Err) | (none yet) | (none yet) |
+| **Recap-model override** | (config field, picked by `process_raw_prompt`) | inside `dimmy_set_config_json` | Win + Mac: curated dropdown in Advanced settings |
+| **Pill ↔ Meeting recap pipeline** | (no Rust) | (no FFI — uses existing meeting FFI) | Win: `Services/MeetingPostProcessService.cs`. Mac: `Services/MeetingPostProcessService.swift` (mirror) |
+
+Hardening status: see [`docs/dev/system-audio-capture-tests.md`](docs/dev/system-audio-capture-tests.md) for the 40 net-new tests landed with PR #45 (23 Rust unit + 4 integration + 13 C# xUnit) and the manual-sweep checklist for what isn't automated. Earlier `feat/v2-unified` hardening plan: [`docs/dev/v2-test-hardening-plan.md`](docs/dev/v2-test-hardening-plan.md).
 
 ## Decision tree — where does this change go?
 
@@ -126,8 +151,12 @@ Hardening status: see [`docs/dev/v2-test-hardening-plan.md`](docs/dev/v2-test-ha
 | Add an FFI entry | `core/src/ffi.rs` + `core/tests/v2_ffi.rs` (round-trip) + each platform's interop wrapper |
 | Add an app-rule trigger | `core/src/app_rules.rs::resolve` + UI capture (Win: `Helpers/AppContextCapture.cs`, Mac: `NSWorkspace`) |
 | Fix audio bug | Reproduce in `preprocess.rs` test FIRST, read `docs/dev/audio-pipeline.md`, then fix |
-| Add a meeting feature | `core/src/meeting.rs` (worker + transcripts.txt) + UI window + LLM raw handoff |
-| Touch the file-load pipeline | `dimmy_transcribe_file` in `ffi.rs` — rc table is contractual, don't renumber |
+| Add a meeting feature | `core/src/meeting.rs` (worker + transcripts.txt) + UI window + LLM raw handoff. Lifecycle is decoupled from UI: closing the window doesn't stop the recording — `MEETING` static lives in `ffi.rs` |
+| Touch meeting pause/resume | `meeting.rs::MeetingSession::{pause,resume,is_paused}` + FFI rc contract (1 / 0 / -1). Worker excludes paused window from `audio.wav` and adds `[paused]` line in `transcripts.txt` |
+| Touch the AEC / Mix-mode echo path | `core/src/aec.rs` — 10 ms frames @ 48 kHz, ref ring zero-padding when loopback empty. Reference signal comes from cpal loopback, capture from mic |
+| Touch the file-load pipeline | `dimmy_transcribe_file` in `ffi.rs` — rc table is contractual, don't renumber. Uses `preprocess::process_buffer_for_file_load` (highpass-only). Do NOT call full `RawAudio::preprocess` — AGC NaN destroys long files |
+| Pick a recap model | `core/src/llm.rs::process_raw_prompt` honours `recap_model_override` first, then URL heuristic. Anthropic Opus 4.7+ / Sonnet 5+ use `thinking.type=adaptive`; older Sonnets use `budget_tokens` |
+| Add a Parakeet feature | `core/src/parakeet.rs` (Win/Linux ONNX path) + `parakeet_fluid.rs` (Mac ANE, gated by `local-stt-parakeet-fluid`). Realtime chunking lives in `chunked_stt.rs` |
 | Touch macOS FFI | Read `docs/dev/known-bugs.md` MACOS-001/002/003 first |
 | Touch Windows CI / installer | Read `docs/dev/windows-ci.md` — 10 invariants, all paid in blood |
 | Add a test | Read `docs/dev/testing.md` (tier definitions) + `docs/dev/v2-test-hardening-plan.md` (Phase 7+8 hardening) |
