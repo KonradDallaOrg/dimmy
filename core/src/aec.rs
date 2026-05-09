@@ -254,3 +254,145 @@ fn drain_frame(ring: &Arc<Mutex<Vec<f32>>>, dest: &mut [f32]) -> bool {
         false
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper: build a sine-ish synthetic mic signal at 48 kHz so the
+    /// AEC worker has finite, in-range samples to chew on.
+    fn synth_mic(n: usize) -> Vec<f32> {
+        (0..n)
+            .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 48_000.0).sin() * 0.3)
+            .collect()
+    }
+
+    #[test]
+    fn push_to_ring_caps_at_max() {
+        let ring: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+        // Push 2 × MAX_RING_SAMPLES; ring should clamp to the cap and
+        // keep the most-recent tail (drops the oldest excess).
+        let chunk = vec![0.5f32; MAX_RING_SAMPLES];
+        push_to_ring(&ring, &chunk);
+        push_to_ring(&ring, &chunk);
+        let len = ring.lock().unwrap().len();
+        assert_eq!(len, MAX_RING_SAMPLES, "ring must not grow beyond the cap");
+    }
+
+    #[test]
+    fn drain_frame_returns_false_when_short() {
+        let ring: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(vec![0.5f32; 100]));
+        let mut dst = vec![0.0f32; FRAME_SAMPLES];
+        assert!(!drain_frame(&ring, &mut dst));
+        // Ring is untouched.
+        assert_eq!(ring.lock().unwrap().len(), 100);
+    }
+
+    #[test]
+    fn drain_frame_consumes_exact_size() {
+        let ring: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(vec![0.5f32; FRAME_SAMPLES * 3]));
+        let mut dst = vec![0.0f32; FRAME_SAMPLES];
+        assert!(drain_frame(&ring, &mut dst));
+        assert_eq!(ring.lock().unwrap().len(), FRAME_SAMPLES * 2);
+        assert!(dst.iter().all(|&s| s == 0.5));
+    }
+
+    /// Regression: AEC worker must NOT block when ref ring is empty.
+    /// Before commit 3eddac3 the worker required BOTH rings to have a
+    /// frame, so a configuration where loopback never delivers (no
+    /// default output, BT routed away, silent system) would deadlock
+    /// the mic stream — output_buffer stayed empty forever, dictation
+    /// captured nothing. After the fix, the worker zero-pads the ref
+    /// frame and processes mic immediately, AEC3 with zero ref ≈
+    /// passthrough.
+    #[test]
+    fn worker_processes_mic_when_ref_ring_empty() {
+        let mic: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+        let rref: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+        let out: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+        let shutdown = Arc::new(AtomicBool::new(false));
+
+        let h = spawn_aec_thread(mic.clone(), rref.clone(), out.clone(), shutdown.clone());
+
+        // Push 5 frames worth of mic samples; ref stays empty.
+        push_to_ring(&mic, &synth_mic(FRAME_SAMPLES * 5));
+
+        // Give the worker time to drain + process. 200 ms is generous
+        // for 5 frames at 5 ms poll + AEC3 inference per frame.
+        thread::sleep(Duration::from_millis(300));
+
+        let produced = out.lock().unwrap().len();
+        assert!(
+            produced >= FRAME_SAMPLES,
+            "worker should have produced at least one frame even with empty ref ring (produced={})",
+            produced
+        );
+        assert!(
+            out.lock().unwrap().iter().all(|s| s.is_finite()),
+            "all output samples must be finite"
+        );
+
+        shutdown.store(true, Ordering::SeqCst);
+        let _ = h.join();
+    }
+
+    /// Symmetric case: ref present, mic present. Worker drains lockstep
+    /// and produces cleaned mic output.
+    #[test]
+    fn worker_processes_mic_with_ref_present() {
+        let mic: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+        let rref: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+        let out: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+        let shutdown = Arc::new(AtomicBool::new(false));
+
+        let h = spawn_aec_thread(mic.clone(), rref.clone(), out.clone(), shutdown.clone());
+
+        // Push 5 frames each. Ref is a slightly-delayed copy of mic so
+        // AEC3 has a sensible echo correlation to learn.
+        let mic_samples = synth_mic(FRAME_SAMPLES * 5);
+        push_to_ring(&mic, &mic_samples);
+        push_to_ring(&rref, &mic_samples);
+
+        thread::sleep(Duration::from_millis(300));
+
+        let produced = out.lock().unwrap().len();
+        assert!(
+            produced >= FRAME_SAMPLES,
+            "worker should produce frames when both rings are filled (produced={})",
+            produced
+        );
+
+        shutdown.store(true, Ordering::SeqCst);
+        let _ = h.join();
+    }
+
+    /// Sanity: worker exits promptly on shutdown signal even if rings
+    /// are completely empty. Catches a regression where a future
+    /// refactor might block on a long sleep without checking shutdown.
+    #[test]
+    fn worker_honours_shutdown_signal() {
+        let mic: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+        let rref: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+        let out: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+        let shutdown = Arc::new(AtomicBool::new(false));
+
+        let h = spawn_aec_thread(mic.clone(), rref.clone(), out.clone(), shutdown.clone());
+        // Brief settle so the thread enters its main loop.
+        thread::sleep(Duration::from_millis(50));
+        shutdown.store(true, Ordering::SeqCst);
+
+        // Should join within a few poll intervals — POLL_SLEEP is 5 ms,
+        // 200 ms is many orders of magnitude above the worst case.
+        let join_deadline = std::time::Instant::now() + Duration::from_millis(500);
+        loop {
+            if h.is_finished() {
+                break;
+            }
+            if std::time::Instant::now() > join_deadline {
+                panic!("AEC worker did not exit within 500 ms of shutdown");
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        let _ = h.join();
+    }
+}

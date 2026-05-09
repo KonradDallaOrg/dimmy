@@ -4926,7 +4926,10 @@ mod tests {
                 overlay_position: Mutex::new("Bottom Right".to_string()),
                 keep_in_clipboard: Mutex::new(false),
                 input_gain: Arc::new(std::sync::atomic::AtomicU32::new(1.0f32.to_bits())),
+                loopback_gain: Arc::new(std::sync::atomic::AtomicU32::new(1.0f32.to_bits())),
                 audio_source: Mutex::new("mic".to_string()),
+                meeting_chunk_secs: Mutex::new(15.0f32),
+                audio_buffer_secondary: Arc::new(Mutex::new(Vec::new())),
                 key_store: crate::keystore::KeyStore::new(),
                 audio_debug_session_dir: Mutex::new(None),
                 window_anchor: Mutex::new(None),
@@ -5699,5 +5702,89 @@ mod tests {
         dimmy_shutdown();
         let recording = state().recording.lock().map(|r| *r).unwrap_or(true);
         assert!(!recording, "recording flag must be false after shutdown");
+    }
+
+    // ── Meeting-pause FFI surface ────────────────────────────────────
+    // These mirror the integration test in tests/meeting_pause_resume.rs
+    // but at the lib-test level so they run without the dylib link
+    // shenanigans. Coverage for the FFI return-code contract:
+    //   1  → state actually flipped (was running, now paused; or vice
+    //        versa)
+    //   0  → no-op (already in target state, or no meeting active)
+    //  -1  → internal lock failure (not exercised here)
+
+    #[test]
+    fn meeting_pause_no_op_without_meeting() {
+        ensure_test_state();
+        // Defensive cleanup in case a prior test left a session.
+        if let Ok(mut g) = MEETING.lock() {
+            *g = None;
+        }
+        assert_eq!(dimmy_meeting_is_active(), 0, "no meeting active to start");
+        assert_eq!(dimmy_meeting_pause(), 0, "pause without meeting → 0");
+        assert_eq!(dimmy_meeting_resume(), 0, "resume without meeting → 0");
+        assert_eq!(
+            dimmy_meeting_is_paused(),
+            0,
+            "is_paused without meeting → 0"
+        );
+    }
+
+    #[test]
+    fn start_recording_blocked_when_meeting_active() {
+        ensure_test_state();
+        // Drop any leftover MEETING from prior tests that touched it.
+        if let Ok(mut g) = MEETING.lock() {
+            *g = None;
+        }
+        // Inject a fake meeting session into the global slot via the
+        // public start path with a cloud STT snapshot; we tear it down
+        // immediately after the assert so other tests aren't affected.
+        use crate::audio::AudioSource;
+        use crate::meeting::{MeetingSession, SttSnapshot};
+        use std::sync::Arc;
+        let stt = SttSnapshot {
+            mode: "cloud".to_string(),
+            api_url: "https://test.invalid/".to_string(),
+            api_model: "x".to_string(),
+            api_key: Some("x".to_string()),
+            prompt: String::new(),
+            local_model: String::new(),
+            local_backend: "whisper".to_string(),
+            language: "en".to_string(),
+            chunk_secs: Some(15.0),
+        };
+        let primary: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+        let secondary: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+        let session = match MeetingSession::start(
+            primary,
+            secondary,
+            48_000,
+            48_000,
+            AudioSource::Mix,
+            stt,
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("[skip] start failed: {e}");
+                return;
+            }
+        };
+        if let Ok(mut g) = MEETING.lock() {
+            *g = Some(session);
+        }
+
+        // Now meeting is "active" — dimmy_start_recording must return
+        // -7 immediately.
+        let rc = dimmy_start_recording();
+        // Restore: stop the meeting before checking so we don't leak.
+        let session = MEETING.lock().ok().and_then(|mut g| g.take());
+        if let Some(s) = session {
+            let _ = s.stop();
+        }
+        assert_eq!(
+            rc, -7,
+            "dimmy_start_recording must return -7 when a meeting is active"
+        );
     }
 }

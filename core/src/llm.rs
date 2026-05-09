@@ -447,6 +447,46 @@ pub async fn process_text(
 /// completions everywhere else. `max_tokens` is provided by the
 /// caller so summary callers can request 4 K outputs without us
 /// guessing from input length.
+/// Gemini's NATIVE generateContent endpoint uses a completely different
+/// request schema than OpenAI-compatible — detect by URL shape so we
+/// can route to the right body construction. The OpenAI-compat layer
+/// at /openai/v1/chat/completions still falls through to the
+/// OpenAI-style branch.
+fn is_gemini_native_url(api_url: &str) -> bool {
+    api_url.contains("generativelanguage.googleapis.com")
+        && (api_url.contains("generateContent") || api_url.contains(":streamGenerateContent"))
+}
+
+/// True for Anthropic models that benefit from extended thinking (the
+/// flagship reasoning tier). Caller already knows it's an Anthropic URL.
+/// Match on lowercased model id. Future Sonnet 6+ are explicitly listed
+/// so we don't have to track every API drop — the adaptive-thinking
+/// dispatch picks the right shape per model.
+fn anthropic_wants_thinking(model_lc: &str) -> bool {
+    model_lc.contains("opus")
+        || model_lc.contains("sonnet-4")
+        || model_lc.contains("sonnet-5")
+        || model_lc.contains("sonnet-6")
+}
+
+/// True for Gemini models that benefit from extended thinking. Caller
+/// already knows the URL is Gemini-native. Match on lowercased model id.
+fn gemini_wants_thinking(model_lc: &str) -> bool {
+    model_lc.contains("pro") || model_lc.starts_with("gemini-3")
+}
+
+/// Anthropic API split: Opus 4.7 / Sonnet 5+ removed extended-thinking
+/// budgets. They require `thinking.type=adaptive` + `output_config.effort`
+/// and reject `temperature/top_p/top_k`. Older Opus 4.x / Sonnet 4 still
+/// use the budget_tokens form. Detect by model id so a config pinning
+/// a specific older model still works.
+fn anthropic_uses_adaptive_thinking(model_lc: &str) -> bool {
+    model_lc.contains("opus-4-7")
+        || model_lc.contains("opus-4.7")
+        || model_lc.contains("sonnet-5")
+        || model_lc.contains("sonnet-6") // future-proof
+}
+
 pub async fn process_raw_prompt(
     api_url: &str,
     model: &str,
@@ -479,38 +519,20 @@ pub async fn process_raw_prompt(
         .build()?;
 
     let is_anthropic = crate::provider::Provider::from_url(api_url).is_anthropic();
-    // Gemini's NATIVE generateContent endpoint uses a completely different
-    // request schema than OpenAI-compatible — detect by URL shape so we
-    // can route to the right body construction. The OpenAI-compat layer
-    // at /openai/v1/chat/completions still falls through to the
-    // OpenAI-style branch.
-    let is_gemini_native = api_url.contains("generativelanguage.googleapis.com")
-        && (api_url.contains("generateContent") || api_url.contains(":streamGenerateContent"));
+    let is_gemini_native = is_gemini_native_url(api_url);
 
     // Auto-enable extended thinking on flagship reasoning-tier models —
     // worth the +30-60 s for meeting recap quality. Detection by model
     // name so we don't have to plumb a flag from every caller.
     let model_lc = model.to_ascii_lowercase();
-    let wants_thinking_anthropic = is_anthropic
-        && (model_lc.contains("opus")
-            || model_lc.contains("sonnet-4")
-            || model_lc.contains("sonnet-5"));
-    let wants_thinking_gemini =
-        is_gemini_native && (model_lc.contains("pro") || model_lc.starts_with("gemini-3"));
+    let wants_thinking_anthropic = is_anthropic && anthropic_wants_thinking(&model_lc);
+    let wants_thinking_gemini = is_gemini_native && gemini_wants_thinking(&model_lc);
 
-    // Anthropic API split: Opus 4.7 / Sonnet 5+ removed extended-thinking
-    // budgets. They require `thinking.type=adaptive` + `output_config.effort`
-    // and reject `temperature/top_p/top_k`. Older Opus 4.x / Sonnet 4
-    // still use the budget_tokens form. Detect by model id so a config
-    // pinning a specific older model still works.
-    let is_anthropic_adaptive_only = model_lc.contains("opus-4-7")
-        || model_lc.contains("opus-4.7")
-        || model_lc.contains("sonnet-5")
-        || model_lc.contains("sonnet-6"); // future-proof
-                                          // max_tokens sizing — adaptive-only models need 32k headroom (the new
-                                          // Opus 4.7 tokenizer uses ~1.0-1.35× more tokens, and adaptive
-                                          // thinking writes a reasoning trace inline). Old budget mode keeps
-                                          // its tighter ceiling (budget + 4k headroom).
+    let is_anthropic_adaptive_only = anthropic_uses_adaptive_thinking(&model_lc);
+    // max_tokens sizing — adaptive-only models need 32k headroom (the new
+    // Opus 4.7 tokenizer uses ~1.0-1.35× more tokens, and adaptive
+    // thinking writes a reasoning trace inline). Old budget mode keeps
+    // its tighter ceiling (budget + 4k headroom).
     const ANTHROPIC_THINKING_BUDGET: u64 = 10_000;
     let effective_max_tokens = if wants_thinking_anthropic {
         if is_anthropic_adaptive_only {
@@ -913,5 +935,119 @@ mod tests {
     fn translate_empty_string_is_noop() {
         let prompt = build_system_prompt(LlmStyle::Off, LlmTone::None, "", "");
         assert!(prompt.is_empty());
+    }
+
+    // ── Provider/model dispatch helpers ──────────────────────────────
+    // Coverage for the routing logic that decides whether a call uses
+    // Anthropic's adaptive thinking shape vs the legacy budget_tokens
+    // shape, and whether extended thinking should auto-enable.
+    // Bug 2026-05-08: Opus 4.7 was being sent budget_tokens form →
+    // 400 invalid_request_error. Fixed in commit 9729ca4.
+
+    #[test]
+    fn gemini_native_url_detection() {
+        // Native generateContent endpoint variants
+        assert!(is_gemini_native_url(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent"
+        ));
+        assert!(is_gemini_native_url(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro:streamGenerateContent"
+        ));
+        // OpenAI-compat endpoint should NOT match (falls through to
+        // OpenAI branch even though hostname is googleapis)
+        assert!(!is_gemini_native_url(
+            "https://generativelanguage.googleapis.com/openai/v1/chat/completions"
+        ));
+        // Other providers
+        assert!(!is_gemini_native_url(
+            "https://api.anthropic.com/v1/messages"
+        ));
+        assert!(!is_gemini_native_url(
+            "https://api.openai.com/v1/chat/completions"
+        ));
+        assert!(!is_gemini_native_url(
+            "https://api.groq.com/openai/v1/audio/transcriptions"
+        ));
+    }
+
+    #[test]
+    fn anthropic_thinking_dispatch_flagship_models() {
+        // All flagship reasoning-tier models opt into extended thinking.
+        assert!(anthropic_wants_thinking("claude-opus-4-7"));
+        assert!(anthropic_wants_thinking("claude-opus-4-5"));
+        assert!(anthropic_wants_thinking("claude-opus-3-5"));
+        assert!(anthropic_wants_thinking("claude-sonnet-4-6"));
+        assert!(anthropic_wants_thinking("claude-sonnet-4-5"));
+        assert!(anthropic_wants_thinking("claude-sonnet-5"));
+    }
+
+    #[test]
+    fn anthropic_thinking_dispatch_skips_haiku_and_sonnet3() {
+        // Haiku is the fast tier — no thinking. Sonnet 3.x predates
+        // extended thinking entirely.
+        assert!(!anthropic_wants_thinking("claude-haiku-4-5-20251001"));
+        assert!(!anthropic_wants_thinking("claude-haiku-3-5"));
+        assert!(!anthropic_wants_thinking("claude-sonnet-3-5"));
+    }
+
+    #[test]
+    fn anthropic_adaptive_thinking_only_for_new_models() {
+        // Opus 4.7 + Sonnet 5+ require thinking.type=adaptive
+        assert!(anthropic_uses_adaptive_thinking("claude-opus-4-7"));
+        assert!(anthropic_uses_adaptive_thinking("claude-opus-4.7"));
+        assert!(anthropic_uses_adaptive_thinking("claude-sonnet-5"));
+        assert!(anthropic_uses_adaptive_thinking("claude-sonnet-6")); // future
+                                                                      // Older models keep the budget_tokens form
+        assert!(!anthropic_uses_adaptive_thinking("claude-opus-4-5"));
+        assert!(!anthropic_uses_adaptive_thinking("claude-opus-3-5"));
+        assert!(!anthropic_uses_adaptive_thinking("claude-sonnet-4-6"));
+        assert!(!anthropic_uses_adaptive_thinking("claude-sonnet-4-5"));
+        // Haiku never adaptive
+        assert!(!anthropic_uses_adaptive_thinking(
+            "claude-haiku-4-5-20251001"
+        ));
+    }
+
+    #[test]
+    fn anthropic_dispatch_combinations_match_routing_rule() {
+        // Sanity: every adaptive-only model must also "want thinking";
+        // the inverse isn't required (older Opus wants thinking but
+        // uses the legacy shape).
+        for m in &[
+            "claude-opus-4-7",
+            "claude-opus-4.7",
+            "claude-sonnet-5",
+            "claude-sonnet-6",
+        ] {
+            assert!(anthropic_wants_thinking(m), "{} should want thinking", m);
+            assert!(
+                anthropic_uses_adaptive_thinking(m),
+                "{} should use adaptive thinking",
+                m
+            );
+        }
+        // Old Opus: thinking yes, adaptive no.
+        let old = "claude-opus-4-5";
+        assert!(anthropic_wants_thinking(old));
+        assert!(!anthropic_uses_adaptive_thinking(old));
+    }
+
+    #[test]
+    fn gemini_thinking_dispatch_pro_and_3x() {
+        assert!(gemini_wants_thinking("gemini-2.5-pro"));
+        assert!(gemini_wants_thinking("gemini-3.1-pro"));
+        assert!(gemini_wants_thinking("gemini-3-flash"));
+        // Flash 2.x is a fast tier — no thinking.
+        assert!(!gemini_wants_thinking("gemini-2.5-flash"));
+        assert!(!gemini_wants_thinking("gemini-2-flash"));
+    }
+
+    #[test]
+    fn case_insensitive_model_matching() {
+        // Caller already lowercases; helpers should NOT match upper-case
+        // input (defensive — mismatched casing means caller forgot
+        // to_ascii_lowercase()).
+        assert!(!anthropic_uses_adaptive_thinking("Claude-Opus-4-7"));
+        assert!(!anthropic_wants_thinking("CLAUDE-OPUS-4-7"));
     }
 }
