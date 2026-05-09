@@ -734,13 +734,16 @@ pub fn primary_sample_rate(device_name: &Option<String>, source: &AudioSource) -
     let rate = match source {
         AudioSource::System => {
             #[cfg(target_os = "windows")]
-            let r = host
-                .default_output_device()
-                .and_then(|d| d.default_output_config().ok())
-                .map(|c| c.sample_rate().0);
+            {
+                host.default_output_device()
+                    .and_then(|d| d.default_output_config().ok())
+                    .map(|c| c.sample_rate().0)
+                    .unwrap_or_else(|| primary_sample_rate(device_name, &AudioSource::Mic))
+            }
             #[cfg(not(target_os = "windows"))]
-            let r: Option<u32> = None;
-            r.unwrap_or_else(|| primary_sample_rate(device_name, &AudioSource::Mic))
+            {
+                primary_sample_rate(device_name, &AudioSource::Mic)
+            }
         }
         AudioSource::Mic | AudioSource::Mix => {
             let device = if let Some(ref name) = device_name {
