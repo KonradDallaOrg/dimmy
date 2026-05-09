@@ -490,10 +490,12 @@ final class MeetingViewModel: ObservableObject {
             let s = secs % 60
             timerLabel = String(format: "%02d:%02d:%02d", h, m, s)
         }
-
-        // Re-read pause state from FFI in case another surface flipped
-        // it (pill toggle, future tray menu).
-        let livePaused = DimmyCore.shared.meetingIsPaused
+        // Pause state now flows from the `meeting_state` event in
+        // DimmyCore.handleEvent into AppState.shared.meetingIsPaused —
+        // no need to re-poll FFI here. Mirror the shared flag so
+        // existing `vm.isPaused` consumers in MeetingRecordingView
+        // keep working without a constructor-signature change.
+        let livePaused = AppState.shared.meetingIsPaused
         if livePaused != isPaused {
             isPaused = livePaused
             statusLabel = isPaused ? "Paused" : "Recording"

@@ -14,10 +14,12 @@ namespace Dimmy.Windows.Services;
 /// route through this service so the recap fires regardless of which
 /// surface the user pressed Stop from.
 ///
-/// Helper methods (BuildStructuredRecapPrompt / ParseStructuredRecap /
-/// BuildMarkdownFromSections / PickRecapModel) live as `internal
-/// static` on MeetingWindow so the prompt + parser stay in lockstep
-/// with the UI rendering.
+/// Pure helper methods — BuildStructuredRecapPrompt /
+/// ParseStructuredRecap / BuildMarkdownFromSections — live as
+/// `public static` on <see cref="Dimmy.Windows.Helpers.MeetingRecapHelpers"/>
+/// so they're testable without a XAML host. PickRecapModel still
+/// lives on MeetingWindow as `internal static
+/// PickRecapModelInternal` because it depends on AppViewModel state.
 public static class MeetingPostProcessService
 {
     public sealed class RecapResult
@@ -41,7 +43,7 @@ public static class MeetingPostProcessService
 
         try
         {
-            var prompt = MeetingWindow.BuildStructuredRecapPromptInternal(transcript);
+            var prompt = Helpers.MeetingRecapHelpers.BuildStructuredRecapPrompt(transcript);
             var modelOverride = MeetingWindow.PickRecapModelInternal();
             App.Log($"recap (shared) model='{modelOverride}' prompt {prompt.Length} chars dir='{dir}'",
                 "MeetingRecap");
@@ -63,8 +65,8 @@ public static class MeetingPostProcessService
             }
 
             var raw = System.Text.Encoding.UTF8.GetString(buf, 0, rc);
-            var sections = MeetingWindow.ParseStructuredRecapInternal(raw);
-            var recapMarkdown = MeetingWindow.BuildMarkdownFromSectionsInternal(sections);
+            var sections = Helpers.MeetingRecapHelpers.ParseStructuredRecap(raw);
+            var recapMarkdown = Helpers.MeetingRecapHelpers.BuildMarkdownFromSections(sections);
             var actionsPlain = sections.GetValueOrDefault("ACTIONS", "");
 
             int saveRc = DimmyNative.dimmy_meeting_save_post_process(
