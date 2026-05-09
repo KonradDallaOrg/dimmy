@@ -17,6 +17,14 @@ public enum AppState
 
 public partial class AppViewModel : ObservableObject
 {
+    /// <summary>
+    /// Optional log sink injected by App at startup. Lets this view-
+    /// model emit diagnostic lines without taking a hard dependency on
+    /// <c>App.Log</c> — which keeps it cross-compilable into the test
+    /// project (Dimmy.Windows.Tests doesn't link App.xaml.cs). Default
+    /// no-op; production wires this to <c>App.Log</c> in OnLaunched.
+    /// </summary>
+    public static System.Action<string, string>? Log;
     private static readonly Dictionary<string, string> StyleColors = new()
     {
         ["off"] = "#41B0B1", ["correct"] = "#2dd4bf", ["summarize"] = "#fbbf24",
@@ -211,8 +219,13 @@ public partial class AppViewModel : ObservableObject
                     // PillWindow. Rust emits this exactly once per state
                     // transition (start / pause / resume / stop), so we
                     // get instant updates with zero idle CPU.
-                    MeetingActive = payload.GetProperty("active").GetBoolean();
-                    MeetingPaused = payload.GetProperty("paused").GetBoolean();
+                    {
+                        var ma = payload.GetProperty("active").GetBoolean();
+                        var mp = payload.GetProperty("paused").GetBoolean();
+                        Log?.Invoke($"meeting_state event: active={ma} paused={mp}", "Meeting");
+                        MeetingActive = ma;
+                        MeetingPaused = mp;
+                    }
                     break;
             }
         }
