@@ -416,38 +416,26 @@ public sealed partial class SettingsWindow : Window
         UpdateAppRuleDragAutoScroll(pt);
     }
 
-    private void UpdateAppRuleDropIndicator(global::Windows.Foundation.Point pt)
+    private System.Collections.Generic.List<Helpers.AppRuleReorderMath.Slot> GatherAppRuleSlots()
     {
         var lv = AppRulesListView;
-        // Find the slot boundary (top of slot, or bottom of last slot
-        // the cursor passed) closest to the cursor; that's where the
-        // dropped item would land. Default: bottom of the list.
-        double indicatorY = 0;
-        bool found = false;
+        var slots = new System.Collections.Generic.List<Helpers.AppRuleReorderMath.Slot>(ViewModel.AppRules.Count);
         for (int i = 0; i < ViewModel.AppRules.Count; i++)
         {
             if (lv.ContainerFromIndex(i) is not ListViewItem container) continue;
             var transform = container.TransformToVisual(lv);
             var topLeft = transform.TransformPoint(new global::Windows.Foundation.Point(0, 0));
-            double midY = topLeft.Y + container.ActualHeight / 2.0;
-            double bottomY = topLeft.Y + container.ActualHeight;
-            if (pt.Y < midY) { indicatorY = topLeft.Y; found = true; break; }
-            if (pt.Y < bottomY) { indicatorY = bottomY; found = true; break; }
+            slots.Add(new Helpers.AppRuleReorderMath.Slot(
+                topLeft.Y, topLeft.Y + container.ActualHeight));
         }
-        if (!found)
-        {
-            int last = ViewModel.AppRules.Count - 1;
-            if (last >= 0 && lv.ContainerFromIndex(last) is ListViewItem lastContainer)
-            {
-                var transform = lastContainer.TransformToVisual(lv);
-                var topLeft = transform.TransformPoint(new global::Windows.Foundation.Point(0, 0));
-                indicatorY = topLeft.Y + lastContainer.ActualHeight;
-            }
-            else
-            {
-                indicatorY = lv.ActualHeight;
-            }
-        }
+        return slots;
+    }
+
+    private void UpdateAppRuleDropIndicator(global::Windows.Foundation.Point pt)
+    {
+        var lv = AppRulesListView;
+        var slots = GatherAppRuleSlots();
+        var (_, indicatorY) = Helpers.AppRuleReorderMath.HitTest(pt.Y, slots, lv.ActualHeight);
         // The indicator's parent Grid pads against the ListView's outer
         // edges; clamp Y to keep the 2-px line inside.
         indicatorY = System.Math.Max(0, System.Math.Min(indicatorY, lv.ActualHeight - 2));
@@ -567,31 +555,14 @@ public sealed partial class SettingsWindow : Window
         int srcIdx = ViewModel.AppRules.IndexOf(rule);
         if (srcIdx < 0) return;
 
-        // Hit-test the release point against rendered ListViewItems
-        // to find the target slot. Upper half of container i ⇒ insert
-        // above (target = i); lower half ⇒ insert below (target = i+1).
-        // Past the last item ⇒ append.
         var lv = AppRulesListView;
         var pt = e.GetCurrentPoint(lv).Position;
-        int dstIdx = ViewModel.AppRules.Count;
-        for (int i = 0; i < ViewModel.AppRules.Count; i++)
+        var slots = GatherAppRuleSlots();
+        var (rawTarget, _) = Helpers.AppRuleReorderMath.HitTest(pt.Y, slots, lv.ActualHeight);
+        int dstIdx = Helpers.AppRuleReorderMath.AdjustedDstIndex(srcIdx, rawTarget);
+        if (dstIdx < 0)
         {
-            if (lv.ContainerFromIndex(i) is not ListViewItem container) continue;
-            var transform = container.TransformToVisual(lv);
-            var topLeft = transform.TransformPoint(new global::Windows.Foundation.Point(0, 0));
-            double midY = topLeft.Y + container.ActualHeight / 2.0;
-            double bottomY = topLeft.Y + container.ActualHeight;
-            if (pt.Y < midY) { dstIdx = i; break; }
-            if (pt.Y < bottomY) { dstIdx = i + 1; break; }
-        }
-        if (dstIdx > ViewModel.AppRules.Count) dstIdx = ViewModel.AppRules.Count;
-        // ObservableCollection.Move semantics: dst is FINAL index.
-        // If src < dst, removal shifts items down by one, so the
-        // desired final position is dst - 1.
-        if (srcIdx < dstIdx) dstIdx -= 1;
-        if (dstIdx < 0 || dstIdx == srcIdx)
-        {
-            App.Log($"app-rule drag end: no-op (src={srcIdx} dst={dstIdx})", "Settings");
+            App.Log($"app-rule drag end: no-op (src={srcIdx} rawTarget={rawTarget})", "Settings");
             return;
         }
         App.Log($"app-rule reorder src={srcIdx} dst={dstIdx} count={ViewModel.AppRules.Count}", "Settings");

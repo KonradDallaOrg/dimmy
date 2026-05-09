@@ -137,7 +137,7 @@ manual sweep:
 
 | Area | What to verify |
 |---|---|
-| App rules drag-reorder | Open Settings → App rules → drag a row up / down. **Known: WinUI 3 v3.1.7 + SentinelOne EDR can crash mid-drag (combase E_UNEXPECTED) — environment issue, not branch regression. Reboot resets COM state.** |
+| App rules drag-reorder | Open Settings → App rules → grab the grip (E76F glyph, leftmost column) → drag up / down. Source row dims, 2-px insertion line tracks slot boundary, ghost popup follows cursor with row snapshot, near-edge auto-scroll. **NB: built-in `CanReorderItems` is disabled — replaced with manual pointer-driven impl because WinUI 3 v3.1.7 hard-crashes the renderer on the built-in path. See [`known-bugs.md`](known-bugs.md) WIN-003.** |
 | Meeting pause UI | Start meeting → click Pause → icon flips to play, label "Resume" → click → icon flips back. `transcripts.txt` contains `[paused] (resumed after N ms)` line at the seam. |
 | Pill stop = meeting recap | Start meeting → close MeetingWindow → click pill Stop → pill shows Transcribing spinner ~10-30 s → recap.md and actions.json land in the meeting dir. If MeetingWindow is reopened during the recap, sidebar auto-selects the new row. |
 | Sidebar Delete | MeetingWindow sidebar history → click trash icon on a row → confirms → meeting dir deleted from disk + row removed. |
