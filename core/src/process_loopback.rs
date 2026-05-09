@@ -170,10 +170,10 @@ mod windows_impl {
     /// the speaker→mic echo cancellation continues to work even when
     /// audio comes from process capture instead of device loopback.
     ///
-    /// PHASE 5 STUB: returns Err for now. The real ActivateAudioInterfaceAsync
-    /// + IActivateAudioInterfaceCompletionHandler implementation
-    /// lands in the next commit. Caller must check the result and
-    /// fall back to default loopback on error.
+    /// PHASE 5 STUB: returns Err for now. The real
+    /// ActivateAudioInterfaceAsync + IActivateAudioInterfaceCompletionHandler
+    /// implementation lands in the next commit. Caller must check
+    /// the result and fall back to default loopback on error.
     pub fn spawn_process_capture(
         _pid: u32,
         _output_buffer: Arc<Mutex<Vec<f32>>>,

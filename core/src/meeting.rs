@@ -194,13 +194,13 @@ impl MeetingSession {
             "[Meeting] WAV rates: mic={} Hz, system={} Hz, mix(audio.wav)={} Hz",
             device_sample_rate, system_sample_rate, device_sample_rate
         ));
-        let writer = hound::WavWriter::create(dir.join("audio.wav"), mic_spec.clone())
+        let writer = hound::WavWriter::create(dir.join("audio.wav"), mic_spec)
             .map_err(|e| format!("wav create audio.wav: {}", e))?;
-        let writer_mic = hound::WavWriter::create(dir.join("audio_mic.wav"), mic_spec.clone())
+        let writer_mic = hound::WavWriter::create(dir.join("audio_mic.wav"), mic_spec)
             .map_err(|e| format!("wav create audio_mic.wav: {}", e))?;
         let writer_system = if mix_active {
             Some(
-                hound::WavWriter::create(dir.join("audio_system.wav"), system_spec.clone())
+                hound::WavWriter::create(dir.join("audio_system.wav"), system_spec)
                     .map_err(|e| format!("wav create audio_system.wav: {}", e))?,
             )
         } else {
@@ -310,6 +310,7 @@ impl MeetingSession {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn worker_loop(
     audio_buffer: Arc<Mutex<Vec<f32>>>,
     audio_buffer_secondary: Arc<Mutex<Vec<f32>>>,
@@ -354,11 +355,9 @@ fn worker_loop(
             let dir = primary.parent().map(|p| p.to_path_buf());
             let alt = dir.and_then(|d| {
                 std::fs::read_dir(&d).ok().and_then(|rd| {
-                    rd.filter_map(|e| e.ok().map(|e| e.path()))
-                        .filter(|p| {
-                            p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("bin")
-                        })
-                        .next()
+                    rd.filter_map(|e| e.ok().map(|e| e.path())).find(|p| {
+                        p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("bin")
+                    })
                 })
             });
             if let Some(ref p) = alt {
@@ -469,8 +468,7 @@ fn worker_loop(
         };
         let n = primary.len();
         let mut out = Vec::with_capacity(n);
-        for i in 0..n {
-            let p = primary[i];
+        for (i, &p) in primary.iter().enumerate() {
             // Pick the system sample at the corresponding wall-time
             // index. Simple nearest-neighbour decimation; for typical
             // 3:1 ratios (48k → 16k) this is ~equivalent to taking
@@ -542,10 +540,7 @@ fn worker_loop(
                 .map(|t| t.elapsed().as_millis())
                 .unwrap_or(0);
             pause_started_at = None;
-            let snap = match synth_len(&audio_buffer, &audio_buffer_secondary) {
-                Some(n) => n,
-                None => 0,
-            };
+            let snap = synth_len(&audio_buffer, &audio_buffer_secondary).unwrap_or_default();
             crate::log(&format!(
                 "[Meeting] {}{} ms — skipping {} mic-rate samples",
                 if cancelled {
