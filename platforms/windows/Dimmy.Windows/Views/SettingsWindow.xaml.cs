@@ -298,6 +298,306 @@ public sealed partial class SettingsWindow : Window
             ViewModel.AppRules.Remove(rule);
     }
 
+    // ── App-rule reorder (raw pointer events) ──────────────────────
+    // WinUI 3 v3.1.7's drag pipeline crashes (Microsoft.UI.Xaml.dll
+    // +0x39ce55 → combase.dll +0x37fc4 → E_UNEXPECTED) regardless of
+    // entry point — CanReorderItems, CanDrag/DragStarting on a child,
+    // ListView-level Drop handler all reproduce it. The unifying
+    // factor is the IDataObject / IDropTarget code path inside
+    // Microsoft.UI.Xaml.dll. Workaround: drive reorder from raw
+    // PointerPressed / Released / CaptureLost only — that pipeline
+    // never touches drag-drop. See microsoft-ui-xaml issues #5607,
+    // #7690 — no fix in WindowsAppSDK through 2.0.1.
+
+    private AppRuleViewModel _appRuleDragSource;
+    private ListViewItem _appRuleDragSourceContainer;
+    // Cached source-row bitmap (rendered once at PointerPressed) for
+    // the floating ghost preview. RenderTargetBitmap.RenderAsync is
+    // ~5–30 ms on a typical row — fast enough to be perceived as
+    // synchronous when fired off as fire-and-forget from Pressed.
+    private Microsoft.UI.Xaml.Media.Imaging.RenderTargetBitmap _appRuleDragGhostBmp;
+    // Auto-scroll while dragging near the top / bottom edge of the
+    // ListView. Built-in CanReorderItems would do this for free; manual
+    // reorder needs us to drive the ScrollViewer ourselves.
+    private Microsoft.UI.Xaml.DispatcherTimer _appRuleDragScrollTimer;
+    private double _appRuleDragScrollDelta;
+    private ScrollViewer _appRulesScrollViewer;
+    // Last pointer position in ListView coordinates — needed by the
+    // scroll timer tick so the drop indicator can refresh after each
+    // auto-scroll step (PointerMoved alone wouldn't fire when the
+    // cursor is stationary at the edge).
+    private global::Windows.Foundation.Point _appRuleLastPointerInLV;
+
+    private void AppRuleHandle_PointerPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement fe) return;
+        if (fe.DataContext is not AppRuleViewModel rule) return;
+        // Left click only. Touch / pen / right click ignored — keeps
+        // context menus and other gestures unaffected.
+        var pt = e.GetCurrentPoint(fe);
+        if (pt.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Mouse
+            && !pt.Properties.IsLeftButtonPressed)
+            return;
+        _appRuleDragSource = rule;
+        _appRuleDragSourceContainer = AppRulesListView.ContainerFromItem(rule) as ListViewItem;
+        if (_appRuleDragSourceContainer != null)
+        {
+            // Dim the source row so the user sees which row they're
+            // moving. Restored in FinishAppRuleDrag.
+            _appRuleDragSourceContainer.Opacity = 0.45;
+        }
+        if (fe.CapturePointer(e.Pointer))
+        {
+            App.Log($"app-rule drag start: rule='{rule.MatchPattern}' idx={ViewModel.AppRules.IndexOf(rule)}",
+                "Settings");
+            // Fire-and-forget: render the source row to a bitmap, then
+            // open the ghost Popup at the pointer. The ghost mirrors
+            // the row visually so the user sees what's being moved.
+            _ = ShowAppRuleDragGhostAsync(e);
+        }
+        else
+        {
+            // Capture refused — bail rather than enter a half-tracked state.
+            _appRuleDragSource = null;
+            if (_appRuleDragSourceContainer != null)
+                _appRuleDragSourceContainer.Opacity = 1.0;
+            _appRuleDragSourceContainer = null;
+        }
+        e.Handled = true;
+    }
+
+    private async System.Threading.Tasks.Task ShowAppRuleDragGhostAsync(
+        Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        var container = _appRuleDragSourceContainer;
+        if (container == null) return;
+        try
+        {
+            var rtb = new Microsoft.UI.Xaml.Media.Imaging.RenderTargetBitmap();
+            await rtb.RenderAsync(container);
+            // Released before the snapshot finished — bail without
+            // opening the popup; FinishAppRuleDrag has already cleaned up.
+            if (_appRuleDragSource == null) return;
+            _appRuleDragGhostBmp = rtb;
+            AppRuleDragGhostImage.Source = rtb;
+            AppRuleDragGhostImage.Width = container.ActualWidth;
+            AppRuleDragGhostImage.Height = container.ActualHeight;
+            UpdateAppRuleDragGhostPosition(e);
+            AppRuleDragGhostPopup.IsOpen = true;
+        }
+        catch (System.Exception ex)
+        {
+            App.Log($"ghost render exc: {ex.Message}", "Settings");
+        }
+    }
+
+    private void UpdateAppRuleDragGhostPosition(
+        Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        if (this.Content is not UIElement root) return;
+        var pt = e.GetCurrentPoint(root).Position;
+        // Offset slightly so the ghost doesn't sit dead-center under the
+        // cursor (cursor stays visible at top-left of the ghost block).
+        AppRuleDragGhostPopup.HorizontalOffset = pt.X + 12;
+        AppRuleDragGhostPopup.VerticalOffset = pt.Y + 8;
+    }
+
+    private void AppRuleHandle_PointerMoved(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        if (_appRuleDragSource == null) return;
+        // Move the ghost popup with the cursor (works even outside the
+        // ListView bounds — Popup.ShouldConstrainToRootBounds=False).
+        if (AppRuleDragGhostPopup.IsOpen)
+            UpdateAppRuleDragGhostPosition(e);
+        var lv = AppRulesListView;
+        var pt = e.GetCurrentPoint(lv).Position;
+        _appRuleLastPointerInLV = pt;
+        UpdateAppRuleDropIndicator(pt);
+        UpdateAppRuleDragAutoScroll(pt);
+    }
+
+    private void UpdateAppRuleDropIndicator(global::Windows.Foundation.Point pt)
+    {
+        var lv = AppRulesListView;
+        // Find the slot boundary (top of slot, or bottom of last slot
+        // the cursor passed) closest to the cursor; that's where the
+        // dropped item would land. Default: bottom of the list.
+        double indicatorY = 0;
+        bool found = false;
+        for (int i = 0; i < ViewModel.AppRules.Count; i++)
+        {
+            if (lv.ContainerFromIndex(i) is not ListViewItem container) continue;
+            var transform = container.TransformToVisual(lv);
+            var topLeft = transform.TransformPoint(new global::Windows.Foundation.Point(0, 0));
+            double midY = topLeft.Y + container.ActualHeight / 2.0;
+            double bottomY = topLeft.Y + container.ActualHeight;
+            if (pt.Y < midY) { indicatorY = topLeft.Y; found = true; break; }
+            if (pt.Y < bottomY) { indicatorY = bottomY; found = true; break; }
+        }
+        if (!found)
+        {
+            int last = ViewModel.AppRules.Count - 1;
+            if (last >= 0 && lv.ContainerFromIndex(last) is ListViewItem lastContainer)
+            {
+                var transform = lastContainer.TransformToVisual(lv);
+                var topLeft = transform.TransformPoint(new global::Windows.Foundation.Point(0, 0));
+                indicatorY = topLeft.Y + lastContainer.ActualHeight;
+            }
+            else
+            {
+                indicatorY = lv.ActualHeight;
+            }
+        }
+        // The indicator's parent Grid pads against the ListView's outer
+        // edges; clamp Y to keep the 2-px line inside.
+        indicatorY = System.Math.Max(0, System.Math.Min(indicatorY, lv.ActualHeight - 2));
+        AppRuleDropIndicator.Margin = new Thickness(0, indicatorY, 0, 0);
+        AppRuleDropIndicator.Visibility = Visibility.Visible;
+    }
+
+    private void UpdateAppRuleDragAutoScroll(global::Windows.Foundation.Point pt)
+    {
+        const double EDGE_ZONE = 40.0;
+        const double SCROLL_PER_TICK = 14.0;
+        var lv = AppRulesListView;
+        double delta = 0;
+        if (pt.Y < EDGE_ZONE) delta = -SCROLL_PER_TICK;
+        else if (pt.Y > lv.ActualHeight - EDGE_ZONE) delta = SCROLL_PER_TICK;
+        _appRuleDragScrollDelta = delta;
+        if (delta != 0 && _appRuleDragScrollTimer == null)
+        {
+            _appRuleDragScrollTimer = new Microsoft.UI.Xaml.DispatcherTimer
+            {
+                Interval = System.TimeSpan.FromMilliseconds(40),
+            };
+            _appRuleDragScrollTimer.Tick += AppRuleDragScrollTimer_Tick;
+            _appRuleDragScrollTimer.Start();
+        }
+        else if (delta == 0 && _appRuleDragScrollTimer != null)
+        {
+            StopAppRuleDragScrollTimer();
+        }
+    }
+
+    private void AppRuleDragScrollTimer_Tick(object sender, object e)
+    {
+        if (_appRuleDragSource == null || _appRuleDragScrollDelta == 0)
+        {
+            StopAppRuleDragScrollTimer();
+            return;
+        }
+        var sv = GetAppRulesScrollViewer();
+        if (sv == null) return;
+        double newOffset = sv.VerticalOffset + _appRuleDragScrollDelta;
+        sv.ChangeView(null, newOffset, null, disableAnimation: true);
+        // Refresh the drop indicator after the scroll — items shifted
+        // under the stationary cursor.
+        UpdateAppRuleDropIndicator(_appRuleLastPointerInLV);
+    }
+
+    private void StopAppRuleDragScrollTimer()
+    {
+        if (_appRuleDragScrollTimer != null)
+        {
+            _appRuleDragScrollTimer.Stop();
+            _appRuleDragScrollTimer.Tick -= AppRuleDragScrollTimer_Tick;
+            _appRuleDragScrollTimer = null;
+        }
+        _appRuleDragScrollDelta = 0;
+    }
+
+    private ScrollViewer GetAppRulesScrollViewer()
+    {
+        if (_appRulesScrollViewer != null) return _appRulesScrollViewer;
+        _appRulesScrollViewer = FindFirstDescendant<ScrollViewer>(AppRulesListView);
+        return _appRulesScrollViewer;
+    }
+
+    private static T FindFirstDescendant<T>(DependencyObject d) where T : DependencyObject
+    {
+        if (d == null) return null;
+        int n = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(d);
+        for (int i = 0; i < n; i++)
+        {
+            var c = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(d, i);
+            if (c is T t) return t;
+            var r = FindFirstDescendant<T>(c);
+            if (r != null) return r;
+        }
+        return null;
+    }
+
+    private void AppRuleHandle_PointerReleased(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        FinishAppRuleDrag(sender as FrameworkElement, e);
+    }
+
+    private void AppRuleHandle_PointerCaptureLost(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        FinishAppRuleDrag(sender as FrameworkElement, e);
+    }
+
+    private void FinishAppRuleDrag(FrameworkElement handle, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        var rule = _appRuleDragSource;
+        var srcContainer = _appRuleDragSourceContainer;
+        _appRuleDragSource = null;
+        _appRuleDragSourceContainer = null;
+
+        // Always hide the indicator + ghost + restore opacity, even
+        // if we bail early — the visual feedback should not stick
+        // around after the pointer is released.
+        StopAppRuleDragScrollTimer();
+        AppRuleDropIndicator.Visibility = Visibility.Collapsed;
+        if (AppRuleDragGhostPopup != null && AppRuleDragGhostPopup.IsOpen)
+            AppRuleDragGhostPopup.IsOpen = false;
+        if (AppRuleDragGhostImage != null)
+            AppRuleDragGhostImage.Source = null;
+        _appRuleDragGhostBmp = null;
+        if (srcContainer != null) srcContainer.Opacity = 1.0;
+
+        if (rule == null) return;
+
+        try
+        {
+            handle?.ReleasePointerCapture(e.Pointer);
+        }
+        catch { /* ignore — capture may already be gone */ }
+
+        int srcIdx = ViewModel.AppRules.IndexOf(rule);
+        if (srcIdx < 0) return;
+
+        // Hit-test the release point against rendered ListViewItems
+        // to find the target slot. Upper half of container i ⇒ insert
+        // above (target = i); lower half ⇒ insert below (target = i+1).
+        // Past the last item ⇒ append.
+        var lv = AppRulesListView;
+        var pt = e.GetCurrentPoint(lv).Position;
+        int dstIdx = ViewModel.AppRules.Count;
+        for (int i = 0; i < ViewModel.AppRules.Count; i++)
+        {
+            if (lv.ContainerFromIndex(i) is not ListViewItem container) continue;
+            var transform = container.TransformToVisual(lv);
+            var topLeft = transform.TransformPoint(new global::Windows.Foundation.Point(0, 0));
+            double midY = topLeft.Y + container.ActualHeight / 2.0;
+            double bottomY = topLeft.Y + container.ActualHeight;
+            if (pt.Y < midY) { dstIdx = i; break; }
+            if (pt.Y < bottomY) { dstIdx = i + 1; break; }
+        }
+        if (dstIdx > ViewModel.AppRules.Count) dstIdx = ViewModel.AppRules.Count;
+        // ObservableCollection.Move semantics: dst is FINAL index.
+        // If src < dst, removal shifts items down by one, so the
+        // desired final position is dst - 1.
+        if (srcIdx < dstIdx) dstIdx -= 1;
+        if (dstIdx < 0 || dstIdx == srcIdx)
+        {
+            App.Log($"app-rule drag end: no-op (src={srcIdx} dst={dstIdx})", "Settings");
+            return;
+        }
+        App.Log($"app-rule reorder src={srcIdx} dst={dstIdx} count={ViewModel.AppRules.Count}", "Settings");
+        ViewModel.AppRules.Move(srcIdx, dstIdx);
+    }
+
     // ── File-load (offline transcribe) ────────────────────────────
 
     private async void FileLoadPick_Click(object sender, RoutedEventArgs e)

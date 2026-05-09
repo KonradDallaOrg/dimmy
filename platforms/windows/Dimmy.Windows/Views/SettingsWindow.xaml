@@ -1197,14 +1197,26 @@
               <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                       BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
                       BorderThickness="1" CornerRadius="8" Padding="0">
+                <!-- WinUI 3 v3.1.7 ListView built-in CanReorderItems
+                     hard-crashes the renderer mid-drag with E_UNEXPECTED
+                     in Microsoft.UI.Xaml.dll +0x39ce55 → combase.dll
+                     +0x37fc4. The same offset crashes ANY XAML drag
+                     pipeline in 1.7.x (CanDrag / DragStarting / Drop on
+                     children also reproduces it), not just the
+                     CanReorderItems path. Matches microsoft-ui-xaml
+                     issues #5607 / #7690; no fix in any shipping
+                     WindowsAppSDK through 2.0.1. Bypass: skip ALL XAML
+                     drag-drop on the AppRules ListView and drive
+                     reorder from raw PointerPressed / PointerReleased
+                     / PointerCaptureLost events on a dedicated grip —
+                     a completely different input pipeline that doesn't
+                     touch IDataObject / IDropTarget at all. -->
+                <Grid>
                 <ListView x:Name="AppRulesListView"
                           ItemsSource="{Binding AppRules}"
                           SelectionMode="None"
                           IsItemClickEnabled="False"
-                          HorizontalContentAlignment="Stretch"
-                          CanReorderItems="True"
-                          AllowDrop="True"
-                          ReorderMode="Enabled">
+                          HorizontalContentAlignment="Stretch">
                   <ListView.ItemContainerStyle>
                     <Style TargetType="ListViewItem">
                       <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
@@ -1232,6 +1244,7 @@
                              field stays in the data model so a
                              Mac-shared config still round-trips. -->
                         <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="Auto"/>      <!-- drag handle -->
                           <ColumnDefinition Width="Auto"/>      <!-- icon -->
                           <ColumnDefinition Width="2*"/>        <!-- pattern -->
                           <ColumnDefinition Width="2*"/>        <!-- style -->
@@ -1239,7 +1252,27 @@
                           <ColumnDefinition Width="Auto"/>      <!-- enabled toggle -->
                           <ColumnDefinition Width="Auto"/>      <!-- delete -->
                         </Grid.ColumnDefinitions>
-                        <Grid Grid.Column="0" Width="22" Height="22"
+                        <!-- Drag handle. Pointer events ONLY — no
+                             CanDrag / IDataObject; that path crashes
+                             on WinUI 3 1.7.x. Border with transparent
+                             background gives a reliable hit area for
+                             the FontIcon. -->
+                        <Border Grid.Column="0"
+                                Background="Transparent"
+                                Padding="4,0"
+                                VerticalAlignment="Stretch"
+                                ToolTipService.ToolTip="Drag to reorder"
+                                PointerPressed="AppRuleHandle_PointerPressed"
+                                PointerMoved="AppRuleHandle_PointerMoved"
+                                PointerReleased="AppRuleHandle_PointerReleased"
+                                PointerCaptureLost="AppRuleHandle_PointerCaptureLost">
+                          <FontIcon Glyph="&#xE76F;"
+                                    FontSize="14"
+                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                    VerticalAlignment="Center"
+                                    HorizontalAlignment="Center"/>
+                        </Border>
+                        <Grid Grid.Column="1" Width="22" Height="22"
                               VerticalAlignment="Center" Margin="2,0,4,0">
                           <Image Width="22" Height="22"
                                  Source="{Binding IconAssetUri, Mode=OneWay}"
@@ -1249,11 +1282,11 @@
                                     Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
                                     Visibility="{Binding IconAssetUri, Mode=OneWay, Converter={StaticResource NotNullToVisibilityConverter}, ConverterParameter=Invert}"/>
                         </Grid>
-                        <TextBox Grid.Column="1"
+                        <TextBox Grid.Column="2"
                                  VerticalAlignment="Center"
                                  Text="{Binding MatchPattern, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                  PlaceholderText="slack.exe" />
-                        <ComboBox Grid.Column="2" SelectedValue="{Binding LlmStyle, Mode=TwoWay}"
+                        <ComboBox Grid.Column="3" SelectedValue="{Binding LlmStyle, Mode=TwoWay}"
                                   SelectedValuePath="Tag" HorizontalAlignment="Stretch"
                                   VerticalAlignment="Center">
                           <ComboBoxItem Tag="off"            Content="Off (no LLM)"/>
@@ -1269,7 +1302,7 @@
                           <ComboBoxItem Tag="imbruttito"     Content="Imbruttito"/>
                           <ComboBoxItem Tag="prompt"         Content="Custom prompt"/>
                         </ComboBox>
-                        <ComboBox Grid.Column="3" SelectedValue="{Binding LlmTranslateTo, Mode=TwoWay}"
+                        <ComboBox Grid.Column="4" SelectedValue="{Binding LlmTranslateTo, Mode=TwoWay}"
                                   SelectedValuePath="Tag" HorizontalAlignment="Stretch"
                                   VerticalAlignment="Center">
                           <ComboBoxItem Tag=""    Content="No translation"/>
@@ -1280,12 +1313,12 @@
                           <ComboBoxItem Tag="de"  Content="→ Deutsch"/>
                           <ComboBoxItem Tag="pt"  Content="→ Português"/>
                         </ComboBox>
-                        <ToggleSwitch Grid.Column="4"
+                        <ToggleSwitch Grid.Column="5"
                                       IsOn="{Binding Enabled, Mode=TwoWay}"
                                       OnContent="" OffContent="" MinWidth="0"
                                       VerticalAlignment="Center"
                                       ToolTipService.ToolTip="Enable rule"/>
-                        <Button Grid.Column="5"
+                        <Button Grid.Column="6"
                                 Click="AppRuleDelete_Click"
                                 Tag="{Binding}"
                                 ToolTipService.ToolTip="Remove rule"
@@ -1297,6 +1330,19 @@
                     </DataTemplate>
                   </ListView.ItemTemplate>
                 </ListView>
+                <!-- Drop indicator: a 2-px horizontal accent line that
+                     follows the cursor between rows during a drag.
+                     Hit-testing disabled so it never intercepts pointer
+                     events. Margin.Top is updated from PointerMoved. -->
+                <Rectangle x:Name="AppRuleDropIndicator"
+                           Height="2"
+                           Fill="{ThemeResource AccentFillColorDefaultBrush}"
+                           HorizontalAlignment="Stretch"
+                           VerticalAlignment="Top"
+                           Margin="0"
+                           IsHitTestVisible="False"
+                           Visibility="Collapsed"/>
+                </Grid>
               </Border>
 
               <TextBlock x:Name="AppRulesEmptyHint"
@@ -2047,5 +2093,27 @@
       <Button Content="Cancel" Click="Cancel_Click" />
       <Button Content="Save" Click="Save_Click" Style="{ThemeResource AccentButtonStyle}" />
     </StackPanel>
+
+    <!-- Floating ghost preview for app-rule drag-reorder. RenderTargetBitmap
+         snapshot of the source row, shown via Popup positioned at the
+         pointer. Replaces what WinUI 3's drag pipeline would normally
+         render — that pipeline crashes on 1.7.x (see SettingsWindow.xaml.cs
+         AppRuleHandle_PointerPressed comment). -->
+    <Popup x:Name="AppRuleDragGhostPopup"
+           IsLightDismissEnabled="False"
+           ShouldConstrainToRootBounds="False">
+      <!-- Solid opaque background — the row's DataTemplate Grid is
+           transparent, so RenderTargetBitmap captures element-only
+           pixels; without a solid backdrop the ghost looks see-through.
+           Slight 0.96 opacity keeps a "this is a ghost" cue without
+           letting the desktop bleed through. -->
+      <Border BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"
+              BorderThickness="1"
+              CornerRadius="6"
+              Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
+              Opacity="0.96">
+        <Image x:Name="AppRuleDragGhostImage" Stretch="None"/>
+      </Border>
+    </Popup>
   </Grid>
 </Window>

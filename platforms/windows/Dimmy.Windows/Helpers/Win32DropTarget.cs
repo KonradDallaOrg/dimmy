@@ -53,16 +53,31 @@ public sealed class Win32DropTarget : IDisposable
         foreach (var h in hwnds)
         {
             var cls = GetClassName(h);
-            // WinUI 3 uses InputSiteWindowClass + DesktopChildSiteBridge
-            // for its internal OLE drag-drop (XAML drag events,
-            // ListView reorder). RevokeDragDrop'ing those HWNDs kills
-            // ListView CanReorderItems entirely. Only revoke on the
-            // outer Win32 window class which doesn't host XAML
-            // content-level drag/drop.
-            if (cls == "WinUIDesktopWin32WindowClass" || cls == "InputNonClientPointerSource")
+            // WinUI 3 hosts XAML drag-drop (incl. ListView CanReorderItems)
+            // on InputSiteWindowClass + DesktopChildSiteBridge via its
+            // own IDropTarget. Touching those HWNDs at all — RevokeDragDrop,
+            // DragAcceptFiles, or WM_DROPFILES subclass — destabilises
+            // the XAML drag pipeline. Observed symptoms:
+            //   • CanReorderItems silently no-ops (May 2026 v1)
+            //   • drag-reorder hard-crashes the renderer mid-drag (May 9
+            //     2026 — WS_EX_ACCEPTFILES set by DragAcceptFiles on the
+            //     content-host HWND collides with WinUI's own drop-target
+            //     state once a drag actually runs the full pipeline)
+            // Restrict ALL Win32 drop-target wiring (revoke + accept +
+            // subclass + UIPI filter) to the outer chrome HWNDs that
+            // don't host XAML drag/drop. WinUI 3 still propagates a
+            // dropped file from the content layer up to the chrome
+            // layer through its own AllowDrop chain, so file drops keep
+            // working from this narrower attach point.
+            bool isChromeHwnd = cls == "WinUIDesktopWin32WindowClass"
+                || cls == "InputNonClientPointerSource";
+            if (!isChromeHwnd)
             {
-                RevokeDragDrop(h);
+                App.Log($"  ~ skipping content-host hwnd=0x{h:X} class={cls} (XAML drag-drop owns it)",
+                    "FileLoad");
+                continue;
             }
+            RevokeDragDrop(h);
             DragAcceptFiles(h, true);
             // UIPI bypass: when Dimmy runs at higher integrity level
             // than the drag source (Explorer = Medium IL, Dimmy =
