@@ -237,21 +237,6 @@ fn downsample_if_needed(samples: &[f32], source_rate: u32) -> Vec<f32> {
     }
 }
 
-/// If the last 3 lower-cased tokens of `prev_cumulative` appear as a
-/// 3-token window inside the first 8 tokens of `new_chunk`, return
-/// `new_chunk` with everything up to and including that window
-/// stripped. Otherwise return `new_chunk` unchanged. Punctuation is
-/// stripped on the comparison side only; the returned string preserves
-/// the original whitespace + punctuation of the surviving suffix so
-/// downstream callers can append it directly to the cumulative.
-///
-/// Edge cases:
-/// - Empty `prev_cumulative` → returns `new_chunk` as-is.
-/// - Empty `new_chunk` → returns "".
-/// - `prev_cumulative` has fewer than 3 tokens → returns `new_chunk`
-///   as-is (no anchor to match against).
-/// - `new_chunk` has fewer than 3 tokens → still scans up to its
-///   length and matches if the prev tail equals the whole new_chunk.
 /// Find and remove the boundary-overlap duplication between
 /// `prev_cumulative` (the running transcript so far) and `new_chunk`
 /// (the latest Parakeet output, which was transcribed from audio that
@@ -259,14 +244,17 @@ fn downsample_if_needed(samples: &[f32], source_rate: u32) -> Vec<f32> {
 ///
 /// Algorithm — **longest suffix-prefix match with offset tolerance**:
 ///
-/// 1. Tokenize both sides (whitespace + punctuation strip + lowercase).
-/// 2. For k ∈ \[`MAX_K`..`MIN_K`\], scan whether `prev_norm[-k..]` matches
-///    `new_chunk[offset..offset+k]` for some `offset ∈ \[0..MAX_OFFSET\]`.
-/// 3. The first (largest k, smallest offset) match wins; trim `new_chunk`
-///    up to and including the matched k-th token. Larger k preferred so
-///    we don't over-trim a coincidental short match when a longer real
-///    overlap is present.
-/// 4. If no match found, return `new_chunk` unchanged.
+/// 1\. Tokenize both sides (whitespace + punctuation strip + lowercase).
+///
+/// 2\. For k ∈ \[`MAX_K`..`MIN_K`\], scan whether `prev_norm[-k..]` matches
+/// `new_chunk[offset..offset+k]` for some `offset ∈ \[0..MAX_OFFSET\]`.
+///
+/// 3\. The first (largest k, smallest offset) match wins; trim
+/// `new_chunk` up to and including the matched k-th token. Larger k
+/// preferred so we don't over-trim a coincidental short match when a
+/// longer real overlap is present.
+///
+/// 4\. If no match found, return `new_chunk` unchanged.
 ///
 /// Why we changed from "exact last-3-words anchor in first 12 tokens":
 /// Parakeet hallucinates / drops the partial-word lead token when the
