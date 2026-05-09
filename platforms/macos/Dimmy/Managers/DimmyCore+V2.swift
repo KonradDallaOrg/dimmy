@@ -161,6 +161,33 @@ extension DimmyCore {
         dimmy_meeting_is_active() == 1
     }
 
+    /// True while the active meeting is paused (worker is skipping WAV
+    /// writes + STT chunks). False also when no meeting is active.
+    var meetingIsPaused: Bool {
+        dimmy_meeting_is_paused() == 1
+    }
+
+    /// Pause the in-flight meeting. Returns true iff the state actually
+    /// flipped (was running, now paused). False = already paused or no
+    /// meeting active. The Rust worker keeps cpal callbacks running; only
+    /// WAV writes + STT chunks are skipped, and on resume the cursors
+    /// advance past the gap so it doesn't land in audio.wav or the
+    /// transcript timeline. A `[paused N ms]` marker is appended to
+    /// transcripts.txt at the seam.
+    @discardableResult
+    func meetingPause() -> Bool {
+        guard isInitialized else { return false }
+        return dimmy_meeting_pause() == 1
+    }
+
+    /// Resume a paused meeting. Returns true iff the state actually
+    /// flipped (was paused, now running).
+    @discardableResult
+    func meetingResume() -> Bool {
+        guard isInitialized else { return false }
+        return dimmy_meeting_resume() == 1
+    }
+
     /// JSON array of crashed-meeting directories (`.recording` marker
     /// still present). UI surfaces this as a "recover meeting?" prompt.
     func meetingListOrphans() -> [[String: Any]] {

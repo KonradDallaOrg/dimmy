@@ -22,6 +22,20 @@
 		AA000506 /* FileLoadCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000506 /* FileLoadCard.swift */; };
 		AA000507 /* AudioWaveformView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000507 /* AudioWaveformView.swift */; };
 		AA000508 /* SampleAudioSynth.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000508 /* SampleAudioSynth.swift */; };
+		AA000601 /* MeetingPostProcessService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000601 /* MeetingPostProcessService.swift */; };
+		AA000602 /* MeetingViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000602 /* MeetingViewModel.swift */; };
+		AA000603 /* MeetingSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000603 /* MeetingSidebar.swift */; };
+		AA000604 /* MeetingIdleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000604 /* MeetingIdleView.swift */; };
+		AA000605 /* MeetingRecordingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000605 /* MeetingRecordingView.swift */; };
+		AA000606 /* MeetingProcessingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000606 /* MeetingProcessingView.swift */; };
+		AA000607 /* MeetingDoneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000607 /* MeetingDoneView.swift */; };
+		AA000608 /* AudioPlaybackBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000608 /* AudioPlaybackBar.swift */; };
+		AA000609 /* WavPeaks.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000609 /* WavPeaks.swift */; };
+		AA000700 /* AppStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000700 /* AppStateTests.swift */; };
+		AA000701 /* MeetingPostProcessServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000701 /* MeetingPostProcessServiceTests.swift */; };
+		AA000702 /* RecapModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000702 /* RecapModelTests.swift */; };
+		AA000703 /* MeetingHistoryRowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000703 /* MeetingHistoryRowTests.swift */; };
+		AA000704 /* AppStateRecapModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000704 /* AppStateRecapModelTests.swift */; };
 		AA000006 /* HotkeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000006 /* HotkeyManager.swift */; };
 		AA000007 /* AudioSimulator.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000007 /* AudioSimulator.swift */; };
 		AA000008 /* TextInjector.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000008 /* TextInjector.swift */; };
@@ -94,6 +108,21 @@
 		AB000506 /* FileLoadCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileLoadCard.swift; sourceTree = "<group>"; };
 		AB000507 /* AudioWaveformView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioWaveformView.swift; sourceTree = "<group>"; };
 		AB000508 /* SampleAudioSynth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleAudioSynth.swift; sourceTree = "<group>"; };
+		AB000601 /* MeetingPostProcessService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingPostProcessService.swift; sourceTree = "<group>"; };
+		AB000602 /* MeetingViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingViewModel.swift; sourceTree = "<group>"; };
+		AB000603 /* MeetingSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSidebar.swift; sourceTree = "<group>"; };
+		AB000604 /* MeetingIdleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingIdleView.swift; sourceTree = "<group>"; };
+		AB000605 /* MeetingRecordingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingRecordingView.swift; sourceTree = "<group>"; };
+		AB000606 /* MeetingProcessingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingProcessingView.swift; sourceTree = "<group>"; };
+		AB000607 /* MeetingDoneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingDoneView.swift; sourceTree = "<group>"; };
+		AB000608 /* AudioPlaybackBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioPlaybackBar.swift; sourceTree = "<group>"; };
+		AB000609 /* WavPeaks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WavPeaks.swift; sourceTree = "<group>"; };
+		AB000098 /* DimmyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DimmyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		AB000700 /* AppStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateTests.swift; sourceTree = "<group>"; };
+		AB000701 /* MeetingPostProcessServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingPostProcessServiceTests.swift; sourceTree = "<group>"; };
+		AB000702 /* RecapModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecapModelTests.swift; sourceTree = "<group>"; };
+		AB000703 /* MeetingHistoryRowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingHistoryRowTests.swift; sourceTree = "<group>"; };
+		AB000704 /* AppStateRecapModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateRecapModelTests.swift; sourceTree = "<group>"; };
 		AB000006 /* HotkeyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyManager.swift; sourceTree = "<group>"; };
 		AB000007 /* AudioSimulator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSimulator.swift; sourceTree = "<group>"; };
 		AB000008 /* TextInjector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextInjector.swift; sourceTree = "<group>"; };
@@ -170,6 +199,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AC000010 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -177,9 +213,22 @@
 			isa = PBXGroup;
 			children = (
 				AD000002 /* Dimmy */,
+				AD000060 /* DimmyTests */,
 				AD000011 /* Frameworks */,
 				AD000099 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		AD000060 /* DimmyTests */ = {
+			isa = PBXGroup;
+			children = (
+				AB000700 /* AppStateTests.swift */,
+				AB000701 /* MeetingPostProcessServiceTests.swift */,
+				AB000702 /* RecapModelTests.swift */,
+				AB000703 /* MeetingHistoryRowTests.swift */,
+				AB000704 /* AppStateRecapModelTests.swift */,
+			);
+			path = DimmyTests;
 			sourceTree = "<group>";
 		};
 		AD000002 /* Dimmy */ = {
@@ -195,10 +244,34 @@
 				AD000005 /* Managers */,
 				AD000020 /* ViewModels */,
 				AD000021 /* Helpers */,
+				AD000050 /* Services */,
 				AD000006 /* Views */,
 				AD000010 /* Utilities */,
 			);
 			path = Dimmy;
+			sourceTree = "<group>";
+		};
+		AD000050 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				AB000601 /* MeetingPostProcessService.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		AD000051 /* Meeting */ = {
+			isa = PBXGroup;
+			children = (
+				AB000602 /* MeetingViewModel.swift */,
+				AB000603 /* MeetingSidebar.swift */,
+				AB000604 /* MeetingIdleView.swift */,
+				AB000605 /* MeetingRecordingView.swift */,
+				AB000606 /* MeetingProcessingView.swift */,
+				AB000607 /* MeetingDoneView.swift */,
+				AB000608 /* AudioPlaybackBar.swift */,
+				AB000609 /* WavPeaks.swift */,
+			);
+			path = Meeting;
 			sourceTree = "<group>";
 		};
 		AD000020 /* ViewModels */ = {
@@ -260,6 +333,7 @@
 				AB000507 /* AudioWaveformView.swift */,
 				AD000007 /* Onboarding */,
 				AD000008 /* Settings */,
+				AD000051 /* Meeting */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -343,6 +417,7 @@
 			isa = PBXGroup;
 			children = (
 				AB000099 /* Dimmy.app */,
+				AB000098 /* DimmyTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -369,6 +444,23 @@
 			productName = Dimmy;
 			productReference = AB000099 /* Dimmy.app */;
 			productType = "com.apple.product-type.application";
+		};
+		AE000010 /* DimmyTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AF000005 /* Build configuration list for PBXNativeTarget "DimmyTests" */;
+			buildPhases = (
+				AE000012 /* Sources */,
+				AC000010 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AT000010 /* PBXTargetDependency */,
+			);
+			name = DimmyTests;
+			productName = DimmyTests;
+			productReference = AB000098 /* DimmyTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
 
@@ -399,6 +491,7 @@
 			projectRoot = "";
 			targets = (
 				AE000001 /* Dimmy */,
+				AE000010 /* DimmyTests */,
 			);
 		};
 /* End PBXProject section */
@@ -539,10 +632,49 @@
 				AA000506 /* FileLoadCard.swift in Sources */,
 				AA000507 /* AudioWaveformView.swift in Sources */,
 				AA000508 /* SampleAudioSynth.swift in Sources */,
+				AA000601 /* MeetingPostProcessService.swift in Sources */,
+				AA000602 /* MeetingViewModel.swift in Sources */,
+				AA000603 /* MeetingSidebar.swift in Sources */,
+				AA000604 /* MeetingIdleView.swift in Sources */,
+				AA000605 /* MeetingRecordingView.swift in Sources */,
+				AA000606 /* MeetingProcessingView.swift in Sources */,
+				AA000607 /* MeetingDoneView.swift in Sources */,
+				AA000608 /* AudioPlaybackBar.swift in Sources */,
+				AA000609 /* WavPeaks.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AE000012 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA000700 /* AppStateTests.swift in Sources */,
+				AA000701 /* MeetingPostProcessServiceTests.swift in Sources */,
+				AA000702 /* RecapModelTests.swift in Sources */,
+				AA000703 /* MeetingHistoryRowTests.swift in Sources */,
+				AA000704 /* AppStateRecapModelTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		AT000010 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AE000001 /* Dimmy */;
+			targetProxy = AT000011 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin PBXContainerItemProxy section */
+		AT000011 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AE000099 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AE000001;
+			remoteInfo = Dimmy;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin XCBuildConfiguration section */
 		AF000010 /* Debug */ = {
@@ -761,6 +893,50 @@
 			};
 			name = Release;
 		};
+		AF000030 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_MODULES = YES;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.dimmy.app.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Dimmy.app/Contents/MacOS/Dimmy";
+			};
+			name = Debug;
+		};
+		AF000031 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_MODULES = YES;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.dimmy.app.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Dimmy.app/Contents/MacOS/Dimmy";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -778,6 +954,15 @@
 			buildConfigurations = (
 				AF000020 /* Debug */,
 				AF000021 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AF000005 /* Build configuration list for PBXNativeTarget "DimmyTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AF000030 /* Debug */,
+				AF000031 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

@@ -131,6 +131,18 @@ struct PillView: View {
         BorderStyle.from(appState.borderStyle)
     }
 
+    /// When a meeting is recording in the background and the dictation
+    /// pipeline is otherwise idle, the pill should still show the
+    /// recording view + Stop button (mirror of Win pill behaviour).
+    /// We synthesise a `.recording(.toggle)` state when the FFI reports
+    /// an active meeting and no dictation is in flight.
+    private var effectiveState: RecordingState {
+        if appState.meetingActive, case .idle = appState.recordingState {
+            return .recording(.toggle)
+        }
+        return appState.recordingState
+    }
+
     private var activeWaveformStyle: WaveformStyle {
         WaveformStyle.from(appState.waveformStyle)
     }
@@ -166,7 +178,7 @@ struct PillView: View {
             // Transparent spacer so the ZStack expands to fill the panel —
             // otherwise it sizes to its content and the alignment is moot.
             Color.clear
-            switch appState.recordingState {
+            switch effectiveState {
             case .idle:
                 idleView
             case .recording(let mode):
@@ -430,7 +442,17 @@ struct PillView: View {
 
             if mode == .toggle {
                 Button(action: {
-                    HotkeyManager.shared.stopToggleRecording()
+                    // Mirror of Win PillWindow.Stop_Click: when a
+                    // meeting is in flight, route Stop through the
+                    // meeting recap pipeline. Otherwise fall back to
+                    // the dictation toggle stop. The dictation path
+                    // pastes the transcript; the meeting path runs
+                    // the LLM recap and saves recap.md.
+                    if appState.meetingActive {
+                        PillWindowController.stopMeetingFromPill(appState: appState)
+                    } else {
+                        HotkeyManager.shared.stopToggleRecording()
+                    }
                 }) {
                     RoundedRectangle(cornerRadius: 2.5)
                         .fill(Color.white.opacity(0.9))

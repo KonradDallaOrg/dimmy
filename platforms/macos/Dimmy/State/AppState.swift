@@ -499,6 +499,15 @@ final class AppState: ObservableObject {
     @Published var recordingState: RecordingState = .idle
     @Published var preferredMode: RecordingMode = .pushToTalk
     @Published var waveformLevels: [CGFloat] = Array(repeating: 0.2, count: 7)
+    /// Mirror of `dimmy_meeting_is_active()`. PillWindowController polls
+    /// every 500 ms so the pill UI knows when a meeting started from
+    /// any surface (meeting window, future tray menu) and can render
+    /// the Stop button + recording feedback even with no dictation.
+    @Published var meetingActive: Bool = false
+    /// Mirror of `dimmy_meeting_is_paused()`. Also polled from the pill
+    /// state poll so the bar / status reflects pause state regardless
+    /// of which surface flipped it.
+    @Published var meetingIsPaused: Bool = false
     @Published var lastTranscript: String = ""
     @Published var lastError: String?
     @Published var hotkeyStatus: HotkeyStatus = .uninstalled
@@ -696,6 +705,15 @@ final class AppState: ObservableObject {
     /// `enhanced_text`). 0 = disabled. Default 60.
     @Published var autoRecapThresholdSecs: UInt32 = 60
 
+    /// User-picked recap model from the curated dropdown in Mac
+    /// Settings → Advanced. Empty string = Auto (uses the
+    /// pickRecapModel() heuristic — match LLM provider). Non-empty
+    /// values flow through `dimmy_llm_call_raw(model_override=...)`
+    /// for both meeting recap and auto-recap. Mirror of Win
+    /// `SettingsWindow` recap-model ComboBox stored as
+    /// `recap_model_override` in config.json.
+    @Published var recapModelOverride: String = ""
+
     // MARK: - App rules (foreground-app overrides)
 
     /// User-curated rules evaluated top-down at hotkey-down. Persisted
@@ -852,6 +870,7 @@ final class AppState: ObservableObject {
 
         // Phase 6.4 auto-recap
         if let v = config["auto_recap_threshold_secs"] as? Int { autoRecapThresholdSecs = UInt32(max(0, v)) }
+        if let v = config["recap_model_override"] as? String { recapModelOverride = v }
 
         // App rules — array of dicts matching Rust serde shape
         if let arr = config["app_rules"] as? [[String: Any]] {
@@ -898,6 +917,7 @@ final class AppState: ObservableObject {
             "history_audio_keep_days": Int(historyAudioKeepDays),
             "history_audio_max_mb": Int(historyAudioMaxMb),
             "auto_recap_threshold_secs": Int(autoRecapThresholdSecs),
+            "recap_model_override": recapModelOverride,
             "app_rules": appRules.map { $0.toDict() },
         ]
         if let dev = selectedDevice {

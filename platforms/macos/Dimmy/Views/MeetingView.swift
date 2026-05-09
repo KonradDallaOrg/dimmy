@@ -3,169 +3,106 @@ import AppKit
 
 // MARK: - MeetingView
 //
-// Long-form recording UI. Mirror of Win MeetingWindow.xaml. Distinct
-// from the dictation pill so the user can leave the window open, watch
-// the live transcript drift in, and grab the recap + actions when they
-// stop. State is held by `MeetingViewModel` (below); the Rust core owns
-// the actual recording session and chunked transcribe loop.
+// Top-level meeting window content. Mirror of Win MeetingWindow.xaml:
+//   - Title bar with "Dimmy Meeting" + center title + "New meeting"
+//     button (always-visible escape from Done back to Idle).
+//   - Body: 280pt sidebar | * main panel.
+//   - Main panel hosts a state machine: idleView / recordingView /
+//     processingView / doneView. The persistent recording bar inside
+//     `MeetingRecordingView` keeps Stop/Pause reachable across
+//     navigation, identical to Win.
+//
+// SourceKit may flag unresolved references to MeetingViewModel /
+// MacTheme / Color extensions while indexing — those are defined in
+// sibling files inside the same target and resolve at Xcode build time.
 
 struct MeetingView: View {
-    @ObservedObject var vm: MeetingViewModel
+    @StateObject private var vm: MeetingViewModel
+
+    init(vm: MeetingViewModel) {
+        _vm = StateObject(wrappedValue: vm)
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            header
-            controls
-            ScrollView {
-                Text(vm.transcript.isEmpty
-                     ? "🎙️ Listening… first transcript appears in ~15 s."
-                     : vm.transcript)
+        VStack(spacing: 0) {
+            titlebar
+            Divider().opacity(0.4)
+            HStack(spacing: 0) {
+                MeetingSidebar(vm: vm)
+                mainPanel
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(20)
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if let toast = vm.toastMessage {
+                Text(toast)
                     .font(.system(size: 13))
-                    .foregroundStyle(vm.transcript.isEmpty ? Color.secondary : Color.primary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-                    .padding(12)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(
+                        Capsule().fill(Color.black.opacity(0.78))
+                    )
+                    .padding(.bottom, 20)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
-            .frame(minHeight: 200)
-            .background(Color.gray.opacity(0.06))
-            .cornerRadius(10)
-
-            if vm.recapVisible {
-                recapPanel
-            }
-            if vm.actionsVisible {
-                actionsPanel
-            }
-
-            footer
         }
-        .padding(16)
-        .frame(minWidth: 640, minHeight: 480)
+        .animation(.easeOut(duration: 0.18), value: vm.toastMessage)
+        .animation(.easeInOut(duration: 0.22), value: vm.phase)
+        .frame(minWidth: 880, minHeight: 560)
+        .onAppear {
+            vm.onWindowShown()
+        }
     }
 
-    // MARK: Header
+    // MARK: Titlebar
 
-    private var header: some View {
-        HStack(spacing: 10) {
-            statusDot
-            VStack(alignment: .leading, spacing: 2) {
-                Text(vm.statusLabel)
-                    .font(.system(size: 13, weight: .medium))
-                Text(vm.subStatusLabel)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+    private var titlebar: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "mic.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                Text("Dimmy Meeting")
+                    .font(.system(size: 15, weight: .semibold))
             }
             Spacer()
-            Text(vm.timerLabel)
-                .font(.system(size: 22, weight: .semibold, design: .monospaced))
-                .monospacedDigit()
-        }
-    }
-
-    private var statusDot: some View {
-        Circle()
-            .fill(vm.dotColor)
-            .frame(width: 10, height: 10)
-            .shadow(color: vm.dotColor.opacity(0.6), radius: 4)
-            .opacity(vm.isPulsing ? 0.5 : 1.0)
-            .animation(
-                vm.isRecording
-                    ? .easeInOut(duration: 0.8).repeatForever(autoreverses: true)
-                    : .default,
-                value: vm.isPulsing
-            )
-            .onAppear { if vm.isRecording { vm.isPulsing = true } }
-    }
-
-    // MARK: Controls
-
-    private var controls: some View {
-        HStack(spacing: 10) {
-            if !vm.isRecording {
-                Button {
-                    vm.start()
-                } label: {
-                    Label("Start meeting", systemImage: "record.circle.fill")
-                        .foregroundStyle(.red)
-                }
-                .keyboardShortcut("r", modifiers: [.command])
-                .disabled(vm.isWorking)
-            } else {
-                Button {
-                    vm.stopAndProcess()
-                } label: {
-                    Label("Stop & process", systemImage: "stop.circle.fill")
-                }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.return, modifiers: [.command])
-                .disabled(vm.isWorking)
-            }
-
-            Toggle("Generate recap + actions", isOn: $vm.generateRecap)
-                .controlSize(.small)
-                .disabled(vm.isRecording || vm.isWorking)
-
+            Text(vm.titlebarTitle)
+                .font(.system(size: 13))
+                .foregroundStyle(Color.macTextSecondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
             Spacer()
-
-            if vm.isWorking {
-                ProgressView().controlSize(.small).scaleEffect(0.7)
-            }
-        }
-    }
-
-    // MARK: Recap / Actions panels
-
-    private var recapPanel: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label("Recap", systemImage: "text.alignleft")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.secondary)
-            Text(vm.recap.isEmpty ? "(LLM produced no recap)" : vm.recap)
-                .font(.system(size: 12))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .textSelection(.enabled)
-                .padding(10)
-                .background(Color.purple.opacity(0.08))
-                .cornerRadius(8)
-        }
-    }
-
-    private var actionsPanel: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label("Action items", systemImage: "checklist")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.secondary)
-            Text(vm.actions.isEmpty ? "(no action items detected)" : vm.actions)
-                .font(.system(size: 12))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .textSelection(.enabled)
-                .padding(10)
-                .background(Color.blue.opacity(0.08))
-                .cornerRadius(8)
-        }
-    }
-
-    // MARK: Footer
-
-    private var footer: some View {
-        HStack(spacing: 8) {
-            if !vm.activeDir.isEmpty {
-                Text(vm.activeDir)
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(Color.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Button("Open folder") {
-                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: vm.activeDir)])
+            Button(action: { vm.newMeeting() }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("New meeting")
+                        .font(.system(size: 13))
                 }
-                .controlSize(.small)
+                .padding(.horizontal, 4)
             }
-            Spacer()
-            if let chunk = vm.chunkSummary {
-                Text(chunk)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-            }
+            .buttonStyle(.bordered)
+            .help("Start a new meeting")
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+    }
+
+    // MARK: Main panel
+
+    @ViewBuilder
+    private var mainPanel: some View {
+        switch vm.phase {
+        case .idle:
+            MeetingIdleView(vm: vm)
+        case .recording:
+            MeetingRecordingView(vm: vm)
+        case .processing:
+            MeetingProcessingView(vm: vm)
+        case .done:
+            MeetingDoneView(vm: vm)
         }
     }
 }

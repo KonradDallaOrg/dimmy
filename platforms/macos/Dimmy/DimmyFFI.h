@@ -314,6 +314,29 @@ int32_t dimmy_meeting_list_orphans(char * _Nonnull out_buf, int32_t buf_len);
 /// dictation hotkey while a meeting is recording (cpal collision).
 int32_t dimmy_meeting_is_active(void);
 
+/// Pause the active meeting. While paused the worker keeps cpal capturing
+/// (we don't bounce the streams — that races with device acquisition on
+/// resume) but skips WAV writes + STT chunks. On resume, the worker
+/// advances its cursors past the gap so the paused window is excluded
+/// from `audio.wav` and from the chunked transcript timeline; a
+/// `[paused N ms]` line lands in `transcripts.txt` at the seam.
+///
+/// Return-code contract:
+///   1  → state actually flipped (was running, now paused)
+///   0  → no-op (already paused, or no meeting active)
+///  -1  → internal lock failure (rare)
+int32_t dimmy_meeting_pause(void);
+
+/// Resume a paused meeting. Idempotent: same return-code contract as
+/// `dimmy_meeting_pause` (1 flipped, 0 no-op, -1 lock failure).
+int32_t dimmy_meeting_resume(void);
+
+/// 1 if the active meeting is currently paused, 0 otherwise (including
+/// no meeting active). Used to render the Pause/Resume button correctly
+/// when re-attaching to an in-flight meeting (e.g. window reopened
+/// while a meeting started from the pill is still running).
+int32_t dimmy_meeting_is_paused(void);
+
 // ── Raw LLM call (bypasses dictation rewrite) ────────────────────
 
 /// Send `prompt` to the configured LLM endpoint without the dictation

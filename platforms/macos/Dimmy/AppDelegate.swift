@@ -38,16 +38,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // windows, two licensing FFI sessions writing the same
         // license.json. Detect any other process advertising our bundle
         // ID and bail out — let the existing instance keep running.
-        let myBundleID = Bundle.main.bundleIdentifier ?? ""
-        let myPID = ProcessInfo.processInfo.processIdentifier
-        let others = NSRunningApplication
-            .runningApplications(withBundleIdentifier: myBundleID)
-            .filter { $0.processIdentifier != myPID }
-        if let existing = others.first {
-            hkLog("[AppDelegate] another Dimmy already running (pid=\(existing.processIdentifier)) — activating it and quitting")
-            existing.activate(options: [.activateIgnoringOtherApps])
-            NSApp.terminate(nil)
-            return
+        //
+        // Skipped under XCTest. The test runner launches Dimmy.app as a
+        // host process; if a developer build is already running, the
+        // mutex would terminate the test host before XCTest can attach
+        // and the run reports "Early unexpected exit, operation never
+        // finished bootstrapping". Tests own their own lifecycle, so
+        // bypass this check when `XCTestConfigurationFilePath` is set
+        // (the env var XCTest sets in the host's environment).
+        let isUnderTest = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        if !isUnderTest {
+            let myBundleID = Bundle.main.bundleIdentifier ?? ""
+            let myPID = ProcessInfo.processInfo.processIdentifier
+            let others = NSRunningApplication
+                .runningApplications(withBundleIdentifier: myBundleID)
+                .filter { $0.processIdentifier != myPID }
+            if let existing = others.first {
+                hkLog("[AppDelegate] another Dimmy already running (pid=\(existing.processIdentifier)) — activating it and quitting")
+                existing.activate(options: [.activateIgnoringOtherApps])
+                NSApp.terminate(nil)
+                return
+            }
         }
 
         AppDelegate.shared = self
