@@ -595,17 +595,28 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
             });
         let transcriber = crate::chunked_stt::ChunkedTranscriber::start(
             buffer_arc, device_sr,
-            // 3 s chunks — chunked_smoke A/B 2026-05-06 showed first
-            // chunk 8.7 s vs 12.6 s, cadence 3 s vs 5 s, real-time
-            // margin 87 % vs 86 %. Interactive caption appears nearly
-            // twice as often with no quality regression on jfk×6.
-            3.0, 500, // overlap_ms — covers a word that straddles a chunk
-            on_chunk,
+            // 3 s chunks + 500 ms overlap. Chunk size from the
+            // chunked_smoke A/B 2026-05-06 benchmark (3 s wins cadence
+            // over 5 s without quality regression). Overlap stays at
+            // 500 ms after a 2026-05-10 experiment found that bumping
+            // to 800 ms made boundary duplicates WORSE, not better:
+            // longer overlap means the next chunk's audio starts
+            // further INSIDE the previous chunk's last spoken word,
+            // and Parakeet hallucinates / drops the partial-word lead
+            // token. The anchor `[w_n-2, w_n-1, w_n]` then can't match
+            // because chunk_n+1 starts with `[?, w_n-1, w_n, ...]`,
+            // dedup falls through, and the duplicate ships.
+            // The remaining boundary duplicates are an intrinsic
+            // limitation of word-anchor dedup over chunked Parakeet
+            // — proper fix is fuzzy match / longest common substring,
+            // tracked as future work. Scan window 12 tokens (was 8)
+            // is kept since it has no downside on the failure cases.
+            3.0, 500, on_chunk,
         );
         if let Ok(mut slot) = CHUNKED.lock() {
             *slot = Some(transcriber);
         }
-        log("[StartRec] chunked-stt worker spawned (5s+500ms+dedup)");
+        log("[StartRec] chunked-stt worker spawned (3s+500ms+dedup, 12-token scan)");
     }
 
     emit_event("recording_started", "{}");
