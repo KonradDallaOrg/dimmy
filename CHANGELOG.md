@@ -147,6 +147,42 @@ the Win-side `feat/system-audio-capture` branch (PR #45, merged into
   surfacing an error. Mac already pre-flighted with `meetingIsActive`;
   the rc = -7 branch closes the race where a meeting is started
   between the check and the call.
+- **Mac meeting waveform = real audio, not random walk.** The first
+  Mac parity push shipped with `MeetingViewModel.amplitudeTick()`
+  driving the bars from `CGFloat.random(in:)` because the bridging
+  header was missing `dimmy_get_loopback_amplitude` and a TODO had
+  been left in place. Fixed: declare the loopback FFI in
+  `DimmyFFI.h`, expose it via `DimmyCore.getLoopbackAmplitude()`, and
+  rewrite `amplitudeTick` to poll mic + system FFI 12× per second
+  through a display-AGC (`min(1, sqrt(raw) * 1.4)` — same formula Win
+  uses) and push into a scrolling FIFO. New `DualBandWaveform` view
+  renders the history mirrored: mic above the centre line, system
+  audio below. 10 unit tests in `MeetingAmplitudeAGCTests` pin the
+  formula + FIFO semantics so the regression cannot recur silently.
+- **Mac empty-recording → meaningful done state.** Before: stopping a
+  meeting that captured no speech showed "(recap not generated)" as
+  if recap had been skipped. Now: `MeetingViewModel.stopAndProcess`
+  detects the empty transcript and renders an explicit "Nothing was
+  recorded" TLDR card with mic/permissions guidance.
+- **Mac LLM-not-configured error → actionable message.** Before: recap
+  failure surfaced `LlmRawError.notConfigured` raw description. Now:
+  `MeetingPostProcessService.Failure.description` translates each rc
+  into a user-actionable string ("Open Settings → LLM and add a
+  key …", network-error → "check your network and API key", etc.).
+- **Mac recap markdown — `####` headings + fenced code blocks.** The
+  recap renderer collapsed level-4 headings into paragraph text and
+  rendered code fences as literal triple-backticks. Refactored into a
+  `MarkdownBlockParser` (state machine + line classifier) covering
+  level 1–4 headings, fenced code blocks (with language tags),
+  block quotes, dash/star bullets, numbered lists, and unclosed-fence
+  recovery. 13 unit tests in `MarkdownBlockParserTests` lock the rules.
+- **Mac pill mirrors meeting pause state.** The 500 ms poll in
+  `PillWindowController.tickMeetingState` was already mirroring
+  `dimmy_meeting_is_paused` into `AppState`, but the pill itself
+  didn't consume it — the user paused from the meeting window and
+  saw no visual change on the pill. Added an explicit
+  `pause.circle.fill` + "Meeting paused" indicator inside the pill
+  so the state is visible from any surface.
 
 ## [0.6.30] - 2026-05-07
 

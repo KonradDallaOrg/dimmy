@@ -190,6 +190,13 @@ final class DimmyCore {
         dimmy_get_amplitude()
     }
 
+    /// Peak amplitude of the secondary (system / loopback) audio buffer.
+    /// 0.0 when no Mix-mode meeting is in flight. The Mac meeting window
+    /// pairs this with `getAmplitude()` to draw a dual-band waveform.
+    func getLoopbackAmplitude() -> Float {
+        dimmy_get_loopback_amplitude()
+    }
+
     /// Get list of audio input device names.
     func listDevices() -> [String] {
         let bufLen = Self.bufferSize

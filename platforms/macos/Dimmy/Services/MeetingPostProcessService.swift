@@ -36,7 +36,22 @@ enum MeetingPostProcessService {
         var description: String {
             switch self {
             case .emptyTranscript: return "Empty transcript — nothing to summarise"
-            case .llm(let e): return "\(e)"
+            case .llm(let e):
+                // Translate FFI rc → user-actionable text. The raw enum
+                // values land in Settings hints (subStatusLabel) so the
+                // user knows where to fix it.
+                switch e {
+                case .notConfigured:
+                    return "No LLM provider configured. Open Settings → LLM and add a key (Anthropic, OpenAI, or Google) before generating a recap."
+                case .httpError:
+                    return "LLM request failed — check your network and API key, then click Regenerate. Details in Console.app under \"dimmy\"."
+                case .emptyPrompt, .invalidArgs:
+                    return "Internal error preparing the LLM call. Click Regenerate; if it persists, please report this."
+                case .notInitialized:
+                    return "Dimmy core isn't ready yet — wait a moment then click Regenerate."
+                case .unknown(let code):
+                    return "LLM call failed (rc=\(code)). See Console.app under \"dimmy\"."
+                }
             case .unknown(let s): return s
             }
         }

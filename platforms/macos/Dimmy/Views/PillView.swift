@@ -438,7 +438,24 @@ struct PillView: View {
 
     private func recordingView(mode: RecordingMode) -> some View {
         HStack(spacing: 12) {
-            WaveformView(levels: appState.waveformLevels, style: activeWaveformStyle)
+            // When the pill is mirroring a paused meeting, replace the
+            // dictation waveform (which is dictation-only data) with a
+            // pause glyph so the user sees at a glance that audio is
+            // not being captured. The Stop button on the right still
+            // routes through the meeting recap pipeline as before.
+            if appState.meetingActive && appState.meetingIsPaused {
+                HStack(spacing: 6) {
+                    Image(systemName: "pause.circle.fill")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.orange)
+                    Text("Meeting paused")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Color.orange)
+                }
+                .accessibilityLabel("Meeting paused")
+            } else {
+                WaveformView(levels: appState.waveformLevels, style: activeWaveformStyle)
+            }
 
             if mode == .toggle {
                 Button(action: {

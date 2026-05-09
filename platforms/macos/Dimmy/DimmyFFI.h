@@ -49,6 +49,12 @@ int32_t dimmy_set_config_json(const char * _Nonnull json_ptr);
 /// Get current microphone amplitude (0.0 - 1.0).
 float dimmy_get_amplitude(void);
 
+/// Peak amplitude of the secondary (loopback / system audio) buffer.
+/// 0.0 when no Mix-mode meeting is active or the buffer is empty.
+/// Used by the meeting-window dual-band waveform to render mic + system
+/// as two stacked bands so the user sees both streams at a glance.
+float dimmy_get_loopback_amplitude(void);
+
 /// Get device list as JSON array. Returns length written, or -1 on error.
 int32_t dimmy_list_devices_json(char * _Nonnull out_buf, int32_t buf_len);
 

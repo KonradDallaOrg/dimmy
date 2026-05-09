@@ -41,7 +41,9 @@ final class MeetingViewModel: ObservableObject {
     @Published var timerLabel: String = "00:00:00"
     @Published var chunkSummary: String = ""
     @Published var isPaused: Bool = false
-    @Published var liveAmplitudeBars: [CGFloat] = Array(repeating: 0, count: 32)
+    static let liveAmplitudeBarCount: Int = 56
+    @Published var liveAmplitudeBars: [MeetingAmplitudeSample] =
+        Array(repeating: .zero, count: MeetingViewModel.liveAmplitudeBarCount)
 
     // ── Sidebar ────────────────────────────────────────────────────
     @Published var historyRows: [MeetingHistoryRow] = []
@@ -86,6 +88,14 @@ final class MeetingViewModel: ObservableObject {
         case .processing: return .blue
         case .done: return .green
         }
+    }
+
+    /// Whether ANY sample in the live waveform buffer has a non-zero
+    /// system-audio level. Used to gate the second band in the recording
+    /// view: mic-only meetings stay single-band rather than rendering an
+    /// always-empty lower half.
+    var systemAudioActive: Bool {
+        liveAmplitudeBars.contains { $0.system > 0.001 }
     }
 
     // MARK: - Lifecycle: window opens / re-opens
@@ -219,13 +229,28 @@ final class MeetingViewModel: ObservableObject {
                 self.doneAudioURL = self.audioURL(for: result.dir)
                 self.titlebarTitle = self.doneTitle
 
-                if self.generateRecap, !cleanTranscript.isEmpty {
+                if cleanTranscript.isEmpty {
+                    // No speech captured (very short recording, VAD
+                    // rejected everything, or STT failed silently).
+                    // Don't pretend the recap "wasn't generated" — be
+                    // explicit so the user knows nothing landed.
+                    self.isWorking = false
+                    self.phase = .done
+                    self.doneSections = [
+                        "TLDR": "Nothing was recorded — no speech was detected. Try moving closer to the microphone, checking input device settings, or recording for longer.",
+                    ]
+                    self.statusLabel = "Empty recording"
+                    self.subStatusLabel = "No transcript was produced"
+                    self.loadHistory()
+                } else if self.generateRecap {
                     self.processingStep = .generatingRecap
                     self.runPostProcess(dir: result.dir, transcript: cleanTranscript)
                 } else {
                     self.isWorking = false
                     self.phase = .done
-                    self.doneSections = ["TLDR": "(recap not generated)"]
+                    self.doneSections = [
+                        "TLDR": "Recap skipped — toggle on \"Generate recap\" before stopping next time, or click Regenerate to run it now.",
+                    ]
                     self.statusLabel = "Done"
                     self.loadHistory()
                 }
@@ -449,7 +474,12 @@ final class MeetingViewModel: ObservableObject {
     private func stopRecordingPolling() {
         pollTimer?.invalidate(); pollTimer = nil
         amplitudeTimer?.invalidate(); amplitudeTimer = nil
-        liveAmplitudeBars = Array(repeating: 0, count: liveAmplitudeBars.count)
+        liveAmplitudeBars = Array(
+            repeating: .zero,
+            count: liveAmplitudeBars.isEmpty
+                ? Self.liveAmplitudeBarCount
+                : liveAmplitudeBars.count
+        )
     }
 
     private func pollTick() {
@@ -483,19 +513,23 @@ final class MeetingViewModel: ObservableObject {
     }
 
     private func amplitudeTick() {
-        // Crude amplitude proxy: the Rust core exposes
-        // `dimmy_get_amplitude` for the dictation pill. Meeting mode
-        // goes through cpal direct so the buffer doesn't surface that
-        // signal here — fall back to a damped random walk so the bars
-        // visibly react. The "real" amplitude wire-up is a follow-up
-        // (see meeting-ui-port-plan.md).
-        let n = liveAmplitudeBars.count
-        var next = liveAmplitudeBars
-        for i in 0..<n {
-            let target = isPaused ? 0 : CGFloat.random(in: 0.05...0.85)
-            next[i] = next[i] * 0.6 + target * 0.4
-        }
-        liveAmplitudeBars = next
+        // Real amplitude: the meeting worker (`core/src/meeting.rs`)
+        // pushes mic + system samples into the same `audio_buffer` /
+        // `audio_buffer_secondary` that `dimmy_get_amplitude` and
+        // `dimmy_get_loopback_amplitude` read, so the FFI surfaces the
+        // genuine peak even though meeting mode bypasses the dictation
+        // capture path. Display-AGC mirrors Win
+        // `MeetingWindow.OnAmpTick`: `min(1, sqrt(raw) * 1.4)`.
+        let micRaw = DimmyCore.shared.getAmplitude()
+        let sysRaw = DimmyCore.shared.getLoopbackAmplitude()
+        let mic = MeetingAmplitudeAGC.displayLevel(micRaw)
+        let sys = MeetingAmplitudeAGC.displayLevel(sysRaw)
+        liveAmplitudeBars = MeetingAmplitudeAGC.push(
+            liveAmplitudeBars,
+            mic: mic,
+            system: sys,
+            capacity: Self.liveAmplitudeBarCount
+        )
     }
 
     // MARK: - Disk helpers
