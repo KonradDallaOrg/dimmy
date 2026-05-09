@@ -54,6 +54,12 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern float dimmy_get_amplitude();
 
+    /// Peak amplitude of the SECONDARY (loopback / system) audio buffer.
+    /// Returns 0.0 when no Mix recording is active. Used by the meeting
+    /// window dual-band waveform to draw mic + system as separate bands.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern float dimmy_get_loopback_amplitude();
+
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_list_devices_json(byte[] outBuf, int bufLen);
 
@@ -193,6 +199,23 @@ public static class DimmyNative
     /// corrupt the shared cpal audio buffer.
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_meeting_is_active();
+
+    /// Pause / resume the in-flight meeting. cpal streams keep running
+    /// in the background, but the meeting worker stops writing the WAV
+    /// files / emitting STT chunks. On resume the worker advances past
+    /// the paused window so the gap is excluded from the audio + the
+    /// transcript timeline; a `[paused N ms]` marker is written into
+    /// transcripts.txt at the seam.
+    /// Returns 1 if state flipped, 0 if no-op (already in target state
+    /// or no meeting active), -1 internal failure.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_meeting_pause();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_meeting_resume();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_meeting_is_paused();
 
     /// Raw LLM call — bypasses the dictation rewrite wrapper. Pass
     /// empty string for `modelOverride` to use the user-configured

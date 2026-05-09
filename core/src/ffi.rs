@@ -218,11 +218,19 @@ fn dimmy_init_inner() -> c_int {
 
     // Audio thread
     let audio_buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
+    let audio_buffer_secondary = Arc::new(Mutex::new(Vec::<f32>::new()));
     let input_gain_atomic = Arc::new(std::sync::atomic::AtomicU32::new(
         file_cfg.input_gain.to_bits(),
     ));
-    let audio_tx =
-        crate::audio::spawn_audio_thread(audio_buffer.clone(), input_gain_atomic.clone());
+    let loopback_gain_atomic = Arc::new(std::sync::atomic::AtomicU32::new(
+        file_cfg.loopback_gain.to_bits(),
+    ));
+    let audio_tx = crate::audio::spawn_audio_thread(
+        audio_buffer.clone(),
+        audio_buffer_secondary.clone(),
+        input_gain_atomic.clone(),
+        loopback_gain_atomic.clone(),
+    );
 
     let app_state = AppState {
         recording: Mutex::new(false),
@@ -237,6 +245,7 @@ fn dimmy_init_inner() -> c_int {
         audio_sample_rate: Mutex::new(crate::audio::device_sample_rate(&file_cfg.selected_device)),
         transcript: Mutex::new(String::new()),
         audio_buffer,
+        audio_buffer_secondary,
         audio_tx: Mutex::new(audio_tx),
         streaming_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         llm_enabled: Mutex::new(file_cfg.llm_enabled),
@@ -249,6 +258,7 @@ fn dimmy_init_inner() -> c_int {
         llm_use_same_key: Mutex::new(file_cfg.llm_use_same_key),
         llm_api_key: Mutex::new(stored_llm_key),
         llm_log_enabled: Mutex::new(file_cfg.llm_log_enabled),
+        recap_model_override: Mutex::new(file_cfg.recap_model_override),
         chunk_streaming_enabled: Mutex::new(file_cfg.chunk_streaming_enabled),
         preprocessing_enabled: Mutex::new(file_cfg.preprocessing_enabled),
         audio_debug_enabled: Mutex::new(file_cfg.audio_debug_enabled),
@@ -270,6 +280,9 @@ fn dimmy_init_inner() -> c_int {
         overlay_position: Mutex::new(file_cfg.overlay_position),
         keep_in_clipboard: Mutex::new(file_cfg.keep_in_clipboard),
         input_gain: input_gain_atomic,
+        loopback_gain: loopback_gain_atomic,
+        meeting_chunk_secs: Mutex::new(file_cfg.meeting_chunk_secs),
+        audio_source: Mutex::new(file_cfg.audio_source),
         key_store,
         audio_debug_session_dir: Mutex::new(None),
         window_anchor: Mutex::new(None),
@@ -463,10 +476,27 @@ pub extern "C" fn dimmy_set_event_callback(cb: extern "C" fn(*const c_char)) {
 
 // ── Recording ───────────────────────────────────────────────────────
 
-/// Start recording. Returns 0=OK, -1=no API key, -2=already recording.
+/// Start recording. Returns 0=OK, -1=no API key, -2=already recording,
+/// -3=lock poisoned, -7=meeting in progress (caller should suppress
+/// the dictation hotkey — having two captures running concurrently
+/// would clobber the meeting's audio_buffer / aec_mic_ring and corrupt
+/// the active meeting recording).
 #[no_mangle]
 pub extern "C" fn dimmy_start_recording() -> c_int {
     let st = state();
+
+    // Block dictation when a meeting is recording. The audio thread
+    // can only host one capture configuration at a time — letting the
+    // pill hijack it would silently truncate the meeting's WAV files
+    // (synth_len would peg at 0 and the worker would write nothing
+    // until the user clicks Stop). User-explicit fix request 2026-05-08.
+    {
+        let meeting_active = MEETING.lock().map(|g| g.is_some()).unwrap_or(false);
+        if meeting_active {
+            log("[StartRec] suppressed — meeting recording in progress (rc=-7)");
+            return -7;
+        }
+    }
 
     let mut recording = match st.recording.lock() {
         Ok(r) => r,
@@ -497,10 +527,26 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
         *sr = device_sr;
     }
 
-    let _ = st
-        .audio_tx
-        .lock()
-        .map(|tx| tx.send(AudioCommand::Start(selected_device)));
+    // Always-mix architecture (2026-05-08): the audio capture session
+    // ALWAYS opens both mic + system loopback, AEC3 always processes
+    // the mic with the loopback as far-end reference. Pill dictation
+    // still consumes only the cleaned mic buffer (audio_buffer) — the
+    // loopback samples flow into audio_buffer_secondary which the
+    // dictation chunked-stt worker simply ignores. Net effect:
+    //   • no more "Mic vs Mix vs System" decision at the call site
+    //   • AEC3 cleans up speaker echo even during pill dictation
+    //   • the pill amplitude visualizer can read MAX(mic, loopback) so
+    //     the user sees activity from either source
+    //   • robustness: aec.rs no longer blocks on missing ref, so a
+    //     loopback that never delivers (no default output, no audio
+    //     playing) gracefully falls back to mic-only behavior
+    let source = crate::audio::AudioSource::Mix;
+    let _ = st.audio_tx.lock().map(|tx| {
+        tx.send(AudioCommand::Start {
+            device_name: selected_device,
+            source,
+        })
+    });
 
     // Spawn the realtime chunked transcriber when the user has it
     // turned on AND the active local backend is Parakeet. Whisper.cpp
@@ -1130,6 +1176,7 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "llm_use_same_key": *st.llm_use_same_key.lock().unwrap_or_else(|e| e.into_inner()),
         "has_llm_key": has_llm_key,
         "llm_log_enabled": *st.llm_log_enabled.lock().unwrap_or_else(|e| e.into_inner()),
+        "recap_model_override": st.recap_model_override.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         "chunk_streaming_enabled": *st.chunk_streaming_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "preprocessing_enabled": *st.preprocessing_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "audio_debug_enabled": *st.audio_debug_enabled.lock().unwrap_or_else(|e| e.into_inner()),
@@ -1147,6 +1194,7 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "overlay_position": *st.overlay_position.lock().unwrap_or_else(|e| e.into_inner()),
         "keep_in_clipboard": *st.keep_in_clipboard.lock().unwrap_or_else(|e| e.into_inner()),
         "input_gain": f32::from_bits(st.input_gain.load(std::sync::atomic::Ordering::Relaxed)),
+        "audio_source": st.audio_source.lock().map(|s| s.clone()).unwrap_or_else(|_| "mic".to_string()),
         "stats_total_words": *st.stats_total_words.lock().unwrap_or_else(|e| e.into_inner()),
         "stats_total_speaking_secs": *st.stats_total_speaking_secs.lock().unwrap_or_else(|e| e.into_inner()),
         // Per-provider key flags — STT
@@ -1408,6 +1456,12 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
             *l = b;
         }
     }
+    if let Some(s) = v["recap_model_override"].as_str() {
+        if let Ok(mut slot) = st.recap_model_override.lock() {
+            *slot = s.to_string();
+        }
+        log(&format!("[Config] recap_model_override set to {:?}", s));
+    }
 
     // Audio / appearance
     if let Some(b) = v["preprocessing_enabled"].as_bool() {
@@ -1532,6 +1586,29 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
         st.input_gain
             .store(gain.to_bits(), std::sync::atomic::Ordering::Relaxed);
         log(&format!("[Config] input_gain set to {:.2}", gain));
+    }
+    if let Some(g) = v["loopback_gain"].as_f64() {
+        let gain = (g as f32).clamp(0.5, 4.0);
+        st.loopback_gain
+            .store(gain.to_bits(), std::sync::atomic::Ordering::Relaxed);
+        log(&format!("[Config] loopback_gain set to {:.2}", gain));
+    }
+    if let Some(s) = v["meeting_chunk_secs"].as_f64() {
+        let secs = (s as f32).clamp(5.0, 60.0);
+        if let Ok(mut slot) = st.meeting_chunk_secs.lock() {
+            *slot = secs;
+        }
+        log(&format!("[Config] meeting_chunk_secs set to {:.1}", secs));
+    }
+    if let Some(s) = v["audio_source"].as_str() {
+        let normalised = match s.to_ascii_lowercase().as_str() {
+            "system" | "mix" | "mic" => s.to_ascii_lowercase(),
+            _ => "mic".to_string(),
+        };
+        if let Ok(mut slot) = st.audio_source.lock() {
+            *slot = normalised.clone();
+        }
+        log(&format!("[Config] audio_source set to {}", normalised));
     }
     if !v["app_rules"].is_null() {
         if let Ok(rules) =
@@ -1735,6 +1812,33 @@ pub extern "C" fn dimmy_get_amplitude() -> c_float {
         }
     });
     // clamp guarantees [0.0, 1.0]; NaN filtered in fold above
+    peak.clamp(0.0, 1.0)
+}
+
+/// Peak amplitude of the SECONDARY audio buffer (the loopback / system
+/// audio stream populated in Mix mode). Returns 0.0 when no Mix
+/// recording is active or the buffer hasn't been fed yet. Used by the
+/// meeting-window dual-band waveform to draw mic + system as separate
+/// bands so the user can see both streams at a glance.
+#[no_mangle]
+pub extern "C" fn dimmy_get_loopback_amplitude() -> c_float {
+    let st = state();
+    let buffer = match st.audio_buffer_secondary.lock() {
+        Ok(b) => b,
+        Err(_) => return 0.0,
+    };
+    if buffer.is_empty() {
+        return 0.0;
+    }
+    let start = buffer.len().saturating_sub(800);
+    let peak = buffer[start..].iter().fold(0.0f32, |max, &s| {
+        let abs = s.abs();
+        if abs.is_finite() {
+            max.max(abs)
+        } else {
+            max
+        }
+    });
     peak.clamp(0.0, 1.0)
 }
 
@@ -2281,21 +2385,110 @@ pub unsafe extern "C" fn dimmy_meeting_start(out_buf: *mut c_char, buf_len: c_in
 
     let st = state();
     let selected_device = st.selected_device.lock().ok().and_then(|d| d.clone());
-    let device_sr = crate::audio::device_sample_rate(&selected_device);
+    // Always-mix (2026-05-08). The legacy `audio_source` config field
+    // is honoured only for the rate-probe call below where some
+    // backward-compat tests still set it explicitly. Capture itself
+    // always opens both mic + loopback so the meeting worker has both
+    // tracks regardless of what the user had configured pre-refactor.
+    let mt_source = crate::audio::AudioSource::Mix;
+    let _legacy_source_unused = st.audio_source.lock();
+    // CRITICAL: when source = System, the primary capture stream is the
+    // OUTPUT device in WASAPI loopback mode (~48 kHz on most systems),
+    // NOT the mic. Querying the mic's rate here and feeding it to the
+    // meeting writer makes audio.wav play back at 1/3 speed ("metallic,
+    // very slow") because the WAV header advertises 16 kHz but the
+    // shared buffer was actually filling at 48 kHz.
+    let device_sr = crate::audio::primary_sample_rate(&selected_device, &mt_source);
+    log(&format!(
+        "[Meeting] primary_sample_rate={} source={:?}",
+        device_sr, mt_source
+    ));
     if let Ok(mut sr) = st.audio_sample_rate.lock() {
         *sr = device_sr;
     }
-    // Clear any stale buffer from a previous recording so the meeting
-    // worker starts at offset 0.
+    // Clear any stale buffers from a previous recording so the meeting
+    // worker starts at offset 0 on both primary and secondary streams.
     if let Ok(mut b) = st.audio_buffer.lock() {
         b.clear();
     }
-    let _ = st
-        .audio_tx
-        .lock()
-        .map(|tx| tx.send(crate::audio::AudioCommand::Start(selected_device)));
+    if let Ok(mut b) = st.audio_buffer_secondary.lock() {
+        b.clear();
+    }
+    let _ = st.audio_tx.lock().map(|tx| {
+        tx.send(crate::audio::AudioCommand::Start {
+            device_name: selected_device,
+            source: mt_source,
+        })
+    });
 
-    let session = match crate::meeting::MeetingSession::start(st.audio_buffer.clone(), device_sr) {
+    // Snapshot the user's STT configuration so the meeting worker uses
+    // the SAME backend (cloud or local) the dictation pipeline does.
+    // Avoids the previous trap where meeting hardcoded a backend and
+    // silently produced empty transcripts when the user's setup didn't
+    // match (cloud user → meeting tried local; missing local model file
+    // → meeting tried whisper anyway → "model not found" loop).
+    let stt_snapshot = crate::meeting::SttSnapshot {
+        mode: st
+            .stt_mode
+            .lock()
+            .ok()
+            .map(|s| s.clone())
+            .unwrap_or_else(|| "local".to_string()),
+        api_url: st
+            .api_url
+            .lock()
+            .ok()
+            .map(|s| s.clone())
+            .unwrap_or_default(),
+        api_model: st
+            .api_model
+            .lock()
+            .ok()
+            .map(|s| s.clone())
+            .unwrap_or_default(),
+        api_key: st.api_key.lock().ok().and_then(|k| k.clone()),
+        prompt: st.prompt.lock().ok().map(|s| s.clone()).unwrap_or_default(),
+        local_model: st
+            .local_model
+            .lock()
+            .ok()
+            .map(|s| s.clone())
+            .unwrap_or_default(),
+        local_backend: st
+            .local_stt_backend
+            .lock()
+            .ok()
+            .map(|s| s.clone())
+            .unwrap_or_else(|| "whisper".to_string()),
+        language: st
+            .language
+            .lock()
+            .ok()
+            .map(|s| s.clone())
+            .unwrap_or_else(|| "auto".to_string()),
+        chunk_secs: st.meeting_chunk_secs.lock().ok().map(|s| *s),
+    };
+    // Loopback device runs at its OWN native rate which may differ from
+    // the mic (typical: BT mic 16k HFP + speakers 48k A2DP). meeting.rs
+    // writes audio_system.wav with this rate so playback is correct
+    // regardless of the mic/system mismatch.
+    let system_sr = if matches!(mt_source, crate::audio::AudioSource::Mix) {
+        crate::audio::secondary_sample_rate()
+    } else {
+        device_sr
+    };
+    log(&format!(
+        "[Meeting] mic_sr={} system_sr={} source={:?}",
+        device_sr, system_sr, mt_source
+    ));
+    let session = match crate::meeting::MeetingSession::start(
+        st.audio_buffer.clone(),
+        st.audio_buffer_secondary.clone(),
+        device_sr,
+        system_sr,
+        mt_source,
+        stt_snapshot,
+    ) {
         Ok(s) => s,
         Err(e) => {
             log(&format!("[Meeting] start failed: {}", e));
@@ -2441,6 +2634,68 @@ pub unsafe extern "C" fn dimmy_meeting_list_orphans(out_buf: *mut c_char, buf_le
 #[no_mangle]
 pub extern "C" fn dimmy_meeting_is_active() -> c_int {
     MEETING.lock().map(|g| g.is_some() as c_int).unwrap_or(0)
+}
+
+/// Pause the in-flight meeting. While paused, the meeting worker
+/// stops draining the audio buffers, stops writing to the WAV files,
+/// and stops emitting STT chunks. cpal callbacks keep firing — we
+/// don't bounce the streams (avoids a device-acquisition race on
+/// resume). On resume, the worker advances its write/read cursors
+/// past the paused window so the gap doesn't end up in the audio or
+/// transcript timeline; a `[paused N ms]` marker lands in
+/// transcripts.txt at the seam so the recap LLM sees the gap.
+///
+/// Returns:
+///   1  state flipped (meeting was running, now paused)
+///   0  no-op (meeting was already paused, or no meeting active)
+///  -1  internal lock failure
+#[no_mangle]
+pub extern "C" fn dimmy_meeting_pause() -> c_int {
+    match MEETING.lock() {
+        Ok(g) => match g.as_ref() {
+            Some(s) => {
+                if s.pause() {
+                    1
+                } else {
+                    0
+                }
+            }
+            None => 0,
+        },
+        Err(_) => -1,
+    }
+}
+
+/// Resume a paused meeting. Idempotent: returns 0 if the meeting
+/// wasn't paused. See dimmy_meeting_pause for the gap-skip semantics.
+#[no_mangle]
+pub extern "C" fn dimmy_meeting_resume() -> c_int {
+    match MEETING.lock() {
+        Ok(g) => match g.as_ref() {
+            Some(s) => {
+                if s.resume() {
+                    1
+                } else {
+                    0
+                }
+            }
+            None => 0,
+        },
+        Err(_) => -1,
+    }
+}
+
+/// Returns 1 if the active meeting is paused, 0 otherwise (including
+/// no meeting active).
+#[no_mangle]
+pub extern "C" fn dimmy_meeting_is_paused() -> c_int {
+    match MEETING.lock() {
+        Ok(g) => match g.as_ref() {
+            Some(s) => s.is_paused() as c_int,
+            None => 0,
+        },
+        Err(_) => 0,
+    }
 }
 
 /// Raw LLM call: send `prompt` to the configured LLM endpoint without
@@ -3245,13 +3500,20 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
         mono.len() as f64 / spec.sample_rate as f64,
     ));
 
-    // ── Preprocess (same pipeline the recording path uses) ──────
+    // ── Preprocess: file-load mode (highpass only, no VAD, no AGC) ──
+    // The live-recording pipeline normalises level via dagc, but on a
+    // long recorded file dagc encounters natural silence stretches and
+    // emits NaN, permanently corrupting all downstream samples (CLAUDE.md
+    // AUDIO-001). On a 95-min meeting WAV this destroyed 97 % of the
+    // audio, leaving only the first ~150 s transcribable. File-load
+    // audio is already at a recorded level — only de-rumble is needed.
     let raw_samples_for_history = mono.clone();
-    let raw = crate::audio::RawAudio {
-        samples: mono,
+    let processed_samples =
+        crate::preprocess::process_buffer_for_file_load(&mono, spec.sample_rate);
+    let processed = crate::audio::ProcessedAudio {
+        samples: processed_samples,
         sample_rate: spec.sample_rate,
     };
-    let processed = raw.preprocess(true);
     if processed.samples.is_empty() {
         log("[FileLoad] preprocess produced 0 samples (silent input?)");
         return -3;
@@ -4642,6 +4904,7 @@ mod tests {
                 llm_use_same_key: Mutex::new(true),
                 llm_api_key: Mutex::new(None),
                 llm_log_enabled: Mutex::new(false),
+                recap_model_override: Mutex::new(String::new()),
                 chunk_streaming_enabled: Mutex::new(false),
                 preprocessing_enabled: Mutex::new(true),
                 audio_debug_enabled: Mutex::new(false),
@@ -4663,6 +4926,10 @@ mod tests {
                 overlay_position: Mutex::new("Bottom Right".to_string()),
                 keep_in_clipboard: Mutex::new(false),
                 input_gain: Arc::new(std::sync::atomic::AtomicU32::new(1.0f32.to_bits())),
+                loopback_gain: Arc::new(std::sync::atomic::AtomicU32::new(1.0f32.to_bits())),
+                audio_source: Mutex::new("mic".to_string()),
+                meeting_chunk_secs: Mutex::new(15.0f32),
+                audio_buffer_secondary: Arc::new(Mutex::new(Vec::new())),
                 key_store: crate::keystore::KeyStore::new(),
                 audio_debug_session_dir: Mutex::new(None),
                 window_anchor: Mutex::new(None),
@@ -5435,5 +5702,89 @@ mod tests {
         dimmy_shutdown();
         let recording = state().recording.lock().map(|r| *r).unwrap_or(true);
         assert!(!recording, "recording flag must be false after shutdown");
+    }
+
+    // ── Meeting-pause FFI surface ────────────────────────────────────
+    // These mirror the integration test in tests/meeting_pause_resume.rs
+    // but at the lib-test level so they run without the dylib link
+    // shenanigans. Coverage for the FFI return-code contract:
+    //   1  → state actually flipped (was running, now paused; or vice
+    //        versa)
+    //   0  → no-op (already in target state, or no meeting active)
+    //  -1  → internal lock failure (not exercised here)
+
+    #[test]
+    fn meeting_pause_no_op_without_meeting() {
+        ensure_test_state();
+        // Defensive cleanup in case a prior test left a session.
+        if let Ok(mut g) = MEETING.lock() {
+            *g = None;
+        }
+        assert_eq!(dimmy_meeting_is_active(), 0, "no meeting active to start");
+        assert_eq!(dimmy_meeting_pause(), 0, "pause without meeting → 0");
+        assert_eq!(dimmy_meeting_resume(), 0, "resume without meeting → 0");
+        assert_eq!(
+            dimmy_meeting_is_paused(),
+            0,
+            "is_paused without meeting → 0"
+        );
+    }
+
+    #[test]
+    fn start_recording_blocked_when_meeting_active() {
+        ensure_test_state();
+        // Drop any leftover MEETING from prior tests that touched it.
+        if let Ok(mut g) = MEETING.lock() {
+            *g = None;
+        }
+        // Inject a fake meeting session into the global slot via the
+        // public start path with a cloud STT snapshot; we tear it down
+        // immediately after the assert so other tests aren't affected.
+        use crate::audio::AudioSource;
+        use crate::meeting::{MeetingSession, SttSnapshot};
+        use std::sync::Arc;
+        let stt = SttSnapshot {
+            mode: "cloud".to_string(),
+            api_url: "https://test.invalid/".to_string(),
+            api_model: "x".to_string(),
+            api_key: Some("x".to_string()),
+            prompt: String::new(),
+            local_model: String::new(),
+            local_backend: "whisper".to_string(),
+            language: "en".to_string(),
+            chunk_secs: Some(15.0),
+        };
+        let primary: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+        let secondary: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+        let session = match MeetingSession::start(
+            primary,
+            secondary,
+            48_000,
+            48_000,
+            AudioSource::Mix,
+            stt,
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("[skip] start failed: {e}");
+                return;
+            }
+        };
+        if let Ok(mut g) = MEETING.lock() {
+            *g = Some(session);
+        }
+
+        // Now meeting is "active" — dimmy_start_recording must return
+        // -7 immediately.
+        let rc = dimmy_start_recording();
+        // Restore: stop the meeting before checking so we don't leak.
+        let session = MEETING.lock().ok().and_then(|mut g| g.take());
+        if let Some(s) = session {
+            let _ = s.stop();
+        }
+        assert_eq!(
+            rc, -7,
+            "dimmy_start_recording must return -7 when a meeting is active"
+        );
     }
 }

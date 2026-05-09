@@ -40,8 +40,31 @@ pub async fn transcribe_audio(
         Provider::Deepgram => {
             return transcribe_audio_deepgram(api_url, api_key, wav_data, language).await
         }
-        Provider::Gemini if api_url.contains("generateContent") => {
-            return transcribe_audio_gemini(api_url, api_key, wav_data, language).await;
+        Provider::Gemini => {
+            // Gemini transcription is multimodal generateContent with
+            // audio inline. The user may have configured api_url as
+            // either the full method path (...:generateContent) or
+            // just the base / models prefix — in that case we build
+            // the full URL using `model`. Without this, the OpenAI
+            // multipart fallback would POST to a base URL Google
+            // doesn't expose as an endpoint and return 404.
+            let full_url = if api_url.contains(":generateContent")
+                || api_url.contains(":streamGenerateContent")
+            {
+                api_url.to_string()
+            } else {
+                let base = api_url.trim_end_matches('/');
+                if base.ends_with("/models") {
+                    format!("{}/{}:generateContent", base, model)
+                } else if base.contains("/models/") {
+                    // already has /models/<id>, append the method
+                    format!("{}:generateContent", base)
+                } else {
+                    // unknown shape — assume v1beta and append models/<id>
+                    format!("{}/models/{}:generateContent", base, model)
+                }
+            };
+            return transcribe_audio_gemini(&full_url, api_key, wav_data, language).await;
         }
         _ => {}
     }

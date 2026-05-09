@@ -194,9 +194,21 @@ public sealed class TaskbarService : IDisposable
     private void AmpTimerTick(object? sender, object e)
     {
         if (_taskbar is null || _disposed) return;
-        float amp;
-        try { amp = DimmyNative.dimmy_get_amplitude(); }
+        // Always-mix: taskbar bar reacts to whichever source has signal,
+        // mirroring the pill's max(mic, sys) behaviour. Without this the
+        // user sees a flat taskbar bar during a meeting where they're
+        // listening (system audio playing, mic silent) — confusing
+        // because the pill IS animating.
+        float ampMic, ampSys;
+        try
+        {
+            ampMic = DimmyNative.dimmy_get_amplitude();
+            ampSys = DimmyNative.dimmy_get_loopback_amplitude();
+        }
         catch { return; }
+        if (!float.IsFinite(ampMic)) ampMic = 0;
+        if (!float.IsFinite(ampSys)) ampSys = 0;
+        float amp = Math.Max(ampMic, ampSys);
 
         // Display AGC — same algorithm the pill's waveform uses.
         // Fast attack so peaks land immediately; slow release so quiet
