@@ -4,6 +4,69 @@ All notable changes to Dimmy are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.31] - 2026-05-09
+
+### Added
+- **Mac Meeting window — full system-audio-capture parity port.** Mac
+  catches up to Win for the meeting feature shipped on `feat/system-
+  audio-capture`. SwiftUI rewrite of `MeetingWindow` with the full
+  state machine (idle / recording / processing / done), translucent
+  sidebar of past meetings (search + delete with NSAlert confirm),
+  persistent recording bar (timer / chunks / Pause / Stop / Back-to-
+  live), processing spinner with stepwise checkmarks, and the seven
+  recap cards (TLDR + Context + Highlights + Narrative + Decisions +
+  Topics + Actions + Open Questions + Risks + Next Steps + Followups).
+- **Mac block-level markdown renderer.** Replaces the flat-text recap
+  render. Bullets (`- ` / `* `), numbered lists (`1. `), sub-headings
+  (`### `), and block quotes (`> `) all render with native SwiftUI
+  shapes; inline (`**bold**`, `*italic*`, `` `code` ``) still flows
+  through `AttributedString.markdown`.
+- **Mac waveform strip with click/drag seek.** New `AudioPlaybackBar`
+  + `WavPeaks` (Swift port of Win's `WavPeaks.cs`). Renders 220-bucket
+  centre-mirrored amplitude bars in a SwiftUI `Canvas`; played portion
+  fills with the accent colour, unplayed stays in `macTextSecondary`.
+  Single `DragGesture(minimumDistance: 0)` covers both tap-to-jump and
+  continuous scrubbing. AVAudioPlayer-backed (AVKit's `VideoPlayer`
+  was the source of a SwiftUI layout-loop SIGABRT on audio-only
+  assets — fixed-height waveform avoids the size-computation that
+  triggered it).
+- **Mac recap-model dropdown** in Advanced settings. Curated picker
+  (Auto + Anthropic Opus 4.7 / Sonnet 4.6 / Haiku 4.5 + Gemini 3.1
+  Pro / 2.5 Pro / 2.5 Flash + GPT-5 / GPT-4o + Custom) bound to
+  `recap_model_override` in config.json. `pickRecapModel()` honours
+  the override before the URL-heuristic fallback.
+- **Mac Pill ↔ Meeting routing.** Stop button on the pill branches:
+  when a meeting is active, Stop spins up the recap pipeline through
+  the new shared `MeetingPostProcessService`; otherwise the existing
+  dictation toggle stop runs. A 500 ms `NSTimer` in
+  `PillWindowController` mirrors `dimmy_meeting_is_active` /
+  `_is_paused` into `AppState` so the pill auto-shows the recording
+  bar when a meeting is started from any surface.
+- **Mac XCTest target + 69 unit tests.** New `DimmyTests` bundle wired
+  into the pbxproj (productType `bundle.unit-test`, ad-hoc signing).
+  Coverage: structured-recap prompt + parser + markdown round-trip
+  (17), curated picker list integrity + resolve fallthrough (12),
+  history-row title/subtitle pretty-printing (7), AppState
+  recap_model_override round-trip (6), plus the existing AppState
+  language/preset tests (27).
+
+### Changed
+- **Mac MeetingWindow lifecycle decoupled from FFI.** Closing the
+  window no longer stops the recording (state lives in the Rust
+  `MEETING` static). Reopening probes `dimmy_meeting_is_active` and
+  re-attaches polling, pause state, and active dir.
+- **Mac `AppDelegate` single-instance guard bypassed under XCTest.**
+  `XCTestConfigurationFilePath` env var indicates the host is a test
+  runner — without the bypass the runner would terminate before
+  XCTest could attach if a dev-build instance was already running.
+
+### Fixed
+- **Mac dictation hotkey race vs in-flight meeting.** `HotkeyManager`
+  now handles `dimmy_start_recording` rc=-7 (meeting active) as a
+  silent no-op (log only) instead of bubbling an error. Mac already
+  pre-flighted with `meetingIsActive`; the rc=-7 branch closes the
+  race where a meeting is started between the check and the call.
+
 ## [0.6.24] - 2026-04-29
 
 ### Added
