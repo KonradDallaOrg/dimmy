@@ -16,15 +16,42 @@
 ## Feature flags (`core/Cargo.toml`)
 
 ```
-default            = ["local-stt"]
-local-stt          = whisper.cpp (CPU) — the baseline local STT
-local-stt-metal    = whisper.cpp + Metal (macOS Apple Silicon)
-local-stt-vulkan   = whisper.cpp + Vulkan (Windows/Linux cross-vendor GPU)
-local-stt-cuda     = whisper.cpp + CUDA (NVIDIA)
-local-llm          = llama.cpp (CPU) — optional local LLM
-local-llm-metal    = llama.cpp + Metal (+ dynamic-link on macOS)
-local-llm-vulkan   = llama.cpp + Vulkan
-local-llm-cuda     = llama.cpp + CUDA
+default                    = ["local-stt", "telemetry-sentry"]
+
+# Whisper (whisper.cpp via whisper-rs)
+local-stt                  = baseline whisper.cpp (CPU)
+local-stt-metal            = whisper.cpp + Metal (macOS Apple Silicon)
+local-stt-vulkan           = whisper.cpp + Vulkan (Win/Linux cross-vendor GPU)
+local-stt-cuda             = whisper.cpp + CUDA (NVIDIA)
+
+# Parakeet TDT v3 (ONNX Runtime — istupakov/parakeet-tdt-0.6b-v3-onnx)
+local-stt-parakeet         = ort + ndarray (CPU; default for Win/Linux)
+local-stt-parakeet-cuda    = ort/cuda      (Win NVIDIA)
+local-stt-parakeet-coreml  = ort/coreml    (Mac, currently no-win)
+
+# Parakeet via FluidAudio CoreML (Apple Neural Engine)
+local-stt-parakeet-fluid   = aarch64-apple-darwin only; pulls Swift bridge
+
+# DeepFilterNet (DEFERRED — upstream `deep_filter` crate needs `tract` feature)
+local-dfn                  = no-op gate (module is wired, dependency commented out)
+
+# llama.cpp local LLM
+local-llm                  = baseline llama.cpp (CPU)
+local-llm-metal            = llama.cpp + Metal + dynamic-link (Mac)
+local-llm-vulkan           = llama.cpp + Vulkan (Win/Linux)
+local-llm-cuda             = llama.cpp + CUDA  (NVIDIA)
+
+# Telemetry & licensing
+telemetry-sentry           = Sentry crash + manual capture pipeline (default ON)
+license-cli                = CLI client for the licensing server (clap + ed25519)
+license-client             = production cdylib license verification (default ON
+                             when DIMMY_LICENSE_PUBKEY is injected at build)
+
+# Test-only
+test-ffi                   = test-only FFI entry points that bypass cpal
+                             (used by core/tests/ffi_e2e.rs, never in release)
+smoke-test                 = libloading-based runtime FFI smoke binary
+                             (core/src/bin/dimmy_smoke.rs)
 ```
 
 **Rule of thumb for CI & local dev:**
@@ -32,10 +59,22 @@ local-llm-cuda     = llama.cpp + CUDA
 | Scenario | Features |
 |---|---|
 | CI lint + test (ubuntu-22.04) | `--features local-stt,local-llm` |
-| macOS release build | `--features local-stt-metal,local-llm-metal` |
-| Windows release build | `--features local-stt-vulkan,local-llm-vulkan` |
+| macOS release build | `--features local-stt-metal,local-stt-parakeet-fluid,local-llm-metal` |
+| Windows release build (FROZEN — see below) | `--features local-stt-vulkan,local-stt-parakeet,local-llm-vulkan` |
 | Linux release build | `--features local-stt` (CPU fallback for AppImage portability) |
 | Quick local check | `--features local-stt` (skip local-llm to avoid llama.cpp compile) |
+| Tier-1 FFI integration | `--features local-stt,test-ffi` |
+| Installer FFI smoke | `--features smoke-test` (builds `dimmy_smoke` binary) |
+
+### Windows local DLL build — feature flag set is FROZEN
+
+`cargo build --release --lib --features local-stt-vulkan,local-stt-parakeet,local-llm-vulkan` is the canonical local Win build. Dropping any of the three silently breaks production code paths because the user's *runtime config* decides which path runs:
+
+- `local-stt-vulkan` → whisper.cpp Vulkan STT (dictation when `local_stt_backend=whisper`, meeting STT chunks, file-load).
+- `local-stt-parakeet` → Parakeet TDT v3 (dictation chunked-stt worker when `local_stt_backend=parakeet`, default for many users; ALSO referenced by meeting follow-ups).
+- `local-llm-vulkan` → llama.cpp Vulkan LLM (local recap, local rewrite).
+
+Burned twice in production 2026-05-07 (meeting empty transcript, then dictation empty transcript) — the user has explicitly forbidden dropping a feature on your own initiative. See CLAUDE.md "Windows local DLL build — feature flag set is FROZEN".
 
 ## Core (Rust) — everyone runs these
 
@@ -48,7 +87,7 @@ cargo fmt --check
 # Lint — CI uses local-stt,local-llm; zero-warning policy
 cargo clippy --features local-stt,local-llm -- -D warnings
 
-# Test — 246 tests
+# Test — currently ~411 lib tests + ~88 integration tests
 cargo test --lib --features local-stt,local-llm
 ```
 

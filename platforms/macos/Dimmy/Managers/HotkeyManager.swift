@@ -299,6 +299,14 @@ final class HotkeyManager {
             DimmyCore.shared.clearAppContext()
             currentRecordingBundleId = ""
             recordingStartedAt = nil
+        } else if result == -7 {
+            // Meeting active — race with the pre-flight meetingIsActive
+            // gate above. Silent no-op: don't pull the user out of their
+            // meeting context with an error toast, just log.
+            hkLog("[HotkeyManager] dictation hotkey suppressed: meeting active (rc=-7)")
+            DimmyCore.shared.clearAppContext()
+            currentRecordingBundleId = ""
+            recordingStartedAt = nil
         }
     }
 

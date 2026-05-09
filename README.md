@@ -66,16 +66,18 @@ Learn more at **[dimmy.app](https://dimmy.app)**.
 
 ## Highlights
 
-- **Local offline transcription** powered by [whisper.cpp](https://github.com/ggerganov/whisper.cpp). No API key, no internet, no data leaving your machine.
+- **Local offline transcription** powered by [whisper.cpp](https://github.com/ggerganov/whisper.cpp) and [Parakeet TDT v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3). No API key, no internet, no data leaving your machine.
 - **Universal dictation** into any application via clipboard paste — editors, browsers, chat, terminals.
+- **Meeting mode** — long-form record with streaming WAV + chunked live transcript + LLM-generated structured recap (TLDR + decisions + actions + next steps + risks + …). Pause / resume mid-meeting; the paused window is excluded from the WAV and the timeline.
+- **File load** — drop or pick a WAV / MP3 / MP4 to transcribe offline (whisper or Parakeet) or via cloud, with waveform preview and silence-aware chunking for files above provider limits.
 - **Native per platform** — WinUI 3, SwiftUI, GTK4. Feels right at home, runs fast, uses little memory.
 - **Always-on-top pill overlay** with live waveform visualization and per-state colour feedback.
 - **Cloud STT providers** — Groq (fastest), OpenAI, Deepgram, Google Gemini, or any OpenAI-compatible endpoint.
-- **LLM post-processing** — 13 styles (correct grammar, summarize, rewrite professionally, translate, custom prompts, and more).
+- **LLM post-processing** — 13 styles (correct grammar, summarize, rewrite professionally, translate, custom prompts, and more) with per-app rules that auto-switch style based on which app had focus when you pressed the hotkey.
 - **Filler word removal** — strips "um", "basically", "cioè" etc. in six languages.
-- **Searchable history** — SQLite + FTS5 full-text search over every transcription.
+- **Searchable history** — SQLite + FTS5 full-text search over every transcription, with audio playback + word timestamps for past dictations.
 - **Privacy-first** — no account; API keys encrypted locally with AES-256-GCM; minimal anonymous opt-out telemetry (no transcripts, no prompts, no IP — full list in [`PRIVACY.md`](PRIVACY.md)).
-- **GPU acceleration** — Metal on Apple Silicon, Vulkan on Windows (all GPU vendors), CUDA on NVIDIA.
+- **GPU acceleration** — Metal on Apple Silicon, Vulkan on Windows (all GPU vendors), CUDA on NVIDIA. Parakeet runs on the Apple Neural Engine on M-series Macs at 100–300× realtime.
 - **Multilingual** — auto-detect or pick from 12+ languages.
 - **Configurable hotkey** — toggle or hold-to-record, any modifier combination.
 - **Auto-update** — checks GitHub for new releases, notifies from Settings → About.
@@ -374,9 +376,10 @@ Per-platform notes: [`platforms/linux/README.md`](platforms/linux/README.md).
 
 | Suite | Count | Command |
 |---|---|---|
-| Rust core unit tests | **305** `#[test]` | `cargo test --lib --features local-stt,local-llm` (from `core/`) |
-| Windows C# tests | **91** `[Fact]` / `[Theory]` | `dotnet test` (from `platforms/windows/Dimmy.Windows.Tests/`) |
-| macOS XCTest suite | Run in Xcode | `Cmd+U` or `xcodebuild test` |
+| Rust core unit tests | ~411 `#[test]` | `cargo test --lib --features local-stt,local-llm` (from `core/`) |
+| Rust integration tests | ~88 across 11 files (`ffi_e2e`, `meeting_pause_resume`, `parakeet_long_file`, `preprocess_properties`, `abi_snapshot`, `v2_ffi`, …) | `cargo test --test <name> --features ...` (see [`docs/dev/testing.md`](docs/dev/testing.md)) |
+| Windows C# tests | ~100 `[Fact]` / `[Theory]` | `dotnet test` (from `platforms/windows/Dimmy.Windows.Tests/`) |
+| macOS XCTest suite | 69 funcs | `Cmd+U` in Xcode or `xcodebuild test` |
 | Linux crate tests | Run via cargo | `cargo test` (from `platforms/linux/`) |
 
 **Negative Space Programming.** Every function in the Rust core asserts its preconditions and postconditions. Assertions run in **release builds** — we want crashes on corruption, not silent propagation of NaN or zero-length buffers. Full rationale in [`docs/dev/development-practices.md`](docs/dev/development-practices.md).

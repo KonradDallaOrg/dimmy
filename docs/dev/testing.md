@@ -26,13 +26,24 @@
 - v0.6.10 FFI ABI mismatch (installer crashed on first transcription) — caught at PR time by tier 1.5 ABI snapshot + installer FFI smoke.
 - `set_single_segment(true)` → empty transcript on clips shorter than ~30 s — caught by tier 1 short-clip test.
 - Onboarding Cloud path writing a Groq STT key while pre-existing LLM config pointed to Anthropic with `llm_use_same_key=true` → silent 401 on every dictation — caught by tier 1 provider-mismatch test.
-- AUDIO-001 (zero-amplitude samples → permanent NaN in dagc AGC) — caught by tier 1.5 preprocess proptest.
+- AUDIO-001 dictation case (zero-amplitude samples → permanent NaN in dagc AGC) — caught by tier 1.5 preprocess proptest.
+- AUDIO-001 file-load case (97 % of a 95-min WAV destroyed by AGC NaN) — caught by `preprocess::tests::file_load_long_silence_does_not_corrupt_subsequent_audio` + 7 sibling unit tests, plus the diagnostic-style `parakeet_long_file.rs`.
+- AUDIO-003 AEC ref-ring starvation (Mix mode hung on systems with no active loopback) — caught by `aec::tests::worker_processes_mic_when_ref_ring_empty`.
+- LLM-001 Anthropic Opus 4.7+ rejecting `thinking.type=enabled` + `budget_tokens` — caught by the 6 dispatch tests in `llm.rs::tests`.
+- Meeting pause/resume idempotency + stop-while-paused deadlock — caught by `core/tests/meeting_pause_resume.rs` (4 integration tests).
+- `dimmy_start_recording` rc=-7 contract drift between Rust and C# / Swift hosts — caught by `ffi::tests::start_recording_blocked_when_meeting_active`.
 
 ## Tier 1 — FFI integration (Rust)
 
 **What it tests.** Pre-recorded PCM fed directly into the audio buffer via a test-only FFI (`dimmy_inject_pcm_for_test`, gated by `--features test-ffi`), then the normal `dimmy_stop_recording` runs the whole pipeline (preprocess → STT → filler → LLM). Cloud HTTP is mocked with `wiremock-rs`.
 
-**Where.** `core/tests/ffi_e2e.rs` — 12 tests, cross-platform.
+**Where.** `core/tests/ffi_e2e.rs` — 12 tests, cross-platform. Plus
+`core/tests/meeting_pause_resume.rs` (4 tests, exercises the
+`dimmy_meeting_pause/_resume/_is_paused` FFI contract + worker
+behaviour while paused) and `core/tests/parakeet_long_file.rs` (1
+diagnostic test on real long WAVs, skips cleanly when fixture
+unavailable; survives in tree as a regression early-warning for
+future preprocess changes).
 
 Coverage groups:
 - **Local STT**: jfk sample, silent input, short clip (<30s, set_single_segment guard), long clip (>30s, segmentation guard), preprocess pipeline end-to-end.
@@ -180,12 +191,23 @@ cargo test --lib --features local-stt,local-llm
 cargo test --release --test ffi_e2e --features local-stt,test-ffi -- --test-threads=1
 cargo test --release --test abi_snapshot --features local-stt
 cargo test --release --test preprocess_properties --features local-stt
+cargo test --release --test meeting_pause_resume --features local-stt -- --test-threads=1
 
 # C# (Windows)
 cd ../platforms/windows/Dimmy.Windows.Tests
 dotnet test
 cd ../Dimmy.Windows.UiTests
 dotnet test    # requires Dimmy.Windows + dimmy_lib.dll built first
+
+# Swift (macOS)
+cd ../../macos
+xcodebuild test -project Dimmy.xcodeproj -scheme Dimmy \
+  -destination "platform=macOS"
 ```
 
-A CI cycle is 10-20 minutes; this checklist runs in under 5 min locally and catches ~95 % of what CI would fail on.
+A CI cycle is 10-20 minutes; this checklist runs in under 5 min locally and catches ~95 % of what CI would fail on. The Mac XCTest target is wired into `Dimmy.xcodeproj` (productType `bundle.unit-test`, ad-hoc signed); it currently runs structured-recap prompt + parser, recap-model picker round-trip, history-row formatting, AppState language/preset round-trip.
+
+## Hardening pass for `feat/system-audio-capture`
+
+Separate doc with the per-test rationale + manual-sweep checklist:
+[`docs/dev/system-audio-capture-tests.md`](system-audio-capture-tests.md). Read it before relaxing or removing any of the new tests — each one corresponds to a real shipped bug or near-miss.

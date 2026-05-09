@@ -2,6 +2,14 @@ import AppKit
 import SwiftUI
 import Combine
 
+extension Notification.Name {
+    /// Posted by `PillWindowController.stopMeetingFromPill` after the
+    /// recap pipeline finishes. MeetingWindowController listens to
+    /// refresh its sidebar + jump to the new row when the meeting
+    /// window happens to be open.
+    static let meetingRecapSaved = Notification.Name("dimmy.meetingRecapSaved")
+}
+
 // MARK: - Right-click aware hosting view for NSPanel
 
 /// NSHostingView subclass that intercepts right-click to show a context menu.
@@ -22,6 +30,12 @@ final class PillWindowController {
     private var cancellables = Set<AnyCancellable>()
     /// Flag to prevent didMove observer from writing back during programmatic repositioning
     private var isRepositioning = false
+    /// 500ms timer mirroring `dimmy_meeting_is_active` /
+    /// `dimmy_meeting_is_paused` into AppState so the pill auto-renders
+    /// the Stop control when a meeting starts from any surface and the
+    /// pill is otherwise idle. Same shape Win uses
+    /// (`PillWindow._meetingStatePollTimer`, 500 ms).
+    private var meetingStatePollTimer: Timer?
 
     // Extra padding around the pill so glow/shadow isn't clipped — and so
     // the scroll-cycle popover (renders below the pill) has room to breathe
@@ -34,6 +48,11 @@ final class PillWindowController {
         self.appState = appState
         setupPanel()
         observeState()
+        startMeetingStatePoll()
+    }
+
+    deinit {
+        meetingStatePollTimer?.invalidate()
     }
 
     private func setupPanel() {
@@ -193,6 +212,80 @@ final class PillWindowController {
 
     @objc private func quitAction() {
         NSApplication.shared.terminate(nil)
+    }
+
+    // MARK: - Meeting-state poll
+
+    private func startMeetingStatePoll() {
+        meetingStatePollTimer?.invalidate()
+        meetingStatePollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.tickMeetingState() }
+        }
+        tickMeetingState()
+    }
+
+    private func tickMeetingState() {
+        let active = DimmyCore.shared.meetingIsActive
+        let paused = DimmyCore.shared.meetingIsPaused
+        if active != appState.meetingActive {
+            appState.meetingActive = active
+        }
+        if paused != appState.meetingIsPaused {
+            appState.meetingIsPaused = paused
+        }
+        // When the meeting goes inactive while the pill is showing
+        // a "meeting recording" idle-style cap, drop the pill back
+        // to true idle so the scroll-cycle dots reappear.
+        if !active, case .recording = appState.recordingState {
+            // If we never had a dictation (no startedAt mirror — proxy
+            // via the .toggle/.pushToTalk path), do nothing — the
+            // dictation flow owns this transition. Meeting-only
+            // overlay is handled by the pill rendering directly via
+            // `appState.meetingActive`, not via recordingState.
+        }
+    }
+
+    // MARK: - Pill Stop → meeting recap
+
+    /// Called by PillView's Stop button branch when a meeting is
+    /// active. Spins up the recap pipeline on a background thread,
+    /// shows transcribing-style feedback on the pill while the LLM
+    /// runs, then drops the pill back to idle.
+    nonisolated static func stopMeetingFromPill(appState: AppState) {
+        Task { @MainActor in
+            // Visual feedback during recap — recap can take 10-60s.
+            appState.recordingState = .transcribing
+            await Task.detached(priority: .userInitiated) {
+                let stopResult = DimmyCore.shared.meetingStop()
+                guard let stopResult, !stopResult.transcript.isEmpty else {
+                    await MainActor.run {
+                        appState.recordingState = .idle
+                        appState.meetingActive = DimmyCore.shared.meetingIsActive
+                    }
+                    return
+                }
+                let recap = MeetingPostProcessService.runRecap(
+                    dir: stopResult.dir,
+                    transcript: stopResult.transcript
+                )
+                await MainActor.run {
+                    appState.recordingState = .completing
+                    appState.meetingActive = DimmyCore.shared.meetingIsActive
+                    NotificationCenter.default.post(
+                        name: .meetingRecapSaved,
+                        object: nil,
+                        userInfo: [
+                            "dir": stopResult.dir,
+                            "success": (try? recap.get()) != nil,
+                        ]
+                    )
+                    // Brief completion flash, then idle.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                        appState.recordingState = .idle
+                    }
+                }
+            }.value
+        }
     }
 
     // MARK: - State observation

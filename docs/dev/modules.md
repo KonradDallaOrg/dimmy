@@ -102,14 +102,243 @@ Full reference: [`audio-pipeline.md`](audio-pipeline.md). Headline:
 
 ## `ffi.rs` — the C surface
 
-- 30+ functions. Stable ABI.
-- Global `OnceLock<AppState>` owns the process-wide singleton.
+- ~76 functions, snapshotted in `core/tests/fixtures/abi_exports.txt`
+  and diff-tested by `abi_snapshot.rs`. Stable ABI.
+- Global `OnceLock<AppState>` owns the process-wide singleton. The
+  `MEETING` static (separate slot) owns the meeting session so its
+  lifecycle is decoupled from any UI window.
 - Every function asserts preconditions: non-null pointers, valid UTF-8, bounds, finite floats.
 - All JSON blobs are validated on entry (malformed JSON returns an error, does not panic).
 - String outputs: caller allocates the buffer and passes its size; function writes UTF-8 + NUL and returns the bytes written. If the buffer is too small, returns `-1` and the required size is discoverable via a separate `_size()` function.
+- **Return-code conventions** vary by family. The notable ones a UI
+  must handle exactly:
+  - `dimmy_start_recording` returns **-7** when a meeting is active
+    (silent no-op — must not surface as an error).
+  - `dimmy_meeting_pause` / `_resume` / `_is_paused` return **1**
+    (state flipped), **0** (no-op / no meeting), **-1** (lock
+    failure).
+  - `dimmy_transcribe_file` returns **-1..-8** for distinct error
+    classes (file missing, unsupported codec, model missing,
+    over-limit cloud chunk, etc.). The rc table is contractual —
+    do NOT renumber.
 
 ## `error.rs` — typed error hierarchy
 
 - Central `DimmyError` enum, variants per subsystem (`Audio`, `Transcribe`, `Llm`, `Keystore`, `History`, `Model`, `Config`, `Io`).
 - Error messages are truncated to 200 chars at the FFI boundary — prevents leaking API keys, PII, or oversized provider responses into logs.
 - Display impl is the canonical user-facing string. Debug impl is for logs.
+
+## `meeting.rs` — long-form meeting mode
+
+- `MeetingSession::start(...)` spawns a worker thread that drains the
+  shared audio buffer in chunks (default 15 s, configurable via
+  `meeting_chunk_secs`), streaming-writes `audio.wav` (16 kHz mono int16,
+  ~115 MB / hour) and appending one line per chunk to `transcripts.txt`.
+- On-disk layout per meeting (`<config>/meetings/<id>/`): `audio.wav`,
+  `transcripts.txt`, `meta.json` (start_ts, sample_rate, last_chunk_ts),
+  `recap.md` + `actions.json` (post-stop), `.recording` marker (deleted
+  on clean stop; presence at startup → "recover meeting?"). UUIDs avoid
+  same-second collisions.
+- **STT routing**: chunks go through the SAME backend the dictation
+  pipeline would use — cloud (`transcribe.rs`) or local (whisper /
+  Parakeet / parakeet_fluid). Hardcoding Parakeet here was the 2026-05-07
+  bug that broke meeting transcripts on builds without
+  `local-stt-parakeet`.
+- **Pause/resume**: `MeetingSession::pause()` / `.resume()` flip an
+  `Arc<AtomicBool>`; cpal callbacks keep filling buffers but the worker
+  skips drain / WAV write / STT chunks. On resume the worker advances
+  `samples_written` + `last_processed` to current `buf_len_now` so the
+  paused window is excluded from `audio.wav` AND from the chunked
+  timeline. A `[paused] (resumed after N ms)` line lands in
+  `transcripts.txt`. Idempotent (second `pause()` returns false).
+- **Post-process** (`save_post_process`): UI-side `MeetingPostProcessService`
+  (Win + Mac mirrors) reads `transcripts.txt`, formats the 11-section
+  structured-recap prompt, calls `llm::process_raw_prompt` (recap-model
+  override before URL heuristic), parses the response into `recap.md` +
+  `actions.json`. Anthropic Opus 4.7+ / Sonnet 5+ use
+  `thinking.type=adaptive` (no `budget_tokens`).
+- FFI: `dimmy_meeting_start`, `_stop`, `_save_post_process`,
+  `_list_orphans`, `_is_active`, `_pause`, `_resume`, `_is_paused`.
+
+## `aec.rs` — acoustic echo cancellation (Mix mode)
+
+- Pure-Rust port of WebRTC AEC3 via the `aec3 = 0.2` crate.
+- Operates on 10 ms frames at 48 kHz mono (480 samples). cpal callbacks
+  push to two ring buffers — mic (`capture`) and loopback (`render`,
+  the reference signal); the worker drains 480-sample frames and runs
+  them through `aec3::pipelines::linear`.
+- **Bounded rings** (`MAX_RING_SAMPLES = 48_000`, 1 s headroom): if a
+  callback stalls, oldest samples are dropped and AEC resyncs via its
+  delay estimator. Better than unbounded growth.
+- **Always-mix safety**: when loopback is silent / disabled / routed
+  away (BT meeting in HFP, no default output, headset unplugged), the
+  worker zero-pads the ref ring rather than blocking — the
+  `worker_processes_mic_when_ref_ring_empty` test guards this.
+- Idle: rings empty → 5 ms sleep tick, zero CPU.
+
+## `dfn.rs` — DeepFilterNet noise suppression (DEFERRED)
+
+- Module wired upstream of AEC for ML-based noise suppression. Currently
+  a no-op gate behind `local-dfn` cargo feature.
+- Activation deferred until either the upstream `deep_filter` crate
+  publishes a `tract`-feature build, or we swap to `deepfilter-rt`
+  riding the existing `ort` runtime. See `Cargo.toml` comment.
+
+## `process_loopback.rs` — per-process WASAPI loopback (Win-only, Phase 5a SCAFFOLDING)
+
+- Why: standard WASAPI loopback captures whatever's routed to a specific
+  OUTPUT device. When a meeting app puts a Bluetooth headset into HFP/SCO
+  for bidirectional voice, the audio bypasses the normal render endpoint
+  → loopback is silent. Per-process capture asks Windows for the audio
+  the meeting app *itself* is producing, before routing.
+- API surface: `list_meeting_processes()` enumerates known meeting exes
+  (`ms-teams.exe`, `zoom.exe`, `discord.exe`, `slack.exe`, `webex.exe`,
+  `googlemeet.exe`, …) via `Toolhelp32` snapshot. `auto_detect_meeting_pid()`
+  picks one heuristically.
+- **Status: SCAFFOLDING.** `spawn_process_capture` returns `Err` for
+  now. The real implementation (`ActivateAudioInterfaceAsync` +
+  `AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK` + an
+  `IActivateAudioInterfaceCompletionHandler` impl) is the next commit.
+- Mac/Linux: stub returning empty enumeration + Err from
+  `spawn_process_capture`. Caller falls back to default-output loopback.
+
+## `chunked_stt.rs` — realtime chunked Parakeet worker
+
+- Spawns a worker that, while the audio capture thread fills the shared
+  PCM buffer, periodically slices off the most recent N seconds (+ small
+  overlap), runs them through `parakeet::transcribe`, dedups against the
+  running cumulative text (last-3-words match), and emits a callback so
+  the FFI layer can fan out events to the native UI.
+- Default 5 s chunks for the realtime path (interactive cadence). The
+  benchmark-tuned 30 s window with 500 ms overlap is for the offline
+  driver. Pattern proven on WSL CPU at 8.7× realtime over 272 min of
+  LibriVox audio (see `docs/dev/stt-benchmark-parakeet-local-2026-05-05.md`).
+- Worker downsamples to 16 kHz per chunk. **No preprocessing** is
+  applied per chunk — Parakeet is robust to mic-level noise on its own;
+  highpass/VAD/AGC are tuned for end-of-recording silence trim, not
+  streaming.
+
+## `parakeet.rs` — Parakeet TDT v3 FP32 local STT (ONNX Runtime)
+
+- Pure-Rust port of `onnx_asr.models.nemo.NemoConformerTdt`. Bundle:
+  `nemo128.onnx` (waveform → 128-bin mel) + `encoder-model.onnx` +
+  external `.data` (~2.4 GB) + `decoder_joint-model.onnx` + `vocab.txt`
+  (8193 tokens BPE-style with `▁` word marker), downloaded from
+  `istupakov/parakeet-tdt-0.6b-v3-onnx` to `<config>/parakeet-fp32/`
+  on first use (~2.5 GB).
+- Pipeline: 16 kHz f32 PCM → mel features `[1, 128, T_mel]` → encoder
+  `[1, 1024, T_enc] + lens` → greedy TDT (LSTM state `[2, 1, 640]` × 2;
+  per-frame argmax of token + duration) → vocab → text.
+- Feature gates: `local-stt-parakeet` (CPU, default for Win/Linux),
+  `local-stt-parakeet-cuda` (Win NVIDIA), `local-stt-parakeet-coreml`
+  (Mac, currently no-win — see `parakeet_fluid.rs` for the production
+  Mac path).
+- Word-level timestamps via `transcribe_with_word_timestamps` for the
+  history-v2 schema.
+- **Lifecycle gotcha**: `Box::leak`s the `Mutex<Option<Inner>>` so
+  Rust's static-destructor pass never drops the cached ort `Session`s
+  — drops at process exit hit a torn-down onnxruntime mutex and abort.
+  See `known-bugs.md` STT-002.
+
+## `parakeet_fluid.rs` — Parakeet via FluidAudio CoreML (Mac ANE)
+
+- Wraps `fluidaudio-rs` (Swift bridge built by `build.rs` at compile
+  time; needs Xcode CLT with Swift 5.10+) to run Parakeet on the Apple
+  Neural Engine. Documented RTF on M-series: 100–300×; first
+  `init_asr()` downloads the ~3 GB CoreML bundle into
+  `~/.cache/fluidaudio/` and ANE-compiles it (~20–30 s one-time);
+  warm reloads ~1 s.
+- Gated by `local-stt-parakeet-fluid` feature. Mutually exclusive with
+  the ONNX path on Mac at build time; `transcribe.rs` and
+  `chunked_stt.rs` dispatch on the active feature without knowing
+  which is live.
+- Only available on `aarch64-apple-darwin` — `#![cfg(...)]` at module
+  top so non-Mac / Intel-Mac builds skip the file entirely.
+- `transcribe_samples` only landed upstream after FluidAudio v0.12.6,
+  so the bridge writes a temp WAV per call (~320 KB I/O for a 5 s
+  chunk, negligible vs ANE inference time).
+
+## `app_rules.rs` — per-app LLM style override
+
+- Resolves the captured app id (process name on Win, bundle id on Mac,
+  X11 `WM_CLASS` on Linux/X11) against the user's rule list. First match
+  wins. Produces a per-transcription override of `llm_style` and
+  `llm_translate_to` without mutating the user's saved defaults.
+- `MatchType` discriminator is set at rule-creation time based on the
+  user's OS so the matcher can dispatch (case-insensitive process name,
+  case-sensitive bundle id, case-insensitive WM_CLASS). Wayland is
+  unsupported (compositor security model) — rules with `WmClass`
+  silently no-op on Wayland sessions.
+- **Privacy invariant**: app identifiers ARE user data (could leak a
+  sensitive app name) — they MUST NOT leave the machine via telemetry.
+  Only emit `app_rule_matched` as a boolean signal. See `CLAUDE.md`
+  privacy hard rules.
+- FFI: `dimmy_set_app_context`, `dimmy_clear_app_context`. Win captures
+  the foreground HWND + focus drift in `Helpers/AppContextCapture.cs`.
+
+## `autostart.rs` — launch-at-login toggle
+
+- Cross-platform wrapper around the `auto-launch` crate. Win:
+  `HKCU\…\Run\Dimmy`. Mac: `~/Library/LaunchAgents/dimmy.plist`. Linux:
+  `~/.config/autostart/dimmy.desktop` (XDG spec; honoured by GNOME /
+  KDE / XFCE / …).
+- All three are user-scope, reversible, survive reboots. `is_enabled()`
+  is cheap (one stat or registry read) — caching not needed.
+- FFI: `dimmy_autostart_set_enabled`, `dimmy_autostart_is_enabled`.
+  Failure surface is non-load-bearing — losing the entry just means
+  "next reboot, the user has to launch Dimmy manually".
+
+## `gpu_health.rs` + `gpu_diag.rs` — GPU crash recovery
+
+- **Sentinel** (`.gpu_init_in_progress`): short-lived. Written
+  immediately before a GPU-backed model load, deleted immediately after
+  the call returns (only a hard `abort()` leaves it on disk). Lets the
+  next process detect that the previous one died inside ggml-vulkan.
+- **Known-bad** (`.gpu_known_bad`): sticky across sessions. Written
+  when the sentinel fires AND recovery succeeds. Stores a driver
+  fingerprint so the next launch can compare: same → keep CPU mode,
+  different → driver/ICD changed, retry GPU once. Without this, the
+  user paid one crash + relaunch on every cold start. Manual override:
+  `clear_known_bad` (UI button).
+- `gpu_diag.rs` registers ggml log callbacks on whisper + llama so the
+  C++ stderr (invisible on Windows GUI apps) lands in `dimmy.log` —
+  the last-words-before-crash become visible post-mortem. Plus a
+  one-shot Vulkan environment snapshot (vulkan-1.dll path + size,
+  per-device VRAM, driver version best-effort).
+
+## `license.rs` — Ed25519 license verification (offline)
+
+- Verifies Ed25519-signed license tokens **offline** against a
+  build-time-embedded public key (`DIMMY_LICENSE_PUBKEY` env var).
+- Reads/writes `~/.config/dimmy/license.json`. Tracks last successful
+  online refresh so it can enforce a soft offline grace window
+  (`max_offline_days` from the token).
+- **Privacy invariants**: plain email is never persisted on disk, only
+  its SHA-256 hash with stable salt. Private signing key is never in
+  the client binary — only the public key.
+- Open-source carve-out: when `DIMMY_LICENSE_PUBKEY` is empty/unset
+  (source-build path), `check_status()` returns `Unrestricted` and
+  licensing is a no-op. Build-it-yourself, run-it-free.
+- Token format: JWT-like, `header_b64.payload_b64.sig_b64` (alg=EdDSA,
+  typ=DLT). See `Claims` for the payload schema.
+- Feature-gated: `license-cli` (CLI testing client) + `license-client`
+  (verification + file I/O for the production cdylib, default ON).
+  Server-side signing happens in a Cloudflare Worker (TypeScript) — no
+  Rust signer ships.
+
+## `telemetry/` — PostHog + Sentry pipeline
+
+- `telemetry/events.rs` defines the `Event` enum — every event variant
+  IS the wire format. Adding a new event requires a unit test plus
+  updates to `docs/dev/telemetry-implementation.md` and `PRIVACY.md` if
+  a new category of data is collected.
+- `telemetry/sentry_pipeline.rs` wraps the `sentry` crate (gated by
+  `telemetry-sentry` feature, default ON). User feedback uses a
+  manually-built envelope (`type=feedback`) so reports land in Sentry's
+  Feedback tab, not Issues.
+- **Hard privacy rules** — never include user content (transcribed
+  text, prompt text, custom LLM prompt, mic device name, file paths,
+  hostname, username, IP) in any property or message. The
+  `looks_like_secret` filter is a safety net, not a substitute for
+  review. Provider names (groq/openai/anthropic/…) are categorical
+  enums and OK to send. See `PRIVACY.md` for the public surface.
