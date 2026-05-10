@@ -4,6 +4,86 @@ All notable changes to Dimmy are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.32] - 2026-05-10
+
+Cross-platform Notion integration lands as the headline feature, plus
+a stack of Win app-rules / meeting-state fixes that piled up on
+`staging` after 0.6.31.
+
+### Added
+
+- **Notion integration (core + Win + Mac).** Send meeting recaps to a
+  Notion page or database via the official REST API. Token stored in
+  the existing `keys.enc` (AES-256-GCM); never written to
+  `config.json`. Five new FFI exports — `dimmy_notion_set_token`,
+  `_has_token`, `_test_connection`, `_search`, `_send_recap`.
+  Settings → Integrations gains a summary card + 3-step Connect
+  wizard (prepare → token → destination). The Done view picks up a
+  Send-to-Notion button; if `notion_auto_send=true` the upload fires
+  automatically after recap on both platforms.
+- **Win theme centralization.** Single source of truth for accent
+  colour + dark/light tokens, theme-aware popup menus, jump-list
+  rename. Replaces the per-page inline `<Setter>` jungle.
+- **Event-driven meeting state on pill (Win + Mac).** The pill no
+  longer polls `dimmy_meeting_is_active` / `_is_paused` every 500 ms
+  — the meeting worker now posts a Mac NotificationCenter notification
+  / Win event each time state flips, and the pill subscribes. Same
+  visual behaviour, zero idle CPU.
+- **Mac no-FFI pollTick.** `MeetingPostProcessService` extracts the
+  recap prompt + parser into `MeetingRecapHelpers`, mirrored by 16
+  xUnit cases on Win. Mac `pollTick` no longer touches the FFI from
+  the main run loop.
+- **Win app-rules manual drag-reorder + 20 xUnit cases.** The reorder
+  math is extracted into a pure function with deterministic tests so
+  pointer-tracking math can't regress silently.
+
+### Fixed
+
+- **Win app-rules drag-reorder dead in WinUI.** The built-in
+  `CanReorderItems` interaction silently no-ops inside the page-level
+  `ScrollViewer` that hosts AppRulesListView. Replaced with a manual
+  pointer-tracking implementation that handles drag-begin /
+  drag-during / drag-end + drop-target hit detection itself. Twenty
+  xUnit cases cover the index-shift math.
+- **Win app-rules drag edge-scroll did nothing.** Auto-scroll
+  introduced in PR #47 walked DOWN the visual tree from the ListView
+  and found the ListView's own (disabled) inner `ScrollViewer`. Now
+  walks UP via `FindFirstAncestor` to the page-level scroller and
+  tests the cursor against `ViewportHeight` in scroller-local coords.
+- **Win Notion `has_notion_token=false` after boot.** The FFI snapshot
+  read missed the token-presence field on `dimmy_get_config_json`,
+  so the summary card always showed "not connected" until the user
+  re-pasted. Snapshot read now includes `has_notion_token` from the
+  core state, not from the on-disk config.
+- **STT chunked dedup overlap drift.** The old greedy character-match
+  produced false positives on long meetings (chunk N+1 starting with
+  a different word but containing fragments of chunk N). Rewritten
+  as longest suffix-prefix overlap with an offset tolerance — single
+  pass, deterministic, covered by new unit tests.
+- **Mac Notion auto-send broke strict-concurrency.** `runRecap` runs
+  from `DispatchQueue.global` / `Task.detached` but read
+  `AppState.shared.notionAutoSend` (an `@MainActor @Published`
+  property) directly. Now passed in as a `notionAutoSend: Bool`
+  parameter snapshotted on MainActor by each of the three callers.
+  Honest threading contract; build green.
+- **Mac Done view toolbar visual weight.** The Regen / Recap / Copy /
+  Notion / Folder buttons were bordered pills with 13pt monochrome
+  SF Symbols — looked cheap. Replaced with borderless icon buttons
+  using `symbolRenderingMode(.hierarchical)` + a soft hover fill,
+  matching the Mail / Messages toolbar shape in macOS Tahoe.
+- **Mac Notion send button now uses the real Notion mark** (from
+  `Assets.xcassets/Providers/notion.imageset`) instead of the
+  placeholder `link.badge.plus` SF Symbol.
+- **Mac AudioPlaybackBar waveform chunkier + gradient.** 220 → 120
+  buckets, bar width ≥ 2pt, gap 2pt, corner radius 2pt. Played /
+  unplayed bars fill with vertical gradients (accent → 0.55 /
+  secondary 0.55 → 0.25) and the playhead picks up a soft accent
+  glow.
+- **Mac recording-bar icon weight.** Pause / Stop / Back-to-live and
+  the Mic / System waveform labels bumped from 11–12pt to 12–13pt
+  with `.medium` / `.semibold` weights — they no longer read as
+  system-default cheap glyphs.
+
 ## [0.6.31] - 2026-05-09
 
 This release combines two parallel work streams that landed back-to-back:
