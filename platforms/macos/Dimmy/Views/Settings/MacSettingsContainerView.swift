@@ -13,78 +13,80 @@ import SwiftUI
 // reserves space at the top so visual alignment matches.
 
 enum MacSettingsTab: String, CaseIterable, Identifiable {
-    case home, voice, output, rules, history, pill, shortcut, permissions, privacy, license, about, advanced
+    case home, voice, output, rules, history, integrations, pill, shortcut, permissions, privacy, license, about, advanced
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
-        case .home:        return "Home"
-        case .voice:       return "Voice input"
-        case .output:      return "Output"
-        case .rules:       return "App rules"
-        case .history:     return "History"
-        case .pill:        return "Pill overlay"
-        case .shortcut:    return "Shortcut"
-        case .permissions: return "Permissions"
-        case .privacy:     return "Privacy & data"
-        case .license:     return "License"
-        case .about:       return "About"
-        case .advanced:    return "Advanced"
+        case .home:         return "Home"
+        case .voice:        return "Voice input"
+        case .output:       return "Output"
+        case .rules:        return "App rules"
+        case .history:      return "History"
+        case .integrations: return "Integrations"
+        case .pill:         return "Pill overlay"
+        case .shortcut:     return "Shortcut"
+        case .permissions:  return "Permissions"
+        case .privacy:      return "Privacy & data"
+        case .license:      return "License"
+        case .about:        return "About"
+        case .advanced:     return "Advanced"
         }
     }
 
     var subtitle: String {
         switch self {
-        case .home:        return "Get a quick read on Dimmy and jump to what you need."
-        case .voice:       return "How Dimmy hears and transcribes your voice."
-        case .output:      return "How Dimmy rewrites and delivers your dictation."
-        case .rules:       return "Auto-switch the rewrite style based on the focused app."
-        case .history:     return "Past dictations — click a row to see Raw / Enhanced and replay audio."
-        case .pill:        return "The floating pill — where it lives and how it looks."
-        case .shortcut:    return "The hotkey that starts and stops recording."
-        case .permissions: return "macOS access Dimmy needs to record and paste."
-        case .privacy:     return "What leaves your machine, and what doesn't."
-        case .license:     return "Activate Dimmy, manage your trial, or paste an activation code from email."
-        case .about:       return "Version, updates, and resources."
-        case .advanced:    return "Developer-leaning controls and diagnostics."
+        case .home:         return "Get a quick read on Dimmy and jump to what you need."
+        case .voice:        return "How Dimmy hears and transcribes your voice."
+        case .output:       return "How Dimmy rewrites and delivers your dictation."
+        case .rules:        return "Auto-switch the rewrite style based on the focused app."
+        case .history:      return "Past dictations — click a row to see Raw / Enhanced and replay audio."
+        case .integrations: return "Push your meeting recaps into the tools you already use."
+        case .pill:         return "The floating pill — where it lives and how it looks."
+        case .shortcut:     return "The hotkey that starts and stops recording."
+        case .permissions:  return "macOS access Dimmy needs to record and paste."
+        case .privacy:      return "What leaves your machine, and what doesn't."
+        case .license:      return "Activate Dimmy, manage your trial, or paste an activation code from email."
+        case .about:        return "Version, updates, and resources."
+        case .advanced:     return "Developer-leaning controls and diagnostics."
         }
     }
 
     /// SF Symbol for the squircle nav icon.
     var iconSystemName: String {
         switch self {
-        case .home:        return "house.fill"
-        case .voice:       return "mic.fill"
-        case .output:      return "text.bubble.fill"
-        case .rules:       return "rectangle.3.group.fill"
-        case .history:     return "clock.arrow.circlepath"
-        case .pill:        return "capsule.fill"
-        case .shortcut:    return "keyboard.fill"
-        case .permissions: return "hand.raised.fill"
-        case .privacy:     return "lock.shield.fill"
-        case .license:     return "key.fill"
-        case .about:       return "info.circle.fill"
-        case .advanced:    return "wrench.and.screwdriver.fill"
+        case .home:         return "house.fill"
+        case .voice:        return "mic.fill"
+        case .output:       return "text.bubble.fill"
+        case .rules:        return "rectangle.3.group.fill"
+        case .history:      return "clock.arrow.circlepath"
+        case .integrations: return "link"
+        case .pill:         return "capsule.fill"
+        case .shortcut:     return "keyboard.fill"
+        case .permissions:  return "hand.raised.fill"
+        case .privacy:      return "lock.shield.fill"
+        case .license:      return "key.fill"
+        case .about:        return "info.circle.fill"
+        case .advanced:     return "wrench.and.screwdriver.fill"
         }
     }
 
-    /// macOS Settings.app uses a coloured tile per category — pick one
-    /// per tab, matching the design's NAV_COLOR map.
     var iconColor: Color {
         switch self {
-        case .home:        return Color(red: 0.04, green: 0.52, blue: 1.00)  // blue
-        case .voice:       return Color(red: 1.00, green: 0.22, blue: 0.37)  // red/pink
-        case .output:      return Color(red: 1.00, green: 0.80, blue: 0.00)  // yellow
-        case .rules:       return Color(red: 0.20, green: 0.78, blue: 0.35)  // green
-        case .history:     return Color(red: 0.34, green: 0.61, blue: 0.99)  // light blue
-        case .pill:        return Color(red: 0.69, green: 0.32, blue: 0.87)  // purple
-        case .shortcut:    return Color(red: 0.04, green: 0.52, blue: 1.00)  // blue
-        case .permissions: return Color(red: 1.00, green: 0.45, blue: 0.20)  // orange/red
-        case .privacy:     return Color(red: 0.11, green: 0.11, blue: 0.12)  // black
-        case .license:     return Color(red: 1.00, green: 0.62, blue: 0.04)  // orange
-        case .about:       return Color(red: 0.56, green: 0.56, blue: 0.58)  // grey
-        case .advanced:    return Color(red: 1.00, green: 0.62, blue: 0.04)  // orange
+        case .home:         return Color(red: 0.04, green: 0.52, blue: 1.00)
+        case .voice:        return Color(red: 1.00, green: 0.22, blue: 0.37)
+        case .output:       return Color(red: 1.00, green: 0.80, blue: 0.00)
+        case .rules:        return Color(red: 0.20, green: 0.78, blue: 0.35)
+        case .history:      return Color(red: 0.34, green: 0.61, blue: 0.99)
+        case .integrations: return Color(red: 0.20, green: 0.20, blue: 0.20)  // Notion-mark black
+        case .pill:         return Color(red: 0.69, green: 0.32, blue: 0.87)
+        case .shortcut:     return Color(red: 0.04, green: 0.52, blue: 1.00)
+        case .permissions:  return Color(red: 1.00, green: 0.45, blue: 0.20)
+        case .privacy:      return Color(red: 0.11, green: 0.11, blue: 0.12)
+        case .license:      return Color(red: 1.00, green: 0.62, blue: 0.04)
+        case .about:        return Color(red: 0.56, green: 0.56, blue: 0.58)
+        case .advanced:     return Color(red: 1.00, green: 0.62, blue: 0.04)
         }
     }
 }
@@ -375,6 +377,7 @@ struct MacSettingsContainerView: View {
         case .rules:       MacRulesPage(appState: appState)
         case .history:     HistorySettingsView(appState: appState)
                               .frame(minHeight: 480)
+        case .integrations: MacIntegrationsPage(appState: appState)
         case .pill:        MacPillPage(appState: appState)
         case .shortcut:    MacShortcutPage(appState: appState)
         case .permissions: MacPermissionsPage(appState: appState)

@@ -73,12 +73,62 @@ public static class MeetingPostProcessService
                 dir, recapMarkdown, actionsPlain, null);
             App.Log($"recap (shared) saved rc={saveRc}", "MeetingRecap");
 
+            // Auto-send to Notion if the user has it configured + opted in.
+            // Best-effort: failure is logged but doesn't block the recap
+            // pipeline. The user can always retry manually from the Done
+            // view's "Notion" button. Reads notion_auto_send fresh from
+            // the Rust core's config snapshot so we don't have to thread
+            // a mutable VM reference through this service.
+            if (Services.NotionService.HasToken() && ReadNotionAutoSend())
+            {
+                try
+                {
+                    var notionResult = await Services.NotionService.SendRecapAsync(dir);
+                    if (notionResult.Ok)
+                    {
+                        App.Log($"recap auto-sent to Notion: {notionResult.PageUrl}", "Notion");
+                    }
+                    else
+                    {
+                        App.Log($"recap auto-send failed: {notionResult.Error}", "Notion");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    App.Log($"recap auto-send exc: {ex.Message}", "Notion");
+                }
+            }
+
             return new RecapResult { Success = true, Dir = dir, Sections = sections };
         }
         catch (Exception ex)
         {
             App.Log($"recap (shared) exc: {ex}", "MeetingRecap");
             return new RecapResult { Success = false, Dir = dir, Error = ex.Message };
+        }
+    }
+
+    /// Read the notion_auto_send flag from the Rust core's current
+    /// config snapshot. ~5 ms one-shot — only fires once per meeting,
+    /// not hot-path. Returns false on any error (config not yet
+    /// loaded, JSON parse failure, etc.) so a botched config doesn't
+    /// silently auto-send.
+    private static bool ReadNotionAutoSend()
+    {
+        try
+        {
+            var buf = new byte[1 << 14];
+            int n = DimmyNative.dimmy_get_config_json(buf, buf.Length);
+            if (n <= 0) return false;
+            var json = System.Text.Encoding.UTF8.GetString(buf, 0, n);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            return doc.RootElement.TryGetProperty("notion_auto_send", out var el)
+                && el.GetBoolean();
+        }
+        catch (Exception ex)
+        {
+            App.Log($"ReadNotionAutoSend exc: {ex.Message}", "Notion");
+            return false;
         }
     }
 }

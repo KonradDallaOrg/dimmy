@@ -146,6 +146,27 @@ public partial class SettingsViewModel : ObservableObject
     /// reasoning model (Opus 4.7 / Gemini 3.1 Pro / GPT-5).
     [ObservableProperty] private string _recapModelOverride = "";
 
+    // ── Notion integration ──────────────────────────────────────────
+    /// UUID of the Notion page or database where meeting recaps land.
+    /// Empty = no target picked yet (UI shows the onboarding panel).
+    /// Set by the picker in the IntegrationsPanel.
+    [ObservableProperty] private string _notionTargetId = "";
+    /// "page" or "database" — drives the request shape sent to Notion.
+    [ObservableProperty] private string _notionTargetKind = "";
+    /// Display name of the picked target ("Meeting Notes",
+    /// "Engineering log") shown in Settings as a confirmation.
+    [ObservableProperty] private string _notionTargetTitle = "";
+    /// When true, every meeting auto-sends to Notion at stop time.
+    /// Default false — opt-in via explicit click. Save path goes through
+    /// dimmy_set_config_json so the Rust core sees the toggle.
+    [ObservableProperty] private bool _notionAutoSend;
+    /// "Has the user pasted a token?" — drives the Connected/Not
+    /// Connected status indicator on the Notion settings page. Sourced
+    /// from `has_notion_token` field of dimmy_get_config_json snapshot
+    /// at load time, kept in sync after the user pastes/clears the token
+    /// via the dedicated FFI (token never round-trips through config).
+    [ObservableProperty] private bool _hasNotionToken;
+
     /// Per-provider snapshot of "is an LLM key already stored?" — sourced from
     /// the `has_llm_*_key` fields of `dimmy_get_config_json`. Used by the
     /// dropdown handler to refresh `HasLlmKey` (the green ✓ badge) without an
@@ -342,6 +363,19 @@ public partial class SettingsViewModel : ObservableObject
             LlmUseSameKey = !r.TryGetProperty("llm_use_same_key", out var lsk) || lsk.GetBoolean();
             RecapModelOverride = r.TryGetProperty("recap_model_override", out var rmo)
                 ? rmo.GetString() ?? "" : "";
+            // Notion target + auto-send flag round-trip through config.
+            // The token itself never appears in the config snapshot —
+            // we read its presence via has_notion_token (set by the
+            // Rust core when generating the snapshot) and load/store
+            // the value via the dedicated FFI.
+            NotionTargetId = r.TryGetProperty("notion_target_id", out var nti)
+                ? nti.GetString() ?? "" : "";
+            NotionTargetKind = r.TryGetProperty("notion_target_kind", out var ntk)
+                ? ntk.GetString() ?? "" : "";
+            NotionTargetTitle = r.TryGetProperty("notion_target_title", out var ntt)
+                ? ntt.GetString() ?? "" : "";
+            NotionAutoSend = r.TryGetProperty("notion_auto_send", out var nas) && nas.GetBoolean();
+            HasNotionToken = r.TryGetProperty("has_notion_token", out var hnt) && hnt.GetBoolean();
             HasLlmKey = r.TryGetProperty("has_llm_key", out var hlk) && hlk.GetBoolean();
             // Per-provider snapshot — drives real-time green ✓ when user picks
             // another LLM provider in the dropdown before saving.
@@ -431,6 +465,10 @@ public partial class SettingsViewModel : ObservableObject
             ["llm_api_model"] = LlmApiModel,
             ["llm_use_same_key"] = LlmUseSameKey,
             ["recap_model_override"] = RecapModelOverride,
+            ["notion_target_id"] = NotionTargetId,
+            ["notion_target_kind"] = NotionTargetKind,
+            ["notion_target_title"] = NotionTargetTitle,
+            ["notion_auto_send"] = NotionAutoSend,
             ["llm_custom_prompt"] = LlmCustomPrompt,
             ["llm_translate_to"] = LlmTranslateTo,
             ["llm_log_enabled"] = LlmLogEnabled,

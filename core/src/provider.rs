@@ -163,21 +163,27 @@ impl Provider {
 
 // ── Keyring scoping ──────────────────────────────────────────────────
 
-/// Keyring entry scope — prevents mixing up STT and LLM keys.
+/// Keyring entry scope — prevents mixing up STT, LLM, and integration tokens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyringScope {
     /// Transcription / STT API key
     Stt(Provider),
     /// LLM post-processing API key
     Llm(Provider),
+    /// Notion internal integration token (notion.so/my-integrations).
+    /// Stored under the same AES-256 keystore as STT/LLM keys; not a
+    /// per-provider variant because there's exactly one Notion service
+    /// (vs many cloud STT/LLM providers).
+    NotionToken,
 }
 
 impl KeyringScope {
-    /// Keyring entry name (e.g. "api-key-groq", "llm-key-anthropic").
+    /// Keyring entry name (e.g. "api-key-groq", "llm-key-anthropic", "integration-notion-token").
     pub fn entry_name(&self) -> String {
         let name = match self {
             Self::Stt(p) => format!("api-key-{}", p.as_str()),
             Self::Llm(p) => format!("llm-key-{}", p.as_str()),
+            Self::NotionToken => "integration-notion-token".to_string(),
         };
         // Entry name must be non-empty and contain a dash separator
         assert!(!name.is_empty(), "entry_name produced empty string");
@@ -189,10 +195,12 @@ impl KeyringScope {
         name
     }
 
-    /// The provider for this scope.
-    pub fn provider(&self) -> Provider {
+    /// The provider for this scope, when there's a per-provider one.
+    /// Returns `None` for non-provider scopes (e.g. Notion integration token).
+    pub fn provider(&self) -> Option<Provider> {
         match self {
-            Self::Stt(p) | Self::Llm(p) => *p,
+            Self::Stt(p) | Self::Llm(p) => Some(*p),
+            Self::NotionToken => None,
         }
     }
 }
@@ -358,10 +366,22 @@ mod tests {
 
     #[test]
     fn keyring_scope_provider() {
-        assert_eq!(KeyringScope::Stt(Provider::Groq).provider(), Provider::Groq);
+        assert_eq!(
+            KeyringScope::Stt(Provider::Groq).provider(),
+            Some(Provider::Groq)
+        );
         assert_eq!(
             KeyringScope::Llm(Provider::Anthropic).provider(),
-            Provider::Anthropic
+            Some(Provider::Anthropic)
+        );
+        assert_eq!(KeyringScope::NotionToken.provider(), None);
+    }
+
+    #[test]
+    fn keyring_scope_notion_entry_name() {
+        assert_eq!(
+            KeyringScope::NotionToken.entry_name(),
+            "integration-notion-token"
         );
     }
 

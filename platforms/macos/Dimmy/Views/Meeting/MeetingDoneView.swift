@@ -73,6 +73,10 @@ struct MeetingDoneView: View {
                               help: "Copy recap to clipboard") {
                     copyRecap()
                 }
+                toolbarButton(assetImage: "notion",
+                              help: "Send recap to Notion") {
+                    Task { await sendToNotion() }
+                }
                 toolbarButton(systemImage: "folder", help: "Open meeting folder") {
                     let dir = vm.selectedDir ?? activeDirFromAudio
                     if let dir, !dir.isEmpty {
@@ -92,14 +96,20 @@ struct MeetingDoneView: View {
     }
 
     private func toolbarButton(systemImage: String, help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        ToolbarIconButton(help: help, action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 13))
-                .frame(width: 26, height: 26)
+                .font(.system(size: 16, weight: .medium))
+                .symbolRenderingMode(.hierarchical)
         }
-        .buttonStyle(.bordered)
-        .controlSize(.small)
-        .help(help)
+    }
+
+    private func toolbarButton(assetImage: String, help: String, action: @escaping () -> Void) -> some View {
+        ToolbarIconButton(help: help, action: action) {
+            Image(assetImage)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 16, height: 16)
+        }
     }
 
     private func copyRecap() {
@@ -111,6 +121,74 @@ struct MeetingDoneView: View {
         copiedFlash = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
             copiedFlash = false
+        }
+    }
+
+    /// Send the current meeting's recap.md to Notion. Surfaces a
+    /// success / failure alert + offers an "Open in Notion" button on
+    /// success. Disabled flow until token + target are configured
+    /// (Settings → Integrations).
+    @MainActor
+    private func sendToNotion() async {
+        guard let dir = vm.selectedDir ?? activeDirFromAudio, !dir.isEmpty else { return }
+        if !DimmyCore.shared.notionHasToken {
+            await showNotionAlert(
+                title: "Notion not connected",
+                message: "Connect to Notion in Settings → Integrations first. Paste your integration token, pick where recaps should land, then come back here.",
+                isError: true,
+                pageURL: nil
+            )
+            return
+        }
+        let json = await Task.detached { DimmyCore.shared.notionSendRecap(meetingDir: dir) }.value
+        guard let json = json,
+              let data = json.data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            await showNotionAlert(
+                title: "Couldn't send to Notion",
+                message: "Invalid response from the integration.",
+                isError: true,
+                pageURL: nil
+            )
+            return
+        }
+        let ok = dict["ok"] as? Bool ?? false
+        if ok {
+            let pageURL = dict["page_url"] as? String
+            await showNotionAlert(
+                title: "Sent to Notion ✓",
+                message: "Your recap is live in Notion.",
+                isError: false,
+                pageURL: pageURL
+            )
+        } else {
+            await showNotionAlert(
+                title: "Couldn't send to Notion",
+                message: (dict["error"] as? String) ?? "Unknown error",
+                isError: true,
+                pageURL: nil
+            )
+        }
+    }
+
+    @MainActor
+    private func showNotionAlert(title: String, message: String, isError: Bool, pageURL: String?) async {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = isError ? .warning : .informational
+        if !isError, let urlStr = pageURL, !urlStr.isEmpty {
+            alert.addButton(withTitle: "Open in Notion")
+            alert.addButton(withTitle: "Close")
+        } else {
+            alert.addButton(withTitle: "Close")
+        }
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn,
+           !isError,
+           let urlStr = pageURL,
+           let url = URL(string: urlStr) {
+            NSWorkspace.shared.open(url)
         }
     }
 
@@ -417,5 +495,36 @@ enum MarkdownBlockParser {
         else { return nil }
         let body = String(s[s.index(i, offsetBy: 2)...])
         return (n, body)
+    }
+}
+
+// MARK: - ToolbarIconButton
+//
+// Borderless icon button with a soft hover background — the macOS
+// Mail / Messages toolbar style. Default state is flat (icon only) so
+// the header stays clean; on hover a subtle rounded fill appears,
+// giving the click affordance without the heavy default Bordered pill.
+// Used for the Done view header toolbar (regen, copy, send-to-notion,
+// open-folder).
+private struct ToolbarIconButton<Label: View>: View {
+    let help: String
+    let action: () -> Void
+    @ViewBuilder let label: () -> Label
+
+    @State private var hovering: Bool = false
+
+    var body: some View {
+        Button(action: action) {
+            label()
+                .frame(width: 30, height: 28)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color.primary.opacity(hovering ? 0.08 : 0))
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+        .buttonStyle(.borderless)
+        .onHover { hovering = $0 }
+        .help(help)
     }
 }

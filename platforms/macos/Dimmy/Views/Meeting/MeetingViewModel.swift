@@ -260,8 +260,13 @@ final class MeetingViewModel: ObservableObject {
 
     private func runPostProcess(dir: String, transcript: String) {
         statusLabel = "Generating recap with LLM…"
+        let notionAutoSend = AppState.shared.notionAutoSend
         DispatchQueue.global(qos: .userInitiated).async {
-            let result = MeetingPostProcessService.runRecap(dir: dir, transcript: transcript)
+            let result = MeetingPostProcessService.runRecap(
+                dir: dir,
+                transcript: transcript,
+                notionAutoSend: notionAutoSend
+            )
             DispatchQueue.main.async {
                 self.isWorking = false
                 self.phase = .done
@@ -298,8 +303,13 @@ final class MeetingViewModel: ObservableObject {
         phase = .processing
         processingStep = .generatingRecap
         statusLabel = "Regenerating recap…"
+        let notionAutoSend = AppState.shared.notionAutoSend
         DispatchQueue.global(qos: .userInitiated).async {
-            let result = MeetingPostProcessService.runRecap(dir: dir, transcript: transcript)
+            let result = MeetingPostProcessService.runRecap(
+                dir: dir,
+                transcript: transcript,
+                notionAutoSend: notionAutoSend
+            )
             DispatchQueue.main.async {
                 self.phase = .done
                 switch result {

@@ -1048,12 +1048,57 @@ public sealed partial class PillWindow : Window
         quitItem.Click += (_, _) => App.Instance?.QuitApp();
         menu.Items.Add(quitItem);
 
-        // Show at anchor or at center of pill
+        // Show at anchor or at center of pill. The pill body is dark
+        // by design (locked palette) but the right-click menu must
+        // honour the user's saved Light/Dark preference. We theme the
+        // MenuFlyoutPresenter (the popup root) instead of individual
+        // items: setting per-item RequestedTheme leaves the presenter's
+        // own acrylic background brush coupled to the system theme,
+        // which produced washed-out light-text-on-dark-acrylic the
+        // first time we tried this (2026-05-10). Styling the presenter
+        // changes both background AND child theme atomically.
+        menu.MenuFlyoutPresenterStyle = ThemedPresenterStyle(
+            Helpers.ThemeHelper.ResolvedElementTheme());
         var target = anchor ?? ColorBorder;
         var pos = position ?? new global::Windows.Foundation.Point(
             target.ActualWidth / 2, target.ActualHeight / 2);
         menu.ShowAt(target, pos);
     }
+
+    /// <summary>Build a Style for the MenuFlyoutPresenter with explicit
+    /// theme-aware brushes. Setting only RequestedTheme didn't work
+    /// (verified empirically 2026-05-10): WinUI 3 resolves the popup's
+    /// background against the XamlRoot's theme, not the presenter's,
+    /// so an acrylic brush bleeds through the system theme even when
+    /// the presenter says Light. Setting Background + Foreground +
+    /// BorderBrush explicitly bypasses the lookup entirely. Colors
+    /// chosen to match Win11's standard menu palette: light = near-
+    /// white panel + black text, dark = near-black panel + white text.</summary>
+    private static Style ThemedPresenterStyle(ElementTheme theme)
+    {
+        if (_presenterStyles.TryGetValue(theme, out var cached)) return cached;
+        bool dark = theme == ElementTheme.Dark;
+        var bg = new SolidColorBrush(dark
+            ? global::Windows.UI.Color.FromArgb(0xFF, 0x2B, 0x2B, 0x2B)
+            : global::Windows.UI.Color.FromArgb(0xFF, 0xF9, 0xF9, 0xF9));
+        var fg = new SolidColorBrush(dark
+            ? global::Windows.UI.Color.FromArgb(0xFF, 0xF2, 0xF2, 0xF2)
+            : global::Windows.UI.Color.FromArgb(0xFF, 0x1A, 0x1A, 0x1A));
+        var stroke = new SolidColorBrush(dark
+            ? global::Windows.UI.Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF)
+            : global::Windows.UI.Color.FromArgb(0x20, 0x00, 0x00, 0x00));
+        var style = new Style(typeof(MenuFlyoutPresenter));
+        style.Setters.Add(new Setter(FrameworkElement.RequestedThemeProperty, theme));
+        style.Setters.Add(new Setter(Control.BackgroundProperty, bg));
+        style.Setters.Add(new Setter(Control.ForegroundProperty, fg));
+        style.Setters.Add(new Setter(Control.BorderBrushProperty, stroke));
+        style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(1)));
+        _presenterStyles[theme] = style;
+        return style;
+    }
+
+    private static readonly System.Collections.Generic.Dictionary<ElementTheme, Style>
+        _presenterStyles = new();
 
     private MenuFlyoutSubItem BuildTranslateToSubmenu()
     {

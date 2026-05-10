@@ -38,6 +38,9 @@ backend/.wrangler/
 licensing-data/
 **/dimmy_jumplist.log
 **/dimmy_startup.log
+# Ad-hoc build logs from local dev sessions (cargo/dotnet output redirects).
+build.log
+dotnet-build.log
 
 # Local-only licensing flow notes (kept on disk, not in repo).
 docs/dev/licensing-flow.md

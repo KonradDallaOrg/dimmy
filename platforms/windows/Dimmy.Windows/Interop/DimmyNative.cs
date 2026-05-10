@@ -217,6 +217,46 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_meeting_is_paused();
 
+    // ── Notion integration ──────────────────────────────────────────
+    /// Save the user's Notion integration token to the AES-256 keystore.
+    /// Empty string clears it. Returns 0 on success, -1 on failure.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_notion_set_token(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string token);
+
+    /// Returns 1 if a Notion token is currently stored, 0 otherwise.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_notion_has_token();
+
+    /// Verify the stored token by pinging /v1/users/me. Writes JSON
+    /// envelope `{"ok":true,"bot_name":"...","workspace_name":"..."}`
+    /// or `{"ok":false,"error":"..."}` to outBuf. Returns the JSON
+    /// length, or -1 on invalid args.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_notion_test_connection(
+        byte[] outBuf, int bufLen);
+
+    /// Search Notion for accessible pages + databases. `query` is an
+    /// optional substring filter — pass empty string to list everything.
+    /// Writes a JSON array of `{id,object,title,parent_label,url}` to
+    /// outBuf. Returns the JSON length, -1 on invalid args, or writes
+    /// `{"error":"..."}` envelope on API failure.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_notion_search(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string query,
+        byte[] outBuf, int bufLen);
+
+    /// Send a meeting's recap.md to the configured Notion target.
+    /// Reads the meeting dir's recap.md + transcripts.txt for the title
+    /// hint, sends via the markdown-content API. Writes a JSON envelope
+    /// `{"ok":true,"page_id":"...","page_url":"https://..."}` or
+    /// `{"ok":false,"error":"..."}`. Returns the JSON length, -1 on
+    /// invalid args.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_notion_send_recap(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string meetingDir,
+        byte[] outBuf, int bufLen);
+
     /// Raw LLM call — bypasses the dictation rewrite wrapper. Pass
     /// empty string for `modelOverride` to use the user-configured
     /// llm_api_model. Used by meeting recap + audio-load summarizer.

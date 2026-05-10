@@ -64,6 +64,9 @@
     <Content Include="Assets\Providers\*.svg">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <Content Include="Assets\notion-mark.svg">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
   <!-- Copy dimmy_lib.dll from Rust build output to bin dir -->

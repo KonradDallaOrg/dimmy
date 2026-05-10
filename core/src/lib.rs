@@ -35,6 +35,11 @@ pub mod local_stt;
 /// Swift host through dimmy_process_with_llm to keep async runtime
 /// concerns out of the meeting worker.
 pub mod meeting;
+/// Notion REST API client — sends meeting recap markdown to a user-
+/// picked Notion page or database. Internal integration tokens, no
+/// OAuth. Uses Notion's server-side markdown API (2026-02-26+) so we
+/// don't ship a markdown→block-tree converter. See `notion.rs`.
+pub mod notion;
 /// Parakeet TDT v3 FP32 local STT via ONNX Runtime. Inference is
 /// gated behind `local-stt-parakeet`; bundle download / presence
 /// helpers are always available so the UI can render the "needs
@@ -400,6 +405,22 @@ pub struct AppConfig {
     /// accept up to ~25 MB so 60 s @ 16k mono int16 (~1.9 MB) is
     /// well within limits.
     pub meeting_chunk_secs: f32,
+    /// Notion integration target — UUID of the parent page or database
+    /// where each meeting recap lands. Empty string = no target
+    /// configured (Settings UI shows the onboarding flow).
+    pub notion_target_id: String,
+    /// `"page"` or `"database"` — determines the request shape we send
+    /// to `POST /v1/pages` (parent.page_id vs parent.database_id, plus
+    /// the title-property name). Empty string → defaults to "page".
+    pub notion_target_kind: String,
+    /// Display name of the target — shown in Settings as "Recaps will
+    /// land in: <title>". Pure UI sugar, never sent to the API.
+    pub notion_target_title: String,
+    /// When true, every meeting auto-sends to Notion at stop time.
+    /// When false, the user clicks a "Send to Notion" button in the
+    /// MeetingWindow Done view. Default false (opt-in by explicit
+    /// click — same caution we apply to all data-egress features).
+    pub notion_auto_send: bool,
     /// What to capture: "mic" (default), "system" (loopback — what's
     /// playing through the speakers), or "mix" (both summed in time).
     /// System / Mix are Windows-only for now; on Mac/Linux they fall
@@ -485,6 +506,10 @@ impl Default for AppConfig {
             // identity for in-range samples.
             loopback_gain: 1.0,
             meeting_chunk_secs: 15.0,
+            notion_target_id: String::new(),
+            notion_target_kind: String::new(),
+            notion_target_title: String::new(),
+            notion_auto_send: false,
             audio_source: default_audio_source(),
             window_anchor_right: None,
             window_anchor_bottom: None,
@@ -565,6 +590,10 @@ pub fn save_config_file(cfg: &AppConfig) {
             "input_gain": cfg.input_gain,
             "loopback_gain": cfg.loopback_gain,
             "meeting_chunk_secs": cfg.meeting_chunk_secs,
+            "notion_target_id": cfg.notion_target_id,
+            "notion_target_kind": cfg.notion_target_kind,
+            "notion_target_title": cfg.notion_target_title,
+            "notion_auto_send": cfg.notion_auto_send,
             "audio_source": cfg.audio_source,
             "stats_total_words": cfg.stats_total_words,
             "stats_total_speaking_secs": cfg.stats_total_speaking_secs,
@@ -724,6 +753,21 @@ pub fn load_config_file() -> AppConfig {
                         .as_f64()
                         .unwrap_or(defaults.meeting_chunk_secs as f64)
                         as f32,
+                    notion_target_id: v["notion_target_id"]
+                        .as_str()
+                        .unwrap_or(&defaults.notion_target_id)
+                        .to_string(),
+                    notion_target_kind: v["notion_target_kind"]
+                        .as_str()
+                        .unwrap_or(&defaults.notion_target_kind)
+                        .to_string(),
+                    notion_target_title: v["notion_target_title"]
+                        .as_str()
+                        .unwrap_or(&defaults.notion_target_title)
+                        .to_string(),
+                    notion_auto_send: v["notion_auto_send"]
+                        .as_bool()
+                        .unwrap_or(defaults.notion_auto_send),
                     audio_source: v["audio_source"]
                         .as_str()
                         .unwrap_or(&defaults.audio_source)
@@ -957,6 +1001,11 @@ pub struct AppState {
     pub input_gain: Arc<std::sync::atomic::AtomicU32>,
     pub loopback_gain: Arc<std::sync::atomic::AtomicU32>,
     pub meeting_chunk_secs: Mutex<f32>,
+    /// Notion integration target — see [`AppConfig::notion_target_id`].
+    pub notion_target_id: Mutex<String>,
+    pub notion_target_kind: Mutex<String>,
+    pub notion_target_title: Mutex<String>,
+    pub notion_auto_send: Mutex<bool>,
     /// Audio source: "mic" | "system" | "mix". Read by dimmy_start_recording
     /// + meeting start to pick which AudioCommand::Start variant to send.
     pub audio_source: Mutex<String>,
@@ -1081,6 +1130,10 @@ impl AppState {
             input_gain: input_gain_atomic,
             loopback_gain: loopback_gain_atomic,
             meeting_chunk_secs: Mutex::new(file_cfg.meeting_chunk_secs),
+            notion_target_id: Mutex::new(file_cfg.notion_target_id.clone()),
+            notion_target_kind: Mutex::new(file_cfg.notion_target_kind.clone()),
+            notion_target_title: Mutex::new(file_cfg.notion_target_title.clone()),
+            notion_auto_send: Mutex::new(file_cfg.notion_auto_send),
             audio_source: Mutex::new(file_cfg.audio_source.clone()),
             key_store,
             audio_debug_session_dir: Mutex::new(None),
@@ -1263,6 +1316,22 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         input_gain: f32::from_bits(state.input_gain.load(Ordering::Relaxed)),
         loopback_gain: f32::from_bits(state.loopback_gain.load(Ordering::Relaxed)),
         meeting_chunk_secs: *state.meeting_chunk_secs.lock().map_err(|e| e.to_string())?,
+        notion_target_id: state
+            .notion_target_id
+            .lock()
+            .map_err(|e| e.to_string())?
+            .clone(),
+        notion_target_kind: state
+            .notion_target_kind
+            .lock()
+            .map_err(|e| e.to_string())?
+            .clone(),
+        notion_target_title: state
+            .notion_target_title
+            .lock()
+            .map_err(|e| e.to_string())?
+            .clone(),
+        notion_auto_send: *state.notion_auto_send.lock().map_err(|e| e.to_string())?,
         audio_source: state
             .audio_source
             .lock()

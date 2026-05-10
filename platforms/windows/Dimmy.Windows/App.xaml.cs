@@ -1063,8 +1063,8 @@ public partial class App : Application
     public void OpenSettingsWindow() => OpenSettings();
 
     /// Open the dedicated MeetingWindow (or activate it if already
-    /// open). Triggered from the tray menu's "Start meeting…" item
-    /// and from the Settings home → Meeting card.
+    /// open). Triggered from the jump-list "Meetings" entry and from
+    /// the Settings home → Meeting card.
     /// Called by PillWindow.StopMeetingFromPillAsync after the recap
     /// pipeline successfully writes recap.md / actions to disk. If a
     /// MeetingWindow is open, dispatches it to refresh its history

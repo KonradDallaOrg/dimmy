@@ -290,6 +290,70 @@ extension DimmyCore {
             dimmy_history_update_word_timestamps(id, ptr) == 0
         }
     }
+
+    // MARK: - Notion integration
+    //
+    // Mirrors the Win side. Token stored in the AES-256 keystore via
+    // dimmy_notion_set_token; token presence + target round-trip via
+    // get_config_json so the Settings UI can render the connected /
+    // disconnected state without re-pinging Notion.
+
+    /// Save the user's Notion integration token. Empty string clears.
+    /// Returns true on success.
+    @discardableResult
+    func notionSetToken(_ token: String) -> Bool {
+        guard isInitialized else { return false }
+        return token.withCString { ptr in
+            dimmy_notion_set_token(ptr) == 0
+        }
+    }
+
+    /// True if a Notion token is stored (regardless of validity).
+    var notionHasToken: Bool {
+        guard isInitialized else { return false }
+        return dimmy_notion_has_token() == 1
+    }
+
+    /// Ping /v1/users/me with the stored token. Returns the JSON
+    /// envelope `{"ok":true|false, "bot_name":"...", "workspace_name":"...", "error":"..."}`
+    /// raw — the caller decodes.
+    func notionTestConnection() -> String? {
+        guard isInitialized else { return nil }
+        var buffer = [CChar](repeating: 0, count: 16384)
+        let len = buffer.withUnsafeMutableBufferPointer { ptr -> Int32 in
+            dimmy_notion_test_connection(ptr.baseAddress!, Int32(ptr.count))
+        }
+        guard len > 0 else { return nil }
+        return String(cString: buffer)
+    }
+
+    /// Search Notion for accessible pages + databases. Returns the raw
+    /// JSON array (or `{"error":"..."}` on failure); caller decodes.
+    func notionSearch(_ query: String) -> String? {
+        guard isInitialized else { return nil }
+        return query.withCString { qptr -> String? in
+            var buffer = [CChar](repeating: 0, count: 32768)
+            let len = buffer.withUnsafeMutableBufferPointer { ptr -> Int32 in
+                dimmy_notion_search(qptr, ptr.baseAddress!, Int32(ptr.count))
+            }
+            guard len > 0 else { return nil }
+            return String(cString: buffer)
+        }
+    }
+
+    /// Send the meeting's recap.md to the configured Notion target.
+    /// Returns the raw JSON envelope; caller decodes ok/page_url/error.
+    func notionSendRecap(meetingDir: String) -> String? {
+        guard isInitialized else { return nil }
+        return meetingDir.withCString { dptr -> String? in
+            var buffer = [CChar](repeating: 0, count: 16384)
+            let len = buffer.withUnsafeMutableBufferPointer { ptr -> Int32 in
+                dimmy_notion_send_recap(dptr, ptr.baseAddress!, Int32(ptr.count))
+            }
+            guard len > 0 else { return nil }
+            return String(cString: buffer)
+        }
+    }
 }
 
 // MARK: - MeetingResult

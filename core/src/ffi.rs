@@ -296,6 +296,10 @@ fn dimmy_init_inner() -> c_int {
         input_gain: input_gain_atomic,
         loopback_gain: loopback_gain_atomic,
         meeting_chunk_secs: Mutex::new(file_cfg.meeting_chunk_secs),
+        notion_target_id: Mutex::new(file_cfg.notion_target_id),
+        notion_target_kind: Mutex::new(file_cfg.notion_target_kind),
+        notion_target_title: Mutex::new(file_cfg.notion_target_title),
+        notion_auto_send: Mutex::new(file_cfg.notion_auto_send),
         audio_source: Mutex::new(file_cfg.audio_source),
         key_store,
         audio_debug_session_dir: Mutex::new(None),
@@ -1301,6 +1305,40 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         .key_store
         .has_key(KeyringScope::Llm(Provider::Custom), use_kr)
         .into();
+    // Notion integration token presence — drives the "Connected /
+    // Not connected" status indicator on the Notion settings page.
+    // Token value itself is NEVER round-tripped via config.
+    json["has_notion_token"] = st
+        .key_store
+        .has_key(KeyringScope::NotionToken, use_kr)
+        .into();
+    // Notion target — surfaced for the picker to show "Recaps will
+    // land in: <title>" status text, and so the C# VM can drive the
+    // "you haven't picked a target yet" hint.
+    json["notion_target_id"] = st
+        .notion_target_id
+        .lock()
+        .map(|s| s.clone())
+        .unwrap_or_default()
+        .into();
+    json["notion_target_kind"] = st
+        .notion_target_kind
+        .lock()
+        .map(|s| s.clone())
+        .unwrap_or_default()
+        .into();
+    json["notion_target_title"] = st
+        .notion_target_title
+        .lock()
+        .map(|s| s.clone())
+        .unwrap_or_default()
+        .into();
+    json["notion_auto_send"] = st
+        .notion_auto_send
+        .lock()
+        .map(|b| *b)
+        .unwrap_or(false)
+        .into();
 
     let s = serde_json::to_string(&json).unwrap_or_else(|_| "{}".to_string());
     write_to_buf(&s, out_buf, buf_len)
@@ -1624,6 +1662,39 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
             *slot = secs;
         }
         log(&format!("[Config] meeting_chunk_secs set to {:.1}", secs));
+    }
+    // Notion target / auto-send. UI writes here on the picker
+    // confirmation + auto-send toggle. Token is NEVER round-tripped
+    // via config JSON — it lives in the keystore (encrypted) and is
+    // touched only via the dedicated dimmy_notion_set_token FFI.
+    if let Some(s) = v["notion_target_id"].as_str() {
+        if let Ok(mut slot) = st.notion_target_id.lock() {
+            *slot = s.to_string();
+        }
+        log(&format!(
+            "[Config] notion_target_id set ({})",
+            if s.is_empty() { "cleared" } else { "set" }
+        ));
+    }
+    if let Some(s) = v["notion_target_kind"].as_str() {
+        let normalised = match s.to_ascii_lowercase().as_str() {
+            "page" | "database" => s.to_ascii_lowercase(),
+            _ => "page".to_string(),
+        };
+        if let Ok(mut slot) = st.notion_target_kind.lock() {
+            *slot = normalised;
+        }
+    }
+    if let Some(s) = v["notion_target_title"].as_str() {
+        if let Ok(mut slot) = st.notion_target_title.lock() {
+            *slot = s.to_string();
+        }
+    }
+    if let Some(b) = v["notion_auto_send"].as_bool() {
+        if let Ok(mut slot) = st.notion_auto_send.lock() {
+            *slot = b;
+        }
+        log(&format!("[Config] notion_auto_send set to {}", b));
     }
     if let Some(s) = v["audio_source"].as_str() {
         let normalised = match s.to_ascii_lowercase().as_str() {
@@ -2729,6 +2800,290 @@ pub extern "C" fn dimmy_meeting_is_paused() -> c_int {
         },
         Err(_) => 0,
     }
+}
+
+// ── Notion integration ─────────────────────────────────────────────
+// Internal-integration-token model: user pastes a `ntn_...` token
+// from notion.so/my-integrations into the Settings UI; we store it
+// in the AES-256 keystore alongside STT/LLM keys, then use it to
+// send meeting recaps via the Notion REST API. See `notion.rs`.
+
+/// Set the Notion integration token. Empty token = clear (no upload
+/// possible until re-set). Returns 0 on success, -1 on lock failure.
+///
+/// # Safety
+/// `token_ptr` must be a valid null-terminated UTF-8 C string. NULL is
+/// rejected (-1). Empty string clears the stored token.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_notion_set_token(token_ptr: *const c_char) -> c_int {
+    if token_ptr.is_null() {
+        return -1;
+    }
+    let token = match unsafe { CStr::from_ptr(token_ptr) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let st = state();
+    let result = if token.is_empty() {
+        save_key_with_store(&st.key_store, KeyringScope::NotionToken, "", false)
+    } else {
+        save_key_with_store(&st.key_store, KeyringScope::NotionToken, token, false)
+    };
+    match result {
+        Ok(_) => {
+            log(&format!(
+                "[Notion] token {} ({} chars)",
+                if token.is_empty() { "cleared" } else { "set" },
+                token.len()
+            ));
+            0
+        }
+        Err(e) => {
+            log(&format!("[Notion] save_key failed: {}", e));
+            -1
+        }
+    }
+}
+
+/// Returns 1 if a Notion token is currently stored, 0 otherwise.
+#[no_mangle]
+pub extern "C" fn dimmy_notion_has_token() -> c_int {
+    let st = state();
+    let token = crate::load_key_with_store(
+        &st.key_store,
+        crate::provider::KeyringScope::NotionToken,
+        false,
+    );
+    if token.as_deref().map(|s| !s.is_empty()).unwrap_or(false) {
+        1
+    } else {
+        0
+    }
+}
+
+/// Verify the stored Notion token by calling /v1/users/me. Writes a
+/// JSON envelope to `out_buf`:
+///   `{"ok":true,"bot_name":"Dimmy","workspace_name":"Konrad's Workspace"}`
+/// or
+///   `{"ok":false,"error":"Notion API 401: ..."}`
+///
+/// Returns the JSON length on success, -1 on invalid args / no token.
+///
+/// # Safety
+/// `out_buf` must be a valid writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_notion_test_connection(
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let st = state();
+    let token = match crate::load_key_with_store(
+        &st.key_store,
+        crate::provider::KeyringScope::NotionToken,
+        false,
+    ) {
+        Some(t) if !t.is_empty() => t,
+        _ => {
+            let json = r#"{"ok":false,"error":"Notion token not set"}"#;
+            return write_to_buf(json, out_buf, buf_len);
+        }
+    };
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(r) => r,
+        Err(_) => return -1,
+    };
+    let result = rt.block_on(crate::notion::ping(&token));
+    let json = match result {
+        Ok(info) => serde_json::json!({
+            "ok": true,
+            "bot_name": info.bot_name,
+            "workspace_name": info.workspace_name,
+        })
+        .to_string(),
+        Err(e) => serde_json::json!({
+            "ok": false,
+            "error": format!("{}", e),
+        })
+        .to_string(),
+    };
+    write_to_buf(&json, out_buf, buf_len)
+}
+
+/// Search Notion for pages + databases the integration has access to.
+/// Used by the Settings picker. Writes JSON array:
+///   `[{"id":"...","object":"page","title":"Notes","parent_label":"Workspace","url":"..."}, ...]`
+/// Returns the JSON length on success, -1 on invalid args / no token,
+/// or writes a `{"error":"..."}` envelope on API failure with length.
+///
+/// # Safety
+/// `query_ptr` and `out_buf` must be valid C string / writable buffer.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_notion_search(
+    query_ptr: *const c_char,
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let query = if query_ptr.is_null() {
+        String::new()
+    } else {
+        unsafe { CStr::from_ptr(query_ptr) }
+            .to_str()
+            .unwrap_or("")
+            .to_string()
+    };
+    let st = state();
+    let token = match crate::load_key_with_store(
+        &st.key_store,
+        crate::provider::KeyringScope::NotionToken,
+        false,
+    ) {
+        Some(t) if !t.is_empty() => t,
+        _ => {
+            let json = r#"{"error":"Notion token not set"}"#;
+            return write_to_buf(json, out_buf, buf_len);
+        }
+    };
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(r) => r,
+        Err(_) => return -1,
+    };
+    let result = rt.block_on(crate::notion::search(&token, &query));
+    let json = match result {
+        Ok(items) => serde_json::to_string(&items).unwrap_or_else(|_| "[]".to_string()),
+        Err(e) => serde_json::json!({
+            "error": format!("{}", e),
+        })
+        .to_string(),
+    };
+    write_to_buf(&json, out_buf, buf_len)
+}
+
+/// Send a meeting's recap to the configured Notion target. Reads
+/// `recap.md` from the meeting dir; falls back to `transcripts.txt` +
+/// regenerated recap if recap.md doesn't exist (caller's
+/// responsibility to ensure recap was produced first).
+///
+/// Writes a JSON envelope to `out_buf`:
+///   `{"ok":true,"page_id":"...","page_url":"https://www.notion.so/..."}`
+/// or
+///   `{"ok":false,"error":"..."}`
+///
+/// Returns the JSON length, or -1 on invalid args.
+///
+/// # Safety
+/// `meeting_dir_ptr` and `out_buf` must be valid C string / writable
+/// buffer.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_notion_send_recap(
+    meeting_dir_ptr: *const c_char,
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if meeting_dir_ptr.is_null() || out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let dir_str = match unsafe { CStr::from_ptr(meeting_dir_ptr) }.to_str() {
+        Ok(s) if !s.is_empty() => s,
+        _ => return -1,
+    };
+    let dir = std::path::PathBuf::from(dir_str);
+    let st = state();
+
+    let token = match crate::load_key_with_store(
+        &st.key_store,
+        crate::provider::KeyringScope::NotionToken,
+        false,
+    ) {
+        Some(t) if !t.is_empty() => t,
+        _ => {
+            let json = r#"{"ok":false,"error":"Notion token not set"}"#;
+            return write_to_buf(json, out_buf, buf_len);
+        }
+    };
+
+    let target_id = st
+        .notion_target_id
+        .lock()
+        .ok()
+        .map(|s| s.clone())
+        .unwrap_or_default();
+    if target_id.is_empty() {
+        let json = r#"{"ok":false,"error":"Notion target page not configured"}"#;
+        return write_to_buf(json, out_buf, buf_len);
+    }
+    let target_kind = st
+        .notion_target_kind
+        .lock()
+        .ok()
+        .map(|s| s.clone())
+        .unwrap_or_else(|| "page".to_string());
+    let target_title = st
+        .notion_target_title
+        .lock()
+        .ok()
+        .map(|s| s.clone())
+        .unwrap_or_default();
+    let target = crate::notion::NotionTarget {
+        id: target_id,
+        kind: target_kind,
+        title: target_title,
+    };
+
+    let recap_path = dir.join("recap.md");
+    let markdown = match std::fs::read_to_string(&recap_path) {
+        Ok(s) => s,
+        Err(_) => {
+            let json = r#"{"ok":false,"error":"recap.md not found in meeting dir"}"#;
+            return write_to_buf(json, out_buf, buf_len);
+        }
+    };
+    if markdown.trim().is_empty() {
+        let json = r#"{"ok":false,"error":"recap.md is empty"}"#;
+        return write_to_buf(json, out_buf, buf_len);
+    }
+
+    // Title: prefer transcripts.txt content for a hint of subject;
+    // fall back to meta.json timestamp via meeting_dir_to_title.
+    let transcript = std::fs::read_to_string(dir.join("transcripts.txt")).unwrap_or_default();
+    let title = crate::notion::meeting_dir_to_title(&dir, &transcript);
+
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(r) => r,
+        Err(_) => return -1,
+    };
+    let result = rt.block_on(crate::notion::send_meeting_recap(
+        &token, &title, &markdown, &target,
+    ));
+    let json = match result {
+        Ok(page) => {
+            log(&format!(
+                "[Notion] recap sent for {} → {}",
+                dir.display(),
+                page.url
+            ));
+            serde_json::json!({
+                "ok": true,
+                "page_id": page.id,
+                "page_url": page.url,
+            })
+            .to_string()
+        }
+        Err(e) => {
+            log(&format!("[Notion] send failed: {}", e));
+            serde_json::json!({
+                "ok": false,
+                "error": format!("{}", e),
+            })
+            .to_string()
+        }
+    };
+    write_to_buf(&json, out_buf, buf_len)
 }
 
 /// Raw LLM call: send `prompt` to the configured LLM endpoint without
@@ -4962,6 +5317,10 @@ mod tests {
                 loopback_gain: Arc::new(std::sync::atomic::AtomicU32::new(1.0f32.to_bits())),
                 audio_source: Mutex::new("mic".to_string()),
                 meeting_chunk_secs: Mutex::new(15.0f32),
+                notion_target_id: Mutex::new(String::new()),
+                notion_target_kind: Mutex::new(String::new()),
+                notion_target_title: Mutex::new(String::new()),
+                notion_auto_send: Mutex::new(false),
                 audio_buffer_secondary: Arc::new(Mutex::new(Vec::new())),
                 key_store: crate::keystore::KeyStore::new(),
                 audio_debug_session_dir: Mutex::new(None),

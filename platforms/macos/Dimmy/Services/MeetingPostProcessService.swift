@@ -71,7 +71,8 @@ enum MeetingPostProcessService {
     /// timeout to 600 s for Anthropic adaptive thinking.
     static func runRecap(dir: String,
                          transcript: String,
-                         modelOverride: String? = nil) -> Swift.Result<Result, Failure> {
+                         modelOverride: String? = nil,
+                         notionAutoSend: Bool = false) -> Swift.Result<Result, Failure> {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .failure(.emptyTranscript) }
 
@@ -98,6 +99,21 @@ enum MeetingPostProcessService {
                 recap: markdown,
                 actions: actions
             )
+            // Auto-send to Notion if user has token + auto-send on.
+            // Best-effort: failure is logged but does not block the
+            // recap pipeline. The user can always retry manually from
+            // the Done view's "Send to Notion" button.
+            if notionAutoSend,
+               DimmyCore.shared.notionHasToken {
+                if let json = DimmyCore.shared.notionSendRecap(meetingDir: dir),
+                   let data = json.data(using: .utf8),
+                   let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   (dict["ok"] as? Bool) == true {
+                    NSLog("[Dimmy] Notion auto-send ok url=\(dict["page_url"] as? String ?? "")")
+                } else {
+                    NSLog("[Dimmy] Notion auto-send failed (silent fallback to manual button)")
+                }
+            }
             return .success(Result(
                 recapMarkdown: markdown,
                 actionsPlain: actions,

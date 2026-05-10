@@ -241,6 +241,21 @@ PR #48 — see commits + tests for the canonical shape.
 - **Release:** `main` is fast-forwarded from `staging` at release time
 - **CLAUDE.md is committed** (this file). It IS the playbook. Keep it slim — link to `docs/` for detail.
 
+### Branching from staging — MANDATORY
+
+When starting a new feature/fix branch, you MUST base it on the **latest** `origin/staging`, not on a stale local checkout. The standard sequence:
+
+```bash
+git fetch origin staging --force   # force-update origin/staging in case local was behind
+git checkout -b feat/new-thing origin/staging
+```
+
+If the user asks you to start work without specifying a base, **ask explicitly**: "Branch this off latest `origin/staging`, or off another base (`main`, a specific tag, an existing feature branch)?". Don't guess — branching off the wrong base produces invisible regressions: features that landed on staging yesterday simply don't exist in the new branch, the user trips over the missing functionality hours later, and the rescue is a non-trivial merge with conflicts.
+
+Burned 2026-05-10 on `feat/notion-integration`: branched off a local `origin/staging` that was 7 commits behind GitHub's `staging` (PR #47 had merged the night before — drag-reorder rewrite, event-driven meeting state, recap helpers, STT dedup). The user found out only when drag-reorder crashed in the Notion-integration build because the WinUI built-in drag was still in place. Recovery required committing in-flight Notion work + merging origin/staging mid-stream + resolving conflicts in `SettingsWindow.xaml.cs`, `MeetingWindow.xaml.cs`, `PillWindow.xaml.cs`.
+
+If you're already on a branch that's diverged from staging, the recovery is the same: **merge origin/staging into your branch** (not rebase — preserves the feature-branch shape we already use for PRs). Cherry-picking is a fallback only when merge conflicts would be intractable.
+
 ## Executing actions with care (AI-specific)
 
 Before running destructive or shared-state actions, check with the user:

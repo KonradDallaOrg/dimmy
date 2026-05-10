@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
 using System.Text.Json;
@@ -178,6 +179,12 @@ public sealed partial class SettingsWindow : Window
         // FontIcon fallback. Runs on a background thread; refreshes
         // each row's IconAssetUri on the UI thread when done.
         _ = WarmUpAppIconsAsync();
+
+        // Initial Notion summary card state — reflect HasNotionToken +
+        // NotionTargetTitle from LoadConfig. Without this the card
+        // shows the XAML default ("Not connected" / Connect button)
+        // even when a token was already saved.
+        NotionRefreshSummary();
 
         _loaded = true;
     }
@@ -443,14 +450,35 @@ public sealed partial class SettingsWindow : Window
         AppRuleDropIndicator.Visibility = Visibility.Visible;
     }
 
-    private void UpdateAppRuleDragAutoScroll(global::Windows.Foundation.Point pt)
+    private void UpdateAppRuleDragAutoScroll(global::Windows.Foundation.Point _pointerInLv)
     {
+        // Edge-zone test must happen against the VIEWPORT, not the
+        // ListView. AppRulesListView is nested inside the page-level
+        // ScrollViewer (xaml.cs:1223 inside xaml:103), so the ListView's
+        // own ScrollViewer is disabled and its content grows freely —
+        // pt.Y in ListView coords reaches lv.ActualHeight only when the
+        // cursor is near the LAST item, not when it's at the bottom of
+        // the visible area. We compute pointer Y relative to the outer
+        // ScrollViewer + use its ViewportHeight as the edge baseline.
         const double EDGE_ZONE = 40.0;
         const double SCROLL_PER_TICK = 14.0;
-        var lv = AppRulesListView;
         double delta = 0;
-        if (pt.Y < EDGE_ZONE) delta = -SCROLL_PER_TICK;
-        else if (pt.Y > lv.ActualHeight - EDGE_ZONE) delta = SCROLL_PER_TICK;
+        var sv = GetAppRulesScrollViewer();
+        if (sv != null)
+        {
+            try
+            {
+                var transform = AppRulesListView.TransformToVisual(sv);
+                var pInSv = transform.TransformPoint(_pointerInLv);
+                double viewportH = sv.ViewportHeight;
+                if (viewportH > 0)
+                {
+                    if (pInSv.Y < EDGE_ZONE) delta = -SCROLL_PER_TICK;
+                    else if (pInSv.Y > viewportH - EDGE_ZONE) delta = SCROLL_PER_TICK;
+                }
+            }
+            catch { /* TransformToVisual can race during layout; skip this tick */ }
+        }
         _appRuleDragScrollDelta = delta;
         if (delta != 0 && _appRuleDragScrollTimer == null)
         {
@@ -478,8 +506,14 @@ public sealed partial class SettingsWindow : Window
         if (sv == null) return;
         double newOffset = sv.VerticalOffset + _appRuleDragScrollDelta;
         sv.ChangeView(null, newOffset, null, disableAnimation: true);
-        // Refresh the drop indicator after the scroll — items shifted
-        // under the stationary cursor.
+        // The cursor stayed in the same screen position but the ListView
+        // translated within its parent ScrollViewer by SCROLL_PER_TICK —
+        // so in LV-relative coords the cursor effectively moved by the
+        // same amount. Update the cached pointer so the drop indicator
+        // refresh below picks the correct slot for the now-shifted layout.
+        _appRuleLastPointerInLV = new global::Windows.Foundation.Point(
+            _appRuleLastPointerInLV.X,
+            _appRuleLastPointerInLV.Y + _appRuleDragScrollDelta);
         UpdateAppRuleDropIndicator(_appRuleLastPointerInLV);
     }
 
@@ -497,20 +531,23 @@ public sealed partial class SettingsWindow : Window
     private ScrollViewer GetAppRulesScrollViewer()
     {
         if (_appRulesScrollViewer != null) return _appRulesScrollViewer;
-        _appRulesScrollViewer = FindFirstDescendant<ScrollViewer>(AppRulesListView);
+        // Walk UP the visual tree, not down. AppRulesListView lives
+        // inside the page-level ScrollViewer (xaml line 103) — its own
+        // inner ScrollViewer (templated child) is disabled when the
+        // host has no fixed height, so descending finds a no-op
+        // scroller. The first ScrollViewer ancestor is the one that
+        // actually moves content under the cursor.
+        _appRulesScrollViewer = FindFirstAncestor<ScrollViewer>(AppRulesListView);
         return _appRulesScrollViewer;
     }
 
-    private static T FindFirstDescendant<T>(DependencyObject d) where T : DependencyObject
+    private static T FindFirstAncestor<T>(DependencyObject d) where T : DependencyObject
     {
-        if (d == null) return null;
-        int n = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(d);
-        for (int i = 0; i < n; i++)
+        var p = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(d);
+        while (p != null)
         {
-            var c = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(d, i);
-            if (c is T t) return t;
-            var r = FindFirstDescendant<T>(c);
-            if (r != null) return r;
+            if (p is T t) return t;
+            p = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(p);
         }
         return null;
     }
@@ -1200,6 +1237,15 @@ public sealed partial class SettingsWindow : Window
                     ViewModel.HasApiKey = hk.GetBoolean();
                 if (r.TryGetProperty("has_llm_key", out var hlk))
                     ViewModel.HasLlmKey = hlk.GetBoolean();
+                // Notion token presence is a runtime-only flag derived
+                // from the keystore (same as has_key / has_llm_key).
+                // Rust strips it on config.json save, so LoadFromJson
+                // never sees it — we MUST pull it from the FFI snapshot
+                // here, otherwise the Integrations summary card stays
+                // "Not connected" on every relaunch even though the
+                // token sits in keys.enc. Burned 2026-05-10.
+                if (r.TryGetProperty("has_notion_token", out var hnt))
+                    ViewModel.HasNotionToken = hnt.GetBoolean();
                 _sttKeyByProvider.Clear();
                 _llmKeyByProvider.Clear();
                 CacheProviderKeyFlags(r);
@@ -1826,6 +1872,7 @@ public sealed partial class SettingsWindow : Window
             OverlayPanel.Visibility = Visibility.Collapsed;
             RulesPanel.Visibility = Visibility.Collapsed;
             HistoryPanel.Visibility = Visibility.Collapsed;
+            IntegrationsPanel.Visibility = Visibility.Collapsed;
             AboutPanel.Visibility = Visibility.Collapsed;
             PrivacyPanel.Visibility = Visibility.Collapsed;
             LicensePanel.Visibility = Visibility.Collapsed;
@@ -1840,6 +1887,7 @@ public sealed partial class SettingsWindow : Window
                 "pill" or "overlay" => OverlayPanel,
                 "rules" => RulesPanel,
                 "history" => HistoryPanel,
+                "integrations" => IntegrationsPanel,
                 "shortcut" => ShortcutPanel,
                 "privacy" => PrivacyPanel,
                 "license" => LicensePanel,
@@ -3388,6 +3436,174 @@ public sealed partial class SettingsWindow : Window
         catch
         {
             FeedbackStatus.Text = "Couldn't send right now. Try again later.";
+        }
+    }
+
+    // ── Notion integration ────────────────────────────────────────
+    // Setup is delegated to NotionConnectDialog (3-step wizard). This
+    // surface only owns the summary card + auto-send toggle + the
+    // launchers that open the wizard at the right step.
+
+    private void NotionShowMessage(string text, bool isError)
+    {
+        NotionMessageText.Text = text;
+        NotionMessageBar.Background = isError
+            ? (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["SystemFillColorCriticalBackgroundBrush"]
+            : (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["SystemFillColorSuccessBackgroundBrush"];
+        NotionMessageBar.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>Refresh the Integrations summary card from the current
+    /// ViewModel state. Idempotent — safe to call from initial load
+    /// and after every wizard close.</summary>
+    private void NotionRefreshSummary()
+    {
+        bool connected = ViewModel.HasNotionToken;
+        if (connected)
+        {
+            var dest = string.IsNullOrEmpty(ViewModel.NotionTargetTitle)
+                ? "no destination yet"
+                : $"recaps land in “{ViewModel.NotionTargetTitle}”";
+            NotionStatusText.Text = $"Connected — {dest}";
+            NotionStatusGlyph.Glyph = ""; // CheckMark
+            NotionStatusGlyph.Foreground = (Microsoft.UI.Xaml.Media.Brush)
+                Application.Current.Resources["SystemFillColorSuccessBrush"];
+            NotionDisconnectedActions.Visibility = Visibility.Collapsed;
+            NotionConnectedActions.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            NotionStatusText.Text = "Not connected";
+            NotionStatusGlyph.Glyph = ""; // Info
+            NotionStatusGlyph.Foreground = (Microsoft.UI.Xaml.Media.Brush)
+                Application.Current.Resources["TextFillColorTertiaryBrush"];
+            NotionDisconnectedActions.Visibility = Visibility.Visible;
+            NotionConnectedActions.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private async System.Threading.Tasks.Task RunNotionWizardAsync(int initialStep)
+    {
+        var dlg = new NotionConnectDialog
+        {
+            XamlRoot = (this.Content as FrameworkElement)?.XamlRoot,
+            InitialStep = initialStep,
+        };
+        dlg.SetExistingTarget(ViewModel.NotionTargetId ?? "");
+        try
+        {
+            await dlg.ShowAsync();
+        }
+        catch (Exception ex)
+        {
+            App.Log($"Notion wizard exc: {ex}", "Notion");
+            NotionShowMessage($"Wizard error: {ex.Message}", isError: true);
+            return;
+        }
+        // Whatever the wizard's exit reason, sync our state with what
+        // the user actually did inside it. The wizard wrote the token
+        // to keystore on Verify and may have picked a target.
+        if (dlg.TokenVerified)
+        {
+            ViewModel.HasNotionToken = true;
+        }
+        if (dlg.Completed && !string.IsNullOrEmpty(dlg.PickedTargetId))
+        {
+            ViewModel.NotionTargetId = dlg.PickedTargetId;
+            ViewModel.NotionTargetKind = dlg.PickedTargetKind;
+            ViewModel.NotionTargetTitle = dlg.PickedTargetTitle;
+            try
+            {
+                var json = ViewModel.ToJson();
+                int rc = DimmyNative.dimmy_set_config_json(json);
+                App.Log($"Notion wizard saved rc={rc} id={dlg.PickedTargetId} title='{dlg.PickedTargetTitle}'", "Notion");
+                if (rc == 0)
+                {
+                    App.Instance?.ApplySettings(ViewModel);
+                    NotionShowMessage(
+                        $"Recaps will land in “{dlg.PickedTargetTitle}” ({dlg.PickedTargetKind}). All set.",
+                        isError: false);
+                }
+                else
+                {
+                    NotionShowMessage(
+                        $"Saved locally but Rust set_config_json returned {rc}.",
+                        isError: true);
+                }
+            }
+            catch (Exception ex)
+            {
+                App.Log($"Notion wizard persist exc: {ex}", "Notion");
+                NotionShowMessage($"Couldn't save destination: {ex.Message}", isError: true);
+            }
+        }
+        NotionRefreshSummary();
+    }
+
+    private async void NotionConnect_Click(object sender, RoutedEventArgs e)
+    {
+        // Token already valid? Skip prepare + token, jump to picker.
+        // The connect button should only be visible when HasNotionToken
+        // is false, but a stale binding could race.
+        int initial = ViewModel.HasNotionToken ? 3 : 1;
+        await RunNotionWizardAsync(initial);
+    }
+
+    private async void NotionChangeDestination_Click(object sender, RoutedEventArgs e)
+    {
+        await RunNotionWizardAsync(initialStep: 3);
+    }
+
+    private async void NotionDisconnect_Click(object sender, RoutedEventArgs e)
+    {
+        var confirm = new ContentDialog
+        {
+            Title = "Disconnect Notion?",
+            Content = "Dimmy will forget your token and destination. Your Notion content stays untouched. You can reconnect any time.",
+            PrimaryButtonText = "Disconnect",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = (this.Content as FrameworkElement)?.XamlRoot,
+        };
+        if ((await confirm.ShowAsync()) != ContentDialogResult.Primary) return;
+        try
+        {
+            // Empty token = clear in keystore (notion.rs handles the
+            // empty-string branch as "forget").
+            var rcToken = Services.NotionService.SetToken("");
+            ViewModel.HasNotionToken = false;
+            ViewModel.NotionTargetId = "";
+            ViewModel.NotionTargetKind = "";
+            ViewModel.NotionTargetTitle = "";
+            ViewModel.NotionAutoSend = false;
+            var json = ViewModel.ToJson();
+            int rcCfg = DimmyNative.dimmy_set_config_json(json);
+            App.Log($"Notion disconnected rcToken={rcToken} rcCfg={rcCfg}", "Notion");
+            App.Instance?.ApplySettings(ViewModel);
+            NotionShowMessage("Disconnected. Token and destination removed from this device.", isError: false);
+        }
+        catch (Exception ex)
+        {
+            App.Log($"Notion disconnect exc: {ex}", "Notion");
+            NotionShowMessage($"Couldn't disconnect: {ex.Message}", isError: true);
+        }
+        NotionRefreshSummary();
+    }
+
+    private void NotionAutoSend_Toggled(object sender, RoutedEventArgs e)
+    {
+        // Persist immediately so the next meeting honours the toggle
+        // even if the user never clicks Save.
+        if (!_loaded) return;
+        try
+        {
+            var json = ViewModel.ToJson();
+            int rc = DimmyNative.dimmy_set_config_json(json);
+            App.Log($"Notion auto-send toggled rc={rc} new={ViewModel.NotionAutoSend}", "Notion");
+        }
+        catch (Exception ex)
+        {
+            App.Log($"NotionAutoSend save exc: {ex.Message}", "Notion");
         }
     }
 }

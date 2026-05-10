@@ -343,6 +343,34 @@ int32_t dimmy_meeting_resume(void);
 /// while a meeting started from the pill is still running).
 int32_t dimmy_meeting_is_paused(void);
 
+// ── Notion integration ────────────────────────────────────────────
+
+/// Save the user's Notion integration token to the AES-256 keystore.
+/// Empty string clears it. Returns 0 on success, -1 on failure.
+int32_t dimmy_notion_set_token(const char * _Nonnull token_ptr);
+
+/// Returns 1 if a Notion token is currently stored, 0 otherwise.
+int32_t dimmy_notion_has_token(void);
+
+/// Verify the stored token by pinging /v1/users/me. Writes JSON
+/// `{"ok":true,"bot_name":"...","workspace_name":"..."}` or
+/// `{"ok":false,"error":"..."}` to out_buf. Returns the JSON length,
+/// or -1 on invalid args.
+int32_t dimmy_notion_test_connection(char * _Nonnull out_buf, int32_t buf_len);
+
+/// Search Notion for accessible pages + databases. Writes a JSON
+/// array of `{id,object,title,parent_label,url}` to out_buf.
+/// Returns the JSON length, -1 on invalid args.
+int32_t dimmy_notion_search(const char * _Nonnull query_ptr,
+                            char * _Nonnull out_buf, int32_t buf_len);
+
+/// Send a meeting's recap.md to the configured Notion target.
+/// Writes `{"ok":true,"page_id":"...","page_url":"https://..."}` or
+/// `{"ok":false,"error":"..."}`. Returns the JSON length, -1 on
+/// invalid args.
+int32_t dimmy_notion_send_recap(const char * _Nonnull meeting_dir_ptr,
+                                char * _Nonnull out_buf, int32_t buf_len);
+
 // ── Raw LLM call (bypasses dictation rewrite) ────────────────────
 
 /// Send `prompt` to the configured LLM endpoint without the dictation

@@ -13,6 +13,7 @@ dimmy_download_llm_model
 dimmy_download_model
 dimmy_get_amplitude
 dimmy_get_config_json
+dimmy_get_loopback_amplitude
 dimmy_get_version
 dimmy_gpu_clear_known_bad
 dimmy_gpu_get_status
@@ -51,11 +52,19 @@ dimmy_list_local_models
 dimmy_llm_call_raw
 dimmy_llm_model_exists
 dimmy_meeting_is_active
+dimmy_meeting_is_paused
 dimmy_meeting_list_orphans
+dimmy_meeting_pause
+dimmy_meeting_resume
 dimmy_meeting_save_post_process
 dimmy_meeting_start
 dimmy_meeting_stop
 dimmy_model_exists
+dimmy_notion_has_token
+dimmy_notion_search
+dimmy_notion_send_recap
+dimmy_notion_set_token
+dimmy_notion_test_connection
 dimmy_parakeet_bundle_present
 dimmy_parakeet_download_bundle
 dimmy_parakeet_transcribe
