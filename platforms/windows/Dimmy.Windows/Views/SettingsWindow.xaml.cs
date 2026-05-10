@@ -450,14 +450,35 @@ public sealed partial class SettingsWindow : Window
         AppRuleDropIndicator.Visibility = Visibility.Visible;
     }
 
-    private void UpdateAppRuleDragAutoScroll(global::Windows.Foundation.Point pt)
+    private void UpdateAppRuleDragAutoScroll(global::Windows.Foundation.Point _pointerInLv)
     {
+        // Edge-zone test must happen against the VIEWPORT, not the
+        // ListView. AppRulesListView is nested inside the page-level
+        // ScrollViewer (xaml.cs:1223 inside xaml:103), so the ListView's
+        // own ScrollViewer is disabled and its content grows freely —
+        // pt.Y in ListView coords reaches lv.ActualHeight only when the
+        // cursor is near the LAST item, not when it's at the bottom of
+        // the visible area. We compute pointer Y relative to the outer
+        // ScrollViewer + use its ViewportHeight as the edge baseline.
         const double EDGE_ZONE = 40.0;
         const double SCROLL_PER_TICK = 14.0;
-        var lv = AppRulesListView;
         double delta = 0;
-        if (pt.Y < EDGE_ZONE) delta = -SCROLL_PER_TICK;
-        else if (pt.Y > lv.ActualHeight - EDGE_ZONE) delta = SCROLL_PER_TICK;
+        var sv = GetAppRulesScrollViewer();
+        if (sv != null)
+        {
+            try
+            {
+                var transform = AppRulesListView.TransformToVisual(sv);
+                var pInSv = transform.TransformPoint(_pointerInLv);
+                double viewportH = sv.ViewportHeight;
+                if (viewportH > 0)
+                {
+                    if (pInSv.Y < EDGE_ZONE) delta = -SCROLL_PER_TICK;
+                    else if (pInSv.Y > viewportH - EDGE_ZONE) delta = SCROLL_PER_TICK;
+                }
+            }
+            catch { /* TransformToVisual can race during layout; skip this tick */ }
+        }
         _appRuleDragScrollDelta = delta;
         if (delta != 0 && _appRuleDragScrollTimer == null)
         {
@@ -485,8 +506,14 @@ public sealed partial class SettingsWindow : Window
         if (sv == null) return;
         double newOffset = sv.VerticalOffset + _appRuleDragScrollDelta;
         sv.ChangeView(null, newOffset, null, disableAnimation: true);
-        // Refresh the drop indicator after the scroll — items shifted
-        // under the stationary cursor.
+        // The cursor stayed in the same screen position but the ListView
+        // translated within its parent ScrollViewer by SCROLL_PER_TICK —
+        // so in LV-relative coords the cursor effectively moved by the
+        // same amount. Update the cached pointer so the drop indicator
+        // refresh below picks the correct slot for the now-shifted layout.
+        _appRuleLastPointerInLV = new global::Windows.Foundation.Point(
+            _appRuleLastPointerInLV.X,
+            _appRuleLastPointerInLV.Y + _appRuleDragScrollDelta);
         UpdateAppRuleDropIndicator(_appRuleLastPointerInLV);
     }
 
@@ -504,20 +531,23 @@ public sealed partial class SettingsWindow : Window
     private ScrollViewer GetAppRulesScrollViewer()
     {
         if (_appRulesScrollViewer != null) return _appRulesScrollViewer;
-        _appRulesScrollViewer = FindFirstDescendant<ScrollViewer>(AppRulesListView);
+        // Walk UP the visual tree, not down. AppRulesListView lives
+        // inside the page-level ScrollViewer (xaml line 103) — its own
+        // inner ScrollViewer (templated child) is disabled when the
+        // host has no fixed height, so descending finds a no-op
+        // scroller. The first ScrollViewer ancestor is the one that
+        // actually moves content under the cursor.
+        _appRulesScrollViewer = FindFirstAncestor<ScrollViewer>(AppRulesListView);
         return _appRulesScrollViewer;
     }
 
-    private static T FindFirstDescendant<T>(DependencyObject d) where T : DependencyObject
+    private static T FindFirstAncestor<T>(DependencyObject d) where T : DependencyObject
     {
-        if (d == null) return null;
-        int n = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(d);
-        for (int i = 0; i < n; i++)
+        var p = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(d);
+        while (p != null)
         {
-            var c = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(d, i);
-            if (c is T t) return t;
-            var r = FindFirstDescendant<T>(c);
-            if (r != null) return r;
+            if (p is T t) return t;
+            p = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(p);
         }
         return null;
     }
