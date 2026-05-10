@@ -238,6 +238,7 @@ final class PillWindowController {
         Task { @MainActor in
             // Visual feedback during recap — recap can take 10-60s.
             appState.recordingState = .transcribing
+            let notionAutoSend = appState.notionAutoSend
             await Task.detached(priority: .userInitiated) {
                 let stopResult = DimmyCore.shared.meetingStop()
                 guard let stopResult, !stopResult.transcript.isEmpty else {
@@ -249,7 +250,8 @@ final class PillWindowController {
                 }
                 let recap = MeetingPostProcessService.runRecap(
                     dir: stopResult.dir,
-                    transcript: stopResult.transcript
+                    transcript: stopResult.transcript,
+                    notionAutoSend: notionAutoSend
                 )
                 await MainActor.run {
                     appState.recordingState = .completing

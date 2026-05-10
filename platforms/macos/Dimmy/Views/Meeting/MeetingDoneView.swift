@@ -73,7 +73,7 @@ struct MeetingDoneView: View {
                               help: "Copy recap to clipboard") {
                     copyRecap()
                 }
-                toolbarButton(systemImage: "link.badge.plus",
+                toolbarButton(assetImage: "notion",
                               help: "Send recap to Notion") {
                     Task { await sendToNotion() }
                 }
@@ -96,14 +96,20 @@ struct MeetingDoneView: View {
     }
 
     private func toolbarButton(systemImage: String, help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        ToolbarIconButton(help: help, action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 13))
-                .frame(width: 26, height: 26)
+                .font(.system(size: 16, weight: .medium))
+                .symbolRenderingMode(.hierarchical)
         }
-        .buttonStyle(.bordered)
-        .controlSize(.small)
-        .help(help)
+    }
+
+    private func toolbarButton(assetImage: String, help: String, action: @escaping () -> Void) -> some View {
+        ToolbarIconButton(help: help, action: action) {
+            Image(assetImage)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 16, height: 16)
+        }
     }
 
     private func copyRecap() {
@@ -489,5 +495,36 @@ enum MarkdownBlockParser {
         else { return nil }
         let body = String(s[s.index(i, offsetBy: 2)...])
         return (n, body)
+    }
+}
+
+// MARK: - ToolbarIconButton
+//
+// Borderless icon button with a soft hover background — the macOS
+// Mail / Messages toolbar style. Default state is flat (icon only) so
+// the header stays clean; on hover a subtle rounded fill appears,
+// giving the click affordance without the heavy default Bordered pill.
+// Used for the Done view header toolbar (regen, copy, send-to-notion,
+// open-folder).
+private struct ToolbarIconButton<Label: View>: View {
+    let help: String
+    let action: () -> Void
+    @ViewBuilder let label: () -> Label
+
+    @State private var hovering: Bool = false
+
+    var body: some View {
+        Button(action: action) {
+            label()
+                .frame(width: 30, height: 28)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color.primary.opacity(hovering ? 0.08 : 0))
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+        .buttonStyle(.borderless)
+        .onHover { hovering = $0 }
+        .help(help)
     }
 }

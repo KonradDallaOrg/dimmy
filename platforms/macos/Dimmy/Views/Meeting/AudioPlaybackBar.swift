@@ -21,7 +21,7 @@ struct AudioPlaybackBar: View {
     let url: URL
     @StateObject private var model = AudioPlaybackModel()
 
-    private let waveformBucketCount: Int = 220
+    private let waveformBucketCount: Int = 120
 
     var body: some View {
         HStack(spacing: 12) {
@@ -84,20 +84,21 @@ private struct WaveformStrip: View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
                 Canvas { ctx, size in
-                    drawBars(ctx: &ctx, size: size, color: Color.macTextSecondary.opacity(0.45))
+                    drawBars(ctx: &ctx, size: size, gradient: unplayedGradient)
                 }
                 Canvas { ctx, size in
                     let clipWidth = size.width * max(0, min(1, progress))
                     ctx.clip(to: Path(CGRect(x: 0, y: 0, width: clipWidth, height: size.height)))
-                    drawBars(ctx: &ctx, size: size, color: .accentColor)
+                    drawBars(ctx: &ctx, size: size, gradient: playedGradient)
                 }
-                // 1px progress cursor for visual clarity even on
-                // near-flat waveforms (silent leading audio etc.).
+                // 1.5pt accent cursor with a soft glow so the playhead
+                // pops even when the underlying waveform is near-silent.
                 Rectangle()
                     .fill(Color.accentColor)
                     .frame(width: 1.5)
+                    .shadow(color: Color.accentColor.opacity(0.6), radius: 3)
                     .offset(x: geo.size.width * max(0, min(1, progress)) - 0.75)
-                    .opacity(progress > 0 ? 0.9 : 0)
+                    .opacity(progress > 0 ? 0.95 : 0)
             }
             .contentShape(Rectangle())
             .gesture(
@@ -110,7 +111,29 @@ private struct WaveformStrip: View {
         }
     }
 
-    private func drawBars(ctx: inout GraphicsContext, size: CGSize, color: Color) {
+    private var playedGradient: GraphicsContext.Shading {
+        .linearGradient(
+            Gradient(colors: [
+                Color.accentColor,
+                Color.accentColor.opacity(0.55),
+            ]),
+            startPoint: CGPoint(x: 0, y: 0),
+            endPoint: CGPoint(x: 0, y: 1)
+        )
+    }
+
+    private var unplayedGradient: GraphicsContext.Shading {
+        .linearGradient(
+            Gradient(colors: [
+                Color.macTextSecondary.opacity(0.55),
+                Color.macTextSecondary.opacity(0.25),
+            ]),
+            startPoint: CGPoint(x: 0, y: 0),
+            endPoint: CGPoint(x: 0, y: 1)
+        )
+    }
+
+    private func drawBars(ctx: inout GraphicsContext, size: CGSize, gradient: GraphicsContext.Shading) {
         guard !peaks.isEmpty else {
             // Empty / unparsable waveform — render a thin baseline so
             // the strip doesn't disappear visually.
@@ -119,24 +142,25 @@ private struct WaveformStrip: View {
                 p.move(to: CGPoint(x: 0, y: mid))
                 p.addLine(to: CGPoint(x: size.width, y: mid))
             }
-            ctx.stroke(path, with: .color(color), lineWidth: 1)
+            ctx.stroke(path, with: gradient, lineWidth: 1)
             return
         }
         let n = peaks.count
         let totalWidth = size.width
-        let gap: CGFloat = 1
-        // Each bar gets an even slice of the strip. Reserving 1pt gap
-        // between bars keeps them visually distinct without leaving
-        // white space when the bucket count is high.
-        let barWidth = max(1, (totalWidth - CGFloat(n - 1) * gap) / CGFloat(n))
+        let gap: CGFloat = 2
+        // Wider bars + 2pt gap (chunkier than the original 1pt gap with
+        // 220 buckets) — gives the waveform real visual weight at the
+        // ~120 bucket count used here.
+        let barWidth = max(2, (totalWidth - CGFloat(n - 1) * gap) / CGFloat(n))
         let mid = size.height / 2
         let maxHalf = size.height / 2 - 2  // 2pt vertical padding
+        let cornerRadius: CGFloat = 2
         for (i, peak) in peaks.enumerated() {
             let x = CGFloat(i) * (barWidth + gap)
-            let half = max(1, CGFloat(peak) * maxHalf)
+            let half = max(1.5, CGFloat(peak) * maxHalf)
             let rect = CGRect(x: x, y: mid - half, width: barWidth, height: half * 2)
-            ctx.fill(Path(roundedRect: rect, cornerRadius: 1, style: .continuous),
-                      with: .color(color))
+            ctx.fill(Path(roundedRect: rect, cornerRadius: cornerRadius, style: .continuous),
+                      with: gradient)
         }
     }
 }

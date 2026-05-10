@@ -50,7 +50,7 @@ struct MeetingRecordingView: View {
                     Button(action: { vm.backToLive() }) {
                         HStack(spacing: 6) {
                             Image(systemName: "dot.radiowaves.left.and.right")
-                                .font(.system(size: 12))
+                                .font(.system(size: 13, weight: .medium))
                             Text("Back to live")
                                 .font(.system(size: 12))
                         }
@@ -62,7 +62,7 @@ struct MeetingRecordingView: View {
                 Button(action: { vm.togglePause() }) {
                     HStack(spacing: 6) {
                         Image(systemName: vm.isPaused ? "play.fill" : "pause.fill")
-                            .font(.system(size: 11))
+                            .font(.system(size: 13, weight: .medium))
                         Text(vm.isPaused ? "Resume" : "Pause")
                             .font(.system(size: 12))
                     }
@@ -74,7 +74,7 @@ struct MeetingRecordingView: View {
                 Button(action: { vm.stopAndProcess() }) {
                     HStack(spacing: 6) {
                         Image(systemName: "stop.fill")
-                            .font(.system(size: 11))
+                            .font(.system(size: 13, weight: .semibold))
                         Text("Stop & finish")
                             .font(.system(size: 12, weight: .semibold))
                     }
@@ -94,21 +94,21 @@ struct MeetingRecordingView: View {
 
     private var waveformCard: some View {
         HStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Image(systemName: "mic.fill")
-                        .font(.system(size: 11))
+                        .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(Color.accentColor)
                     Text("Mic")
-                        .font(.system(size: 11))
+                        .font(.system(size: 12, weight: .medium))
                 }
                 if vm.systemAudioActive {
                     HStack(spacing: 6) {
                         Image(systemName: "speaker.wave.2.fill")
-                            .font(.system(size: 11))
+                            .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(Color.accentColor.opacity(0.55))
                         Text("System")
-                            .font(.system(size: 11))
+                            .font(.system(size: 12, weight: .medium))
                     }
                 }
             }
