@@ -230,11 +230,15 @@ public static class JumpListService
                     // that brings the visible Dimmy UI back. Default
                     // (null icon) → the EXE's own dimmy.ico.
                     Task("Toggle pill",    "toggle-pill",   icon: null),
-                    // Open the dedicated long-form meeting window —
-                    // streamed-to-disk recording + LLM recap. Microphone
-                    // glyph reads as a distinct action vs the three-dots
-                    // Settings entry below.
-                    Task("Start meeting…", "open-meeting",  icon: MeetingIcon()),
+                    // Open the dedicated meeting window — streamed-to-disk
+                    // recording + LLM recap. Label is "Meetings" (plural,
+                    // neutral) because the window shows the past-meetings
+                    // sidebar in addition to the start-new affordance —
+                    // "Start meeting…" was misleading: clicking the entry
+                    // doesn't begin recording, it opens the window. Notes
+                    // glyph in neutral gray reads as a distinct action vs
+                    // the dots Settings entry below.
+                    Task("Meetings",       "open-meeting",  icon: MeetingIcon()),
                     // Settings = three horizontal dots (universal
                     // "more / configure" affordance, reads cleaner
                     // than a custom-drawn gear at 16px).
@@ -727,86 +731,115 @@ public static class JumpListService
     private static string? _settingsIconPath;
     private static string? _meetingIconPath;
 
-    /// <summary>Path to a 32×32 grey-X close glyph. Mirrors the
+    /// <summary>Tone tuple for monochrome jump-list icons. Picked from
+    /// the system theme at the moment we (re)build the cache: the
+    /// jump-list background follows Windows AppsUseLightTheme — light
+    /// menu wants a dark glyph (#525252), dark menu wants a light glyph
+    /// (#C8C8C8). Rebuilding when the system flips themes is the
+    /// caller's responsibility (we file-suffix the cache by tone so
+    /// nothing leaks across).</summary>
+    private static (byte b, byte g, byte r, string suffix) MonoTone()
+    {
+        if (Helpers.ThemeHelper.SystemIsDark())
+            return (0xC8, 0xC8, 0xC8, "_dark");
+        return (0x52, 0x52, 0x52, "_light");
+    }
+
+    /// <summary>True if the cached path still matches the current tone
+    /// (the suffix `_light` / `_dark` is in the filename). When the
+    /// user flips the system theme mid-process the old cache hit
+    /// would otherwise return the wrong-tone ICO, leaving icons
+    /// invisible until a relaunch.</summary>
+    private static bool CacheMatchesCurrentTone(string? path)
+    {
+        if (string.IsNullOrEmpty(path) || !File.Exists(path)) return false;
+        var (_, _, _, suffix) = MonoTone();
+        return path.Contains(suffix, System.StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Path to a 32×32 X close glyph. Mirrors the
     /// "destructive but neutral" affordance Spotify / Slack use for
     /// Quit in their tray menus — red is reserved for state errors,
-    /// not for normal user-initiated exits.</summary>
+    /// not for normal user-initiated exits. Tone tracks the system
+    /// theme (light bg → dark glyph, dark bg → light glyph) so the
+    /// icon stays visible whichever theme the user has Windows in.</summary>
     private static string QuitIcon()
     {
-        if (_quitIconPath is not null && File.Exists(_quitIconPath))
-            return _quitIconPath;
+        if (CacheMatchesCurrentTone(_quitIconPath))
+            return _quitIconPath!;
         var dir = Path.Combine(Path.GetTempPath(), "dimmy_misc_icons_v2");
         try { Directory.CreateDirectory(dir); } catch { return ""; }
-        var path = Path.Combine(dir, "quit_x.ico");
+        var (b, g, r, suffix) = MonoTone();
+        var path = Path.Combine(dir, $"quit_x{suffix}.ico");
         try
         {
             if (!File.Exists(path))
-                // Darker grey (#525252) so the X holds contrast on
-                // light menu themes after Windows downscales 32→16.
-                // Lighter shades (#7E7E…) faded to nothing on
-                // light-Explorer right-click menus.
-                File.WriteAllBytes(path, BuildXIco(32, 0x52, 0x52, 0x52));
+                File.WriteAllBytes(path, BuildXIco(32, b, g, r));
             _quitIconPath = path;
             return path;
         }
         catch (Exception ex) { Log($"QuitIcon: {ex.Message}"); return ""; }
     }
 
-    /// <summary>Path to a 32×32 microphone glyph for the "Start meeting"
-    /// jump-list entry. Distinct from the "Settings" three-dots so the
-    /// Meeting row reads as a different action at a glance instead of
-    /// looking like a sub-item of Settings.</summary>
+    /// <summary>Path to a 32×32 notes-document glyph for the "Meetings"
+    /// jump-list entry. Document with three horizontal lines reads as
+    /// "notes / artifacts" — semantically aligned with what the meeting
+    /// window holds (transcripts + recaps), not a recording action. The
+    /// red mic was misleading: it implied clicking the entry would
+    /// start recording, when in fact the window opens with a list view
+    /// and a Start button. Neutral gray matches the Settings dots.</summary>
     private static string MeetingIcon()
     {
-        if (_meetingIconPath is not null && File.Exists(_meetingIconPath))
-            return _meetingIconPath;
+        if (CacheMatchesCurrentTone(_meetingIconPath))
+            return _meetingIconPath!;
         var dir = Path.Combine(Path.GetTempPath(), "dimmy_misc_icons_v2");
         try { Directory.CreateDirectory(dir); } catch { return ""; }
-        // _v3 in the filename so existing _v2 caches don't shadow the
-        // colour change. Recording-red mic — same hue convention as the
-        // pill's "Recording" state (Crimson) so the visual link
-        // jumplist-row → recording-state-in-pill is immediate.
-        var path = Path.Combine(dir, "meeting_mic_v3_red.ico");
+        // _v5 supersedes _v4 (single-tone gray). Tone now follows the
+        // system theme via MonoTone() — file suffix splits the cache.
+        var (b, g, r, suffix) = MonoTone();
+        var path = Path.Combine(dir, $"meeting_notes_v5{suffix}.ico");
         try
         {
             if (!File.Exists(path))
-                // BGR order: b=0x3C, g=0x14, r=0xDC -> #DC143C "crimson",
-                // matches the pill recording-state Crimson + the
-                // RecordingBar Stop button background.
-                File.WriteAllBytes(path, BuildMicIco(32, 0x3C, 0x14, 0xDC));
+                File.WriteAllBytes(path, BuildNotesIco(32, b, g, r));
             _meetingIconPath = path;
             return path;
         }
         catch (Exception ex) { Log($"MeetingIcon: {ex.Message}"); return ""; }
     }
 
-    /// <summary>Build a 32×32 microphone glyph: vertical capsule head +
-    /// short stem + horizontal base. Anti-aliased via 4×4 super-sampling
-    /// (same routine as BuildDotsIco / BuildXIco). Proportions tuned so
-    /// each part remains legible after Windows' 32→16 downscale —
-    /// thicker stem, wider base than a literal mic outline.</summary>
-    private static byte[] BuildMicIco(int size, byte b, byte g, byte r)
+    /// <summary>Build a 32×32 document-with-lines glyph: rounded rectangle
+    /// outline + three horizontal text lines inside. Anti-aliased via
+    /// 4×4 super-sampling. Proportions tuned to read at 16×16 after
+    /// Windows downscales the cached 32×32 ICO.</summary>
+    private static byte[] BuildNotesIco(int size, byte b, byte g, byte r)
     {
         var pixels = new byte[size * size * 4];
         const int Samples = 4;
 
-        // Capsule (mic head): 28% width × 50% height, vertically rounded ends.
-        double capLeft = size * 0.36;
-        double capRight = size * 0.64;
-        double capTop = size * 0.16;
-        double capBottom = size * 0.62;
-        double capCx = (capLeft + capRight) / 2.0;
-        double capRadius = (capRight - capLeft) / 2.0;
-        // Stem connecting capsule bottom to base.
-        double stemLeft = size * 0.475;
-        double stemRight = size * 0.525;
-        double stemTop = size * 0.62;
-        double stemBottom = size * 0.82;
-        // Horizontal base (mic stand foot).
-        double baseLeft = size * 0.30;
-        double baseRight = size * 0.70;
-        double baseTop = size * 0.82;
-        double baseBottom = size * 0.88;
+        // Outer document rectangle (rounded corners). Slightly off-centre
+        // top→bottom so the bottom line has more breathing room — reads
+        // less cramped at 16×16 than a perfectly centred rectangle.
+        double docLeft = size * 0.20;
+        double docRight = size * 0.80;
+        double docTop = size * 0.14;
+        double docBottom = size * 0.86;
+        double cornerR = size * 0.08;
+        double strokeW = size * 0.07;
+        double innerLeft = docLeft + strokeW;
+        double innerRight = docRight - strokeW;
+        double innerTop = docTop + strokeW;
+        double innerBottom = docBottom - strokeW;
+
+        // Three horizontal text lines inside the document.
+        double lineLeft = size * 0.30;
+        double lineRight = size * 0.70;
+        double lineHeight = size * 0.07;
+        double[] lineTops = {
+            size * 0.30,
+            size * 0.46,
+            size * 0.62,
+        };
 
         for (int y = 0; y < size; y++)
         {
@@ -821,37 +854,26 @@ public static class JumpListService
                         double py = y + (sy + 0.5) / Samples;
                         bool inside = false;
 
-                        // Capsule body (rounded rectangle).
-                        if (px >= capLeft && px <= capRight && py >= capTop && py <= capBottom)
+                        // Document outline = filled rounded rect minus
+                        // its inset rounded rect. Hit-test by checking
+                        // outer-in but NOT inner-in.
+                        if (PointInRoundRect(px, py, docLeft, docTop, docRight, docBottom, cornerR)
+                            && !PointInRoundRect(px, py, innerLeft, innerTop, innerRight, innerBottom, cornerR - strokeW * 0.5))
                         {
-                            if (py >= capTop + capRadius && py <= capBottom - capRadius)
+                            inside = true;
+                        }
+
+                        // Three horizontal text lines.
+                        if (!inside && px >= lineLeft && px <= lineRight)
+                        {
+                            foreach (var top in lineTops)
                             {
-                                inside = true;
-                            }
-                            else
-                            {
-                                double curveCy = py < capTop + capRadius
-                                    ? capTop + capRadius
-                                    : capBottom - capRadius;
-                                double dx = px - capCx;
-                                double dy = py - curveCy;
-                                if (dx * dx + dy * dy <= capRadius * capRadius)
+                                if (py >= top && py <= top + lineHeight)
+                                {
                                     inside = true;
+                                    break;
+                                }
                             }
-                        }
-                        // Stem (vertical line below capsule).
-                        if (!inside
-                            && px >= stemLeft && px <= stemRight
-                            && py >= stemTop && py <= stemBottom)
-                        {
-                            inside = true;
-                        }
-                        // Base (horizontal line at the bottom).
-                        if (!inside
-                            && px >= baseLeft && px <= baseRight
-                            && py >= baseTop && py <= baseBottom)
-                        {
-                            inside = true;
                         }
 
                         if (inside) hits++;
@@ -869,6 +891,24 @@ public static class JumpListService
         return EncodeBgraAsIco(size, pixels);
     }
 
+    /// <summary>Hit-test a point against an axis-aligned rounded rect.
+    /// Treats negative or sub-pixel `r` as a plain rectangle.</summary>
+    private static bool PointInRoundRect(double px, double py,
+        double left, double top, double right, double bottom, double r)
+    {
+        if (px < left || px > right || py < top || py > bottom) return false;
+        if (r <= 0) return true;
+        // Outside the corner caps' bounding boxes → straight edge,
+        // automatically inside.
+        if ((px >= left + r && px <= right - r) || (py >= top + r && py <= bottom - r))
+            return true;
+        // Nearest corner centre.
+        double cx = px < left + r ? left + r : right - r;
+        double cy = py < top + r ? top + r : bottom - r;
+        double dx = px - cx, dy = py - cy;
+        return dx * dx + dy * dy <= r * r;
+    }
+
     /// <summary>Path to a 32×32 "•••" three-horizontal-dots glyph.
     /// Universal "more / settings / options" affordance — same shape
     /// Discord, Slack, Teams use in their context menus. Reads better
@@ -876,15 +916,16 @@ public static class JumpListService
     /// post-downscale).</summary>
     private static string SettingsIcon()
     {
-        if (_settingsIconPath is not null && File.Exists(_settingsIconPath))
-            return _settingsIconPath;
+        if (CacheMatchesCurrentTone(_settingsIconPath))
+            return _settingsIconPath!;
         var dir = Path.Combine(Path.GetTempPath(), "dimmy_misc_icons_v2");
         try { Directory.CreateDirectory(dir); } catch { return ""; }
-        var path = Path.Combine(dir, "settings_dots.ico");
+        var (b, g, r, suffix) = MonoTone();
+        var path = Path.Combine(dir, $"settings_dots{suffix}.ico");
         try
         {
             if (!File.Exists(path))
-                File.WriteAllBytes(path, BuildDotsIco(32, 0x52, 0x52, 0x52));
+                File.WriteAllBytes(path, BuildDotsIco(32, b, g, r));
             _settingsIconPath = path;
             return path;
         }
