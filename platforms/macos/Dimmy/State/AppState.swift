@@ -714,6 +714,29 @@ final class AppState: ObservableObject {
     /// `recap_model_override` in config.json.
     @Published var recapModelOverride: String = ""
 
+    // MARK: - Notion integration
+
+    /// True if a Notion integration token is currently stored. Driven
+    /// by `has_notion_token` in the Rust config snapshot. Read-only
+    /// from the UI's perspective — the token itself round-trips via
+    /// the dedicated `dimmy_notion_set_token` FFI, never via config.
+    @Published var hasNotionToken: Bool = false
+
+    /// UUID of the parent Notion page or database where meeting recaps
+    /// land. Empty = onboarding state in the Settings UI.
+    @Published var notionTargetId: String = ""
+
+    /// "page" or "database" — drives the Notion API request shape.
+    @Published var notionTargetKind: String = ""
+
+    /// Display name of the picked target ("Meeting Notes",
+    /// "Engineering log") shown in Settings as confirmation. Pure UI.
+    @Published var notionTargetTitle: String = ""
+
+    /// True = every meeting auto-uploads to Notion at recap completion.
+    /// False = user clicks the "Send to Notion" button per meeting.
+    @Published var notionAutoSend: Bool = false
+
     // MARK: - App rules (foreground-app overrides)
 
     /// User-curated rules evaluated top-down at hotkey-down. Persisted
@@ -872,6 +895,13 @@ final class AppState: ObservableObject {
         if let v = config["auto_recap_threshold_secs"] as? Int { autoRecapThresholdSecs = UInt32(max(0, v)) }
         if let v = config["recap_model_override"] as? String { recapModelOverride = v }
 
+        // Notion integration — see top of file.
+        if let v = config["has_notion_token"] as? Bool { hasNotionToken = v }
+        if let v = config["notion_target_id"] as? String { notionTargetId = v }
+        if let v = config["notion_target_kind"] as? String { notionTargetKind = v }
+        if let v = config["notion_target_title"] as? String { notionTargetTitle = v }
+        if let v = config["notion_auto_send"] as? Bool { notionAutoSend = v }
+
         // App rules — array of dicts matching Rust serde shape
         if let arr = config["app_rules"] as? [[String: Any]] {
             appRules = arr.compactMap { AppRule(dict: $0) }
@@ -918,6 +948,10 @@ final class AppState: ObservableObject {
             "history_audio_max_mb": Int(historyAudioMaxMb),
             "auto_recap_threshold_secs": Int(autoRecapThresholdSecs),
             "recap_model_override": recapModelOverride,
+            "notion_target_id": notionTargetId,
+            "notion_target_kind": notionTargetKind,
+            "notion_target_title": notionTargetTitle,
+            "notion_auto_send": notionAutoSend,
             "app_rules": appRules.map { $0.toDict() },
         ]
         if let dev = selectedDevice {

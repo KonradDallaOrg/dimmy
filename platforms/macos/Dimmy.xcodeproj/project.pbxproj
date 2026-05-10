@@ -93,6 +93,8 @@
 		AA000209 /* MacAdvancedPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000209 /* MacAdvancedPage.swift */; };
 		AA000210 /* MacRulesPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000210 /* MacRulesPage.swift */; };
 		AA000211 /* MacPermissionsPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000211 /* MacPermissionsPage.swift */; };
+		AA000302 /* MacIntegrationsPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000302 /* MacIntegrationsPage.swift */; };
+		AA000303 /* NotionConnectSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000303 /* NotionConnectSheet.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -185,6 +187,8 @@
 		AB000209 /* MacAdvancedPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAdvancedPage.swift; sourceTree = "<group>"; };
 		AB000210 /* MacRulesPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacRulesPage.swift; sourceTree = "<group>"; };
 		AB000211 /* MacPermissionsPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPermissionsPage.swift; sourceTree = "<group>"; };
+		AB000302 /* MacIntegrationsPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacIntegrationsPage.swift; sourceTree = "<group>"; };
+		AB000303 /* NotionConnectSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotionConnectSheet.swift; sourceTree = "<group>"; };
 		AB000099 /* Dimmy.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Dimmy.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -389,6 +393,8 @@
 				AB000210 /* MacRulesPage.swift */,
 				AB000211 /* MacPermissionsPage.swift */,
 				AB000301 /* MacLicensePage.swift */,
+				AB000302 /* MacIntegrationsPage.swift */,
+				AB000303 /* NotionConnectSheet.swift */,
 			);
 			path = Settings;
 			sourceTree = "<group>";
@@ -630,6 +636,8 @@
 				AA000030 /* DimmyCore.swift in Sources */,
 				AA000300 /* DimmyCore+License.swift in Sources */,
 				AA000301 /* MacLicensePage.swift in Sources */,
+				AA000302 /* MacIntegrationsPage.swift in Sources */,
+				AA000303 /* NotionConnectSheet.swift in Sources */,
 				AA000041 /* SelfTests.swift in Sources */,
 				AA000042 /* RecordingSimulator.swift in Sources */,
 				AA000500 /* DimmyCore+V2.swift in Sources */,
