@@ -237,22 +237,49 @@ fn downsample_if_needed(samples: &[f32], source_rate: u32) -> Vec<f32> {
     }
 }
 
-/// If the last 3 lower-cased tokens of `prev_cumulative` appear as a
-/// 3-token window inside the first 8 tokens of `new_chunk`, return
-/// `new_chunk` with everything up to and including that window
-/// stripped. Otherwise return `new_chunk` unchanged. Punctuation is
-/// stripped on the comparison side only; the returned string preserves
-/// the original whitespace + punctuation of the surviving suffix so
-/// downstream callers can append it directly to the cumulative.
+/// Find and remove the boundary-overlap duplication between
+/// `prev_cumulative` (the running transcript so far) and `new_chunk`
+/// (the latest Parakeet output, which was transcribed from audio that
+/// overlaps the previous chunk by `overlap_ms`).
 ///
-/// Edge cases:
-/// - Empty `prev_cumulative` → returns `new_chunk` as-is.
-/// - Empty `new_chunk` → returns "".
-/// - `prev_cumulative` has fewer than 3 tokens → returns `new_chunk`
-///   as-is (no anchor to match against).
-/// - `new_chunk` has fewer than 3 tokens → still scans up to its
-///   length and matches if the prev tail equals the whole new_chunk.
+/// Algorithm — **longest suffix-prefix match with offset tolerance**:
+///
+/// 1\. Tokenize both sides (whitespace + punctuation strip + lowercase).
+///
+/// 2\. For k ∈ \[`MAX_K`..`MIN_K`\], scan whether `prev_norm[-k..]` matches
+/// `new_chunk[offset..offset+k]` for some `offset ∈ \[0..MAX_OFFSET\]`.
+///
+/// 3\. The first (largest k, smallest offset) match wins; trim
+/// `new_chunk` up to and including the matched k-th token. Larger k
+/// preferred so we don't over-trim a coincidental short match when a
+/// longer real overlap is present.
+///
+/// 4\. If no match found, return `new_chunk` unchanged.
+///
+/// Why we changed from "exact last-3-words anchor in first 12 tokens":
+/// Parakeet hallucinates / drops the partial-word lead token when the
+/// chunk's audio starts mid-word (which it does, at every boundary).
+/// The strict 3-word anchor failed because the cumulative tail's first
+/// word wasn't in the new chunk's start (e.g. cumulative ends with
+/// "abbiamo anche mangiato"; new chunk starts with "anche mangiato un
+/// sacco" — `abbiamo` is gone, anchor never matches, duplicate ships).
+///
+/// Tunables (compile-time constants below): `MIN_K=2` keeps over-trim
+/// risk low (single-word matches like "il", "the" would trigger too
+/// often); `MAX_K=6` covers the worst-case overlap; `MAX_OFFSET=3`
+/// tolerates up to 3 garbage tokens at the chunk start.
+///
+/// **Known false-positive case**: if the user intentionally repeats a
+/// 2+ word phrase across the boundary (e.g. "vado al lavoro, vado al
+/// lavoro"), this algorithm trims one copy. Trade-off accepted: the
+/// boundary-duplicate noise was reported by users as more frequent and
+/// more annoying than legitimate repetitions.
 pub fn dedup_last_3_words(prev_cumulative: &str, new_chunk: &str) -> String {
+    const MIN_K: usize = 2;
+    const MAX_K: usize = 6;
+    const MAX_OFFSET: usize = 3;
+    const MAX_HEAD_TOKENS: usize = MAX_K + MAX_OFFSET;
+
     if new_chunk.trim().is_empty() {
         return String::new();
     }
@@ -261,10 +288,9 @@ pub fn dedup_last_3_words(prev_cumulative: &str, new_chunk: &str) -> String {
     }
 
     let prev_norm = normalize_tokens(prev_cumulative);
-    if prev_norm.len() < 3 {
+    if prev_norm.len() < MIN_K {
         return new_chunk.to_string();
     }
-    let anchor: &[String] = &prev_norm[prev_norm.len() - 3..];
 
     // Tokenize new_chunk along with the byte offset where each token
     // ends, so when we find a match we know where in the original
@@ -272,29 +298,43 @@ pub fn dedup_last_3_words(prev_cumulative: &str, new_chunk: &str) -> String {
     let mut tokens: Vec<(String, usize)> = Vec::new();
     let mut byte_idx = 0usize;
     for raw_tok in new_chunk.split_whitespace() {
-        // Locate this token in the original string starting at byte_idx
-        // — split_whitespace collapses runs but we need the absolute
-        // position to slice later.
         if let Some(rel) = new_chunk[byte_idx..].find(raw_tok) {
             let token_end_in_original = byte_idx + rel + raw_tok.len();
             tokens.push((normalize_one(raw_tok), token_end_in_original));
             byte_idx = token_end_in_original;
         }
-        if tokens.len() >= 8 {
+        if tokens.len() >= MAX_HEAD_TOKENS {
             break;
         }
     }
+    if tokens.len() < MIN_K {
+        return new_chunk.to_string();
+    }
 
-    // Look for `anchor` as a contiguous 3-token window inside the
-    // first 8 tokens of new_chunk. Scan windows i, i+1, i+2.
-    if tokens.len() >= 3 {
-        let scan_upto = tokens.len().saturating_sub(2);
-        for i in 0..scan_upto {
-            if tokens[i].0 == anchor[0]
-                && tokens[i + 1].0 == anchor[1]
-                && tokens[i + 2].0 == anchor[2]
-            {
-                let cut_at = tokens[i + 2].1;
+    // Try the LARGEST k first — a longer match is more confident and
+    // avoids over-trimming when a coincidental short prefix-suffix
+    // would also pass.
+    let max_k_avail = MAX_K.min(prev_norm.len()).min(tokens.len());
+    for k in (MIN_K..=max_k_avail).rev() {
+        if k > prev_norm.len() {
+            continue;
+        }
+        let anchor = &prev_norm[prev_norm.len() - k..];
+        let max_offset_avail = if tokens.len() >= k {
+            (tokens.len() - k).min(MAX_OFFSET)
+        } else {
+            continue;
+        };
+        for offset in 0..=max_offset_avail {
+            let mut all_match = true;
+            for j in 0..k {
+                if tokens[offset + j].0 != anchor[j] {
+                    all_match = false;
+                    break;
+                }
+            }
+            if all_match {
+                let cut_at = tokens[offset + k - 1].1;
                 return new_chunk[cut_at..].trim_start().to_string();
             }
         }
@@ -349,13 +389,67 @@ mod tests {
     }
 
     #[test]
-    fn dedup_scans_first_8_tokens_only() {
-        // anchor at position 6-8 is in window
+    fn dedup_anchor_in_offset_window() {
+        // Anchor (last 3 of cumulative) at offset 0 → trim works.
+        let out = dedup_last_3_words("uno due tre", "uno due tre fine");
+        assert_eq!(out, "fine");
+    }
+
+    #[test]
+    fn dedup_anchor_after_garbage_lead_token() {
+        // Parakeet-hallucinated single garbage token at chunk start.
+        // Anchor [uno, due, tre] starts at offset 1. MAX_OFFSET=3 so
+        // we still find it. Real-world failure mode: chunk starts
+        // mid-word and Parakeet emits a phantom syllable as token 0.
+        let out = dedup_last_3_words("uno due tre", "garbage uno due tre fine");
+        assert_eq!(out, "fine");
+    }
+
+    #[test]
+    fn dedup_anchor_past_max_offset_falls_through() {
+        // Anchor at offset 4 (past MAX_OFFSET=3) → no trim. Ensures
+        // the algorithm doesn't scan unboundedly deep — that would
+        // open up false-positive trims when a coincidental phrase
+        // appears later in genuinely new content.
         let out = dedup_last_3_words(
             "uno due tre",
-            "alfa beta gamma delta epsilon uno due tre fine",
+            "alpha beta gamma delta epsilon uno due tre fine",
         );
-        assert_eq!(out, "fine");
+        assert_eq!(out, "alpha beta gamma delta epsilon uno due tre fine");
+    }
+
+    #[test]
+    fn dedup_two_word_match_when_three_word_anchor_first_word_dropped() {
+        // The user-reported failure mode (2026-05-10):
+        //   cumulative ends "alla festa di compleanno"
+        //   chunk starts  "di compleanno ci siamo"   (Parakeet
+        //                                             dropped "festa"
+        //                                             because chunk
+        //                                             audio cut into
+        //                                             middle of word)
+        // Old algo: anchor [festa, di, compleanno] not found in new
+        // chunk → fall through → "compleanno di compleanno" duplicate.
+        // New algo: tries k=4 [alla,festa,di,compleanno] (no match),
+        // k=3 [festa,di,compleanno] (no match), k=2 [di,compleanno]
+        // (MATCH at offset 0) → trim → "ci siamo" appended cleanly.
+        let out = dedup_last_3_words("alla festa di compleanno", "di compleanno ci siamo");
+        assert_eq!(out, "ci siamo");
+    }
+
+    #[test]
+    fn dedup_single_word_repeat_at_boundary_falls_through() {
+        // MIN_K=2, so a 1-word repeat at boundary is NOT trimmed.
+        // Avoids over-trimming common articles (il, la, the, a) that
+        // would coincidentally match on every chunk.
+        // Cumulative: "tanto" (single trailing word)
+        // Chunk:      "tanto e poi"
+        // 1-word match would trim "tanto" → "e poi". We don't want
+        // that, especially because "tanto" might be a legitimate
+        // standalone sentence the user dictated.
+        let out = dedup_last_3_words("ci siamo divertiti tanto", "tanto e poi");
+        // 2-word anchor is [divertiti, tanto], chunk starts [tanto, e,
+        // poi] — `divertiti` not at offset 0..3 → no match → no trim.
+        assert_eq!(out, "tanto e poi");
     }
 
     #[test]

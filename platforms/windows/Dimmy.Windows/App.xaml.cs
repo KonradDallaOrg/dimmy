@@ -220,6 +220,12 @@ public partial class App : Application
             // 2. Register event callback
             _eventCallbackDelegate = OnNativeEvent;
             DimmyNative.dimmy_set_event_callback(_eventCallbackDelegate);
+            // Wire AppViewModel's optional log delegate through to
+            // App.Log so diagnostic lines from the VM (e.g.
+            // "meeting_state event: …") land in ptt.log. Kept as an
+            // injection point so the VM stays cross-compilable into
+            // Dimmy.Windows.Tests without taking App as a hard dep.
+            ViewModels.AppViewModel.Log = (msg, tag) => Log(msg, tag);
 
             // 2b. Caption window — chunked transcriber emits stt_chunk
             // events from the Rust core; we route them through the

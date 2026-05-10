@@ -30,13 +30,6 @@ final class PillWindowController {
     private var cancellables = Set<AnyCancellable>()
     /// Flag to prevent didMove observer from writing back during programmatic repositioning
     private var isRepositioning = false
-    /// 500ms timer mirroring `dimmy_meeting_is_active` /
-    /// `dimmy_meeting_is_paused` into AppState so the pill auto-renders
-    /// the Stop control when a meeting starts from any surface and the
-    /// pill is otherwise idle. Same shape Win uses
-    /// (`PillWindow._meetingStatePollTimer`, 500 ms).
-    private var meetingStatePollTimer: Timer?
-
     // Extra padding around the pill so glow/shadow isn't clipped — and so
     // the scroll-cycle popover (renders below the pill) has room to breathe
     // without being clipped by the panel bounds.
@@ -48,11 +41,13 @@ final class PillWindowController {
         self.appState = appState
         setupPanel()
         observeState()
-        startMeetingStatePoll()
-    }
-
-    deinit {
-        meetingStatePollTimer?.invalidate()
+        // One-shot initial sync in case a meeting is already active when
+        // the pill is opened (e.g. user reopened the pill while a meeting
+        // ran in the background). Subsequent updates flow through the
+        // `meeting_state` event handler in DimmyCore.handleEvent — no
+        // polling. Replaces the 0.5 s `meetingStatePollTimer` that lived
+        // here before. See CLAUDE.md "No FFI-state polling rule".
+        syncMeetingStateOnce()
     }
 
     private func setupPanel() {
@@ -214,17 +209,15 @@ final class PillWindowController {
         NSApplication.shared.terminate(nil)
     }
 
-    // MARK: - Meeting-state poll
+    // MARK: - Meeting-state initial sync
+    //
+    // Steady-state updates flow through the `meeting_state` event in
+    // DimmyCore.handleEvent (envelope from `dimmy_set_event_callback`).
+    // This function only handles the one case the event channel CAN'T:
+    // a meeting that was already active when the pill window opens
+    // (no transition fires while we're attaching).
 
-    private func startMeetingStatePoll() {
-        meetingStatePollTimer?.invalidate()
-        meetingStatePollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.tickMeetingState() }
-        }
-        tickMeetingState()
-    }
-
-    private func tickMeetingState() {
+    private func syncMeetingStateOnce() {
         let active = DimmyCore.shared.meetingIsActive
         let paused = DimmyCore.shared.meetingIsPaused
         if active != appState.meetingActive {
@@ -232,16 +225,6 @@ final class PillWindowController {
         }
         if paused != appState.meetingIsPaused {
             appState.meetingIsPaused = paused
-        }
-        // When the meeting goes inactive while the pill is showing
-        // a "meeting recording" idle-style cap, drop the pill back
-        // to true idle so the scroll-cycle dots reappear.
-        if !active, case .recording = appState.recordingState {
-            // If we never had a dictation (no startedAt mirror — proxy
-            // via the .toggle/.pushToTalk path), do nothing — the
-            // dictation flow owns this transition. Meeting-only
-            // overlay is handled by the pill rendering directly via
-            // `appState.meetingActive`, not via recordingState.
         }
     }
 

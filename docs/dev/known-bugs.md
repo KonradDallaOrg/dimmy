@@ -118,26 +118,78 @@ Check this file before touching audio preprocessing, macOS FFI, or Windows trans
   `anthropic_dispatch_combinations_match_routing_rule`,
   `gemini_thinking_dispatch_pro_and_3x`, `case_insensitive_model_matching`.
 
-## WIN-003: WinUI 3 v3.1.7 ListView drag-reorder COM E_UNEXPECTED on EDR-loaded boxes
+## WIN-003: WinUI 3 v3.1.7 ListView drag-reorder hard-crashes the renderer
 - **Symptom**: App rules drag-reorder in `SettingsWindow` crashes the
-  process mid-drag with `combase.dll +0x37fc4 E_UNEXPECTED`. The same
-  XAML on a different machine (or the same machine after reboot)
-  works fine.
-- **Root cause (suspected)**: COM apartment-state corruption in WinUI 3
-  v3.1.7 when SentinelOne EDR's `InProcessClient64.dll` is loaded into
-  the process and hooks COM. The drag-reorder path inside
-  `Microsoft.UI.Xaml.dll` uses an apartment that the EDR layer can
-  put into an invalid state. Not reproducible cleanly without the EDR
-  in-process — environmental, not a Dimmy code bug.
-- **Workaround**: Reboot resets COM state. No code-level fix in tree.
-- **Coverage status**: NOT addressable in our test pyramid (FlaUI
-  doesn't fire OS-level drag events; can't reproduce without EDR).
-  Tracked here as a known support-ticket pattern. If/when it becomes
-  reproducible without EDR, file an upstream
-  WindowsAppSDK / WinUI bug.
+  process mid-drag with `combase.dll +0x37fc4 E_UNEXPECTED` /
+  `0xc000027b STOWED_EXCEPTION_NOT_HANDLED`. Faulting module is
+  `Microsoft.UI.Xaml.dll v3.1.7.0`, exception offset `0x000000000039ce55`.
+- **Root cause**: real WinUI 3 v3.1.7 bug in the `ListView`/`ListBox`
+  drag pipeline. Same crash signature reproduces on ANY XAML drag
+  entry point (`CanReorderItems`, `CanDrag` + `DragStarting` on a
+  child, ListView-level `Drop` handler) — the unifying factor is the
+  `IDataObject` / `IDropTarget` code path inside
+  `Microsoft.UI.Xaml.dll`. Documented in microsoft-ui-xaml issues
+  [#5607](https://github.com/microsoft/microsoft-ui-xaml/issues/5607)
+  (closed *won't-fix*) and
+  [#7690](https://github.com/microsoft/microsoft-ui-xaml/issues/7690)
+  (open, no PR, parked on the Markup-team backlog). **No fix in any
+  shipping WindowsAppSDK through 2.0.1** — verified against release
+  notes Feb–Apr 2026. Bumping the package won't help.
+- **Earlier mis-diagnosis**: a previous version of this entry blamed
+  EDR-induced COM apartment corruption. That was wrong. The drag
+  reorder actually worked on this codebase 2026-05-06 → 2026-05-08
+  (commit `ef15a86` added it; same XAML, same WindowsAppSDK
+  1.7.260224002 throughout) before the bug surfaced. Reboot
+  "fixing it" was coincidence — the latent WinUI bug is gated on
+  some other interaction (most likely candidate: the 500 ms UI-thread
+  DispatcherTimer added in `feat/system-audio-capture` for meeting-
+  state polling, whose ticks during a drag are believed to corrupt
+  the drag pipeline's internal state). Root-causing the interaction
+  needs WinDbg on a `.mdmp` and is parked.
+- **Fix**: replace the built-in pipeline with a manual implementation
+  that never touches `IDataObject` / `IDropTarget`:
+  - Drop `CanReorderItems` / `AllowDrop` / `ReorderMode` from the
+    ListView entirely.
+  - Add a dedicated drag handle (Segoe Fluent grip glyph `E76F`) as
+    the leftmost column of each row, wrapped in a transparent-
+    background `Border` so the entire bounding box is hit-testable.
+  - Pointer-event-only mechanics: `PointerPressed` (capture) →
+    `PointerMoved` (track + auto-scroll + drop-indicator update) →
+    `PointerReleased` / `PointerCaptureLost` (commit + cleanup).
+    Compute the target slot via `TransformToVisual` hit-test on the
+    rendered `ListViewItem` containers; call
+    `ObservableCollection<T>.Move` with the adjustment
+    `if (src < dst) dst--` so `Move`'s "final-position" semantics
+    match the user's intent.
+  - Visual feedback the broken XAML pipeline would have provided:
+    - Source row dimmed to opacity 0.45 in place.
+    - 2-px accent-colour insertion line tracks the slot boundary.
+    - Floating ghost popup with a `RenderTargetBitmap` snapshot of
+      the source row, opaque background, follows the cursor.
+  - Edge auto-scroll: 40-px top / bottom edge zone, `DispatcherTimer`
+    at 40 ms ticks scrolling the inner `ScrollViewer` 14 px per
+    tick (drop indicator refreshes after each scroll step).
+  - `Win32DropTarget`: tighten `Register()` to skip ALL wiring on
+    content-host HWNDs (`Microsoft.UI.Content.DesktopChildSiteBridge`
+    + `InputSiteWindowClass`) — they belong to WinUI 3's own
+    `IDropTarget` for ListView reorder + child drag. Wiring
+    `DragAcceptFiles` + WM_DROPFILES subclass there destabilises
+    the renderer even when our XAML doesn't use drag, observed
+    during this debug pass. The earlier May 7 baseline gated only
+    `RevokeDragDrop` to chrome HWNDs; the new gate restricts the
+    entire wiring to `WinUIDesktopWin32WindowClass` +
+    `InputNonClientPointerSource`. WAV file drops still bubble up
+    via WinUI's own `AllowDrop` chain to the chrome layer.
 - **Files**: `platforms/windows/Dimmy.Windows/Views/SettingsWindow.xaml`
-  (ListView with `CanReorderItems=True` + `CanDragItems=True` +
-  `AllowDrop=True` + `ReorderMode=Enabled`).
+  + `.xaml.cs` (manual drag handlers),
+  `platforms/windows/Dimmy.Windows/Helpers/Win32DropTarget.cs`
+  (chrome-only Win32 wiring).
+- **Coverage status**: pure index-math helpers can be unit-tested;
+  the pointer-driven UI flow is NOT addressable by FlaUI — UIA3
+  doesn't drive captured-pointer drag operations on dynamically-
+  generated `ListViewItem` containers. Tracked as manual sweep in
+  [`docs/dev/system-audio-capture-tests.md`](system-audio-capture-tests.md)
+  Tier 3.
 
 ## STT-002: SIGABRT at process exit when Parakeet feature is on (cosmetic)
 - **Symptom**: parakeet smoke / e2e test runs print `test result: ok` with all asserts green, then the binary exits with SIGABRT (`libc++abi: terminating due to uncaught exception of type std::__1::system_error: mutex lock failed: Invalid argument`). Cargo surfaces it as `process didn't exit successfully (signal: 6)`.

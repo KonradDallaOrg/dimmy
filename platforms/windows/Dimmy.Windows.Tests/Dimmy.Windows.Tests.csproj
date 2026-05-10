@@ -24,6 +24,8 @@
     <Compile Include="..\Dimmy.Windows\ViewModels\HistoryItemViewModel.cs" Link="ViewModels\HistoryItemViewModel.cs" />
     <Compile Include="..\Dimmy.Windows\ViewModels\AppRulesDefaults.cs" Link="ViewModels\AppRulesDefaults.cs" />
     <Compile Include="..\Dimmy.Windows\Helpers\IconExtractor.cs" Link="Helpers\IconExtractor.cs" />
+    <Compile Include="..\Dimmy.Windows\Helpers\AppRuleReorderMath.cs" Link="Helpers\AppRuleReorderMath.cs" />
+    <Compile Include="..\Dimmy.Windows\Helpers\MeetingRecapHelpers.cs" Link="Helpers\MeetingRecapHelpers.cs" />
     <Compile Include="..\Dimmy.Windows\Services\HotkeyParser.cs" Link="Services\HotkeyParser.cs" />
     <Compile Include="..\Dimmy.Windows\Services\TranscriptionService.cs" Link="Services\TranscriptionService.cs" />
     <Compile Include="..\Dimmy.Windows\Interop\DimmyNative.cs" Link="Interop\DimmyNative.cs" />

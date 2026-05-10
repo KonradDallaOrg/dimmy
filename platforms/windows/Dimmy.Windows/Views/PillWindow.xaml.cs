@@ -22,16 +22,15 @@ public sealed partial class PillWindow : Window
     private readonly AppViewModel _vm;
     private DispatcherTimer? _amplitudeTimer;
     private DispatcherTimer? _recordingTimer;
-    /// Long-running poll that watches the Rust core's meeting state so
-    /// the pill mirrors a meeting that was started/stopped from
-    /// MeetingWindow (or any other surface). Without this the pill
-    /// would stay Idle while a meeting is recording in the background,
-    /// the user couldn't see signal capture and couldn't Stop from
-    /// here. 2 Hz is plenty — meeting transitions are user-initiated.
-    private DispatcherTimer? _meetingStatePollTimer;
     /// Track whether the current pill Recording state was driven by a
     /// meeting (so we know to clear it back to Idle when the meeting
     /// ends, without stomping on a concurrent dictation flow).
+    /// Updated reactively from `AppViewModel.MeetingActive` changes —
+    /// no polling. The Rust core emits `meeting_state` envelopes via
+    /// `dimmy_set_event_callback` on every transition; AppViewModel
+    /// translates them to the observable property; this window just
+    /// listens to PropertyChanged. Replaces the 500 ms polling timer
+    /// that was here before (CLAUDE.md "No FFI-state polling rule").
     private bool _pillRecordingDueToMeeting;
     private DateTime _recordingStartTime;
     private DispatcherTimer? _completingTimer;
@@ -75,47 +74,42 @@ public sealed partial class PillWindow : Window
         Waveform.StyleMode = _vm.WaveformStyle;
         ColorBorder.SizeChanged += ColorBorder_SizeChanged;
         UpdateVisualState();
-        StartMeetingStatePoll();
+        // Initial sync: one shot in case a meeting is already active when
+        // the pill is opened (e.g. the user closed and reopened the pill
+        // window while a meeting was running). Subsequent updates flow
+        // through Vm_PropertyChanged ⇒ MeetingActive — no polling.
+        OnMeetingStateChanged();
     }
 
-    private void StartMeetingStatePoll()
+    private void OnMeetingStateChanged()
     {
-        _meetingStatePollTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
-        _meetingStatePollTimer.Tick += (_, _) =>
+        bool meetingActive = _vm.MeetingActive;
+        if (meetingActive)
         {
-            int active;
-            try { active = DimmyNative.dimmy_meeting_is_active(); }
-            catch { return; }
-            bool meetingActive = active == 1;
-
-            if (meetingActive)
+            // Pill should be in Recording while meeting is active. Don't
+            // stomp on dictation: if AppState is anything other than
+            // Idle (i.e. dictation flow already drove it), leave it
+            // alone.
+            if (_vm.CurrentState == AppState.Idle)
             {
-                // Pill should be in Recording while meeting is active.
-                // Don't stomp on dictation: if AppState is anything
-                // other than Idle (i.e. dictation flow already drove
-                // it), leave it alone.
-                if (_vm.CurrentState == AppState.Idle)
-                {
-                    _pillRecordingDueToMeeting = true;
-                    _vm.SetState(AppState.Recording);
-                }
+                _pillRecordingDueToMeeting = true;
+                _vm.SetState(AppState.Recording);
             }
-            else
+        }
+        else
+        {
+            // Meeting just ended. If WE put the pill into Recording,
+            // clean up. If dictation owns the state, leave alone.
+            if (_pillRecordingDueToMeeting && _vm.CurrentState == AppState.Recording)
             {
-                // Meeting just ended. If WE put the pill into Recording,
-                // clean up. If dictation owns the state, leave alone.
-                if (_pillRecordingDueToMeeting && _vm.CurrentState == AppState.Recording)
-                {
-                    _pillRecordingDueToMeeting = false;
-                    _vm.SetState(AppState.Idle);
-                }
-                else if (!meetingActive && _vm.CurrentState != AppState.Recording)
-                {
-                    _pillRecordingDueToMeeting = false;
-                }
+                _pillRecordingDueToMeeting = false;
+                _vm.SetState(AppState.Idle);
             }
-        };
-        _meetingStatePollTimer.Start();
+            else if (_vm.CurrentState != AppState.Recording)
+            {
+                _pillRecordingDueToMeeting = false;
+            }
+        }
     }
 
     private void SetupWindow()
@@ -150,6 +144,9 @@ public sealed partial class PillWindow : Window
             DispatcherQueue.TryEnqueue(() => StyleDot.Fill = new SolidColorBrush(ParseColor(_vm.LlmStyleColor)));
         if (e.PropertyName == nameof(AppViewModel.WaveformStyle))
             DispatcherQueue.TryEnqueue(() => Waveform.StyleMode = _vm.WaveformStyle);
+        if (e.PropertyName == nameof(AppViewModel.MeetingActive)
+            || e.PropertyName == nameof(AppViewModel.MeetingPaused))
+            DispatcherQueue.TryEnqueue(OnMeetingStateChanged);
     }
 
     // ── Shape helpers ───────────────────────────────────────────────

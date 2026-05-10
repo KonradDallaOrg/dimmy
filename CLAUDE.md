@@ -181,6 +181,52 @@ All 10 invariants live in [`docs/dev/windows-ci.md`](docs/dev/windows-ci.md) —
 - Update `core/Cargo.toml` → `version = "x.y.z"` for every release.
 - Full runbook: [`docs/RELEASING.md`](docs/RELEASING.md).
 
+### No FFI-state polling rule
+
+**Don't poll the Rust core to mirror state in the UI.** Use the event
+callback channel (`dimmy_set_event_callback` ⇒ Win
+`AppViewModel.HandleEvent`, Mac `DimmyCore.handleEvent`,
+Linux `DimmyCore::on_event`). When you need the host UI to react to a
+state change in the Rust core (meeting active, recording started,
+chunk progress, …), have the Rust side `emit_event(...)` exactly once
+per transition; subscribers update local state from the envelope.
+Polling timers (`DispatcherTimer` / `NSTimer` / `Timer.scheduledTimer`
+/ `tokio::time::interval`) that call `dimmy_*_is_*()` on a fixed
+interval are forbidden — they waste CPU/battery, add perceived
+latency, and pick arbitrary cadences ("500 ms" with no rationale)
+that hide the real design question (which is "what events does the
+core emit?").
+
+**Documented exceptions** (legitimate timer use):
+
+- Continuous sampling that has no "event" semantics — amplitude /
+  waveform sampling at 12-30 fps for the live VU meter; recording
+  clock tick at 1 Hz for the elapsed-time label. The data is a
+  continuous stream, not a state transition.
+- User-initiated UI animations — drag-scroll edge-of-list timer,
+  popover fade, tooltip hover delay. The user is actively driving
+  the timer; idle ⇒ no timer.
+- OS APIs without notifications — macOS `AXIsProcessTrustedWithOptions`
+  (TCC permissions) requires polling because Apple ships no
+  notification API for trust-state transitions. Document the reason
+  inline.
+
+**To replace a polling timer with an event:**
+
+1. Add a Rust emit: small helper like `emit_meeting_state_event(active, paused)` that wraps the call to `emit_event("name", "{...}")`.
+2. Call it in every state-transition branch of the Rust handler. One emit per transition, exactly.
+3. Add a `case "name":` in the host `HandleEvent` / `handleEvent` /
+   `on_event` switch; map payload fields to observable view-model
+   properties.
+4. Replace the polling tick body with the same logic, hooked off
+   `PropertyChanged` (Win) / `@Published` (Mac, Combine) / signal
+   (Linux GTK4).
+5. Add Rust unit tests verifying the emit happens (capture the
+   callback into a test slot, assert the JSON envelope shape).
+
+Pattern reference: meeting state polling on the pill, replaced in
+PR #48 — see commits + tests for the canonical shape.
+
 ### Telemetry — privacy hard rules
 - **NEVER** include user content (transcribed text, prompt text, custom LLM prompt, microphone device name, file paths, hostname, username, IP) in any PostHog property or Sentry message. The `looks_like_secret` filter is a safety net, not a substitute for review.
 - Provider names (groq/openai/anthropic/...) are categorical enums and OK to send.
