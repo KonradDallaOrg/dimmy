@@ -1572,6 +1572,90 @@ public sealed partial class MeetingWindow : Window
         catch (Exception ex) { App.Log($"open folder failed: {ex.Message}", "Meeting"); }
     }
 
+    /// Send the current meeting's recap.md to the user's configured
+    /// Notion target. Called from the Done view button. Surfaces a
+    /// success / failure dialog and offers "Open in Notion" link on
+    /// success. Disabled flow until the user has both a token AND a
+    /// target picked (Settings → Integrations).
+    private async void SendToNotion_Click(object sender, RoutedEventArgs e)
+    {
+        var dir = _viewingMeetingDir ?? _activeMeetingDir;
+        if (string.IsNullOrEmpty(dir))
+        {
+            App.Log("SendToNotion: no meeting dir", "Notion");
+            return;
+        }
+        if (!Services.NotionService.HasToken())
+        {
+            await ShowNotionDialogAsync(
+                "Notion not connected",
+                "Connect to Notion in Settings → Integrations first. Paste your integration token, pick where recaps should land, then come back here.",
+                isError: true,
+                pageUrl: null);
+            return;
+        }
+        if (sender is Microsoft.UI.Xaml.Controls.Button btn) { btn.IsEnabled = false; }
+        try
+        {
+            App.Log($"SendToNotion: dir={dir}", "Notion");
+            var result = await Services.NotionService.SendRecapAsync(dir);
+            if (result.Ok)
+            {
+                App.Log($"SendToNotion: ok url={result.PageUrl}", "Notion");
+                await ShowNotionDialogAsync(
+                    "Sent to Notion ✓",
+                    "Your recap is live in Notion. Click Open to view it.",
+                    isError: false,
+                    pageUrl: result.PageUrl);
+            }
+            else
+            {
+                App.Log($"SendToNotion: failed {result.Error}", "Notion");
+                await ShowNotionDialogAsync(
+                    "Couldn't send to Notion",
+                    result.Error ?? "Unknown error",
+                    isError: true,
+                    pageUrl: null);
+            }
+        }
+        catch (Exception ex)
+        {
+            App.Log($"SendToNotion exc: {ex}", "Notion");
+            await ShowNotionDialogAsync(
+                "Couldn't send to Notion",
+                ex.Message,
+                isError: true,
+                pageUrl: null);
+        }
+        finally
+        {
+            if (sender is Microsoft.UI.Xaml.Controls.Button btn2) { btn2.IsEnabled = true; }
+        }
+    }
+
+    private async System.Threading.Tasks.Task ShowNotionDialogAsync(
+        string title, string content, bool isError, string? pageUrl)
+    {
+        var dlg = new Microsoft.UI.Xaml.Controls.ContentDialog
+        {
+            Title = title,
+            Content = content,
+            CloseButtonText = "Close",
+            XamlRoot = this.Content.XamlRoot,
+        };
+        if (!isError && !string.IsNullOrEmpty(pageUrl))
+        {
+            dlg.PrimaryButtonText = "Open in Notion";
+            dlg.DefaultButton = Microsoft.UI.Xaml.Controls.ContentDialogButton.Primary;
+        }
+        var result = await dlg.ShowAsync();
+        if (result == Microsoft.UI.Xaml.Controls.ContentDialogResult.Primary && !string.IsNullOrEmpty(pageUrl))
+        {
+            try { await global::Windows.System.Launcher.LaunchUriAsync(new Uri(pageUrl)); }
+            catch (Exception ex) { App.Log($"open notion url failed: {ex.Message}", "Notion"); }
+        }
+    }
+
     private void CopyRecap_Click(object sender, RoutedEventArgs e)
     {
         try

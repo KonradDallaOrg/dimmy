@@ -372,6 +372,16 @@
                             ToolTipService.ToolTip="Copy recap to clipboard">
                       <FontIcon Glyph="&#xE8C8;" FontSize="13"/>
                     </Button>
+                    <Button x:Name="SendToNotionBtn" Click="SendToNotion_Click"
+                            Padding="6,4"
+                            ToolTipService.ToolTip="Send recap to Notion">
+                      <!-- Real Notion logo — bundled SVG asset
+                           (Assets/notion-mark.svg). Renders crisply at
+                           any DPI; black/white squircle works against
+                           both light and dark theming. -->
+                      <Image Width="18" Height="18"
+                             Source="ms-appx:///Assets/notion-mark.svg"/>
+                    </Button>
                     <Button x:Name="OpenFolderBtn" Click="OpenFolder_Click"
                             ToolTipService.ToolTip="Open meeting folder">
                       <FontIcon Glyph="&#xE838;" FontSize="13"/>

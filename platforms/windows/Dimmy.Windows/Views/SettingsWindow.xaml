@@ -6,8 +6,13 @@
     xmlns:controls="using:Dimmy.Windows.Views.Controls"
     Title="Dimmy Settings">
 
+  <!-- RequestedTheme is set at runtime by SyncThemeRadioButtons() from
+       UiPreferences.Theme (Light/Dark/Default→system). Hardcoding it
+       here would override the saved preference on every relayout and
+       reintroduce the "Settings stays Light, jump-list/menu stays
+       Dark" mismatch users complained about 2026-05-10. -->
   <Grid x:Name="RootGrid" AllowDrop="True"
-        RequestedTheme="Light" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+        Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
     <Grid.RowDefinitions>
       <RowDefinition Height="*" />
       <RowDefinition Height="Auto" />
@@ -42,6 +47,9 @@
         </NavigationViewItem>
         <NavigationViewItem Content="Recordings" Tag="history">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE7B8;" /></NavigationViewItem.Icon>
+        </NavigationViewItem>
+        <NavigationViewItem Content="Integrations" Tag="integrations">
+          <NavigationViewItem.Icon><FontIcon Glyph="&#xE71B;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
         <NavigationViewItem Content="Privacy &amp; data" Tag="privacy">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE72E;" /></NavigationViewItem.Icon>
@@ -1575,6 +1583,108 @@
                     <Button x:Name="HistoryDeleteBtn" Click="HistoryDelete_Click" Content="Delete" />
                   </StackPanel>
                 </StackPanel>
+              </Border>
+            </StackPanel>
+
+            <!-- ═══ Integrations — Notion (more to come) ═══ -->
+            <StackPanel x:Name="IntegrationsPanel" Spacing="4" Visibility="Collapsed">
+              <StackPanel Spacing="2" Margin="0,0,0,16">
+                <TextBlock Text="Integrations" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="Push your meeting recaps into the tools you already use."
+                           FontSize="13"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+              </StackPanel>
+
+              <!-- Group: NOTION -->
+              <TextBlock Text="NOTION"
+                         FontSize="12" FontWeight="SemiBold"
+                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                         CharacterSpacing="40" Margin="2,16,0,8" />
+
+              <!-- Summary card — shows current connection state. Two
+                   variants: NOT CONNECTED (default, big "Connect"
+                   accent button) vs CONNECTED (workspace + destination
+                   + change/disconnect buttons + auto-send toggle).
+                   The wizard handles all setup; this card just summarises. -->
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="16">
+                <Grid ColumnSpacing="14" RowSpacing="12">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                  </Grid.ColumnDefinitions>
+                  <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                  </Grid.RowDefinitions>
+                  <!-- Real Notion logo — bundled SVG asset. -->
+                  <Image Grid.Column="0" Grid.Row="0" Grid.RowSpan="2"
+                         Width="40" Height="40"
+                         Source="ms-appx:///Assets/notion-mark.svg"
+                         VerticalAlignment="Top"/>
+                  <StackPanel Grid.Column="1" Grid.Row="0" VerticalAlignment="Center" Spacing="2">
+                    <TextBlock Text="Notion" FontSize="16" FontWeight="SemiBold" />
+                    <TextBlock x:Name="NotionStatusText"
+                               Text="Not connected"
+                               FontSize="13"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               TextWrapping="Wrap"/>
+                  </StackPanel>
+                  <StackPanel Grid.Column="2" Grid.Row="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Top">
+                    <FontIcon x:Name="NotionStatusGlyph"
+                              Glyph="&#xEA39;"
+                              FontSize="20"
+                              Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                  </StackPanel>
+                  <!-- Action button row — Connect (when disconnected)
+                       or Change destination + Disconnect (when
+                       connected). Visibility flipped from code-behind. -->
+                  <StackPanel x:Name="NotionDisconnectedActions"
+                              Grid.Column="1" Grid.ColumnSpan="2" Grid.Row="1"
+                              Orientation="Horizontal" Spacing="8"
+                              Visibility="Visible">
+                    <Button Content="Connect Notion"
+                            Click="NotionConnect_Click"
+                            Style="{ThemeResource AccentButtonStyle}"/>
+                  </StackPanel>
+                  <StackPanel x:Name="NotionConnectedActions"
+                              Grid.Column="1" Grid.ColumnSpan="2" Grid.Row="1"
+                              Orientation="Horizontal" Spacing="8"
+                              Visibility="Collapsed">
+                    <Button Content="Change destination"
+                            Click="NotionChangeDestination_Click"/>
+                    <Button Content="Disconnect"
+                            Click="NotionDisconnect_Click"/>
+                  </StackPanel>
+                </Grid>
+              </Border>
+
+              <!-- Auto-send toggle — only meaningful once connected.
+                   Stays inline (not in wizard) because it's a single
+                   binary choice and users may want to flip it on/off
+                   over time without re-entering setup. -->
+              <controls:SettingCard Glyph="&#xE945;"
+                                    Label="Auto-send each meeting"
+                                    Description="When on, every meeting's recap is uploaded to your Notion destination as soon as the recap finishes. When off, you click the Notion button on the meeting Done view per meeting.">
+                <ToggleSwitch IsOn="{Binding NotionAutoSend, Mode=TwoWay}"
+                              IsEnabled="{Binding HasNotionToken}"
+                              Toggled="NotionAutoSend_Toggled"
+                              OnContent="" OffContent="" />
+              </controls:SettingCard>
+
+              <!-- Help footer -->
+              <TextBlock Margin="2,16,0,0" FontSize="12"
+                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                         TextWrapping="Wrap"
+                         Text="Free Notion accounts work — no API limits per plan. Token + destination stay on this device; only the recap markdown leaves when you (or auto-send) trigger an upload." />
+
+              <!-- Status / errors -->
+              <Border x:Name="NotionMessageBar" Background="{ThemeResource SystemFillColorAttentionBackgroundBrush}"
+                      BorderThickness="0" CornerRadius="6" Padding="12,8"
+                      Margin="0,16,0,0" Visibility="Collapsed">
+                <TextBlock x:Name="NotionMessageText" FontSize="13" TextWrapping="Wrap" />
               </Border>
             </StackPanel>
 

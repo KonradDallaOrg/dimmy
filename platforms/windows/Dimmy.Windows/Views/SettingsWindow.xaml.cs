@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
 using System.Text.Json;
@@ -178,6 +179,12 @@ public sealed partial class SettingsWindow : Window
         // FontIcon fallback. Runs on a background thread; refreshes
         // each row's IconAssetUri on the UI thread when done.
         _ = WarmUpAppIconsAsync();
+
+        // Initial Notion summary card state — reflect HasNotionToken +
+        // NotionTargetTitle from LoadConfig. Without this the card
+        // shows the XAML default ("Not connected" / Connect button)
+        // even when a token was already saved.
+        NotionRefreshSummary();
 
         _loaded = true;
     }
@@ -1555,6 +1562,7 @@ public sealed partial class SettingsWindow : Window
             OverlayPanel.Visibility = Visibility.Collapsed;
             RulesPanel.Visibility = Visibility.Collapsed;
             HistoryPanel.Visibility = Visibility.Collapsed;
+            IntegrationsPanel.Visibility = Visibility.Collapsed;
             AboutPanel.Visibility = Visibility.Collapsed;
             PrivacyPanel.Visibility = Visibility.Collapsed;
             LicensePanel.Visibility = Visibility.Collapsed;
@@ -1569,6 +1577,7 @@ public sealed partial class SettingsWindow : Window
                 "pill" or "overlay" => OverlayPanel,
                 "rules" => RulesPanel,
                 "history" => HistoryPanel,
+                "integrations" => IntegrationsPanel,
                 "shortcut" => ShortcutPanel,
                 "privacy" => PrivacyPanel,
                 "license" => LicensePanel,
@@ -3117,6 +3126,174 @@ public sealed partial class SettingsWindow : Window
         catch
         {
             FeedbackStatus.Text = "Couldn't send right now. Try again later.";
+        }
+    }
+
+    // ── Notion integration ────────────────────────────────────────
+    // Setup is delegated to NotionConnectDialog (3-step wizard). This
+    // surface only owns the summary card + auto-send toggle + the
+    // launchers that open the wizard at the right step.
+
+    private void NotionShowMessage(string text, bool isError)
+    {
+        NotionMessageText.Text = text;
+        NotionMessageBar.Background = isError
+            ? (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["SystemFillColorCriticalBackgroundBrush"]
+            : (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["SystemFillColorSuccessBackgroundBrush"];
+        NotionMessageBar.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>Refresh the Integrations summary card from the current
+    /// ViewModel state. Idempotent — safe to call from initial load
+    /// and after every wizard close.</summary>
+    private void NotionRefreshSummary()
+    {
+        bool connected = ViewModel.HasNotionToken;
+        if (connected)
+        {
+            var dest = string.IsNullOrEmpty(ViewModel.NotionTargetTitle)
+                ? "no destination yet"
+                : $"recaps land in “{ViewModel.NotionTargetTitle}”";
+            NotionStatusText.Text = $"Connected — {dest}";
+            NotionStatusGlyph.Glyph = ""; // CheckMark
+            NotionStatusGlyph.Foreground = (Microsoft.UI.Xaml.Media.Brush)
+                Application.Current.Resources["SystemFillColorSuccessBrush"];
+            NotionDisconnectedActions.Visibility = Visibility.Collapsed;
+            NotionConnectedActions.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            NotionStatusText.Text = "Not connected";
+            NotionStatusGlyph.Glyph = ""; // Info
+            NotionStatusGlyph.Foreground = (Microsoft.UI.Xaml.Media.Brush)
+                Application.Current.Resources["TextFillColorTertiaryBrush"];
+            NotionDisconnectedActions.Visibility = Visibility.Visible;
+            NotionConnectedActions.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private async System.Threading.Tasks.Task RunNotionWizardAsync(int initialStep)
+    {
+        var dlg = new NotionConnectDialog
+        {
+            XamlRoot = (this.Content as FrameworkElement)?.XamlRoot,
+            InitialStep = initialStep,
+        };
+        dlg.SetExistingTarget(ViewModel.NotionTargetId ?? "");
+        try
+        {
+            await dlg.ShowAsync();
+        }
+        catch (Exception ex)
+        {
+            App.Log($"Notion wizard exc: {ex}", "Notion");
+            NotionShowMessage($"Wizard error: {ex.Message}", isError: true);
+            return;
+        }
+        // Whatever the wizard's exit reason, sync our state with what
+        // the user actually did inside it. The wizard wrote the token
+        // to keystore on Verify and may have picked a target.
+        if (dlg.TokenVerified)
+        {
+            ViewModel.HasNotionToken = true;
+        }
+        if (dlg.Completed && !string.IsNullOrEmpty(dlg.PickedTargetId))
+        {
+            ViewModel.NotionTargetId = dlg.PickedTargetId;
+            ViewModel.NotionTargetKind = dlg.PickedTargetKind;
+            ViewModel.NotionTargetTitle = dlg.PickedTargetTitle;
+            try
+            {
+                var json = ViewModel.ToJson();
+                int rc = DimmyNative.dimmy_set_config_json(json);
+                App.Log($"Notion wizard saved rc={rc} id={dlg.PickedTargetId} title='{dlg.PickedTargetTitle}'", "Notion");
+                if (rc == 0)
+                {
+                    App.Instance?.ApplySettings(ViewModel);
+                    NotionShowMessage(
+                        $"Recaps will land in “{dlg.PickedTargetTitle}” ({dlg.PickedTargetKind}). All set.",
+                        isError: false);
+                }
+                else
+                {
+                    NotionShowMessage(
+                        $"Saved locally but Rust set_config_json returned {rc}.",
+                        isError: true);
+                }
+            }
+            catch (Exception ex)
+            {
+                App.Log($"Notion wizard persist exc: {ex}", "Notion");
+                NotionShowMessage($"Couldn't save destination: {ex.Message}", isError: true);
+            }
+        }
+        NotionRefreshSummary();
+    }
+
+    private async void NotionConnect_Click(object sender, RoutedEventArgs e)
+    {
+        // Token already valid? Skip prepare + token, jump to picker.
+        // The connect button should only be visible when HasNotionToken
+        // is false, but a stale binding could race.
+        int initial = ViewModel.HasNotionToken ? 3 : 1;
+        await RunNotionWizardAsync(initial);
+    }
+
+    private async void NotionChangeDestination_Click(object sender, RoutedEventArgs e)
+    {
+        await RunNotionWizardAsync(initialStep: 3);
+    }
+
+    private async void NotionDisconnect_Click(object sender, RoutedEventArgs e)
+    {
+        var confirm = new ContentDialog
+        {
+            Title = "Disconnect Notion?",
+            Content = "Dimmy will forget your token and destination. Your Notion content stays untouched. You can reconnect any time.",
+            PrimaryButtonText = "Disconnect",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = (this.Content as FrameworkElement)?.XamlRoot,
+        };
+        if ((await confirm.ShowAsync()) != ContentDialogResult.Primary) return;
+        try
+        {
+            // Empty token = clear in keystore (notion.rs handles the
+            // empty-string branch as "forget").
+            var rcToken = Services.NotionService.SetToken("");
+            ViewModel.HasNotionToken = false;
+            ViewModel.NotionTargetId = "";
+            ViewModel.NotionTargetKind = "";
+            ViewModel.NotionTargetTitle = "";
+            ViewModel.NotionAutoSend = false;
+            var json = ViewModel.ToJson();
+            int rcCfg = DimmyNative.dimmy_set_config_json(json);
+            App.Log($"Notion disconnected rcToken={rcToken} rcCfg={rcCfg}", "Notion");
+            App.Instance?.ApplySettings(ViewModel);
+            NotionShowMessage("Disconnected. Token and destination removed from this device.", isError: false);
+        }
+        catch (Exception ex)
+        {
+            App.Log($"Notion disconnect exc: {ex}", "Notion");
+            NotionShowMessage($"Couldn't disconnect: {ex.Message}", isError: true);
+        }
+        NotionRefreshSummary();
+    }
+
+    private void NotionAutoSend_Toggled(object sender, RoutedEventArgs e)
+    {
+        // Persist immediately so the next meeting honours the toggle
+        // even if the user never clicks Save.
+        if (!_loaded) return;
+        try
+        {
+            var json = ViewModel.ToJson();
+            int rc = DimmyNative.dimmy_set_config_json(json);
+            App.Log($"Notion auto-send toggled rc={rc} new={ViewModel.NotionAutoSend}", "Notion");
+        }
+        catch (Exception ex)
+        {
+            App.Log($"NotionAutoSend save exc: {ex.Message}", "Notion");
         }
     }
 }
