@@ -1207,6 +1207,15 @@ public sealed partial class SettingsWindow : Window
                     ViewModel.HasApiKey = hk.GetBoolean();
                 if (r.TryGetProperty("has_llm_key", out var hlk))
                     ViewModel.HasLlmKey = hlk.GetBoolean();
+                // Notion token presence is a runtime-only flag derived
+                // from the keystore (same as has_key / has_llm_key).
+                // Rust strips it on config.json save, so LoadFromJson
+                // never sees it — we MUST pull it from the FFI snapshot
+                // here, otherwise the Integrations summary card stays
+                // "Not connected" on every relaunch even though the
+                // token sits in keys.enc. Burned 2026-05-10.
+                if (r.TryGetProperty("has_notion_token", out var hnt))
+                    ViewModel.HasNotionToken = hnt.GetBoolean();
                 _sttKeyByProvider.Clear();
                 _llmKeyByProvider.Clear();
                 CacheProviderKeyFlags(r);
