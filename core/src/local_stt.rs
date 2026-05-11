@@ -813,6 +813,10 @@ mod whisper_cache {
         // composed string straight through.
         if !prompt.trim().is_empty() {
             params.set_initial_prompt(prompt);
+            crate::log(&format!(
+                "[DictBias] provider=whisper_local prompt_chars={}",
+                prompt.len()
+            ));
         }
 
         if !language.is_empty() {
