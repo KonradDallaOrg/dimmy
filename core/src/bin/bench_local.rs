@@ -181,7 +181,10 @@ fn main() {
             };
 
             let start = Instant::now();
-            let result = dimmy_lib::local_stt::transcribe_local(&model_path, samples, lang);
+            // Empty prompt — bench doesn't exercise the vocabulary
+            // biasing path. transcribe_local picked up a 4th
+            // `prompt` parameter in the user_dict commit.
+            let result = dimmy_lib::local_stt::transcribe_local(&model_path, samples, lang, "");
             let elapsed = start.elapsed();
             let ms = elapsed.as_millis();
 
