@@ -248,7 +248,21 @@ impl LicenseStatus {
 }
 
 /// Convenience for call sites — equivalent to `check_status().has_scope(name)`.
+///
+/// Staging override: staging builds (DIMMY_BUILD_FLAVOR=staging) grant
+/// every scope regardless of license state. We need this so the
+/// auto-update flow, managed STT/LLM, and any other paid feature can
+/// be dogfooded end-to-end in staging without manually provisioning a
+/// trial token on every test box. Prod builds (flavor empty) keep
+/// strict enforcement via `check_status().has_scope(name)`. The
+/// underlying status is unchanged — Settings → License still shows
+/// the real "Free" / trial / expired UI so we can also exercise the
+/// redeem / refresh flows in staging without losing access to the
+/// gated features.
 pub fn has_scope(name: &str) -> bool {
+    if crate::is_staging_build() {
+        return true;
+    }
     check_status().has_scope(name)
 }
 
