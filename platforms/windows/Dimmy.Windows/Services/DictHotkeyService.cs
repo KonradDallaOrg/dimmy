@@ -205,34 +205,17 @@ public sealed class DictHotkeyService : IDisposable
     /// or digit key. Returns false on empty, unrecognised tokens, or
     /// missing key code (modifier-only is rejected — Win+Alt-style
     /// PTT belongs on the Rust hook, not on a Win32 hotkey).</summary>
-    private static bool TryParseCombo(string combo, out uint mods, out uint vk)
-    {
-        mods = 0;
-        vk = 0;
-        foreach (var raw in combo.Split('+'))
-        {
-            var t = raw.Trim().ToLowerInvariant();
-            switch (t)
-            {
-                case "ctrl": case "control": mods |= MOD_CONTROL; break;
-                case "shift": mods |= MOD_SHIFT; break;
-                case "alt": mods |= MOD_ALT; break;
-                case "win": case "windows": case "lwin": mods |= MOD_WIN; break;
-                default:
-                    if (vk != 0) return false; // only one key allowed
-                    if (t.Length == 1)
-                    {
-                        char c = char.ToUpperInvariant(t[0]);
-                        if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))
-                            vk = c;
-                        else return false;
-                    }
-                    else return false;
-                    break;
-            }
-        }
-        return mods != 0 && vk != 0;
-    }
+    /// <summary>
+    /// Re-uses <see cref="HotkeyParser"/> for combo parsing so the dict
+    /// hotkey supports the same grammar (incl. F-keys, named keys) as
+    /// the dictation hotkey, and gains all of its test coverage. The
+    /// secondary check below enforces dict-specific semantics: BOTH a
+    /// modifier AND a key are required (no modifier-only or key-only
+    /// combos — those would either clash with normal typing or be
+    /// undetectable to RegisterHotKey).
+    /// </summary>
+    public static bool TryParseCombo(string combo, out uint mods, out uint vk)
+        => DictHotkeyParser.TryParse(combo, out mods, out vk);
 
     public void Dispose()
     {
