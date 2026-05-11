@@ -1439,10 +1439,15 @@
                    GitHub "Latest" tag; "Stable + Pre-release" also
                    considers staging-native builds tagged
                    staging-latest. Persisted to UiPreferences.UpdateChannel
-                   (NOT config.json — Rust core has no opinion). -->
-              <controls:SettingCard Glyph="&#xE74C;"
+                   (NOT config.json — Rust core has no opinion).
+                   The card is hidden for users without the
+                   auto_update license scope — they see no update UI
+                   at all (silent-gating UX picked 2026-05-11). -->
+              <controls:SettingCard x:Name="UpdateChannelCard"
+                                    Glyph="&#xE74C;"
                                     Label="Update channel"
                                     Description="Stable only is the safer default. Pre-release also offers staging builds with new features earlier."
+                                    Visibility="Collapsed"
                                     Margin="0,8,0,0">
                 <ComboBox x:Name="UpdateChannelCombo"
                           MinWidth="200"

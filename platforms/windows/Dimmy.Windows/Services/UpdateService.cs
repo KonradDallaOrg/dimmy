@@ -76,7 +76,19 @@ public sealed class UpdateService
         Instance ??= new UpdateService();
     }
 
-    private UpdateService() { }
+    private UpdateService()
+    {
+        // When the user redeems / activates a license, re-poll
+        // immediately instead of waiting up to 6 h for the next tick.
+        // Symmetric on Clear() — if scope drops, the next tick simply
+        // skips, no need to react synchronously.
+        LicenseService.LicenseChanged += () =>
+        {
+            if (_cts is null) return;
+            App.Log("license changed — forcing update re-check", "Update");
+            _ = CheckAndDownloadAsync();
+        };
+    }
 
     /// <summary>Schedule the first background check after FirstCheckDelay
     /// + periodic re-checks every ReCheckInterval. Idempotent — calling
@@ -123,6 +135,21 @@ public sealed class UpdateService
     {
         try
         {
+            // License gate — auto-update is a paid feature
+            // (LicenseService.ScopeNames.AutoUpdate). Source / dev
+            // builds without an embedded pubkey see HasScope=true for
+            // every scope, so this is a no-op locally. Free users on
+            // a signed prod build silently skip the entire flow — no
+            // poll, no notification, no Settings UI — as the user
+            // requested 2026-05-11 ("Nulla — silenzioso"). Re-runs
+            // automatically when LicenseService.LicenseChanged fires
+            // (e.g. after a Redeem succeeds).
+            if (!LicenseService.HasScope(LicenseService.ScopeNames.AutoUpdate))
+            {
+                App.Log("auto_update scope absent — skipping check (license-gated)", "Update");
+                return;
+            }
+
             var prefs = UiPreferences.Load();
             bool prerelease = string.Equals(prefs.UpdateChannel, "prerelease",
                 StringComparison.OrdinalIgnoreCase);

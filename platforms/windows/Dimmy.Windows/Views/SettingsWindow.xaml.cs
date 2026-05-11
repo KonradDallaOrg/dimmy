@@ -3274,10 +3274,35 @@ public sealed partial class SettingsWindow : Window
                 ? Microsoft.UI.Xaml.Visibility.Visible
                 : Microsoft.UI.Xaml.Visibility.Collapsed;
 
-        // Channel selector — restore last pick. Subscription to
-        // UpdateService.UpdateReady handles the "show card" side; we
-        // also reflect any update already downloaded before the
-        // Settings window was opened.
+        // Update UI gate — auto-update is a paid feature
+        // (LicenseService.ScopeNames.AutoUpdate). Free users see
+        // neither the channel selector nor the "Update ready" card;
+        // the UpdateService background loop also skips the poll.
+        // Source builds (HasScope=true for everything) get the full
+        // UI for dev testing. Subscribe to LicenseChanged so
+        // redemption mid-session flips the card on without restart.
+        bool autoUpdateEnabled = Services.LicenseService.HasScope(
+            Services.LicenseService.ScopeNames.AutoUpdate);
+        UpdateChannelCard.Visibility = autoUpdateEnabled
+            ? Visibility.Visible : Visibility.Collapsed;
+        Action onLicenseChanged = () => DispatcherQueue.TryEnqueue(() =>
+        {
+            bool nowEnabled = Services.LicenseService.HasScope(
+                Services.LicenseService.ScopeNames.AutoUpdate);
+            UpdateChannelCard.Visibility = nowEnabled
+                ? Visibility.Visible : Visibility.Collapsed;
+            // Hide the "Update ready" card too if scope was dropped
+            // (e.g. license expired). Show stays controlled by the
+            // UpdateReady event when scope returns.
+            if (!nowEnabled) UpdateCard.Visibility = Visibility.Collapsed;
+        });
+        Services.LicenseService.LicenseChanged += onLicenseChanged;
+        Closed += (_, _) =>
+        {
+            try { Services.LicenseService.LicenseChanged -= onLicenseChanged; } catch { }
+        };
+
+        // Channel selector — restore last pick.
         try
         {
             var prefs = Services.UiPreferences.Load();
