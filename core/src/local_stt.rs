@@ -719,6 +719,7 @@ mod whisper_cache {
         model_path: &std::path::Path,
         samples: &[f32],
         language: &str,
+        prompt: &str,
     ) -> Result<String, crate::error::TranscribeError> {
         use std::ffi::c_int;
         use whisper_rs::{FullParams, SamplingStrategy};
@@ -801,6 +802,18 @@ mod whisper_cache {
         crate::log("[LocalSTT] Inference state created");
 
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+
+        // Inject the composed user prompt + dict (Wispr Flow-style
+        // vocabulary biasing). Whisper.cpp treats `initial_prompt` as
+        // the preceding-context for the model — when present, recognition
+        // is biased toward those words. Empty string is the natural
+        // no-op (skip set_initial_prompt entirely so the binding doesn't
+        // emit "<|prev|>" framing for nothing). The 224-token Whisper
+        // limit is upstream's responsibility; we just forward the
+        // composed string straight through.
+        if !prompt.trim().is_empty() {
+            params.set_initial_prompt(prompt);
+        }
 
         if !language.is_empty() {
             params.set_language(Some(language));
@@ -893,6 +906,7 @@ pub fn transcribe_local(
     model_file: &Path,
     samples: &[f32], // 16 kHz mono
     language: &str,
+    prompt: &str,
 ) -> Result<String, TranscribeError> {
     // ── Precondition assertions ──────────────────────────────────
     assert!(!samples.is_empty(), "samples must not be empty");
@@ -909,7 +923,7 @@ pub fn transcribe_local(
     }
 
     // ── Transcribe with cached WhisperContext ────────────────────
-    let result = whisper_cache::transcribe(model_file, samples, language)?;
+    let result = whisper_cache::transcribe(model_file, samples, language, prompt)?;
 
     // ── Postcondition ────────────────────────────────────────────
     if result.is_empty() {
@@ -925,6 +939,7 @@ pub fn transcribe_local(
     _model_file: &Path,
     _samples: &[f32],
     _language: &str,
+    _prompt: &str,
 ) -> Result<String, TranscribeError> {
     Err(TranscribeError::LocalModel(
         "local STT not available: compile with `local-stt` feature".to_string(),
@@ -1025,7 +1040,7 @@ mod tests {
     #[test]
     fn transcribe_local_rejects_missing_model() {
         let samples = vec![0.0f32; 16000];
-        let result = transcribe_local(Path::new("/nonexistent/model.bin"), &samples, "en");
+        let result = transcribe_local(Path::new("/nonexistent/model.bin"), &samples, "en", "");
         assert!(result.is_err());
         if let Err(TranscribeError::LocalModel(msg)) = result {
             assert!(
@@ -1067,7 +1082,12 @@ mod tests {
     fn cache_rejects_missing_model() {
         // Trying to cache a non-existent model should fail gracefully
         clear_model_cache();
-        let result = transcribe_local(Path::new("/nonexistent/model.bin"), &[0.1f32; 16000], "en");
+        let result = transcribe_local(
+            Path::new("/nonexistent/model.bin"),
+            &[0.1f32; 16000],
+            "en",
+            "",
+        );
         assert!(result.is_err());
     }
 }

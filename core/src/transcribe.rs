@@ -243,6 +243,7 @@ pub fn transcribe_audio_local(
     audio: &crate::audio::ProcessedAudio,
     language: &str,
     model_filename: &str,
+    prompt: &str,
 ) -> Result<String, crate::error::TranscribeError> {
     // Preconditions
     assert!(
@@ -272,7 +273,7 @@ pub fn transcribe_audio_local(
     );
 
     let model_path = crate::local_stt::model_path(model_filename);
-    crate::local_stt::transcribe_local(&model_path, &samples_16k, language)
+    crate::local_stt::transcribe_local(&model_path, &samples_16k, language, prompt)
 }
 
 /// Transcribe ProcessedAudio locally using Parakeet TDT v3 FP32. No
