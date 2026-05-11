@@ -297,7 +297,12 @@ public static class TextInjectionService
     /// for both the phantom-release batch AND the Ctrl+C batch).</summary>
     public static bool SendCtrlC()
     {
-        const ushort VK_C = 0x43;
+        var held = new System.Collections.Generic.List<ushort>(ModifierVks.Length);
+        foreach (var vk in ModifierVks)
+        {
+            if ((GetAsyncKeyState(vk) & 0x8000) != 0) held.Add(vk);
+        }
+        var plan = PlanCtrlCBatch(held);
 
         // Single atomic SendInput batch: phantom-modifier releases
         // FIRST, then a clean Ctrl+C. The Win32 SendInput docs
@@ -306,20 +311,43 @@ public static class TextInjectionService
         // every release land before Ctrl-down arrives, no race, no
         // wall-clock sleep between phases. Replaces the previous
         // two-SendInput + Thread.Sleep(20) pattern.
-        var batch = new System.Collections.Generic.List<INPUT>(12);
-        foreach (var vk in ModifierVks)
+        var arr = new INPUT[plan.Count];
+        for (int i = 0; i < plan.Count; i++)
         {
-            if ((GetAsyncKeyState(vk) & 0x8000) != 0)
-                batch.Add(MakeKeyUp(vk));
+            var (vk, isUp) = plan[i];
+            arr[i] = isUp ? MakeKeyUp(vk) : MakeKeyDown(vk);
         }
-        batch.Add(MakeKeyDown(VK_CONTROL));
-        batch.Add(MakeKeyDown(VK_C));
-        batch.Add(MakeKeyUp(VK_C));
-        batch.Add(MakeKeyUp(VK_CONTROL));
-
-        var arr = batch.ToArray();
         uint sent = SendInput((uint)arr.Length, arr, Marshal.SizeOf<INPUT>());
         return sent == (uint)arr.Length;
+    }
+
+    /// <summary>
+    /// Plan the Ctrl+C SendInput batch given the modifier VKs the OS
+    /// currently considers held. Pure function — no Win32 calls — so
+    /// the ordering invariants the dictionary-hotkey path depends on
+    /// can be unit tested without standing up a window or a hook:
+    ///
+    ///   1. EVERY held modifier is released FIRST (else our synthetic
+    ///      Ctrl gets merged with the user's still-down Shift / Win /
+    ///      etc. — the chord most apps reject as copy).
+    ///   2. Releases preserve caller order (so callers can choose a
+    ///      stable order if they want; we feed them in <c>ModifierVks</c>
+    ///      array order which is L-modifiers before R-modifiers).
+    ///   3. Then exactly Ctrl-down, C-down, C-up, Ctrl-up — every key
+    ///      is balanced (no dangling presses left behind).
+    /// </summary>
+    public static System.Collections.Generic.IReadOnlyList<(ushort Vk, bool IsUp)>
+        PlanCtrlCBatch(System.Collections.Generic.IEnumerable<ushort> heldModifierVks)
+    {
+        const ushort VK_C = 0x43;
+        var list = new System.Collections.Generic.List<(ushort, bool)>(12);
+        foreach (var vk in heldModifierVks ?? System.Array.Empty<ushort>())
+            list.Add((vk, true));
+        list.Add((VK_CONTROL, false));
+        list.Add((VK_C, false));
+        list.Add((VK_C, true));
+        list.Add((VK_CONTROL, true));
+        return list;
     }
 
     [DllImport("user32.dll")]
