@@ -275,4 +275,62 @@ public static class TextInjectionService
             dwFlags = KEYEVENTF_KEYUP,
         }}
     };
+
+    /// <summary>Synthesize a Ctrl+C keystroke against the currently-
+    /// focused app. Used by the dictionary hotkey to copy whatever the
+    /// user has selected so we can read it from the clipboard.
+    ///
+    /// **Phantom-modifier release.** This runs WHILE the user is
+    /// physically holding the dict combo (Ctrl+Shift+D by default) —
+    /// WM_HOTKEY fires on the press edge. If we just SendInput
+    /// Ctrl+C, the OS merges our synthetic Ctrl with the user's
+    /// already-down Shift and the target app sees `Ctrl+Shift+C`,
+    /// which most apps do NOT interpret as copy (Notepad++:
+    /// comment-toggle; VS: comment-line). Result: clipboard stays
+    /// stale and the caller reads garbage from an earlier copy.
+    /// Same root cause as the Win+Alt paste-bug fixed for Ctrl+V in
+    /// SendInput above (line 150 comment). The defense is identical:
+    /// release every modifier the OS currently considers down, wait
+    /// 20 ms for the releases to land, then send a clean Ctrl+C.
+    ///
+    /// Returns true iff all SendInput calls succeeded (sent == count
+    /// for both the phantom-release batch AND the Ctrl+C batch).</summary>
+    public static bool SendCtrlC()
+    {
+        const ushort VK_C = 0x43;
+
+        // Single atomic SendInput batch: phantom-modifier releases
+        // FIRST, then a clean Ctrl+C. The Win32 SendInput docs
+        // guarantee "these events are not interspersed with other
+        // keyboard or mouse input events" — so the target app sees
+        // every release land before Ctrl-down arrives, no race, no
+        // wall-clock sleep between phases. Replaces the previous
+        // two-SendInput + Thread.Sleep(20) pattern.
+        var batch = new System.Collections.Generic.List<INPUT>(12);
+        foreach (var vk in ModifierVks)
+        {
+            if ((GetAsyncKeyState(vk) & 0x8000) != 0)
+                batch.Add(MakeKeyUp(vk));
+        }
+        batch.Add(MakeKeyDown(VK_CONTROL));
+        batch.Add(MakeKeyDown(VK_C));
+        batch.Add(MakeKeyUp(VK_C));
+        batch.Add(MakeKeyUp(VK_CONTROL));
+
+        var arr = batch.ToArray();
+        uint sent = SendInput((uint)arr.Length, arr, Marshal.SizeOf<INPUT>());
+        return sent == (uint)arr.Length;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern uint GetClipboardSequenceNumber();
+
+    /// <summary>Current OS clipboard sequence number. Increments on
+    /// every write (any process). Used to deterministically wait for
+    /// a clipboard update instead of sleeping a fixed wall-clock
+    /// duration. Returns 0 if the caller lacks GENERIC_READ on the
+    /// clipboard window station — practically zero on user desktop
+    /// processes, but the caller should handle 0 as "polling
+    /// unsupported, fall back to a bounded wait".</summary>
+    public static uint ClipboardSequenceNumber() => GetClipboardSequenceNumber();
 }

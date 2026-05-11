@@ -603,6 +603,72 @@
                 </controls:SettingCard>
                 <!-- API keys always stored in local encrypted file (keys.enc) -->
               </StackPanel>
+
+              <!-- ═══ Custom dictionary ═══ -->
+              <TextBlock Text="CUSTOM DICTIONARY"
+                         FontSize="12" FontWeight="SemiBold"
+                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                         CharacterSpacing="40" Margin="2,20,0,8" />
+              <TextBlock Text="Words you add here are injected as context on every transcription, so the STT model learns your jargon, names, and acronyms. Press the hotkey below in any app after selecting text to add a word in one keystroke."
+                         FontSize="12"
+                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                         TextWrapping="Wrap" Margin="2,0,0,8" />
+
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="6"
+                      Padding="14" Margin="0,8,0,0">
+                <StackPanel Spacing="10">
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBox x:Name="DictAddTextBox"
+                             PlaceholderText="word or short phrase"
+                             MinWidth="240"
+                             KeyDown="DictAddTextBox_KeyDown"/>
+                    <Button x:Name="DictAddBtn" Content="Add"
+                            Click="DictAdd_Click"
+                            Style="{ThemeResource AccentButtonStyle}"/>
+                    <TextBlock x:Name="DictStatusText"
+                               VerticalAlignment="Center"
+                               FontSize="12"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                  </StackPanel>
+                  <ListView x:Name="DictListView"
+                            ItemsSource="{Binding UserDict}"
+                            SelectionMode="None"
+                            MaxHeight="280">
+                    <ListView.ItemContainerStyle>
+                      <Style TargetType="ListViewItem">
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                        <Setter Property="Padding" Value="0"/>
+                      </Style>
+                    </ListView.ItemContainerStyle>
+                    <ListView.ItemTemplate>
+                      <DataTemplate>
+                        <Grid Padding="8,4" ColumnSpacing="8">
+                          <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                          </Grid.ColumnDefinitions>
+                          <TextBlock Grid.Column="0" Text="{Binding}"
+                                     VerticalAlignment="Center" FontSize="13"/>
+                          <Button Grid.Column="1" Tag="{Binding}"
+                                  Click="DictRemove_Click"
+                                  ToolTipService.ToolTip="Remove from dictionary"
+                                  Padding="6,4">
+                            <FontIcon Glyph="&#xE74D;" FontSize="12"/>
+                          </Button>
+                        </Grid>
+                      </DataTemplate>
+                    </ListView.ItemTemplate>
+                  </ListView>
+                  <TextBlock x:Name="DictEmptyHint"
+                             Text="No words yet. Add one above or press the shortcut after selecting text anywhere."
+                             FontSize="12"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                             TextWrapping="Wrap"
+                             Visibility="Collapsed"/>
+                </StackPanel>
+              </Border>
             </StackPanel>
 
             <!-- ═══ Shortcut ═══ -->
@@ -632,6 +698,16 @@
                   <RadioButton Content="Toggle" GroupName="ShortcutMode"
                                IsChecked="{Binding ShortcutMode, Mode=TwoWay, Converter={StaticResource StringToBoolConverter}, ConverterParameter=toggle}" />
                 </StackPanel>
+              </controls:SettingCard>
+
+              <TextBlock Text="DICTIONARY"
+                         FontSize="12" FontWeight="SemiBold"
+                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                         CharacterSpacing="40" Margin="2,20,0,8" />
+              <controls:SettingCard Glyph="&#xE82D;"
+                                    Label="Add-to-dictionary shortcut"
+                                    Description="Press the combo, then release to confirm. After pressing in any app while text is selected, the word is added to your custom dictionary in Voice input.">
+                <controls:ShortcutRecorder Shortcut="{Binding DictHotkey, Mode=TwoWay}" />
               </controls:SettingCard>
             </StackPanel>
 

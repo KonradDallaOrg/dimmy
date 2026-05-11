@@ -217,6 +217,28 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_meeting_is_paused();
 
+    // ── Custom vocabulary dictionary ───────────────────────────────
+    /// Append `word` to the user dictionary (case-insensitive dedupe +
+    /// persist to config.json). Returns 0 if added, 1 if already
+    /// present, -1 on invalid args / persistence failure.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_user_dict_add(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string word);
+
+    /// Remove `word` (case-insensitive). Returns the count of entries
+    /// dropped (0 = no match), or -1 on failure.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_user_dict_remove(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string word);
+
+    /// Read the current dictionary as a JSON array of strings into
+    /// outBuf. Returns the byte length, -1 on invalid args, or -2
+    /// when buf_len is too small for the JSON (caller retries with
+    /// a larger buffer).
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_user_dict_list_json(
+        byte[] outBuf, int bufLen);
+
     // ── Notion integration ──────────────────────────────────────────
     /// Save the user's Notion integration token to the AES-256 keystore.
     /// Empty string clears it. Returns 0 on success, -1 on failure.

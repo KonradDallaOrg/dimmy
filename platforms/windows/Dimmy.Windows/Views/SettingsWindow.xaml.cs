@@ -186,6 +186,40 @@ public sealed partial class SettingsWindow : Window
         // even when a token was already saved.
         NotionRefreshSummary();
 
+        // Custom-dict ListView source-of-truth lives in the Rust
+        // AppState; pull it now so the UI matches reality, AND
+        // restore the user's hotkey preference from UiPreferences so
+        // the ShortcutRecorder shows the right combo.
+        ReloadUserDict();
+        try
+        {
+            var prefs = Services.UiPreferences.Load();
+            ViewModel.DictHotkey = string.IsNullOrEmpty(prefs.DictHotkey)
+                ? "ctrl+shift+d" : prefs.DictHotkey;
+        }
+        catch { }
+
+        // Persist DictHotkey changes + re-register the global hotkey
+        // on the App's DictHotkeyService so the new combo binds
+        // without a restart.
+        ViewModel.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName != nameof(ViewModel.DictHotkey)) return;
+            if (!_loaded) return;
+            try
+            {
+                var prefs = Services.UiPreferences.Load();
+                prefs.DictHotkey = ViewModel.DictHotkey;
+                prefs.Save();
+                App.Instance?.ReregisterDictHotkey(ViewModel.DictHotkey);
+                App.Log($"dict hotkey updated to '{ViewModel.DictHotkey}'", "Dict");
+            }
+            catch (Exception ex)
+            {
+                App.Log($"DictHotkey save exc: {ex.Message}", "Dict");
+            }
+        };
+
         _loaded = true;
     }
 
@@ -3482,6 +3516,80 @@ public sealed partial class SettingsWindow : Window
     private void Cancel_Click(object sender, RoutedEventArgs e)
     {
         this.Close();
+    }
+
+    // ── Custom dictionary handlers ──────────────────────────────
+    // The dict lives in the Rust AppState (round-tripped through
+    // config.json). We refresh the ObservableCollection on Settings
+    // open + after every add / remove so the ListView reflects
+    // reality even if a global-hotkey Add fired while Settings was
+    // already open.
+
+    private void ReloadUserDict()
+    {
+        try
+        {
+            var list = Services.DictionaryService.List();
+            ViewModel.UserDict.Clear();
+            foreach (var w in list) ViewModel.UserDict.Add(w);
+            if (DictEmptyHint is not null)
+                DictEmptyHint.Visibility = list.Count == 0
+                    ? Visibility.Visible : Visibility.Collapsed;
+        }
+        catch (Exception ex)
+        {
+            App.Log($"ReloadUserDict exc: {ex.Message}", "Dict");
+        }
+    }
+
+    private void DictAdd_Click(object sender, RoutedEventArgs e)
+    {
+        var word = (DictAddTextBox?.Text ?? "").Trim();
+        if (string.IsNullOrEmpty(word))
+        {
+            DictStatusText.Text = "Type a word first.";
+            return;
+        }
+        int rc = Services.DictionaryService.Add(word);
+        switch (rc)
+        {
+            case 0:
+                DictStatusText.Text = $"Added “{word}”.";
+                DictAddTextBox.Text = "";
+                break;
+            case 1:
+                DictStatusText.Text = $"“{word}” is already in the dictionary.";
+                break;
+            default:
+                DictStatusText.Text = $"Couldn't add (rc={rc}).";
+                break;
+        }
+        ReloadUserDict();
+    }
+
+    private void DictAddTextBox_KeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
+    {
+        if (e.Key == global::Windows.System.VirtualKey.Enter)
+        {
+            DictAdd_Click(sender, e);
+            e.Handled = true;
+        }
+    }
+
+    private void DictRemove_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement fe) return;
+        if (fe.Tag is not string word || string.IsNullOrEmpty(word)) return;
+        int removed = Services.DictionaryService.Remove(word);
+        if (removed > 0)
+        {
+            DictStatusText.Text = $"Removed “{word}”.";
+        }
+        else
+        {
+            DictStatusText.Text = $"“{word}” was not in the dictionary.";
+        }
+        ReloadUserDict();
     }
 
     // ── Privacy panel handlers ──────────────────────────────────

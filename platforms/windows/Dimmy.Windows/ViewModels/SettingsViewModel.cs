@@ -111,6 +111,16 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _apiKey = "";
     [ObservableProperty] private bool _hasApiKey;
     [ObservableProperty] private string _prompt = "";
+    /// <summary>User-curated vocabulary list — see core/src/lib.rs
+    /// `compose_stt_prompt`. Loaded from / pushed to the Rust
+    /// AppState via DictionaryService FFI; round-trips through
+    /// dimmy_set_config_json too (the "user_dict" field on the
+    /// snapshot is the same source of truth).</summary>
+    public System.Collections.ObjectModel.ObservableCollection<string> UserDict { get; } = new();
+    /// <summary>Hotkey for "add selected text to dictionary".
+    /// Persisted to UiPreferences.DictHotkey (NOT config.json — it's
+    /// a Win-only UI knob). Default Ctrl+Shift+D.</summary>
+    [ObservableProperty] private string _dictHotkey = "ctrl+shift+d";
     [ObservableProperty] private string _shortcut = "Win+Alt";
     [ObservableProperty] private string _shortcutMode = "toggle";
     [ObservableProperty] private string? _selectedDevice;
