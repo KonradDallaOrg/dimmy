@@ -27,6 +27,14 @@ public partial class App : Application
     /// Onboarding) can subscribe to FFI-routed events that the App-level
     /// callback already de-duplicates and dispatches onto the UI thread.
     public AppViewModel AppViewModel => _appViewModel;
+
+    /// <summary>Dispatch an action onto the UI thread. Safe to call
+    /// from any thread; no-op if the dispatcher hasn't been captured
+    /// yet (very early startup). Used by background services
+    /// (UpdateService, etc.) that need to raise events without
+    /// hardcoding their own DispatcherQueue resolution.</summary>
+    public void RunOnUI(Action action) => _dispatcherQueue?.TryEnqueue(() => action());
+
     private PillWindow? _pillWindow;
     private CaptionWindow? _captionWindow;
     private MeetingWindow? _meetingWindow;
@@ -406,6 +414,20 @@ public partial class App : Application
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"[App] JumpList register failed: {ex.Message}");
+        }
+
+        // Auto-update: Velopack wrapper kicks off ~5 s after startup
+        // and re-checks every 6 h while Dimmy stays open. Surfaces an
+        // UpdateReady event the Settings card + taskbar overlay
+        // subscribe to. No admin prompt; writes to %LOCALAPPDATA%.
+        try
+        {
+            UpdateService.EnsureCreated();
+            UpdateService.Instance?.StartBackgroundLoop();
+        }
+        catch (Exception ex)
+        {
+            Log($"UpdateService start failed: {ex.Message}", "Update");
         }
     }
 
@@ -1252,10 +1274,35 @@ public partial class App : Application
         }
     }
 
-    public void QuitApp() => Quit();
+    public async void QuitApp() => await QuitAsync();
 
-    private void Quit()
+    /// <summary>Sync facade for callers that can't await (tray menu
+    /// callback delegate, jump-list command pipe). Fire-and-forget —
+    /// the UI thread continues normally while the async path tears
+    /// services down. Equivalent to QuitApp(); the rename keeps the
+    /// public surface intuitive for external callers.</summary>
+    private void Quit() => _ = QuitAsync();
+
+    private async Task QuitAsync()
     {
+        // Auto-update prompt at quit — only if an update was already
+        // downloaded in the background AND we still have a XamlRoot to
+        // host the dialog on. The "Mixed" UX picked 2026-05-11: silent
+        // download + ask before apply. ApplyAndRestart never returns
+        // (Velopack swaps the EXE and re-spawns); ApplyOnExit stages
+        // the swap so the next normal launch picks up the new version.
+        if (UpdateService.Instance?.IsUpdateReady == true)
+        {
+            var apply = await AskApplyUpdateAsync();
+            if (apply == true)
+            {
+                UpdateService.Instance.ApplyAndRestart();
+                return; // never reached — Velopack exits the process
+            }
+            // Skip / no-dialog-possible: still stage so next launch picks up.
+            UpdateService.Instance.ApplyOnExit();
+        }
+
         _hotkeyService?.Dispose();
         _trayService?.Dispose();
         _commandPipe?.Dispose();
@@ -1279,6 +1326,41 @@ public partial class App : Application
         _singleInstanceMutex?.ReleaseMutex();
         _singleInstanceMutex?.Dispose();
         Exit();
+    }
+
+    /// <summary>Ask the user "Apply update now or skip?" via a
+    /// ContentDialog anchored on whatever XamlRoot is currently
+    /// available (pill window or taskbar anchor). Returns true for
+    /// Apply, false for Skip, null when no XamlRoot is available
+    /// (quit-from-tray with no visible window) — in which case
+    /// callers should stage the update for next launch silently.</summary>
+    private async Task<bool?> AskApplyUpdateAsync()
+    {
+        var anchor = (FrameworkElement?)_pillWindow?.Content
+                  ?? (FrameworkElement?)_taskbarAnchor?.Content;
+        if (anchor?.XamlRoot is null) return null;
+        try
+        {
+            var version = UpdateService.Instance?.PendingVersion ?? "";
+            var dlg = new Microsoft.UI.Xaml.Controls.ContentDialog
+            {
+                Title = "Update ready",
+                Content = string.IsNullOrEmpty(version)
+                    ? "A Dimmy update is downloaded.\nApply now? Dimmy will close and reopen on the new version."
+                    : $"Dimmy v{version} is downloaded.\nApply now? Dimmy will close and reopen on the new version.",
+                PrimaryButtonText = "Apply & restart",
+                CloseButtonText = "Skip this time",
+                DefaultButton = Microsoft.UI.Xaml.Controls.ContentDialogButton.Primary,
+                XamlRoot = anchor.XamlRoot,
+            };
+            var result = await dlg.ShowAsync();
+            return result == Microsoft.UI.Xaml.Controls.ContentDialogResult.Primary;
+        }
+        catch (Exception ex)
+        {
+            Log($"AskApplyUpdate dialog failed: {ex.Message}", "Update");
+            return null;
+        }
     }
 
     private static bool IsOnboardingComplete()

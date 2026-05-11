@@ -47,6 +47,13 @@ public sealed class UiPreferences
     /// "set Light → reverts to Auto on reopen" bug.</summary>
     public string Theme { get; set; } = "Default";
 
+    /// <summary>Auto-update channel: "stable" (default — Latest GitHub
+    /// release only) or "prerelease" (also offers staging-native builds
+    /// off the staging-latest tag). The user picks in Settings → About;
+    /// UpdateService reads it on every BackgroundCheckAsync to decide
+    /// whether to set GithubSource.prerelease=true.</summary>
+    public string UpdateChannel { get; set; } = "stable";
+
     private static string PrefsPath
     {
         get
