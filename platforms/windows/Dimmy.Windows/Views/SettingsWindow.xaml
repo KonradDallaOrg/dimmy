@@ -1421,16 +1421,48 @@
                    are the visible carriers now. -->
               <TextBlock x:Name="VersionText" Visibility="Collapsed" />
 
-              <!-- Update-available banner: only shown when GitHub has a newer
-                   tag than the running build. Sits between hero and the
-                   resources group so users see it first. -->
+              <!-- Update-available banner: Velopack background loop
+                   (UpdateService.StartBackgroundLoop) silently downloads
+                   the update + raises UpdateReady; we flip this card
+                   Visible and the user can apply now or wait for the
+                   quit-time prompt. Mixed UX picked 2026-05-11. -->
               <controls:SettingCard x:Name="UpdateCard"
                                     Glyph="&#xEBD3;"
-                                    Label="Update available"
-                                    Description="A newer version of Dimmy is ready to download."
+                                    Label="Update ready"
+                                    Description="A new version of Dimmy is downloaded and ready to install."
                                     Visibility="Collapsed"
                                     Margin="0,16,0,0">
-                <HyperlinkButton x:Name="UpdateLink" Content="" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <Button x:Name="UpdateInstallBtn"
+                          Content="Install &amp; restart"
+                          Style="{ThemeResource AccentButtonStyle}"
+                          Click="UpdateInstallNow_Click"/>
+                  <HyperlinkButton x:Name="UpdateLink"
+                                   Content="Release notes"
+                                   ToolTipService.ToolTip="Open the release page on GitHub"/>
+                </StackPanel>
+              </controls:SettingCard>
+
+              <!-- Update channel selector. "Stable" picks only the
+                   GitHub "Latest" tag; "Stable + Pre-release" also
+                   considers staging-native builds tagged
+                   staging-latest. Persisted to UiPreferences.UpdateChannel
+                   (NOT config.json — Rust core has no opinion).
+                   The card is hidden for users without the
+                   auto_update license scope — they see no update UI
+                   at all (silent-gating UX picked 2026-05-11). -->
+              <controls:SettingCard x:Name="UpdateChannelCard"
+                                    Glyph="&#xE74C;"
+                                    Label="Update channel"
+                                    Description="Stable only is the safer default. Pre-release also offers staging builds with new features earlier."
+                                    Visibility="Collapsed"
+                                    Margin="0,8,0,0">
+                <ComboBox x:Name="UpdateChannelCombo"
+                          MinWidth="200"
+                          SelectionChanged="UpdateChannel_SelectionChanged">
+                  <ComboBoxItem Content="Stable only" Tag="stable"/>
+                  <ComboBoxItem Content="Stable + Pre-release" Tag="prerelease"/>
+                </ComboBox>
               </controls:SettingCard>
 
               <TextBlock Text="RESOURCES"

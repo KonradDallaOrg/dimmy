@@ -3321,16 +3321,146 @@ public sealed partial class SettingsWindow : Window
             StagingBanner.Visibility = BuildInfo.IsStaging
                 ? Microsoft.UI.Xaml.Visibility.Visible
                 : Microsoft.UI.Xaml.Visibility.Collapsed;
-        _ = CheckForUpdateAsync();
+
+        // Update UI gate — auto-update is a paid feature
+        // (LicenseService.ScopeNames.AutoUpdate). Free users see
+        // neither the channel selector nor the "Update ready" card;
+        // the UpdateService background loop also skips the poll.
+        // Source builds (HasScope=true for everything) get the full
+        // UI for dev testing. Subscribe to LicenseChanged so
+        // redemption mid-session flips the card on without restart.
+        bool autoUpdateEnabled = Services.LicenseService.HasScope(
+            Services.LicenseService.ScopeNames.AutoUpdate);
+        UpdateChannelCard.Visibility = autoUpdateEnabled
+            ? Visibility.Visible : Visibility.Collapsed;
+        Action onLicenseChanged = () => DispatcherQueue.TryEnqueue(() =>
+        {
+            bool nowEnabled = Services.LicenseService.HasScope(
+                Services.LicenseService.ScopeNames.AutoUpdate);
+            UpdateChannelCard.Visibility = nowEnabled
+                ? Visibility.Visible : Visibility.Collapsed;
+            // Hide the "Update ready" card too if scope was dropped
+            // (e.g. license expired). Show stays controlled by the
+            // UpdateReady event when scope returns.
+            if (!nowEnabled) UpdateCard.Visibility = Visibility.Collapsed;
+        });
+        Services.LicenseService.LicenseChanged += onLicenseChanged;
+        Closed += (_, _) =>
+        {
+            try { Services.LicenseService.LicenseChanged -= onLicenseChanged; } catch { }
+        };
+
+        // Channel selector — restore last pick.
+        try
+        {
+            var prefs = Services.UiPreferences.Load();
+            for (int i = 0; i < UpdateChannelCombo.Items.Count; i++)
+            {
+                if (UpdateChannelCombo.Items[i] is ComboBoxItem cbi
+                    && cbi.Tag is string tag && tag == prefs.UpdateChannel)
+                {
+                    UpdateChannelCombo.SelectedIndex = i;
+                    break;
+                }
+            }
+            if (UpdateChannelCombo.SelectedIndex < 0) UpdateChannelCombo.SelectedIndex = 0;
+        }
+        catch { }
+
+        // Subscribe + reflect current state. UpdateService background
+        // loop may have already downloaded an update before Settings
+        // opened — handle both "already ready" and "ready while
+        // Settings is open" without leaking subscriptions: detach on
+        // Closed below.
+        if (Services.UpdateService.Instance is { } upd)
+        {
+            upd.UpdateReady += UpdateService_UpdateReady;
+            if (upd.IsUpdateReady) ReflectUpdateReady(upd.PendingVersion);
+            Closed += (_, _) => { try { upd.UpdateReady -= UpdateService_UpdateReady; } catch { } };
+        }
+    }
+
+    private void UpdateService_UpdateReady(object? sender, EventArgs e)
+    {
+        var version = Services.UpdateService.Instance?.PendingVersion ?? "";
+        DispatcherQueue.TryEnqueue(() => ReflectUpdateReady(version));
+    }
+
+    private void ReflectUpdateReady(string version)
+    {
+        UpdateCard.Description = string.IsNullOrEmpty(version)
+            ? "A new version of Dimmy is downloaded and ready to install."
+            : $"Dimmy v{version} is downloaded and ready to install.";
+        UpdateCard.Visibility = Visibility.Visible;
+        UpdateLink.NavigateUri = new Uri(
+            "https://github.com/KonradDallaOrg/dimmy/releases" +
+            (string.IsNullOrEmpty(version) ? "" : $"/tag/v{version}"));
+    }
+
+    private void UpdateInstallNow_Click(object sender, RoutedEventArgs e)
+    {
+        // ApplyAndRestart never returns: Velopack spawns its updater,
+        // tears down the current EXE, and re-launches the new build.
+        // No need to dispose anything here — the OS reclaims it.
+        Services.UpdateService.Instance?.ApplyAndRestart();
+    }
+
+    private void UpdateChannel_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_loaded) return;
+        if (UpdateChannelCombo.SelectedItem is not ComboBoxItem cbi) return;
+        if (cbi.Tag is not string tag) return;
+        try
+        {
+            var prefs = Services.UiPreferences.Load();
+            prefs.UpdateChannel = tag;
+            prefs.Save();
+            App.Log($"channel set to {tag}, forcing re-check", "Update");
+            // Channel change must re-check immediately — the user
+            // expects toggling "Pre-release" to surface a staging
+            // build right away if one exists, not at the next 6h tick.
+            _ = Services.UpdateService.Instance?.CheckAndDownloadAsync();
+        }
+        catch (Exception ex)
+        {
+            App.Log($"channel save failed: {ex.Message}", "Update");
+        }
     }
 
     private async void CheckUpdates_Click(object sender, RoutedEventArgs e)
     {
+        // Force-fire the Velopack background check. Useful for users
+        // who don't want to wait up to 6 h for the next periodic tick
+        // (e.g. just saw a release announcement) and for our own
+        // staging-to-staging test cycle where the second build needs
+        // to be discovered as soon as it's published.
+        //
+        // Falls back to opening the download page in the browser when
+        // the UpdateService isn't enabled — that's the auto_update
+        // license scope being absent (free user) OR a dev source
+        // build where Velopack metadata isn't present. Either way the
+        // user still gets a way to get the latest version.
+        if (sender is Button btn) btn.IsEnabled = false;
         try
         {
-            await global::Windows.System.Launcher.LaunchUriAsync(new Uri("https://dimmy.app/download"));
+            var svc = Services.UpdateService.Instance;
+            if (svc is null
+                || !Services.LicenseService.HasScope(Services.LicenseService.ScopeNames.AutoUpdate))
+            {
+                await global::Windows.System.Launcher.LaunchUriAsync(
+                    new Uri("https://dimmy.app/download"));
+                return;
+            }
+            await svc.CheckAndDownloadAsync();
         }
-        catch { }
+        catch (Exception ex)
+        {
+            App.Log($"CheckUpdates_Click exc: {ex.Message}", "Update");
+        }
+        finally
+        {
+            if (sender is Button btn2) btn2.IsEnabled = true;
+        }
     }
 
     private async void ReleaseNotes_Click(object sender, RoutedEventArgs e)
@@ -3343,43 +3473,11 @@ public sealed partial class SettingsWindow : Window
         catch { }
     }
 
-    private async Task CheckForUpdateAsync()
-    {
-        try
-        {
-            using var http = new HttpClient();
-            http.DefaultRequestHeaders.UserAgent.ParseAdd("Dimmy-Updater");
-            http.Timeout = TimeSpan.FromSeconds(10);
-
-            var resp = await http.GetStringAsync(
-                "https://api.github.com/repos/KonradDallaOrg/dimmy/releases/latest");
-            using var doc = JsonDocument.Parse(resp);
-            var root = doc.RootElement;
-
-            var tagName = root.GetProperty("tag_name").GetString() ?? "";
-            var latestVersion = tagName.TrimStart('v');
-            var htmlUrl = root.GetProperty("html_url").GetString() ?? "";
-
-            if (IsNewerVersion(latestVersion, _currentVersion) && !string.IsNullOrEmpty(htmlUrl))
-            {
-                DispatcherQueue.TryEnqueue(() =>
-                {
-                    UpdateLink.Content = $"Update available: v{latestVersion}";
-                    UpdateLink.NavigateUri = new Uri(htmlUrl);
-                    UpdateLink.Visibility = Visibility.Visible;
-                });
-            }
-        }
-        catch { /* no network = no update check, that's fine */ }
-    }
-
-    /// <summary>Compare two semver strings. Returns true if candidate > current.</summary>
-    private static bool IsNewerVersion(string candidate, string current)
-    {
-        if (Version.TryParse(candidate, out var c) && Version.TryParse(current, out var cur))
-            return c > cur;
-        return false;
-    }
+    // CheckForUpdateAsync + IsNewerVersion removed 2026-05-11 — the
+    // GitHub-Releases poll has been replaced by UpdateService (Velopack
+    // wrapper). The new path silently downloads the delta + surfaces
+    // UpdateReady, so this Settings window only needs to reflect state
+    // raised by that service.
 
     private void Cancel_Click(object sender, RoutedEventArgs e)
     {
