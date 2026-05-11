@@ -479,6 +479,92 @@ struct ModifierShortcut: Equatable {
     }
 }
 
+/// Modifier+key chord — distinct from `ModifierShortcut` (which is
+/// modifier-only). Used by the user-dictionary "add to dict" hotkey
+/// (Cmd+Shift+D by default). The Win side persists the equivalent
+/// combo as a "ctrl+shift+d"-style string in UiPreferences; on Mac we
+/// keep the structured form because the modifier set is mostly fixed
+/// (we only let the user pick the LETTER and toggle modifiers in
+/// Settings, not arbitrary key codes).
+struct HotkeyCombo: Equatable {
+    var control: Bool
+    var option: Bool
+    var command: Bool
+    var shift: Bool
+    /// macOS virtual key code for the non-modifier key. Letters: A=0,
+    /// S=1, D=2, F=3, …  See HIToolbox/Events.h kVK_ANSI_* constants.
+    var keyCode: UInt16
+    /// Display character for the keyCode (uppercase letter). Stored
+    /// separately so we don't have to maintain a keyCode→char table
+    /// inside View code — the keypad recorder writes both on capture.
+    var keyChar: String
+
+    var displayParts: [String] {
+        var parts: [String] = []
+        if control { parts.append("⌃") }
+        if option { parts.append("⌥") }
+        if shift { parts.append("⇧") }
+        if command { parts.append("⌘") }
+        if !keyChar.isEmpty { parts.append(keyChar) }
+        return parts
+    }
+
+    var displayString: String { displayParts.joined(separator: "") }
+
+    /// Match a keyDown event against this combo. CGEvent flag masks vs
+    /// NSEvent.ModifierFlags — we receive NSEvent here from the event
+    /// tap wrapper. Strict equality on each modifier so e.g. Cmd+Shift
+    /// doesn't accidentally match plain Cmd+D.
+    func matches(flags: NSEvent.ModifierFlags, keyCode kc: UInt16) -> Bool {
+        let f = flags.intersection(.deviceIndependentFlagsMask)
+        return kc == keyCode
+            && f.contains(.control) == control
+            && f.contains(.option) == option
+            && f.contains(.command) == command
+            && f.contains(.shift) == shift
+    }
+
+    /// Mac default = ⌘⇧D — mirrors Win's Ctrl+Shift+D combo for
+    /// muscle-memory consistency across platforms. macOS keyCode for
+    /// "D" is 0x02 (kVK_ANSI_D).
+    static let defaultDictHotkey = HotkeyCombo(
+        control: false, option: false, command: true, shift: true,
+        keyCode: 0x02, keyChar: "D"
+    )
+
+    /// Compact string form for UserDefaults round-trip. Mirrors Win's
+    /// "ctrl+shift+d" persistence grammar so config files are
+    /// human-inspectable on both platforms. Format:
+    /// `[ctrl+][opt+][cmd+][shift+]<keyCode hex>:<keyChar>`. The keyCode
+    /// is the source of truth on read-back; keyChar is for display only.
+    var encoded: String {
+        var parts: [String] = []
+        if control { parts.append("ctrl") }
+        if option { parts.append("opt") }
+        if command { parts.append("cmd") }
+        if shift { parts.append("shift") }
+        parts.append(String(format: "%02x:%@", keyCode, keyChar))
+        return parts.joined(separator: "+")
+    }
+
+    /// Inverse of `encoded`. Returns nil for malformed input; callers
+    /// should fall back to `defaultDictHotkey` in that case.
+    init?(encoded: String) {
+        let tokens = encoded.split(separator: "+").map(String.init)
+        guard let last = tokens.last, let colon = last.firstIndex(of: ":") else { return nil }
+        let hex = String(last[..<colon])
+        let char = String(last[last.index(after: colon)...])
+        guard let kc = UInt16(hex, radix: 16) else { return nil }
+        let mods = Set(tokens.dropLast())
+        self.control = mods.contains("ctrl")
+        self.option = mods.contains("opt")
+        self.command = mods.contains("cmd")
+        self.shift = mods.contains("shift")
+        self.keyCode = kc
+        self.keyChar = char
+    }
+}
+
 // MARK: - Hotkey Status (surfaces CGEventTap install state to the UI)
 
 /// Tracks whether the global shortcut interception is live.
@@ -737,6 +823,27 @@ final class AppState: ObservableObject {
     /// False = user clicks the "Send to Notion" button per meeting.
     @Published var notionAutoSend: Bool = false
 
+    // MARK: - Custom vocabulary / user dictionary
+
+    /// Words / short phrases the user has flagged to boost in STT.
+    /// Mirrored from the Rust `user_dict` config field; persisted via
+    /// `toRustConfig()`. Order is preserved for UI display but doesn't
+    /// matter for the STT bias itself (the Rust `compose_stt_prompt`
+    /// joins them with commas before passing to Whisper / cloud /
+    /// Gemini / Deepgram).
+    @Published var userDictWords: [String] = []
+
+    /// Global hotkey that triggers "copy selection + add to dictionary".
+    /// Default Cmd+Shift+D. Same grammar / parser as `shortcut` but used
+    /// by `DictHotkeyManager` (separate CGEventTap, doesn't conflict
+    /// with the main dictation hotkey). Persisted to UserDefaults
+    /// rather than config.json because it's a Mac-only UI knob —
+    /// the Rust core has no opinion on which key adds to the dict,
+    /// only on what's IN the dict.
+    @Published var dictHotkey: HotkeyCombo = .defaultDictHotkey {
+        didSet { UserDefaults.standard.set(dictHotkey.encoded, forKey: "dictHotkeyEncoded") }
+    }
+
     // MARK: - App rules (foreground-app overrides)
 
     /// User-curated rules evaluated top-down at hotkey-down. Persisted
@@ -799,6 +906,10 @@ final class AppState: ObservableObject {
             self.shortcut = ModifierShortcut(encoded: savedShortcut)
         } else {
             self.shortcut = .default
+        }
+        if let saved = UserDefaults.standard.string(forKey: "dictHotkeyEncoded"),
+           let combo = HotkeyCombo(encoded: saved) {
+            self.dictHotkey = combo
         }
         self.buyerEmail = UserDefaults.standard.string(forKey: "buyerEmail")
     }
@@ -901,6 +1012,11 @@ final class AppState: ObservableObject {
         if let v = config["notion_target_kind"] as? String { notionTargetKind = v }
         if let v = config["notion_target_title"] as? String { notionTargetTitle = v }
         if let v = config["notion_auto_send"] as? Bool { notionAutoSend = v }
+        if let arr = config["user_dict"] as? [String] {
+            // Rust strips empty / whitespace entries already; defensive
+            // copy keeps the UI list rendering predictable.
+            userDictWords = arr.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        }
 
         // App rules — array of dicts matching Rust serde shape
         if let arr = config["app_rules"] as? [[String: Any]] {
@@ -952,6 +1068,7 @@ final class AppState: ObservableObject {
             "notion_target_kind": notionTargetKind,
             "notion_target_title": notionTargetTitle,
             "notion_auto_send": notionAutoSend,
+            "user_dict": userDictWords,
             "app_rules": appRules.map { $0.toDict() },
         ]
         if let dev = selectedDevice {

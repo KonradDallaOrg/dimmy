@@ -400,4 +400,21 @@ int32_t dimmy_history_update_audio(int32_t id,
                                    const char * _Nullable path_ptr,
                                    int64_t size_bytes);
 
+// ── User dictionary (vocabulary biasing) ─────────────────────────
+
+/// Append `word_ptr` to the user dictionary. Case-insensitive dedupe +
+/// persists to config.json. Returns:
+///   0  added (new word)
+///   1  already present (no-op)
+///  -1  invalid args / persistence failure
+int32_t dimmy_user_dict_add(const char * _Nonnull word_ptr);
+
+/// Remove all entries matching `word_ptr` (case-insensitive). Returns
+/// the count of entries dropped (0 = no match), or -1 on failure.
+int32_t dimmy_user_dict_remove(const char * _Nonnull word_ptr);
+
+/// Write the current dictionary to `out_buf` as a JSON array of
+/// strings. Returns byte length, -1 invalid args, -2 buf too small.
+int32_t dimmy_user_dict_list_json(char * _Nonnull out_buf, int32_t buf_len);
+
 #endif /* DimmyFFI_h */

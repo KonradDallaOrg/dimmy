@@ -8,11 +8,17 @@ import SwiftUI
 struct MacShortcutPage: View {
     @ObservedObject var appState: AppState
     @State private var showRecorder = false
+    @State private var showDictRecorder = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             hotkeyGroup
+            dictHotkeyGroup
             behaviorGroup
+        }
+        .sheet(isPresented: $showDictRecorder) {
+            DictHotkeyRecorderSheet(appState: appState, isPresented: $showDictRecorder)
+                .frame(minWidth: 420, minHeight: 220)
         }
         .sheet(isPresented: $showRecorder) {
             // Phase 4: dedicated capture sheet. For now jump back to the
@@ -77,6 +83,30 @@ struct MacShortcutPage: View {
         }
     }
 
+    private var dictHotkeyGroup: some View {
+        Group {
+            MacGroupLabel(text: "Dictionary")
+            MacTile {
+                MacRow(
+                    "Add to dictionary",
+                    description: "Select text in any app, press this combo to teach Dimmy your custom words",
+                    icon: "text.badge.plus",
+                    iconBackground: Color(red: 0.40, green: 0.73, blue: 0.42),
+                    showsDivider: false
+                ) {
+                    HStack(spacing: 4) {
+                        ForEach(appState.dictHotkey.displayParts, id: \.self) { glyph in
+                            MacKeycap(glyph: glyph)
+                        }
+                    }
+                    Button("Change…") { showDictRecorder = true }
+                        .controlSize(.small)
+                }
+            }
+            MacGroupFooter(text: "macOS Services menu also has “Add to Dimmy Dictionary” — right-click any selection.")
+        }
+    }
+
     private var behaviorGroup: some View {
         Group {
             MacGroupLabel(text: "Status")
@@ -112,5 +142,114 @@ struct MacShortcutPage: View {
                 .foregroundStyle(.gray)
                 .font(.system(size: 12, weight: .medium))
         }
+    }
+}
+
+/// Capture sheet for the "add to dictionary" hotkey. Press any
+/// modifier+letter combo to bind. Mirrors the Win
+/// `DictHotkeyCaptureDialog` semantics: at least one modifier required,
+/// letter must be A–Z. The sheet uses `NSEvent.addLocalMonitorForEvents`
+/// while shown so we don't fight with the global CGEventTap; closes
+/// itself after a valid bind. The persistence side (UserDefaults +
+/// DictHotkeyManager refresh) is driven by `AppState.dictHotkey.didSet`.
+private struct DictHotkeyRecorderSheet: View {
+    @ObservedObject var appState: AppState
+    @Binding var isPresented: Bool
+    @State private var monitor: Any?
+    @State private var lastError: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("Capture dictionary hotkey")
+                    .font(.system(size: 15, weight: .semibold))
+                Spacer()
+                Button("Cancel") { isPresented = false }
+                    .keyboardShortcut(.cancelAction)
+            }
+
+            Text("Press a combination — at least one modifier plus a letter. Cmd+Shift+D is the default.")
+                .font(.system(size: 12))
+                .foregroundStyle(Color.macTextSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 6) {
+                ForEach(appState.dictHotkey.displayParts, id: \.self) { glyph in
+                    MacKeycap(glyph: glyph)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 56)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color(nsColor: .controlBackgroundColor))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Color.macControlStroke, lineWidth: 0.5)
+            )
+
+            if let err = lastError {
+                Label(err, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.orange)
+            } else {
+                Text("Listening…")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.macTextSecondary)
+            }
+
+            Spacer()
+
+            HStack {
+                Button("Restore default") {
+                    appState.dictHotkey = .defaultDictHotkey
+                }
+                .controlSize(.small)
+                Spacer()
+                Button("Done") { isPresented = false }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .onAppear { installMonitor() }
+        .onDisappear { removeMonitor() }
+    }
+
+    private func installMonitor() {
+        // Local key monitor — fires for keys delivered to this window.
+        // We must consume the event (return nil) so the standard "key
+        // beep on unhandled keyDown" doesn't fire for every press.
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            let modCount = [
+                flags.contains(.control), flags.contains(.option),
+                flags.contains(.command), flags.contains(.shift),
+            ].filter { $0 }.count
+            if modCount == 0 {
+                lastError = "Add at least one modifier"
+                return nil
+            }
+            guard let chars = event.charactersIgnoringModifiers?.uppercased(),
+                  let letter = chars.first, letter.isLetter else {
+                lastError = "Use a letter (A–Z)"
+                return nil
+            }
+            appState.dictHotkey = HotkeyCombo(
+                control: flags.contains(.control),
+                option: flags.contains(.option),
+                command: flags.contains(.command),
+                shift: flags.contains(.shift),
+                keyCode: event.keyCode,
+                keyChar: String(letter)
+            )
+            lastError = nil
+            return nil
+        }
+    }
+
+    private func removeMonitor() {
+        if let m = monitor { NSEvent.removeMonitor(m) }
+        monitor = nil
     }
 }

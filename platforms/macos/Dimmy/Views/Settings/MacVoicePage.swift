@@ -14,6 +14,13 @@ struct MacVoicePage: View {
     @State private var downloadInFlight: Bool = false
     @State private var downloadFailed: String? = nil
 
+    /// Text-field state for the "add a word" row in the custom-dictionary
+    /// section. Kept inline to avoid a parallel view-model class — the
+    /// list itself lives on AppState and `addDictWord` calls the FFI so
+    /// the Rust core remains the single writer.
+    @State private var newDictWord: String = ""
+    @State private var dictAddError: String? = nil
+
     /// Sentinel value for the Parakeet entry in the unified local-model
     /// Picker. Mirrors `ParakeetTag` in the Windows OnboardingWindow.xaml.cs
     /// so the two UIs round-trip the same selection through the Rust core.
@@ -24,10 +31,107 @@ struct MacVoicePage: View {
             speechRecognitionGroup
             microphoneGroup
             audioProcessingGroup
+            customDictionaryGroup
 
             if appState.showAdvanced {
                 advancedGroup
             }
+        }
+    }
+
+    // MARK: Custom dictionary
+    //
+    // Wispr Flow-style user-curated vocabulary. Surfaces at top level
+    // (not gated by Advanced) because the feature is the user's main
+    // entry point to teach Dimmy domain words. Each word is sent through
+    // the FFI; the Rust core dedupes case-insensitively and persists.
+
+    private var customDictionaryGroup: some View {
+        Group {
+            MacGroupLabel(text: "Custom dictionary")
+            MacTile {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 8) {
+                        TextField("Add a word or short phrase", text: $newDictWord)
+                            .textFieldStyle(.roundedBorder)
+                            .onSubmit { addDictWord() }
+                        Button("Add") { addDictWord() }
+                            .disabled(newDictWord.trimmingCharacters(in: .whitespaces).isEmpty)
+                            .keyboardShortcut(.defaultAction)
+                    }
+                    if let err = dictAddError {
+                        Text(err)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.orange)
+                    }
+
+                    if appState.userDictWords.isEmpty {
+                        Text("No custom words yet. Use the Add field, the Services menu, or the global hotkey (\(appState.dictHotkey.displayString)) on a selection in any app.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.macTextSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 4) {
+                                ForEach(appState.userDictWords, id: \.self) { word in
+                                    HStack {
+                                        Text(word)
+                                            .font(.system(size: 12))
+                                        Spacer()
+                                        Button {
+                                            removeDictWord(word)
+                                        } label: {
+                                            Image(systemName: "minus.circle.fill")
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .help("Remove \(word)")
+                                    }
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                            .fill(Color.black.opacity(0.04))
+                                    )
+                                }
+                            }
+                        }
+                        .frame(maxHeight: 180)
+                    }
+                }
+                .padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14))
+            }
+            MacGroupFooter(text: "Words listed here are passed to the STT engine on every transcription to bias recognition. Cloud (Whisper / Gemini), Deepgram keyterms, and local Whisper all honour this; Parakeet ignores it (NeMo TDT has no boost-word API).")
+        }
+    }
+
+    private func addDictWord() {
+        let trimmed = newDictWord.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if trimmed.count > 100 {
+            dictAddError = "Word too long (max 100 chars)"
+            return
+        }
+        let result = DimmyCore.shared.userDictAdd(trimmed)
+        switch result {
+        case .added:
+            if !appState.userDictWords.contains(where: { $0.lowercased() == trimmed.lowercased() }) {
+                appState.userDictWords.append(trimmed)
+            }
+            newDictWord = ""
+            dictAddError = nil
+        case .alreadyPresent:
+            dictAddError = "“\(trimmed)” is already in the dictionary"
+            newDictWord = ""
+        case .error:
+            dictAddError = "Could not add — check log"
+        }
+    }
+
+    private func removeDictWord(_ word: String) {
+        let count = DimmyCore.shared.userDictRemove(word)
+        if count >= 0 {
+            appState.userDictWords.removeAll { $0.lowercased() == word.lowercased() }
         }
     }
 

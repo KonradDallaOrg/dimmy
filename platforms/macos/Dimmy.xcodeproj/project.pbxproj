@@ -95,6 +95,8 @@
 		AA000211 /* MacPermissionsPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000211 /* MacPermissionsPage.swift */; };
 		AA000302 /* MacIntegrationsPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000302 /* MacIntegrationsPage.swift */; };
 		AA000303 /* NotionConnectSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000303 /* NotionConnectSheet.swift */; };
+		AA000800 /* DictHotkeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000800 /* DictHotkeyManager.swift */; };
+		AA000801 /* DictToastWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000801 /* DictToastWindow.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -189,6 +191,8 @@
 		AB000211 /* MacPermissionsPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPermissionsPage.swift; sourceTree = "<group>"; };
 		AB000302 /* MacIntegrationsPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacIntegrationsPage.swift; sourceTree = "<group>"; };
 		AB000303 /* NotionConnectSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotionConnectSheet.swift; sourceTree = "<group>"; };
+		AB000800 /* DictHotkeyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictHotkeyManager.swift; sourceTree = "<group>"; };
+		AB000801 /* DictToastWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictToastWindow.swift; sourceTree = "<group>"; };
 		AB000099 /* Dimmy.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Dimmy.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -331,6 +335,7 @@
 				AB000030 /* DimmyCore.swift */,
 				AB000300 /* DimmyCore+License.swift */,
 				AB000500 /* DimmyCore+V2.swift */,
+				AB000800 /* DictHotkeyManager.swift */,
 			);
 			path = Managers;
 			sourceTree = "<group>";
@@ -344,6 +349,7 @@
 				AB000505 /* MeetingView.swift */,
 				AB000506 /* FileLoadCard.swift */,
 				AB000507 /* AudioWaveformView.swift */,
+				AB000801 /* DictToastWindow.swift */,
 				AD000007 /* Onboarding */,
 				AD000008 /* Settings */,
 				AD000051 /* Meeting */,
@@ -638,6 +644,8 @@
 				AA000301 /* MacLicensePage.swift in Sources */,
 				AA000302 /* MacIntegrationsPage.swift in Sources */,
 				AA000303 /* NotionConnectSheet.swift in Sources */,
+				AA000800 /* DictHotkeyManager.swift in Sources */,
+				AA000801 /* DictToastWindow.swift in Sources */,
 				AA000041 /* SelfTests.swift in Sources */,
 				AA000042 /* RecordingSimulator.swift in Sources */,
 				AA000500 /* DimmyCore+V2.swift in Sources */,

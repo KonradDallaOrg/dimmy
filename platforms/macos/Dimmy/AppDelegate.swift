@@ -290,6 +290,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 hkLog("[AppDelegate] core ready — starting HotkeyManager")
                 HotkeyManager.shared.start(appState: self.appState)
 
+                // Secondary global hotkey for "add selected text to
+                // dictionary" (Wispr Flow-style). Independent CGEventTap
+                // for keyDown events; uses the same Accessibility
+                // permission HotkeyManager already required. Default
+                // combo Cmd+Shift+D, rebindable in Settings → Shortcut.
+                DictHotkeyManager.shared.start(appState: self.appState)
+
+                // Register macOS Services provider so the OS-wide
+                // "Add to Dimmy Dictionary" Services menu entry routes
+                // back to AppDelegate.addToDimmyDictionary. Bypasses
+                // the synthetic Cmd+C dance — the Services system
+                // hands us the selection directly via NSPasteboard.
+                NSApp.servicesProvider = self
+                NSUpdateDynamicServices()
+
                 // Async warmup — Parakeet only, and only if the bundle is
                 // already on disk. Avoids the ~6 s cold path on the user's
                 // first recording at the cost of one upfront background
@@ -643,6 +658,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard let window = notification.object as? NSWindow, window === onboardingWindow else { return }
         onboardingWindow = nil
         applyActivationPolicy()
+    }
+
+    // MARK: - macOS Services provider
+    //
+    // Selector is wired in Info.plist via NSServices →
+    // NSMessage = "addToDimmyDictionary". The OS pre-fills `pboard`
+    // with the user's current selection — no synthetic Cmd+C needed,
+    // so we bypass the probe/copy dance in DictHotkeyManager and call
+    // straight into `AddToDictionaryFlow.runWithText`. The method
+    // signature is fixed by Cocoa: any deviation (different param
+    // names / types / `@objc` style) and the Services system
+    // silently fails to bind the menu item.
+    @objc func addToDimmyDictionary(
+        _ pboard: NSPasteboard,
+        userData: String,
+        error: AutoreleasingUnsafeMutablePointer<NSString?>
+    ) {
+        guard let text = pboard.string(forType: .string), !text.isEmpty else {
+            error.pointee = "No text selected" as NSString
+            NSLog("[Dict/Services] called with empty pasteboard")
+            return
+        }
+        NSLog("[Dict/Services] received \(text.count) chars from selection")
+        Task { @MainActor in
+            await AddToDictionaryFlow.runWithText(text)
+        }
     }
 }
 

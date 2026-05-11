@@ -27,5 +27,33 @@
 			<string>Viewer</string>
 		</dict>
 	</array>
+	<!--
+	macOS Services menu entry. Users can right-click any selected text
+	in any app and pick Services → "Add to Dimmy Dictionary" to boost
+	that word's recognition on future transcriptions. NSMessage
+	matches AppDelegate.addToDimmyDictionary — the OS pre-fills the
+	pasteboard with the user's selection, so we skip the synthetic
+	Cmd+C dance the global hotkey path uses. NSSendTypes restricts the
+	entry to text selections (NSStringPboardType).
+	-->
+	<key>NSServices</key>
+	<array>
+		<dict>
+			<key>NSMenuItem</key>
+			<dict>
+				<key>default</key>
+				<string>Add to Dimmy Dictionary</string>
+			</dict>
+			<key>NSMessage</key>
+			<string>addToDimmyDictionary</string>
+			<key>NSPortName</key>
+			<string>Dimmy</string>
+			<key>NSSendTypes</key>
+			<array>
+				<string>NSStringPboardType</string>
+				<string>public.utf8-plain-text</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

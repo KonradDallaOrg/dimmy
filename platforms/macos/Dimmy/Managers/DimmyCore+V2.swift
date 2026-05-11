@@ -354,6 +354,67 @@ extension DimmyCore {
             return String(cString: buffer)
         }
     }
+
+    // ── User dictionary (custom vocabulary biasing) ──────────────────
+
+    /// Result of `userDictAdd` — mirrors the FFI rc table so callers can
+    /// branch on "added vs already-present vs error" without remembering
+    /// magic numbers. Win's DictionaryService.Add returns the raw int
+    /// 0/1/-1; we lift that into an enum here so SwiftUI binding paths
+    /// stay strongly typed.
+    enum UserDictAddResult {
+        case added
+        case alreadyPresent
+        case error
+    }
+
+    /// Append `word` to the user dictionary. The Rust side persists to
+    /// config.json + case-insensitive dedupes. Empty / whitespace-only
+    /// strings are rejected (returns .error) without touching state —
+    /// callers should still trim defensively. Safe to call from any
+    /// thread.
+    @discardableResult
+    func userDictAdd(_ word: String) -> UserDictAddResult {
+        guard isInitialized else { return .error }
+        let trimmed = word.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return .error }
+        let rc = trimmed.withCString { ptr in dimmy_user_dict_add(ptr) }
+        switch rc {
+        case 0: return .added
+        case 1: return .alreadyPresent
+        default: return .error
+        }
+    }
+
+    /// Remove all entries matching `word` (case-insensitive). Returns
+    /// the count of entries dropped. 0 means nothing matched; negative
+    /// means an FFI / persistence error.
+    @discardableResult
+    func userDictRemove(_ word: String) -> Int {
+        guard isInitialized else { return -1 }
+        let trimmed = word.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return -1 }
+        let rc = trimmed.withCString { ptr in dimmy_user_dict_remove(ptr) }
+        return Int(rc)
+    }
+
+    /// Read the current dictionary as `[String]`. Returns empty array
+    /// on FFI failure (the dictionary just isn't populated yet — callers
+    /// don't need to differentiate "error" from "empty").
+    func userDictList() -> [String] {
+        guard isInitialized else { return [] }
+        var buffer = [CChar](repeating: 0, count: 16384)
+        let len = buffer.withUnsafeMutableBufferPointer { ptr -> Int32 in
+            dimmy_user_dict_list_json(ptr.baseAddress!, Int32(ptr.count))
+        }
+        guard len > 0 else { return [] }
+        let json = String(cString: buffer)
+        guard let data = json.data(using: .utf8),
+              let arr = try? JSONSerialization.jsonObject(with: data) as? [String] else {
+            return []
+        }
+        return arr
+    }
 }
 
 // MARK: - MeetingResult
