@@ -20,7 +20,7 @@ final class DictToastWindow {
     static func show(title: String, body: String) {
         dismissCurrent()
 
-        let content = DictToastView(title: title, body: body)
+        let content = DictToastView(title: title, message: body)
         let host = NSHostingController(rootView: content)
         let windowSize = NSSize(width: 380, height: 80)
 
@@ -95,8 +95,12 @@ final class DictToastWindow {
 /// resolve correctly. The Win side has to hand-paint two palettes
 /// because the bespoke transparent backdrop bypasses theme resources.
 private struct DictToastView: View {
+    // Renamed from `body` to `message` to avoid colliding with the
+    // SwiftUI `var body: some View` requirement — having both as
+    // stored property + computed property is a Swift redeclaration
+    // error.
     let title: String
-    let body: String
+    let message: String
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -109,7 +113,7 @@ private struct DictToastView: View {
                 Text(title)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.primary)
-                Text(body)
+                Text(message)
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)

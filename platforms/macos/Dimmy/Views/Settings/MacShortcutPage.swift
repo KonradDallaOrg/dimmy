@@ -220,7 +220,10 @@ private struct DictHotkeyRecorderSheet: View {
         // Local key monitor — fires for keys delivered to this window.
         // We must consume the event (return nil) so the standard "key
         // beep on unhandled keyDown" doesn't fire for every press.
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+        // Explicit `-> NSEvent?` annotation — without it the compiler
+        // sometimes infers `-> NSEvent` from a non-optional code path
+        // (depending on Swift version) and refuses the `return nil`s.
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { (event: NSEvent) -> NSEvent? in
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             let modCount = [
                 flags.contains(.control), flags.contains(.option),

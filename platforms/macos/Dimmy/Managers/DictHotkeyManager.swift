@@ -159,7 +159,8 @@ enum AddToDictionaryFlow {
         let preProbe = pb.changeCount
         pb.clearContents()
         pb.setString(probeSentinel, forType: .string)
-        if !await waitForChangeCountBump(baseline: preProbe, timeoutMs: 200) {
+        let probeBumped = await waitForChangeCountBump(baseline: preProbe, timeoutMs: 200)
+        if !probeBumped {
             NSLog("[Dict] sentinel write didn't bump pasteboard — abort")
             return
         }
@@ -169,7 +170,8 @@ enum AddToDictionaryFlow {
         synthesizeCmdC()
 
         // ── Phase 3: wait for app to fulfill copy ────────────────
-        if !await waitForChangeCountBump(baseline: preCopy, timeoutMs: 500) {
+        let copyBumped = await waitForChangeCountBump(baseline: preCopy, timeoutMs: 500)
+        if !copyBumped {
             NSLog("[Dict] app didn't update pasteboard (no selection / password field / frozen)")
             restorePasteboard(previousText)
             return
@@ -225,11 +227,11 @@ enum AddToDictionaryFlow {
         case .added:
             DictToastWindow.showAdded(word: text)
             // Reflect into AppState so the Settings list updates
-            // without a full reload trip.
-            if let app = AppState.shared {
-                if !app.userDictWords.contains(where: { $0.lowercased() == text.lowercased() }) {
-                    app.userDictWords.append(text)
-                }
+            // without a full reload trip. AppState.shared is a
+            // non-optional class singleton — no optional binding.
+            let app = AppState.shared
+            if !app.userDictWords.contains(where: { $0.lowercased() == text.lowercased() }) {
+                app.userDictWords.append(text)
             }
         case .alreadyPresent:
             DictToastWindow.showAlreadyPresent(word: text)

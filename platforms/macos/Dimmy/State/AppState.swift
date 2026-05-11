@@ -547,8 +547,17 @@ struct HotkeyCombo: Equatable {
         return parts.joined(separator: "+")
     }
 
+}
+
+extension HotkeyCombo {
     /// Inverse of `encoded`. Returns nil for malformed input; callers
     /// should fall back to `defaultDictHotkey` in that case.
+    ///
+    /// Lives in an extension so Swift still synthesises the implicit
+    /// memberwise initialiser (`HotkeyCombo(control:option:...)`) on
+    /// the struct itself — adding a custom init directly on the struct
+    /// suppresses memberwise synthesis, which silently broke
+    /// `defaultDictHotkey` (the existing memberwise call site).
     init?(encoded: String) {
         let tokens = encoded.split(separator: "+").map(String.init)
         guard let last = tokens.last, let colon = last.firstIndex(of: ":") else { return nil }
@@ -556,12 +565,14 @@ struct HotkeyCombo: Equatable {
         let char = String(last[last.index(after: colon)...])
         guard let kc = UInt16(hex, radix: 16) else { return nil }
         let mods = Set(tokens.dropLast())
-        self.control = mods.contains("ctrl")
-        self.option = mods.contains("opt")
-        self.command = mods.contains("cmd")
-        self.shift = mods.contains("shift")
-        self.keyCode = kc
-        self.keyChar = char
+        self.init(
+            control: mods.contains("ctrl"),
+            option: mods.contains("opt"),
+            command: mods.contains("cmd"),
+            shift: mods.contains("shift"),
+            keyCode: kc,
+            keyChar: char
+        )
     }
 }
 
