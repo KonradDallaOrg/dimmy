@@ -38,7 +38,8 @@ use dimmy_lib::ffi::{
     dimmy_clear_app_context, dimmy_get_config_json, dimmy_history_save, dimmy_history_update_audio,
     dimmy_history_update_enhanced, dimmy_history_update_word_timestamps, dimmy_init,
     dimmy_llm_call_raw, dimmy_meeting_is_active, dimmy_meeting_save_post_process,
-    dimmy_set_app_context, dimmy_set_config_json, dimmy_transcribe_file,
+    dimmy_set_app_context, dimmy_set_config_json, dimmy_transcribe_file, dimmy_user_dict_add,
+    dimmy_user_dict_list_json, dimmy_user_dict_remove,
 };
 
 // ── Fixture wiring (lifted from ffi_e2e to stay self-contained) ──────
@@ -544,4 +545,251 @@ fn llm_call_raw_rejects_empty_prompt_with_minus_one() {
         )
     };
     assert_eq!(n, -1, "empty prompt must return -1 invalid args, got {}", n);
+}
+
+// ── Tests: user dictionary FFI ────────────────────────────────────────
+//
+// Exercise the three add/remove/list entry points the Win and Mac UI
+// + the global hotkey path lean on. The list is global state on the
+// running core, so each test snapshots before & after and is annotated
+// `#[serial]` to keep the assertions stable when the suite is run
+// together.
+
+/// Read the dict as a Vec<String>. Picks a buffer big enough for any
+/// realistic dictionary; -2 (truncation) here would be a test bug.
+fn read_user_dict() -> Vec<String> {
+    let mut buf: Vec<u8> = vec![0; 64 * 1024];
+    let n =
+        unsafe { dimmy_user_dict_list_json(buf.as_mut_ptr() as *mut c_char, buf.len() as c_int) };
+    assert!(n > 0, "list_json must return >0 bytes, got {}", n);
+    let used = (n as usize).min(buf.len());
+    let end = buf[..used].iter().position(|&b| b == 0).unwrap_or(used);
+    let json = std::str::from_utf8(&buf[..end]).expect("utf8 dict json");
+    serde_json::from_str(json).expect("valid dict json array")
+}
+
+/// Wipe the dict between tests so they don't bleed into each other.
+/// Done via `set_config_json({"user_dict": []})` because that's the
+/// bulk-replacement path the Settings UI uses.
+fn clear_user_dict() {
+    set_config(&serde_json::json!({"user_dict": []}).to_string());
+}
+
+#[test]
+#[serial]
+fn user_dict_add_then_list_round_trip() {
+    ensure_init();
+    clear_user_dict();
+
+    let word = CString::new("Velopack").unwrap();
+    let rc = unsafe { dimmy_user_dict_add(word.as_ptr()) };
+    assert_eq!(
+        rc, 0,
+        "first add of a new word must return 0 (added), got {}",
+        rc
+    );
+
+    let dict = read_user_dict();
+    assert_eq!(dict, vec!["Velopack".to_string()]);
+}
+
+#[test]
+#[serial]
+fn user_dict_add_dedupes_case_insensitively() {
+    ensure_init();
+    clear_user_dict();
+
+    let upper = CString::new("Notion").unwrap();
+    let lower = CString::new("notion").unwrap();
+    assert_eq!(
+        unsafe { dimmy_user_dict_add(upper.as_ptr()) },
+        0,
+        "first add → 0"
+    );
+    assert_eq!(
+        unsafe { dimmy_user_dict_add(lower.as_ptr()) },
+        1,
+        "case-different duplicate must return 1 (already-present), not 0"
+    );
+
+    let dict = read_user_dict();
+    assert_eq!(
+        dict.len(),
+        1,
+        "case-variant must not append, got {:?}",
+        dict
+    );
+    // Original casing is preserved (we don't normalise on store).
+    assert_eq!(dict[0], "Notion");
+}
+
+#[test]
+#[serial]
+fn user_dict_add_rejects_empty_and_whitespace() {
+    ensure_init();
+    clear_user_dict();
+
+    let empty = CString::new("").unwrap();
+    let ws = CString::new("   \t  ").unwrap();
+    assert_eq!(
+        unsafe { dimmy_user_dict_add(empty.as_ptr()) },
+        -1,
+        "empty word must reject with -1"
+    );
+    assert_eq!(
+        unsafe { dimmy_user_dict_add(ws.as_ptr()) },
+        -1,
+        "whitespace-only word must reject with -1"
+    );
+    assert!(
+        read_user_dict().is_empty(),
+        "rejected adds must leave dict untouched"
+    );
+}
+
+#[test]
+#[serial]
+fn user_dict_add_null_pointer_returns_minus_one_not_crash() {
+    ensure_init();
+    let rc = unsafe { dimmy_user_dict_add(std::ptr::null()) };
+    assert_eq!(rc, -1, "null pointer must return -1, not crash");
+}
+
+#[test]
+#[serial]
+fn user_dict_remove_drops_matching_entries() {
+    ensure_init();
+    clear_user_dict();
+
+    for w in ["alpha", "beta", "gamma"] {
+        let c = CString::new(w).unwrap();
+        assert_eq!(unsafe { dimmy_user_dict_add(c.as_ptr()) }, 0);
+    }
+
+    let target = CString::new("beta").unwrap();
+    let removed = unsafe { dimmy_user_dict_remove(target.as_ptr()) };
+    assert_eq!(
+        removed, 1,
+        "remove should return drop count, got {}",
+        removed
+    );
+
+    let dict = read_user_dict();
+    assert_eq!(dict, vec!["alpha".to_string(), "gamma".to_string()]);
+}
+
+#[test]
+#[serial]
+fn user_dict_remove_is_case_insensitive() {
+    ensure_init();
+    clear_user_dict();
+
+    let add = CString::new("Notion").unwrap();
+    assert_eq!(unsafe { dimmy_user_dict_add(add.as_ptr()) }, 0);
+
+    let rm = CString::new("NOTION").unwrap();
+    assert_eq!(
+        unsafe { dimmy_user_dict_remove(rm.as_ptr()) },
+        1,
+        "remove must match case-insensitively (mirror of add's dedup rule)"
+    );
+    assert!(read_user_dict().is_empty());
+}
+
+#[test]
+#[serial]
+fn user_dict_remove_unknown_returns_zero() {
+    ensure_init();
+    clear_user_dict();
+    let missing = CString::new("not-in-dict").unwrap();
+    let rc = unsafe { dimmy_user_dict_remove(missing.as_ptr()) };
+    assert_eq!(
+        rc, 0,
+        "removing a missing entry must return 0 (no-op), got {}",
+        rc
+    );
+}
+
+#[test]
+#[serial]
+fn user_dict_remove_null_pointer_returns_minus_one() {
+    ensure_init();
+    let rc = unsafe { dimmy_user_dict_remove(std::ptr::null()) };
+    assert_eq!(rc, -1);
+}
+
+#[test]
+#[serial]
+fn user_dict_list_json_truncation_returns_minus_two() {
+    ensure_init();
+    clear_user_dict();
+
+    // Pack the dict with enough entries that 8 bytes is guaranteed too
+    // small. Even an empty list "[]" is 2 bytes; one entry "[\"x\"]" is 5;
+    // we want the truncation branch.
+    for i in 0..32 {
+        let w = format!("word{:02}", i);
+        let c = CString::new(w).unwrap();
+        unsafe { dimmy_user_dict_add(c.as_ptr()) };
+    }
+
+    let mut tiny: Vec<u8> = vec![0; 8];
+    let rc =
+        unsafe { dimmy_user_dict_list_json(tiny.as_mut_ptr() as *mut c_char, tiny.len() as c_int) };
+    assert_eq!(rc, -2, "undersized buffer must return -2, got {}", rc);
+}
+
+#[test]
+#[serial]
+fn user_dict_list_json_empty_returns_two_byte_array() {
+    ensure_init();
+    clear_user_dict();
+    let dict = read_user_dict();
+    assert!(dict.is_empty());
+}
+
+#[test]
+#[serial]
+fn user_dict_set_via_config_then_list_via_ffi_round_trip() {
+    // Mirror the Settings page bulk-replace path: write the whole list
+    // through set_config_json, then read back through the dedicated
+    // list FFI. Catches drift between the two persistence routes.
+    ensure_init();
+    set_config(&serde_json::json!({"user_dict": ["Notion", "Velopack", "Parakeet"]}).to_string());
+
+    let dict = read_user_dict();
+    assert_eq!(
+        dict,
+        vec![
+            "Notion".to_string(),
+            "Velopack".to_string(),
+            "Parakeet".to_string()
+        ]
+    );
+
+    // And: order is preserved across a second read (no shuffle).
+    let dict2 = read_user_dict();
+    assert_eq!(dict, dict2);
+}
+
+#[test]
+#[serial]
+fn user_dict_persists_to_disk_so_next_launch_sees_it() {
+    ensure_init();
+    clear_user_dict();
+    let word = CString::new("LoadBearingWord").unwrap();
+    assert_eq!(unsafe { dimmy_user_dict_add(word.as_ptr()) }, 0);
+
+    let path = dirs::config_dir()
+        .expect("config_dir resolvable")
+        .join("dimmy")
+        .join("config.json");
+    assert!(path.exists(), "config.json missing after dict add");
+    let raw = std::fs::read_to_string(&path).expect("read config.json");
+    let v: serde_json::Value = serde_json::from_str(&raw).expect("valid JSON");
+    let arr = v["user_dict"].as_array().expect("user_dict array on disk");
+    assert!(
+        arr.iter().any(|w| w == "LoadBearingWord"),
+        "added word not in on-disk config.json — UI persistence broken"
+    );
 }

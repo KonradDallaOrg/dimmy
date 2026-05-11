@@ -2971,6 +2971,14 @@ pub unsafe extern "C" fn dimmy_user_dict_list_json(out_buf: *mut c_char, buf_len
         },
         Err(_) => return -1,
     };
+    // Honour the documented contract: -2 when the buffer is too small,
+    // so the C# / Swift wrappers can retry with a larger one instead of
+    // silently receiving a truncated, invalid JSON array. `write_to_buf`
+    // alone would truncate to `buf_len - 1` and return that length,
+    // which the caller would then try to `JSON.parse` and crash on.
+    if json.len() + 1 > buf_len as usize {
+        return -2;
+    }
     write_to_buf(&json, out_buf, buf_len)
 }
 
