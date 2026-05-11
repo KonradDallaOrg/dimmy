@@ -35,6 +35,16 @@ public partial class App : Application
     /// hardcoding their own DispatcherQueue resolution.</summary>
     public void RunOnUI(Action action) => _dispatcherQueue?.TryEnqueue(() => action());
 
+    /// <summary>Re-register the dictionary global hotkey with a new
+    /// combo. Called by Settings → Voice input → Add-to-dictionary
+    /// shortcut after the user picks a new combination. No-op if the
+    /// service hasn't been created yet (very early startup race).</summary>
+    public void ReregisterDictHotkey(string combo)
+    {
+        try { _dictHotkey?.Register(combo); }
+        catch (Exception ex) { Log($"ReregisterDictHotkey exc: {ex.Message}", "Hotkey"); }
+    }
+
     private PillWindow? _pillWindow;
     private CaptionWindow? _captionWindow;
     private MeetingWindow? _meetingWindow;
@@ -46,6 +56,7 @@ public partial class App : Application
     private CommandPipeServer? _commandPipe;
     private UiPreferences _uiPrefs = new();
     private DispatcherQueue? _dispatcherQueue;
+    private DictHotkeyService? _dictHotkey;
 
     /// <summary>Set on launch if `dimmy://activate?…` was the trigger
     /// AND no running instance was reachable to forward to. Picked up
@@ -429,6 +440,180 @@ public partial class App : Application
         {
             Log($"UpdateService start failed: {ex.Message}", "Update");
         }
+
+        // Custom-dictionary hotkey — a SECOND global hotkey via Win32
+        // RegisterHotKey, independent of the Rust low-level hook that
+        // owns the main dictation combo. Default Ctrl+Shift+D, user-
+        // configurable in Settings → Voice input. On press: simulate
+        // Ctrl+C silently, read the clipboard, push the word into the
+        // Rust user_dict (which persists to config.json + applies as
+        // STT bias on every future transcribe).
+        try
+        {
+            _dictHotkey = new DictHotkeyService();
+            _dictHotkey.Triggered += OnDictHotkeyTriggered;
+            _dictHotkey.Register(_uiPrefs.DictHotkey);
+        }
+        catch (Exception ex)
+        {
+            Log($"DictHotkey start failed: {ex.Message}", "Hotkey");
+        }
+    }
+
+    /// <summary>Add-to-dictionary handler — fires on the DictHotkey
+    /// pump thread, marshals to UI thread to read clipboard and call
+    /// the FFI. Sequence: simulate Ctrl+C → wait 80 ms for the host
+    /// app to honour the copy → read text from clipboard → trim →
+    /// call <c>dimmy_user_dict_add</c>. Logs every step into ptt.log
+    /// (tag "Dict") so the user can diagnose "I pressed it but
+    /// nothing happened" cases.</summary>
+    private void OnDictHotkeyTriggered()
+    {
+        _dispatcherQueue?.TryEnqueue(async () =>
+        {
+            // Deterministic clipboard-update detection via
+            // GetClipboardSequenceNumber: capture seq, do the work,
+            // poll until seq increments. No arbitrary wall-clock
+            // delays — the poll exits the same millisecond the
+            // target app finishes its copy handler. The 200/500 ms
+            // ceilings are safety nets for unresponsive apps
+            // (frozen Electron, sandbox refusing copy), NOT
+            // "wait this long because we hope it's done".
+            const string Sentinel = "__DIMMY_DICT_PROBE_v1__";
+            const int SeqPollIntervalMs = 1;
+            const int SetContentMaxWaitMs = 200;
+            const int CopyMaxWaitMs = 500;
+
+            string? previousText = null;
+            try
+            {
+                // Stash existing clipboard text so we can restore at
+                // the end (probe shouldn't clobber the user's
+                // paste buffer).
+                try
+                {
+                    var prev = global::Windows.ApplicationModel.DataTransfer.Clipboard.GetContent();
+                    if (prev.Contains(global::Windows.ApplicationModel.DataTransfer.StandardDataFormats.Text))
+                        previousText = await prev.GetTextAsync();
+                }
+                catch { }
+
+                // ── Phase 1: write sentinel + wait for seq bump ──
+                uint preSet = Services.TextInjectionService.ClipboardSequenceNumber();
+                var probe = new global::Windows.ApplicationModel.DataTransfer.DataPackage();
+                probe.SetText(Sentinel);
+                global::Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(probe);
+                if (!await WaitForSequenceBumpAsync(preSet, SetContentMaxWaitMs, SeqPollIntervalMs))
+                {
+                    Log("DictHotkey: sentinel write didn't bump clipboard seq — abort", "Dict");
+                    return;
+                }
+
+                // ── Phase 2: atomic Ctrl+C ── (SendCtrlC batches
+                // phantom-modifier releases + Ctrl+C in one
+                // SendInput call — no race, no inter-phase sleep).
+                uint preCopy = Services.TextInjectionService.ClipboardSequenceNumber();
+                Services.TextInjectionService.SendCtrlC();
+
+                // ── Phase 3: wait for the app to fulfill copy ──
+                if (!await WaitForSequenceBumpAsync(preCopy, CopyMaxWaitMs, SeqPollIntervalMs))
+                {
+                    Log("DictHotkey: app didn't update clipboard (no selection / password field / frozen)", "Dict");
+                    RestoreClipboard(previousText);
+                    return;
+                }
+
+                var dp = global::Windows.ApplicationModel.DataTransfer.Clipboard.GetContent();
+                if (!dp.Contains(global::Windows.ApplicationModel.DataTransfer.StandardDataFormats.Text))
+                {
+                    Log("DictHotkey: clipboard non-text after copy — restoring", "Dict");
+                    RestoreClipboard(previousText);
+                    return;
+                }
+                var raw = await dp.GetTextAsync();
+                if (raw == Sentinel)
+                {
+                    // seq bumped to a different sentinel? Race —
+                    // someone else wrote then we wrote again.
+                    // Treat as no-op.
+                    Log("DictHotkey: clipboard still sentinel after seq bump (race?)", "Dict");
+                    RestoreClipboard(previousText);
+                    return;
+                }
+                var text = (raw ?? "").Trim();
+                if (string.IsNullOrEmpty(text))
+                {
+                    Log("DictHotkey: clipboard text empty after trim", "Dict");
+                    RestoreClipboard(previousText);
+                    return;
+                }
+                // Cap at 100 chars — covers long names ("Software
+                // Engineer Senior Manager", "Centro Studi Erickson
+                // Trento") while still catching paragraph grabs.
+                if (text.Length > 100)
+                {
+                    Log($"DictHotkey: rejected too-long selection ({text.Length} chars) — use Settings for phrases", "Dict");
+                    RestoreClipboard(previousText);
+                    return;
+                }
+                int rc = Services.DictionaryService.Add(text);
+                Log($"DictHotkey: add '{text}' rc={rc}", "Dict");
+                // Visible feedback: rc 0 = added, 1 = already present.
+                // Both show a toast so the user knows the hotkey
+                // worked (no silent failures from their perspective).
+                switch (rc)
+                {
+                    case 0: Services.DictNotificationService.ShowAdded(text); break;
+                    case 1: Services.DictNotificationService.ShowAlreadyPresent(text); break;
+                }
+                RestoreClipboard(previousText);
+            }
+            catch (Exception ex)
+            {
+                Log($"DictHotkey handler exc: {ex.Message}", "Dict");
+                RestoreClipboard(previousText);
+            }
+        });
+    }
+
+    /// <summary>Poll <see cref="Services.TextInjectionService.ClipboardSequenceNumber"/>
+    /// at <paramref name="intervalMs"/> ms until it differs from
+    /// <paramref name="baselineSeq"/> or <paramref name="timeoutMs"/>
+    /// elapses. Returns true on bump, false on timeout. The poll loop
+    /// is yield-friendly (uses Task.Delay, not Thread.Sleep) so the
+    /// dispatcher queue stays responsive while we wait.</summary>
+    private static async System.Threading.Tasks.Task<bool> WaitForSequenceBumpAsync(
+        uint baselineSeq, int timeoutMs, int intervalMs)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < timeoutMs)
+        {
+            uint now = Services.TextInjectionService.ClipboardSequenceNumber();
+            // seq=0 from GetClipboardSequenceNumber means the caller
+            // lacks the right to read; treat as "polling unsupported"
+            // and bail with timeout — caller falls back gracefully.
+            if (now == 0) return false;
+            if (now != baselineSeq) return true;
+            await System.Threading.Tasks.Task.Delay(intervalMs);
+        }
+        return false;
+    }
+
+    /// <summary>Best-effort restore of whatever text the user had on
+    /// the clipboard before our probe overwrote it. Silent on failure
+    /// — clipboard contention happens, and the cost of NOT restoring
+    /// is just one Ctrl+V missing its expected text, recoverable by
+    /// the user.</summary>
+    private static void RestoreClipboard(string? previousText)
+    {
+        if (previousText is null) return;
+        try
+        {
+            var dp = new global::Windows.ApplicationModel.DataTransfer.DataPackage();
+            dp.SetText(previousText);
+            global::Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dp);
+        }
+        catch { }
     }
 
     /// <summary>Dispatcher for the line received over the command
@@ -1304,6 +1489,7 @@ public partial class App : Application
         }
 
         _hotkeyService?.Dispose();
+        _dictHotkey?.Dispose();
         _trayService?.Dispose();
         _commandPipe?.Dispose();
         _appViewModel.PropertyChanged -= OnAppViewModelPropertyChangedForTaskbar;

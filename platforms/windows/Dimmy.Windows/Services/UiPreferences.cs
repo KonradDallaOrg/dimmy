@@ -54,6 +54,15 @@ public sealed class UiPreferences
     /// whether to set GithubSource.prerelease=true.</summary>
     public string UpdateChannel { get; set; } = "stable";
 
+    /// <summary>Global hotkey for "add selected text to user dictionary"
+    /// (Wispr Flow-style). Same combo grammar as the main hotkey
+    /// (ctrl/shift/alt/win + single letter). Default Ctrl+Shift+D.
+    /// Editable in Settings → Voice input → Dictionary section. Lives
+    /// here rather than config.json because it's a Win-only UI knob
+    /// — the Rust core has no opinion on which key adds to the dict,
+    /// only on what's IN the dict.</summary>
+    public string DictHotkey { get; set; } = "ctrl+shift+d";
+
     private static string PrefsPath
     {
         get

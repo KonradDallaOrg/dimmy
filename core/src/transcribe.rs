@@ -38,7 +38,7 @@ pub async fn transcribe_audio(
     // Route to provider-specific path
     match Provider::from_url(api_url) {
         Provider::Deepgram => {
-            return transcribe_audio_deepgram(api_url, api_key, wav_data, language).await
+            return transcribe_audio_deepgram(api_url, api_key, wav_data, language, prompt).await
         }
         Provider::Gemini => {
             // Gemini transcription is multimodal generateContent with
@@ -64,7 +64,7 @@ pub async fn transcribe_audio(
                     format!("{}/models/{}:generateContent", base, model)
                 }
             };
-            return transcribe_audio_gemini(&full_url, api_key, wav_data, language).await;
+            return transcribe_audio_gemini(&full_url, api_key, wav_data, language, prompt).await;
         }
         _ => {}
     }
@@ -89,6 +89,11 @@ pub async fn transcribe_audio(
     // It's not an instruction — Whisper mimics the style of the prompt text.
     if !prompt.is_empty() {
         form = form.text("prompt", prompt.to_string());
+        crate::log(&format!(
+            "[DictBias] provider={} prompt_chars={}",
+            Provider::from_url(api_url).as_str(),
+            prompt.len()
+        ));
     }
 
     let client = reqwest::Client::builder().timeout(timeout).build()?;
@@ -120,6 +125,7 @@ async fn transcribe_audio_deepgram(
     api_key: &str,
     wav_data: &[u8],
     language: &str,
+    prompt: &str,
 ) -> Result<String, crate::error::TranscribeError> {
     let mut url = api_url.to_string();
     let sep = if url.contains('?') { "&" } else { "?" };
@@ -128,6 +134,39 @@ async fn transcribe_audio_deepgram(
     } else {
         // Auto-detect language when none specified
         url = format!("{}{}detect_language=true", url, sep);
+    }
+
+    // Vocabulary biasing — Deepgram's native param is `keyterm` (Nova-3+
+    // models) / `keywords` (legacy). We split the composed prompt by
+    // comma so each dict entry becomes a separate keyterm; the user's
+    // free-form prompt text falls in as one big keyterm (mostly
+    // harmless — Deepgram tolerates long phrases). Format:
+    //   ...&keyterm=Velopack&keyterm=Notion&keyterm=foobar
+    // Skipped when prompt is empty. See
+    // https://developers.deepgram.com/docs/keyterm for the parameter
+    // semantics + per-language support.
+    if !prompt.is_empty() {
+        for term in prompt
+            .split(',')
+            .map(|t| t.trim())
+            .filter(|t| !t.is_empty())
+        {
+            // url-encode minimally — Deepgram tolerates spaces,
+            // but commas / ampersands in a dict entry would break
+            // the query string. We picked '&' as the URL separator
+            // above and ',' as our dict separator, so escape just
+            // those two plus '%' for safety.
+            let escaped = term
+                .replace('%', "%25")
+                .replace('&', "%26")
+                .replace(' ', "%20");
+            url = format!("{}&keyterm={}", url, escaped);
+        }
+        crate::log(&format!(
+            "[DictBias] provider=deepgram keyterm_count={} prompt_chars={}",
+            prompt.split(',').filter(|t| !t.trim().is_empty()).count(),
+            prompt.len()
+        ));
     }
 
     let timeout = timeout_for_payload(wav_data);
@@ -172,11 +211,28 @@ async fn transcribe_audio_gemini(
     api_key: &str,
     wav_data: &[u8],
     language: &str,
+    prompt: &str,
 ) -> Result<String, crate::error::TranscribeError> {
     let audio_b64 = base64::engine::general_purpose::STANDARD.encode(wav_data);
 
     let lang_hint = if !language.is_empty() {
         format!(" The audio is in {}.", language)
+    } else {
+        String::new()
+    };
+
+    // Gemini multimodal generateContent has no Whisper-style `prompt`
+    // form field. We inject the composed dict by appending a "Domain
+    // vocabulary you may hear" instruction to the system text part —
+    // the LLM-style biasing works because Gemini IS an LLM that reads
+    // the entire prompt before transcribing. Empty string → no append,
+    // keeps the request short.
+    let vocab_hint = if !prompt.trim().is_empty() {
+        crate::log(&format!(
+            "[DictBias] provider=gemini vocab_chars={}",
+            prompt.len()
+        ));
+        format!(" Vocabulary you may hear in this audio: {}.", prompt)
     } else {
         String::new()
     };
@@ -187,7 +243,8 @@ async fn transcribe_audio_gemini(
                 {
                     "text": format!(
                         "Transcribe this audio exactly as spoken. Output ONLY the transcribed text, nothing else. \
-                        No introductions, no explanations, no labels.{}", lang_hint
+                        No introductions, no explanations, no labels.{}{}",
+                        lang_hint, vocab_hint
                     )
                 },
                 {
@@ -243,6 +300,7 @@ pub fn transcribe_audio_local(
     audio: &crate::audio::ProcessedAudio,
     language: &str,
     model_filename: &str,
+    prompt: &str,
 ) -> Result<String, crate::error::TranscribeError> {
     // Preconditions
     assert!(
@@ -272,7 +330,7 @@ pub fn transcribe_audio_local(
     );
 
     let model_path = crate::local_stt::model_path(model_filename);
-    crate::local_stt::transcribe_local(&model_path, &samples_16k, language)
+    crate::local_stt::transcribe_local(&model_path, &samples_16k, language, prompt)
 }
 
 /// Transcribe ProcessedAudio locally using Parakeet TDT v3 FP32. No

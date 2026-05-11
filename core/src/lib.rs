@@ -110,6 +110,38 @@ pub fn is_staging_build() -> bool {
     build_flavor() == "staging"
 }
 
+/// Compose the final initial-prompt / `prompt` form-field value for an
+/// STT call from the user's free-form prompt + their curated user_dict
+/// list. Both are user-controlled vocab biasing; we just join them
+/// with `, ` so the STT model sees a single context string.
+///
+/// Behaviour:
+///   - empty `prompt` + empty `user_dict` → `""` (caller skips param)
+///   - empty `prompt` + non-empty dict → `"foo, bar, baz"`
+///   - non-empty `prompt` + non-empty dict → `"<prompt>, foo, bar"`
+///   - empty dict words are filtered (defensive — set_config_json
+///     already drops them, but a hot-add could race)
+///
+/// The 224-token Whisper prompt limit is NOT enforced here — the
+/// model truncates from the start; we trust the caller-side UI to
+/// guide users away from pathological 500-word dicts (settings
+/// shows a counter). At ~3 tokens/word avg, 60 words is the sweet
+/// spot before truncation eats the user's free-form prompt.
+pub fn compose_stt_prompt(prompt: &str, user_dict: &[String]) -> String {
+    let dict_joined: String = user_dict
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ");
+    match (prompt.trim().is_empty(), dict_joined.is_empty()) {
+        (true, true) => String::new(),
+        (true, false) => dict_joined,
+        (false, true) => prompt.to_string(),
+        (false, false) => format!("{}, {}", prompt.trim(), dict_joined),
+    }
+}
+
 /// Per-flavor config dir name. Prod = `dimmy`, staging = `dimmy-staging`.
 /// Splitting these names is what keeps a staging install from
 /// overwriting prod's `license.json` / `config.json` / `keys.enc` on
@@ -317,6 +349,20 @@ pub struct AppConfig {
     pub shortcut_mode: String,
     pub shortcut: String,
     pub prompt: String,
+    /// User-curated vocabulary list. Words / short phrases the user
+    /// has flagged as misspelled in past transcripts and explicitly
+    /// added — Wispr Flow-style "Add to dictionary" flow. Joined with
+    /// the `prompt` field at STT time so both cloud (Whisper /
+    /// Groq / OpenAI / Gemini's `prompt` form field) AND local
+    /// Whisper.cpp (`initial_prompt` param) see the bias context.
+    /// Stored as a flat list because order doesn't matter for STT
+    /// biasing and the UI surfaces "Add" / "Remove" — no nesting.
+    /// Parakeet local backend does NOT honor this in v1 (its NeMo
+    /// TDT decoder has no public boost-words API in the ort wrapper
+    /// we use); documented limitation, dict still applies to cloud
+    /// and Whisper paths. Missing on-disk → empty Vec (see load
+    /// fallback in parse_config).
+    pub user_dict: Vec<String>,
     // LLM post-processing fields
     pub llm_enabled: bool,
     pub llm_style: llm::LlmStyle,
@@ -458,6 +504,7 @@ impl Default for AppConfig {
             }
             .to_string(),
             prompt: DEFAULT_PROMPT.to_string(),
+            user_dict: Vec::new(),
             llm_enabled: false,
             llm_style: llm::LlmStyle::Off,
             llm_tone: llm::LlmTone::None,
@@ -557,6 +604,7 @@ pub fn save_config_file(cfg: &AppConfig) {
             "shortcut_mode": cfg.shortcut_mode,
             "shortcut": cfg.shortcut,
             "prompt": cfg.prompt,
+            "user_dict": cfg.user_dict,
             "llm_enabled": cfg.llm_enabled,
             "llm_style": cfg.llm_style.as_str(),
             "llm_tone": cfg.llm_tone.as_str(),
@@ -645,6 +693,15 @@ pub fn load_config_file() -> AppConfig {
                         .unwrap_or(default_shortcut())
                         .to_string(),
                     prompt: v["prompt"].as_str().unwrap_or(DEFAULT_PROMPT).to_string(),
+                    user_dict: v["user_dict"]
+                        .as_array()
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|x| x.as_str().map(String::from))
+                                .filter(|s| !s.is_empty())
+                                .collect()
+                        })
+                        .unwrap_or_default(),
                     llm_enabled: v["llm_enabled"].as_bool().unwrap_or(defaults.llm_enabled),
                     llm_style: llm::LlmStyle::from_str_lossy(
                         v["llm_style"].as_str().unwrap_or("off"),
@@ -949,8 +1006,12 @@ pub struct AppState {
     pub api_model: Mutex<String>,
     pub language: Mutex<String>,
     pub prompt: Mutex<String>, // Whisper style prompt (punctuation + vocabulary)
+    /// User-curated vocabulary — see [`AppConfig::user_dict`].
+    /// Mutated by `dimmy_user_dict_add` / `_remove` FFI; read by
+    /// `compose_stt_prompt` which joins it with `prompt` at STT time.
+    pub user_dict: Mutex<Vec<String>>,
     pub shortcut_mode: Mutex<String>, // "toggle" or "hold"
-    pub shortcut: Mutex<String>, // "win+alt", "ctrl+alt", "ctrl+shift"
+    pub shortcut: Mutex<String>,      // "win+alt", "ctrl+alt", "ctrl+shift"
     pub selected_device: Mutex<Option<String>>,
     pub audio_sample_rate: Mutex<u32>,
     pub transcript: Mutex<String>,
@@ -1087,6 +1148,7 @@ impl AppState {
             api_model: Mutex::new(file_cfg.api_model),
             language: Mutex::new(file_cfg.language),
             prompt: Mutex::new(file_cfg.prompt),
+            user_dict: Mutex::new(file_cfg.user_dict),
             shortcut_mode: Mutex::new(file_cfg.shortcut_mode),
             shortcut: Mutex::new(file_cfg.shortcut),
             selected_device: Mutex::new(file_cfg.selected_device.clone()),
@@ -1187,6 +1249,7 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         .clone();
     let shortcut = state.shortcut.lock().map_err(|e| e.to_string())?.clone();
     let prompt = state.prompt.lock().map_err(|e| e.to_string())?.clone();
+    let user_dict = state.user_dict.lock().map_err(|e| e.to_string())?.clone();
     let llm_enabled = *state.llm_enabled.lock().map_err(|e| e.to_string())?;
     let llm_style = *state.llm_style.lock().map_err(|e| e.to_string())?;
     let llm_tone = *state.llm_tone.lock().map_err(|e| e.to_string())?;
@@ -1267,6 +1330,7 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         shortcut_mode,
         shortcut,
         prompt,
+        user_dict,
         llm_enabled,
         llm_style,
         llm_tone,
@@ -1351,6 +1415,53 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compose_stt_prompt_empty_both() {
+        assert_eq!(compose_stt_prompt("", &[]), "");
+    }
+
+    #[test]
+    fn compose_stt_prompt_dict_only() {
+        let dict = vec!["foo".to_string(), "bar".to_string()];
+        assert_eq!(compose_stt_prompt("", &dict), "foo, bar");
+    }
+
+    #[test]
+    fn compose_stt_prompt_prompt_only() {
+        assert_eq!(
+            compose_stt_prompt("a quick brown fox", &[]),
+            "a quick brown fox"
+        );
+    }
+
+    #[test]
+    fn compose_stt_prompt_both_appends() {
+        let dict = vec!["Notion".to_string(), "Velopack".to_string()];
+        assert_eq!(
+            compose_stt_prompt("technical context", &dict),
+            "technical context, Notion, Velopack"
+        );
+    }
+
+    #[test]
+    fn compose_stt_prompt_filters_empty_dict_entries() {
+        let dict = vec![
+            "foo".to_string(),
+            "".to_string(),
+            "  ".to_string(),
+            "bar".to_string(),
+        ];
+        assert_eq!(compose_stt_prompt("", &dict), "foo, bar");
+    }
+
+    #[test]
+    fn compose_stt_prompt_trims_outer_prompt() {
+        let dict = vec!["x".to_string()];
+        // Leading/trailing whitespace in user prompt shouldn't leak
+        // into the composed output — trimmed before the comma join.
+        assert_eq!(compose_stt_prompt("  hello  ", &dict), "hello, x");
+    }
 
     #[test]
     fn config_roundtrip_with_device() {

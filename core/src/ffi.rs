@@ -253,6 +253,7 @@ fn dimmy_init_inner() -> c_int {
         api_model: Mutex::new(file_cfg.api_model),
         language: Mutex::new(file_cfg.language),
         prompt: Mutex::new(file_cfg.prompt),
+        user_dict: Mutex::new(file_cfg.user_dict),
         shortcut_mode: Mutex::new(file_cfg.shortcut_mode),
         shortcut: Mutex::new(file_cfg.shortcut),
         selected_device: Mutex::new(file_cfg.selected_device.clone()),
@@ -780,7 +781,12 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         return write_to_buf("", out_buf, buf_len);
     }
     let language = st.language.lock().map(|l| l.clone()).unwrap_or_default();
-    let prompt = st.prompt.lock().map(|p| p.clone()).unwrap_or_default();
+    let prompt_base = st.prompt.lock().map(|p| p.clone()).unwrap_or_default();
+    let user_dict = st.user_dict.lock().map(|d| d.clone()).unwrap_or_default();
+    // Compose the user's free-form prompt + curated vocabulary into a
+    // single biasing string. Same path drives both cloud (multipart
+    // `prompt` form field) and local Whisper (`initial_prompt`).
+    let prompt = crate::compose_stt_prompt(&prompt_base, &user_dict);
     let preprocessing = st.preprocessing_enabled.lock().map(|p| *p).unwrap_or(true);
     // Audio debug: create session directory if enabled
     let audio_debug = st.audio_debug_enabled.lock().map(|d| *d).unwrap_or(false);
@@ -857,7 +863,12 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
                 "[StopRec] Local STT mode — backend: whisper, model: {}",
                 local_model_filename
             ));
-            crate::transcribe::transcribe_audio_local(&processed, &language, &local_model_filename)
+            crate::transcribe::transcribe_audio_local(
+                &processed,
+                &language,
+                &local_model_filename,
+                &prompt,
+            )
         }
     } else {
         // Cloud mode: existing flow — WAV encode + chunked cloud API
@@ -1191,6 +1202,7 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "api_model": *st.api_model.lock().unwrap_or_else(|e| e.into_inner()),
         "language": *st.language.lock().unwrap_or_else(|e| e.into_inner()),
         "prompt": *st.prompt.lock().unwrap_or_else(|e| e.into_inner()),
+        "user_dict": st.user_dict.lock().map(|d| d.clone()).unwrap_or_default(),
         "shortcut_mode": *st.shortcut_mode.lock().unwrap_or_else(|e| e.into_inner()),
         "shortcut": *st.shortcut.lock().unwrap_or_else(|e| e.into_inner()),
         "selected_device": *st.selected_device.lock().unwrap_or_else(|e| e.into_inner()),
@@ -1400,6 +1412,21 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
     if let Some(s) = v["prompt"].as_str() {
         if let Ok(mut p) = st.prompt.lock() {
             *p = s.to_string();
+        }
+    }
+    if let Some(arr) = v["user_dict"].as_array() {
+        // Accept replacement of the full list (settings-page edit
+        // flow). Add / remove single-word mutations also have a
+        // dedicated FFI (dimmy_user_dict_add / _remove) for the
+        // hotkey path so a 500-word dict doesn't get re-serialised
+        // for every keystroke.
+        let new_dict: Vec<String> = arr
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .filter(|s| !s.is_empty())
+            .collect();
+        if let Ok(mut d) = st.user_dict.lock() {
+            *d = new_dict;
         }
     }
     if let Some(s) = v["shortcut_mode"].as_str() {
@@ -2543,7 +2570,19 @@ pub unsafe extern "C" fn dimmy_meeting_start(out_buf: *mut c_char, buf_len: c_in
             .map(|s| s.clone())
             .unwrap_or_default(),
         api_key: st.api_key.lock().ok().and_then(|k| k.clone()),
-        prompt: st.prompt.lock().ok().map(|s| s.clone()).unwrap_or_default(),
+        // Compose user's free-form prompt + dict into one biasing
+        // string so the meeting worker's STT path (cloud or local
+        // Whisper) gets the same vocabulary advantage as live
+        // dictation. user_dict isn't a field on SttSnapshot itself —
+        // we squash it into `prompt` here at snapshot time.
+        prompt: crate::compose_stt_prompt(
+            &st.prompt.lock().ok().map(|s| s.clone()).unwrap_or_default(),
+            &st.user_dict
+                .lock()
+                .ok()
+                .map(|d| d.clone())
+                .unwrap_or_default(),
+        ),
         local_model: st
             .local_model
             .lock()
@@ -2800,6 +2839,139 @@ pub extern "C" fn dimmy_meeting_is_paused() -> c_int {
         },
         Err(_) => 0,
     }
+}
+
+// ── Custom dictionary (user vocabulary) ────────────────────────────
+// User curates a list of words / short phrases that get injected as
+// initial-prompt context into every STT call. Boosts recognition of
+// names, jargon, brand terms the speech-to-text models would otherwise
+// guess phonetically (Wispr Flow-equivalent feature). Lives on disk in
+// config.json under `user_dict` so it's portable across machines via
+// the same backup path users already have.
+//
+// Three FFI surfaces here:
+//   - dimmy_user_dict_add(word)        — append + dedupe + persist
+//   - dimmy_user_dict_remove(word)     — drop matches + persist
+//   - dimmy_user_dict_list_json(...)   — read for the settings UI
+//
+// Bulk replacement (Settings page edit-everything-at-once) still goes
+// through `dimmy_set_config_json` with a `user_dict: [...]` field —
+// the dedicated add/remove paths exist for the global-hotkey flow so
+// a 500-word dict doesn't get re-serialised on every keystroke.
+
+/// Append `word` to the user dictionary if not already present (case-
+/// insensitive de-dup). Persists immediately so a crash doesn't lose
+/// the addition. Empty / whitespace-only words are rejected without
+/// modifying state. Returns:
+///   0  added (new word)
+///   1  already present (no-op)
+///  -1  invalid args (null / non-UTF-8) or persistence failure
+///
+/// # Safety
+/// `word_ptr` must be a valid null-terminated UTF-8 C string. NULL → -1.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_user_dict_add(word_ptr: *const c_char) -> c_int {
+    if word_ptr.is_null() {
+        return -1;
+    }
+    let word = match unsafe { CStr::from_ptr(word_ptr) }.to_str() {
+        Ok(s) => s.trim().to_string(),
+        Err(_) => return -1,
+    };
+    if word.is_empty() {
+        return -1;
+    }
+    let st = state();
+    let mut already_present = false;
+    if let Ok(mut d) = st.user_dict.lock() {
+        if d.iter().any(|w| w.eq_ignore_ascii_case(&word)) {
+            already_present = true;
+        } else {
+            d.push(word.clone());
+        }
+    } else {
+        return -1;
+    }
+    if !already_present {
+        if let Ok(cfg) = crate::snapshot_config(st) {
+            save_config_file(&cfg);
+        } else {
+            return -1;
+        }
+        log(&format!(
+            "[UserDict] added '{}' ({} chars)",
+            word,
+            word.len()
+        ));
+        0
+    } else {
+        log(&format!("[UserDict] '{}' already present — no-op", word));
+        1
+    }
+}
+
+/// Remove `word` from the user dictionary (case-insensitive match).
+/// Persists immediately. Returns the count of entries dropped (0 = no
+/// match), or -1 on invalid args / lock failure / persistence failure.
+///
+/// # Safety
+/// `word_ptr` must be a valid null-terminated UTF-8 C string. NULL → -1.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_user_dict_remove(word_ptr: *const c_char) -> c_int {
+    if word_ptr.is_null() {
+        return -1;
+    }
+    let word = match unsafe { CStr::from_ptr(word_ptr) }.to_str() {
+        Ok(s) => s.trim().to_string(),
+        Err(_) => return -1,
+    };
+    if word.is_empty() {
+        return -1;
+    }
+    let st = state();
+    let removed_count = match st.user_dict.lock() {
+        Ok(mut d) => {
+            let before = d.len();
+            d.retain(|w| !w.eq_ignore_ascii_case(&word));
+            (before - d.len()) as c_int
+        }
+        Err(_) => return -1,
+    };
+    if removed_count > 0 {
+        if let Ok(cfg) = crate::snapshot_config(st) {
+            save_config_file(&cfg);
+        } else {
+            return -1;
+        }
+        log(&format!(
+            "[UserDict] removed '{}' ({} entries)",
+            word, removed_count
+        ));
+    }
+    removed_count
+}
+
+/// Write the current dictionary to `out_buf` as a JSON array of
+/// strings (e.g. `["foobar","Notion","ROM-O"]`). Returns the byte
+/// length written, -1 on invalid args / lock failure, or -2 if the
+/// JSON exceeds `buf_len` (caller should retry with a larger buffer).
+///
+/// # Safety
+/// `out_buf` must be a valid writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_user_dict_list_json(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let st = state();
+    let json = match st.user_dict.lock() {
+        Ok(d) => match serde_json::to_string(&*d) {
+            Ok(j) => j,
+            Err(_) => return -1,
+        },
+        Err(_) => return -1,
+    };
+    write_to_buf(&json, out_buf, buf_len)
 }
 
 // ── Notion integration ─────────────────────────────────────────────
@@ -4018,6 +4190,13 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
         .lock()
         .map(|m| m.clone())
         .unwrap_or_else(|_| "ggml-base-q8_0.bin".to_string());
+    // Compose vocab biasing for the file-load chunked-whisper path so
+    // imported recordings get the same user_dict / prompt advantage as
+    // a live dictation. Parakeet branch ignores it (no boost-words
+    // support in our ort wrapper).
+    let prompt_base = st.prompt.lock().map(|p| p.clone()).unwrap_or_default();
+    let user_dict_snapshot = st.user_dict.lock().map(|d| d.clone()).unwrap_or_default();
+    let composed_prompt = crate::compose_stt_prompt(&prompt_base, &user_dict_snapshot);
     // Emit a starting event so the UI can flip its progress bar
     // from indeterminate to 0 % the moment we begin work.
     let total_secs = raw_samples_for_history.len() as f64 / spec.sample_rate as f64;
@@ -4058,7 +4237,8 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
             crate::transcribe::transcribe_audio_local_parakeet_with_word_ts(&chunk)
                 .map(|(t, j)| (t, Some(j)))
         } else {
-            crate::transcribe::transcribe_audio_local(&chunk, &language, &model).map(|t| (t, None))
+            crate::transcribe::transcribe_audio_local(&chunk, &language, &model, &composed_prompt)
+                .map(|t| (t, None))
         };
         match result {
             Ok((text, ts_opt)) => {
@@ -5274,6 +5454,7 @@ mod tests {
                 api_model: Mutex::new("whisper-large-v3-turbo".to_string()),
                 language: Mutex::new("en".to_string()),
                 prompt: Mutex::new(String::new()),
+                user_dict: Mutex::new(Vec::new()),
                 shortcut_mode: Mutex::new("toggle".to_string()),
                 shortcut: Mutex::new("ctrl+shift".to_string()),
                 selected_device: Mutex::new(None),

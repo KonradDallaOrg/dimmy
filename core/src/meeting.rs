@@ -760,7 +760,10 @@ fn worker_loop(
                     match &resolved_local_model {
                         Some(model_path) => {
                             match crate::local_stt::transcribe_local(
-                                model_path, &pcm_16k, &language,
+                                model_path,
+                                &pcm_16k,
+                                &language,
+                                &stt.prompt,
                             ) {
                                 Ok(t) => t,
                                 Err(e) => {
