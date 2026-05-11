@@ -215,4 +215,85 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(SttProvider.from(url: "https://generativelanguage.googleapis.com/v1beta"), .gemini)
         XCTAssertEqual(SttProvider.from(url: "https://custom.example.com/api"), .custom)
     }
+
+    // MARK: - HotkeyCombo (dictionary hotkey persistence + matching)
+    //
+    // The combo round-trips through UserDefaults using its `encoded`
+    // string form. These tests pin the encode/decode pair so a future
+    // refactor of the format can't silently break existing users'
+    // saved combos. Default = ⌘⇧D mirrors the Win Ctrl+Shift+D.
+
+    func testHotkeyComboDefaultIsCommandShiftD() {
+        let c = HotkeyCombo.defaultDictHotkey
+        XCTAssertTrue(c.command)
+        XCTAssertTrue(c.shift)
+        XCTAssertFalse(c.control)
+        XCTAssertFalse(c.option)
+        XCTAssertEqual(c.keyCode, 0x02, "kVK_ANSI_D")
+        XCTAssertEqual(c.keyChar, "D")
+    }
+
+    func testHotkeyComboDefaultDisplayString() {
+        // Modifier ordering in displayParts: ctrl, option, shift, command, letter
+        let parts = HotkeyCombo.defaultDictHotkey.displayParts
+        XCTAssertEqual(parts, ["⇧", "⌘", "D"])
+        XCTAssertEqual(HotkeyCombo.defaultDictHotkey.displayString, "⇧⌘D")
+    }
+
+    func testHotkeyComboEncodeDecodeRoundTrip() {
+        let combos = [
+            HotkeyCombo.defaultDictHotkey,
+            HotkeyCombo(control: true, option: false, command: false, shift: true,
+                        keyCode: 0x09, keyChar: "V"),
+            HotkeyCombo(control: true, option: true, command: true, shift: true,
+                        keyCode: 0x31, keyChar: "Space"),
+            HotkeyCombo(control: false, option: false, command: false, shift: false,
+                        keyCode: 0x7A, keyChar: "F1"),
+        ]
+        for original in combos {
+            let encoded = original.encoded
+            let decoded = HotkeyCombo(encoded: encoded)
+            XCTAssertNotNil(decoded, "encoded form must decode: \(encoded)")
+            XCTAssertEqual(decoded, original, "round-trip lost data for \(encoded)")
+        }
+    }
+
+    func testHotkeyComboDecodeMalformedReturnsNil() {
+        // No colon → no separator → reject
+        XCTAssertNil(HotkeyCombo(encoded: "ctrl+shift+nosep"))
+        // Invalid hex → reject
+        XCTAssertNil(HotkeyCombo(encoded: "ctrl+ZZ:D"))
+        // Empty string → reject
+        XCTAssertNil(HotkeyCombo(encoded: ""))
+    }
+
+    func testHotkeyComboMatchesRequiresExactModifierSet() {
+        let combo = HotkeyCombo.defaultDictHotkey  // ⌘⇧D
+        let dKey: UInt16 = 0x02
+
+        // Exact match.
+        XCTAssertTrue(combo.matches(flags: [.command, .shift], keyCode: dKey))
+
+        // Wrong key.
+        XCTAssertFalse(combo.matches(flags: [.command, .shift], keyCode: 0x01))
+
+        // Missing a required modifier.
+        XCTAssertFalse(combo.matches(flags: [.command], keyCode: dKey))
+
+        // Extra modifier the combo doesn't ask for — strict reject (else
+        // ⌘⌥⇧D would fire the dict-add when the user pressed a
+        // different chord). This is the load-bearing assertion of the
+        // matcher.
+        XCTAssertFalse(combo.matches(flags: [.command, .shift, .option], keyCode: dKey))
+    }
+
+    func testHotkeyComboEncodedFormatIsStable() {
+        // Lock the on-disk format so users with a saved combo from
+        // v0.6.36 still see it on every later version.
+        XCTAssertEqual(
+            HotkeyCombo.defaultDictHotkey.encoded,
+            "cmd+shift+02:D",
+            "default combo encoded form is part of the contract — update with care"
+        )
+    }
 }

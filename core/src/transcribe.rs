@@ -118,6 +118,62 @@ pub async fn transcribe_audio(
     Ok(result.text)
 }
 
+/// Compose the full Deepgram request URL given a base `api_url` (which
+/// already carries query params like `?model=nova-3&smart_format=true`),
+/// a `language` code (empty = auto-detect), and a comma-separated
+/// vocabulary biasing `prompt`. Each comma-separated dict term becomes
+/// a separate `&keyterm=<term>` parameter — Deepgram's native API for
+/// vocabulary biasing on Nova-3+ models. Pure function for unit testing.
+pub fn compose_deepgram_url(api_url: &str, language: &str, prompt: &str) -> String {
+    let mut url = api_url.to_string();
+    let sep = if url.contains('?') { "&" } else { "?" };
+    if !language.is_empty() {
+        url = format!("{}{}language={}", url, sep, language);
+    } else {
+        url = format!("{}{}detect_language=true", url, sep);
+    }
+
+    if !prompt.is_empty() {
+        for term in prompt
+            .split(',')
+            .map(|t| t.trim())
+            .filter(|t| !t.is_empty())
+        {
+            // Minimal escape: spaces, commas, ampersands, and percent.
+            // Deepgram tolerates a lot, but our query-string separator
+            // is '&' and our dict separator is ',' — so escape those
+            // two plus '%' (for safety) and ' ' (for cleanliness).
+            let escaped = term
+                .replace('%', "%25")
+                .replace('&', "%26")
+                .replace(' ', "%20");
+            url = format!("{}&keyterm={}", url, escaped);
+        }
+    }
+    url
+}
+
+/// Compose the system-text part for the Gemini multimodal request. The
+/// audio is supplied in a separate inline_data part — this function
+/// produces only the leading text prompt. Pure for unit testing.
+pub fn compose_gemini_prompt_text(language: &str, prompt: &str) -> String {
+    let lang_hint = if !language.is_empty() {
+        format!(" The audio is in {}.", language)
+    } else {
+        String::new()
+    };
+    let vocab_hint = if !prompt.trim().is_empty() {
+        format!(" Vocabulary you may hear in this audio: {}.", prompt)
+    } else {
+        String::new()
+    };
+    format!(
+        "Transcribe this audio exactly as spoken. Output ONLY the transcribed text, nothing else. \
+        No introductions, no explanations, no labels.{}{}",
+        lang_hint, vocab_hint
+    )
+}
+
 /// Deepgram-specific transcription: sends raw WAV bytes with Token auth.
 /// The URL should be: https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true
 async fn transcribe_audio_deepgram(
@@ -127,41 +183,8 @@ async fn transcribe_audio_deepgram(
     language: &str,
     prompt: &str,
 ) -> Result<String, crate::error::TranscribeError> {
-    let mut url = api_url.to_string();
-    let sep = if url.contains('?') { "&" } else { "?" };
-    if !language.is_empty() {
-        url = format!("{}{}language={}", url, sep, language);
-    } else {
-        // Auto-detect language when none specified
-        url = format!("{}{}detect_language=true", url, sep);
-    }
-
-    // Vocabulary biasing — Deepgram's native param is `keyterm` (Nova-3+
-    // models) / `keywords` (legacy). We split the composed prompt by
-    // comma so each dict entry becomes a separate keyterm; the user's
-    // free-form prompt text falls in as one big keyterm (mostly
-    // harmless — Deepgram tolerates long phrases). Format:
-    //   ...&keyterm=Velopack&keyterm=Notion&keyterm=foobar
-    // Skipped when prompt is empty. See
-    // https://developers.deepgram.com/docs/keyterm for the parameter
-    // semantics + per-language support.
+    let url = compose_deepgram_url(api_url, language, prompt);
     if !prompt.is_empty() {
-        for term in prompt
-            .split(',')
-            .map(|t| t.trim())
-            .filter(|t| !t.is_empty())
-        {
-            // url-encode minimally — Deepgram tolerates spaces,
-            // but commas / ampersands in a dict entry would break
-            // the query string. We picked '&' as the URL separator
-            // above and ',' as our dict separator, so escape just
-            // those two plus '%' for safety.
-            let escaped = term
-                .replace('%', "%25")
-                .replace('&', "%26")
-                .replace(' ', "%20");
-            url = format!("{}&keyterm={}", url, escaped);
-        }
         crate::log(&format!(
             "[DictBias] provider=deepgram keyterm_count={} prompt_chars={}",
             prompt.split(',').filter(|t| !t.trim().is_empty()).count(),
@@ -214,39 +237,18 @@ async fn transcribe_audio_gemini(
     prompt: &str,
 ) -> Result<String, crate::error::TranscribeError> {
     let audio_b64 = base64::engine::general_purpose::STANDARD.encode(wav_data);
-
-    let lang_hint = if !language.is_empty() {
-        format!(" The audio is in {}.", language)
-    } else {
-        String::new()
-    };
-
-    // Gemini multimodal generateContent has no Whisper-style `prompt`
-    // form field. We inject the composed dict by appending a "Domain
-    // vocabulary you may hear" instruction to the system text part —
-    // the LLM-style biasing works because Gemini IS an LLM that reads
-    // the entire prompt before transcribing. Empty string → no append,
-    // keeps the request short.
-    let vocab_hint = if !prompt.trim().is_empty() {
+    let text_part = compose_gemini_prompt_text(language, prompt);
+    if !prompt.trim().is_empty() {
         crate::log(&format!(
             "[DictBias] provider=gemini vocab_chars={}",
             prompt.len()
         ));
-        format!(" Vocabulary you may hear in this audio: {}.", prompt)
-    } else {
-        String::new()
-    };
+    }
 
     let body = serde_json::json!({
         "contents": [{
             "parts": [
-                {
-                    "text": format!(
-                        "Transcribe this audio exactly as spoken. Output ONLY the transcribed text, nothing else. \
-                        No introductions, no explanations, no labels.{}{}",
-                        lang_hint, vocab_hint
-                    )
-                },
+                { "text": text_part },
                 {
                     "inline_data": {
                         "mime_type": "audio/wav",
@@ -486,4 +488,163 @@ pub async fn transcribe_chunked(
     }
 
     Ok(results.join(" "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── Deepgram URL composition ────────────────────────────────────
+
+    #[test]
+    fn deepgram_url_appends_language_when_set() {
+        let url = compose_deepgram_url("https://api.deepgram.com/v1/listen?model=nova-3", "en", "");
+        assert!(url.contains("&language=en"), "url={}", url);
+        assert!(!url.contains("detect_language"), "url={}", url);
+    }
+
+    #[test]
+    fn deepgram_url_uses_auto_detect_when_language_empty() {
+        let url = compose_deepgram_url("https://api.deepgram.com/v1/listen?model=nova-3", "", "");
+        assert!(url.contains("&detect_language=true"), "url={}", url);
+        assert!(!url.contains("&language="), "url={}", url);
+    }
+
+    #[test]
+    fn deepgram_url_uses_question_mark_when_base_has_no_query() {
+        let url = compose_deepgram_url("https://api.deepgram.com/v1/listen", "en", "");
+        assert!(url.contains("?language=en"), "url={}", url);
+    }
+
+    #[test]
+    fn deepgram_url_appends_each_dict_term_as_keyterm() {
+        let url = compose_deepgram_url(
+            "https://api.deepgram.com/v1/listen?model=nova-3",
+            "en",
+            "Velopack, Notion, foobar",
+        );
+        assert!(url.contains("&keyterm=Velopack"), "url={}", url);
+        assert!(url.contains("&keyterm=Notion"), "url={}", url);
+        assert!(url.contains("&keyterm=foobar"), "url={}", url);
+        assert_eq!(url.matches("&keyterm=").count(), 3);
+    }
+
+    #[test]
+    fn deepgram_url_escapes_space_ampersand_percent_in_terms() {
+        let url = compose_deepgram_url(
+            "https://api.deepgram.com/v1/listen?model=nova-3",
+            "",
+            "hello world,A&B,50%off",
+        );
+        assert!(url.contains("&keyterm=hello%20world"), "url={}", url);
+        assert!(url.contains("&keyterm=A%26B"), "url={}", url);
+        assert!(url.contains("&keyterm=50%25off"), "url={}", url);
+        // Defensive: raw '&' or '%' inside a term would break the
+        // query string. Make sure we never emit one.
+        assert!(
+            !url.contains("hello world"),
+            "raw space leaked into url={}",
+            url
+        );
+        assert!(
+            !url.contains("A&B"),
+            "raw ampersand leaked into url={}",
+            url
+        );
+    }
+
+    #[test]
+    fn deepgram_url_filters_empty_terms_and_trims_whitespace() {
+        // Trailing comma + extra spaces — common from textbox edits.
+        let url = compose_deepgram_url(
+            "https://api.deepgram.com/v1/listen?model=nova-3",
+            "en",
+            "  alpha , , beta ,,,",
+        );
+        assert!(url.contains("&keyterm=alpha"));
+        assert!(url.contains("&keyterm=beta"));
+        // Empty + whitespace-only terms must not produce a bare
+        // `&keyterm=` — Deepgram would 400 the request.
+        assert!(!url.contains("&keyterm=&"), "url={}", url);
+        assert!(!url.ends_with("&keyterm="), "url={}", url);
+    }
+
+    #[test]
+    fn deepgram_url_empty_prompt_emits_no_keyterm() {
+        let url = compose_deepgram_url("https://api.deepgram.com/v1/listen?model=nova-3", "en", "");
+        assert!(!url.contains("keyterm"), "url={}", url);
+    }
+
+    // ── Gemini prompt-text composition ──────────────────────────────
+
+    #[test]
+    fn gemini_prompt_starts_with_transcribe_instruction() {
+        let text = compose_gemini_prompt_text("", "");
+        assert!(
+            text.starts_with("Transcribe this audio exactly as spoken."),
+            "Gemini must lead with the transcribe instruction so the model doesn't generate prose: {}",
+            text
+        );
+        assert!(text.contains("Output ONLY the transcribed text"));
+    }
+
+    #[test]
+    fn gemini_prompt_includes_language_hint_when_set() {
+        let text = compose_gemini_prompt_text("Italian", "");
+        assert!(
+            text.contains("The audio is in Italian"),
+            "missing language hint: {}",
+            text
+        );
+    }
+
+    #[test]
+    fn gemini_prompt_no_language_means_no_language_hint() {
+        let text = compose_gemini_prompt_text("", "");
+        assert!(
+            !text.contains("The audio is in"),
+            "should not emit a language hint when language is empty: {}",
+            text
+        );
+    }
+
+    #[test]
+    fn gemini_prompt_includes_vocab_hint_when_dict_present() {
+        let text = compose_gemini_prompt_text("en", "Velopack, Notion");
+        assert!(
+            text.contains("Vocabulary you may hear"),
+            "missing vocab hint: {}",
+            text
+        );
+        assert!(text.contains("Velopack"));
+        assert!(text.contains("Notion"));
+    }
+
+    #[test]
+    fn gemini_prompt_no_vocab_when_prompt_empty_or_whitespace() {
+        for empty in &["", "   ", "\t\n"] {
+            let text = compose_gemini_prompt_text("en", empty);
+            assert!(
+                !text.contains("Vocabulary you may hear"),
+                "spurious vocab hint for empty/whitespace prompt={:?}: {}",
+                empty,
+                text
+            );
+        }
+    }
+
+    #[test]
+    fn gemini_prompt_language_and_vocab_both_appended() {
+        let text = compose_gemini_prompt_text("en", "alpha");
+        assert!(text.contains("The audio is in en"));
+        assert!(text.contains("Vocabulary you may hear in this audio: alpha"));
+        // Order matters for prompt-engineering legibility: language
+        // hint before vocab hint (matches the original inline format).
+        let lang_idx = text.find("The audio is in").unwrap();
+        let vocab_idx = text.find("Vocabulary you may hear").unwrap();
+        assert!(
+            lang_idx < vocab_idx,
+            "language hint must precede vocab hint"
+        );
+    }
 }
