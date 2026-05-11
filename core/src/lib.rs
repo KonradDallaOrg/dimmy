@@ -360,7 +360,7 @@ pub struct AppConfig {
     /// Parakeet local backend does NOT honor this in v1 (its NeMo
     /// TDT decoder has no public boost-words API in the ort wrapper
     /// we use); documented limitation, dict still applies to cloud
-    /// + Whisper paths. Missing on-disk → empty Vec (see load
+    /// and Whisper paths. Missing on-disk → empty Vec (see load
     /// fallback in parse_config).
     pub user_dict: Vec<String>,
     // LLM post-processing fields
