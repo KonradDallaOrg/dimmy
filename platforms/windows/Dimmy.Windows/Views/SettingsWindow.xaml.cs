@@ -3381,11 +3381,38 @@ public sealed partial class SettingsWindow : Window
 
     private async void CheckUpdates_Click(object sender, RoutedEventArgs e)
     {
+        // Force-fire the Velopack background check. Useful for users
+        // who don't want to wait up to 6 h for the next periodic tick
+        // (e.g. just saw a release announcement) and for our own
+        // staging-to-staging test cycle where the second build needs
+        // to be discovered as soon as it's published.
+        //
+        // Falls back to opening the download page in the browser when
+        // the UpdateService isn't enabled — that's the auto_update
+        // license scope being absent (free user) OR a dev source
+        // build where Velopack metadata isn't present. Either way the
+        // user still gets a way to get the latest version.
+        if (sender is Button btn) btn.IsEnabled = false;
         try
         {
-            await global::Windows.System.Launcher.LaunchUriAsync(new Uri("https://dimmy.app/download"));
+            var svc = Services.UpdateService.Instance;
+            if (svc is null
+                || !Services.LicenseService.HasScope(Services.LicenseService.ScopeNames.AutoUpdate))
+            {
+                await global::Windows.System.Launcher.LaunchUriAsync(
+                    new Uri("https://dimmy.app/download"));
+                return;
+            }
+            await svc.CheckAndDownloadAsync();
         }
-        catch { }
+        catch (Exception ex)
+        {
+            App.Log($"CheckUpdates_Click exc: {ex.Message}", "Update");
+        }
+        finally
+        {
+            if (sender is Button btn2) btn2.IsEnabled = true;
+        }
     }
 
     private async void ReleaseNotes_Click(object sender, RoutedEventArgs e)
