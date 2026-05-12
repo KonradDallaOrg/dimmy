@@ -701,10 +701,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 // `@convention(c)` callbacks — captured-context closures don't bridge).
 
 private func crashLogPath() -> String {
-    let dir = FileManager.default.urls(
-        for: .applicationSupportDirectory,
-        in: .userDomainMask
-    ).first?.appendingPathComponent("dimmy", isDirectory: true)
+    // Match the Rust core's `config_dir_name()` — `dimmy-staging` for
+    // staging-flavor builds, `dimmy` otherwise. Hardcoding "dimmy"
+    // here would mean staging crash output lands in the prod log
+    // (cross-contaminating diagnostics) and prod testers can't find
+    // their own crash trail. Same root-cause class as the Win
+    // app_rules-wipe bug fixed 2026-05-12. The DimmyCore.shared
+    // accessor reads `dimmy_build_flavor()` from FFI; on a pristine
+    // launch where FFI hasn't been loaded yet, configDirURL is nil
+    // and we fall back to /tmp.
+    let dir = DimmyCore.shared.configDirURL
+        ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first?.appendingPathComponent("dimmy", isDirectory: true)
     return dir?.appendingPathComponent("dimmy.log").path
         ?? "/tmp/dimmy-crash.log"
 }

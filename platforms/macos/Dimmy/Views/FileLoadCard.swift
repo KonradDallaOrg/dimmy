@@ -32,6 +32,14 @@ struct FileLoadCard: View {
     /// the "Reveal" button still works after the result lands.
     @State private var lastPath: String?
 
+    // File-load → meeting recap state. Mirrors Win
+    // SettingsWindow._lastFileLoad{Path,Transcript} + RecapPanel
+    // visibility. The button only appears after a successful
+    // transcript so we never recap a stale pair.
+    @State private var recapRunning: Bool = false
+    @State private var recapStatus: String? = nil
+    @State private var recapDir: String? = nil
+
     var body: some View {
         MacTile {
             VStack(spacing: 0) {
@@ -153,6 +161,34 @@ struct FileLoadCard: View {
                 .padding(8)
                 .background(Color.gray.opacity(0.08))
                 .cornerRadius(6)
+
+                // Run-recap-as-meeting bridge. Same UX as the Win
+                // "Run recap as meeting" button in
+                // SettingsWindow.xaml — mints a synthetic meeting
+                // dir with the WAV + transcript, fires the same LLM
+                // recap pipeline used by live meetings. Result shows
+                // up in Meeting → History.
+                HStack(spacing: 8) {
+                    Button {
+                        runRecapAsMeeting(transcript: text)
+                    } label: {
+                        Label("Run recap as meeting", systemImage: "doc.text.magnifyingglass")
+                    }
+                    .controlSize(.small)
+                    .disabled(recapRunning)
+
+                    if recapRunning {
+                        ProgressView().controlSize(.small).scaleEffect(0.7)
+                    }
+                    if let s = recapStatus {
+                        Text(s)
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.macTextSecondary)
+                            .lineLimit(2)
+                    }
+                    Spacer()
+                }
+                .padding(.top, 4)
             }
         case .error(let msg):
             HStack(spacing: 6) {
@@ -222,6 +258,44 @@ struct FileLoadCard: View {
 
     private func isAcceptableAudioPath(_ path: String) -> Bool {
         path.lowercased().hasSuffix(".wav")
+    }
+
+    // MARK: - Run recap as meeting
+
+    /// "Run recap as meeting" — promotes the last successful
+    /// file-load transcript into a synthetic meeting dir + runs the
+    /// same LLM recap pipeline live meetings use. Result lands in
+    /// Meeting → History.
+    ///
+    /// The LLM call (`MeetingPostProcessService.runRecap`) can take
+    /// 10–60 s — runs on a background queue so the SwiftUI thread
+    /// stays responsive. Button stays disabled until completion to
+    /// prevent double-fires.
+    private func runRecapAsMeeting(transcript: String) {
+        guard !recapRunning else { return }
+        recapRunning = true
+        recapStatus = "Building meeting + running recap…"
+        recapDir = nil
+
+        let path = lastPath ?? ""
+        let transcriptCopy = transcript
+        DispatchQueue.global(qos: .userInitiated).async {
+            let outcome = FileLoadToMeetingService.run(
+                sourceWavPath: path,
+                transcript: transcriptCopy
+            )
+            DispatchQueue.main.async {
+                recapRunning = false
+                if outcome.success {
+                    recapDir = outcome.dir
+                    recapStatus = "✓ Recap saved. Open Meeting → History."
+                    NSLog("[FileLoadCard] recap success at \(outcome.dir)")
+                } else {
+                    recapStatus = "Failed: \(outcome.error ?? "unknown")"
+                    NSLog("[FileLoadCard] recap failed: \(outcome.error ?? "nil")")
+                }
+            }
+        }
     }
 
     // MARK: - Run

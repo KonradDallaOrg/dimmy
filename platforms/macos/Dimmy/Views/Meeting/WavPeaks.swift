@@ -13,6 +13,54 @@ import Foundation
 // array on any parse failure — the UI falls back to a thin slider.
 
 enum WavPeaks {
+    /// Audio duration in seconds, or 0 if the file is missing /
+    /// unreadable / not a parseable WAV. Cheap — only walks the
+    /// header chunks. Used by the file-load → meeting bridge to
+    /// populate `meta.json.duration_secs` so the Meeting → History
+    /// row renders the right HH:MM:SS subtitle.
+    static func readDurationSecs(path: String) -> Double {
+        guard FileManager.default.fileExists(atPath: path),
+              let data = try? Data(contentsOf: URL(fileURLWithPath: path),
+                                    options: [.alwaysMapped])
+        else { return 0 }
+        guard data.count >= 44,
+              read4cc(data, at: 0) == "RIFF",
+              read4cc(data, at: 8) == "WAVE"
+        else { return 0 }
+
+        var channels: UInt16 = 1
+        var sampleRate: UInt32 = 0
+        var bitsPerSample: UInt16 = 0
+        var dataSize: Int = 0
+
+        var pos = 12
+        while pos + 8 <= data.count {
+            let id = read4cc(data, at: pos)
+            let size = Int(readU32LE(data, at: pos + 4))
+            let bodyStart = pos + 8
+            switch id {
+            case "fmt ":
+                guard bodyStart + 16 <= data.count else { return 0 }
+                channels = readU16LE(data, at: bodyStart + 2)
+                sampleRate = readU32LE(data, at: bodyStart + 4)
+                bitsPerSample = readU16LE(data, at: bodyStart + 14)
+            case "data":
+                dataSize = size
+            default:
+                break
+            }
+            if dataSize > 0 { break }
+            pos = bodyStart + size
+            if size % 2 == 1 { pos += 1 }
+        }
+        guard sampleRate > 0, bitsPerSample > 0, channels > 0 else { return 0 }
+        let bytesPerSample = Int(bitsPerSample / 8)
+        let frameSize = bytesPerSample * Int(channels)
+        guard frameSize > 0 else { return 0 }
+        let totalFrames = dataSize / frameSize
+        return Double(totalFrames) / Double(sampleRate)
+    }
+
     /// Read `path` and produce `bucketCount` normalized peaks. Returns
     /// `[]` on any error (missing file, unknown format, truncated WAV).
     static func readPeaks(path: String, bucketCount: Int) -> [Float] {

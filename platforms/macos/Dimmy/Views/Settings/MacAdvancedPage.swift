@@ -280,13 +280,15 @@ struct MacAdvancedPage: View {
         }
     }
 
-    /// Path to the macOS log directory: `~/Library/Application Support/dimmy/`.
-    /// Mirrors the Rust core's `config_dir_path()` on macOS.
+    /// Path to the macOS log directory:
+    /// `~/Library/Application Support/dimmy/` (prod) or
+    /// `~/Library/Application Support/dimmy-staging/` (staging-flavor).
+    /// Mirrors the Rust core's `config_dir_path()` via
+    /// `DimmyCore.shared.configDirURL` so flavor selection stays in
+    /// one place. Hardcoding "dimmy" here would point staging users
+    /// at the prod log dir, missing their actual diagnostics.
     private func logDirectoryURL() -> URL? {
-        guard let support = FileManager.default.urls(
-            for: .applicationSupportDirectory, in: .userDomainMask
-        ).first else { return nil }
-        let dir = support.appendingPathComponent("dimmy", isDirectory: true)
+        guard let dir = DimmyCore.shared.configDirURL else { return nil }
         // Ensure it exists so the Finder doesn't pop a "doesn't exist" alert.
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
