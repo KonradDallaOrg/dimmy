@@ -25,6 +25,7 @@ Cross-platform voice-transcription overlay. Records audio via global hotkey, tra
 | Local LLM feasibility study | [`docs/dev/local-llm-feasibility.md`](docs/dev/local-llm-feasibility.md) |
 | **Telemetry implementation (PostHog + Sentry)** | [`docs/dev/telemetry-implementation.md`](docs/dev/telemetry-implementation.md) |
 | **Licensing v2 PoC — local server, Ed25519 tokens, 7 test scenarios** | [`docs/dev/licensing-poc.md`](docs/dev/licensing-poc.md) |
+| **Claude Code subscription backend (LLM via local `claude` CLI)** | [`docs/dev/claude-code-backend.md`](docs/dev/claude-code-backend.md) |
 | **User-facing privacy policy** | [`PRIVACY.md`](PRIVACY.md) |
 | Per-platform notes | [`platforms/windows/README.md`](platforms/windows/README.md), [`platforms/macos/README.md`](platforms/macos/README.md), [`platforms/linux/README.md`](platforms/linux/README.md) |
 

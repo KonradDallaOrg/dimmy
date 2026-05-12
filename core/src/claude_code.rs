@@ -441,7 +441,32 @@ pub fn spawn_login() -> Result<(), ClaudeCodeError> {
     }
 
     crate::log("[ClaudeCode] login subprocess spawned");
+    crate::telemetry::track(crate::telemetry::Event::ClaudeCodeLoginSpawned);
     Ok(())
+}
+
+/// Convert a `ClaudeCodeError` to the categorical telemetry bucket. The
+/// raw `Display` is too verbose for PostHog and would leak path
+/// fragments from the user's machine via `Spawn(io::Error)`. Caller
+/// owns mapping `Ok(_)` to "ok".
+pub fn error_category(err: &ClaudeCodeError) -> &'static str {
+    match err {
+        ClaudeCodeError::NotInstalled => "not_installed",
+        ClaudeCodeError::NotLoggedIn => "not_logged_in",
+        ClaudeCodeError::Spawn(_) => "spawn",
+        ClaudeCodeError::Timeout => "timeout",
+        ClaudeCodeError::NonZeroExit { .. } => "exit_nonzero",
+        ClaudeCodeError::InvalidUtf8 => "invalid_utf8",
+    }
+}
+
+/// Map the status enum to the categorical telemetry label.
+pub fn status_label(s: &ClaudeCodeStatus) -> &'static str {
+    match s {
+        ClaudeCodeStatus::Ready { .. } => "ready",
+        ClaudeCodeStatus::NotLoggedIn { .. } => "not_logged_in",
+        ClaudeCodeStatus::NotInstalled => "not_installed",
+    }
 }
 
 // ── Synthetic provider URL helpers ────────────────────────────
@@ -522,6 +547,83 @@ mod tests {
                 p
             );
         }
+    }
+
+    #[test]
+    fn error_category_covers_every_variant() {
+        // Lock down the categorical mapping. PostHog dashboards key off
+        // these exact strings.
+        assert_eq!(
+            error_category(&ClaudeCodeError::NotInstalled),
+            "not_installed"
+        );
+        assert_eq!(
+            error_category(&ClaudeCodeError::NotLoggedIn),
+            "not_logged_in"
+        );
+        assert_eq!(error_category(&ClaudeCodeError::Spawn("x".into())), "spawn");
+        assert_eq!(error_category(&ClaudeCodeError::Timeout), "timeout");
+        assert_eq!(
+            error_category(&ClaudeCodeError::NonZeroExit {
+                code: 1,
+                stderr_excerpt: "ignored".into()
+            }),
+            "exit_nonzero"
+        );
+        assert_eq!(
+            error_category(&ClaudeCodeError::InvalidUtf8),
+            "invalid_utf8"
+        );
+    }
+
+    #[test]
+    fn status_label_covers_every_variant() {
+        assert_eq!(
+            status_label(&ClaudeCodeStatus::Ready {
+                binary_path: PathBuf::from("/x")
+            }),
+            "ready"
+        );
+        assert_eq!(
+            status_label(&ClaudeCodeStatus::NotLoggedIn {
+                binary_path: PathBuf::from("/x")
+            }),
+            "not_logged_in"
+        );
+        assert_eq!(
+            status_label(&ClaudeCodeStatus::NotInstalled),
+            "not_installed"
+        );
+    }
+
+    #[test]
+    fn display_never_leaks_stderr_or_spawn_message() {
+        // SECURITY: the Display impl is what gets formatted into log
+        // messages and (historically) into Sentry error reports. If
+        // either ever carries the spawn message or stderr, transcript
+        // fragments echoed back by `claude` (e.g. "model refused
+        // because '...your transcript text...'") would leak.
+        let with_spawn = format!(
+            "{}",
+            ClaudeCodeError::Spawn("contains-secret-filepath".into())
+        );
+        assert!(
+            !with_spawn.contains("contains-secret-filepath"),
+            "Spawn Display must not echo the inner message: {}",
+            with_spawn
+        );
+        let with_stderr = format!(
+            "{}",
+            ClaudeCodeError::NonZeroExit {
+                code: 1,
+                stderr_excerpt: "your-transcript-here".into(),
+            }
+        );
+        assert!(
+            !with_stderr.contains("your-transcript-here"),
+            "NonZeroExit Display must not echo stderr: {}",
+            with_stderr
+        );
     }
 
     #[test]

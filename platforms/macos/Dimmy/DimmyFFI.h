@@ -435,4 +435,19 @@ int32_t dimmy_claude_code_binary_path(char * _Nonnull out_buf, int32_t buf_len);
 /// dimmy_claude_code_status() to detect login completion.
 int32_t dimmy_claude_code_spawn_login(void);
 
+/// Send a content-free "ping" prompt through the local CLI to test
+/// the end-to-end pipeline. Returns elapsed_ms (always > 0) on
+/// success, or a negative error code:
+///   -1 not installed, -2 not logged in, -3 spawn failed,
+///   -4 timeout (15 s), -5 non-zero exit, -6 invalid utf-8 output.
+int32_t dimmy_claude_code_ping(void);
+
+/// Track a host-side telemetry event by name with optional JSON
+/// properties. Used by the Mac UI to emit categorical events whose
+/// trigger is host-side (login outcome polling, file-load source,
+/// app-rules add/remove, etc.). Returns 0 emitted, -1 invalid input,
+/// -2 unknown event name.
+int32_t dimmy_telemetry_track_typed(const char * _Nonnull name_ptr,
+                                    const char * _Nullable props_json_ptr);
+
 #endif /* DimmyFFI_h */

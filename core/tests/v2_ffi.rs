@@ -496,6 +496,55 @@ fn config_persists_to_disk_so_next_launch_sees_v2_fields() {
     assert_eq!(v["auto_recap_threshold_secs"], 120);
 }
 
+/// The Claude-Code subscription provider lives on a synthetic URL
+/// scheme `claude-code://default` that is never sent over HTTP — the
+/// LLM dispatcher checks `is_claude_code_url` and routes to a local
+/// subprocess instead. Lock in that this URL survives the
+/// `dimmy_set_config_json` → on-disk → reload cycle without being
+/// rejected by `validate_url` or coerced to another scheme. A silent
+/// rewrite here would brick the new Settings preset.
+#[test]
+#[serial]
+fn config_round_trip_preserves_claude_code_url() {
+    ensure_init();
+    set_config(
+        &serde_json::json!({
+            "llm_enabled": true,
+            "llm_api_url": "claude-code://default",
+            "llm_api_model": "claude-opus-4-7",
+        })
+        .to_string(),
+    );
+
+    // 1. In-memory round-trip.
+    let v = get_config_value();
+    assert_eq!(
+        v["llm_api_url"], "claude-code://default",
+        "claude-code:// URL must survive in-memory round-trip — rewriting to https breaks subprocess routing"
+    );
+    assert_eq!(v["llm_api_model"], "claude-opus-4-7");
+    assert_eq!(v["llm_enabled"], true);
+
+    // 2. On-disk persistence (the user-visible failure if the writer
+    //    coerced the URL — next launch would dispatch via HTTP and hit
+    //    https://claude-code/ giving a connect refused with the
+    //    transcript in the body).
+    let path = dirs::config_dir()
+        .expect("config_dir resolvable on this platform")
+        .join("dimmy")
+        .join("config.json");
+    assert!(
+        path.exists(),
+        "config.json must exist after set_config_json"
+    );
+    let raw = std::fs::read_to_string(&path).expect("read config.json");
+    let on_disk: serde_json::Value = serde_json::from_str(&raw).expect("valid JSON on disk");
+    assert_eq!(
+        on_disk["llm_api_url"], "claude-code://default",
+        "on-disk URL must be preserved verbatim — UI re-reads this on next launch"
+    );
+}
+
 // ── Tests: meeting save_post_process actually writes the artefacts ─────
 
 #[test]

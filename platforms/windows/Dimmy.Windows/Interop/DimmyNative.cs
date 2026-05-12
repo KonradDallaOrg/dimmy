@@ -436,7 +436,26 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_claude_code_spawn_login();
 
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_claude_code_ping();
+
     public enum ClaudeCodeStatus { Ready = 0, NotLoggedIn = 1, NotInstalled = 2 }
+
+    /// <summary>
+    /// Outcome of the Test Connection button. Maps directly to the
+    /// Rust FFI return-code table (see dimmy_claude_code_ping doc).
+    /// </summary>
+    public enum ClaudeCodePingResult
+    {
+        Ok,
+        NotInstalled,
+        NotLoggedIn,
+        SpawnFailed,
+        Timeout,
+        NonZeroExit,
+        InvalidUtf8,
+        UnknownError,
+    }
 
     public static ClaudeCodeStatus GetClaudeCodeStatus()
     {
@@ -451,6 +470,29 @@ public static class DimmyNative
     {
         try { return dimmy_claude_code_spawn_login() == 0; }
         catch { return false; }
+    }
+
+    /// <summary>
+    /// Run a small ping round-trip through the local Claude CLI.
+    /// Returns (result, elapsed_ms). elapsed_ms is meaningful only when
+    /// result == Ok; for error results it's 0.
+    /// </summary>
+    public static (ClaudeCodePingResult result, int elapsedMs) PingClaudeCode()
+    {
+        int rc;
+        try { rc = dimmy_claude_code_ping(); }
+        catch { return (ClaudeCodePingResult.UnknownError, 0); }
+        return rc switch
+        {
+            > 0 => (ClaudeCodePingResult.Ok, rc),
+            -1 => (ClaudeCodePingResult.NotInstalled, 0),
+            -2 => (ClaudeCodePingResult.NotLoggedIn, 0),
+            -3 => (ClaudeCodePingResult.SpawnFailed, 0),
+            -4 => (ClaudeCodePingResult.Timeout, 0),
+            -5 => (ClaudeCodePingResult.NonZeroExit, 0),
+            -6 => (ClaudeCodePingResult.InvalidUtf8, 0),
+            _ => (ClaudeCodePingResult.UnknownError, 0),
+        };
     }
 
     public static bool TelemetryEnabled

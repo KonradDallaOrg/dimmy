@@ -938,6 +938,14 @@
                         <TextBlock Text="Sign in via browser"/>
                       </StackPanel>
                     </Button>
+                    <Button x:Name="ClaudeCodeTestBtn"
+                            Click="ClaudeCodeTest_Click"
+                            ToolTipService.ToolTip="Send a small ping prompt to verify end-to-end (binary + login + network)">
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xE945;" FontSize="14"/>
+                        <TextBlock Text="Test"/>
+                      </StackPanel>
+                    </Button>
                     <Button x:Name="ClaudeCodeRefreshBtn"
                             Click="ClaudeCodeRefresh_Click">
                       <FontIcon Glyph="&#xE72C;" FontSize="14"/>

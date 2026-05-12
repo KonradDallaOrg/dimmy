@@ -353,6 +353,7 @@ pub async fn process_text(
             system_prompt, text
         );
         let model_owned = model.to_string();
+        let started_at = std::time::Instant::now();
         let result = tokio::task::spawn_blocking(move || {
             crate::claude_code::run_blocking(
                 &combined,
@@ -362,6 +363,17 @@ pub async fn process_text(
         })
         .await
         .map_err(|e| crate::error::LlmError::Network(format!("claude-code join: {}", e)))?;
+        let elapsed_ms = started_at.elapsed().as_millis() as u64;
+        let (success, category) = match &result {
+            Ok(_) => (true, "ok"),
+            Err(e) => (false, crate::claude_code::error_category(e)),
+        };
+        crate::telemetry::track(crate::telemetry::Event::ClaudeCodeInvocation {
+            kind: "rewrite",
+            processing_ms_bucket: crate::telemetry::sanitize::bucket_processing_ms(elapsed_ms),
+            success,
+            error_category: category,
+        });
         return result.map_err(|e| match e {
             crate::claude_code::ClaudeCodeError::NotInstalled
             | crate::claude_code::ClaudeCodeError::NotLoggedIn => {
@@ -547,6 +559,7 @@ pub async fn process_raw_prompt(
     if crate::claude_code::is_claude_code_url(api_url) {
         let model_owned = model.to_string();
         let prompt_owned = user_prompt.to_string();
+        let started_at = std::time::Instant::now();
         let result = tokio::task::spawn_blocking(move || {
             // 10 min — same ceiling as the HTTP path. Adaptive
             // thinking on Opus 4.7 can need it.
@@ -558,6 +571,17 @@ pub async fn process_raw_prompt(
         })
         .await
         .map_err(|e| crate::error::LlmError::Network(format!("claude-code join: {}", e)))?;
+        let elapsed_ms = started_at.elapsed().as_millis() as u64;
+        let (success, category) = match &result {
+            Ok(_) => (true, "ok"),
+            Err(e) => (false, crate::claude_code::error_category(e)),
+        };
+        crate::telemetry::track(crate::telemetry::Event::ClaudeCodeInvocation {
+            kind: "recap",
+            processing_ms_bucket: crate::telemetry::sanitize::bucket_processing_ms(elapsed_ms),
+            success,
+            error_category: category,
+        });
         return result.map_err(|e| match e {
             crate::claude_code::ClaudeCodeError::NotInstalled
             | crate::claude_code::ClaudeCodeError::NotLoggedIn => {

@@ -3038,7 +3038,11 @@ pub unsafe extern "C" fn dimmy_user_dict_list_json(out_buf: *mut c_char, buf_len
 ///  -1 = lock/IO failure during probe
 #[no_mangle]
 pub extern "C" fn dimmy_claude_code_status() -> c_int {
-    crate::claude_code::status().as_code()
+    let s = crate::claude_code::status();
+    crate::telemetry::track(crate::telemetry::Event::ClaudeCodeStatusProbed {
+        status: crate::claude_code::status_label(&s),
+    });
+    s.as_code()
 }
 
 /// Return the resolved Claude Code binary path into `out_buf` (as
@@ -3078,6 +3082,66 @@ pub extern "C" fn dimmy_claude_code_spawn_login() -> c_int {
         Ok(()) => 0,
         Err(crate::claude_code::ClaudeCodeError::NotInstalled) => -1,
         Err(_) => -2,
+    }
+}
+
+/// Run a small "ping" round-trip through the local `claude` CLI to
+/// verify the subprocess can dispatch a real call. The host uses this
+/// for the Settings "Test connection" button — gives the user a
+/// concrete success signal that the binary works, the credentials
+/// are alive, and a sample request completes within ~15 s.
+///
+/// The prompt is hard-coded to `"reply with the single word: pong"`
+/// so the user's recent transcripts can NEVER end up on the wire
+/// here — the test is observably content-free.
+///
+/// Returns the elapsed milliseconds on success (always > 0). Negative
+/// values are categorical error codes:
+///   -1 = not installed (binary missing)
+///   -2 = not logged in (credentials missing)
+///   -3 = subprocess spawn failure (OS-level)
+///   -4 = invocation timeout (10 s ceiling)
+///   -5 = non-zero exit from `claude`
+///   -6 = stdout was not valid UTF-8
+///
+/// Side-effect: emits `claude_code.invocation` with kind="test" so
+/// dashboards can distinguish ping invocations from real recap /
+/// rewrite calls.
+#[no_mangle]
+pub extern "C" fn dimmy_claude_code_ping() -> c_int {
+    use crate::claude_code::{error_category, ClaudeCodeError};
+    let started = std::time::Instant::now();
+    let result = crate::claude_code::run_blocking(
+        "reply with the single word: pong",
+        "",
+        std::time::Duration::from_secs(15),
+    );
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    let (success, category) = match &result {
+        Ok(_) => (true, "ok"),
+        Err(e) => (false, error_category(e)),
+    };
+    crate::telemetry::track(crate::telemetry::Event::ClaudeCodeInvocation {
+        kind: "test",
+        processing_ms_bucket: crate::telemetry::sanitize::bucket_processing_ms(elapsed_ms),
+        success,
+        error_category: category,
+    });
+    match result {
+        Ok(_) => {
+            // Clamp to fit i32; a successful round-trip well under
+            // 60 s never overflows but keep the contract explicit.
+            let ms = elapsed_ms.min(i32::MAX as u64) as c_int;
+            // Never return 0 from success — the host distinguishes
+            // success-with-zero-elapsed from error states.
+            ms.max(1)
+        }
+        Err(ClaudeCodeError::NotInstalled) => -1,
+        Err(ClaudeCodeError::NotLoggedIn) => -2,
+        Err(ClaudeCodeError::Spawn(_)) => -3,
+        Err(ClaudeCodeError::Timeout) => -4,
+        Err(ClaudeCodeError::NonZeroExit { .. }) => -5,
+        Err(ClaudeCodeError::InvalidUtf8) => -6,
     }
 }
 
@@ -4825,6 +4889,13 @@ pub unsafe extern "C" fn dimmy_telemetry_track_typed(
                 "service",
                 &["microphone", "accessibility", "input_monitoring"],
             ),
+        }),
+        // claude_code.* — login funnel emitted from the host polling
+        // loop. The `claude_code.invocation` event lives Rust-side
+        // (emitted from `process_text` / `process_raw_prompt`) so the
+        // host doesn't dispatch it.
+        "claude_code.login_completed" => Some(crate::telemetry::Event::ClaudeCodeLoginCompleted {
+            outcome: prop_static("outcome", &["success", "timeout", "spawn_failed"]),
         }),
         _ => None,
     };

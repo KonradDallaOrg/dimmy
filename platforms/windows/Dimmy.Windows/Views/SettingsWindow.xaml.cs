@@ -1565,6 +1565,9 @@ public sealed partial class SettingsWindow : Window
             if (!ok)
             {
                 ClaudeCodeStatusLabel.Text = "Could not start `claude /login`. Open a terminal and run it manually.";
+                Interop.DimmyNative.TrackEvent(
+                    "claude_code.login_completed",
+                    new { outcome = "spawn_failed" });
                 return;
             }
             // Poll status every 2 s for 3 min — long enough for the
@@ -1579,16 +1582,25 @@ public sealed partial class SettingsWindow : Window
                 var status = Interop.DimmyNative.GetClaudeCodeStatus();
                 if (status == Interop.DimmyNative.ClaudeCodeStatus.Ready)
                 {
+                    Interop.DimmyNative.TrackEvent(
+                        "claude_code.login_completed",
+                        new { outcome = "success" });
                     RefreshClaudeCodeStatus();
                     return;
                 }
             }
             ClaudeCodeStatusLabel.Text = "Sign-in not completed in 3 minutes. Click ↻ when ready.";
+            Interop.DimmyNative.TrackEvent(
+                "claude_code.login_completed",
+                new { outcome = "timeout" });
         }
         catch (Exception ex)
         {
             ClaudeCodeStatusLabel.Text = $"Sign-in error: {ex.Message}";
             App.Log($"ClaudeCode sign-in exc: {ex}", "ClaudeCode");
+            Interop.DimmyNative.TrackEvent(
+                "claude_code.login_completed",
+                new { outcome = "spawn_failed" });
         }
         finally
         {
@@ -1599,6 +1611,49 @@ public sealed partial class SettingsWindow : Window
     private void ClaudeCodeRefresh_Click(object sender, RoutedEventArgs e)
     {
         RefreshClaudeCodeStatus();
+    }
+
+    private async void ClaudeCodeTest_Click(object sender, RoutedEventArgs e)
+    {
+        // Test connection: send a content-free "ping" through the
+        // local CLI. Concrete success signal for the user — confirms
+        // binary + credentials + Anthropic API in one round-trip.
+        ClaudeCodeTestBtn.IsEnabled = false;
+        var originalLabel = ClaudeCodeStatusLabel.Text;
+        ClaudeCodeStatusLabel.Text = "Sending ping…";
+        try
+        {
+            var (result, elapsedMs) = await System.Threading.Tasks.Task.Run(
+                () => Interop.DimmyNative.PingClaudeCode());
+            ClaudeCodeStatusLabel.Text = result switch
+            {
+                Interop.DimmyNative.ClaudeCodePingResult.Ok =>
+                    $"✓ Connection OK ({elapsedMs} ms round-trip)",
+                Interop.DimmyNative.ClaudeCodePingResult.NotInstalled =>
+                    "✗ `claude` binary not found. Install Claude Code first.",
+                Interop.DimmyNative.ClaudeCodePingResult.NotLoggedIn =>
+                    "✗ Not logged in. Click Sign in to authenticate.",
+                Interop.DimmyNative.ClaudeCodePingResult.SpawnFailed =>
+                    "✗ Could not spawn the CLI. See dimmy.log.",
+                Interop.DimmyNative.ClaudeCodePingResult.Timeout =>
+                    "✗ Timed out after 15 s — network or rate-limit issue.",
+                Interop.DimmyNative.ClaudeCodePingResult.NonZeroExit =>
+                    "✗ `claude` returned a non-zero exit code. See dimmy.log.",
+                Interop.DimmyNative.ClaudeCodePingResult.InvalidUtf8 =>
+                    "✗ Unexpected output from `claude`. See dimmy.log.",
+                _ => "✗ Unknown error. See dimmy.log.",
+            };
+        }
+        catch (Exception ex)
+        {
+            ClaudeCodeStatusLabel.Text = $"Test error: {ex.Message}";
+            App.Log($"ClaudeCode test exc: {ex}", "ClaudeCode");
+        }
+        finally
+        {
+            ClaudeCodeTestBtn.IsEnabled = true;
+            _ = originalLabel; // intentionally unused — we leave the new status visible
+        }
     }
 
     // Per-provider has_key flags cached at Settings open. Maps the

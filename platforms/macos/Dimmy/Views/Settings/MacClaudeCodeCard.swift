@@ -28,6 +28,7 @@ struct MacClaudeCodeCard: View {
     @State private var status: DimmyCore.ClaudeCodeStatus = .notInstalled
     @State private var binaryPath: String? = nil
     @State private var signInRunning: Bool = false
+    @State private var testRunning: Bool = false
     @State private var statusMessage: String = ""
 
     var body: some View {
@@ -40,7 +41,7 @@ struct MacClaudeCodeCard: View {
                 showsDivider: false
             ) {
                 HStack(spacing: 8) {
-                    if signInRunning {
+                    if signInRunning || testRunning {
                         ProgressView().controlSize(.small).scaleEffect(0.7)
                     }
                     Button(action: signIn) {
@@ -48,6 +49,13 @@ struct MacClaudeCodeCard: View {
                     }
                     .controlSize(.small)
                     .disabled(signInDisabled)
+
+                    Button(action: testConnection) {
+                        Label("Test", systemImage: "checkmark.circle.fill")
+                    }
+                    .controlSize(.small)
+                    .disabled(testDisabled)
+                    .help("Send a small ping prompt to verify end-to-end (binary + login + network)")
 
                     Button(action: refresh) {
                         Image(systemName: "arrow.clockwise")
@@ -84,7 +92,11 @@ struct MacClaudeCodeCard: View {
     }
 
     private var signInDisabled: Bool {
-        signInRunning || status == .notInstalled
+        signInRunning || testRunning || status == .notInstalled
+    }
+
+    private var testDisabled: Bool {
+        signInRunning || testRunning || status != .ready
     }
 
     private func refresh() {
@@ -102,6 +114,9 @@ struct MacClaudeCodeCard: View {
                 if !ok {
                     signInRunning = false
                     statusMessage = "Could not spawn `claude /login`. Open Terminal and run it manually."
+                    DimmyCore.shared.trackEvent(
+                        "claude_code.login_completed",
+                        ["outcome": "spawn_failed"])
                     return
                 }
                 // Poll for up to 3 minutes (90 × 2 s). Matches the
@@ -116,6 +131,9 @@ struct MacClaudeCodeCard: View {
         if attempt >= max {
             signInRunning = false
             statusMessage = "Sign-in not completed in 3 minutes. Click ↻ when ready."
+            DimmyCore.shared.trackEvent(
+                "claude_code.login_completed",
+                ["outcome": "timeout"])
             return
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
@@ -123,10 +141,38 @@ struct MacClaudeCodeCard: View {
             if s == .ready {
                 signInRunning = false
                 statusMessage = ""
+                DimmyCore.shared.trackEvent(
+                    "claude_code.login_completed",
+                    ["outcome": "success"])
                 refresh()
                 return
             }
             pollForCompletion(attempt: attempt + 1, max: max)
+        }
+    }
+
+    private func testConnection() {
+        testRunning = true
+        statusMessage = "Sending ping…"
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = DimmyCore.shared.pingClaudeCode()
+            DispatchQueue.main.async {
+                testRunning = false
+                statusMessage = describe(result)
+            }
+        }
+    }
+
+    private func describe(_ r: DimmyCore.ClaudeCodePingResult) -> String {
+        switch r {
+        case .ok(let ms): return "✓ Connection OK (\(ms) ms round-trip)"
+        case .notInstalled: return "✗ `claude` binary not found. Install Claude Code first."
+        case .notLoggedIn: return "✗ Not logged in. Click Sign in to authenticate."
+        case .spawnFailed: return "✗ Could not spawn the CLI. See ~/Library/Logs/Dimmy/dimmy.log."
+        case .timeout: return "✗ Timed out after 15 s — network or rate-limit issue."
+        case .nonZeroExit: return "✗ `claude` returned a non-zero exit code. See dimmy.log."
+        case .invalidUtf8: return "✗ Unexpected output from `claude`. See dimmy.log."
+        case .unknownError: return "✗ Unknown error. See dimmy.log."
         }
     }
 }
