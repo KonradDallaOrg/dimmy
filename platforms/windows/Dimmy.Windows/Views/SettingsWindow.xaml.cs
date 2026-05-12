@@ -85,6 +85,9 @@ public sealed partial class SettingsWindow : Window
         ViewModel.LoadGpuStatus();
         SyncProviderComboBox();
         SyncLlmProviderComboBox();
+        // Reveal/refresh the Claude Code status card if the user's
+        // saved LLM provider is the synthetic claude-code:// URL.
+        RefreshClaudeCodeStatus();
         SyncLanguageComboBox();
         SyncThemeRadioButtons();
         SyncAudioSourceRadio();
@@ -1484,7 +1487,118 @@ public sealed partial class SettingsWindow : Window
             // Without this, switching to a provider with a saved key still
             // showed "no key" until the user closed + reopened Settings.
             ViewModel.HasLlmKey = LookupLlmKeyForTag(tag);
+            // Reveal the Claude Code subscription status card when
+            // that provider is picked. RefreshClaudeCodeStatus probes
+            // the binary + credentials state via FFI; safe to call
+            // repeatedly because the Rust side is cached.
+            RefreshClaudeCodeStatus();
         }
+    }
+
+    // ── Claude Code subscription card ─────────────────────────────
+
+    /// Re-read the Claude Code install state + credentials and
+    /// reflect into the SettingsCard. Called on tab activation, on
+    /// provider switch, and after the Sign-in button completes (or
+    /// the user clicks the manual refresh ↻).
+    private void RefreshClaudeCodeStatus()
+    {
+        // Only show the card when Claude Code is the active LLM
+        // provider — otherwise the card is dead weight.
+        var isClaudeCode = ViewModel.LlmApiUrl != null
+            && ViewModel.LlmApiUrl.StartsWith("claude-code://", StringComparison.Ordinal);
+        ClaudeCodeStatusCard.Visibility = isClaudeCode ? Visibility.Visible : Visibility.Collapsed;
+        if (!isClaudeCode) return;
+
+        var status = Interop.DimmyNative.GetClaudeCodeStatus();
+        switch (status)
+        {
+            case Interop.DimmyNative.ClaudeCodeStatus.Ready:
+                var binary = Interop.DimmyNative.GetClaudeCodeBinaryPath() ?? "";
+                ClaudeCodeStatusLabel.Text =
+                    $"✓ Logged in. Using `claude` at {binary}.";
+                ClaudeCodeSignInBtn.Content = BuildSignInLabel("Re-sign in");
+                ClaudeCodeSignInBtn.IsEnabled = true;
+                break;
+            case Interop.DimmyNative.ClaudeCodeStatus.NotLoggedIn:
+                ClaudeCodeStatusLabel.Text =
+                    "Claude Code is installed but not logged in. Click Sign in to authenticate via browser.";
+                ClaudeCodeSignInBtn.Content = BuildSignInLabel("Sign in via browser");
+                ClaudeCodeSignInBtn.IsEnabled = true;
+                break;
+            case Interop.DimmyNative.ClaudeCodeStatus.NotInstalled:
+            default:
+                ClaudeCodeStatusLabel.Text =
+                    "Claude Code CLI not detected. Install via `npm install -g @anthropic-ai/claude-code` or from anthropic.com, then click ↻.";
+                ClaudeCodeSignInBtn.IsEnabled = false;
+                break;
+        }
+    }
+
+    private static Microsoft.UI.Xaml.Controls.StackPanel BuildSignInLabel(string text)
+    {
+        // Re-create the icon + label every time so the IsEnabled
+        // state controls the inner color too. Allocation is cheap
+        // and the alternative (keeping a static instance) trips a
+        // "control parent already set" assert in WinUI.
+        var stack = new Microsoft.UI.Xaml.Controls.StackPanel
+        {
+            Orientation = Microsoft.UI.Xaml.Controls.Orientation.Horizontal,
+            Spacing = 6,
+        };
+        stack.Children.Add(new Microsoft.UI.Xaml.Controls.FontIcon
+        {
+            Glyph = "",
+            FontSize = 14,
+        });
+        stack.Children.Add(new TextBlock { Text = text });
+        return stack;
+    }
+
+    private async void ClaudeCodeSignIn_Click(object sender, RoutedEventArgs e)
+    {
+        ClaudeCodeSignInBtn.IsEnabled = false;
+        ClaudeCodeStatusLabel.Text = "Launching browser… complete the Anthropic OAuth flow in the new terminal window.";
+        try
+        {
+            var ok = Interop.DimmyNative.SpawnClaudeCodeLogin();
+            if (!ok)
+            {
+                ClaudeCodeStatusLabel.Text = "Could not start `claude /login`. Open a terminal and run it manually.";
+                return;
+            }
+            // Poll status every 2 s for 3 min — long enough for the
+            // user to complete the OAuth dance even on a slow link.
+            // The Rust side has no completion callback so polling is
+            // the only signal. 2 s is the right balance: short
+            // enough that the UI feels live, long enough that we
+            // don't hammer the disk.
+            for (int i = 0; i < 90; i++)
+            {
+                await System.Threading.Tasks.Task.Delay(2000);
+                var status = Interop.DimmyNative.GetClaudeCodeStatus();
+                if (status == Interop.DimmyNative.ClaudeCodeStatus.Ready)
+                {
+                    RefreshClaudeCodeStatus();
+                    return;
+                }
+            }
+            ClaudeCodeStatusLabel.Text = "Sign-in not completed in 3 minutes. Click ↻ when ready.";
+        }
+        catch (Exception ex)
+        {
+            ClaudeCodeStatusLabel.Text = $"Sign-in error: {ex.Message}";
+            App.Log($"ClaudeCode sign-in exc: {ex}", "ClaudeCode");
+        }
+        finally
+        {
+            ClaudeCodeSignInBtn.IsEnabled = true;
+        }
+    }
+
+    private void ClaudeCodeRefresh_Click(object sender, RoutedEventArgs e)
+    {
+        RefreshClaudeCodeStatus();
     }
 
     // Per-provider has_key flags cached at Settings open. Maps the

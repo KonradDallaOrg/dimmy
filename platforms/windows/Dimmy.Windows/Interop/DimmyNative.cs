@@ -421,6 +421,38 @@ public static class DimmyNative
         }
     }
 
+    // ── Claude Code subscription login ────────────────────────────
+    //
+    // Use the user's Anthropic Pro/Team/Max subscription via the
+    // official `claude` CLI instead of API keys. See
+    // `core/src/claude_code.rs` for the full design.
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_claude_code_status();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_claude_code_binary_path(byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_claude_code_spawn_login();
+
+    public enum ClaudeCodeStatus { Ready = 0, NotLoggedIn = 1, NotInstalled = 2 }
+
+    public static ClaudeCodeStatus GetClaudeCodeStatus()
+    {
+        try { return (ClaudeCodeStatus)dimmy_claude_code_status(); }
+        catch { return ClaudeCodeStatus.NotInstalled; }
+    }
+
+    public static string? GetClaudeCodeBinaryPath() =>
+        ReadBuffer(dimmy_claude_code_binary_path, 4096);
+
+    public static bool SpawnClaudeCodeLogin()
+    {
+        try { return dimmy_claude_code_spawn_login() == 0; }
+        catch { return false; }
+    }
+
     public static bool TelemetryEnabled
     {
         get => dimmy_telemetry_is_enabled() == 1;

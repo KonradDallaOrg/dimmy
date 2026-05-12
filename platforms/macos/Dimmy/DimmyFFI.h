@@ -417,4 +417,22 @@ int32_t dimmy_user_dict_remove(const char * _Nonnull word_ptr);
 /// strings. Returns byte length, -1 invalid args, -2 buf too small.
 int32_t dimmy_user_dict_list_json(char * _Nonnull out_buf, int32_t buf_len);
 
+// ── Claude Code subscription login ────────────────────────────
+// Use the Anthropic Pro/Team/Max subscription via the local
+// `claude` CLI. See core/src/claude_code.rs.
+
+/// Probe local Claude Code state.
+///   0 = ready (binary + credentials)
+///   1 = installed but not logged in
+///   2 = not installed
+int32_t dimmy_claude_code_status(void);
+
+/// Resolved path of the `claude` binary, or 0 if not installed.
+int32_t dimmy_claude_code_binary_path(char * _Nonnull out_buf, int32_t buf_len);
+
+/// Spawn `claude /login` in a new Terminal window. Returns 0 on
+/// success, -1 not installed, -2 spawn failure. Caller polls
+/// dimmy_claude_code_status() to detect login completion.
+int32_t dimmy_claude_code_spawn_login(void);
+
 #endif /* DimmyFFI_h */

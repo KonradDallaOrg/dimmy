@@ -115,6 +115,14 @@ struct MacOutputPage: View {
                         .frame(width: 320)
                     }
 
+                    // Claude Code subscription card — appears only
+                    // when the user has picked the synthetic
+                    // `claude-code://` provider. Mirrors the Win
+                    // SettingsWindow ClaudeCodeStatusCard.
+                    if appState.llmApiUrl.hasPrefix("claude-code://") {
+                        MacClaudeCodeCard(appState: appState)
+                    }
+
                     MacRow(
                         "Use same key as STT",
                         description: "Reuse the speech-to-text key for the LLM provider when both are the same vendor.",

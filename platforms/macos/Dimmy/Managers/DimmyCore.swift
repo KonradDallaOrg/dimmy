@@ -397,6 +397,43 @@ final class DimmyCore {
         ).first?.appendingPathComponent(configDirName, isDirectory: true)
     }
 
+    // ── Claude Code subscription login ───────────────────────────
+    //
+    // Use the user's Anthropic Pro/Team/Max plan via the local
+    // `claude` CLI instead of API-key credit. See
+    // core/src/claude_code.rs for the design.
+
+    enum ClaudeCodeStatus: Int32 {
+        case ready = 0
+        case notLoggedIn = 1
+        case notInstalled = 2
+    }
+
+    /// Probe local Claude Code state. Cheap — no subprocess.
+    var claudeCodeStatus: ClaudeCodeStatus {
+        let raw = dimmy_claude_code_status()
+        return ClaudeCodeStatus(rawValue: raw) ?? .notInstalled
+    }
+
+    /// Resolved path of the `claude` binary, or nil if not installed.
+    var claudeCodeBinaryPath: String? {
+        let bufLen: Int32 = 4096
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+        let written = dimmy_claude_code_binary_path(buffer, bufLen)
+        guard written > 0 else { return nil }
+        return String(cString: buffer)
+    }
+
+    /// Spawn `claude /login` in a new Terminal window (via
+    /// osascript). Returns true on success. Caller polls
+    /// `claudeCodeStatus` to detect login completion.
+    @discardableResult
+    func spawnClaudeCodeLogin() -> Bool {
+        return dimmy_claude_code_spawn_login() == 0
+    }
+
     /// GPU known-bad status as parsed JSON. `enabled` indicates whether
     /// the marker is currently set (forcing CPU fallback).
     func gpuStatus() -> [String: Any]? {

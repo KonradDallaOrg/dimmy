@@ -81,6 +81,18 @@ public partial class SettingsViewModel : ObservableObject
         new("Anthropic", "https://api.anthropic.com/v1/messages", "claude-haiku-4-5-20251001"),
         new("Anthropic-Sonnet", "https://api.anthropic.com/v1/messages", "claude-sonnet-4-20250514"),
         new("Anthropic-Opus", "https://api.anthropic.com/v1/messages", "claude-opus-4-7"),
+        // Claude Code (subscription) — synthetic provider that
+        // routes LLM calls through the local `claude` CLI using
+        // the user's Pro/Team/Max plan instead of API-key credit.
+        // URL is the marker `claude-code://default`; Rust core
+        // detects this in process_text + process_raw_prompt and
+        // dispatches via subprocess. No api_key needed. See
+        // core/src/claude_code.rs.
+        // Name = "Claude-Code" so SyncLlmProviderComboBox lowercases
+        // it to "claude-code" — matches the ComboBoxItem tag in
+        // SettingsWindow.xaml. The user-facing label lives in XAML
+        // (StackPanel TextBlock), this Name is just the routing key.
+        new("Claude-Code", "claude-code://default", "claude-opus-4-7"),
         // Phase 1 cloud expansion (2026-05-04, sensible model picks for filler-removal/smart-format)
         new("Fireworks", "https://api.fireworks.ai/inference/v1/chat/completions", "accounts/fireworks/models/kimi-k2p6"),
         new("Together-Llama", "https://api.together.xyz/v1/chat/completions", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
