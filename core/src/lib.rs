@@ -9,6 +9,7 @@ pub mod app_rules;
 pub mod audio;
 pub mod autostart;
 pub mod chunked_stt;
+pub mod claude_code;
 pub mod dfn;
 pub mod error;
 pub mod ffi;

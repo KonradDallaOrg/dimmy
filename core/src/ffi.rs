@@ -3024,6 +3024,63 @@ pub unsafe extern "C" fn dimmy_user_dict_list_json(out_buf: *mut c_char, buf_len
     write_to_buf(&json, out_buf, buf_len)
 }
 
+// ── Claude Code (subscription login) ──────────────────────────────
+// Use the user's Anthropic Pro / Team / Max subscription for LLM
+// calls instead of consuming API-key credits. Delegates auth to
+// Anthropic's official `claude` CLI (which handles browser-based
+// OAuth) and dispatches every LLM call through a subprocess. See
+// `core/src/claude_code.rs` for the full design.
+
+/// Probe local Claude Code state. Returns:
+///   0 = ready  (binary installed + credentials present)
+///   1 = installed but not logged in
+///   2 = not installed
+///  -1 = lock/IO failure during probe
+#[no_mangle]
+pub extern "C" fn dimmy_claude_code_status() -> c_int {
+    crate::claude_code::status().as_code()
+}
+
+/// Return the resolved Claude Code binary path into `out_buf` (as
+/// a NUL-terminated UTF-8 string). Length of bytes written (without
+/// NUL) on success, 0 if not installed, -1 on invalid args / too-
+/// small buffer.
+///
+/// # Safety
+/// `out_buf` must be a valid writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_claude_code_binary_path(
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    match crate::claude_code::detect_binary() {
+        Some(p) => {
+            let s = p.to_string_lossy().to_string();
+            if s.len() + 1 > buf_len as usize {
+                return -1;
+            }
+            write_to_buf(&s, out_buf, buf_len)
+        }
+        None => 0,
+    }
+}
+
+/// Spawn `claude /login` so the user can authenticate via browser.
+/// Detached subprocess — returns 0 once the spawn succeeded, -1 on
+/// missing binary, -2 on spawn failure. The actual login completion
+/// is detected by polling `dimmy_claude_code_status()` from the host.
+#[no_mangle]
+pub extern "C" fn dimmy_claude_code_spawn_login() -> c_int {
+    match crate::claude_code::spawn_login() {
+        Ok(()) => 0,
+        Err(crate::claude_code::ClaudeCodeError::NotInstalled) => -1,
+        Err(_) => -2,
+    }
+}
+
 // ── Notion integration ─────────────────────────────────────────────
 // Internal-integration-token model: user pastes a `ntn_...` token
 // from notion.so/my-integrations into the Settings UI; we store it

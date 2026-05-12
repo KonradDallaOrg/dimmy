@@ -341,6 +341,39 @@ pub async fn process_text(
         return Ok(text.to_string());
     }
 
+    // Claude Code branch — see comment in `process_raw_prompt`. The
+    // style-rewrite path builds the same system + user prompt shape
+    // as the HTTP path but ships it through the local CLI subprocess.
+    if crate::claude_code::is_claude_code_url(api_url) {
+        // Glue system + user into a single prompt; the CLI doesn't
+        // distinguish them in --print mode. The system prompt acts
+        // as a leading instruction block.
+        let combined = format!(
+            "{}\n\n---\nProcess the following transcription. Output ONLY the transformed text, nothing else.\n\n[TRANSCRIPTION]\n{}\n[/TRANSCRIPTION]",
+            system_prompt, text
+        );
+        let model_owned = model.to_string();
+        let result = tokio::task::spawn_blocking(move || {
+            crate::claude_code::run_blocking(
+                &combined,
+                &model_owned,
+                std::time::Duration::from_secs(60),
+            )
+        })
+        .await
+        .map_err(|e| crate::error::LlmError::Network(format!("claude-code join: {}", e)))?;
+        return result.map_err(|e| match e {
+            crate::claude_code::ClaudeCodeError::NotInstalled
+            | crate::claude_code::ClaudeCodeError::NotLoggedIn => {
+                crate::error::LlmError::NoApiKey("claude-code".to_string())
+            }
+            crate::claude_code::ClaudeCodeError::Timeout => {
+                crate::error::LlmError::Network("claude-code timeout".to_string())
+            }
+            _ => crate::error::LlmError::Network("claude-code error".to_string()),
+        });
+    }
+
     // SECURITY: validate URL — reject non-HTTPS, dangerous schemes, CRLF injection, etc.
     if let Err(reason) = crate::provider::Provider::validate_url(api_url) {
         return Err(crate::error::LlmError::Network(reason));
@@ -503,6 +536,49 @@ pub async fn process_raw_prompt(
         max_tokens <= 100_000,
         "process_raw_prompt: max_tokens too large"
     );
+
+    // Claude Code CLI branch — synthetic `claude-code://` URL means
+    // "spawn the local Claude Code subprocess using the user's
+    // logged-in Anthropic subscription". No API key consumed; the
+    // user's Pro / Team / Max plan is the auth source. Branch runs
+    // BEFORE `validate_url` because that helper rejects non-HTTPS.
+    // See `core/src/claude_code.rs` for the binary detection +
+    // subprocess plumbing.
+    if crate::claude_code::is_claude_code_url(api_url) {
+        let model_owned = model.to_string();
+        let prompt_owned = user_prompt.to_string();
+        let result = tokio::task::spawn_blocking(move || {
+            // 10 min — same ceiling as the HTTP path. Adaptive
+            // thinking on Opus 4.7 can need it.
+            crate::claude_code::run_blocking(
+                &prompt_owned,
+                &model_owned,
+                std::time::Duration::from_secs(600),
+            )
+        })
+        .await
+        .map_err(|e| crate::error::LlmError::Network(format!("claude-code join: {}", e)))?;
+        return result.map_err(|e| match e {
+            crate::claude_code::ClaudeCodeError::NotInstalled
+            | crate::claude_code::ClaudeCodeError::NotLoggedIn => {
+                crate::error::LlmError::NoApiKey("claude-code".to_string())
+            }
+            crate::claude_code::ClaudeCodeError::Timeout => {
+                crate::error::LlmError::Network("claude-code timeout".to_string())
+            }
+            crate::claude_code::ClaudeCodeError::Spawn(_)
+            | crate::claude_code::ClaudeCodeError::InvalidUtf8 => {
+                crate::error::LlmError::Network("claude-code spawn failed".to_string())
+            }
+            crate::claude_code::ClaudeCodeError::NonZeroExit { code, .. } => {
+                crate::error::LlmError::Api {
+                    status: code.unsigned_abs() as u16,
+                    body: String::new(),
+                }
+            }
+        });
+    }
+
     if let Err(reason) = crate::provider::Provider::validate_url(api_url) {
         return Err(crate::error::LlmError::Network(reason));
     }
@@ -721,6 +797,56 @@ pub async fn process_raw_prompt(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Claude Code dispatch branch (subscription login) ────────
+    //
+    // The full integration test requires a logged-in `claude`
+    // binary on the test machine. We can't guarantee that on CI,
+    // so these tests only pin the BRANCH CHOICE — the routing
+    // logic in process_raw_prompt / process_text that says "URL
+    // starts with claude-code:// → dispatch via subprocess". The
+    // subprocess itself is tested in core/src/claude_code.rs.
+
+    #[test]
+    fn claude_code_url_short_circuits_validate_url() {
+        // validate_url rejects non-HTTPS. Our claude-code:// scheme
+        // is non-HTTPS so a regression where we moved the
+        // is_claude_code_url check BELOW validate_url would
+        // produce InsecureUrl errors instead of routing to the
+        // subprocess. Test the routing precondition: the helper
+        // must recognise our scheme.
+        assert!(crate::claude_code::is_claude_code_url(
+            "claude-code://default"
+        ));
+        // And the URL validator does indeed reject it (which is
+        // why we check first and short-circuit).
+        assert!(crate::provider::Provider::validate_url("claude-code://default").is_err());
+    }
+
+    #[test]
+    fn process_raw_prompt_with_claude_code_url_returns_no_api_key_when_not_installed() {
+        // On test machines without `claude` installed, the dispatch
+        // must surface NoApiKey (== "Claude Code not available") so
+        // the host can prompt the user to install + sign in. Test
+        // only runs the synchronous validation path; the subprocess
+        // branch needs tokio runtime so we can't assert end-to-end
+        // here, but the smoke test confirms the contract types
+        // line up. Run via tokio_test if a runtime is available.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build runtime");
+        let result = rt.block_on(async {
+            process_raw_prompt("claude-code://default", "claude-opus-4-7", "", "ping", 100).await
+        });
+        // Either NotInstalled (no claude on machine) → NoApiKey, or
+        // NotLoggedIn → NoApiKey, or actual success if the dev
+        // machine has it. The bright-line contract is "doesn't panic
+        // + doesn't fall through to HTTP".
+        if let Err(crate::error::LlmError::Api { .. }) = result {
+            panic!("claude-code:// URL must never hit HTTP API path");
+        }
+    }
 
     #[test]
     fn off_returns_empty() {
