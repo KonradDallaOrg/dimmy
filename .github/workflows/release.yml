@@ -111,7 +111,14 @@ jobs:
           name: "Dimmy ${{ github.ref_name }}"
           body_path: changelog.md
           draft: true
-          prerelease: false
+          # Auto-detect prerelease from tag suffix. Tag `v0.6.37`
+          # → production. Tag `v0.6.37-rc1` / `-beta` / `-alpha`
+          # → prerelease. The `v*-staging*` shape is already excluded
+          # by the trigger filter at the top of this file so it
+          # never reaches here. The Mac appcast step (lower down)
+          # reads `github.event.release.prerelease` to set the
+          # `<sparkle:channel>prerelease</sparkle:channel>` tag.
+          prerelease: ${{ contains(github.ref_name, '-') }}
 
   # ── macOS Native Build ─────────────────────────────────────────────
   build-macos:
