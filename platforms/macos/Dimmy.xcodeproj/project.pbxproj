@@ -97,6 +97,8 @@
 		AA000303 /* NotionConnectSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000303 /* NotionConnectSheet.swift */; };
 		AA000800 /* DictHotkeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000800 /* DictHotkeyManager.swift */; };
 		AA000801 /* DictToastWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000801 /* DictToastWindow.swift */; };
+		AA000900 /* UpdateService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000900 /* UpdateService.swift */; };
+		AA000901 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = XP000001 /* Sparkle */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -116,6 +118,7 @@
 		AB000507 /* AudioWaveformView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioWaveformView.swift; sourceTree = "<group>"; };
 		AB000508 /* SampleAudioSynth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleAudioSynth.swift; sourceTree = "<group>"; };
 		AB000601 /* MeetingPostProcessService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingPostProcessService.swift; sourceTree = "<group>"; };
+		AB000900 /* UpdateService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateService.swift; sourceTree = "<group>"; };
 		AB000602 /* MeetingViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingViewModel.swift; sourceTree = "<group>"; };
 		AB000603 /* MeetingSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSidebar.swift; sourceTree = "<group>"; };
 		AB000604 /* MeetingIdleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingIdleView.swift; sourceTree = "<group>"; };
@@ -210,6 +213,7 @@
 				AA000037 /* CoreFoundation.framework in Frameworks */,
 				AA000038 /* Accelerate.framework in Frameworks */,
 				AA000039 /* Metal.framework in Frameworks */,
+				AA000901 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -271,6 +275,7 @@
 			isa = PBXGroup;
 			children = (
 				AB000601 /* MeetingPostProcessService.swift */,
+				AB000900 /* UpdateService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -462,6 +467,9 @@
 			dependencies = (
 			);
 			name = Dimmy;
+			packageProductDependencies = (
+				XP000001 /* Sparkle */,
+			);
 			productName = Dimmy;
 			productReference = AB000099 /* Dimmy.app */;
 			productType = "com.apple.product-type.application";
@@ -507,6 +515,9 @@
 				Base,
 			);
 			mainGroup = AD000001;
+			packageReferences = (
+				XR000001 /* XCRemoteSwiftPackageReference "Sparkle" */,
+			);
 			productRefGroup = AD000099 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -658,6 +669,7 @@
 				AA000507 /* AudioWaveformView.swift in Sources */,
 				AA000508 /* SampleAudioSynth.swift in Sources */,
 				AA000601 /* MeetingPostProcessService.swift in Sources */,
+				AA000900 /* UpdateService.swift in Sources */,
 				AA000602 /* MeetingViewModel.swift in Sources */,
 				AA000603 /* MeetingSidebar.swift in Sources */,
 				AA000604 /* MeetingIdleView.swift in Sources */,
@@ -996,6 +1008,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		XR000001 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.6.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		XP000001 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = XR000001 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = AE000099 /* Project object */;
 }

@@ -70,6 +70,47 @@ After every staging / release build, this job downloads the Windows Setup.exe fr
 
 **Known gap:** the test does not yet exercise `dimmy_stop_recording` with synthetic audio. v0.6.10 shipped an ABI mismatch that only triggered on first transcription. Before the next release cycle, extend `test-install.yml` to feed a silent WAV through the FFI and assert no crash.
 
+## Mac auto-update bootstrap (one-time setup)
+
+Sparkle 2 verifies every downloaded DMG with an EdDSA signature embedded in `appcast.xml`. The matching public key lives in `platforms/macos/Dimmy/Info.plist` (`SUPublicEDKey`). Until the keypair is generated and the GitHub secret is set, the workflow ships the DMG but skips signing — auto-update will not function for those releases.
+
+**One-time bootstrap:**
+
+1. **Resolve the Sparkle package locally** so `generate_keys` is available on disk:
+   ```bash
+   xcodebuild -project platforms/macos/Dimmy.xcodeproj -resolvePackageDependencies
+   ```
+
+2. **Generate the keypair.** The binary lives under SwiftPM's resolved checkout:
+   ```bash
+   find platforms/macos/build/derived/SourcePackages -name generate_keys -type f -perm +111
+   # → run it: prints public key, writes private key to Keychain
+   ./<that-path>/generate_keys
+   ```
+   Output is something like:
+   ```
+   A pair of keys was just created and is now stored in your Keychain.
+   In your Info.plist, set the SUPublicEDKey key to:
+     <base64-encoded-public-key-32-chars>
+   ```
+
+3. **Set `SUPublicEDKey` in `platforms/macos/Dimmy/Info.plist`** — replace `REPLACE_ME_WITH_SPARKLE_PUBLIC_ED_KEY` with the printed value. Commit that change.
+
+4. **Export the private key for CI:**
+   ```bash
+   find platforms/macos/build/derived/SourcePackages -name generate_keys -type f -perm +111 -exec dirname {} \; | head -1
+   # cd into that dir and:
+   ./generate_keys -x
+   # → prints the base64 private key
+   ```
+   Set it as a GitHub repository secret named `SPARKLE_PRIVATE_KEY` (Settings → Secrets and variables → Actions → New repository secret). The key **never** leaves Keychain on your dev machine — the secret is the one-time export you paste into the GitHub UI.
+
+5. **Cut a normal release.** From this point on, every `release.yml` run signs the DMG, writes `appcast.xml`, and uploads both. Mac auto-update is live.
+
+### Channel behaviour
+
+GitHub releases marked "prerelease" produce an appcast with `<sparkle:channel>prerelease</sparkle:channel>`. The Mac app's About page exposes a Stable / Prerelease picker; "Stable" users skip prerelease items, "Prerelease" users get both.
+
 ## Rolling back
 
 If a release is broken after publication:
