@@ -279,10 +279,15 @@ struct FileLoadCard: View {
 
         let path = lastPath ?? ""
         let transcriptCopy = transcript
+        // Resolve @MainActor-isolated AppState fields here, on main,
+        // before dispatching to background. Passing them in keeps the
+        // background pipeline free of main-actor reads.
+        let notionAutoSend = AppState.shared.notionAutoSend
         DispatchQueue.global(qos: .userInitiated).async {
             let outcome = FileLoadToMeetingService.run(
                 sourceWavPath: path,
-                transcript: transcriptCopy
+                transcript: transcriptCopy,
+                notionAutoSend: notionAutoSend
             )
             DispatchQueue.main.async {
                 recapRunning = false

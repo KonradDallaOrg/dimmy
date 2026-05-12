@@ -12,8 +12,18 @@ struct MacOutputPage: View {
     @State private var showLlmKeyField: Bool = false
 
     @State private var localLlmExists: Bool = false
-    @State private var llmDownloadInFlight: Bool = false
     @State private var llmDownloadFailed: String? = nil
+
+    /// Use the AppState-published flag (NOT a local @State) so the
+    /// download progress survives the Settings page being recreated:
+    /// SwiftUI tears the view down when you navigate to another page,
+    /// which used to reset a local @State and re-show the Download
+    /// button while the background download was still running. Two
+    /// races later you'd have a corrupted `.part` file. Mirrors what
+    /// `LLMModelSettingsView` already does for the OutputSettingsView.
+    private var llmDownloadInFlight: Bool {
+        appState.isDownloadingLlmModel
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -172,11 +182,20 @@ struct MacOutputPage: View {
                                 refreshLocalLlmStatus()
                             }
                         )) {
-                            Text("Gemma 4 E2B-it (Q4)").tag("gemma-4-E2B-it-Q4_K_M.gguf")
-                            Text("Gemma 4 E4B-it (Q4)").tag("gemma-4-E4B-it-Q4_K_M.gguf")
+                            // Gemma 4 family — same catalogue as
+                            // core/src/local_llm.rs AVAILABLE_LLM_MODELS.
+                            // Order: small→large so the dropdown lines up
+                            // with VRAM requirements top-to-bottom.
+                            Text("Gemma 4 E2B Q4 · 3.1 GB · fast").tag("gemma-4-E2B-it-Q4_K_M.gguf")
+                            Text("Gemma 4 E2B Q5 · 3.7 GB").tag("gemma-4-E2B-it-Q5_K_M.gguf")
+                            Text("Gemma 4 E4B Q3 · 4.1 GB").tag("gemma-4-E4B-it-Q3_K_M.gguf")
+                            Text("Gemma 4 E4B Q4 · 5.0 GB · recommended").tag("gemma-4-E4B-it-Q4_K_M.gguf")
+                            Text("Gemma 4 E4B Q8 · 8.2 GB · max quality").tag("gemma-4-E4B-it-Q8_0.gguf")
+                            // Phi-4 Mini — multilingual fallback
+                            Text("Phi-4 Mini Q4 · 2.5 GB").tag("phi-4-mini-instruct-q4_k_m.gguf")
                         }
                         .labelsHidden()
-                        .frame(width: 220)
+                        .frame(width: 280)
                     }
 
                     if llmDownloadInFlight {
@@ -225,15 +244,20 @@ struct MacOutputPage: View {
     }
 
     private func startLlmDownload() {
-        guard !llmDownloadInFlight, DimmyCore.shared.isInitialized else { return }
+        // Belt-and-braces guard: the AppState flag survives view tear-
+        // down, so a re-entered MacOutputPage with an in-flight
+        // download still sees `true` and the button is hidden. Without
+        // this guard a fast double-click could still slip through
+        // before the @Published value propagates.
+        guard !appState.isDownloadingLlmModel, DimmyCore.shared.isInitialized else { return }
         let target = appState.localLlmModel
-        llmDownloadInFlight = true
+        appState.isDownloadingLlmModel = true
         llmDownloadFailed = nil
         appState.llmModelDownloadProgress = 0
         DispatchQueue.global(qos: .userInitiated).async {
             let ok = DimmyCore.shared.downloadLLMModel(target)
             DispatchQueue.main.async {
-                llmDownloadInFlight = false
+                appState.isDownloadingLlmModel = false
                 if ok {
                     refreshLocalLlmStatus()
                 } else {

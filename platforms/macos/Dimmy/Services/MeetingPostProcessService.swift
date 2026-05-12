@@ -42,13 +42,15 @@ enum MeetingPostProcessService {
                 // user knows where to fix it.
                 switch e {
                 case .notConfigured:
-                    return "No LLM provider configured. Open Settings → LLM and add a key (Anthropic, OpenAI, or Google) before generating a recap."
+                    return "No LLM provider configured. Open Settings → LLM and add a key (Anthropic, OpenAI, or Google), OR switch to Local mode + download a Gemma model."
                 case .httpError:
                     return "LLM request failed — check your network and API key, then click Regenerate. Details in Console.app under \"dimmy\"."
                 case .emptyPrompt, .invalidArgs:
                     return "Internal error preparing the LLM call. Click Regenerate; if it persists, please report this."
                 case .notInitialized:
                     return "Dimmy core isn't ready yet — wait a moment then click Regenerate."
+                case .localModelMissing:
+                    return "Local LLM model not on disk. Open Settings → LLM → download a Gemma variant (E2B Q4 = fast, E4B Q4 = best balance) before generating a recap."
                 case .unknown(let code):
                     return "LLM call failed (rc=\(code)). See Console.app under \"dimmy\"."
                 }

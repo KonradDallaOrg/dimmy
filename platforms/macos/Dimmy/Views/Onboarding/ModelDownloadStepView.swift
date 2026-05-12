@@ -43,10 +43,10 @@ struct ModelDownloadStepView: View {
             // Model picker — whisper variants + Parakeet sentinel.
             VStack(spacing: 10) {
                 Picker("", selection: $selection) {
-                    Text("Whisper Base · 78 MB (recommended)").tag(Self.defaultWhisper)
+                    Text("Parakeet TDT v3 · 466 MB · Apple Neural Engine (recommended)").tag(Self.parakeetTag)
+                    Text("Whisper Base · 78 MB").tag(Self.defaultWhisper)
                     Text("Whisper Small · 466 MB").tag("ggml-small-q8_0.bin")
                     Text("Whisper Medium · 1.5 GB").tag("ggml-medium-q8_0.bin")
-                    Text("Parakeet TDT v3 · 466 MB · Apple Neural Engine").tag(Self.parakeetTag)
                 }
                 .labelsHidden()
                 .pickerStyle(.menu)

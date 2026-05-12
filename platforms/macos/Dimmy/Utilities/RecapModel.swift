@@ -57,7 +57,7 @@ struct RecapModelOption: Identifiable, Equatable {
     let provider: Provider
 
     enum Provider: String {
-        case auto, anthropic, gemini, openai, custom
+        case auto, anthropic, gemini, openai, local, custom
     }
 
     /// The value persisted in `recap_model_override` for the "Auto"
@@ -66,6 +66,10 @@ struct RecapModelOption: Identifiable, Equatable {
     static let autoKey = ""
 
     /// User-curated list. Order matters — same as Win.
+    /// Local options carry a `local:` prefix in their id so the Rust
+    /// FFI (`dimmy_llm_call_raw`) can distinguish from cloud model
+    /// names. Cloud options stay bare-string for backward compatibility
+    /// with existing `recap_model_override` values.
     static let curated: [RecapModelOption] = [
         .init(id: autoKey, label: "Auto (match LLM provider)", provider: .auto),
 
@@ -81,6 +85,21 @@ struct RecapModelOption: Identifiable, Equatable {
         .init(id: "gpt-5",      label: "OpenAI — GPT-5 (best)",          provider: .openai),
         .init(id: "gpt-5-mini", label: "OpenAI — GPT-5 mini (fast + cheap)", provider: .openai),
         .init(id: "gpt-4o",     label: "OpenAI — GPT-4o",                provider: .openai),
+
+        // Local Gemma — on-device via llama.cpp Metal. No network, no
+        // API key, transcript never leaves the Mac. Quality is below
+        // flagship cloud models but adequate for personal meeting
+        // recaps. Recap latency on M-series ~30-90 s for typical
+        // 5-10k char transcripts.
+        .init(id: "local:gemma-4-E4B-it-Q4_K_M.gguf",
+              label: "Local — Gemma 4 E4B Q4 (best local, ~6GB VRAM)",
+              provider: .local),
+        .init(id: "local:gemma-4-E2B-it-Q4_K_M.gguf",
+              label: "Local — Gemma 4 E2B Q4 (fast, 4GB VRAM)",
+              provider: .local),
+        .init(id: "local:gemma-4-E4B-it-Q8_0.gguf",
+              label: "Local — Gemma 4 E4B Q8 (max quality, 10GB+ VRAM)",
+              provider: .local),
     ]
 
     /// Find the curated option for a given config value, or fall through
@@ -99,6 +118,7 @@ struct RecapModelOption: Identifiable, Equatable {
         case .anthropic: return "a.circle.fill"
         case .gemini: return "diamond.fill"
         case .openai: return "circle.hexagongrid.fill"
+        case .local: return "cpu"
         case .custom: return "wrench.adjustable"
         }
     }
@@ -110,6 +130,7 @@ struct RecapModelOption: Identifiable, Equatable {
         case .anthropic: return "orange"
         case .gemini: return "blue"
         case .openai: return "green"
+        case .local: return "purple"
         case .custom: return "gray"
         }
     }

@@ -38,7 +38,10 @@ enum FileLoadToMeetingService {
     /// Run the full file-load → meeting pipeline. Blocking — call
     /// from a background thread (the LLM step inside
     /// `MeetingPostProcessService.runRecap` can take 10–60 s).
-    static func run(sourceWavPath: String, transcript: String) -> Outcome {
+    /// `notionAutoSend` is precomputed by the caller on the main actor
+    /// (AppState.shared.notionAutoSend is @MainActor-isolated; reading
+    /// it off-main is a Swift concurrency error).
+    static func run(sourceWavPath: String, transcript: String, notionAutoSend: Bool) -> Outcome {
         let trimmedTranscript = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedTranscript.isEmpty else {
             return Outcome(dir: "", recapMarkdown: nil, error: "empty transcript")
@@ -126,16 +129,15 @@ enum FileLoadToMeetingService {
 
         NSLog("[FileLoadToMeeting] dir=\(dir.path) transcript=\(trimmedTranscript.count)c duration=\(durationSecs)s")
 
-        // Hand off to the shared recap pipeline. notionAutoSend
-        // reads the same config field MeetingWindow uses — keeps
-        // file-load loops consistent with live-meeting behaviour
-        // when the user has Notion auto-send enabled.
-        let notionAutoSend = (AppState.shared.notionAutoSend) && DimmyCore.shared.notionHasToken
+        // Hand off to the shared recap pipeline. notionAutoSend is
+        // resolved on main by the caller (AppState is @MainActor) and
+        // gated here against the Rust-side token presence.
+        let autoSend = notionAutoSend && DimmyCore.shared.notionHasToken
         let recapResult = MeetingPostProcessService.runRecap(
             dir: dir.path,
             transcript: trimmedTranscript,
             modelOverride: nil,
-            notionAutoSend: notionAutoSend
+            notionAutoSend: autoSend
         )
         switch recapResult {
         case .success(let res):
