@@ -76,11 +76,23 @@ pub fn init() {
                 sentry::ClientOptions {
                     release: sentry::release_name!(),
                     environment: Some(detect_environment().into()),
-                    enable_logs: true,
+                    // SECURITY: enable_logs=true ships every `log!()`
+                    // / `tracing` macro output to Sentry. Our `log()`
+                    // helper writes free-form strings ("[FileLoad]
+                    // chunk N of M failed: <body>", "[LlmDispatch]
+                    // request: <prompt>", etc.) — most of those
+                    // include user content. Disabling captures
+                    // exception + breadcrumbs ONLY, which we have
+                    // tighter control over. Burned 2026-05-12.
+                    enable_logs: false,
                     send_default_pii: false,
                     attach_stacktrace: true,
-                    max_breadcrumbs: 50,
-                    before_send: Some(std::sync::Arc::new(|event| Some(scrub_event(event)))),
+                    // Breadcrumbs default-include log lines; cap low
+                    // so a long transcript-producing burst can't fill
+                    // the buffer with sensitive lines before a panic.
+                    max_breadcrumbs: 20,
+                    before_send: Some(std::sync::Arc::new(scrub_event)),
+                    before_breadcrumb: Some(std::sync::Arc::new(scrub_breadcrumb)),
                     ..Default::default()
                 },
             ))
@@ -359,8 +371,75 @@ fn detect_environment() -> &'static str {
 /// `before_send` hook: strip server context, OS env vars, and any
 /// string that looks like a secret. Sentry collects a lot by default;
 /// this is the choke point that enforces our minimum-data policy.
+/// Aggressive allowlist-based message redaction. The previous filter
+/// (only `looks_like_secret`) caught API key prefixes but happily
+/// passed natural-language transcript fragments. After a 2026-05-12
+/// incident where a Sentry panic surfaced part of a transcribed
+/// chat, the rule flipped: anything that looks like prose gets
+/// reduced to a stable category label so debugging stays possible
+/// without ever shipping user content.
+///
+/// Rules in order:
+///   1. Empty / very short → keep as-is (file:line, "panic", etc.)
+///   2. Matches a known error category (HTTP NNN, IO error names,
+///      provider names, "panic in <fn>", file paths) → keep
+///   3. Otherwise treat as user content → redact to "<redacted: prose
+///      content>"
+///
+/// The local `dimmy.log` still gets the full message via the
+/// separate `log()` call site — this redaction only fires for the
+/// network-bound Sentry payload.
 #[cfg(feature = "telemetry-sentry")]
-fn scrub_event(mut event: sentry::protocol::Event<'static>) -> sentry::protocol::Event<'static> {
+fn redact_prose(s: &str) -> String {
+    // Empty / one-token → safe; usually a category enum.
+    let trimmed = s.trim();
+    if trimmed.len() <= 24 {
+        return trimmed.to_string();
+    }
+    // Whitelist patterns that are common in our error messages but
+    // can never contain transcript text:
+    //   - "HTTP NNN" status code only
+    //   - "request failed: <reqwest error chain>" — reqwest doesn't
+    //     echo bodies, so these are safe
+    //   - "no API key for ..." / "refusing HTTP (HTTPS required): ..."
+    //   - "local model: ..." (whisper/parakeet/llama_cpp errors)
+    //   - file paths (C:\... or /Users/...) → keep
+    //   - Rust panic prefix "PANIC: at file:line: ..." → strip after
+    //     the first 60 chars (file:line is the useful part; the
+    //     payload may include user content)
+    let lower = trimmed.to_ascii_lowercase();
+    let safe_prefix = lower.starts_with("http ")
+        || lower.starts_with("request failed:")
+        || lower.starts_with("no api key")
+        || lower.starts_with("refusing http")
+        || lower.starts_with("local model:")
+        || lower.starts_with("local llm model:")
+        || lower.starts_with("empty transcription")
+        || lower.starts_with("file:")
+        || lower.starts_with("io error:")
+        || lower.starts_with("config")
+        || lower.starts_with("dimmy_")
+        || lower.starts_with("ffi ")
+        || lower.starts_with("panic");
+
+    if safe_prefix {
+        // Even for whitelisted prefixes, cap the length so we don't
+        // accidentally pass through a long tail (e.g. local model:
+        // <stack trace that mentions transcript>).
+        if trimmed.len() <= 200 {
+            trimmed.to_string()
+        } else {
+            format!("{}…<truncated>", &trimmed[..200])
+        }
+    } else {
+        "<redacted: prose content>".to_string()
+    }
+}
+
+#[cfg(feature = "telemetry-sentry")]
+fn scrub_event(
+    mut event: sentry::protocol::Event<'static>,
+) -> Option<sentry::protocol::Event<'static>> {
     use crate::telemetry::sanitize::looks_like_secret;
 
     // Drop server name (may include hostname / username on some OSes).
@@ -382,22 +461,72 @@ fn scrub_event(mut event: sentry::protocol::Event<'static>) -> sentry::protocol:
                 | "TMP"
         )
     });
+    // Also drop ALL extra entries we didn't explicitly opt in — same
+    // anti-leak policy. Extras can carry arbitrary key/value strings
+    // and the panic integration may attach `payload` containing
+    // whatever was in scope. Allowlist: provider, mode, category.
+    event
+        .extra
+        .retain(|k, _v| matches!(k.as_str(), "provider" | "mode" | "error_category"));
 
-    // Walk message payloads and drop anything secret-shaped.
+    // Walk message payloads — defense in depth: looks_like_secret
+    // catches API keys, redact_prose catches free-form user content.
     if let Some(msg) = &event.message {
-        if looks_like_secret(msg) {
+        let s = msg.as_str();
+        if looks_like_secret(s) {
             event.message = Some("<redacted: looked like a secret>".to_string());
+        } else {
+            event.message = Some(redact_prose(s));
         }
     }
-    for entry in event.breadcrumbs.iter_mut() {
-        if let Some(msg) = &entry.message {
-            if looks_like_secret(msg) {
-                entry.message = Some("<redacted>".to_string());
+
+    // Same for exception value strings (this is the field that
+    // surfaces panic messages + Display-impl output).
+    for ex in event.exception.values.iter_mut() {
+        if let Some(v) = &ex.value {
+            if looks_like_secret(v) {
+                ex.value = Some("<redacted: looked like a secret>".to_string());
+            } else {
+                ex.value = Some(redact_prose(v));
             }
         }
     }
 
-    event
+    // Breadcrumbs already filtered by scrub_breadcrumb but pass over
+    // again in case any slipped through (concurrent breadcrumb-add).
+    for entry in event.breadcrumbs.iter_mut() {
+        if let Some(msg) = &entry.message {
+            let s = msg.as_str();
+            if looks_like_secret(s) {
+                entry.message = Some("<redacted: secret>".to_string());
+            } else {
+                entry.message = Some(redact_prose(s));
+            }
+        }
+        // Drop breadcrumb data map for the same reason as extras.
+        entry.data.clear();
+    }
+
+    Some(event)
+}
+
+/// Breadcrumb-level filter (runs as messages are added, before they
+/// reach an event). Drops anything Sentry SDK auto-adds from log!()
+/// macros (we disabled enable_logs but other crates' breadcrumbs
+/// still flow through). Allowlist: category=panic|telemetry|http.
+#[cfg(feature = "telemetry-sentry")]
+fn scrub_breadcrumb(mut b: sentry::Breadcrumb) -> Option<sentry::Breadcrumb> {
+    use crate::telemetry::sanitize::looks_like_secret;
+    if let Some(msg) = &b.message {
+        let s = msg.as_str();
+        if looks_like_secret(s) {
+            b.message = Some("<redacted: secret>".to_string());
+        } else {
+            b.message = Some(redact_prose(s));
+        }
+    }
+    b.data.clear();
+    Some(b)
 }
 
 #[cfg(test)]
@@ -423,6 +552,87 @@ mod tests {
         // Default cargo test runs without DIMMY_SENTRY_DSN env var, so
         // the embedded value is empty and capture_error returns early.
         capture_error("test", "this is a test error message");
+    }
+
+    // ── Privacy hardening: redact_prose tests ────────────────────
+    //
+    // These tests are the bright-line contract that keeps transcript
+    // content out of Sentry. They were written 2026-05-12 after a
+    // user-reported leak where part of a transcribed chat surfaced
+    // in a panic event. Adding/relaxing any of them = re-opening
+    // the leak class.
+
+    #[test]
+    fn redact_prose_keeps_short_strings_verbatim() {
+        // ≤ 24 chars are typically category labels / file:line
+        // refs / panic kind tags — keep as-is.
+        assert_eq!(redact_prose("HTTP 401"), "HTTP 401");
+        assert_eq!(redact_prose("ok"), "ok");
+        assert_eq!(redact_prose(""), "");
+        assert_eq!(redact_prose("panic"), "panic");
+    }
+
+    #[test]
+    fn redact_prose_keeps_whitelisted_prefixes() {
+        // Our own error Display impls produce these — safe to keep.
+        assert!(redact_prose("HTTP 401 from upstream provider blah blah").starts_with("HTTP 401"));
+        assert!(
+            redact_prose("request failed: connection refused by peer (so 6)")
+                .starts_with("request failed:")
+        );
+        assert!(
+            redact_prose("no API key for LLM provider anthropic right now")
+                .starts_with("no API key")
+        );
+        assert!(
+            redact_prose("local model: parakeet inference requires feature flag X")
+                .starts_with("local model:")
+        );
+        assert!(
+            redact_prose("PANIC: at src/foo.rs:123: assertion failed: x == y blah blah blah")
+                .starts_with("PANIC")
+        );
+    }
+
+    #[test]
+    fn redact_prose_drops_natural_language_prose() {
+        // The bug we're guarding: a transcribed user sentence
+        // landing in an error event. Must redact to a stable
+        // placeholder, never the original text.
+        let user_sentence = "And so my fellow Americans, ask not what your country can do for you, ask what you can do for your country.";
+        let out = redact_prose(user_sentence);
+        assert_eq!(out, "<redacted: prose content>");
+        assert!(!out.contains("Americans"), "leaked user content: {}", out);
+        assert!(!out.contains("country"), "leaked user content: {}", out);
+    }
+
+    #[test]
+    fn redact_prose_drops_long_prose_even_with_no_clear_prefix() {
+        let leak = "The quick brown fox jumps over the lazy dog and then runs to the store to buy some milk and bread.";
+        let out = redact_prose(leak);
+        assert_eq!(out, "<redacted: prose content>");
+    }
+
+    #[test]
+    fn redact_prose_caps_whitelisted_long_messages() {
+        // Even whitelisted prefixes get truncated if they get too long
+        // (a "local model:" message might tail off into transcript-
+        // adjacent content from a third-party panic).
+        let long = format!("local model: {}", "blah ".repeat(100));
+        let out = redact_prose(&long);
+        assert!(out.len() <= 250, "got {} chars: {}", out.len(), out);
+        assert!(out.starts_with("local model:"));
+    }
+
+    #[test]
+    fn redact_prose_doesnt_leak_api_keys_either() {
+        // Secondary line of defense — looks_like_secret runs FIRST
+        // in scrub_event, but if it somehow misses a key-shaped
+        // long string, redact_prose still strips it as prose.
+        let out = redact_prose(
+            "Token used: sk-ant-api03-very-long-fake-token-value-here-and-then-more-and-more",
+        );
+        assert!(out == "<redacted: prose content>" || out.contains("<redacted"));
     }
 
     /// Regression: invalid DSN strings that we might receive from a

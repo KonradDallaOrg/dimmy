@@ -72,7 +72,16 @@ impl std::fmt::Display for TranscribeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NoApiKey(provider) => write!(f, "no API key configured for {}", provider),
-            Self::Api { status, body } => write!(f, "HTTP {}: {}", status, body),
+            // SECURITY: API error response bodies often echo back the
+            // request (= the transcript / prompt = user content). The
+            // first 200 chars of an OpenAI 400 response, for example,
+            // includes a JSON-quoted prompt fragment. Display MUST NOT
+            // leak that body downstream — `capture_error` -> Sentry
+            // would ship it across the wire. The body still lands in
+            // the local `dimmy.log` via a separate `log()` call site
+            // for offline debugging. Burned 2026-05-12: a Sentry panic
+            // surfaced part of a transcribed chat in the message.
+            Self::Api { status, .. } => write!(f, "HTTP {}", status),
             Self::Empty => write!(f, "empty transcription"),
             Self::Network(msg) => write!(f, "request failed: {}", msg),
             Self::InsecureUrl(url) => {
@@ -86,7 +95,13 @@ impl std::fmt::Display for TranscribeError {
 impl std::fmt::Display for LlmError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Api { status, body } => write!(f, "HTTP {}: {}", status, body),
+            // SECURITY: see TranscribeError::Api — same redaction rule.
+            // LLM API error bodies are even worse than STT bodies: they
+            // contain the FULL prompt (= transcript + system prompt),
+            // because the LLM dispatch path inlines the whole chat
+            // payload. Stripping the body in Display is the choke point
+            // that keeps it out of telemetry.
+            Self::Api { status, .. } => write!(f, "HTTP {}", status),
             Self::Network(msg) => write!(f, "request failed: {}", msg),
             Self::NoApiKey(provider) => write!(f, "no API key for LLM provider {}", provider),
             Self::LocalModel(msg) => write!(f, "local LLM model: {}", msg),
@@ -198,12 +213,32 @@ mod tests {
     }
 
     #[test]
-    fn transcribe_error_display() {
+    fn transcribe_error_display_strips_body() {
+        // Privacy hard-rule: Display MUST NOT include the body (it
+        // can echo back transcript content from the upstream API).
+        // The body still lives on the struct field so caller can
+        // log it locally if needed — just never via Display.
         let e = TranscribeError::Api {
             status: 401,
-            body: "Unauthorized".into(),
+            body: "Unauthorized — your transcript said xyz".into(),
         };
-        assert_eq!(e.to_string(), "HTTP 401: Unauthorized");
+        assert_eq!(e.to_string(), "HTTP 401");
+        assert!(!e.to_string().contains("transcript"));
+        assert!(!e.to_string().contains("xyz"));
+    }
+
+    #[test]
+    fn llm_error_display_strips_body() {
+        // Same privacy contract as TranscribeError::Api — LLM API
+        // error bodies often echo the prompt, which contains the
+        // transcript. Display must redact.
+        let e = LlmError::Api {
+            status: 429,
+            body: "Rate limited — prompt was 'meeting transcript: ...'".into(),
+        };
+        assert_eq!(e.to_string(), "HTTP 429");
+        assert!(!e.to_string().contains("prompt"));
+        assert!(!e.to_string().contains("transcript"));
     }
 
     #[test]
