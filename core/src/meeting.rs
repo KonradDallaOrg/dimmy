@@ -236,6 +236,7 @@ impl MeetingSession {
             .map_err(|e| format!("spawn meeting worker: {}", e))?;
 
         crate::log(&format!("[Meeting] started id={} dir={:?}", id, dir));
+        crate::telemetry::track(crate::telemetry::Event::MeetingStarted);
         Ok(Self {
             id,
             dir,
@@ -253,6 +254,7 @@ impl MeetingSession {
         let was_paused = self.paused.swap(true, Ordering::SeqCst);
         if !was_paused {
             crate::log(&format!("[Meeting] pause id={}", self.id));
+            crate::telemetry::track(crate::telemetry::Event::MeetingPaused);
             true
         } else {
             false
@@ -265,6 +267,7 @@ impl MeetingSession {
         let was_paused = self.paused.swap(false, Ordering::SeqCst);
         if was_paused {
             crate::log(&format!("[Meeting] resume id={}", self.id));
+            crate::telemetry::track(crate::telemetry::Event::MeetingResumed);
             true
         } else {
             false
@@ -298,6 +301,17 @@ impl MeetingSession {
             "[Meeting] stopped id={} duration={:.1}s chunks={} err={:?}",
             result.id, result.duration_secs, result.chunk_count, result.error
         ));
+        // Bucketed stop metrics — never the raw count.
+        let word_count = result.transcript.split_whitespace().count() as u32;
+        crate::telemetry::track(crate::telemetry::Event::MeetingStopped {
+            duration_bucket: crate::telemetry::sanitize::bucket_audio_secs(result.duration_secs),
+            words_bucket: crate::telemetry::sanitize::bucket_word_count(word_count),
+            // The recap fires later in the C#/Swift host after stop()
+            // returns — emitted separately via the typed dispatcher
+            // when it actually completes. We only know here that the
+            // user pressed Stop, not whether the recap pipeline ran.
+            had_recap: false,
+        });
         result
     }
 

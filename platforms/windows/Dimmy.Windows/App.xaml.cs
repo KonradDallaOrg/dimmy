@@ -599,7 +599,11 @@ public partial class App : Application
                 // worked (no silent failures from their perspective).
                 switch (rc)
                 {
-                    case 0: Services.DictNotificationService.ShowAdded(text); break;
+                    case 0:
+                        Services.DictNotificationService.ShowAdded(text);
+                        Interop.DimmyNative.TrackEvent(
+                            "user_dict.word_added", new { source = "hotkey" });
+                        break;
                     case 1: Services.DictNotificationService.ShowAlreadyPresent(text); break;
                 }
                 RestoreClipboard(previousText);
@@ -1521,6 +1525,7 @@ public partial class App : Application
             }
             // Skip / no-dialog-possible: still stage so next launch picks up.
             UpdateService.Instance.ApplyOnExit();
+            Interop.DimmyNative.TrackEvent("update.apply_deferred");
         }
 
         _hotkeyService?.Dispose();

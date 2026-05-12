@@ -41,8 +41,18 @@ public partial class SettingsViewModel : ObservableObject
         new("OpenAI-4o-mini", "https://api.openai.com/v1/audio/transcriptions", "gpt-4o-mini-transcribe"),
         new("Deepgram", "https://api.deepgram.com/v1/listen", "nova-3"),
         new("Deepgram-Nova2", "https://api.deepgram.com/v1/listen", "nova-2"),
-        new("Gemini", "https://generativelanguage.googleapis.com/v1beta/models", "gemini-2.5-flash"),
-        new("Gemini-Pro", "https://generativelanguage.googleapis.com/v1beta/models", "gemini-2.5-pro"),
+        // "Gemini" alias (back-compat: tests + users with persisted
+        // Name="Gemini" still match) → points at the current best
+        // fast tier (3.1-flash, May 2026). Explicit -3.1-flash /
+        // -3.1-pro / -2.5-flash / -2.5-pro entries below for users
+        // who want the exact tier.
+        new("Gemini", "https://generativelanguage.googleapis.com/v1beta/models", "gemini-3.1-flash"),
+        new("Gemini-3.1-Pro", "https://generativelanguage.googleapis.com/v1beta/models", "gemini-3.1-pro"),
+        // Older 2.5 line kept as fallback — same multimodal API; 3.x
+        // is preview tier on Google's side so users may want the
+        // stable 2.5 path for production until 3.x graduates.
+        new("Gemini-2.5-Flash", "https://generativelanguage.googleapis.com/v1beta/models", "gemini-2.5-flash"),
+        new("Gemini-2.5-Pro", "https://generativelanguage.googleapis.com/v1beta/models", "gemini-2.5-pro"),
         // Phase 1 cloud expansion (2026-05-04 benchmark drove the model picks)
         new("Fireworks", "https://audio-turbo.api.fireworks.ai/v1/audio/transcriptions", "whisper-v3-turbo"),
         new("Together-Parakeet", "https://api.together.xyz/v1/audio/transcriptions", "nvidia/parakeet-tdt-0.6b-v3"),
@@ -53,12 +63,24 @@ public partial class SettingsViewModel : ObservableObject
     public static readonly List<ProviderPreset> LlmProviderPresets =
     [
         new("Groq", "https://api.groq.com/openai/v1/chat/completions", "llama-3.3-70b-versatile"),
-        new("OpenAI", "https://api.openai.com/v1/chat/completions", "gpt-4o-mini"),
+        // OpenAI default = gpt-5-mini (fast + cheap, same chat-completions
+        // endpoint as gpt-4 family — no code change needed). gpt-5 (top
+        // tier) and gpt-5-nano (fastest) also surface in the recap-model
+        // dropdown for users who want the quality / speed extremes.
+        new("OpenAI", "https://api.openai.com/v1/chat/completions", "gpt-5-mini"),
+        new("OpenAI-GPT5", "https://api.openai.com/v1/chat/completions", "gpt-5"),
+        new("OpenAI-4o-mini", "https://api.openai.com/v1/chat/completions", "gpt-4o-mini"),
         new("OpenRouter", "https://openrouter.ai/api/v1/chat/completions", "meta-llama/llama-3.3-70b-instruct:free"),
         new("OpenRouter-Deepseek", "https://openrouter.ai/api/v1/chat/completions", "deepseek/deepseek-r1:free"),
-        new("Gemini", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-2.5-flash"),
+        // Gemini default = 3.1-flash (preview, latest fast). Same
+        // OpenAI-shim endpoint we already use; multimodal generateContent
+        // is the other path used for STT.
+        new("Gemini", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-3.1-flash"),
+        new("Gemini-3.1-Pro", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-3.1-pro"),
+        new("Gemini-2.5-Flash", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-2.5-flash"),
         new("Anthropic", "https://api.anthropic.com/v1/messages", "claude-haiku-4-5-20251001"),
         new("Anthropic-Sonnet", "https://api.anthropic.com/v1/messages", "claude-sonnet-4-20250514"),
+        new("Anthropic-Opus", "https://api.anthropic.com/v1/messages", "claude-opus-4-7"),
         // Phase 1 cloud expansion (2026-05-04, sensible model picks for filler-removal/smart-format)
         new("Fireworks", "https://api.fireworks.ai/inference/v1/chat/completions", "accounts/fireworks/models/kimi-k2p6"),
         new("Together-Llama", "https://api.together.xyz/v1/chat/completions", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),

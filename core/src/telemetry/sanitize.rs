@@ -117,6 +117,106 @@ pub fn round_gain(gain: f32) -> f32 {
     (gain * 10.0).round() / 10.0
 }
 
+// ── Bucketing helpers ──────────────────────────────────────────────
+//
+// Used by telemetry events that want a categorical signal instead of
+// a precise count (which could fingerprint individual users:
+// "this is the only user with 17 app rules"). All bucket fns return a
+// stable `&'static str` so PostHog stores them as categorical and we
+// keep the property cardinality bounded.
+
+/// Audio duration buckets. Designed for both single-recording
+/// dictation (sub-minute typical) and long meetings (~hours).
+pub fn bucket_audio_secs(secs: f64) -> &'static str {
+    match secs {
+        s if s < 30.0 => "lt_30",
+        s if s < 120.0 => "30_120",
+        s if s < 600.0 => "120_600",
+        s if s < 1800.0 => "600_1800",
+        s if s < 3600.0 => "1800_3600",
+        _ => "ge_3600",
+    }
+}
+
+/// Wall-clock processing time buckets (STT or LLM call).
+pub fn bucket_processing_ms(ms: u64) -> &'static str {
+    match ms {
+        m if m < 500 => "lt_500",
+        m if m < 2_000 => "500_2000",
+        m if m < 10_000 => "2000_10000",
+        m if m < 60_000 => "10000_60000",
+        _ => "ge_60000",
+    }
+}
+
+/// Word count buckets. Covers dictation snippets (~10 words) up to
+/// meeting transcripts (~10k words).
+pub fn bucket_word_count(n: u32) -> &'static str {
+    match n {
+        0 => "0",
+        1..=50 => "1_50",
+        51..=200 => "51_200",
+        201..=1000 => "201_1000",
+        1001..=5000 => "1001_5000",
+        _ => "ge_5000",
+    }
+}
+
+/// User-dictionary size buckets. Most users will have < 20; this
+/// captures the "power user" tail without leaking the exact count.
+pub fn bucket_dict_size(n: usize) -> &'static str {
+    match n {
+        0 => "0",
+        1..=5 => "1_5",
+        6..=20 => "6_20",
+        21..=100 => "21_100",
+        _ => "ge_100",
+    }
+}
+
+/// App-rules count buckets. Same shape as dict_size — most users
+/// will have the seed defaults (~10-20).
+pub fn bucket_app_rules(n: usize) -> &'static str {
+    match n {
+        0 => "0",
+        1..=5 => "1_5",
+        6..=20 => "6_20",
+        _ => "ge_20",
+    }
+}
+
+/// LLM/recap model bucket. Strips precise version suffixes so we
+/// don't fingerprint via odd model picks ("claude-opus-4-7" → "opus",
+/// "gpt-5-mini-2024-07-18" → "gpt"). Used for `recap_model_bucket`
+/// on MeetingRecapCompleted so the user's exact model id (which can
+/// be an unusual custom string) doesn't leak.
+pub fn bucket_recap_model(model: &str) -> &'static str {
+    let lower = model.to_ascii_lowercase();
+    if lower.contains("opus") {
+        "opus"
+    } else if lower.contains("sonnet") {
+        "sonnet"
+    } else if lower.contains("haiku") {
+        "haiku"
+    } else if lower.contains("gemini-2.5-pro") || lower.contains("gemini-3-pro") {
+        "gemini_pro"
+    } else if lower.contains("gemini-2.5-flash") || lower.contains("gemini-3-flash") {
+        "gemini_flash"
+    } else if lower.contains("gpt-5") {
+        "gpt_5"
+    } else if lower.contains("gpt-4") {
+        "gpt_4"
+    } else if lower.contains("llama") {
+        "llama"
+    } else if lower.contains("gemma") {
+        "gemma"
+    } else if lower.is_empty() {
+        "default"
+    } else {
+        "other"
+    }
+}
+
 /// True if the string looks like it might contain a secret. Used as
 /// a defensive last-ditch check before forwarding any payload.
 pub fn looks_like_secret(s: &str) -> bool {
@@ -216,5 +316,100 @@ mod tests {
         assert!(looks_like_secret("Bearer eyJhbGciOi"));
         assert!(!looks_like_secret("hello world"));
         assert!(!looks_like_secret("user said: ask not"));
+    }
+
+    // ── Bucket helper tests ────────────────────────────────────
+    //
+    // Pin the bucket boundaries so a future refactor doesn't silently
+    // shift the categorical buckets that PostHog dashboards already
+    // depend on (the dashboards filter by these stable string values).
+
+    #[test]
+    fn bucket_audio_secs_boundaries() {
+        assert_eq!(bucket_audio_secs(0.0), "lt_30");
+        assert_eq!(bucket_audio_secs(29.999), "lt_30");
+        assert_eq!(bucket_audio_secs(30.0), "30_120");
+        assert_eq!(bucket_audio_secs(119.9), "30_120");
+        assert_eq!(bucket_audio_secs(120.0), "120_600");
+        assert_eq!(bucket_audio_secs(600.0), "600_1800");
+        assert_eq!(bucket_audio_secs(1800.0), "1800_3600");
+        assert_eq!(bucket_audio_secs(3600.0), "ge_3600");
+        assert_eq!(bucket_audio_secs(99_999.0), "ge_3600");
+    }
+
+    #[test]
+    fn bucket_processing_ms_boundaries() {
+        assert_eq!(bucket_processing_ms(0), "lt_500");
+        assert_eq!(bucket_processing_ms(499), "lt_500");
+        assert_eq!(bucket_processing_ms(500), "500_2000");
+        assert_eq!(bucket_processing_ms(2000), "2000_10000");
+        assert_eq!(bucket_processing_ms(10_000), "10000_60000");
+        assert_eq!(bucket_processing_ms(60_000), "ge_60000");
+    }
+
+    #[test]
+    fn bucket_word_count_boundaries() {
+        assert_eq!(bucket_word_count(0), "0");
+        assert_eq!(bucket_word_count(1), "1_50");
+        assert_eq!(bucket_word_count(50), "1_50");
+        assert_eq!(bucket_word_count(51), "51_200");
+        assert_eq!(bucket_word_count(200), "51_200");
+        assert_eq!(bucket_word_count(201), "201_1000");
+        assert_eq!(bucket_word_count(1000), "201_1000");
+        assert_eq!(bucket_word_count(1001), "1001_5000");
+        assert_eq!(bucket_word_count(5001), "ge_5000");
+    }
+
+    #[test]
+    fn bucket_dict_size_boundaries() {
+        assert_eq!(bucket_dict_size(0), "0");
+        assert_eq!(bucket_dict_size(1), "1_5");
+        assert_eq!(bucket_dict_size(5), "1_5");
+        assert_eq!(bucket_dict_size(6), "6_20");
+        assert_eq!(bucket_dict_size(20), "6_20");
+        assert_eq!(bucket_dict_size(21), "21_100");
+        assert_eq!(bucket_dict_size(100), "21_100");
+        assert_eq!(bucket_dict_size(101), "ge_100");
+    }
+
+    #[test]
+    fn bucket_app_rules_boundaries() {
+        assert_eq!(bucket_app_rules(0), "0");
+        assert_eq!(bucket_app_rules(5), "1_5");
+        assert_eq!(bucket_app_rules(20), "6_20");
+        assert_eq!(bucket_app_rules(21), "ge_20");
+    }
+
+    #[test]
+    fn bucket_recap_model_known_families() {
+        assert_eq!(bucket_recap_model("claude-opus-4-7"), "opus");
+        assert_eq!(bucket_recap_model("claude-sonnet-4-6"), "sonnet");
+        assert_eq!(bucket_recap_model("claude-haiku-4-5-20251001"), "haiku");
+        assert_eq!(bucket_recap_model("gemini-2.5-pro"), "gemini_pro");
+        assert_eq!(bucket_recap_model("gemini-2.5-flash"), "gemini_flash");
+        assert_eq!(bucket_recap_model("gpt-5-mini-2024-07-18"), "gpt_5");
+        assert_eq!(bucket_recap_model("gpt-4o-mini"), "gpt_4");
+        assert_eq!(bucket_recap_model("llama-3.1-70b"), "llama");
+        assert_eq!(bucket_recap_model("gemma-3-12b-it"), "gemma");
+        assert_eq!(bucket_recap_model(""), "default");
+        // Custom user-set model strings always fall to "other" so we
+        // never fingerprint a workplace via a specific Together-AI
+        // hosted model name.
+        assert_eq!(bucket_recap_model("acme-corp/internal-model-v3"), "other");
+    }
+
+    /// Hard rule: the bucket label set is part of the PostHog
+    /// dashboard contract. If a refactor accidentally returns a
+    /// non-static string (e.g. via `format!`) the categorical type
+    /// breaks and dashboards stop working. This compile-time test
+    /// pins the return type as `&'static str`.
+    #[test]
+    fn bucket_helpers_return_static_str() {
+        let _: &'static str = bucket_audio_secs(0.0);
+        let _: &'static str = bucket_processing_ms(0);
+        let _: &'static str = bucket_word_count(0);
+        let _: &'static str = bucket_dict_size(0);
+        let _: &'static str = bucket_app_rules(0);
+        let _: &'static str = bucket_recap_model("");
     }
 }

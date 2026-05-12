@@ -20,6 +20,13 @@ public sealed partial class SettingsWindow : Window
     private string _currentTag = "home";
     private bool _loaded; // suppress SelectionChanged during init
 
+    // File-load → meeting bridge. Captured at successful file-load
+    // completion so the "Run recap as meeting" button can mint a
+    // meeting dir off the same WAV + transcript. Cleared when the
+    // user picks another file so we never recap a stale pair.
+    private string? _lastFileLoadPath;
+    private string? _lastFileLoadTranscript;
+
     public SettingsWindow()
     {
         this.InitializeComponent();
@@ -862,6 +869,19 @@ public sealed partial class SettingsWindow : Window
         FileLoadBar.Visibility = Visibility.Visible;
         FileLoadStatus.Text = $"Transcribing {System.IO.Path.GetFileName(path)}...";
         FileLoadPickBtn.IsEnabled = false;
+        // Telemetry: file load started. `source` is "picker" — drag-
+        // drop fires a different code path that hits this same
+        // function only AFTER the dropped file has been validated, so
+        // we conservatively tag everything reaching here as picker.
+        // Drop path adds its own event below at the AddHandler entry
+        // (separate emit follow-up).
+        var audioSecs = (long)Helpers.WavPeaks.ReadDurationSecs(path);
+        DimmyNative.TrackEvent("file_load.started", new
+        {
+            source = "picker",
+            audio_secs_bucket = Services.TelemetryBuckets.AudioSecs(audioSecs),
+        });
+        var fileLoadStopwatch = System.Diagnostics.Stopwatch.StartNew();
         try
         {
             const int BufLen = 1 << 22;
@@ -883,6 +903,13 @@ public sealed partial class SettingsWindow : Window
                     _ => $"Failed (code {rc})",
                 };
                 FileLoadResult.Visibility = Visibility.Collapsed;
+                DimmyNative.TrackEvent("file_load.completed", new
+                {
+                    audio_secs_bucket = Services.TelemetryBuckets.AudioSecs(audioSecs),
+                    processing_ms_bucket = Services.TelemetryBuckets.ProcessingMs(fileLoadStopwatch.ElapsedMilliseconds),
+                    words_bucket = "0",
+                    success = false,
+                });
             }
             else
             {
@@ -890,7 +917,24 @@ public sealed partial class SettingsWindow : Window
                 FileLoadResult.Text = text;
                 FileLoadResult.Visibility = Visibility.Visible;
                 FileLoadBar.Value = 100;
-                FileLoadStatus.Text = $"{text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length} words. Saved to History.";
+                var wordCount = text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
+                FileLoadStatus.Text = $"{wordCount} words. Saved to History.";
+
+                // Stash for the "Run recap as meeting" button below.
+                // Cleared on the next file pick so we don't recap a
+                // stale pair if the user starts a second transcribe.
+                _lastFileLoadPath = path;
+                _lastFileLoadTranscript = text;
+                FileLoadRecapPanel.Visibility = Visibility.Visible;
+                FileLoadRecapStatus.Text = "";
+
+                DimmyNative.TrackEvent("file_load.completed", new
+                {
+                    audio_secs_bucket = Services.TelemetryBuckets.AudioSecs(audioSecs),
+                    processing_ms_bucket = Services.TelemetryBuckets.ProcessingMs(fileLoadStopwatch.ElapsedMilliseconds),
+                    words_bucket = Services.TelemetryBuckets.WordCount(wordCount),
+                    success = true,
+                });
             }
         }
         catch (Exception ex)
@@ -916,6 +960,54 @@ public sealed partial class SettingsWindow : Window
         FileLoadBar.Value = percent;
         FileLoadStatus.Text =
             $"Transcribing… {processedSecs:F0} / {totalSecs:F0} s ({percent:F0}%)";
+    }
+
+    /// "Run recap as meeting" — promotes the last successful file-load
+    /// transcript into a synthetic meeting dir, runs the same LLM
+    /// recap pipeline that live meetings use, and surfaces the
+    /// resulting Meeting in History so the user can open it from
+    /// Meeting → History the way they would any recorded meeting.
+    /// The button is only visible when a transcript is sitting in
+    /// the result box (fields stashed in the success branch above);
+    /// re-disabled mid-call so the user can't double-fire.
+    private async void FileLoadRunRecap_Click(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrEmpty(_lastFileLoadTranscript))
+        {
+            FileLoadRecapStatus.Text = "No transcript loaded.";
+            return;
+        }
+        FileLoadRunRecapBtn.IsEnabled = false;
+        FileLoadRecapProgress.IsActive = true;
+        FileLoadRecapProgress.Visibility = Visibility.Visible;
+        FileLoadRecapStatus.Text = "Building meeting + running recap…";
+        try
+        {
+            var result = await Services.FileLoadToMeetingService.RunAsync(
+                _lastFileLoadPath ?? "",
+                _lastFileLoadTranscript);
+            if (result.Success)
+            {
+                FileLoadRecapStatus.Text = "✓ Recap saved. Open Meeting → History.";
+                App.Log($"file-load recap success at {result.Dir}", "FileLoad");
+            }
+            else
+            {
+                FileLoadRecapStatus.Text = $"Failed: {result.Error}";
+                App.Log($"file-load recap failed: {result.Error}", "FileLoad");
+            }
+        }
+        catch (Exception ex)
+        {
+            FileLoadRecapStatus.Text = $"Error: {ex.Message}";
+            App.Log($"file-load recap exc: {ex}", "FileLoad");
+        }
+        finally
+        {
+            FileLoadRecapProgress.IsActive = false;
+            FileLoadRecapProgress.Visibility = Visibility.Collapsed;
+            FileLoadRunRecapBtn.IsEnabled = true;
+        }
     }
 
     // ── History ──────────────────────────────────────────────────────
@@ -3453,9 +3545,18 @@ public sealed partial class SettingsWindow : Window
         try
         {
             var prefs = Services.UiPreferences.Load();
+            var previousTag = prefs.UpdateChannel ?? "stable";
             prefs.UpdateChannel = tag;
             prefs.Save();
             App.Log($"channel set to {tag}, forcing re-check", "Update");
+            if (!string.Equals(previousTag, tag, StringComparison.Ordinal))
+            {
+                Interop.DimmyNative.TrackEvent("update.channel_changed", new
+                {
+                    from = previousTag,
+                    to = tag,
+                });
+            }
             // Channel change must re-check immediately — the user
             // expects toggling "Pre-release" to surface a staging
             // build right away if one exists, not at the next 6h tick.

@@ -141,8 +141,19 @@ pub fn resolve(rules: &[AppRule], ctx: &AppContext) -> RuleOverride {
         if let Some(t) = &rule.llm_translate_to {
             over.llm_translate_to = Some(t.clone());
         }
+        // Telemetry: matched rule. Categorical only — never send the
+        // rule pattern itself (it's user text, can identify a
+        // workplace via specific .exe names).
+        crate::telemetry::track(crate::telemetry::Event::AppRulesEvaluated {
+            matched: true,
+            rules_total_bucket: crate::telemetry::sanitize::bucket_app_rules(rules.len()),
+        });
         return over;
     }
+    crate::telemetry::track(crate::telemetry::Event::AppRulesEvaluated {
+        matched: false,
+        rules_total_bucket: crate::telemetry::sanitize::bucket_app_rules(rules.len()),
+    });
     RuleOverride::default()
 }
 

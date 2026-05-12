@@ -41,6 +41,7 @@ public static class MeetingPostProcessService
         if (string.IsNullOrWhiteSpace(transcript))
             return new RecapResult { Success = false, Dir = dir, Error = "empty transcript" };
 
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         try
         {
             var prompt = Helpers.MeetingRecapHelpers.BuildStructuredRecapPrompt(transcript);
@@ -61,6 +62,13 @@ public static class MeetingPostProcessService
                     _ => $"LLM call returned {rc}",
                 };
                 App.Log($"recap (shared) failed rc={rc}: {msg}", "MeetingRecap");
+                DimmyNative.TrackEvent("meeting.recap_completed", new
+                {
+                    provider = TelemetryBuckets.Provider(ReadLlmApiUrl()),
+                    recap_model_bucket = TelemetryBuckets.RecapModel(modelOverride),
+                    processing_ms_bucket = TelemetryBuckets.ProcessingMs(stopwatch.ElapsedMilliseconds),
+                    success = false,
+                });
                 return new RecapResult { Success = false, Dir = dir, Error = msg };
             }
 
@@ -72,6 +80,18 @@ public static class MeetingPostProcessService
             int saveRc = DimmyNative.dimmy_meeting_save_post_process(
                 dir, recapMarkdown, actionsPlain, null);
             App.Log($"recap (shared) saved rc={saveRc}", "MeetingRecap");
+
+            // Recap-completed telemetry (success path). Bucketed
+            // provider + model + processing time so dashboards can
+            // see which combos are popular without leaking the user's
+            // exact model id.
+            DimmyNative.TrackEvent("meeting.recap_completed", new
+            {
+                provider = TelemetryBuckets.Provider(ReadLlmApiUrl()),
+                recap_model_bucket = TelemetryBuckets.RecapModel(modelOverride),
+                processing_ms_bucket = TelemetryBuckets.ProcessingMs(stopwatch.ElapsedMilliseconds),
+                success = true,
+            });
 
             // Auto-send to Notion if the user has it configured + opted in.
             // Best-effort: failure is logged but doesn't block the recap
@@ -92,10 +112,16 @@ public static class MeetingPostProcessService
                     {
                         App.Log($"recap auto-send failed: {notionResult.Error}", "Notion");
                     }
+                    DimmyNative.TrackEvent("notion.recap_sent", new
+                    {
+                        auto = true,
+                        ok = notionResult.Ok,
+                    });
                 }
                 catch (Exception ex)
                 {
                     App.Log($"recap auto-send exc: {ex.Message}", "Notion");
+                    DimmyNative.TrackEvent("notion.recap_sent", new { auto = true, ok = false });
                 }
             }
 
@@ -130,5 +156,25 @@ public static class MeetingPostProcessService
             App.Log($"ReadNotionAutoSend exc: {ex.Message}", "Notion");
             return false;
         }
+    }
+
+    /// Read `llm_api_url` from the Rust core config snapshot. Used
+    /// only to derive a categorical provider tag for telemetry
+    /// (see TelemetryBuckets.Provider). Returns empty on any
+    /// error so the bucket falls to "unset".
+    private static string ReadLlmApiUrl()
+    {
+        try
+        {
+            var buf = new byte[1 << 14];
+            int n = DimmyNative.dimmy_get_config_json(buf, buf.Length);
+            if (n <= 0) return "";
+            var json = System.Text.Encoding.UTF8.GetString(buf, 0, n);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("llm_api_url", out var el))
+                return el.GetString() ?? "";
+            return "";
+        }
+        catch { return ""; }
     }
 }
