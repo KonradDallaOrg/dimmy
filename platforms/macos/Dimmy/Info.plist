@@ -64,10 +64,9 @@
 	             release.yml rewrites the content on each cut.
 
 	SUPublicEDKey — the EdDSA public key matching the private key that
-	             signs each DMG inside release.yml (`sign_update`). The
-	             value below is a placeholder; replace it before the
-	             first signed release (see docs/RELEASING.md → "Mac
-	             auto-update bootstrap").
+	             signs each DMG inside release.yml (`sign_update`). Set
+	             on 2026-05-12; the matching private lives in the
+	             SPARKLE_PRIVATE_KEY GitHub secret.
 
 	SUEnableInstallerLauncherService — required by Sparkle 2 for the
 	             XPC helper that swaps the .app at install time when
@@ -76,7 +75,7 @@
 	<key>SUFeedURL</key>
 	<string>https://github.com/KonradDallaOrg/dimmy/releases/latest/download/appcast.xml</string>
 	<key>SUPublicEDKey</key>
-	<string>REPLACE_ME_WITH_SPARKLE_PUBLIC_ED_KEY</string>
+	<string>mdIhsIeyR1qlZ+MNSaWSVIaVJ2tWvLwHMZYeAGDI5i8=</string>
 	<key>SUEnableInstallerLauncherService</key>
 	<true/>
 	<key>SUEnableAutomaticChecks</key>
