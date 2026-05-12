@@ -155,9 +155,7 @@ public static class TranscriptionService
     {
         try
         {
-            var cfgPath = System.IO.Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "dimmy", "config.json");
+            var cfgPath = System.IO.Path.Combine(BuildInfo.ConfigDirPath, "config.json");
             if (!System.IO.File.Exists(cfgPath)) return 60;
             using var doc = System.Text.Json.JsonDocument.Parse(System.IO.File.ReadAllText(cfgPath));
             return doc.RootElement.TryGetProperty("auto_recap_threshold_secs", out var el)

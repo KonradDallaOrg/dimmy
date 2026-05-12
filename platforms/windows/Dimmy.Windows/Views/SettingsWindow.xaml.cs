@@ -1229,12 +1229,18 @@ public sealed partial class SettingsWindow : Window
 
     private void LoadConfig()
     {
-        // Read from config.json file first — it has all fields including UI-only ones
+        // Read from config.json file first — it has all fields including UI-only ones.
+        // Cartella DEVE matchare quella che il Rust core usa: prod →
+        // `dimmy/`, staging-flavor → `dimmy-staging/`. Hardcoding
+        // "dimmy" qui faceva sì che un binario con
+        // DIMMY_BUILD_FLAVOR=staging leggesse dalla cartella prod, poi
+        // sovrascrivesse la cartella staging con UI state vuoto via
+        // dimmy_set_config_json — silently distruggendo `app_rules`,
+        // `user_dict`, ecc. salvati dal Rust. Burned 2026-05-12.
         string? fileJson = null;
         try
         {
-            var configDir = System.Environment.GetFolderPath(System.Environment.SpecialFolder.ApplicationData);
-            var path = System.IO.Path.Combine(configDir, "dimmy", "config.json");
+            var path = System.IO.Path.Combine(Services.BuildInfo.ConfigDirPath, "config.json");
             if (System.IO.File.Exists(path))
                 fileJson = System.IO.File.ReadAllText(path);
         }
