@@ -376,6 +376,30 @@ jobs:
           tag_name: ${{ github.ref_name }}
           files: platforms/macos/build/appcast.xml
 
+      # Durable auto-update channel — Sparkle's SUFeedURL in
+      # Info.plist points to `releases/download/auto-update/appcast.xml`.
+      # GitHub's `releases/latest/download/...` resolves to the most
+      # recent NON-prerelease, so a prerelease-only history (e.g. before
+      # we ever cut a prod tag) leaves /latest/ pointing at v0.6.26
+      # which has no appcast → 404 → "Update check failed". A fixed tag
+      # bypasses /latest/ semantics entirely. Upload is idempotent and
+      # --clobber-replaces the asset every release so clients always see
+      # the freshest version, regardless of prerelease/stable status.
+      - name: Mirror appcast.xml to durable auto-update channel
+        if: hashFiles('platforms/macos/build/appcast.xml') != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if ! gh release view auto-update >/dev/null 2>&1; then
+            echo "Creating durable auto-update release (one-time bootstrap)…"
+            gh release create auto-update \
+              --title "Auto-update channel (latest appcast)" \
+              --notes "Holds the latest Sparkle appcast.xml at a stable URL. Auto-updated on every release by .github/workflows/release.yml. DO NOT DELETE — Sparkle clients in production reference this tag's download path."
+          fi
+          gh release upload auto-update platforms/macos/build/appcast.xml --clobber
+          echo "appcast.xml mirrored to releases/download/auto-update/appcast.xml"
+
   # ── Windows Native Build ───────────────────────────────────────────
   build-windows:
     name: Build Windows Native

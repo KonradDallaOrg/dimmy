@@ -92,26 +92,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             .sink { [weak self] _ in self?.applyActivationPolicy() }
             .store(in: &cancellables)
 
-        // Initialize the Rust core. Two firing paths to balance "don't pop the
-        // mic prompt before the user expects it" with "non-mic features (file
-        // load, Parakeet download, meeting recap) shouldn't sit dead waiting
-        // for a permission they don't even need":
-        //  1. Mic just became authorized → init immediately (the original
-        //     onboarding flow, mirrored from earlier behaviour).
-        //  2. Onboarding is already complete at launch → init now regardless
-        //     of mic state. Returning users who dismissed mic still get file
-        //     load + Parakeet download + history populated. Without this
-        //     branch the FileLoadCard sits at "Dimmy core hasn't finished
-        //     initializing yet" forever.
-        PermissionsManager.shared.$microphone
-            .filter { $0 == .authorized }
-            .first()
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in self?.initializeCoreAsync() }
-            .store(in: &cancellables)
-        if appState.isOnboardingComplete {
-            initializeCoreAsync()
-        }
+        // Initialize the Rust core unconditionally at launch. FFI init
+        // sets up telemetry, sentry, AEC pipeline, history DB — none of
+        // which open audio devices, so the mic permission prompt is NOT
+        // triggered here (verified by the launch-time stderr log).
+        // Initializing eagerly lets the Parakeet onboarding preload start
+        // at the Welcome step instead of waiting for mic auth, so by the
+        // time the user reaches the model-download step the 466 MB bundle
+        // is already partly (or fully) on disk. Idempotent.
+        initializeCoreAsync()
 
         hkLog("[AppDelegate] isOnboardingComplete=\(appState.isOnboardingComplete) perms=\(permissionsGranted())")
         if appState.isOnboardingComplete {

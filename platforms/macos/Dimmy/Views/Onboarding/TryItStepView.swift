@@ -33,7 +33,9 @@ struct TryItStepView: View {
         }
         .padding(.horizontal, 32)
         .onAppear {
-            modelReady = DimmyCore.shared.modelExists(appState.localModel)
+            modelReady = appState.localSttBackend == "parakeet"
+                ? DimmyCore.shared.parakeetBundlePresent()
+                : DimmyCore.shared.modelExists(appState.localModel)
         }
         .onChange(of: appState.recordingState) { _, newState in
             if case .completing = newState {
@@ -129,24 +131,15 @@ struct TryItStepView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.regular)
             } else if needsLocalModel {
-                Text("Download the local Whisper model (78 MB) to start dictating — no internet needed afterwards.")
+                Text("No local model is on disk yet. Pick one from Settings → Voice → Local model to start dictating.")
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                if appState.isDownloadingModel {
-                    VStack(spacing: 6) {
-                        ProgressView(value: appState.modelDownloadProgress, total: 1.0)
-                        Text("\(Int(appState.modelDownloadProgress * 100))%")
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
-                    }
-                } else {
-                    Button("Download model") {
-                        startDownload()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.regular)
+                Button("Open Settings") {
+                    AppDelegate.shared?.openSettings()
                 }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
             }
         }
         .padding(14)
@@ -189,18 +182,4 @@ struct TryItStepView: View {
         }
     }
 
-    private func startDownload() {
-        appState.isDownloadingModel = true
-        appState.modelDownloadProgress = 0.0
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            let success = DimmyCore.shared.downloadModel(appState.localModel)
-            DispatchQueue.main.async {
-                appState.isDownloadingModel = false
-                if success {
-                    modelReady = DimmyCore.shared.modelExists(appState.localModel)
-                }
-            }
-        }
-    }
 }

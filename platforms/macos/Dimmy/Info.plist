@@ -59,9 +59,11 @@
 	Sparkle 2 auto-update keys.
 
 	SUFeedURL  — the appcast XML we publish alongside each macOS DMG
-	             on GitHub releases. `latest` always points at the most
-	             recent release, so the app polls a stable URL while
-	             release.yml rewrites the content on each cut.
+	             on GitHub releases. Points at a fixed `auto-update`
+	             tag/release that release.yml --clobber-replaces on every
+	             cut. We deliberately avoid `releases/latest/...` because
+	             GitHub's /latest/ semantics skip prereleases and would
+	             404 when a recent-enough non-prerelease doesn't exist.
 
 	SUPublicEDKey — the EdDSA public key matching the private key that
 	             signs each DMG inside release.yml (`sign_update`). Set
@@ -73,7 +75,7 @@
 	             the running process can't write to its own bundle.
 	-->
 	<key>SUFeedURL</key>
-	<string>https://github.com/KonradDallaOrg/dimmy/releases/latest/download/appcast.xml</string>
+	<string>https://github.com/KonradDallaOrg/dimmy/releases/download/auto-update/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>mdIhsIeyR1qlZ+MNSaWSVIaVJ2tWvLwHMZYeAGDI5i8=</string>
 	<key>SUEnableInstallerLauncherService</key>

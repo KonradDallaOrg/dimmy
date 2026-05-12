@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct OnboardingContainerView: View {
-    static let totalSteps = 4
+    static let totalSteps = 5
 
     @ObservedObject var appState: AppState
     @ObservedObject private var perms = PermissionsManager.shared
@@ -33,6 +33,8 @@ struct OnboardingContainerView: View {
                 case 2:
                     ShortcutStepView(appState: appState)
                 case 3:
+                    ModelDownloadStepView(appState: appState)
+                case 4:
                     TryItStepView(appState: appState) {
                         appState.isOnboardingComplete = true
                     }
@@ -66,6 +68,8 @@ struct OnboardingContainerView: View {
 
             Spacer()
 
+            // TryIt (last step) drives its own primary action ("Start Using
+            // Dimmy" + Skip); all earlier steps use the container's Next.
             if currentStep < Self.totalSteps - 1 {
                 Button(action: goNext) {
                     HStack(spacing: 4) {
@@ -98,7 +102,7 @@ struct OnboardingContainerView: View {
 
     private func goNext() {
         if currentStep == Self.totalSteps - 1 { return }
-        if currentStep == 2 {
+        if currentStep == 3 {
             // Entering TryIt — trigger the pill intro animation.
             appState.showPillIntro = true
         }
