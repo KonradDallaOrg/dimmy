@@ -85,6 +85,14 @@ pub enum Event {
     TranscriptionCompleted {
         mode: &'static str,
         provider: &'static str,
+        /// "whisper" | "parakeet" | "" (cloud or unknown). Added 2026-05-12 so
+        /// we can derive the local-backend distribution without inferring
+        /// from `provider` (which collapses to "local_whisper" for both).
+        local_backend: &'static str,
+        /// "hotkey" | "file_load" | "meeting" | "pill". Lets us distinguish
+        /// "real-time dictation" engagement from "post-hoc file processing"
+        /// in the funnel.
+        entry_point: &'static str,
         audio_secs: f64,
         processing_ms: u64,
         word_count: u32,
@@ -216,6 +224,160 @@ pub enum Event {
         /// it deactivated another device under the same license.
         is_self: bool,
     },
+
+    // ── Meeting mode ────────────────────────────────────────────
+    //
+    // The meeting feature has been live since v0.6 but emitted ZERO
+    // events. Added 2026-05-12. All durations / counts bucketed via
+    // `sanitize::bucket_*` so we can't fingerprint a user via an
+    // unusual meeting length / word count.
+    MeetingStarted,
+    MeetingStopped {
+        /// `lt_30` | `30_120` | `120_600` | `600_1800` | `1800_3600` | `ge_3600`
+        duration_bucket: &'static str,
+        /// `0` | `1_50` | `51_200` | `201_1000` | `1001_5000` | `ge_5000`
+        words_bucket: &'static str,
+        /// Was a recap pipeline triggered after stop?
+        had_recap: bool,
+    },
+    MeetingPaused,
+    MeetingResumed,
+    /// Fired when the LLM recap completes (success or fail). Lets us
+    /// see how often the recap chain breaks vs how often users
+    /// actually get a recap out the other end.
+    MeetingRecapCompleted {
+        /// "groq" | "openai" | "anthropic" | "gemini" | "openrouter" | "local" | "unset"
+        provider: &'static str,
+        /// "opus" | "sonnet" | "haiku" | "gemini_pro" | "gemini_flash"
+        /// | "gpt_5" | "gpt_4" | "llama" | "gemma" | "default" | "other"
+        recap_model_bucket: &'static str,
+        /// "lt_500" | "500_2000" | "2000_10000" | "10000_60000" | "ge_60000"
+        processing_ms_bucket: &'static str,
+        success: bool,
+    },
+    /// Fired when a user clicks "Run recap as meeting" on the File
+    /// Load card (Win + Mac). Distinguishes "live mic recording"
+    /// from "imported audio" in the meeting funnel.
+    MeetingImportedFromFile,
+
+    // ── File Load ───────────────────────────────────────────────
+    //
+    // Tracks the offline-WAV path. Lets us see how many users use
+    // file-load at all (was always opaque) and the typical file
+    // shape.
+    FileLoadStarted {
+        /// "drop" | "picker" — how the user got to the transcribe
+        /// call.
+        source: &'static str,
+        audio_secs_bucket: &'static str,
+    },
+    FileLoadCompleted {
+        audio_secs_bucket: &'static str,
+        processing_ms_bucket: &'static str,
+        words_bucket: &'static str,
+        success: bool,
+    },
+
+    // ── Custom Dictionary ───────────────────────────────────────
+    //
+    // The user-dict surface shipped in v0.6.36. These events let us
+    // see which entry point users prefer (hotkey vs Services menu vs
+    // direct text-box add).
+    UserDictWordAdded {
+        /// "hotkey" | "services_menu" | "settings_ui"
+        source: &'static str,
+    },
+    UserDictWordRemoved,
+    /// Periodic snapshot of dict size (bucketed). Emitted once per
+    /// session at startup so we can see the size distribution
+    /// without sampling per-add (which would bias toward power users).
+    UserDictSizeSnapshot {
+        /// "0" | "1_5" | "6_20" | "21_100" | "ge_100"
+        size_bucket: &'static str,
+    },
+
+    // ── Notion integration ──────────────────────────────────────
+    //
+    // No PII — only categorical flags. The token, page id, workspace
+    // name, etc. are NEVER on the wire.
+    NotionConnected,
+    NotionDisconnected,
+    NotionRecapSent {
+        /// `true` if auto-send fired at recap-completion time, `false`
+        /// if the user clicked the manual "Send to Notion" button.
+        auto: bool,
+        ok: bool,
+    },
+
+    // ── App Rules ───────────────────────────────────────────────
+    //
+    // Engagement signal for the app-rules feature. We never send the
+    // rule pattern itself (it's user-curated text that may identify
+    // a workplace via specific .exe names).
+    AppRulesEvaluated {
+        /// Whether the current context (focused app) matched any rule.
+        /// Helps measure how often the rule list actually fires vs
+        /// sits unused.
+        matched: bool,
+        /// `0` | `1_5` | `6_20` | `ge_20`
+        rules_total_bucket: &'static str,
+    },
+    AppRuleAdded,
+    AppRuleRemoved,
+    AppRuleReordered,
+
+    // ── Pill UI ─────────────────────────────────────────────────
+    //
+    // The pill is the primary in-app surface. These events tell us
+    // how users interact with it: visibility toggles, scroll-cycle
+    // gestures (style + language), right-click menu opens.
+    PillVisibilityToggled {
+        /// Final state after the toggle.
+        visible: bool,
+        /// "settings" | "tray" | "jumplist" | "hotkey" | "dock_menu"
+        source: &'static str,
+    },
+    /// User scrolled the pill's style label to cycle between LLM
+    /// styles. Categorical-only — never send the chosen style here
+    /// (already covered by ConfigLlmStyleChanged).
+    PillStyleScrolled,
+    /// User scrolled the pill's language label to cycle translation
+    /// target. Same rule — never send the language code (covered by
+    /// the existing config events).
+    PillLanguageScrolled,
+    PillContextMenuOpened,
+
+    // ── Update channel ──────────────────────────────────────────
+    UpdateChannelChanged {
+        /// "stable" | "prerelease"
+        from: &'static str,
+        /// "stable" | "prerelease"
+        to: &'static str,
+    },
+    /// User dismissed the quit-time "Apply now?" dialog with Skip.
+    /// The update is still staged for next launch (ApplyOnExit).
+    UpdateApplyDeferred,
+
+    // ── Permissions (Mac only — TCC) ────────────────────────────
+    //
+    // Win doesn't have an equivalent TCC concept (no per-feature
+    // grant prompts). On Mac, these surface the funnel drop-off at
+    // each permission step.
+    PermissionGranted {
+        /// "microphone" | "accessibility" | "input_monitoring"
+        service: &'static str,
+    },
+    PermissionDenied {
+        service: &'static str,
+    },
+
+    // ── Recap model picker ─────────────────────────────────────
+    /// User changed the recap-model override in Settings. Bucketed
+    /// model name so we don't fingerprint via odd custom model
+    /// strings (e.g. user-set Together AI hosted ones).
+    ConfigRecapModelChanged {
+        recap_model_bucket: &'static str,
+    },
 }
 
 impl Event {
@@ -260,6 +422,33 @@ impl Event {
             Event::LicenseRefreshFailed { .. } => "license.refresh_failed",
             Event::LicenseScopeDenied { .. } => "license.scope_denied",
             Event::LicenseDeviceDeactivated { .. } => "license.device_deactivated",
+            Event::MeetingStarted => "meeting.started",
+            Event::MeetingStopped { .. } => "meeting.stopped",
+            Event::MeetingPaused => "meeting.paused",
+            Event::MeetingResumed => "meeting.resumed",
+            Event::MeetingRecapCompleted { .. } => "meeting.recap_completed",
+            Event::MeetingImportedFromFile => "meeting.imported_from_file",
+            Event::FileLoadStarted { .. } => "file_load.started",
+            Event::FileLoadCompleted { .. } => "file_load.completed",
+            Event::UserDictWordAdded { .. } => "user_dict.word_added",
+            Event::UserDictWordRemoved => "user_dict.word_removed",
+            Event::UserDictSizeSnapshot { .. } => "user_dict.size_snapshot",
+            Event::NotionConnected => "notion.connected",
+            Event::NotionDisconnected => "notion.disconnected",
+            Event::NotionRecapSent { .. } => "notion.recap_sent",
+            Event::AppRulesEvaluated { .. } => "app_rules.evaluated",
+            Event::AppRuleAdded => "app_rules.added",
+            Event::AppRuleRemoved => "app_rules.removed",
+            Event::AppRuleReordered => "app_rules.reordered",
+            Event::PillVisibilityToggled { .. } => "pill.visibility_toggled",
+            Event::PillStyleScrolled => "pill.style_scrolled",
+            Event::PillLanguageScrolled => "pill.language_scrolled",
+            Event::PillContextMenuOpened => "pill.context_menu_opened",
+            Event::UpdateChannelChanged { .. } => "update.channel_changed",
+            Event::UpdateApplyDeferred => "update.apply_deferred",
+            Event::PermissionGranted { .. } => "permission.granted",
+            Event::PermissionDenied { .. } => "permission.denied",
+            Event::ConfigRecapModelChanged { .. } => "config.recap_model_changed",
         }
     }
 
@@ -325,6 +514,8 @@ mod tests {
         let e = Event::TranscriptionCompleted {
             mode: "cloud",
             provider: "groq",
+            local_backend: "",
+            entry_point: "hotkey",
             audio_secs: 4.5,
             processing_ms: 800,
             word_count: 12,
@@ -338,6 +529,8 @@ mod tests {
         assert_eq!(p["provider"], "groq");
         assert_eq!(p["word_count"], 12);
         assert_eq!(p["had_llm"], false);
+        assert_eq!(p["entry_point"], "hotkey");
+        assert_eq!(p["local_backend"], "");
     }
 
     #[test]

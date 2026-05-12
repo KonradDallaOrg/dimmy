@@ -107,6 +107,64 @@ public static class WavPeaks
         }
     }
 
+    /// <summary>
+    /// Return the audio duration in seconds, or 0 if the file is
+    /// missing / unreadable / not a WAV. Walks the same header as
+    /// <see cref="ReadPeaks"/> but stops after the format/data
+    /// chunk metadata, so it's cheap (no per-sample work).
+    /// </summary>
+    public static double ReadDurationSecs(string path)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(path) || !File.Exists(path)) return 0;
+            using var fs = File.OpenRead(path);
+            using var br = new BinaryReader(fs);
+            if (new string(br.ReadChars(4)) != "RIFF") return 0;
+            br.ReadUInt32();
+            if (new string(br.ReadChars(4)) != "WAVE") return 0;
+
+            ushort channels = 1;
+            uint sampleRate = 0;
+            ushort bitsPerSample = 0;
+            uint dataSize = 0;
+
+            while (fs.Position + 8 <= fs.Length)
+            {
+                var id = new string(br.ReadChars(4));
+                var size = br.ReadUInt32();
+                if (id == "fmt ")
+                {
+                    br.ReadUInt16(); // tag
+                    channels = br.ReadUInt16();
+                    sampleRate = br.ReadUInt32();
+                    br.ReadUInt32(); // byte rate
+                    br.ReadUInt16(); // block align
+                    bitsPerSample = br.ReadUInt16();
+                    var consumed = 16u;
+                    if (size > consumed) fs.Seek(size - consumed, SeekOrigin.Current);
+                }
+                else if (id == "data")
+                {
+                    dataSize = size;
+                    break;
+                }
+                else
+                {
+                    fs.Seek(size, SeekOrigin.Current);
+                }
+            }
+
+            if (sampleRate == 0 || bitsPerSample == 0 || channels == 0) return 0;
+            int bytesPerSample = bitsPerSample / 8;
+            int frameSize = bytesPerSample * channels;
+            if (frameSize == 0) return 0;
+            long totalFrames = dataSize / (uint)frameSize;
+            return (double)totalFrames / sampleRate;
+        }
+        catch { return 0; }
+    }
+
     private static float ReadSample(BinaryReader br, ushort fmtTag, ushort bits)
     {
         // 1=PCM int, 3=IEEE float

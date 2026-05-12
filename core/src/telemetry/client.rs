@@ -548,6 +548,8 @@ mod tests {
                 Event::TranscriptionCompleted {
                     mode: "cloud",
                     provider: "groq",
+                    local_backend: "",
+                    entry_point: "hotkey",
                     audio_secs: 1.0,
                     processing_ms: 100,
                     word_count: 5,
@@ -654,6 +656,8 @@ mod tests {
         let e = Event::TranscriptionCompleted {
             mode: "cloud",
             provider: "anthropic",
+            local_backend: "",
+            entry_point: "hotkey",
             audio_secs: 1.0,
             processing_ms: 100,
             word_count: 5,

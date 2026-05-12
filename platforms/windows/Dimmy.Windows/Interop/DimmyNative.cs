@@ -388,6 +388,39 @@ public static class DimmyNative
         [MarshalAs(UnmanagedType.LPUTF8Str)] string message,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? email);
 
+    /// Track a typed event by name with a JSON property object.
+    /// `name` is the stable event name ("meeting.recap_completed",
+    /// "pill.style_scrolled", etc.). `propsJson` is a JSON object with
+    /// the categorical fields that variant declares — `null` or empty
+    /// for property-less events. Returns 0 on success, -1 invalid
+    /// input, -2 unknown event name (host fell out of date).
+    ///
+    /// Privacy: the host MUST pass categorical / bucketed values.
+    /// Never pass user content. The Rust core enforces the
+    /// categorical allowlist per field — anything off-list lands as
+    /// "unknown".
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_telemetry_track_typed(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string name,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? propsJson);
+
+    /// Helper that builds the JSON + calls the FFI. Swallows
+    /// exceptions because telemetry must NEVER abort a user flow.
+    public static void TrackEvent(string name, object? props = null)
+    {
+        try
+        {
+            var json = props is null
+                ? null
+                : System.Text.Json.JsonSerializer.Serialize(props);
+            _ = dimmy_telemetry_track_typed(name, json);
+        }
+        catch
+        {
+            // Best-effort — telemetry failures must not bubble up.
+        }
+    }
+
     public static bool TelemetryEnabled
     {
         get => dimmy_telemetry_is_enabled() == 1;

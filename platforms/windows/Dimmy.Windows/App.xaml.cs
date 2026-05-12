@@ -201,12 +201,32 @@ public partial class App : Application
         // `--command <name>`; we forward to the running instance via
         // named pipe and exit immediately, so the user sees no second
         // window flash.
+        //
+        // If TrySendCommand returns false there's no running instance
+        // to forward to — we MUST fall through to normal startup
+        // instead of exiting silently. Two scenarios this guards:
+        //   1. Velopack post-update relaunch: ApplyUpdatesAndRestart
+        //      defaults to forwarding the old process's argv as
+        //      restartArgs. If the old Dimmy was started via jumplist
+        //      (`--command open-settings`), the new one inherits the
+        //      same arg, sees no running sibling, used to Exit(0) =
+        //      app vanishes after update.
+        //   2. User clicks jumplist while Dimmy has just crashed or
+        //      shut down — they expect Dimmy to come up, not silently
+        //      die. Same code path now stashes the command and lets
+        //      normal startup proceed.
+        // After init, `_pendingActivationPayload` style stash lets
+        // HandleForwardedCommand pick it up once the pipe server is
+        // up (mirrors the dimmy:// URL fallback pattern just above).
         var pipeCommand = TryGetPipeCommandFromArgs();
         if (pipeCommand is not null)
         {
-            CommandPipeServer.TrySendCommand(pipeCommand);
-            Environment.Exit(0);
-            return;
+            if (CommandPipeServer.TrySendCommand(pipeCommand))
+            {
+                Environment.Exit(0);
+                return;
+            }
+            _pendingActivationPayload = pipeCommand;
         }
 
         // Single-instance guard: exit immediately if another Dimmy is already running.
@@ -435,6 +455,22 @@ public partial class App : Application
         {
             UpdateService.EnsureCreated();
             UpdateService.Instance?.StartBackgroundLoop();
+
+            // Post-update confirmation. If the previous run finished a
+            // Velopack apply-and-restart, it left an `update-pending.txt`
+            // marker. Consume + surface a toast so the user sees an
+            // explicit "yes, you're on the new version". The marker is
+            // single-shot (deleted on read) so a leaked file from a
+            // partial crash doesn't replay forever.
+            var justInstalled = UpdateService.ConsumeUpdatePendingMarker();
+            if (justInstalled is not null)
+            {
+                Log($"post-update toast: v{justInstalled}", "Update");
+                // Marshal to UI dispatcher so the toast window opens on
+                // the right thread — OnLaunched runs there already, but
+                // future refactors may not.
+                RunOnUI(() => DictNotificationService.ShowUpdateInstalled(justInstalled));
+            }
         }
         catch (Exception ex)
         {
@@ -563,7 +599,11 @@ public partial class App : Application
                 // worked (no silent failures from their perspective).
                 switch (rc)
                 {
-                    case 0: Services.DictNotificationService.ShowAdded(text); break;
+                    case 0:
+                        Services.DictNotificationService.ShowAdded(text);
+                        Interop.DimmyNative.TrackEvent(
+                            "user_dict.word_added", new { source = "hotkey" });
+                        break;
                     case 1: Services.DictNotificationService.ShowAlreadyPresent(text); break;
                 }
                 RestoreClipboard(previousText);
@@ -931,8 +971,7 @@ public partial class App : Application
         string? json = null;
         try
         {
-            var configDir = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            var path = Path.Combine(configDir, "dimmy", "config.json");
+            var path = Path.Combine(Services.BuildInfo.ConfigDirPath, "config.json");
             PttLog($"LoadConfig: looking for {path}, exists={File.Exists(path)}");
             if (File.Exists(path))
                 json = File.ReadAllText(path);
@@ -1486,6 +1525,7 @@ public partial class App : Application
             }
             // Skip / no-dialog-possible: still stage so next launch picks up.
             UpdateService.Instance.ApplyOnExit();
+            Interop.DimmyNative.TrackEvent("update.apply_deferred");
         }
 
         _hotkeyService?.Dispose();
@@ -1551,15 +1591,13 @@ public partial class App : Application
 
     private static bool IsOnboardingComplete()
     {
-        var configDir = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        var marker = Path.Combine(configDir, "dimmy", ".onboarding_done");
+        var marker = Path.Combine(Services.BuildInfo.ConfigDirPath, ".onboarding_done");
         return File.Exists(marker);
     }
 
     public static void MarkOnboardingComplete()
     {
-        var configDir = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        var dimmyDir = Path.Combine(configDir, "dimmy");
+        var dimmyDir = Services.BuildInfo.ConfigDirPath;
         Directory.CreateDirectory(dimmyDir);
         File.WriteAllText(Path.Combine(dimmyDir, ".onboarding_done"), "1");
     }

@@ -553,9 +553,7 @@ public sealed partial class MeetingWindow : Window
 
         try
         {
-            var meetings = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "dimmy", "meetings");
+            var meetings = Path.Combine(Services.BuildInfo.ConfigDirPath, "meetings");
             if (!Directory.Exists(meetings)) return;
             var latest = new DirectoryInfo(meetings).GetDirectories()
                 .OrderByDescending(d => d.LastWriteTime)
@@ -1102,9 +1100,7 @@ public sealed partial class MeetingWindow : Window
         //   3. empty (Rust falls back to llm_api_model from config)
         try
         {
-            var cfgPath = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "dimmy", "config.json");
+            var cfgPath = Path.Combine(Services.BuildInfo.ConfigDirPath, "config.json");
             if (!File.Exists(cfgPath)) return "";
             using var doc = JsonDocument.Parse(File.ReadAllText(cfgPath));
             // 1. User override
@@ -1233,9 +1229,7 @@ public sealed partial class MeetingWindow : Window
         HistoryItems.Clear();
         try
         {
-            var meetings = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "dimmy", "meetings");
+            var meetings = Path.Combine(Services.BuildInfo.ConfigDirPath, "meetings");
             if (!Directory.Exists(meetings)) return;
             var query = (HistorySearchBox.Text ?? "").Trim();
             var dirs = new DirectoryInfo(meetings).GetDirectories()

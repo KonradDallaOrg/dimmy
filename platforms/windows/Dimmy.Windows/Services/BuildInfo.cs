@@ -46,4 +46,26 @@ public static class BuildInfo
 
     /// <summary>Display label shown in the watermark badge.</summary>
     public static string FlavorLabel => IsStaging ? "STAGING" : string.Empty;
+
+    /// <summary>
+    /// Folder name under %APPDATA% that holds config.json + history.db
+    /// + license.json + onboarding marker. MUST match the Rust core's
+    /// `config_dir_name()`: `dimmy` for prod, `dimmy-staging` for
+    /// staging — otherwise C# reads the wrong file, then writes UI
+    /// state back through the FFI which overwrites the real
+    /// Rust-owned file with empty defaults. Burned 2026-05-12 on
+    /// app_rules loss after a staging install side-by-side a prod
+    /// install. Use this everywhere — never hardcode "dimmy".
+    /// </summary>
+    public static string ConfigDirName => IsStaging ? "dimmy-staging" : "dimmy";
+
+    /// <summary>
+    /// Full path to the config-folder under %APPDATA%. Helper around
+    /// <see cref="ConfigDirName"/> so callers don't repeat the
+    /// GetFolderPath dance.
+    /// </summary>
+    public static string ConfigDirPath =>
+        System.IO.Path.Combine(
+            System.Environment.GetFolderPath(System.Environment.SpecialFolder.ApplicationData),
+            ConfigDirName);
 }

@@ -18,13 +18,13 @@ import Foundation
 
 func pickRecapModel() -> String {
     do {
-        let support = try FileManager.default.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: false
-        )
-        let cfgURL = support.appendingPathComponent("dimmy/config.json")
+        // Path comes from DimmyCore.shared.configDirURL so the staging
+        // flavor (`dimmy-staging/`) is honoured. Hardcoding "dimmy"
+        // here would make staging builds read a stale prod config —
+        // same class of bug as the Win app_rules wipe (2026-05-12).
+        guard let cfgURL = DimmyCore.shared.configDirURL?
+            .appendingPathComponent("config.json")
+        else { return "" }
         let data = try Data(contentsOf: cfgURL)
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return ""
@@ -69,16 +69,18 @@ struct RecapModelOption: Identifiable, Equatable {
     static let curated: [RecapModelOption] = [
         .init(id: autoKey, label: "Auto (match LLM provider)", provider: .auto),
 
-        .init(id: "claude-opus-4-7",   label: "Anthropic — Claude Opus 4.7",  provider: .anthropic),
-        .init(id: "claude-sonnet-4-6", label: "Anthropic — Claude Sonnet 4.6", provider: .anthropic),
-        .init(id: "claude-haiku-4-5",  label: "Anthropic — Claude Haiku 4.5",  provider: .anthropic),
+        .init(id: "claude-opus-4-7",   label: "Anthropic — Claude Opus 4.7 (best)",   provider: .anthropic),
+        .init(id: "claude-sonnet-4-6", label: "Anthropic — Claude Sonnet 4.6 (balanced)", provider: .anthropic),
+        .init(id: "claude-haiku-4-5",  label: "Anthropic — Claude Haiku 4.5 (fast)",  provider: .anthropic),
 
-        .init(id: "gemini-3.1-pro",   label: "Google — Gemini 3.1 Pro",  provider: .gemini),
-        .init(id: "gemini-2.5-pro",   label: "Google — Gemini 2.5 Pro",  provider: .gemini),
-        .init(id: "gemini-2.5-flash", label: "Google — Gemini 2.5 Flash", provider: .gemini),
+        .init(id: "gemini-3.1-pro",   label: "Google — Gemini 3.1 Pro (best)",   provider: .gemini),
+        .init(id: "gemini-3.1-flash", label: "Google — Gemini 3.1 Flash (fast)", provider: .gemini),
+        .init(id: "gemini-2.5-pro",   label: "Google — Gemini 2.5 Pro",          provider: .gemini),
+        .init(id: "gemini-2.5-flash", label: "Google — Gemini 2.5 Flash",        provider: .gemini),
 
-        .init(id: "gpt-5",  label: "OpenAI — GPT-5",  provider: .openai),
-        .init(id: "gpt-4o", label: "OpenAI — GPT-4o", provider: .openai),
+        .init(id: "gpt-5",      label: "OpenAI — GPT-5 (best)",          provider: .openai),
+        .init(id: "gpt-5-mini", label: "OpenAI — GPT-5 mini (fast + cheap)", provider: .openai),
+        .init(id: "gpt-4o",     label: "OpenAI — GPT-4o",                provider: .openai),
     ]
 
     /// Find the curated option for a given config value, or fall through

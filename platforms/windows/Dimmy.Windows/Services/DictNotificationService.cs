@@ -32,6 +32,19 @@ public static class DictNotificationService
              $"“{word}” is already on the list.");
     }
 
+    /// <summary>Post-update confirmation — fires once on the first
+    /// launch after Velopack swapped the EXE. Without this, users
+    /// who clicked "Install Now" saw the app close (Velopack kills
+    /// the old process) and reasonably wondered whether the new
+    /// version had actually come up. The marker file the toast
+    /// reads is written by UpdateService.ApplyAndRestart and
+    /// consumed exactly once at startup.</summary>
+    public static void ShowUpdateInstalled(string version)
+    {
+        Show($"Updated to v{version}",
+             "Dimmy was upgraded in the background and is ready to use.");
+    }
+
     private static void Show(string title, string body)
     {
         try

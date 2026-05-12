@@ -206,15 +206,73 @@ public sealed class UpdateService
             App.Log("ApplyAndRestart called with no pending update", "Update");
             return;
         }
-        App.Log($"applying update v{_pendingUpdate.TargetFullRelease.Version} + restart", "Update");
+        var version = _pendingUpdate.TargetFullRelease.Version.ToString();
+        App.Log($"applying update v{version} + restart", "Update");
+
+        // Write a one-shot "I just updated" marker so the next launch
+        // can surface a confirmation toast — users complained that
+        // post-update the app vanished without telling them whether
+        // the new version actually came up. Read + deleted by
+        // OnLaunched after the UI is wired.
+        WriteUpdatePendingMarker(version);
+
         try
         {
-            _manager.ApplyUpdatesAndRestart(_pendingUpdate);
+            // restartArgs: explicit Array.Empty<string>() — Velopack's
+            // default is to forward the CURRENT process's argv as the
+            // new process's argv. If the old Dimmy was launched via a
+            // jump-list shortcut (`--command open-settings`), that arg
+            // is forwarded to the new process, which then tries to
+            // pipe-forward to a sibling that doesn't exist (Velopack
+            // just killed it) and exits silently. Burned on v0.6.37
+            // first-install. Empty array = clean argv = normal startup.
+            _manager.ApplyUpdatesAndRestart(_pendingUpdate, restartArgs: System.Array.Empty<string>());
         }
         catch (Exception ex)
         {
             App.Log($"ApplyAndRestart exc: {ex.GetType().Name}: {ex.Message}", "Update");
         }
+    }
+
+    /// <summary>
+    /// Persist "the apply happened" so the next launch can show a
+    /// confirmation toast. Marker file lives alongside the existing
+    /// config so we don't proliferate locations. Best-effort — IO
+    /// failure here must not block the apply.
+    /// </summary>
+    private static void WriteUpdatePendingMarker(string version)
+    {
+        try
+        {
+            var path = System.IO.Path.Combine(BuildInfo.ConfigDirPath, "update-pending.txt");
+            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
+            System.IO.File.WriteAllText(path, version);
+        }
+        catch (System.Exception ex)
+        {
+            App.Log($"WriteUpdatePendingMarker exc: {ex.GetType().Name}: {ex.Message}", "Update");
+        }
+    }
+
+    /// <summary>
+    /// Read + clear the post-update marker written by
+    /// <see cref="WriteUpdatePendingMarker"/>. Returns the applied
+    /// version string if the previous run finished an update, or
+    /// null if no marker (normal startup). Always deletes the marker
+    /// — even on null return — so a marker leaked from a partial
+    /// crash doesn't replay forever.
+    /// </summary>
+    public static string? ConsumeUpdatePendingMarker()
+    {
+        try
+        {
+            var path = System.IO.Path.Combine(BuildInfo.ConfigDirPath, "update-pending.txt");
+            if (!System.IO.File.Exists(path)) return null;
+            var v = System.IO.File.ReadAllText(path).Trim();
+            try { System.IO.File.Delete(path); } catch { }
+            return string.IsNullOrEmpty(v) ? null : v;
+        }
+        catch { return null; }
     }
 
     /// <summary>Apply at next launch instead of now — Velopack stages

@@ -367,6 +367,18 @@ fn dimmy_init_inner() -> c_int {
                 cold_start_ms,
             });
 
+            // Periodic-on-startup snapshot of the user-dict size. Lets
+            // us see the distribution of dict-using vs not-using
+            // installs + power-user tail. Bucketed via sanitize so
+            // we can never fingerprint a specific dictionary count.
+            {
+                let st_for_dict = state();
+                let dict_len = st_for_dict.user_dict.lock().map(|d| d.len()).unwrap_or(0);
+                crate::telemetry::track(crate::telemetry::Event::UserDictSizeSnapshot {
+                    size_bucket: crate::telemetry::sanitize::bucket_dict_size(dict_len),
+                });
+            }
+
             // Background history-audio retention. Runs once 5 s after
             // init (lets the rest of the app settle) then once per
             // hour. Bounded I/O — only touches files in
@@ -1000,9 +1012,29 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
                 crate::telemetry::sanitize::provider_from_url(&api_url)
             };
             let llm_enabled_now = st.llm_enabled.lock().map(|e| *e).unwrap_or(false);
+            // local_backend categorical: "whisper" | "parakeet" | "" when cloud.
+            let local_backend_static: &'static str = if stt_mode == "local" {
+                match st
+                    .local_stt_backend
+                    .lock()
+                    .map(|b| b.clone())
+                    .unwrap_or_default()
+                    .as_str()
+                {
+                    "parakeet" => "parakeet",
+                    _ => "whisper",
+                }
+            } else {
+                ""
+            };
             crate::telemetry::track(crate::telemetry::Event::TranscriptionCompleted {
                 mode: mode_static,
                 provider: provider_static,
+                local_backend: local_backend_static,
+                // Hotkey-driven dictation path — this is the only emit
+                // site on the dictation flow. File-load + meeting emit
+                // their own dedicated events.
+                entry_point: "hotkey",
                 audio_secs: speaking_secs,
                 processing_ms,
                 word_count: words.max(0) as u32,
@@ -1547,10 +1579,20 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
         }
     }
     if let Some(s) = v["recap_model_override"].as_str() {
+        let changed = st
+            .recap_model_override
+            .lock()
+            .map(|prev| prev.as_str() != s)
+            .unwrap_or(false);
         if let Ok(mut slot) = st.recap_model_override.lock() {
             *slot = s.to_string();
         }
         log(&format!("[Config] recap_model_override set to {:?}", s));
+        if changed {
+            crate::telemetry::track(crate::telemetry::Event::ConfigRecapModelChanged {
+                recap_model_bucket: crate::telemetry::sanitize::bucket_recap_model(s),
+            });
+        }
     }
 
     // Audio / appearance
@@ -4518,6 +4560,229 @@ pub unsafe extern "C" fn dimmy_telemetry_capture_feedback(
     };
     crate::telemetry::capture_feedback(kind, message, email);
     0
+}
+
+// ── Typed telemetry dispatcher (host-driven events) ──────────────
+//
+// Many events fire from UI surfaces that Rust doesn't see directly:
+// pill scroll gestures, the "Run recap" button on the File Load
+// card, Notion send result, update channel toggle, etc. Rather than
+// add one bespoke FFI per event (and grow the surface area by ~14
+// fns), we expose a single typed dispatcher that takes the event
+// name + a JSON property object.
+//
+// The Rust side parses the name + props, constructs the matching
+// typed `Event` variant, and falls into the existing
+// `telemetry::track` path (so all the same privacy/scrubbing rules
+// apply). Unknown event names or malformed props return -2 so the
+// host can log + ignore — never abort.
+//
+// Privacy contract: the host MUST pass categorical values only —
+// e.g. `source: "hotkey"`, `provider: "anthropic"`,
+// `audio_secs_bucket: "120_600"`. The dispatcher does NOT bucket
+// numeric values for you because the bucket choice is per-event.
+// PostHog dashboards depend on stable bucket labels.
+
+/// Track an event by name with a JSON props object. Returns:
+///   0  emitted
+///  -1  invalid input (null name, non-UTF-8, malformed JSON)
+///  -2  unknown event name (host fell out of date with the Rust
+///      schema; safe to ignore)
+///
+/// # Safety
+/// `name_ptr` must be a valid null-terminated UTF-8 string.
+/// `props_json_ptr` may be null (= no properties) or must be a
+/// valid null-terminated UTF-8 string containing a JSON object.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_telemetry_track_typed(
+    name_ptr: *const c_char,
+    props_json_ptr: *const c_char,
+) -> c_int {
+    if name_ptr.is_null() {
+        return -1;
+    }
+    let name = match unsafe { CStr::from_ptr(name_ptr) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let props: serde_json::Value = if props_json_ptr.is_null() {
+        serde_json::Value::Null
+    } else {
+        let s = match unsafe { CStr::from_ptr(props_json_ptr) }.to_str() {
+            Ok(s) => s,
+            Err(_) => return -1,
+        };
+        if s.trim().is_empty() {
+            serde_json::Value::Null
+        } else {
+            match serde_json::from_str(s) {
+                Ok(v) => v,
+                Err(_) => return -1,
+            }
+        }
+    };
+
+    // Tiny helpers to fetch typed fields with safe defaults. We
+    // never `unwrap()` — bad input from the host degrades to an
+    // empty-string / false-bool, never a panic.
+    let prop_str = |key: &str| -> String {
+        props
+            .get(key)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    let prop_static = |key: &str, allowed: &[&'static str]| -> &'static str {
+        let v = props.get(key).and_then(|v| v.as_str()).unwrap_or("");
+        for &a in allowed {
+            if a == v {
+                return a;
+            }
+        }
+        "unknown"
+    };
+    let prop_bool =
+        |key: &str| -> bool { props.get(key).and_then(|v| v.as_bool()).unwrap_or(false) };
+
+    let event = match name {
+        "user_dict.word_added" => Some(crate::telemetry::Event::UserDictWordAdded {
+            source: prop_static("source", &["hotkey", "services_menu", "settings_ui"]),
+        }),
+        "user_dict.word_removed" => Some(crate::telemetry::Event::UserDictWordRemoved),
+        "meeting.recap_completed" => Some(crate::telemetry::Event::MeetingRecapCompleted {
+            provider: prop_static(
+                "provider",
+                &[
+                    "groq",
+                    "openai",
+                    "anthropic",
+                    "gemini",
+                    "openrouter",
+                    "local",
+                    "unset",
+                ],
+            ),
+            recap_model_bucket: prop_static(
+                "recap_model_bucket",
+                &[
+                    "opus",
+                    "sonnet",
+                    "haiku",
+                    "gemini_pro",
+                    "gemini_flash",
+                    "gpt_5",
+                    "gpt_4",
+                    "llama",
+                    "gemma",
+                    "default",
+                    "other",
+                ],
+            ),
+            processing_ms_bucket: prop_static(
+                "processing_ms_bucket",
+                &[
+                    "lt_500",
+                    "500_2000",
+                    "2000_10000",
+                    "10000_60000",
+                    "ge_60000",
+                ],
+            ),
+            success: prop_bool("success"),
+        }),
+        "meeting.imported_from_file" => Some(crate::telemetry::Event::MeetingImportedFromFile),
+        "file_load.started" => Some(crate::telemetry::Event::FileLoadStarted {
+            source: prop_static("source", &["drop", "picker"]),
+            audio_secs_bucket: prop_static(
+                "audio_secs_bucket",
+                &[
+                    "lt_30",
+                    "30_120",
+                    "120_600",
+                    "600_1800",
+                    "1800_3600",
+                    "ge_3600",
+                ],
+            ),
+        }),
+        "file_load.completed" => Some(crate::telemetry::Event::FileLoadCompleted {
+            audio_secs_bucket: prop_static(
+                "audio_secs_bucket",
+                &[
+                    "lt_30",
+                    "30_120",
+                    "120_600",
+                    "600_1800",
+                    "1800_3600",
+                    "ge_3600",
+                ],
+            ),
+            processing_ms_bucket: prop_static(
+                "processing_ms_bucket",
+                &[
+                    "lt_500",
+                    "500_2000",
+                    "2000_10000",
+                    "10000_60000",
+                    "ge_60000",
+                ],
+            ),
+            words_bucket: prop_static(
+                "words_bucket",
+                &["0", "1_50", "51_200", "201_1000", "1001_5000", "ge_5000"],
+            ),
+            success: prop_bool("success"),
+        }),
+        "notion.connected" => Some(crate::telemetry::Event::NotionConnected),
+        "notion.disconnected" => Some(crate::telemetry::Event::NotionDisconnected),
+        "notion.recap_sent" => Some(crate::telemetry::Event::NotionRecapSent {
+            auto: prop_bool("auto"),
+            ok: prop_bool("ok"),
+        }),
+        "app_rules.added" => Some(crate::telemetry::Event::AppRuleAdded),
+        "app_rules.removed" => Some(crate::telemetry::Event::AppRuleRemoved),
+        "app_rules.reordered" => Some(crate::telemetry::Event::AppRuleReordered),
+        "pill.visibility_toggled" => Some(crate::telemetry::Event::PillVisibilityToggled {
+            visible: prop_bool("visible"),
+            source: prop_static(
+                "source",
+                &["settings", "tray", "jumplist", "hotkey", "dock_menu"],
+            ),
+        }),
+        "pill.style_scrolled" => Some(crate::telemetry::Event::PillStyleScrolled),
+        "pill.language_scrolled" => Some(crate::telemetry::Event::PillLanguageScrolled),
+        "pill.context_menu_opened" => Some(crate::telemetry::Event::PillContextMenuOpened),
+        "update.channel_changed" => Some(crate::telemetry::Event::UpdateChannelChanged {
+            from: prop_static("from", &["stable", "prerelease"]),
+            to: prop_static("to", &["stable", "prerelease"]),
+        }),
+        "update.apply_deferred" => Some(crate::telemetry::Event::UpdateApplyDeferred),
+        "permission.granted" => Some(crate::telemetry::Event::PermissionGranted {
+            service: prop_static(
+                "service",
+                &["microphone", "accessibility", "input_monitoring"],
+            ),
+        }),
+        "permission.denied" => Some(crate::telemetry::Event::PermissionDenied {
+            service: prop_static(
+                "service",
+                &["microphone", "accessibility", "input_monitoring"],
+            ),
+        }),
+        _ => None,
+    };
+    // `prop_str` is unused for now — kept available for any future
+    // event variants that legitimately accept a free-form string
+    // field (e.g. a future categorical that the host passes raw).
+    let _ = prop_str;
+
+    match event {
+        Some(e) => {
+            crate::telemetry::track(e);
+            0
+        }
+        None => -2,
+    }
 }
 
 // ── Autostart ─────────────────────────────────────────────────────

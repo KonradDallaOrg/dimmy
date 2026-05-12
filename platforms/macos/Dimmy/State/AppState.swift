@@ -190,6 +190,11 @@ struct SttPreset: Identifiable, Hashable {
         SttPreset(id: "openai-4o-mini-transcribe", displayName: "OpenAI \u{00B7} gpt-4o-mini-transcribe", provider: .openai, apiUrl: "https://api.openai.com/v1/audio/transcriptions", model: "gpt-4o-mini-transcribe"),
         SttPreset(id: "deepgram-nova3", displayName: "Deepgram \u{00B7} nova-3", provider: .deepgram, apiUrl: "https://api.deepgram.com/v1/listen", model: "nova-3"),
         SttPreset(id: "deepgram-nova2", displayName: "Deepgram \u{00B7} nova-2", provider: .deepgram, apiUrl: "https://api.deepgram.com/v1/listen", model: "nova-2"),
+        // Latest Gemini 3.1 preview line (May 2026) — same multimodal
+        // generateContent endpoint as 2.5, drop-in replacement. 2.5
+        // entries kept as fallback for users who prefer stable tier.
+        SttPreset(id: "gemini-3.1-flash", displayName: "Gemini \u{00B7} gemini-3.1-flash (free, latest)", provider: .gemini, apiUrl: "https://generativelanguage.googleapis.com/v1beta/models", model: "gemini-3.1-flash"),
+        SttPreset(id: "gemini-3.1-pro", displayName: "Gemini \u{00B7} gemini-3.1-pro (free, latest)", provider: .gemini, apiUrl: "https://generativelanguage.googleapis.com/v1beta/models", model: "gemini-3.1-pro"),
         SttPreset(id: "gemini-flash", displayName: "Gemini \u{00B7} gemini-2.5-flash (free)", provider: .gemini, apiUrl: "https://generativelanguage.googleapis.com/v1beta/models", model: "gemini-2.5-flash"),
         SttPreset(id: "gemini-pro", displayName: "Gemini \u{00B7} gemini-2.5-pro (free)", provider: .gemini, apiUrl: "https://generativelanguage.googleapis.com/v1beta/models", model: "gemini-2.5-pro"),
         // Phase 1 cloud expansion (2026-05-04 benchmark drove the model picks)
@@ -228,12 +233,20 @@ struct LlmPreset: Identifiable, Hashable {
 
     static let presets: [LlmPreset] = [
         LlmPreset(id: "groq-llama70b", displayName: "Groq \u{00B7} llama-3.3-70b (free)", apiUrl: "https://api.groq.com/openai/v1/chat/completions", model: "llama-3.3-70b-versatile"),
+        // OpenAI tier (May 2026): gpt-5 family on same chat-completions
+        // endpoint — drop-in. Default = mini for speed+cost.
+        LlmPreset(id: "openai-gpt5-mini", displayName: "OpenAI \u{00B7} gpt-5-mini (fast + cheap)", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-5-mini"),
+        LlmPreset(id: "openai-gpt5", displayName: "OpenAI \u{00B7} gpt-5 (best)", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-5"),
         LlmPreset(id: "openai-4o-mini", displayName: "OpenAI \u{00B7} gpt-4o-mini", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-4o-mini"),
         LlmPreset(id: "openrouter-llama70b", displayName: "OpenRouter \u{00B7} llama-3.3-70b (free)", apiUrl: "https://openrouter.ai/api/v1/chat/completions", model: "meta-llama/llama-3.3-70b-instruct:free"),
         LlmPreset(id: "openrouter-deepseek", displayName: "OpenRouter \u{00B7} DeepSeek R1 (free)", apiUrl: "https://openrouter.ai/api/v1/chat/completions", model: "deepseek/deepseek-r1:free"),
+        // Gemini 3.1 preview line (May 2026) — same generateContent endpoint.
+        LlmPreset(id: "gemini-3.1-flash", displayName: "Gemini \u{00B7} gemini-3.1-flash (free, latest)", apiUrl: "https://generativelanguage.googleapis.com/v1beta/models", model: "gemini-3.1-flash"),
+        LlmPreset(id: "gemini-3.1-pro", displayName: "Gemini \u{00B7} gemini-3.1-pro (free, latest)", apiUrl: "https://generativelanguage.googleapis.com/v1beta/models", model: "gemini-3.1-pro"),
         LlmPreset(id: "gemini-flash", displayName: "Gemini \u{00B7} gemini-2.5-flash (free)", apiUrl: "https://generativelanguage.googleapis.com/v1beta/models", model: "gemini-2.5-flash"),
         LlmPreset(id: "anthropic-haiku", displayName: "Anthropic \u{00B7} claude-haiku-4.5", apiUrl: "https://api.anthropic.com/v1/messages", model: "claude-haiku-4.5-20250315"),
         LlmPreset(id: "anthropic-sonnet", displayName: "Anthropic \u{00B7} claude-sonnet-4", apiUrl: "https://api.anthropic.com/v1/messages", model: "claude-sonnet-4-20250514"),
+        LlmPreset(id: "anthropic-opus", displayName: "Anthropic \u{00B7} claude-opus-4.7", apiUrl: "https://api.anthropic.com/v1/messages", model: "claude-opus-4-7"),
         // Phase 1 cloud expansion (2026-05-04, sensible model picks for filler-removal/smart-format)
         LlmPreset(id: "fireworks-kimi", displayName: "Fireworks \u{00B7} kimi-k2", apiUrl: "https://api.fireworks.ai/inference/v1/chat/completions", model: "accounts/fireworks/models/kimi-k2p6"),
         LlmPreset(id: "together-llama70b", displayName: "Together \u{00B7} llama-3.3-70b", apiUrl: "https://api.together.xyz/v1/chat/completions", model: "meta-llama/Llama-3.3-70B-Instruct-Turbo"),

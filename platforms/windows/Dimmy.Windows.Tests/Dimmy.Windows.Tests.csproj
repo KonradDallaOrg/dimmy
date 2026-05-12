@@ -27,6 +27,7 @@
     <Compile Include="..\Dimmy.Windows\Helpers\AppRuleReorderMath.cs" Link="Helpers\AppRuleReorderMath.cs" />
     <Compile Include="..\Dimmy.Windows\Helpers\MeetingRecapHelpers.cs" Link="Helpers\MeetingRecapHelpers.cs" />
     <Compile Include="..\Dimmy.Windows\Services\HotkeyParser.cs" Link="Services\HotkeyParser.cs" />
+    <Compile Include="..\Dimmy.Windows\Services\BuildInfo.cs" Link="Services\BuildInfo.cs" />
     <Compile Include="..\Dimmy.Windows\Services\DictHotkeyParser.cs" Link="Services\DictHotkeyParser.cs" />
     <Compile Include="..\Dimmy.Windows\Services\TextInjectionService.cs" Link="Services\TextInjectionService.cs" />
     <Compile Include="..\Dimmy.Windows\Services\TranscriptionService.cs" Link="Services\TranscriptionService.cs" />

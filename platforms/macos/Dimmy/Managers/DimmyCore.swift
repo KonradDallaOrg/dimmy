@@ -378,6 +378,25 @@ final class DimmyCore {
     /// True when this binary was built with `DIMMY_BUILD_FLAVOR=staging`.
     var isStagingBuild: Bool { buildFlavor == "staging" }
 
+    /// Folder under Application Support that holds config.json,
+    /// history.db, license.json, meetings/, dimmy.log. MUST match
+    /// the Rust core's `config_dir_name()`: `dimmy` for prod,
+    /// `dimmy-staging` for staging. Hardcoding "dimmy" anywhere
+    /// silently breaks staging-flavor builds — same class of bug
+    /// caught on Win 2026-05-12 (app_rules wipe). Always use this
+    /// helper from Swift, never `appendingPathComponent("dimmy")`.
+    var configDirName: String { isStagingBuild ? "dimmy-staging" : "dimmy" }
+
+    /// Full URL of the config directory under Application Support.
+    /// Convenience wrapper; nil only on bizarre systems where the
+    /// Application Support directory itself cannot be located.
+    var configDirURL: URL? {
+        FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first?.appendingPathComponent(configDirName, isDirectory: true)
+    }
+
     /// GPU known-bad status as parsed JSON. `enabled` indicates whether
     /// the marker is currently set (forcing CPU fallback).
     func gpuStatus() -> [String: Any]? {

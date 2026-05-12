@@ -226,6 +226,28 @@
                            MinHeight="120"
                            MaxHeight="240"
                            Margin="0,8,0,0" />
+                  <!-- Promote to a meeting: writes a synthetic
+                       meeting dir with the transcript + WAV, then
+                       runs the same LLM recap pipeline used by live
+                       meetings. Result lands in Meeting → History. -->
+                  <StackPanel x:Name="FileLoadRecapPanel"
+                              Visibility="Collapsed"
+                              Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
+                    <Button x:Name="FileLoadRunRecapBtn" Click="FileLoadRunRecap_Click">
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xE8FD;" FontSize="14"/>
+                        <TextBlock Text="Run recap as meeting"/>
+                      </StackPanel>
+                    </Button>
+                    <ProgressRing x:Name="FileLoadRecapProgress"
+                                  IsActive="False" Visibility="Collapsed"
+                                  Width="18" Height="18" />
+                    <TextBlock x:Name="FileLoadRecapStatus"
+                               VerticalAlignment="Center"
+                               FontSize="12"
+                               TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                  </StackPanel>
                 </StackPanel>
               </Border>
 
@@ -962,12 +984,20 @@
                         <TextBlock Text="Google · Gemini 2.5 Pro" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
+                    <ComboBoxItem Tag="gemini-3.1-flash">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Google · Gemini 3.1 Flash (fast)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
                     <ComboBoxItem Tag="gemini-2.5-flash">
                       <StackPanel Orientation="Horizontal" Spacing="8">
                         <Image Width="16" Height="16">
                           <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
                         </Image>
-                        <TextBlock Text="Google · Gemini 2.5 Flash (fast)" VerticalAlignment="Center"/>
+                        <TextBlock Text="Google · Gemini 2.5 Flash" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
                     <ComboBoxItem Tag="gpt-5">
@@ -976,6 +1006,14 @@
                           <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/openai.svg"/></Image.Source>
                         </Image>
                         <TextBlock Text="OpenAI · GPT-5 (best)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="gpt-5-mini">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/openai.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="OpenAI · GPT-5 mini (fast + cheap)" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
                     <ComboBoxItem Tag="gpt-4o">

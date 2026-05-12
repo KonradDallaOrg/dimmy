@@ -294,7 +294,17 @@ jobs:
           call "%VS2026_PATH%\VC\Auxiliary\Build\vcvars64.bat"
           if errorlevel 1 exit /b 1
           cargo clean --release 2>nul
-          cargo build --lib --release --features local-stt-vulkan,local-llm-vulkan,license-client
+          # Feature set FROZEN — must always include local-stt-vulkan +
+          # local-stt-parakeet + local-llm-vulkan. Dropping ANY of these
+          # = silent runtime trap: dictation/meeting paths that switch
+          # to parakeet at user-config time fail with "local model:
+          # parakeet inference requires the `local-stt-parakeet` cargo
+          # feature" once per chunk, while telemetry says
+          # transcription.failed. The flagged side-by-side staging
+          # install (Dimmy-Staging package) was missing parakeet until
+          # 2026-05-12. Mirrors the rule documented in CLAUDE.md §
+          # "Windows local DLL build — feature flag set is FROZEN".
+          cargo build --lib --release --features local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,license-client
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
