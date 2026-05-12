@@ -7,6 +7,7 @@ import SwiftUI
 
 struct MacAboutPage: View {
     @ObservedObject var appState: AppState
+    @ObservedObject private var updates = UpdateService.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -27,9 +28,7 @@ struct MacAboutPage: View {
             actions: AnyView(
                 HStack(spacing: 8) {
                     Button {
-                        if let url = URL(string: "https://dimmy.app/download") {
-                            NSWorkspace.shared.open(url)
-                        }
+                        updates.checkForUpdatesNow()
                     } label: {
                         Label("Check for updates…", systemImage: "arrow.down.circle.fill")
                     }
@@ -73,27 +72,31 @@ struct MacAboutPage: View {
             MacGroupLabel(text: "Updates")
             MacTile {
                 MacRow(
-                    "Automatic updates",
-                    description: "Get new versions as they ship"
+                    "Status",
+                    description: updates.statusText
                 ) {
-                    // macOS Sparkle wiring is a future task — read-only.
-                    Toggle("", isOn: .constant(true))
-                        .toggleStyle(.switch)
-                        .labelsHidden()
-                        .disabled(true)
+                    if updates.isUpdateReady {
+                        // Tiny pulsing dot for the "update ready" case so
+                        // a glance is enough to know action is pending
+                        // when the user quits.
+                        Circle()
+                            .fill(Color.accentColor)
+                            .frame(width: 8, height: 8)
+                    } else {
+                        EmptyView()
+                    }
                 }
                 MacRow(
                     "Update channel",
                     description: "Stable releases or early previews",
                     showsDivider: false
                 ) {
-                    Picker("", selection: .constant("stable")) {
+                    Picker("", selection: $updates.channel) {
                         Text("Stable").tag("stable")
-                        Text("Beta").tag("beta")
+                        Text("Prerelease").tag("prerelease")
                     }
                     .labelsHidden()
                     .frame(width: 140)
-                    .disabled(true)
                 }
             }
         }

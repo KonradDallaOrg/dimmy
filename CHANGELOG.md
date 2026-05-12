@@ -4,6 +4,49 @@ All notable changes to Dimmy are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.37] - 2026-05-12
+
+Mac side of the auto-update feature. The Win build has shipped
+Velopack-driven silent updates since 0.6.33; macOS now reaches
+feature parity via Sparkle 2.
+
+### Added
+
+- **Mac auto-update (Sparkle 2).** Integrated `Sparkle` via Swift
+  Package Manager. New `UpdateService.swift` mirrors the Win UX:
+  background check 5 s after launch, re-check every 6 h, silent
+  download, install-at-quit prompt. About page picks up a real
+  "Check for updates" button and a Stable / Prerelease channel
+  picker. Channel preference persisted in `UserDefaults` under
+  `dimmy.update_channel`. Replaces the placeholder
+  `.disabled(true)` Toggle / Picker that shipped from 0.6.25 onward.
+- **Release pipeline: Sparkle DMG signing + appcast.xml.**
+  `release.yml` resolves the Sparkle SPM checkout, locates
+  `sign_update`, signs the macOS DMG with the `SPARKLE_PRIVATE_KEY`
+  GitHub secret, writes `appcast.xml` (with `<sparkle:channel>` set
+  to `prerelease` for prereleases), and uploads it alongside the
+  DMG. Graceful degradation: if the secret is unset (bootstrap or
+  fork builds), the workflow warns and skips signing without
+  failing the release.
+- **Mac app version sync from `core/Cargo.toml`.** The Xcode project
+  previously hard-coded `MARKETING_VERSION = 0.1.0`, so every shipped
+  Mac DMG reported as v0.1.0 to the OS. `release.yml` now passes
+  `MARKETING_VERSION` + `CURRENT_PROJECT_VERSION` from Cargo at build
+  time. Without this, Sparkle would have offered every release as an
+  "update" because it compares the running `CFBundleShortVersionString`
+  against the appcast — and 0.1.0 < every published version.
+- **`docs/RELEASING.md` — Mac auto-update bootstrap section.** Step
+  by step for generating the Sparkle EdDSA keypair, populating
+  `Info.plist` with the public key, and uploading the private key as
+  a GitHub secret. One-time setup per repo.
+
+### Fixed
+
+- **Mac auto-update channel reset on change.** Switching the channel
+  picker calls `SPUUpdater.resetUpdateCycle()` so the next scheduled
+  check re-evaluates the appcast under the new channel filter,
+  instead of inheriting the prior filter until the 6 h timer fires.
+
 ## [0.6.32] - 2026-05-10
 
 Cross-platform Notion integration lands as the headline feature, plus

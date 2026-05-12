@@ -55,5 +55,32 @@
 			</array>
 		</dict>
 	</array>
+	<!--
+	Sparkle 2 auto-update keys.
+
+	SUFeedURL  — the appcast XML we publish alongside each macOS DMG
+	             on GitHub releases. `latest` always points at the most
+	             recent release, so the app polls a stable URL while
+	             release.yml rewrites the content on each cut.
+
+	SUPublicEDKey — the EdDSA public key matching the private key that
+	             signs each DMG inside release.yml (`sign_update`). Set
+	             on 2026-05-12; the matching private lives in the
+	             SPARKLE_PRIVATE_KEY GitHub secret.
+
+	SUEnableInstallerLauncherService — required by Sparkle 2 for the
+	             XPC helper that swaps the .app at install time when
+	             the running process can't write to its own bundle.
+	-->
+	<key>SUFeedURL</key>
+	<string>https://github.com/KonradDallaOrg/dimmy/releases/latest/download/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>mdIhsIeyR1qlZ+MNSaWSVIaVJ2tWvLwHMZYeAGDI5i8=</string>
+	<key>SUEnableInstallerLauncherService</key>
+	<true/>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>21600</integer>
 </dict>
 </plist>

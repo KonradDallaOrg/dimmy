@@ -297,6 +297,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 // combo Cmd+Shift+D, rebindable in Settings → Shortcut.
                 DictHotkeyManager.shared.start(appState: self.appState)
 
+                // Stand up the Sparkle-based auto-updater. Idempotent;
+                // delays its first network check 5 s internally so we
+                // don't compete with hotkey setup or Metal shader
+                // compile on first launch. Mirror of Win's UpdateService
+                // boot in `App.OnLaunched`.
+                UpdateService.shared.start()
+
                 // Register macOS Services provider so the OS-wide
                 // "Add to Dimmy Dictionary" Services menu entry routes
                 // back to AppDelegate.addToDimmyDictionary. Bypasses
