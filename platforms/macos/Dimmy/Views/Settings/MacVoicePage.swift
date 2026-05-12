@@ -48,7 +48,7 @@ struct MacVoicePage: View {
 
     private var customDictionaryGroup: some View {
         Group {
-            MacGroupLabel(text: "Custom dictionary")
+            MacGroupLabel(text: "Custom dictionary (\(appState.userDictWords.count))")
             MacTile {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 8) {
@@ -65,8 +65,24 @@ struct MacVoicePage: View {
                             .foregroundStyle(.orange)
                     }
 
+                    // Single-line workflow hint. Toast handles the
+                    // detail (showing the actual workflow on mistake);
+                    // Settings just confirms which mode is active.
+                    HStack(alignment: .center, spacing: 6) {
+                        Image(systemName: PermissionsManager.shared.accessibilityGranted
+                              ? "keyboard.fill"
+                              : "exclamationmark.bubble.fill")
+                            .font(.system(size: 11))
+                            .foregroundStyle(PermissionsManager.shared.accessibilityGranted ? .green : .orange)
+                        Text(PermissionsManager.shared.accessibilityGranted
+                             ? "Hotkey ready: select text, press \(appState.dictHotkey.displayString)."
+                             : "Hotkey needs Cmd+C first (Accessibility not granted).")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.macTextSecondary)
+                    }
+
                     if appState.userDictWords.isEmpty {
-                        Text("No custom words yet. Use the Add field, the Services menu, or the global hotkey (\(appState.dictHotkey.displayString)) on a selection in any app.")
+                        Text("No custom words yet.")
                             .font(.system(size: 11))
                             .foregroundStyle(Color.macTextSecondary)
                             .fixedSize(horizontal: false, vertical: true)

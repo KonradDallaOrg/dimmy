@@ -1,65 +1,79 @@
 import AppKit
 import ApplicationServices
+import Carbon.HIToolbox
 import CoreGraphics
 
 /// Secondary global hotkey dedicated to "add selected text to user
 /// dictionary". Independent of `HotkeyManager` — the latter owns the
 /// modifier-only dictation chord (flagsChanged events); this one
-/// listens for modifier+key keyDown events. Two separate CGEventTaps
-/// avoid any cross-talk between the dictation flow and the dict-add
-/// flow, even though both rely on the same Accessibility permission.
+/// listens for modifier+key keyDown events.
 ///
-/// On press:
-///   1. Capture pasteboard.changeCount baseline + stash current text
-///      so we can restore after the probe.
-///   2. Write a sentinel to the pasteboard. Wait for changeCount to
-///      bump (deterministic — no arbitrary sleep).
-///   3. Synthesize Cmd+C. Wait for changeCount to bump again. If it
-///      doesn't, the target app rejected the copy (password field,
-///      sandbox, no selection); abort + restore.
-///   4. Read the copied text. Cap at 100 chars. Call dimmy_user_dict_add.
-///   5. Show a transient `DictToastWindow` with the result.
-///   6. Restore the user's previous pasteboard contents.
+/// Two-path trigger model, picked at `start()`:
+///
+///   1. **CGEventTap (preferred)** — needs Accessibility. Lets us
+///      synthesize Cmd+C against the focused app so the user just
+///      presses the combo on a selection. Full flow:
+///        a. Capture pasteboard baseline + stash current text.
+///        b. Write sentinel; wait for changeCount bump.
+///        c. Synthesize Cmd+C; wait for changeCount bump.
+///        d. Read the copied text. Cap at 100 chars. Call
+///           dimmy_user_dict_add. Show toast. Restore pasteboard.
+///
+///   2. **Carbon RegisterEventHotKey (fallback)** — no Accessibility.
+///      We cannot synthesize Cmd+C (post-event also gated by
+///      Accessibility), so the user must press Cmd+C themselves
+///      first, then trigger the dict combo. The handler reads
+///      whatever is currently on the pasteboard and adds it. The
+///      Services menu provides the same "user-copied" semantics for
+///      the right-click path.
 ///
 /// Mirror of Win's `DictHotkeyService` + `App.OnDictHotkeyTriggered`,
-/// keeping the user experience identical across platforms.
+/// keeping the user experience identical across platforms — except
+/// for the Carbon-fallback caveat, which mirrors the Windows policy
+/// "if no accessibility, the user copies first".
 @MainActor
 final class DictHotkeyManager {
     static let shared = DictHotkeyManager()
 
+    /// Path 1: CGEventTap (Accessibility-gated, lets us auto-Cmd+C)
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var wakeObserver: NSObjectProtocol?
+
+    /// Path 2: Carbon RegisterEventHotKey (Accessibility-free fallback)
+    private var carbonHotKeyRef: EventHotKeyRef?
+    private var carbonEventHandler: EventHandlerRef?
+
     private weak var appState: AppState?
 
     private init() {}
 
-    /// Stand up the tap. Idempotent — safe to call twice (no-ops if
-    /// already installed). Requires Accessibility to be granted; the
-    /// main `HotkeyManager` runs an Accessibility-polling timer at
-    /// startup, so by the time this is invoked from AppDelegate the
-    /// permission is typically already in place.
+    /// Stand up the trigger. Idempotent — second call no-ops.
+    /// Picks the best path available given current permissions.
     func start(appState: AppState) {
         self.appState = appState
-        if eventTap != nil { return }
-        if !AXIsProcessTrustedWithOptions(nil) {
-            // Quiet — HotkeyManager already surfaces the
-            // "missing accessibility" UI state; piggybacking on its
-            // status field instead of duplicating.
-            return
-        }
-        installEventTap()
+        if eventTap != nil || carbonHotKeyRef != nil { return }
 
-        // macOS disables taps during sleep; re-enable on wake. Same
-        // pattern as the dictation HotkeyManager.
-        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didWakeNotification,
-            object: nil, queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in
-                guard let self, let tap = self.eventTap else { return }
-                CGEvent.tapEnable(tap: tap, enable: true)
+        if AXIsProcessTrustedWithOptions(nil) {
+            installEventTap()
+            NSLog("[Dict] CGEventTap path active (Accessibility granted)")
+
+            // macOS disables taps during sleep; re-enable on wake.
+            // Same pattern as the dictation HotkeyManager. Only the
+            // CGEventTap path needs this — Carbon hotkeys survive
+            // sleep without intervention.
+            wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.didWakeNotification,
+                object: nil, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    guard let self, let tap = self.eventTap else { return }
+                    CGEvent.tapEnable(tap: tap, enable: true)
+                }
             }
+        } else {
+            installCarbonHotKey()
+            NSLog("[Dict] Carbon RegisterEventHotKey path active (no Accessibility — user must copy before pressing combo)")
         }
     }
 
@@ -74,6 +88,15 @@ final class DictHotkeyManager {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
         }
         wakeObserver = nil
+
+        if let ref = carbonHotKeyRef {
+            UnregisterEventHotKey(ref)
+            carbonHotKeyRef = nil
+        }
+        if let h = carbonEventHandler {
+            RemoveEventHandler(h)
+            carbonEventHandler = nil
+        }
     }
 
     private func installEventTap() {
@@ -129,6 +152,145 @@ final class DictHotkeyManager {
         // returning to the OS quickly keeps the tap responsive.
         Task { await AddToDictionaryFlow.run(combo: combo) }
         return true
+    }
+
+    // MARK: - Carbon RegisterEventHotKey fallback
+
+    /// Bridge `HotkeyCombo` modifiers to Carbon bitmask. Carbon uses
+    /// its own constants (`cmdKey`, `shiftKey`, …) distinct from
+    /// NSEvent.ModifierFlags or CGEventFlags. Values are stable since
+    /// classic Mac OS — they're not going anywhere.
+    private func carbonModifiers(_ combo: HotkeyCombo) -> UInt32 {
+        var m: UInt32 = 0
+        if combo.command { m |= UInt32(cmdKey) }
+        if combo.shift   { m |= UInt32(shiftKey) }
+        if combo.option  { m |= UInt32(optionKey) }
+        if combo.control { m |= UInt32(controlKey) }
+        return m
+    }
+
+    private func installCarbonHotKey() {
+        guard let appState else { return }
+        let combo = appState.dictHotkey
+
+        // Carbon hotkeys must include at least one modifier; bare keys
+        // would collide with normal typing. The default is ⌘⇧D so the
+        // common path is fine, but a user-customised combo with no
+        // modifier set should be rejected up front so we don't end up
+        // claiming every press of the letter key system-wide.
+        let mods = carbonModifiers(combo)
+        guard mods != 0 else {
+            NSLog("[Dict/Carbon] refusing to register modifier-less hotkey — would intercept normal typing")
+            return
+        }
+
+        // EventHotKeyID: signature is an arbitrary 4-char code unique
+        // per app; id is per-hotkey within the app. We only have one
+        // dict hotkey, so id=1.
+        let signature: OSType = 0x44494D44 // 'DIMD'
+        let hotKeyID = EventHotKeyID(signature: signature, id: 1)
+
+        var ref: EventHotKeyRef?
+        let regStatus = RegisterEventHotKey(
+            UInt32(combo.keyCode),
+            mods,
+            hotKeyID,
+            GetApplicationEventTarget(),
+            0,
+            &ref
+        )
+        guard regStatus == noErr, let ref = ref else {
+            NSLog("[Dict/Carbon] RegisterEventHotKey failed with status \(regStatus) — combo may collide with system shortcut")
+            return
+        }
+        self.carbonHotKeyRef = ref
+
+        // Install the event handler that fires on hotkey press.
+        // Selector is `kEventHotKeyPressed` under `kEventClassKeyboard`.
+        var eventType = EventTypeSpec(
+            eventClass: OSType(kEventClassKeyboard),
+            eventKind: UInt32(kEventHotKeyPressed)
+        )
+        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+
+        let handler: EventHandlerUPP = { (_, _, userData) -> OSStatus in
+            // No need to inspect the event — we only registered one
+            // hotkey under this handler, so any fire IS our combo.
+            guard let userData = userData else { return noErr }
+            let manager = Unmanaged<DictHotkeyManager>.fromOpaque(userData).takeUnretainedValue()
+            Task { @MainActor in await manager.handleCarbonHotKey() }
+            return noErr
+        }
+
+        var handlerRef: EventHandlerRef?
+        let installStatus = InstallEventHandler(
+            GetApplicationEventTarget(),
+            handler,
+            1,
+            &eventType,
+            selfPtr,
+            &handlerRef
+        )
+        if installStatus == noErr {
+            self.carbonEventHandler = handlerRef
+        } else {
+            NSLog("[Dict/Carbon] InstallEventHandler failed with status \(installStatus)")
+            UnregisterEventHotKey(ref)
+            self.carbonHotKeyRef = nil
+        }
+    }
+
+    /// Pasteboard changeCount at the time of the last Carbon-path
+    /// trigger. Used to detect "user pressed the combo without doing a
+    /// new Cmd+C in between" — a workflow mistake that would otherwise
+    /// silently re-process whatever stale text is on the pasteboard.
+    private var lastCarbonChangeCount: Int = -1
+
+    /// Carbon path runtime handler. No Accessibility means no synthetic
+    /// Cmd+C — we read whatever the user already has on the pasteboard.
+    ///
+    /// Workflow-mistake detection: if the pasteboard.changeCount is the
+    /// same as on the previous trigger, the user pressed the combo
+    /// without copying anything new. Show a workflow hint toast instead
+    /// of silently re-adding the same text (which would either be a
+    /// no-op via dedupe or, worse, add a different word than the one
+    /// they THINK they selected).
+    @MainActor
+    private func handleCarbonHotKey() async {
+        let pb = NSPasteboard.general
+        let currentChangeCount = pb.changeCount
+
+        guard let raw = pb.string(forType: .string) else {
+            NSLog("[Dict/Carbon] pasteboard has no text — workflow hint")
+            DictToastWindow.showWorkflowHint(hotkey: appState?.dictHotkey.displayString ?? "⌘⇧D")
+            lastCarbonChangeCount = currentChangeCount
+            return
+        }
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty {
+            NSLog("[Dict/Carbon] pasteboard text empty after trim — workflow hint")
+            DictToastWindow.showWorkflowHint(hotkey: appState?.dictHotkey.displayString ?? "⌘⇧D")
+            lastCarbonChangeCount = currentChangeCount
+            return
+        }
+        if text.count > 100 {
+            NSLog("[Dict/Carbon] pasteboard text \(text.count) chars — too long, use Settings for phrases")
+            return
+        }
+
+        // The signature workflow mistake — pressing the combo without a
+        // fresh Cmd+C. Surfaces inline at the moment of confusion so
+        // the user learns the two-step pattern without reading docs.
+        if currentChangeCount == lastCarbonChangeCount {
+            NSLog("[Dict/Carbon] pasteboard changeCount unchanged since last press — user didn't re-copy, showing workflow hint")
+            DictToastWindow.showWorkflowHint(hotkey: appState?.dictHotkey.displayString ?? "⌘⇧D")
+            return
+        }
+        lastCarbonChangeCount = currentChangeCount
+
+        // Reuse the Services-menu entry point: same "text in hand,
+        // skip the probe/copy dance, persist + toast" pipeline.
+        await AddToDictionaryFlow.runWithText(text)
     }
 }
 
@@ -233,8 +395,10 @@ enum AddToDictionaryFlow {
             if !app.userDictWords.contains(where: { $0.lowercased() == text.lowercased() }) {
                 app.userDictWords.append(text)
             }
+            NSLog("[Dict] AppState.userDictWords now has \(app.userDictWords.count) entries — Settings list should reflect this within one runloop tick")
         case .alreadyPresent:
             DictToastWindow.showAlreadyPresent(word: text)
+            NSLog("[Dict] AppState.userDictWords count unchanged (\(AppState.shared.userDictWords.count)) — word was already present in core")
         case .error:
             NSLog("[Dict] add returned error rc")
         }
