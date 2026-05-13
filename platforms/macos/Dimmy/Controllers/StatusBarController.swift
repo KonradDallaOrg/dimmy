@@ -49,10 +49,9 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         guard let button = statusItem?.button else { return }
-        let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
-        button.image = NSImage(systemSymbolName: "waveform.circle", accessibilityDescription: "Dimmy")?
-            .withSymbolConfiguration(config)
-        button.image?.isTemplate = true
+        button.image = Self.menuBarImage(symbolName: "waveform.circle",
+                                         accessibility: "Dimmy",
+                                         isTemplate: true)
 
         // Assigning .menu (instead of .action) makes the status item
         // open the menu on click — and the menuNeedsUpdate delegate
@@ -101,14 +100,12 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     private func updateIcon(for state: RecordingState, hotkey: HotkeyStatus) {
         guard let button = statusItem?.button else { return }
-        let size = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
 
         // Hotkey health overlays a small yellow badge on top of the regular
         // Dimmy icon — keeps the brand recognisable in the menubar instead
         // of replacing it with a generic warning triangle.
         if case .idle = state, hotkey != .installed {
             button.image = Self.makeWarningBadgedIcon()
-            button.image?.isTemplate = false
             button.toolTip = Self.tooltip(for: hotkey)
             return
         }
@@ -117,30 +114,66 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
         switch state {
         case .idle:
-            button.image = NSImage(systemSymbolName: "waveform.circle", accessibilityDescription: "Dimmy - Ready")?
-                .withSymbolConfiguration(size)
-            button.image?.isTemplate = true
+            button.image = Self.menuBarImage(symbolName: "waveform.circle",
+                                             accessibility: "Dimmy - Ready",
+                                             isTemplate: true)
         case .recording:
-            let config = size.applying(NSImage.SymbolConfiguration(paletteColors: [.systemRed]))
-            button.image = NSImage(systemSymbolName: "waveform.circle.fill", accessibilityDescription: "Dimmy - Recording")?
-                .withSymbolConfiguration(config)
-            button.image?.isTemplate = false
+            button.image = Self.menuBarImage(symbolName: "waveform.circle.fill",
+                                             accessibility: "Dimmy - Recording",
+                                             paletteColor: .systemRed)
         case .transcribing:
-            let config = size.applying(NSImage.SymbolConfiguration(paletteColors: [.systemBlue]))
-            button.image = NSImage(systemSymbolName: "ellipsis.circle.fill", accessibilityDescription: "Dimmy - Transcribing")?
-                .withSymbolConfiguration(config)
-            button.image?.isTemplate = false
+            button.image = Self.menuBarImage(symbolName: "ellipsis.circle.fill",
+                                             accessibility: "Dimmy - Transcribing",
+                                             paletteColor: .systemBlue)
         case .processing:
-            let config = size.applying(NSImage.SymbolConfiguration(paletteColors: [.systemPurple]))
-            button.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "Dimmy - Processing")?
-                .withSymbolConfiguration(config)
-            button.image?.isTemplate = false
+            button.image = Self.menuBarImage(symbolName: "sparkles",
+                                             accessibility: "Dimmy - Processing",
+                                             paletteColor: .systemPurple)
         case .completing:
-            let config = size.applying(NSImage.SymbolConfiguration(paletteColors: [.systemGreen]))
-            button.image = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: "Dimmy - Done")?
-                .withSymbolConfiguration(config)
-            button.image?.isTemplate = false
+            button.image = Self.menuBarImage(symbolName: "checkmark.circle.fill",
+                                             accessibility: "Dimmy - Done",
+                                             paletteColor: .systemGreen)
         }
+    }
+
+    /// Build an NSImage suitable for `NSStatusItem.button.image`.
+    ///
+    /// Why the explicit `size` pin: SF Symbol images returned by
+    /// `withSymbolConfiguration(pointSize:)` come with an intrinsic
+    /// size derived from the symbol's vector bounds at the requested
+    /// point size — and that intrinsic value can change when the
+    /// backing scale factor changes (notched MacBook display ↔
+    /// external monitor with different DPI). The status bar button
+    /// then renders the image at the new intrinsic size, which can
+    /// overflow the menubar's content area and get clipped.
+    ///
+    /// Pinning `image.size = 18×18 pt` keeps the LOGICAL display size
+    /// deterministic — the system still picks the correct pixel-density
+    /// representation from the underlying vector, but never grows or
+    /// shrinks the layout box. 18 pt matches Apple's HIG recommendation
+    /// for menubar extras.
+    ///
+    /// Burned 2026-05-13: status icon visibly oversized + cropped after
+    /// dragging the laptop between built-in display and 4K external.
+    private static let menuBarIconSize = NSSize(width: 18, height: 18)
+    private static let menuBarSymbolPointSize: CGFloat = 16
+
+    private static func menuBarImage(symbolName: String,
+                                     accessibility: String,
+                                     isTemplate: Bool = false,
+                                     paletteColor: NSColor? = nil) -> NSImage? {
+        var config = NSImage.SymbolConfiguration(pointSize: menuBarSymbolPointSize,
+                                                 weight: .regular)
+        if let palette = paletteColor {
+            config = config.applying(NSImage.SymbolConfiguration(paletteColors: [palette]))
+        }
+        guard let image = NSImage(systemSymbolName: symbolName,
+                                  accessibilityDescription: accessibility)?
+                .withSymbolConfiguration(config)
+        else { return nil }
+        image.size = menuBarIconSize
+        image.isTemplate = isTemplate
+        return image
     }
 
     /// Compose the steady Dimmy waveform icon with a small yellow
@@ -149,35 +182,39 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     /// menubars; the badge keeps its yellow palette colour.
     /// Returned as non-template (it's deliberately multi-colour).
     private static func makeWarningBadgedIcon() -> NSImage? {
-        let basePalette = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
+        let basePalette = NSImage.SymbolConfiguration(pointSize: menuBarSymbolPointSize, weight: .regular)
             .applying(NSImage.SymbolConfiguration(paletteColors: [NSColor.labelColor]))
         guard let base = NSImage(systemSymbolName: "waveform.circle",
                                  accessibilityDescription: "Dimmy - Hotkey disabled")?
                 .withSymbolConfiguration(basePalette) else { return nil }
+        // Pin the base symbol's logical size to the same 18×18 box the
+        // composite uses so its intrinsic vector bounds can never push
+        // the drawing outside the canvas when the backing scale changes.
+        base.size = menuBarIconSize
 
         let badgePalette = NSImage.SymbolConfiguration(pointSize: 9, weight: .bold)
             .applying(NSImage.SymbolConfiguration(paletteColors: [NSColor.systemYellow]))
         let badge = NSImage(systemSymbolName: "exclamationmark.circle.fill",
                             accessibilityDescription: nil)?
             .withSymbolConfiguration(badgePalette)
+        badge?.size = NSSize(width: 10, height: 10)
 
-        let size = NSSize(width: 18, height: 18)
-        let composed = NSImage(size: size, flipped: false) { _ in
-            let baseSize = base.size
-            let baseOrigin = NSPoint(x: (size.width - baseSize.width) / 2,
-                                     y: (size.height - baseSize.height) / 2)
-            base.draw(in: NSRect(origin: baseOrigin, size: baseSize),
+        let composed = NSImage(size: menuBarIconSize, flipped: false) { _ in
+            base.draw(in: NSRect(origin: .zero, size: menuBarIconSize),
                       from: .zero, operation: .sourceOver, fraction: 1.0)
 
             if let badge {
-                let badgeSize = NSSize(width: 10, height: 10)
-                let origin = NSPoint(x: size.width - badgeSize.width,
+                let badgeSize = badge.size
+                let origin = NSPoint(x: menuBarIconSize.width - badgeSize.width,
                                      y: 0)
                 badge.draw(in: NSRect(origin: origin, size: badgeSize),
                            from: .zero, operation: .sourceOver, fraction: 1.0)
             }
             return true
         }
+        // Marked non-template because the yellow badge palette is
+        // intentional — letting macOS auto-tint would erase it.
+        composed.isTemplate = false
         return composed
     }
 

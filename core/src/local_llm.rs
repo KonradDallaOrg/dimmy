@@ -91,11 +91,52 @@ pub fn model_path(filename: &str) -> PathBuf {
 
 // ── Model download ───────────────────────────────────────────────
 
+/// Filenames currently being downloaded. A concurrent call for the same
+/// filename returns `LlmError::LocalModel("already in flight")` instead
+/// of racing on the same `.part` file. Defense in depth — the UI
+/// already gates on `appState.isDownloadingLlmModel`, but a fast double
+/// click before the @Published flag propagates would slip past that.
+static DOWNLOAD_IN_FLIGHT: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn try_mark_in_flight(filename: &str) -> bool {
+    let mut set = match DOWNLOAD_IN_FLIGHT.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    if set.iter().any(|f| f == filename) {
+        return false;
+    }
+    set.push(filename.to_string());
+    true
+}
+
+fn clear_in_flight(filename: &str) {
+    let mut set = match DOWNLOAD_IN_FLIGHT.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    set.retain(|f| f != filename);
+}
+
+/// RAII cleanup so every early return from `download_model` clears
+/// the in-flight marker (HTTP error, write error, panic, …). Without
+/// this a single failed download would leave the filename stuck and
+/// block all future retries until process restart.
+struct DownloadInFlightGuard(String);
+impl Drop for DownloadInFlightGuard {
+    fn drop(&mut self) {
+        clear_in_flight(&self.0);
+    }
+}
+
 /// Download an LLM model from HuggingFace to the local LLM model directory.
 ///
 /// - Skips the download if the model file already exists.
 /// - Writes to a `.part` temp file and renames on completion (atomic).
 /// - Calls `on_progress(bytes_downloaded, total_bytes)` during download.
+/// - Refuses to start a second concurrent download for the same
+///   `filename` (returns `already in flight` error) — prevents `.part`
+///   file races from a double-clicked Download button.
 pub async fn download_model<F>(filename: &str, on_progress: F) -> Result<PathBuf, LlmError>
 where
     F: Fn(u64, u64),
@@ -105,6 +146,15 @@ where
         filename.ends_with(".gguf"),
         "LLM model filename must end with .gguf"
     );
+
+    if !try_mark_in_flight(filename) {
+        return Err(LlmError::LocalModel(format!(
+            "download for {} already in flight",
+            filename
+        )));
+    }
+    // Scope guard pattern via explicit cleanup at every return below.
+    let _cleanup = DownloadInFlightGuard(filename.to_string());
 
     let dest = model_path(filename);
     if dest.is_file() {
@@ -648,6 +698,52 @@ pub fn process_text_local(
     ))
 }
 
+/// Run a free-form prompt through the local LLM. Used by the recap path
+/// (`dimmy_llm_call_raw`) when `llm_mode == "local"` — the prompt is
+/// already a self-contained instruction (MeetingPostProcessService builds
+/// it), so we pass an empty system prompt and let the model see only the
+/// recap template as user content. Cap `max_tokens` at 4096 to keep
+/// memory bounded on the 4-8 GB Apple Silicon envelope; recap.md sections
+/// fit comfortably under that.
+#[cfg(feature = "local-llm")]
+pub fn process_raw_prompt_local(
+    model_file: &Path,
+    prompt: &str,
+    max_tokens: u32,
+) -> Result<String, LlmError> {
+    assert!(!prompt.is_empty(), "process_raw_prompt_local: empty prompt");
+    assert!(
+        max_tokens > 0,
+        "process_raw_prompt_local: max_tokens must be > 0"
+    );
+    let capped = max_tokens.min(4096);
+    if !model_file.is_file() {
+        return Err(LlmError::LocalModel(format!(
+            "LLM model file not found: {}",
+            model_file.display()
+        )));
+    }
+    let result = llm_cache::generate(model_file, "", prompt, capped)?;
+    if result.is_empty() {
+        return Err(LlmError::LocalModel(
+            "local LLM produced empty output".to_string(),
+        ));
+    }
+    Ok(result)
+}
+
+/// Stub when `local-llm` feature is disabled.
+#[cfg(not(feature = "local-llm"))]
+pub fn process_raw_prompt_local(
+    _model_file: &Path,
+    _prompt: &str,
+    _max_tokens: u32,
+) -> Result<String, LlmError> {
+    Err(LlmError::LocalModel(
+        "local LLM not available: compile with `local-llm` feature".to_string(),
+    ))
+}
+
 // ── Tests ─────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -671,6 +767,58 @@ mod tests {
     #[test]
     fn llm_model_exists_false_for_missing() {
         assert!(!model_exists("nonexistent-model.gguf"));
+    }
+
+    // ── In-flight dedup tests ───────────────────────────────────
+
+    #[test]
+    fn in_flight_marker_round_trip() {
+        let f = "test-roundtrip.gguf";
+        // Fresh slate.
+        clear_in_flight(f);
+        assert!(try_mark_in_flight(f), "first mark should succeed");
+        assert!(
+            !try_mark_in_flight(f),
+            "second concurrent mark must be rejected"
+        );
+        clear_in_flight(f);
+        assert!(
+            try_mark_in_flight(f),
+            "after clear the same name should be markable again"
+        );
+        clear_in_flight(f);
+    }
+
+    #[test]
+    fn in_flight_guard_drops_clear_the_marker() {
+        let f = "test-guard.gguf";
+        clear_in_flight(f);
+        {
+            assert!(try_mark_in_flight(f));
+            let _guard = DownloadInFlightGuard(f.to_string());
+            assert!(!try_mark_in_flight(f), "guarded marker still set");
+        }
+        // Guard dropped here — marker should be free again.
+        assert!(
+            try_mark_in_flight(f),
+            "Drop didn't clear the in-flight marker"
+        );
+        clear_in_flight(f);
+    }
+
+    #[test]
+    fn in_flight_distinct_filenames_dont_interfere() {
+        let a = "model-a.gguf";
+        let b = "model-b.gguf";
+        clear_in_flight(a);
+        clear_in_flight(b);
+        assert!(try_mark_in_flight(a));
+        assert!(
+            try_mark_in_flight(b),
+            "different filename must be able to start in parallel"
+        );
+        clear_in_flight(a);
+        clear_in_flight(b);
     }
 
     #[test]

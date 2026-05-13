@@ -109,8 +109,20 @@ struct MacAdvancedPage: View {
                         }
                     )) {
                         ForEach(RecapModelOption.curated) { opt in
-                            Label(opt.label, systemImage: opt.iconName)
-                                .tag(opt.id)
+                            Label {
+                                Text(opt.label)
+                            } icon: {
+                                if opt.assetName.isEmpty {
+                                    Image(systemName: opt.iconName)
+                                } else {
+                                    Image(opt.assetName)
+                                        .renderingMode(.original)
+                                        .resizable()
+                                        .scaledToFit()
+                                        .frame(width: 18, height: 18)
+                                }
+                            }
+                            .tag(opt.id)
                         }
                         // Render any custom value users may have hand-
                         // edited in config.json so it's selectable

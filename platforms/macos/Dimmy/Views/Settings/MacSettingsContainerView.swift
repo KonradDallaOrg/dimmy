@@ -268,6 +268,7 @@ struct MacSettingsContainerView: View {
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .frame(height: MacTheme.navItemHeight)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -280,6 +281,7 @@ struct MacSettingsContainerView: View {
                     .strokeBorder(Color.white.opacity(isActive ? 0.6 : 0),
                                   lineWidth: 0.5)
             )
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
         .buttonStyle(.plain)
     }

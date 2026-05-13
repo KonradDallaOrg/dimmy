@@ -3473,26 +3473,57 @@ pub unsafe extern "C" fn dimmy_notion_send_recap(
     write_to_buf(&json, out_buf, buf_len)
 }
 
+/// Parse a `recap_model_override` config value into (provider, model).
+///
+/// Accepted shapes:
+/// - `"local:<filename.gguf>"` → (`"local"`, `<filename.gguf>`)
+/// - `"cloud:<model-id>"`      → (`"cloud"`, `<model-id>`)
+/// - non-empty bare string     → (`"cloud"`, `<string>`)
+///   Legacy path: every override written before the local-recap
+///   feature was a cloud model id, so we keep that semantic.
+/// - empty                     → (`""`, `""`)
+///   Caller falls back to `llm_mode` + the configured dictation
+///   `api_model` / `local_llm_model`.
+///
+/// Extracted so the routing logic gets unit-tested without standing
+/// up the full FFI state machine.
+pub(crate) fn parse_recap_override(input: &str) -> (&'static str, String) {
+    if let Some(rest) = input.strip_prefix("local:") {
+        ("local", rest.to_string())
+    } else if let Some(rest) = input.strip_prefix("cloud:") {
+        ("cloud", rest.to_string())
+    } else if !input.is_empty() {
+        ("cloud", input.to_string())
+    } else {
+        ("", String::new())
+    }
+}
+
 /// Raw LLM call: send `prompt` to the configured LLM endpoint without
 /// the dictation rewrite wrapper. Used by meeting-mode post-process
 /// (recap + actions extraction) and any other caller that owns its
 /// own prompt template.
 ///
-/// Provider is auto-selected from the configured LLM API URL — same
-/// routing the dictation enhance path uses. `model_override` lets the
-/// caller request a stronger model than the user's dictation default
-/// (e.g. claude-opus-4-7 or gemini-2.5-pro for recap quality);
-/// pass an empty string to use the configured `llm_api_model`.
+/// `model_override` accepts the prefix-encoded shapes parsed by
+/// [`parse_recap_override`]: bare cloud model id (legacy), `cloud:<id>`,
+/// `local:<filename.gguf>`, or empty to fall back to llm_mode +
+/// `api_model` / `local_llm_model`. Empty string is also accepted.
 ///
 /// Returns the response byte length on success. Negative on error:
 /// - -1 invalid args (null pointers, empty prompt)
 /// - -2 no LLM API key / URL configured
-/// - -3 HTTP / parsing error (truncated reason in dimmy.log)
+/// - -3 HTTP / parsing / local-inference error (truncated in dimmy.log)
+/// - -4 llm_mode=local (or `local:` prefix) but the requested Gemma
+///   `.gguf` isn't on disk — caller surfaces "download from
+///   Settings → LLM"
 ///
 /// # Safety
-/// `prompt_ptr` and `model_override_ptr` (when non-null) must be
-/// valid null-terminated UTF-8 C strings. `out_buf` must be a valid
-/// writable buffer of `buf_len` bytes.
+/// `prompt_ptr` must be a valid null-terminated UTF-8 C string.
+/// `model_override_ptr` is allowed to be null (treated as empty); when
+/// non-null it must also be a valid null-terminated UTF-8 C string.
+/// `out_buf` must be a valid writable buffer of at least `buf_len`
+/// bytes. The caller must not free any of the pointers while the FFI
+/// call is in flight.
 #[no_mangle]
 pub unsafe extern "C" fn dimmy_llm_call_raw(
     prompt_ptr: *const c_char,
@@ -3548,20 +3579,97 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
         recap_override
     };
 
-    // Subscription mode doesn't need an HTTP URL or an API key —
-    // the local `claude` CLI handles both. The legacy
-    // `claude-code://` URL is also a "no key needed" signal, kept
-    // for back-compat with configs written before this redesign.
+    // ── Routing: explicit recap-model override > llm_mode default ─
+    //
+    // `model_override` (recap_model_override in config) accepts three
+    // shapes, parsed here so the UI can offer a single picker spanning
+    // local + cloud:
+    //   - `local:<filename.gguf>`   → force local Gemma, this filename
+    //   - `cloud:<model-id>`        → force cloud, this model
+    //   - bare string (no `:` prefix) or empty → legacy: fall back to
+    //     llm_mode + (api_model | local_llm_model)
+    //
+    // Why: lets the user keep llm_mode=local for fast/private dictation
+    // AND pick Opus 4.7 (or Gemini 2.5) for the meeting recap, OR vice
+    // versa (cloud dictation + local Gemma recap). Backward-compat:
+    // existing recap_model_override values without a colon prefix are
+    // treated as cloud model names, preserving current behaviour.
+    let llm_mode = st
+        .llm_mode
+        .lock()
+        .map(|m| m.clone())
+        .unwrap_or_else(|_| "cloud".to_string());
+    let (forced_provider, parsed_model) = parse_recap_override(&model_override);
+    let effective_mode = match forced_provider {
+        "local" => "local",
+        "cloud" => "cloud",
+        _ => llm_mode.as_str(),
+    };
+
+    if effective_mode == "local" {
+        let model_filename = if !parsed_model.is_empty() && forced_provider == "local" {
+            parsed_model.clone()
+        } else {
+            st.local_llm_model
+                .lock()
+                .map(|m| m.clone())
+                .unwrap_or_else(|_| crate::local_llm::DEFAULT_LLM_MODEL.to_string())
+        };
+        let model_path = crate::local_llm::model_path(&model_filename);
+        if !model_path.is_file() {
+            log(&format!(
+                "[LlmRaw] local mode but model not on disk: {} — download from Settings → LLM",
+                model_path.display()
+            ));
+            return -4;
+        }
+        let max_tokens_local = if max_tokens <= 0 {
+            4096_u32
+        } else {
+            (max_tokens as u32).min(4096)
+        };
+        log(&format!(
+            "[LlmRaw] local recap → {} ({} max tokens)",
+            model_filename, max_tokens_local
+        ));
+        return match crate::local_llm::process_raw_prompt_local(
+            &model_path,
+            &prompt,
+            max_tokens_local,
+        ) {
+            Ok(text) => {
+                log(&format!(
+                    "[LlmRaw] local ok — {} chars (model={})",
+                    text.len(),
+                    model_filename
+                ));
+                write_to_buf(&text, out_buf, buf_len)
+            }
+            Err(e) => {
+                let msg = format!("{}", e);
+                let mut truncated = msg;
+                truncated.truncate(200);
+                log(&format!("[LlmRaw] local failed: {}", truncated));
+                -3
+            }
+        };
+    }
+
+    // ── Cloud branch ─────────────────────────────────────────────
+    // Subscription mode (Claude Code CLI) needs no api_url/api_key —
+    // the local `claude` binary handles both. Legacy `claude-code://`
+    // URL also counts as a "no key needed" signal for back-compat.
     let is_subscription =
         auth_method == "subscription" || crate::claude_code::is_claude_code_url(&api_url);
     if !is_subscription && (api_url.is_empty() || api_key.is_empty()) {
         log("[LlmRaw] missing api_url or api_key — configure an LLM in Settings");
         return -2;
     }
-    let model = if model_override.is_empty() {
-        api_model
+    // Model: prefix-stripped override, OR legacy bare override, OR api_model.
+    let model = if !parsed_model.is_empty() {
+        parsed_model
     } else {
-        model_override
+        api_model
     };
     if model.is_empty() {
         log("[LlmRaw] no model — neither api_model nor override provided");
@@ -5772,6 +5880,62 @@ pub unsafe extern "C" fn dimmy_inject_pcm_for_test(
 mod tests {
     use super::*;
     use std::ffi::c_char;
+
+    // ── parse_recap_override tests ──────────────────────────────────
+
+    #[test]
+    fn parse_recap_override_local_prefix() {
+        let (provider, model) = parse_recap_override("local:gemma-4-E4B-it-Q4_K_M.gguf");
+        assert_eq!(provider, "local");
+        assert_eq!(model, "gemma-4-E4B-it-Q4_K_M.gguf");
+    }
+
+    #[test]
+    fn parse_recap_override_cloud_prefix() {
+        let (provider, model) = parse_recap_override("cloud:claude-opus-4-7");
+        assert_eq!(provider, "cloud");
+        assert_eq!(model, "claude-opus-4-7");
+    }
+
+    #[test]
+    fn parse_recap_override_bare_treated_as_cloud_legacy() {
+        // A pre-prefix `recap_model_override` value — has to keep
+        // working when the local-recap feature ships, otherwise
+        // every Mac/Win install that already picked Opus 4.7 from
+        // the dropdown silently switches to local Gemma on upgrade.
+        let (provider, model) = parse_recap_override("claude-opus-4-7");
+        assert_eq!(provider, "cloud");
+        assert_eq!(model, "claude-opus-4-7");
+    }
+
+    #[test]
+    fn parse_recap_override_empty_falls_back() {
+        let (provider, model) = parse_recap_override("");
+        assert_eq!(provider, "");
+        assert_eq!(model, "");
+    }
+
+    #[test]
+    fn parse_recap_override_local_prefix_stripped_cleanly() {
+        // Make sure we don't accidentally leak the prefix into the
+        // filename — `local:gemma-…` must become `gemma-…`, not
+        // `:gemma-…` or `local:gemma-…`.
+        let (_, model) = parse_recap_override("local:foo.gguf");
+        assert!(!model.starts_with(':'), "leading colon leaked: {}", model);
+        assert!(!model.starts_with("local"), "prefix leaked: {}", model);
+    }
+
+    #[test]
+    fn parse_recap_override_unknown_prefix_treated_as_bare_cloud() {
+        // A future-prefix we don't recognise yet (`auto:`, `xyz:`)
+        // shouldn't crash — it falls through to the bare-string
+        // path and is treated as a (probably bogus) cloud model id.
+        // The cloud branch downstream handles the bogus id with
+        // its existing HTTP-error rc.
+        let (provider, model) = parse_recap_override("xyz:something");
+        assert_eq!(provider, "cloud");
+        assert_eq!(model, "xyz:something");
+    }
 
     // ── write_to_buf tests ──────────────────────────────────────────
 

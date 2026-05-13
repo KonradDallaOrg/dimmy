@@ -759,6 +759,51 @@ final class AppState: ObservableObject {
     @Published var hasLlmKey: Bool = false
     @Published var llmLogEnabled: Bool = false
 
+    /// LLM auth method — `"api_key"` (default) or `"subscription"`.
+    /// When `"subscription"`, the Rust dispatcher routes every cloud
+    /// LLM call through the local `claude` CLI (Pro/Team/Max plan)
+    /// regardless of `llmApiUrl`. Legacy `claude-code://` URLs are
+    /// also honoured as a back-compat trigger.
+    ///
+    /// `recapAuthMethod` lets the meeting-recap call site override
+    /// this independently: `""` inherits the dictation choice;
+    /// `"api_key"` or `"subscription"` force a specific path for the
+    /// recap only. This is the "fast dictation via API, recap via
+    /// subscription" UX from the Win redesign.
+    @Published var llmAuthMethod: String = "api_key"
+    @Published var recapAuthMethod: String = ""
+
+    /// Cached "is the Anthropic / Claude Code subscription connection
+    /// usable right now" flag. Re-probed by `refreshClaudeCodeStatus()`
+    /// (called from Settings pages on appear). Drives the gate on the
+    /// LLM auth picker — Subscription is only offered when this is
+    /// true. Cached so view bodies don't run the FFI probe on every
+    /// redraw.
+    @Published var claudeCodeReady: Bool = false
+
+    /// Re-probe Claude Code install + credential state. Cheap (a file
+    /// stat + a Keychain query); safe to call from view onAppear /
+    /// auth picker change. Updates `claudeCodeReady`.
+    func refreshClaudeCodeStatus() {
+        guard DimmyCore.shared.isInitialized else {
+            claudeCodeReady = false
+            return
+        }
+        // The probe shells out to `security find-generic-password` for
+        // the Keychain check — on a cold launch that can take ~50-100 ms
+        // (process spawn + Keychain unlock dialog auth). Run it off the
+        // main thread so .onAppear callers in Settings pages don't
+        // block their first paint, then bounce back to update the
+        // @Published. Same dispatch pattern as MacVoicePage's
+        // refreshLocalModelStatus().
+        DispatchQueue.global(qos: .userInitiated).async {
+            let ready = (DimmyCore.shared.claudeCodeStatus == .ready)
+            DispatchQueue.main.async {
+                self.claudeCodeReady = ready
+            }
+        }
+    }
+
     // MARK: - Audio Config
 
     @Published var preprocessingEnabled: Bool = true
@@ -996,6 +1041,15 @@ final class AppState: ObservableObject {
         if let sk = config["llm_use_same_key"] as? Bool { llmUseSameKey = sk }
         if let hlk = config["has_llm_key"] as? Bool { hasLlmKey = hlk }
         if let ll = config["llm_log_enabled"] as? Bool { llmLogEnabled = ll }
+        if let am = config["llm_auth_method"] as? String { llmAuthMethod = am }
+        if let ram = config["recap_auth_method"] as? String { recapAuthMethod = ram }
+        // Back-compat: configs from the first Claude Code iteration used
+        // a synthetic `claude-code://` URL with no auth_method field.
+        // Treat that URL as a "subscription" signal so the new UI picks
+        // up the right radio without forcing the user to re-toggle.
+        if llmApiUrl.hasPrefix("claude-code://") && config["llm_auth_method"] == nil {
+            llmAuthMethod = "subscription"
+        }
 
         // Audio
         if let pe = config["preprocessing_enabled"] as? Bool { preprocessingEnabled = pe }
@@ -1085,6 +1139,8 @@ final class AppState: ObservableObject {
             "llm_api_model": llmApiModel,
             "llm_use_same_key": llmUseSameKey,
             "llm_log_enabled": llmLogEnabled,
+            "llm_auth_method": llmAuthMethod,
+            "recap_auth_method": recapAuthMethod,
             "stt_mode": sttMode,
             "local_model": localModel,
             "local_stt_backend": localSttBackend,

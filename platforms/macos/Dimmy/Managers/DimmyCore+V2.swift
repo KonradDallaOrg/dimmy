@@ -233,6 +233,7 @@ extension DimmyCore {
             case -1: return .failure(.invalidArgs)
             case -2: return .failure(.notConfigured)
             case -3: return .failure(.httpError)
+            case -4: return .failure(.localModelMissing)
             default: return .failure(.unknown(Int(rc)))
             }
         }
@@ -245,6 +246,7 @@ extension DimmyCore {
         case invalidArgs
         case notConfigured  // missing api key/url
         case httpError
+        case localModelMissing  // llm_mode=local but the picked Gemma .gguf isn't on disk
         case unknown(Int)
 
         var description: String {
@@ -254,6 +256,7 @@ extension DimmyCore {
             case .invalidArgs: return "Invalid arguments"
             case .notConfigured: return "LLM API URL or key is not configured"
             case .httpError: return "LLM HTTP / parse error — see dimmy.log"
+            case .localModelMissing: return "Local LLM model not downloaded — open Settings → LLM and download a Gemma variant"
             case .unknown(let code): return "llm_call_raw failed (code \(code))"
             }
         }

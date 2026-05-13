@@ -2,7 +2,6 @@ import SwiftUI
 
 struct ModelDownloadStepView: View {
     @ObservedObject var appState: AppState
-    let onContinue: () -> Void
 
     @State private var downloadState: DownloadState = .notStarted
 
@@ -12,9 +11,10 @@ struct ModelDownloadStepView: View {
     private static let defaultWhisper = "ggml-base-q8_0.bin"
 
     /// What the user picks here lands in appState.localSttBackend +
-    /// appState.localModel. Default is whisper-base (78 MB) — the
-    /// recommended first-run choice; Parakeet (2.5 GB) is opt-in.
-    @State private var selection: String = defaultWhisper
+    /// appState.localModel. Default is Parakeet on Apple Silicon — fastest
+    /// local STT via Apple Neural Engine. `applyAutoPick` downgrades to
+    /// Whisper Base only when the disk is too small for the 466 MB bundle.
+    @State private var selection: String = parakeetTag
 
     enum DownloadState {
         case notStarted
@@ -43,10 +43,10 @@ struct ModelDownloadStepView: View {
             // Model picker — whisper variants + Parakeet sentinel.
             VStack(spacing: 10) {
                 Picker("", selection: $selection) {
-                    Text("Whisper Base · 78 MB (recommended)").tag(Self.defaultWhisper)
+                    Text("Parakeet TDT v3 · 466 MB · Apple Neural Engine (recommended)").tag(Self.parakeetTag)
+                    Text("Whisper Base · 78 MB").tag(Self.defaultWhisper)
                     Text("Whisper Small · 466 MB").tag("ggml-small-q8_0.bin")
                     Text("Whisper Medium · 1.5 GB").tag("ggml-medium-q8_0.bin")
-                    Text("Parakeet TDT v3 · 466 MB · Apple Neural Engine").tag(Self.parakeetTag)
                 }
                 .labelsHidden()
                 .pickerStyle(.menu)
@@ -92,79 +92,51 @@ struct ModelDownloadStepView: View {
             }
 
             Spacer()
-
-            // Bottom buttons
-            HStack {
-                if downloadState == .notStarted {
-                    Button("Skip for now") {
-                        downloadState = .skipped
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundColor(.secondary)
-                }
-
-                Spacer()
-
-                Button(action: onContinue) {
-                    Text("Continue")
-                        .font(.system(size: 15, weight: .semibold))
-                        .frame(maxWidth: 220)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .disabled(downloadState == .downloading)
-            }
-
-            Spacer().frame(height: 16)
         }
         .padding(.horizontal, 40)
         .onAppear {
+            persistSelectionToAppState()
             refreshFromCore()
             applyAutoPick()
         }
         .onChange(of: selection) {
+            // Mirror the picker choice into AppState so Settings → Voice
+            // reflects whatever the user picked here, even without ever
+            // triggering a download.
+            persistSelectionToAppState()
             // If the new selection is already on disk, jump straight
             // to .completed — the user can Continue without re-downloading.
             refreshFromCore()
         }
     }
 
-    /// Smart default: on Apple Silicon with >= 2 GB free disk we auto-
-    /// pick Parakeet (Apple Neural Engine, 466 MB) and kick the
-    /// download — the user just clicks Continue when it's done. With
-    /// less disk we fall back to Whisper Base (78 MB). On a previously
-    /// completed onboarding (model already on disk) we don't re-trigger
-    /// anything; the user is past this step.
+    /// Smart default: on Apple Silicon with >= 2 GB free disk Parakeet is
+    /// already the initial @State pick + AppDelegate has been preloading
+    /// the bundle since launch. Here we just kick the foreground download
+    /// (idempotent — the FFI dedup short-circuits when the preload is
+    /// already in flight). With less disk we downgrade to Whisper Base.
+    /// On < 200 MB we leave the picker on Parakeet but skip the auto-
+    /// download — the user must free space and click Download manually.
     private func applyAutoPick() {
-        guard downloadState == .notStarted else { return }
-        // Don't override an explicit choice the user already made by
-        // tapping the picker — onAppear fires once on entry, so this
-        // only runs on a fresh visit.
         let freeGB = availableDiskGB() ?? 0
-        if freeGB >= 2 {
-            // Bump the default to Parakeet and start downloading it.
-            // The user can still pick a smaller model from the dropdown
-            // if they cancel — the picker remains active.
-            if selection != Self.parakeetTag {
-                selection = Self.parakeetTag
-            }
-            // refreshFromCore on the new selection runs via .onChange;
-            // if Parakeet is already on disk it'll flip to .completed
-            // and we won't auto-start.
-            DispatchQueue.main.async {
-                if downloadState == .notStarted {
-                    startDownload()
-                }
-            }
-        } else if freeGB >= 0.2 {
+        if freeGB < 2 {
+            // Downgrade to whisper-base; the .onChange listener will
+            // refresh state (probably .completed if it's already on disk
+            // from a previous install).
             if selection != Self.defaultWhisper {
                 selection = Self.defaultWhisper
             }
+            return
         }
-        // < 200 MB free: stay on the .notStarted UI so the user has to
-        // make space and click Download manually. We don't show a
-        // dedicated error here — the model dropdown plus the implicit
-        // OS "Disk full" notification is enough.
+        // Disk OK → Parakeet stays. Trigger startDownload only if a
+        // download isn't already in progress and the bundle isn't on
+        // disk. startDownload() has its own dedup against the
+        // AppDelegate-side preload.
+        DispatchQueue.main.async {
+            if downloadState == .notStarted {
+                startDownload()
+            }
+        }
     }
 
     /// Free space (GB) on the volume that holds `~/Library/Application
@@ -204,6 +176,21 @@ struct ModelDownloadStepView: View {
 
     private var currentProgress: Double {
         isParakeet ? appState.parakeetDownloadProgress : appState.modelDownloadProgress
+    }
+
+    /// Mirror the local `selection` into AppState AND push to Rust so the
+    /// choice survives both onboarding and the next launch (Rust config is
+    /// the source of truth on reload). Without the explicit setConfig
+    /// call, the user picks Parakeet here, hits Continue, and Settings →
+    /// Voice shows `Whisper Base` again on next launch.
+    private func persistSelectionToAppState() {
+        if isParakeet {
+            appState.localSttBackend = "parakeet"
+        } else {
+            appState.localSttBackend = "whisper"
+            appState.localModel = selection
+        }
+        DimmyCore.shared.setConfig(appState.toRustConfig())
     }
 
     private func refreshFromCore() {

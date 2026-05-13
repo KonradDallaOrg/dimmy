@@ -181,13 +181,22 @@ pub fn detect_binary() -> Option<PathBuf> {
         .clone()
 }
 
-/// True iff a `~/.claude/credentials.json` (or platform equivalent)
-/// exists and is non-empty. We deliberately do NOT parse it — Claude
-/// Code's file format is not a public contract. The "exists +
-/// non-empty" heuristic is correct for the live binary (the CLI
-/// writes the file atomically after the OAuth callback completes).
+/// True iff the Claude Code CLI has stored credentials somewhere
+/// readable to it — file under `~/.claude/`, OR (on macOS) an entry
+/// in the user's login Keychain.
+///
+/// We deliberately do NOT parse the credentials, just probe for
+/// existence. Claude Code's file format and Keychain attribute set
+/// are not public contracts; the CLI is the only authorised consumer.
+///
+/// macOS Keychain note (2026-05): recent Claude Code releases
+/// (≥ 0.2.x npm `@anthropic-ai/claude-code`) DROP the on-disk
+/// credentials file and store the OAuth token as a generic password
+/// in the login Keychain under service `"Claude Code-credentials"`.
+/// The file-only probe used to mis-report "Not logged in" for users
+/// who'd successfully completed OAuth — see [[fix-has-credentials]].
 pub fn has_credentials() -> bool {
-    // ~/.claude/credentials.json
+    // ~/.claude/credentials.json (legacy + Linux + Win paths)
     if let Some(home) = dirs::home_dir() {
         let p = home.join(".claude").join("credentials.json");
         if let Ok(meta) = std::fs::metadata(&p) {
@@ -204,6 +213,26 @@ pub fn has_credentials() -> bool {
             }
         }
     }
+
+    // macOS Keychain probe — Claude Code ≥ 0.2.x stores the OAuth
+    // token here, NOT on disk. We shell out to `security
+    // find-generic-password -s "Claude Code-credentials"`; exit 0 =
+    // entry exists. We capture stderr to /dev/null so a missing entry
+    // doesn't spam logs.
+    #[cfg(target_os = "macos")]
+    {
+        let out = Command::new("security")
+            .args(["find-generic-password", "-s", "Claude Code-credentials"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        if let Ok(s) = out {
+            if s.success() {
+                return true;
+            }
+        }
+    }
+
     false
 }
 
