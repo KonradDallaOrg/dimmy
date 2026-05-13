@@ -87,6 +87,26 @@ cargo test --release --test ffi_e2e --features local-stt,test-ffi -- --test-thre
 
 CI treats clippy warnings as errors. CI uses the same feature flags — mismatching will go green locally and red in CI. If you touched Linux UI, also `cd platforms/linux && cargo clippy -- -D warnings && cargo test`. If you touched Windows UI / onboarding / XAML, also run the FlaUI smoke tests (see [`docs/dev/testing.md`](docs/dev/testing.md)).
 
+### Mac pre-flight — MANDATORY when touching `platforms/macos/**` or Mac-facing FFI
+
+`scripts/dev/preflight-mac.sh` is the single canonical pre-push for the
+Mac path. It rebuilds the Rust static lib with the Mac frozen feature
+set, runs `xcodebuild`, **and launches the .app for 5 s** so the
+runtime `SelfTests.runAtLaunch` assertions fire before the DMG ships.
+
+`xcodebuild` alone is **not enough** — release.yml only compiles, it
+never launches. A stale `SelfTests` assertion (e.g. "Onboarding has 4
+steps" after a new step lands; "LLM preset URL must be HTTPS" after
+the synthetic `claude-code://` preset lands) compiles fine and ships a
+DMG that **crashes on the user's first launch**. Burned 2026-05-13 —
+v0.6.39-rc1 had to be deleted from GitHub Releases and recut.
+
+Rule: if you change `OnboardingContainerView.totalSteps`, `LlmPreset`,
+`SttPreset`, `MacLlmStyles`, `PillTranslateLanguages`, `Info.plist`
+(esp. SUFeedURL), or any other thing `SelfTests` pins, **update
+SelfTests in the same commit and run `preflight-mac.sh`**. The script
+is the safety net; the rule is the actual fix.
+
 ### Windows local DLL build — feature flag set is FROZEN
 
 **`cargo build --release --lib --features local-stt-vulkan,local-stt-parakeet,local-llm-vulkan`** is the canonical local Windows build for `dimmy_lib.dll`. Dropping any of these features = silently breaks production code paths:

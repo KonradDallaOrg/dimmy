@@ -27,26 +27,13 @@ struct MacOutputPage: View {
 
     // MARK: - Provider matching + auth-method helpers
     //
-    // Provider tag derived from a URL host. Used to decide whether the
-    // STT and LLM endpoints accept the same vendor key (Groq STT +
-    // Groq LLM → yes; Groq STT + OpenAI LLM → no). The `claude-code://`
-    // synthetic URL is mapped to `anthropic` because the underlying
-    // service is the same.
-    private func providerTag(_ url: String) -> String {
-        if url.hasPrefix("claude-code://") { return "anthropic" }
-        if url.contains("groq.com") { return "groq" }
-        if url.contains("openai.com") { return "openai" }
-        if url.contains("openrouter.ai") { return "openrouter" }
-        if url.contains("googleapis.com") { return "gemini" }
-        if url.contains("anthropic.com") { return "anthropic" }
-        if url.contains("fireworks.ai") { return "fireworks" }
-        if url.contains("together.xyz") || url.contains("together.ai") { return "together" }
-        if url.contains("deepgram.com") { return "deepgram" }
-        return ""
-    }
+    // Pure logic lives in `ProviderTagging` (Utilities/) so the same
+    // rules can be exercised from `SelfTests` without standing up a
+    // SwiftUI surface. The view-level computed properties below are
+    // thin pass-throughs that read from `appState`.
 
-    private var sttProviderTag: String { providerTag(appState.apiUrl) }
-    private var llmProviderTag: String { providerTag(appState.llmApiUrl) }
+    private var sttProviderTag: String { ProviderTagging.providerTag(forUrl: appState.apiUrl) }
+    private var llmProviderTag: String { ProviderTagging.providerTag(forUrl: appState.llmApiUrl) }
 
     /// Anthropic is the only provider with a dual-auth path
     /// (API key OR Claude Code subscription). We show the
@@ -57,13 +44,14 @@ struct MacOutputPage: View {
 
     /// The "Use same key as STT" toggle is meaningful only when STT
     /// and LLM share a vendor AND the LLM isn't using subscription
-    /// auth (which has its own credential). For mismatched vendors we
-    /// force a dedicated LLM key.
+    /// auth. Logic lives in `ProviderTagging.sameKeyShouldShow` so it
+    /// can be unit-tested.
     private var sameKeyShouldShow: Bool {
-        guard !sttProviderTag.isEmpty,
-              sttProviderTag == llmProviderTag,
-              appState.llmAuthMethod != "subscription" else { return false }
-        return true
+        ProviderTagging.sameKeyShouldShow(
+            sttUrl: appState.apiUrl,
+            llmUrl: appState.llmApiUrl,
+            llmAuthMethod: appState.llmAuthMethod
+        )
     }
 
     /// Human-readable label for the STT provider — used in the

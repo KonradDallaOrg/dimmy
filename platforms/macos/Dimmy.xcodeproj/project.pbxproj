@@ -23,6 +23,7 @@
 		AA000507 /* AudioWaveformView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000507 /* AudioWaveformView.swift */; };
 		AA000508 /* SampleAudioSynth.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000508 /* SampleAudioSynth.swift */; };
 		AA000509 /* FirstMouseHostingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000509 /* FirstMouseHostingView.swift */; };
+		AA00050A /* ProviderTagging.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00050A /* ProviderTagging.swift */; };
 		AA000601 /* MeetingPostProcessService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000601 /* MeetingPostProcessService.swift */; };
 		AA000602 /* MeetingViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000602 /* MeetingViewModel.swift */; };
 		AA000603 /* MeetingSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000603 /* MeetingSidebar.swift */; };
@@ -122,6 +123,7 @@
 		AB000507 /* AudioWaveformView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioWaveformView.swift; sourceTree = "<group>"; };
 		AB000508 /* SampleAudioSynth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleAudioSynth.swift; sourceTree = "<group>"; };
 		AB000509 /* FirstMouseHostingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstMouseHostingView.swift; sourceTree = "<group>"; };
+		AB00050A /* ProviderTagging.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderTagging.swift; sourceTree = "<group>"; };
 		AB000601 /* MeetingPostProcessService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingPostProcessService.swift; sourceTree = "<group>"; };
 		AB000900 /* UpdateService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateService.swift; sourceTree = "<group>"; };
 		AB000902 /* FileLoadToMeetingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileLoadToMeetingService.swift; sourceTree = "<group>"; };
@@ -431,6 +433,7 @@
 				AB000503 /* RecapModel.swift */,
 				AB000508 /* SampleAudioSynth.swift */,
 				AB000509 /* FirstMouseHostingView.swift */,
+				AB00050A /* ProviderTagging.swift */,
 			);
 			path = Utilities;
 			sourceTree = "<group>";
@@ -681,6 +684,7 @@
 				AA000507 /* AudioWaveformView.swift in Sources */,
 				AA000508 /* SampleAudioSynth.swift in Sources */,
 				AA000509 /* FirstMouseHostingView.swift in Sources */,
+				AA00050A /* ProviderTagging.swift in Sources */,
 				AA000601 /* MeetingPostProcessService.swift in Sources */,
 				AA000900 /* UpdateService.swift in Sources */,
 				AA000902 /* FileLoadToMeetingService.swift in Sources */,

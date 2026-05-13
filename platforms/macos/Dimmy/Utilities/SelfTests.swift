@@ -24,6 +24,9 @@ enum SelfTests {
         testPillCycleStyleWrap()
         testPillCycleLanguageWrap()
         testPillCyclePresetsAreContiguous()
+        testSparkleFeedUrlIsDurable()
+        testProviderTagSamples()
+        testSameKeyGating()
         print("[SelfTests] All \(testCount) tests passed.")
         #endif
     }
@@ -83,7 +86,14 @@ enum SelfTests {
         for preset in LlmPreset.presets where preset.id != "custom" {
             assert(!preset.apiUrl.isEmpty, "LLM preset '\(preset.id)' must have URL")
             assert(!preset.model.isEmpty, "LLM preset '\(preset.id)' must have model")
-            assert(preset.apiUrl.hasPrefix("https://"), "LLM preset '\(preset.id)' URL must be HTTPS")
+            // `claude-code://` is the synthetic URL for the Claude Code
+            // subscription preset — the Rust dispatcher recognises it
+            // as "route via local CLI, no HTTP key needed". Exempt it
+            // from the HTTPS-only check that guards the real cloud
+            // endpoints.
+            let isSynthetic = preset.apiUrl.hasPrefix("claude-code://")
+            assert(isSynthetic || preset.apiUrl.hasPrefix("https://"),
+                   "LLM preset '\(preset.id)' URL must be HTTPS")
         }
 
         let found = LlmPreset.find(url: "https://api.groq.com/openai/v1/chat/completions", model: "llama-3.3-70b-versatile")
@@ -208,7 +218,11 @@ enum SelfTests {
     // MARK: - Onboarding
 
     private static func testOnboardingStepCount() {
-        assert(OnboardingContainerView.totalSteps == 4, "Onboarding has 4 steps, got \(OnboardingContainerView.totalSteps)")
+        // 5 steps: Welcome, Permissions, Shortcut (with PTT/Toggle picker),
+        // ModelDownload, TryIt. Bumped from 4 when the ModelDownload step
+        // (Parakeet vs Whisper picker) landed. Update this number when
+        // adding/removing a step.
+        assert(OnboardingContainerView.totalSteps == 5, "Onboarding has 5 steps, got \(OnboardingContainerView.totalSteps)")
     }
 
     // MARK: - Pill scroll-cycle (regression: see fix(mac) commit bca5c4a)
@@ -293,5 +307,90 @@ enum SelfTests {
         for k in styleKeys {
             assert(!k.isEmpty || k == "off", "MacLlmStyles key empty (only 'off' may be falsy-ish): \(k)")
         }
+    }
+
+    // MARK: - Sparkle SUFeedURL durability
+    //
+    // Burned 2026-05-12: a previous build shipped with
+    // `https://github.com/.../releases/latest/download/appcast.xml` as
+    // SUFeedURL. GitHub's `/latest/` semantics SKIP prereleases — so
+    // when the most recent published release was an rc-tagged
+    // prerelease, the URL returned 404 and every existing user saw
+    // "Update failed" on every check. The fix was to publish a
+    // durable mirror release tagged `auto-update` and point SUFeedURL
+    // at that fixed tag.
+    //
+    // This guardrail asserts the URL never regresses to `/latest/`.
+    // Update the expected substring here if the durable tag ever
+    // changes (e.g. from `auto-update` to `appcast` or similar).
+    private static func testSparkleFeedUrlIsDurable() {
+        let url = Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String ?? ""
+        assert(!url.isEmpty, "Info.plist must define SUFeedURL")
+        assert(!url.contains("/releases/latest/"),
+               "SUFeedURL must NOT use /releases/latest/ — that path skips prereleases. " +
+               "Use the `auto-update` durable tag instead. Current: \(url)")
+        assert(url.hasPrefix("https://"), "SUFeedURL must be HTTPS, got: \(url)")
+    }
+
+    // MARK: - Provider tagging + same-key gating
+    //
+    // The "Use same key as STT" toggle is the easiest setting in
+    // Dimmy to break by accident: change the LLM provider preset and
+    // the toggle quietly switches the wrong key into the wrong API.
+    // These tests pin the helper logic so any future refactor that
+    // changes the rules fails the build instead of silently misrouting
+    // credentials.
+
+    private static func testProviderTagSamples() {
+        // Real cloud endpoints map to a non-empty tag.
+        assert(ProviderTagging.providerTag(forUrl: "https://api.groq.com/openai/v1/chat/completions") == "groq",
+               "groq.com → 'groq'")
+        assert(ProviderTagging.providerTag(forUrl: "https://api.openai.com/v1/chat/completions") == "openai",
+               "openai.com → 'openai'")
+        assert(ProviderTagging.providerTag(forUrl: "https://api.anthropic.com/v1/messages") == "anthropic",
+               "anthropic.com → 'anthropic'")
+        assert(ProviderTagging.providerTag(forUrl: "https://generativelanguage.googleapis.com/v1beta/models") == "gemini",
+               "googleapis.com → 'gemini'")
+        assert(ProviderTagging.providerTag(forUrl: "https://api.deepgram.com/v1/listen") == "deepgram",
+               "deepgram.com → 'deepgram'")
+
+        // Synthetic claude-code:// also maps to 'anthropic' — same
+        // vendor, different auth path.
+        assert(ProviderTagging.providerTag(forUrl: "claude-code://default") == "anthropic",
+               "claude-code:// → 'anthropic'")
+
+        // Unknown / custom → empty.
+        assert(ProviderTagging.providerTag(forUrl: "") == "",
+               "empty URL → ''")
+        assert(ProviderTagging.providerTag(forUrl: "https://some.random.host/api") == "",
+               "random host → ''")
+    }
+
+    private static func testSameKeyGating() {
+        let anthropic = "https://api.anthropic.com/v1/messages"
+        let groqStt = "https://api.groq.com/openai/v1/audio/transcriptions"
+        let groqLlm = "https://api.groq.com/openai/v1/chat/completions"
+        let openaiLlm = "https://api.openai.com/v1/chat/completions"
+
+        // Same vendor on both sides + api_key auth → toggle visible.
+        assert(ProviderTagging.sameKeyShouldShow(sttUrl: groqStt, llmUrl: groqLlm, llmAuthMethod: "api_key"),
+               "Groq STT + Groq LLM (api_key) must show same-key toggle")
+        assert(ProviderTagging.sameKeyShouldShow(sttUrl: anthropic, llmUrl: anthropic, llmAuthMethod: "api_key"),
+               "Anthropic STT + Anthropic LLM (api_key) must show same-key toggle")
+
+        // Different vendor → toggle hidden, force dedicated key.
+        assert(!ProviderTagging.sameKeyShouldShow(sttUrl: groqStt, llmUrl: openaiLlm, llmAuthMethod: "api_key"),
+               "Groq STT + OpenAI LLM must HIDE same-key toggle")
+
+        // Subscription auth → toggle hidden even when vendors match
+        // (the CLI owns its own credential).
+        assert(!ProviderTagging.sameKeyShouldShow(sttUrl: anthropic, llmUrl: anthropic, llmAuthMethod: "subscription"),
+               "Anthropic both sides + subscription must HIDE same-key toggle")
+
+        // Empty / custom URLs → toggle hidden.
+        assert(!ProviderTagging.sameKeyShouldShow(sttUrl: "", llmUrl: groqLlm, llmAuthMethod: "api_key"),
+               "Empty STT URL → no toggle")
+        assert(!ProviderTagging.sameKeyShouldShow(sttUrl: groqStt, llmUrl: "", llmAuthMethod: "api_key"),
+               "Empty LLM URL → no toggle")
     }
 }
