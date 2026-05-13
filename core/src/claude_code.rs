@@ -411,12 +411,12 @@ pub fn spawn_login() -> Result<(), ClaudeCodeError> {
         // it then waits for the callback to land. We don't try to
         // hide that window — the user explicitly initiated this
         // and benefits from seeing the URL + "logged in" message.
-        let script = format!(
-            "tell application \"Terminal\" to do script \"{} /login\"",
-            binary.display()
-        );
         #[cfg(target_os = "macos")]
         {
+            let script = format!(
+                "tell application \"Terminal\" to do script \"{} /login\"",
+                binary.display()
+            );
             let mut cmd = Command::new("osascript");
             cmd.arg("-e").arg(&script);
             cmd.stdin(Stdio::null());
