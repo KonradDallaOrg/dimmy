@@ -1,6 +1,6 @@
 # Dimmy Privacy Policy
 
-_Last updated: 2026-04-27_
+_Last updated: 2026-05-13_
 
 Dimmy is a voice-transcription overlay that runs locally on your computer. We collect a deliberately small amount of anonymous telemetry to understand how the app is used and to fix crashes — never enough to identify you or recover what you said.
 
@@ -59,6 +59,16 @@ We do **not** track changes to: prompt text, custom LLM prompt, microphone devic
 - `feature.hotkey_triggered` — when the global hotkey starts a recording (helps us understand whether users prefer hotkey or button).
 - `feature.api_key_set` — when you save an API key, we log which scope (`stt` / `llm`) and which provider (categorical). **The key value never leaves your computer.**
 
+### Claude Code subscription backend
+If you pick the **Claude-Code** provider in Settings (uses your Anthropic Pro / Team / Max plan via the local `claude` CLI instead of an API key):
+
+- `claude_code.status_probed` — when the Settings card refreshes: which of three states you're in (`ready` / `not_logged_in` / `not_installed`). No path, no version.
+- `claude_code.login_spawned` — when you click "Sign in via browser". No timestamp delta, no result yet.
+- `claude_code.login_completed` — when the polling loop concludes: `success` (you logged in), `timeout` (3-min wait expired), or `spawn_failed` (couldn't start the CLI).
+- `claude_code.invocation` — when an LLM call goes through the CLI: which call site (`rewrite` / `recap` / `test`), processing time bucket, success flag, and a categorical error label (`ok` / `not_installed` / `not_logged_in` / `timeout` / `spawn` / `exit_nonzero` / `invalid_utf8`).
+
+**What we never send for Claude-Code:** the prompt text, the model's response, the path where `claude` is installed on your disk, the contents of `~/.claude/credentials.json` (we never read this file at all — the CLI is the only consumer), or any stderr text from the CLI (it could echo back transcript fragments via model error messages).
+
 ### Performance + stability
 - `perf.startup_ms` — cold-start duration.
 - `perf.gpu_status` — at each launch: which GPU backend was compiled (`vulkan` / `cuda` / `metal` / `cpu`), whether the previous launch crashed during GPU init, whether a sticky known-bad marker is set.
@@ -99,6 +109,7 @@ The **Settings → Send feedback** form goes to Sentry as a tagged message. The 
 - Microphone device names or hardware fingerprints.
 - File paths beyond a categorical "where this kind of file lives" tag (and even those are scrubbed).
 - API keys (they live in `~/.config/dimmy/keys.enc`, AES-256-GCM encrypted, never sent anywhere except to the provider you configured).
+- Anthropic OAuth tokens. If you use the Claude-Code subscription provider, the token lives in `~/.claude/credentials.json` and is managed exclusively by Anthropic's official `claude` CLI. Dimmy never reads or transmits that file.
 - IP addresses (Sentry EU drops them server-side; PostHog explicitly skipped via `$ip: null` in every event).
 - Username / hostname / email (except the explicit feedback-form email if you choose to type one).
 

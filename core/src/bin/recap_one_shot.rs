@@ -188,8 +188,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         api_key.len()
     );
     let t = std::time::Instant::now();
-    let response =
-        dimmy_lib::llm::process_raw_prompt(api_url, model, &api_key, &prompt, max_tokens).await?;
+    let response = dimmy_lib::llm::process_raw_prompt(
+        api_url, model, &api_key, &prompt, max_tokens, "api_key",
+    )
+    .await?;
     let elapsed = t.elapsed().as_secs_f32();
     eprintln!(
         "[recap] received {} chars in {:.1}s",

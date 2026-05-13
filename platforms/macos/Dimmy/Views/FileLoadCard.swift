@@ -279,9 +279,10 @@ struct FileLoadCard: View {
 
         let path = lastPath ?? ""
         let transcriptCopy = transcript
-        // Resolve @MainActor-isolated AppState fields here, on main,
-        // before dispatching to background. Passing them in keeps the
-        // background pipeline free of main-actor reads.
+        // Capture the @MainActor-isolated notionAutoSend flag here on
+        // the main thread so the background dispatch doesn't need to
+        // touch AppState.shared.notionAutoSend — Swift 6 rejects that
+        // cross-isolation read as a hard error.
         let notionAutoSend = AppState.shared.notionAutoSend
         DispatchQueue.global(qos: .userInitiated).async {
             let outcome = FileLoadToMeetingService.run(

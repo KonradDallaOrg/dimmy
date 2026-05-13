@@ -417,4 +417,37 @@ int32_t dimmy_user_dict_remove(const char * _Nonnull word_ptr);
 /// strings. Returns byte length, -1 invalid args, -2 buf too small.
 int32_t dimmy_user_dict_list_json(char * _Nonnull out_buf, int32_t buf_len);
 
+// ── Claude Code subscription login ────────────────────────────
+// Use the Anthropic Pro/Team/Max subscription via the local
+// `claude` CLI. See core/src/claude_code.rs.
+
+/// Probe local Claude Code state.
+///   0 = ready (binary + credentials)
+///   1 = installed but not logged in
+///   2 = not installed
+int32_t dimmy_claude_code_status(void);
+
+/// Resolved path of the `claude` binary, or 0 if not installed.
+int32_t dimmy_claude_code_binary_path(char * _Nonnull out_buf, int32_t buf_len);
+
+/// Spawn `claude /login` in a new Terminal window. Returns 0 on
+/// success, -1 not installed, -2 spawn failure. Caller polls
+/// dimmy_claude_code_status() to detect login completion.
+int32_t dimmy_claude_code_spawn_login(void);
+
+/// Send a content-free "ping" prompt through the local CLI to test
+/// the end-to-end pipeline. Returns elapsed_ms (always > 0) on
+/// success, or a negative error code:
+///   -1 not installed, -2 not logged in, -3 spawn failed,
+///   -4 timeout (15 s), -5 non-zero exit, -6 invalid utf-8 output.
+int32_t dimmy_claude_code_ping(void);
+
+/// Track a host-side telemetry event by name with optional JSON
+/// properties. Used by the Mac UI to emit categorical events whose
+/// trigger is host-side (login outcome polling, file-load source,
+/// app-rules add/remove, etc.). Returns 0 emitted, -1 invalid input,
+/// -2 unknown event name.
+int32_t dimmy_telemetry_track_typed(const char * _Nonnull name_ptr,
+                                    const char * _Nullable props_json_ptr);
+
 #endif /* DimmyFFI_h */

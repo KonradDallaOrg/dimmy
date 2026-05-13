@@ -158,7 +158,11 @@ struct MacIntegrationsPage: View {
         appState.notionTargetKind = ""
         appState.notionTargetTitle = ""
         appState.notionAutoSend = false
-        DimmyCore.shared.setConfig(appState.toRustConfig())
+        // includeNotion: true — explicit clear intent. Generic
+        // saves omit the target fields to avoid wiping a valid
+        // destination accidentally; the disconnect path is one of
+        // the only two sites that owns the clear semantics.
+        DimmyCore.shared.setConfig(appState.toRustConfig(includeNotion: true))
         statusIsError = false
         statusMessage = "Disconnected. Token and destination removed from this device."
     }

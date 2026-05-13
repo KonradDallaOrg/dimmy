@@ -247,6 +247,11 @@ struct LlmPreset: Identifiable, Hashable {
         LlmPreset(id: "anthropic-haiku", displayName: "Anthropic \u{00B7} claude-haiku-4.5", apiUrl: "https://api.anthropic.com/v1/messages", model: "claude-haiku-4.5-20250315"),
         LlmPreset(id: "anthropic-sonnet", displayName: "Anthropic \u{00B7} claude-sonnet-4", apiUrl: "https://api.anthropic.com/v1/messages", model: "claude-sonnet-4-20250514"),
         LlmPreset(id: "anthropic-opus", displayName: "Anthropic \u{00B7} claude-opus-4.7", apiUrl: "https://api.anthropic.com/v1/messages", model: "claude-opus-4-7"),
+        // Claude Code (subscription) — synthetic provider using
+        // user's Pro/Team/Max plan via the local `claude` CLI. No
+        // API key needed; auth handled by `claude login` browser
+        // flow. See core/src/claude_code.rs.
+        LlmPreset(id: "claude-code", displayName: "Claude Code (subscription — Pro/Team/Max)", apiUrl: "claude-code://default", model: "claude-opus-4-7"),
         // Phase 1 cloud expansion (2026-05-04, sensible model picks for filler-removal/smart-format)
         LlmPreset(id: "fireworks-kimi", displayName: "Fireworks \u{00B7} kimi-k2", apiUrl: "https://api.fireworks.ai/inference/v1/chat/completions", model: "accounts/fireworks/models/kimi-k2p6"),
         LlmPreset(id: "together-llama70b", displayName: "Together \u{00B7} llama-3.3-70b", apiUrl: "https://api.together.xyz/v1/chat/completions", model: "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
@@ -754,6 +759,20 @@ final class AppState: ObservableObject {
     @Published var hasLlmKey: Bool = false
     @Published var llmLogEnabled: Bool = false
 
+    /// LLM auth method — `"api_key"` (default) or `"subscription"`.
+    /// When `"subscription"`, the Rust dispatcher routes every cloud
+    /// LLM call through the local `claude` CLI (Pro/Team/Max plan)
+    /// regardless of `llmApiUrl`. Legacy `claude-code://` URLs are
+    /// also honoured as a back-compat trigger.
+    ///
+    /// `recapAuthMethod` lets the meeting-recap call site override
+    /// this independently: `""` inherits the dictation choice;
+    /// `"api_key"` or `"subscription"` force a specific path for the
+    /// recap only. This is the "fast dictation via API, recap via
+    /// subscription" UX from the Win redesign.
+    @Published var llmAuthMethod: String = "api_key"
+    @Published var recapAuthMethod: String = ""
+
     // MARK: - Audio Config
 
     @Published var preprocessingEnabled: Bool = true
@@ -991,6 +1010,15 @@ final class AppState: ObservableObject {
         if let sk = config["llm_use_same_key"] as? Bool { llmUseSameKey = sk }
         if let hlk = config["has_llm_key"] as? Bool { hasLlmKey = hlk }
         if let ll = config["llm_log_enabled"] as? Bool { llmLogEnabled = ll }
+        if let am = config["llm_auth_method"] as? String { llmAuthMethod = am }
+        if let ram = config["recap_auth_method"] as? String { recapAuthMethod = ram }
+        // Back-compat: configs from the first Claude Code iteration used
+        // a synthetic `claude-code://` URL with no auth_method field.
+        // Treat that URL as a "subscription" signal so the new UI picks
+        // up the right radio without forcing the user to re-toggle.
+        if llmApiUrl.hasPrefix("claude-code://") && config["llm_auth_method"] == nil {
+            llmAuthMethod = "subscription"
+        }
 
         // Audio
         if let pe = config["preprocessing_enabled"] as? Bool { preprocessingEnabled = pe }
@@ -1051,7 +1079,20 @@ final class AppState: ObservableObject {
     }
 
     /// Build a config dictionary for sending to Rust via FFI.
-    func toRustConfig() -> [String: Any] {
+    ///
+    /// `includeNotion = false` (default) **omits** the
+    /// `notion_target_id`/`_kind`/`_title` fields so a generic
+    /// Settings save never wipes a valid Notion destination from
+    /// disk. The Rust dispatcher treats an empty `notion_target_id`
+    /// as a clear signal — if the AppState ever holds `""` (race,
+    /// partial load, schema migration), the unguarded save would
+    /// turn a "set" destination into "cleared" on every flush.
+    /// Burned 2026-05-13 when meeting recap kept failing with
+    /// "destination not configured" right after a Settings save.
+    ///
+    /// To explicitly set/clear the Notion destination the Notion
+    /// picker / Disconnect path must call `toRustConfig(includeNotion: true)`.
+    func toRustConfig(includeNotion: Bool = false) -> [String: Any] {
         var config: [String: Any] = [
             "api_url": apiUrl,
             "api_model": apiModel,
@@ -1067,6 +1108,8 @@ final class AppState: ObservableObject {
             "llm_api_model": llmApiModel,
             "llm_use_same_key": llmUseSameKey,
             "llm_log_enabled": llmLogEnabled,
+            "llm_auth_method": llmAuthMethod,
+            "recap_auth_method": recapAuthMethod,
             "stt_mode": sttMode,
             "local_model": localModel,
             "local_stt_backend": localSttBackend,
@@ -1088,13 +1131,19 @@ final class AppState: ObservableObject {
             "history_audio_max_mb": Int(historyAudioMaxMb),
             "auto_recap_threshold_secs": Int(autoRecapThresholdSecs),
             "recap_model_override": recapModelOverride,
-            "notion_target_id": notionTargetId,
-            "notion_target_kind": notionTargetKind,
-            "notion_target_title": notionTargetTitle,
+            // notion_target_{id,kind,title} are deliberately gated
+            // behind `includeNotion` — see toRustConfig docstring above.
+            // notion_auto_send IS safe to round-trip (bool toggle,
+            // not a load-bearing identifier).
             "notion_auto_send": notionAutoSend,
             "user_dict": userDictWords,
             "app_rules": appRules.map { $0.toDict() },
         ]
+        if includeNotion {
+            config["notion_target_id"] = notionTargetId
+            config["notion_target_kind"] = notionTargetKind
+            config["notion_target_title"] = notionTargetTitle
+        }
         if let dev = selectedDevice {
             config["selected_device"] = dev
         }

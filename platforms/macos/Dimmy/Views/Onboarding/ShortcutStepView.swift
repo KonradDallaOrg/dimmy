@@ -18,13 +18,16 @@ struct ShortcutStepView: View {
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            VStack(spacing: 20) {
+            VStack(spacing: 18) {
                 Text("Your Shortcut")
                     .font(.system(size: 26, weight: .bold))
 
-                Text("Hold to dictate, release to paste")
+                Text(modeBlurb)
                     .font(.system(size: 13))
                     .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 32)
 
                 currentShortcutDisplay
 
@@ -35,6 +38,8 @@ struct ShortcutStepView: View {
                     customButton
                 }
                 .padding(.horizontal, 20)
+
+                modeSelector
 
                 if activeShortcut.isFnOnly {
                     fnConflictBanner
@@ -47,6 +52,38 @@ struct ShortcutStepView: View {
             .padding(.vertical, 18)
         }
         .onDisappear { stopRecording() }
+    }
+
+    private var modeBlurb: String {
+        appState.preferredMode == .pushToTalk
+            ? "Hold to dictate, release to transcribe and paste"
+            : "Press to start, press again to transcribe and paste"
+    }
+
+    /// Push-to-talk vs Toggle selector. Mirrors the segmented control in
+    /// Settings → Shortcut so first-launch users can pick their preferred
+    /// mode before they ever open Settings.
+    private var modeSelector: some View {
+        VStack(spacing: 6) {
+            Picker("", selection: Binding(
+                get: { appState.preferredMode == .pushToTalk ? "ptt" : "toggle" },
+                set: { newValue in
+                    appState.preferredMode = newValue == "ptt" ? .pushToTalk : .toggle
+                    DimmyCore.shared.setConfig(appState.toRustConfig())
+                }
+            )) {
+                Text("Push-to-talk").tag("ptt")
+                Text("Toggle").tag("toggle")
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 260)
+
+            Text("You can change this any time in Settings → Shortcut.")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+        }
+        .padding(.top, 4)
     }
 
     private var currentShortcutDisplay: some View {

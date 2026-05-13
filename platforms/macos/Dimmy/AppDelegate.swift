@@ -586,7 +586,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         )
         window.center()
         window.title = "Dimmy Settings"
-        window.contentView = NSHostingView(rootView: rootView)
+        // FirstMouseHostingView lets controls accept the click that
+        // also activates the window — fixes the "Advanced toggle does
+        // nothing on first click" pattern reported on macOS.
+        window.contentView = FirstMouseHostingView(rootView: rootView)
         window.isReleasedWhenClosed = false
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -639,7 +642,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.delegate = self
-        window.contentView = NSHostingView(rootView: onboardingView)
+        // FirstMouseHostingView so the Next / preset buttons work on the
+        // first click after the window appears (e.g. when launched from
+        // the menubar with another app frontmost).
+        window.contentView = FirstMouseHostingView(rootView: onboardingView)
         window.isReleasedWhenClosed = false
 
         self.onboardingWindow = window

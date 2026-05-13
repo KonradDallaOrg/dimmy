@@ -397,6 +397,96 @@ final class DimmyCore {
         ).first?.appendingPathComponent(configDirName, isDirectory: true)
     }
 
+    // ── Claude Code subscription login ───────────────────────────
+    //
+    // Use the user's Anthropic Pro/Team/Max plan via the local
+    // `claude` CLI instead of API-key credit. See
+    // core/src/claude_code.rs for the design.
+
+    enum ClaudeCodeStatus: Int32 {
+        case ready = 0
+        case notLoggedIn = 1
+        case notInstalled = 2
+    }
+
+    /// Probe local Claude Code state. Cheap — no subprocess.
+    var claudeCodeStatus: ClaudeCodeStatus {
+        let raw = dimmy_claude_code_status()
+        return ClaudeCodeStatus(rawValue: raw) ?? .notInstalled
+    }
+
+    /// Resolved path of the `claude` binary, or nil if not installed.
+    var claudeCodeBinaryPath: String? {
+        let bufLen: Int32 = 4096
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+        let written = dimmy_claude_code_binary_path(buffer, bufLen)
+        guard written > 0 else { return nil }
+        return String(cString: buffer)
+    }
+
+    /// Spawn `claude /login` in a new Terminal window (via
+    /// osascript). Returns true on success. Caller polls
+    /// `claudeCodeStatus` to detect login completion.
+    @discardableResult
+    func spawnClaudeCodeLogin() -> Bool {
+        return dimmy_claude_code_spawn_login() == 0
+    }
+
+    /// Outcome of the Test Connection ping. Mirrors the Win
+    /// `ClaudeCodePingResult` enum and the Rust FFI return-code table.
+    enum ClaudeCodePingResult {
+        case ok(elapsedMs: Int32)
+        case notInstalled
+        case notLoggedIn
+        case spawnFailed
+        case timeout
+        case nonZeroExit
+        case invalidUtf8
+        case unknownError
+    }
+
+    /// Run a content-free "ping" prompt through the local CLI.
+    /// BLOCKING — call from a background queue.
+    func pingClaudeCode() -> ClaudeCodePingResult {
+        let rc = dimmy_claude_code_ping()
+        if rc > 0 { return .ok(elapsedMs: rc) }
+        switch rc {
+        case -1: return .notInstalled
+        case -2: return .notLoggedIn
+        case -3: return .spawnFailed
+        case -4: return .timeout
+        case -5: return .nonZeroExit
+        case -6: return .invalidUtf8
+        default: return .unknownError
+        }
+    }
+
+    /// Emit a typed telemetry event. `props` is a Swift dict that
+    /// will be JSON-encoded and passed to the Rust dispatcher.
+    /// Non-categorical or unknown event names silently drop (-2).
+    func trackEvent(_ name: String, _ props: [String: Any] = [:]) {
+        let propsJson: String
+        if props.isEmpty {
+            propsJson = ""
+        } else if let data = try? JSONSerialization.data(withJSONObject: props),
+                  let json = String(data: data, encoding: .utf8) {
+            propsJson = json
+        } else {
+            return
+        }
+        name.withCString { namePtr in
+            if propsJson.isEmpty {
+                _ = dimmy_telemetry_track_typed(namePtr, nil)
+            } else {
+                propsJson.withCString { propsPtr in
+                    _ = dimmy_telemetry_track_typed(namePtr, propsPtr)
+                }
+            }
+        }
+    }
+
     /// GPU known-bad status as parsed JSON. `enabled` indicates whether
     /// the marker is currently set (forcing CPU fallback).
     func gpuStatus() -> [String: Any]? {

@@ -25,15 +25,137 @@ struct MacOutputPage: View {
         appState.isDownloadingLlmModel
     }
 
+    // MARK: - Provider matching + auth-method helpers
+    //
+    // Provider tag derived from a URL host. Used to decide whether the
+    // STT and LLM endpoints accept the same vendor key (Groq STT +
+    // Groq LLM → yes; Groq STT + OpenAI LLM → no). The `claude-code://`
+    // synthetic URL is mapped to `anthropic` because the underlying
+    // service is the same.
+    private func providerTag(_ url: String) -> String {
+        if url.hasPrefix("claude-code://") { return "anthropic" }
+        if url.contains("groq.com") { return "groq" }
+        if url.contains("openai.com") { return "openai" }
+        if url.contains("openrouter.ai") { return "openrouter" }
+        if url.contains("googleapis.com") { return "gemini" }
+        if url.contains("anthropic.com") { return "anthropic" }
+        if url.contains("fireworks.ai") { return "fireworks" }
+        if url.contains("together.xyz") || url.contains("together.ai") { return "together" }
+        if url.contains("deepgram.com") { return "deepgram" }
+        return ""
+    }
+
+    private var sttProviderTag: String { providerTag(appState.apiUrl) }
+    private var llmProviderTag: String { providerTag(appState.llmApiUrl) }
+
+    /// Anthropic is the only provider with a dual-auth path
+    /// (API key OR Claude Code subscription). We show the
+    /// Authentication picker only for Anthropic.
+    private var isAnthropicLlm: Bool {
+        llmProviderTag == "anthropic"
+    }
+
+    /// The "Use same key as STT" toggle is meaningful only when STT
+    /// and LLM share a vendor AND the LLM isn't using subscription
+    /// auth (which has its own credential). For mismatched vendors we
+    /// force a dedicated LLM key.
+    private var sameKeyShouldShow: Bool {
+        guard !sttProviderTag.isEmpty,
+              sttProviderTag == llmProviderTag,
+              appState.llmAuthMethod != "subscription" else { return false }
+        return true
+    }
+
+    /// Human-readable label for the STT provider — used in the
+    /// "Use same \(provider) key" description so the user knows what
+    /// the toggle actually reuses.
+    private var sttProviderLabel: String {
+        switch sttProviderTag {
+        case "groq": return "Groq"
+        case "openai": return "OpenAI"
+        case "openrouter": return "OpenRouter"
+        case "gemini": return "Gemini"
+        case "anthropic": return "Anthropic"
+        case "fireworks": return "Fireworks"
+        case "together": return "Together"
+        case "deepgram": return "Deepgram"
+        default: return "STT"
+        }
+    }
+
+    private var authMethodDescription: String {
+        appState.llmAuthMethod == "subscription"
+            ? "Claude Pro / Team / Max — routed through the local `claude` CLI. No API key needed."
+            : "Direct Anthropic API key — pay-as-you-go billing."
+    }
+
+    /// Side-effects of flipping the auth-method radio: if the user
+    /// moves to API key while the URL is the magic `claude-code://`
+    /// (which Rust still routes through the subscription CLI), swap
+    /// it for the real Anthropic endpoint so the API-key path is
+    /// actually used. Going the other direction we keep the URL —
+    /// Rust only checks `auth_method == "subscription"`.
+    private func normalizeLlmUrlForAuth(_ method: String) {
+        if method == "api_key" && appState.llmApiUrl.hasPrefix("claude-code://") {
+            appState.llmApiUrl = "https://api.anthropic.com/v1/messages"
+            if appState.llmApiModel.isEmpty {
+                appState.llmApiModel = "claude-opus-4-7"
+            }
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             rewriteStyleGroup
             llmModeGroup
+            recapModelGroup
             pasteboardGroup
 
             if appState.showAdvanced {
                 advancedLlmGroup
             }
+        }
+    }
+
+    /// Meeting / long-dictation recap model picker. Always visible so a
+    /// fresh user can pick their preferred recap model without flipping
+    /// the Advanced toggle. Mirrors the picker in Settings → Advanced;
+    /// both write to the same `recap_model_override` config field. The
+    /// `local:` / `cloud:` prefixing is handled by `RecapModelOption`.
+    private var recapModelGroup: some View {
+        Group {
+            MacGroupLabel(text: "Meeting recap model")
+            MacTile {
+                MacRow(
+                    "Recap model",
+                    description: "Used for the meeting recap pipeline and the long-dictation auto-recap. Auto matches your dictation provider. Pick a local Gemma to run the recap offline.",
+                    showsDivider: false
+                ) {
+                    Picker("", selection: Binding<String>(
+                        get: { appState.recapModelOverride },
+                        set: { newValue in
+                            appState.recapModelOverride = newValue
+                            persistConfig()
+                        }
+                    )) {
+                        ForEach(RecapModelOption.curated) { opt in
+                            Label(opt.label, systemImage: opt.iconName)
+                                .tag(opt.id)
+                        }
+                        if !appState.recapModelOverride.isEmpty,
+                           !RecapModelOption.curated.contains(where: { $0.id == appState.recapModelOverride }) {
+                            Divider()
+                            Label("Custom — \(appState.recapModelOverride)",
+                                  systemImage: "wrench.adjustable")
+                                .tag(appState.recapModelOverride)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(minWidth: 280)
+                }
+            }
+            MacGroupFooter(text: "Cloud entries use your configured LLM API key. Local entries use the matching Gemma `.gguf` from Settings → Voice (download required).")
         }
     }
 
@@ -125,47 +247,95 @@ struct MacOutputPage: View {
                         .frame(width: 320)
                     }
 
-                    MacRow(
-                        "Use same key as STT",
-                        description: "Reuse the speech-to-text key for the LLM provider when both are the same vendor.",
-                        showsDivider: !appState.llmUseSameKey
-                    ) {
-                        Toggle("", isOn: Binding(
-                            get: { appState.llmUseSameKey },
-                            set: { newValue in
-                                appState.llmUseSameKey = newValue
-                                persistConfig()
+                    // Anthropic-only: Authentication picker. The user
+                    // chooses between an Anthropic API key (pay-as-
+                    // you-go) and a Claude Pro / Team / Max
+                    // subscription routed via the local `claude` CLI.
+                    // Mirrors the Win redesign — auth is orthogonal to
+                    // provider+model. Shown for any Anthropic URL OR
+                    // for the legacy `claude-code://` synthetic URL.
+                    if isAnthropicLlm {
+                        MacRow(
+                            "Authentication",
+                            description: authMethodDescription,
+                            showsDivider: appState.llmAuthMethod == "subscription" || sameKeyShouldShow
+                        ) {
+                            Picker("", selection: Binding(
+                                get: { appState.llmAuthMethod == "subscription" ? "subscription" : "api_key" },
+                                set: { newValue in
+                                    appState.llmAuthMethod = newValue
+                                    normalizeLlmUrlForAuth(newValue)
+                                    persistConfig()
+                                }
+                            )) {
+                                Text("API key").tag("api_key")
+                                Text("Subscription").tag("subscription")
                             }
-                        ))
-                        .toggleStyle(.switch)
-                        .labelsHidden()
+                            .pickerStyle(.segmented)
+                            .labelsHidden()
+                            .frame(width: 220)
+                        }
                     }
 
-                    if !appState.llmUseSameKey {
-                        MacRow(
-                            "LLM API key",
-                            description: "Encrypted locally. Used when not sharing with STT.",
-                            showsDivider: showLlmKeyField
-                        ) {
-                            if appState.hasLlmKey {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundStyle(.green)
-                                    Text("Saved")
-                                        .font(.system(size: 12, weight: .medium))
-                                        .foregroundStyle(.green)
-                                }
+                    // Subscription branch: show the Claude Code status
+                    // card (binary detection, sign-in via browser, ping
+                    // test). When subscription is selected the API-key
+                    // entry + same-key toggle disappear — the CLI owns
+                    // the credential.
+                    if appState.llmAuthMethod == "subscription" || appState.llmApiUrl.hasPrefix("claude-code://") {
+                        MacClaudeCodeCard(appState: appState)
+                    } else {
+                        // API-key branch. The "Use same key as STT"
+                        // toggle is only meaningful when STT and LLM
+                        // share a vendor (and the key endpoint thus
+                        // accepts the same token). Different vendors →
+                        // we hide the toggle and force a dedicated key.
+                        if sameKeyShouldShow {
+                            MacRow(
+                                "Use same key as STT",
+                                description: "Reuse the \(sttProviderLabel) key for the LLM provider — both endpoints accept the same token.",
+                                showsDivider: !appState.llmUseSameKey
+                            ) {
+                                Toggle("", isOn: Binding(
+                                    get: { appState.llmUseSameKey },
+                                    set: { newValue in
+                                        appState.llmUseSameKey = newValue
+                                        persistConfig()
+                                    }
+                                ))
+                                .toggleStyle(.switch)
+                                .labelsHidden()
                             }
-                            Button(appState.hasLlmKey ? (showLlmKeyField ? "Cancel" : "Replace…")
-                                                      : (showLlmKeyField ? "Cancel" : "Add key…")) {
-                                showLlmKeyField.toggle()
-                                if !showLlmKeyField { llmKeyInput = "" }
-                            }
-                            .controlSize(.small)
                         }
 
-                        if showLlmKeyField {
-                            llmKeyEntryRow
+                        if !sameKeyShouldShow || !appState.llmUseSameKey {
+                            MacRow(
+                                "LLM API key",
+                                description: sameKeyShouldShow
+                                    ? "Encrypted locally. Used when not sharing with STT."
+                                    : "Encrypted locally. STT and LLM use different providers, so a dedicated key is required.",
+                                showsDivider: showLlmKeyField
+                            ) {
+                                if appState.hasLlmKey {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(.green)
+                                        Text("Saved")
+                                            .font(.system(size: 12, weight: .medium))
+                                            .foregroundStyle(.green)
+                                    }
+                                }
+                                Button(appState.hasLlmKey ? (showLlmKeyField ? "Cancel" : "Replace…")
+                                                          : (showLlmKeyField ? "Cancel" : "Add key…")) {
+                                    showLlmKeyField.toggle()
+                                    if !showLlmKeyField { llmKeyInput = "" }
+                                }
+                                .controlSize(.small)
+                            }
+
+                            if showLlmKeyField {
+                                llmKeyEntryRow
+                            }
                         }
                     }
                 } else {

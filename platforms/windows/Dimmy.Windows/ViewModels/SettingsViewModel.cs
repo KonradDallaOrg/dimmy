@@ -81,6 +81,11 @@ public partial class SettingsViewModel : ObservableObject
         new("Anthropic", "https://api.anthropic.com/v1/messages", "claude-haiku-4-5-20251001"),
         new("Anthropic-Sonnet", "https://api.anthropic.com/v1/messages", "claude-sonnet-4-20250514"),
         new("Anthropic-Opus", "https://api.anthropic.com/v1/messages", "claude-opus-4-7"),
+        // The dedicated "Claude-Code" preset is gone — the same
+        // routing now lives behind the Authentication radio group
+        // in the Anthropic provider card (Subscription instead of
+        // API key). Configs that still ship the legacy
+        // claude-code://default URL are migrated in LoadConfig.
         // Phase 1 cloud expansion (2026-05-04, sensible model picks for filler-removal/smart-format)
         new("Fireworks", "https://api.fireworks.ai/inference/v1/chat/completions", "accounts/fireworks/models/kimi-k2p6"),
         new("Together-Llama", "https://api.together.xyz/v1/chat/completions", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
@@ -194,6 +199,19 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _llmUseSameKey = true;
     [ObservableProperty] private string _llmApiKey = "";
     [ObservableProperty] private bool _hasLlmKey;
+    /// LLM authentication method — "api_key" (default, classic
+    /// HTTP+key) or "subscription" (route via local `claude` CLI
+    /// using the user's Anthropic Pro/Team/Max plan, no API credit
+    /// consumed). The Settings RadioButton group binds here.
+    [ObservableProperty] private string _llmAuthMethod = "api_key";
+    /// Recap-specific auth override. Three values:
+    ///   "" (default) — inherit from LlmAuthMethod
+    ///   "api_key" — force HTTP+key for the recap regardless
+    ///   "subscription" — force subprocess CLI for the recap regardless
+    /// Lets a user run dictation rewrite via API key (fast, no
+    /// subprocess cold-start tax) and meeting recap via the
+    /// subscription (amortized across 30-90 s of inference).
+    [ObservableProperty] private string _recapAuthMethod = "";
     /// User override for the model ID used by the meeting recap LLM call.
     /// Empty = let PickRecapModel pick the provider-default flagship
     /// reasoning model (Opus 4.7 / Gemini 3.1 Pro / GPT-5).
@@ -414,6 +432,29 @@ public partial class SettingsViewModel : ObservableObject
             LlmApiUrl = r.TryGetProperty("llm_api_url", out var lu) ? lu.GetString() ?? "" : "";
             LlmApiModel = r.TryGetProperty("llm_api_model", out var lm) ? lm.GetString() ?? "" : "";
             LlmUseSameKey = !r.TryGetProperty("llm_use_same_key", out var lsk) || lsk.GetBoolean();
+            // Auth-method flag — "api_key" (default) or "subscription".
+            // Migrate the legacy `claude-code://` URL scheme to the
+            // explicit Anthropic + subscription pair so saved configs
+            // from the first iteration land cleanly in the new UI.
+            var savedAuth = r.TryGetProperty("llm_auth_method", out var lam)
+                ? lam.GetString() ?? "api_key" : "api_key";
+            if (LlmApiUrl.StartsWith("claude-code://", StringComparison.Ordinal))
+            {
+                LlmApiUrl = "https://api.anthropic.com/v1/messages";
+                savedAuth = "subscription";
+            }
+            LlmAuthMethod = savedAuth == "subscription" ? "subscription" : "api_key";
+            // Recap-specific override is a free string: "" = inherit,
+            // or one of the two explicit values. The radio group
+            // normalizes invalid input back to "" so the dispatcher
+            // always sees a known token.
+            var savedRecapAuth = r.TryGetProperty("recap_auth_method", out var ram)
+                ? ram.GetString() ?? "" : "";
+            RecapAuthMethod = savedRecapAuth switch
+            {
+                "api_key" or "subscription" => savedRecapAuth,
+                _ => "",
+            };
             RecapModelOverride = r.TryGetProperty("recap_model_override", out var rmo)
                 ? rmo.GetString() ?? "" : "";
             // Notion target + auto-send flag round-trip through config.
@@ -493,7 +534,26 @@ public partial class SettingsViewModel : ObservableObject
         catch (JsonException) { }
     }
 
-    public string ToJson()
+    /// <summary>
+    /// Serialize the Settings ViewModel to a JSON payload for
+    /// <c>dimmy_set_config_json</c>.
+    ///
+    /// <para><b>Notion fields are EXCLUDED by default.</b> The Rust
+    /// dispatcher treats an empty <c>notion_target_id</c> as
+    /// "clear destination" — so if the VM had the field empty for
+    /// any reason (race, partial load, schema migration), the
+    /// generic Settings save would wipe a perfectly valid Notion
+    /// destination from disk on every Save_Click. Burned 2026-05-13
+    /// when a meeting recap kept failing with "destination not
+    /// configured" right after a Settings save.</para>
+    ///
+    /// <para>To explicitly set or clear the Notion destination, the
+    /// Notion picker dialog calls <c>ToJson(includeNotion: true)</c>
+    /// AFTER assigning <c>NotionTargetId/Kind/Title</c>; the
+    /// Disconnect path does the same. Generic Settings saves never
+    /// touch these fields.</para>
+    /// </summary>
+    public string ToJson(bool includeNotion = false)
     {
         var dict = new Dictionary<string, object?>
         {
@@ -517,10 +577,13 @@ public partial class SettingsViewModel : ObservableObject
             ["llm_api_url"] = LlmApiUrl,
             ["llm_api_model"] = LlmApiModel,
             ["llm_use_same_key"] = LlmUseSameKey,
+            ["llm_auth_method"] = LlmAuthMethod,
+            ["recap_auth_method"] = RecapAuthMethod,
             ["recap_model_override"] = RecapModelOverride,
-            ["notion_target_id"] = NotionTargetId,
-            ["notion_target_kind"] = NotionTargetKind,
-            ["notion_target_title"] = NotionTargetTitle,
+            // notion_target_{id,kind,title} are deliberately NOT in
+            // the generic dict — see the includeNotion docstring above.
+            // notion_auto_send IS safe to round-trip (it's a bool
+            // toggle, not a load-bearing identifier).
             ["notion_auto_send"] = NotionAutoSend,
             ["llm_custom_prompt"] = LlmCustomPrompt,
             ["llm_translate_to"] = LlmTranslateTo,
@@ -543,6 +606,14 @@ public partial class SettingsViewModel : ObservableObject
         };
         if (!string.IsNullOrEmpty(ApiKey)) dict["api_key"] = ApiKey;
         if (!string.IsNullOrEmpty(LlmApiKey)) dict["llm_api_key"] = LlmApiKey;
+        if (includeNotion)
+        {
+            // Caller is the Notion picker/disconnect — they own the
+            // semantics of "clearing means clear" and "setting means set".
+            dict["notion_target_id"] = NotionTargetId;
+            dict["notion_target_kind"] = NotionTargetKind;
+            dict["notion_target_title"] = NotionTargetTitle;
+        }
 
         // app_rules — serialized as a JSON array matching the Rust
         // `Vec<AppRule>` shape. Empty translate is encoded as null

@@ -134,10 +134,31 @@ extension UpdateService: SPUUpdaterDelegate {
     }
 
     nonisolated func updater(_ updater: SPUUpdater, didAbortWithError error: any Error) {
+        let nsErr = error as NSError
         let msg = error.localizedDescription
+        // Sparkle calls didAbortWithError for several benign outcomes
+        // that have ALREADY been surfaced to the user via the modal
+        // (or via the explicit "no update" delegate). Treating these
+        // as "Check failed" produces a confusing UX: the modal says
+        // "Up to date" and the line right under it says "Check
+        // failed". The SUErrorDomain codes worth filtering:
+        //
+        //   SUNoUpdateError              = 1001  (no update available)
+        //   SUInstallationCanceledError  = 4005  (user dismissed install prompt)
+        //   SUInstallationCancelledError = 4005  (alt spelling in some versions)
+        //   SUInstallationAuthorizeLaterError = 4014 (user picked "Later")
+        //
+        // For these we leave the status text alone — either the
+        // happy-path delegate ran first (`updaterDidNotFindUpdate` →
+        // "Up to date") or the user actively dismissed the prompt.
+        let benignCodes: Set<Int> = [1001, 4005, 4014]
+        if nsErr.domain == "SUSparkleErrorDomain" && benignCodes.contains(nsErr.code) {
+            NSLog("[Update] benign abort (\(nsErr.code)): \(msg)")
+            return
+        }
         Task { @MainActor in
             self.statusText = "Check failed — will retry later"
-            NSLog("[Update] aborted: \(msg)")
+            NSLog("[Update] aborted (\(nsErr.domain) \(nsErr.code)): \(msg)")
         }
     }
 }
