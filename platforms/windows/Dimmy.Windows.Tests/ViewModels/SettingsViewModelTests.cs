@@ -67,6 +67,116 @@ public class SettingsViewModelTests
         Assert.Contains("\"llm_style\":\"off\"", json);
     }
 
+    /// <summary>
+    /// REGRESSION GUARD (2026-05-13): generic <c>ToJson()</c> must
+    /// NOT include the Notion target fields. Rust treats an empty
+    /// <c>notion_target_id</c> as "clear destination", so any save
+    /// from a non-Integration page with a transient-empty VM was
+    /// wiping a valid destination. Fix shipped on
+    /// <c>feat/anthropic-subscription-login</c>; this test pins it.
+    /// </summary>
+    [Fact]
+    public void ToJson_DefaultDoesNotIncludeNotionTargetFields()
+    {
+        var vm = new SettingsViewModel
+        {
+            NotionTargetId = "abc-123-page-id",
+            NotionTargetKind = "page",
+            NotionTargetTitle = "My Workspace",
+        };
+        var json = vm.ToJson(); // default: includeNotion = false
+        Assert.DoesNotContain("notion_target_id", json);
+        Assert.DoesNotContain("notion_target_kind", json);
+        Assert.DoesNotContain("notion_target_title", json);
+        // notion_auto_send IS safe to round-trip (bool toggle, not a
+        // load-bearing identifier).
+        Assert.Contains("notion_auto_send", json);
+    }
+
+    /// <summary>
+    /// Counterpart to the regression guard: the Notion picker
+    /// confirm / Disconnect path passes <c>includeNotion: true</c>
+    /// and the fields MUST be present in the output then.
+    /// </summary>
+    [Fact]
+    public void ToJson_IncludeNotionTrue_ContainsNotionTargetFields()
+    {
+        var vm = new SettingsViewModel
+        {
+            NotionTargetId = "abc-123-page-id",
+            NotionTargetKind = "page",
+            NotionTargetTitle = "My Workspace",
+        };
+        var json = vm.ToJson(includeNotion: true);
+        Assert.Contains("\"notion_target_id\":\"abc-123-page-id\"", json);
+        Assert.Contains("\"notion_target_kind\":\"page\"", json);
+        Assert.Contains("\"notion_target_title\":\"My Workspace\"", json);
+    }
+
+    /// <summary>
+    /// Migration regression guard: a legacy config that still
+    /// carries the synthetic <c>claude-code://default</c> URL must
+    /// land in the new schema as Anthropic + subscription. Without
+    /// this migration the Authentication radio would default to
+    /// API key and the user's saved subscription preference would
+    /// be silently lost.
+    /// </summary>
+    [Fact]
+    public void LoadFromJson_MigratesClaudeCodeUrlToAnthropicSubscription()
+    {
+        var vm = new SettingsViewModel();
+        var json = """
+        {
+            "llm_api_url": "claude-code://default",
+            "llm_api_model": "claude-opus-4-7",
+            "llm_auth_method": "api_key"
+        }
+        """;
+        vm.LoadFromJson(json);
+        Assert.Equal("https://api.anthropic.com/v1/messages", vm.LlmApiUrl);
+        Assert.Equal("subscription", vm.LlmAuthMethod);
+        // Model untouched — the migration only rewrites URL + auth.
+        Assert.Equal("claude-opus-4-7", vm.LlmApiModel);
+    }
+
+    /// <summary>
+    /// LoadFromJson reads the explicit <c>llm_auth_method</c> field
+    /// when present (no migration needed). Default for legacy
+    /// configs that lack the field is "api_key" (classic HTTP path).
+    /// </summary>
+    [Fact]
+    public void LoadFromJson_ReadsExplicitAuthMethodAndDefaultsToApiKey()
+    {
+        var vm = new SettingsViewModel();
+        vm.LoadFromJson("""{"llm_api_url":"https://api.anthropic.com/v1/messages","llm_auth_method":"subscription"}""");
+        Assert.Equal("subscription", vm.LlmAuthMethod);
+
+        var vm2 = new SettingsViewModel();
+        vm2.LoadFromJson("""{"llm_api_url":"https://api.anthropic.com/v1/messages"}""");
+        Assert.Equal("api_key", vm2.LlmAuthMethod);
+    }
+
+    /// <summary>
+    /// RecapAuthMethod accepts only "" (inherit), "api_key", or
+    /// "subscription". A malformed config value must normalise to
+    /// "" so the Rust dispatcher never sees an unknown token.
+    /// </summary>
+    [Fact]
+    public void LoadFromJson_NormalisesUnknownRecapAuthMethodToInherit()
+    {
+        var vm = new SettingsViewModel();
+        vm.LoadFromJson("""{"recap_auth_method":"garbage_value"}""");
+        Assert.Equal("", vm.RecapAuthMethod);
+
+        var vm2 = new SettingsViewModel();
+        vm2.LoadFromJson("""{"recap_auth_method":"subscription"}""");
+        Assert.Equal("subscription", vm2.RecapAuthMethod);
+
+        var vm3 = new SettingsViewModel();
+        vm3.LoadFromJson("""{"recap_auth_method":"api_key"}""");
+        Assert.Equal("api_key", vm3.RecapAuthMethod);
+    }
+
     [Fact]
     public void IsDirty_FalseAfterLoad()
     {
