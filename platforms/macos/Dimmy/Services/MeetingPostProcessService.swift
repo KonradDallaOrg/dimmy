@@ -82,15 +82,32 @@ enum MeetingPostProcessService {
         // 3.1 Pro headroom for adaptive-thinking budgets. The provider
         // dispatch in core/src/llm.rs auto-picks the right thinking
         // shape based on the model id.
+        let started = Date()
         let llmResult = DimmyCore.shared.llmCallRaw(
             prompt: prompt,
             modelOverride: model,
             maxTokens: 32_768
         )
+        let elapsedMs = Int64(Date().timeIntervalSince(started) * 1000)
+        let providerLabel = TelemetryBuckets.provider(currentLlmApiUrl())
+        let modelLabel = TelemetryBuckets.recapModel(model)
+        let processingLabel = TelemetryBuckets.processingMs(elapsedMs)
         switch llmResult {
         case .failure(let err):
+            DimmyCore.shared.trackEvent("meeting.recap_completed", [
+                "provider": providerLabel,
+                "recap_model_bucket": modelLabel,
+                "processing_ms_bucket": processingLabel,
+                "success": false,
+            ])
             return .failure(.llm(err))
         case .success(let raw):
+            DimmyCore.shared.trackEvent("meeting.recap_completed", [
+                "provider": providerLabel,
+                "recap_model_bucket": modelLabel,
+                "processing_ms_bucket": processingLabel,
+                "success": true,
+            ])
             let sections = parseStructuredRecap(raw)
             let markdown = buildMarkdownFromSections(sections)
             let actions = sections["ACTIONS"] ?? ""
@@ -105,14 +122,20 @@ enum MeetingPostProcessService {
             // the Done view's "Send to Notion" button.
             if notionAutoSend,
                DimmyCore.shared.notionHasToken {
+                var notionOk = false
                 if let json = DimmyCore.shared.notionSendRecap(meetingDir: dir),
                    let data = json.data(using: .utf8),
                    let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    (dict["ok"] as? Bool) == true {
+                    notionOk = true
                     NSLog("[Dimmy] Notion auto-send ok url=\(dict["page_url"] as? String ?? "")")
                 } else {
                     NSLog("[Dimmy] Notion auto-send failed (silent fallback to manual button)")
                 }
+                DimmyCore.shared.trackEvent("notion.recap_sent", [
+                    "auto": true,
+                    "ok": notionOk,
+                ])
             }
             return .success(Result(
                 recapMarkdown: markdown,
@@ -318,5 +341,22 @@ enum MeetingPostProcessService {
             if !body.isEmpty { result[key] = body }
         }
         return result
+    }
+
+    /// Read `llm_api_url` from the on-disk config so the telemetry
+    /// provider bucket reflects whatever's currently selected. Same
+    /// "read config.json directly" pattern as `pickRecapModel()` so
+    /// we can call this from non-MainActor contexts without a hop.
+    /// Empty string on any failure — the bucket helper degrades to
+    /// "unset" which the Rust dispatcher allow-lists.
+    fileprivate static func currentLlmApiUrl() -> String {
+        guard let cfgURL = DimmyCore.shared.configDirURL?
+            .appendingPathComponent("config.json")
+        else { return "" }
+        guard let data = try? Data(contentsOf: cfgURL),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let url = json["llm_api_url"] as? String
+        else { return "" }
+        return url
     }
 }

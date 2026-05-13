@@ -126,6 +126,12 @@ enum FileLoadToMeetingService {
 
         NSLog("[FileLoadToMeeting] dir=\(dir.path) transcript=\(trimmedTranscript.count)c duration=\(durationSecs)s")
 
+        // Tag the synthetic meeting so the funnel can distinguish
+        // "live recorded" from "imported audio". Win emits this
+        // before kicking off the recap; we mirror so dashboards
+        // are platform-agnostic.
+        DimmyCore.shared.trackEvent("meeting.imported_from_file")
+
         // Hand off to the shared recap pipeline. notionAutoSend
         // reads the same config field MeetingWindow uses — keeps
         // file-load loops consistent with live-meeting behaviour

@@ -378,6 +378,47 @@ pub enum Event {
     ConfigRecapModelChanged {
         recap_model_bucket: &'static str,
     },
+
+    // ── Claude Code (Anthropic subscription) backend ────────────
+    //
+    // The user-explicit subscription provider that piggybacks on
+    // the `claude` CLI. We track funnel + reliability without
+    // touching any user content — no prompt text, no model output,
+    // no binary paths. Just status enums, durations bucketed, and
+    // error categories.
+    /// Status probe result. Emitted by the Settings card on every
+    /// refresh + after a login spawn returns. Categorical only:
+    /// the UI logic already exposes the same 3 states.
+    ClaudeCodeStatusProbed {
+        /// "ready" | "not_logged_in" | "not_installed"
+        status: &'static str,
+    },
+    /// User clicked "Sign in via browser". Fires when the subprocess
+    /// is spawned, regardless of outcome — pairs with
+    /// `ClaudeCodeLoginCompleted` to derive the abandonment rate.
+    ClaudeCodeLoginSpawned,
+    /// Polling loop concluded — either ready, timed out at 3 min,
+    /// or the spawn itself failed. Lets us see whether the typical
+    /// user actually makes it through the browser flow.
+    ClaudeCodeLoginCompleted {
+        /// "success" | "timeout" | "spawn_failed"
+        outcome: &'static str,
+    },
+    /// One LLM call via the subprocess returned. Lets us see how
+    /// often the CLI path is exercised vs HTTP providers, and the
+    /// typical processing-time distribution.
+    ClaudeCodeInvocation {
+        /// "rewrite" | "recap" — the LLM dispatch site.
+        kind: &'static str,
+        /// `lt_500` | `500_2000` | `2000_10000` | `10000_60000` | `ge_60000`
+        processing_ms_bucket: &'static str,
+        success: bool,
+        /// "ok" | "not_installed" | "not_logged_in" | "timeout" |
+        /// "spawn" | "exit_nonzero" | "invalid_utf8". Categorical
+        /// error bucket — never the raw stderr (which can echo back
+        /// transcript content via the model's complaints).
+        error_category: &'static str,
+    },
 }
 
 impl Event {
@@ -449,6 +490,10 @@ impl Event {
             Event::PermissionGranted { .. } => "permission.granted",
             Event::PermissionDenied { .. } => "permission.denied",
             Event::ConfigRecapModelChanged { .. } => "config.recap_model_changed",
+            Event::ClaudeCodeStatusProbed { .. } => "claude_code.status_probed",
+            Event::ClaudeCodeLoginSpawned => "claude_code.login_spawned",
+            Event::ClaudeCodeLoginCompleted { .. } => "claude_code.login_completed",
+            Event::ClaudeCodeInvocation { .. } => "claude_code.invocation",
         }
     }
 
@@ -596,6 +641,85 @@ mod tests {
                     k
                 );
             }
+        }
+    }
+
+    /// Same PII-scan as the license check, but for the Claude Code
+    /// events. These run on every status probe / login / invocation,
+    /// so a leaked field would amplify into the highest-cardinality
+    /// stream we have. Bind the names + property keys hard.
+    #[test]
+    fn claude_code_events_carry_no_user_content() {
+        let events = vec![
+            Event::ClaudeCodeStatusProbed { status: "ready" },
+            Event::ClaudeCodeLoginSpawned,
+            Event::ClaudeCodeLoginCompleted { outcome: "success" },
+            Event::ClaudeCodeInvocation {
+                kind: "recap",
+                processing_ms_bucket: "2000_10000",
+                success: true,
+                error_category: "ok",
+            },
+        ];
+        // Any property key that smells like content, paths, or
+        // identifiers. The list mirrors the license PII scan; if a
+        // new event ever needs one of these legitimately, allow-list
+        // here EXPLICITLY (not by removing the check).
+        let banned_keys = [
+            "prompt",
+            "model_output",
+            "stderr",
+            "binary_path",
+            "path",
+            "home_dir",
+            "user",
+            "username",
+            "hostname",
+            "ip",
+            "token",
+            "credentials",
+        ];
+        for e in events {
+            let p = e.properties();
+            let p_obj = p
+                .as_object()
+                .expect("claude_code event must serialise as object");
+            for k in p_obj.keys() {
+                assert!(
+                    !banned_keys.contains(&k.as_str()),
+                    "claude_code event '{}' leaks via property '{}'",
+                    e.name(),
+                    k
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn claude_code_event_names_are_dotted_lowercase() {
+        let names = [
+            Event::ClaudeCodeStatusProbed { status: "ready" }.name(),
+            Event::ClaudeCodeLoginSpawned.name(),
+            Event::ClaudeCodeLoginCompleted { outcome: "success" }.name(),
+            Event::ClaudeCodeInvocation {
+                kind: "recap",
+                processing_ms_bucket: "lt_500",
+                success: true,
+                error_category: "ok",
+            }
+            .name(),
+        ];
+        for n in names {
+            assert!(
+                n.starts_with("claude_code."),
+                "claude_code event name must start with 'claude_code.': {}",
+                n
+            );
+            assert!(
+                n.chars().all(|c| c.is_lowercase() || c == '.' || c == '_'),
+                "claude_code event name must be lowercase + dot/underscore: {}",
+                n
+            );
         }
     }
 

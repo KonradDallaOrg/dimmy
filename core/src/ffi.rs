@@ -271,6 +271,8 @@ fn dimmy_init_inner() -> c_int {
         llm_api_url: Mutex::new(file_cfg.llm_api_url),
         llm_api_model: Mutex::new(file_cfg.llm_api_model),
         llm_use_same_key: Mutex::new(file_cfg.llm_use_same_key),
+        llm_auth_method: Mutex::new(file_cfg.llm_auth_method.clone()),
+        recap_auth_method: Mutex::new(file_cfg.recap_auth_method.clone()),
         llm_api_key: Mutex::new(stored_llm_key),
         llm_log_enabled: Mutex::new(file_cfg.llm_log_enabled),
         recap_model_override: Mutex::new(file_cfg.recap_model_override),
@@ -1247,6 +1249,8 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "llm_api_url": *st.llm_api_url.lock().unwrap_or_else(|e| e.into_inner()),
         "llm_api_model": *st.llm_api_model.lock().unwrap_or_else(|e| e.into_inner()),
         "llm_use_same_key": *st.llm_use_same_key.lock().unwrap_or_else(|e| e.into_inner()),
+        "llm_auth_method": st.llm_auth_method.lock().map(|s| s.clone()).unwrap_or_else(|_| "api_key".to_string()),
+        "recap_auth_method": st.recap_auth_method.lock().map(|s| s.clone()).unwrap_or_default(),
         "has_llm_key": has_llm_key,
         "llm_log_enabled": *st.llm_log_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "recap_model_override": st.recap_model_override.lock().unwrap_or_else(|e| e.into_inner()).clone(),
@@ -1546,6 +1550,29 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
     if let Some(b) = v["llm_use_same_key"].as_bool() {
         if let Ok(mut k) = st.llm_use_same_key.lock() {
             *k = b;
+        }
+    }
+    if let Some(s) = v["llm_auth_method"].as_str() {
+        // Allow-list of accepted values so a malformed UI write
+        // can't put the dispatcher into an undefined state.
+        let normalized = match s {
+            "api_key" | "subscription" => s,
+            _ => "api_key",
+        };
+        if let Ok(mut m) = st.llm_auth_method.lock() {
+            *m = normalized.to_string();
+        }
+    }
+    if let Some(s) = v["recap_auth_method"].as_str() {
+        // Empty string is a legitimate "inherit from llm_auth_method"
+        // signal. Anything else must match the same allow-list as
+        // the dictation knob.
+        let normalized = match s {
+            "" | "api_key" | "subscription" => s,
+            _ => "",
+        };
+        if let Ok(mut m) = st.recap_auth_method.lock() {
+            *m = normalized.to_string();
         }
     }
     if let Some(key) = v["llm_api_key"].as_str() {
@@ -2377,20 +2404,36 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
         .lock()
         .map(|m| m.clone())
         .unwrap_or_default();
+    let auth_method = st
+        .llm_auth_method
+        .lock()
+        .map(|s| s.clone())
+        .unwrap_or_else(|_| "api_key".to_string());
 
-    let api_key = if use_same_key {
-        st.api_key.lock().ok().and_then(|k| k.clone())
+    // Subscription mode bypasses the API-key check — the local `claude`
+    // CLI carries auth via the user's saved Anthropic OAuth token in
+    // ~/.claude/credentials.json. The legacy `claude-code://` URL is
+    // also a "no API key" signal, kept for back-compat with configs
+    // from the first iteration.
+    let is_subscription =
+        auth_method == "subscription" || crate::claude_code::is_claude_code_url(&llm_url);
+
+    let api_key = if is_subscription {
+        String::new()
     } else {
-        st.llm_api_key.lock().ok().and_then(|k| k.clone())
-    };
-
-    let api_key = match api_key {
-        Some(k) if !k.is_empty() => k,
-        _ => {
-            log("ERROR: dimmy_process_with_llm: no LLM API key available");
-            emit_event("error", r#"{"message":"No LLM API key configured"}"#);
-            // Return original text on key error (graceful degradation)
-            return write_to_buf(text, out_buf, buf_len);
+        let raw = if use_same_key {
+            st.api_key.lock().ok().and_then(|k| k.clone())
+        } else {
+            st.llm_api_key.lock().ok().and_then(|k| k.clone())
+        };
+        match raw {
+            Some(k) if !k.is_empty() => k,
+            _ => {
+                log("ERROR: dimmy_process_with_llm: no LLM API key available");
+                emit_event("error", r#"{"message":"No LLM API key configured"}"#);
+                // Return original text on key error (graceful degradation)
+                return write_to_buf(text, out_buf, buf_len);
+            }
         }
     };
 
@@ -2430,6 +2473,7 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
         tone,
         &custom_prompt,
         &translate_to,
+        &auth_method,
     ));
     let llm_processing_ms = llm_start.elapsed().as_millis() as u64;
     let llm_provider_static: &'static str = crate::telemetry::sanitize::provider_from_url(&api_url);
@@ -3024,6 +3068,127 @@ pub unsafe extern "C" fn dimmy_user_dict_list_json(out_buf: *mut c_char, buf_len
     write_to_buf(&json, out_buf, buf_len)
 }
 
+// ── Claude Code (subscription login) ──────────────────────────────
+// Use the user's Anthropic Pro / Team / Max subscription for LLM
+// calls instead of consuming API-key credits. Delegates auth to
+// Anthropic's official `claude` CLI (which handles browser-based
+// OAuth) and dispatches every LLM call through a subprocess. See
+// `core/src/claude_code.rs` for the full design.
+
+/// Probe local Claude Code state. Returns:
+///   0 = ready  (binary installed + credentials present)
+///   1 = installed but not logged in
+///   2 = not installed
+///  -1 = lock/IO failure during probe
+#[no_mangle]
+pub extern "C" fn dimmy_claude_code_status() -> c_int {
+    let s = crate::claude_code::status();
+    crate::telemetry::track(crate::telemetry::Event::ClaudeCodeStatusProbed {
+        status: crate::claude_code::status_label(&s),
+    });
+    s.as_code()
+}
+
+/// Return the resolved Claude Code binary path into `out_buf` (as
+/// a NUL-terminated UTF-8 string). Length of bytes written (without
+/// NUL) on success, 0 if not installed, -1 on invalid args / too-
+/// small buffer.
+///
+/// # Safety
+/// `out_buf` must be a valid writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_claude_code_binary_path(
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    match crate::claude_code::detect_binary() {
+        Some(p) => {
+            let s = p.to_string_lossy().to_string();
+            if s.len() + 1 > buf_len as usize {
+                return -1;
+            }
+            write_to_buf(&s, out_buf, buf_len)
+        }
+        None => 0,
+    }
+}
+
+/// Spawn `claude /login` so the user can authenticate via browser.
+/// Detached subprocess — returns 0 once the spawn succeeded, -1 on
+/// missing binary, -2 on spawn failure. The actual login completion
+/// is detected by polling `dimmy_claude_code_status()` from the host.
+#[no_mangle]
+pub extern "C" fn dimmy_claude_code_spawn_login() -> c_int {
+    match crate::claude_code::spawn_login() {
+        Ok(()) => 0,
+        Err(crate::claude_code::ClaudeCodeError::NotInstalled) => -1,
+        Err(_) => -2,
+    }
+}
+
+/// Run a small "ping" round-trip through the local `claude` CLI to
+/// verify the subprocess can dispatch a real call. The host uses this
+/// for the Settings "Test connection" button — gives the user a
+/// concrete success signal that the binary works, the credentials
+/// are alive, and a sample request completes within ~15 s.
+///
+/// The prompt is hard-coded to `"reply with the single word: pong"`
+/// so the user's recent transcripts can NEVER end up on the wire
+/// here — the test is observably content-free.
+///
+/// Returns the elapsed milliseconds on success (always > 0). Negative
+/// values are categorical error codes:
+///   -1 = not installed (binary missing)
+///   -2 = not logged in (credentials missing)
+///   -3 = subprocess spawn failure (OS-level)
+///   -4 = invocation timeout (10 s ceiling)
+///   -5 = non-zero exit from `claude`
+///   -6 = stdout was not valid UTF-8
+///
+/// Side-effect: emits `claude_code.invocation` with kind="test" so
+/// dashboards can distinguish ping invocations from real recap /
+/// rewrite calls.
+#[no_mangle]
+pub extern "C" fn dimmy_claude_code_ping() -> c_int {
+    use crate::claude_code::{error_category, ClaudeCodeError};
+    let started = std::time::Instant::now();
+    let result = crate::claude_code::run_blocking(
+        "reply with the single word: pong",
+        "",
+        std::time::Duration::from_secs(15),
+    );
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    let (success, category) = match &result {
+        Ok(_) => (true, "ok"),
+        Err(e) => (false, error_category(e)),
+    };
+    crate::telemetry::track(crate::telemetry::Event::ClaudeCodeInvocation {
+        kind: "test",
+        processing_ms_bucket: crate::telemetry::sanitize::bucket_processing_ms(elapsed_ms),
+        success,
+        error_category: category,
+    });
+    match result {
+        Ok(_) => {
+            // Clamp to fit i32; a successful round-trip well under
+            // 60 s never overflows but keep the contract explicit.
+            let ms = elapsed_ms.min(i32::MAX as u64) as c_int;
+            // Never return 0 from success — the host distinguishes
+            // success-with-zero-elapsed from error states.
+            ms.max(1)
+        }
+        Err(ClaudeCodeError::NotInstalled) => -1,
+        Err(ClaudeCodeError::NotLoggedIn) => -2,
+        Err(ClaudeCodeError::Spawn(_)) => -3,
+        Err(ClaudeCodeError::Timeout) => -4,
+        Err(ClaudeCodeError::NonZeroExit { .. }) => -5,
+        Err(ClaudeCodeError::InvalidUtf8) => -6,
+    }
+}
+
 // ── Notion integration ─────────────────────────────────────────────
 // Internal-integration-token model: user pastes a `ntn_...` token
 // from notion.so/my-integrations into the Settings UI; we store it
@@ -3365,8 +3530,31 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
         .ok()
         .and_then(|k| k.clone())
         .unwrap_or_default();
+    // The recap-specific override wins. Empty string = "inherit"
+    // (fall through to the dictation knob). Lets a user run fast
+    // dictation via API key while routing the meeting recap via
+    // subscription to avoid spending Opus credit.
+    let recap_override = st
+        .recap_auth_method
+        .lock()
+        .map(|s| s.clone())
+        .unwrap_or_default();
+    let auth_method = if recap_override.is_empty() {
+        st.llm_auth_method
+            .lock()
+            .map(|s| s.clone())
+            .unwrap_or_else(|_| "api_key".to_string())
+    } else {
+        recap_override
+    };
 
-    if api_url.is_empty() || api_key.is_empty() {
+    // Subscription mode doesn't need an HTTP URL or an API key —
+    // the local `claude` CLI handles both. The legacy
+    // `claude-code://` URL is also a "no key needed" signal, kept
+    // for back-compat with configs written before this redesign.
+    let is_subscription =
+        auth_method == "subscription" || crate::claude_code::is_claude_code_url(&api_url);
+    if !is_subscription && (api_url.is_empty() || api_key.is_empty()) {
         log("[LlmRaw] missing api_url or api_key — configure an LLM in Settings");
         return -2;
     }
@@ -3393,7 +3581,15 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
         }
     };
     let result = runtime.block_on(async {
-        crate::llm::process_raw_prompt(&api_url, &model, &api_key, &prompt, max_tokens_u).await
+        crate::llm::process_raw_prompt(
+            &api_url,
+            &model,
+            &api_key,
+            &prompt,
+            max_tokens_u,
+            &auth_method,
+        )
+        .await
     });
     match result {
         Ok(text) => {
@@ -4769,6 +4965,13 @@ pub unsafe extern "C" fn dimmy_telemetry_track_typed(
                 &["microphone", "accessibility", "input_monitoring"],
             ),
         }),
+        // claude_code.* — login funnel emitted from the host polling
+        // loop. The `claude_code.invocation` event lives Rust-side
+        // (emitted from `process_text` / `process_raw_prompt`) so the
+        // host doesn't dispatch it.
+        "claude_code.login_completed" => Some(crate::telemetry::Event::ClaudeCodeLoginCompleted {
+            outcome: prop_static("outcome", &["success", "timeout", "spawn_failed"]),
+        }),
         _ => None,
     };
     // `prop_str` is unused for now — kept available for any future
@@ -5744,6 +5947,8 @@ mod tests {
                 llm_api_url: Mutex::new(String::new()),
                 llm_api_model: Mutex::new(String::new()),
                 llm_use_same_key: Mutex::new(true),
+                llm_auth_method: Mutex::new("api_key".to_string()),
+                recap_auth_method: Mutex::new(String::new()),
                 llm_api_key: Mutex::new(None),
                 llm_log_enabled: Mutex::new(false),
                 recap_model_override: Mutex::new(String::new()),

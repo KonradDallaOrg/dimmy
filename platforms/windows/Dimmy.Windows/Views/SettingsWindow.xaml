@@ -902,6 +902,28 @@
                     </ComboBoxItem>
                   </ComboBox>
                 </controls:SettingCard>
+                <!-- LLM Authentication — only shown for providers that
+                     actually offer a non-API-key auth option (today:
+                     Anthropic via Claude Code subscription). The
+                     RadioButton group flips ViewModel.LlmAuthMethod
+                     which the Rust dispatcher reads on every LLM
+                     call. -->
+                <controls:SettingCard x:Name="LlmAuthMethodCard"
+                                      Glyph="&#xE192;"
+                                      Label="Authentication"
+                                      Description="How Dimmy authenticates LLM calls for this provider."
+                                      Visibility="Collapsed">
+                  <StackPanel Orientation="Vertical" Spacing="2">
+                    <RadioButton x:Name="LlmAuthMethodApiKey"
+                                 GroupName="LlmAuthMethod"
+                                 Content="API key (classic, pay per token)"
+                                 Checked="LlmAuthMethod_Changed"/>
+                    <RadioButton x:Name="LlmAuthMethodSubscription"
+                                 GroupName="LlmAuthMethod"
+                                 Content="Anthropic subscription (Pro / Team / Max, via local claude CLI)"
+                                 Checked="LlmAuthMethod_Changed"/>
+                  </StackPanel>
+                </controls:SettingCard>
                 <controls:SettingCard x:Name="LlmCustomUrlCard"
                                       Glyph="&#xE71B;"
                                       Label="Custom LLM endpoint"
@@ -918,13 +940,15 @@
                   <TextBox x:Name="LlmCustomModelBox" MinWidth="240"
                            Text="{Binding LlmApiModel, Mode=TwoWay}" />
                 </controls:SettingCard>
-                <controls:SettingCard Glyph="&#xE192;"
+                <controls:SettingCard x:Name="LlmUseSameKeyCard"
+                                      Glyph="&#xE192;"
                                       Label="Use same API key as STT"
                                       Description="Reuse the speech-to-text key for the LLM provider when both are the same vendor.">
                   <ToggleSwitch IsOn="{Binding LlmUseSameKey, Mode=TwoWay}"
                                 OnContent="" OffContent="" />
                 </controls:SettingCard>
-                <controls:SettingCard Glyph="&#xE192;"
+                <controls:SettingCard x:Name="LlmApiKeyCard"
+                                      Glyph="&#xE192;"
                                       Label="LLM API key"
                                       Description="Encrypted locally. Used when not sharing with STT."
                                       Visibility="{Binding LlmUseSameKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Invert}">
@@ -934,6 +958,42 @@
                     <FontIcon Glyph="&#xE73E;" FontSize="16" Foreground="#4ade80"
                               VerticalAlignment="Center"
                               Visibility="{Binding HasLlmKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
+                  </StackPanel>
+                </controls:SettingCard>
+                <!-- Subscription status card. Sits right after the API
+                     key entry so the two auth surfaces (key vs token)
+                     are visually adjacent. Visibility logic in
+                     RefreshClaudeCodeStatus: shown iff at least one
+                     call site (dictation or recap) is currently
+                     routed via the subscription. -->
+                <controls:SettingCard x:Name="ClaudeCodeStatusCard"
+                                      Visibility="Collapsed"
+                                      Glyph="&#xE779;"
+                                      Label="Claude Code subscription"
+                                      Description="Initializing…"
+                                      ToolTipService.ToolTip="Uses your Anthropic Pro / Team / Max plan via the local `claude` CLI. No API key needed. Dimmy never sees your token — the CLI owns it.">
+                  <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                    <Button x:Name="ClaudeCodeSignInBtn"
+                            Click="ClaudeCodeSignIn_Click"
+                            ToolTipService.ToolTip="Open the Anthropic OAuth flow in a terminal window">
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xE8A7;" FontSize="14"/>
+                        <TextBlock x:Name="ClaudeCodeSignInLabel" Text="Sign in"/>
+                      </StackPanel>
+                    </Button>
+                    <Button x:Name="ClaudeCodeTestBtn"
+                            Click="ClaudeCodeTest_Click"
+                            ToolTipService.ToolTip="Send a small ping prompt to verify end-to-end (binary + login + network)">
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xE945;" FontSize="14"/>
+                        <TextBlock Text="Test"/>
+                      </StackPanel>
+                    </Button>
+                    <Button x:Name="ClaudeCodeRefreshBtn"
+                            Click="ClaudeCodeRefresh_Click"
+                            ToolTipService.ToolTip="Re-probe Claude Code status">
+                      <FontIcon Glyph="&#xE72C;" FontSize="14"/>
+                    </Button>
                   </StackPanel>
                 </controls:SettingCard>
                 <controls:SettingCard Glyph="&#xE8B5;"
@@ -1039,6 +1099,33 @@
                            PlaceholderText="e.g. claude-opus-4-7-thinking-extra"
                            Text="{Binding RecapModelOverride, Mode=TwoWay}"
                            LostFocus="RecapModelCustom_LostFocus" />
+                </controls:SettingCard>
+                <!-- Recap-specific authentication override. Only shown
+                     when the dictation provider is Anthropic (the only
+                     vendor with a subscription path today). Lets users
+                     run dictation rewrite via API key (fast, no
+                     subprocess cold-start) and meeting recap via the
+                     Anthropic subscription (overhead amortized across
+                     30-90 s of model inference). -->
+                <controls:SettingCard x:Name="RecapAuthMethodCard"
+                                      Glyph="&#xE192;"
+                                      Label="Recap authentication"
+                                      Description="Override the auth method specifically for the meeting recap call."
+                                      Visibility="Collapsed">
+                  <StackPanel Orientation="Vertical" Spacing="2">
+                    <RadioButton x:Name="RecapAuthInherit"
+                                 GroupName="RecapAuthMethod"
+                                 Content="Same as dictation rewrite (default)"
+                                 Checked="RecapAuthMethod_Changed"/>
+                    <RadioButton x:Name="RecapAuthApiKey"
+                                 GroupName="RecapAuthMethod"
+                                 Content="Force API key (paid, but fast cold start)"
+                                 Checked="RecapAuthMethod_Changed"/>
+                    <RadioButton x:Name="RecapAuthSubscription"
+                                 GroupName="RecapAuthMethod"
+                                 Content="Force subscription (via local claude CLI)"
+                                 Checked="RecapAuthMethod_Changed"/>
+                  </StackPanel>
                 </controls:SettingCard>
               </StackPanel>
 

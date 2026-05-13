@@ -9,6 +9,7 @@ pub mod app_rules;
 pub mod audio;
 pub mod autostart;
 pub mod chunked_stt;
+pub mod claude_code;
 pub mod dfn;
 pub mod error;
 pub mod ffi;
@@ -373,6 +374,37 @@ pub struct AppConfig {
     pub llm_api_model: String,
     pub llm_use_same_key: bool,
     pub llm_log_enabled: bool,
+    /// How the LLM dispatcher authenticates against the configured
+    /// provider. Two values today:
+    ///   - `"api_key"` (default) — send HTTP requests with the
+    ///     provider's saved API key. Classic behaviour.
+    ///   - `"subscription"` — route every LLM call through the
+    ///     local `claude` CLI (`core/src/claude_code.rs`) using the
+    ///     user's Anthropic Pro/Team/Max plan. Bypasses the URL
+    ///     entirely; the model id is still honoured via `--model X`.
+    ///
+    /// The auth method is orthogonal to provider + model: a user
+    /// can pick `Anthropic + claude-haiku-4-5 + subscription` to
+    /// rewrite via subscription on Haiku, and `Anthropic + claude-
+    /// opus-4-7 + subscription` for recap — same auth, different
+    /// model, all without an API key. Stored as a string for
+    /// forward-compat with future auth schemes (e.g. OAuth on
+    /// other providers if they ever ship one).
+    pub llm_auth_method: String,
+    /// Auth method for the meeting recap call specifically. Separate
+    /// knob from `llm_auth_method` so a user can run fast dictation
+    /// rewrites via API key (subprocess cold-start would dominate
+    /// the latency budget) AND run recap via the Anthropic
+    /// subscription where the same overhead is amortized across
+    /// 30-90 s of model inference.
+    ///
+    ///   - `""` (default) — inherit from `llm_auth_method`. Single-
+    ///     knob users see exactly the behaviour they configured.
+    ///   - `"api_key"` — force API-key HTTP for the recap regardless
+    ///     of dictation auth.
+    ///   - `"subscription"` — force subprocess CLI for the recap
+    ///     regardless of dictation auth.
+    pub recap_auth_method: String,
     /// Model ID override for the meeting recap call (empty = use the
     /// provider-default flagship reasoning model picked by the C# side
     /// via PickRecapModel — claude-opus-4-7 / gemini-3-1-pro / gpt-5).
@@ -514,6 +546,8 @@ impl Default for AppConfig {
             llm_api_model: DEFAULT_LLM_MODEL.to_string(),
             llm_use_same_key: true,
             llm_log_enabled: false,
+            llm_auth_method: "api_key".to_string(),
+            recap_auth_method: String::new(),
             recap_model_override: String::new(),
             chunk_streaming_enabled: false,
             preprocessing_enabled: true,
@@ -614,6 +648,8 @@ pub fn save_config_file(cfg: &AppConfig) {
             "llm_api_model": cfg.llm_api_model,
             "llm_use_same_key": cfg.llm_use_same_key,
             "llm_log_enabled": cfg.llm_log_enabled,
+            "llm_auth_method": cfg.llm_auth_method,
+            "recap_auth_method": cfg.recap_auth_method,
             "recap_model_override": cfg.recap_model_override,
             "chunk_streaming_enabled": cfg.chunk_streaming_enabled,
             "preprocessing_enabled": cfg.preprocessing_enabled,
@@ -731,6 +767,14 @@ pub fn load_config_file() -> AppConfig {
                     llm_log_enabled: v["llm_log_enabled"]
                         .as_bool()
                         .unwrap_or(defaults.llm_log_enabled),
+                    llm_auth_method: v["llm_auth_method"]
+                        .as_str()
+                        .unwrap_or(&defaults.llm_auth_method)
+                        .to_string(),
+                    recap_auth_method: v["recap_auth_method"]
+                        .as_str()
+                        .unwrap_or(&defaults.recap_auth_method)
+                        .to_string(),
                     recap_model_override: v["recap_model_override"]
                         .as_str()
                         .unwrap_or(&defaults.recap_model_override)
@@ -1032,6 +1076,8 @@ pub struct AppState {
     pub llm_api_url: Mutex<String>,
     pub llm_api_model: Mutex<String>,
     pub llm_use_same_key: Mutex<bool>,
+    pub llm_auth_method: Mutex<String>,
+    pub recap_auth_method: Mutex<String>,
     pub recap_model_override: Mutex<String>,
     pub llm_api_key: Mutex<Option<String>>,
     pub llm_log_enabled: Mutex<bool>,
@@ -1166,6 +1212,8 @@ impl AppState {
             llm_api_url: Mutex::new(file_cfg.llm_api_url),
             llm_api_model: Mutex::new(file_cfg.llm_api_model),
             llm_use_same_key: Mutex::new(file_cfg.llm_use_same_key),
+            llm_auth_method: Mutex::new(file_cfg.llm_auth_method),
+            recap_auth_method: Mutex::new(file_cfg.recap_auth_method),
             recap_model_override: Mutex::new(file_cfg.recap_model_override),
             llm_api_key: Mutex::new(stored_llm_key),
             llm_log_enabled: Mutex::new(file_cfg.llm_log_enabled),
@@ -1271,6 +1319,16 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         .clone();
     let llm_use_same_key = *state.llm_use_same_key.lock().map_err(|e| e.to_string())?;
     let llm_log_enabled = *state.llm_log_enabled.lock().map_err(|e| e.to_string())?;
+    let llm_auth_method = state
+        .llm_auth_method
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
+    let recap_auth_method = state
+        .recap_auth_method
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     let recap_model_override = state
         .recap_model_override
         .lock()
@@ -1340,6 +1398,8 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         llm_api_model,
         llm_use_same_key,
         llm_log_enabled,
+        llm_auth_method,
+        recap_auth_method,
         recap_model_override,
         chunk_streaming_enabled,
         preprocessing_enabled,
