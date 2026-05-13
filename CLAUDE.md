@@ -178,8 +178,21 @@ Hardening status: see [`docs/dev/system-audio-capture-tests.md`](docs/dev/system
 ### Windows CI
 All 10 invariants live in [`docs/dev/windows-ci.md`](docs/dev/windows-ci.md) — paid in blood, MUST be read before editing `.github/workflows/` or `platforms/windows/`. Run `/windows-ci-preflight` before pushing any workflow change.
 
-### Versioning
-- Update `core/Cargo.toml` → `version = "x.y.z"` for every release.
+### Versioning — MANDATORY VERSION CHECK BEFORE ANY RELEASE WORK
+
+**STOP. Before you bump, tag, build a release, or even open a release PR — check what version is already out there.** `core/Cargo.toml` on a branch can be stale (rc1 of a version that's already been final-released, or a number behind because someone else shipped while the branch was open). Bumping based only on Cargo.toml content has caused at least one rollback (2026-05-13: bumped `0.6.37-rc1` → `0.6.37` while `v0.6.38-rc1` had already been tagged the night before; had to cancel the in-flight Staging Release and force-bump to `0.6.38` mid-pipeline).
+
+**Pre-release checklist — run all three, every time:**
+
+1. `gh release list --limit 10` — what's the most recent GitHub release/pre-release?
+2. `git tag --sort=-version:refname | head -10` — what's the highest tag?
+3. `cat core/Cargo.toml | head -5` — what does the source-of-truth say?
+
+The next version is `max(github_releases, git_tags) + 1 patch`. If Cargo.toml is lower, **bump it FIRST**, separate commit, before doing anything release-shaped (PR merge to staging, tag push, release.yml trigger).
+
+If you're about to bump and `gh release list` shows a higher version than what you were going to write, **stop and reconcile**. Don't ship a version number lower than what's published. Don't ship a duplicate. Don't reuse a -rc tag for a different commit.
+
+- Update `core/Cargo.toml` → `version = "x.y.z"` for every release (separate commit, message starts with `chore(release): bump`).
 - Full runbook: [`docs/RELEASING.md`](docs/RELEASING.md).
 
 ### No FFI-state polling rule
