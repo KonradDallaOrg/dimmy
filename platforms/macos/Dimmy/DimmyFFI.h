@@ -442,6 +442,15 @@ int32_t dimmy_claude_code_spawn_login(void);
 ///   -4 timeout (15 s), -5 non-zero exit, -6 invalid utf-8 output.
 int32_t dimmy_claude_code_ping(void);
 
+/// Diagnostic snapshot of CLI binary detection — JSON with every
+/// candidate path tried, which existed, whether the login-shell
+/// fallback found one, and credentials-source label. Used by
+/// Settings → About → Diagnostics so a user reporting "claude is
+/// installed but Dimmy says NotInstalled" can copy/paste the JSON
+/// into a bug report. Returns bytes written, or -1 (null buf) /
+/// -2 (buf too small).
+int32_t dimmy_claude_code_diagnostics(char * _Nonnull out_buf, int32_t buf_len);
+
 /// Track a host-side telemetry event by name with optional JSON
 /// properties. Used by the Mac UI to emit categorical events whose
 /// trigger is host-side (login outcome polling, file-load source,

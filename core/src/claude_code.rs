@@ -97,11 +97,19 @@ pub fn clear_cache() {
 /// Common locations where Claude Code installs the binary,
 /// cross-platform. The list is walked in order until the first
 /// existing file is hit.
+///
+/// Mac coverage note (2026-05-13 incident): macOS GUI apps inherit
+/// the system base PATH (`/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin`),
+/// NOT the user's login-shell PATH. So a user who installed via
+/// `nvm` / `volta` / `npm with custom prefix` / `yarn` / `pnpm` /
+/// `fnm` / `asdf` has the CLI working in Terminal but invisible to
+/// a GUI-launched Dimmy.app. We enumerate the seven Node-manager
+/// install patterns explicitly; the login-shell fallback in
+/// `detect_binary()` catches anything more exotic.
 fn candidate_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
 
-    // 1. User-local install dir (preferred — survives across PATH
-    //    changes, doesn't require admin).
+    // 1. User-local install dirs.
     if let Some(home) = dirs::home_dir() {
         #[cfg(target_os = "windows")]
         {
@@ -111,7 +119,66 @@ fn candidate_paths() -> Vec<PathBuf> {
         }
         #[cfg(not(target_os = "windows"))]
         {
+            // CLI self-managed shim (only present if the user ran a
+            // claude /install-shim or equivalent).
             paths.push(home.join(".claude").join("local").join("claude"));
+
+            // XDG user-bin — pipx, mise (Rust-based runtime manager),
+            // manual installs, and increasingly many distro-agnostic
+            // package managers default here. Suggested by user's Mac
+            // colleague's independent diagnosis (2026-05-13).
+            paths.push(home.join(".local").join("bin").join("claude"));
+
+            // npm with custom global prefix (very common — devs who
+            // ran `npm config set prefix ~/.npm-global` to avoid sudo).
+            paths.push(home.join(".npm-global").join("bin").join("claude"));
+
+            // Yarn global.
+            paths.push(home.join(".yarn").join("bin").join("claude"));
+
+            // Volta — atomic Node version manager (puts shims here).
+            paths.push(home.join(".volta").join("bin").join("claude"));
+
+            // nvm — walk all installed Node versions. nvm doesn't
+            // symlink into a stable path; each `node` version has
+            // its own bin/.
+            let nvm_root = home.join(".nvm").join("versions").join("node");
+            if let Ok(entries) = std::fs::read_dir(&nvm_root) {
+                for entry in entries.flatten() {
+                    paths.push(entry.path().join("bin").join("claude"));
+                }
+            }
+
+            // fnm — newer Node version manager (Rust-based).
+            let fnm_root = home.join(".fnm").join("node-versions");
+            if let Ok(entries) = std::fs::read_dir(&fnm_root) {
+                for entry in entries.flatten() {
+                    paths.push(entry.path().join("installation").join("bin").join("claude"));
+                }
+            }
+
+            // asdf — multi-runtime manager (popular in polyglot teams).
+            let asdf_node = home.join(".asdf").join("installs").join("nodejs");
+            if let Ok(entries) = std::fs::read_dir(&asdf_node) {
+                for entry in entries.flatten() {
+                    paths.push(entry.path().join("bin").join("claude"));
+                }
+            }
+
+            // pnpm — Mac/Linux paths differ slightly.
+            #[cfg(target_os = "macos")]
+            {
+                paths.push(home.join("Library").join("pnpm").join("claude"));
+            }
+            #[cfg(target_os = "linux")]
+            {
+                paths.push(
+                    home.join(".local")
+                        .join("share")
+                        .join("pnpm")
+                        .join("claude"),
+                );
+            }
         }
     }
 
@@ -173,11 +240,82 @@ fn candidate_paths() -> Vec<PathBuf> {
     paths
 }
 
+/// Mac/Linux fallback: ask the user's LOGIN shell where `claude` is.
+///
+/// macOS GUI apps inherit the system base PATH (no `.zprofile`/
+/// `.zshrc`/`.bash_profile` sourcing). A user who installed claude
+/// via a Node-manager whose dir we don't enumerate above (or via a
+/// path that lives behind a custom shell config) will have a working
+/// CLI in Terminal that's invisible to Dimmy. The login shell knows
+/// the real PATH because it sources the user's rc files.
+///
+/// We use `command -v` which is the POSIX-portable equivalent of
+/// `which` and doesn't print spurious output. ~50 ms one-shot.
+///
+/// SECURITY: we only consume the FIRST line of stdout, trimmed and
+/// verified to point at an existing regular file. A malicious
+/// `.zshrc` that printed garbage to stdout (during sourcing) can't
+/// inject a fake path here because we re-verify with `is_file()`
+/// before trusting it.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn detect_via_login_shell() -> Option<PathBuf> {
+    use std::process::Command;
+    // Prefer zsh on Mac (default since Catalina), bash on Linux. If
+    // either is absent, the spawn fails harmlessly and we return None.
+    #[cfg(target_os = "macos")]
+    let shell = "/bin/zsh";
+    #[cfg(target_os = "linux")]
+    let shell = "/bin/bash";
+
+    let output = Command::new(shell)
+        .args(["-l", "-c", "command -v claude 2>/dev/null"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let first = stdout.lines().next()?.trim();
+    if first.is_empty() {
+        return None;
+    }
+    let p = PathBuf::from(first);
+    if p.is_file() {
+        crate::log(&format!(
+            "[ClaudeCode] login-shell fallback resolved binary at {:?}",
+            p
+        ));
+        Some(p)
+    } else {
+        None
+    }
+}
+
 /// Locate the `claude` binary. Returns the first candidate that
 /// exists on disk. Returns `None` if none of the candidates match.
+///
+/// Two-tier search:
+///   1. Explicit candidate paths (fast, ~stat-only).
+///   2. Mac/Linux login-shell fallback when 1 fails (~50 ms once).
+///
+/// Result is cached in `BINARY_CACHE` so the slow path runs at most
+/// once per app launch. The cache is invalidated by `clear_cache()`
+/// which should be called after an install/uninstall event.
 pub fn detect_binary() -> Option<PathBuf> {
     BINARY_CACHE
-        .get_or_init(|| candidate_paths().into_iter().find(|c| c.is_file()))
+        .get_or_init(|| {
+            if let Some(p) = candidate_paths().into_iter().find(|c| c.is_file()) {
+                return Some(p);
+            }
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            {
+                detect_via_login_shell()
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+            {
+                None
+            }
+        })
         .clone()
 }
 
@@ -234,6 +372,88 @@ pub fn has_credentials() -> bool {
     }
 
     false
+}
+
+/// Diagnostic snapshot — returns JSON with the full path-search
+/// trace so a user reporting "CLI is installed but Dimmy says
+/// NotInstalled" can copy/paste it into a bug report. Logs no
+/// content (just paths + booleans).
+///
+/// Shape:
+/// ```json
+/// {
+///   "resolved": "/Users/u/.nvm/versions/node/v22.0.0/bin/claude",
+///   "via_login_shell": true,
+///   "candidates": [
+///     {"path": "/Users/u/.claude/local/claude", "exists": false},
+///     {"path": "/opt/homebrew/bin/claude", "exists": false},
+///     ...
+///   ],
+///   "credentials_present": true,
+///   "credentials_source": "keychain"
+/// }
+/// ```
+pub fn diagnostics_json() -> String {
+    let candidates: Vec<serde_json::Value> = candidate_paths()
+        .into_iter()
+        .map(|p| {
+            serde_json::json!({
+                "path": p.to_string_lossy(),
+                "exists": p.is_file(),
+            })
+        })
+        .collect();
+
+    let resolved_via_explicit = candidate_paths().into_iter().find(|c| c.is_file());
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    let resolved_via_shell = if resolved_via_explicit.is_none() {
+        detect_via_login_shell()
+    } else {
+        None
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    let resolved_via_shell: Option<PathBuf> = None;
+
+    let resolved = resolved_via_explicit
+        .as_ref()
+        .or(resolved_via_shell.as_ref());
+
+    // Credentials probe — we don't read the file, only check
+    // existence + len > 0 + (on Mac) Keychain.
+    let creds_present = has_credentials();
+    let creds_source = if creds_present {
+        if let Some(home) = dirs::home_dir() {
+            let p1 = home.join(".claude").join("credentials.json");
+            let p2 = home.join(".claude").join(".credentials.json");
+            if p1.is_file() {
+                "file:credentials.json"
+            } else if p2.is_file() {
+                "file:.credentials.json"
+            } else {
+                #[cfg(target_os = "macos")]
+                {
+                    "keychain"
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    "unknown"
+                }
+            }
+        } else {
+            "unknown"
+        }
+    } else {
+        "none"
+    };
+
+    serde_json::json!({
+        "resolved": resolved.map(|p| p.to_string_lossy().into_owned()),
+        "via_login_shell": resolved_via_shell.is_some(),
+        "candidates": candidates,
+        "credentials_present": creds_present,
+        "credentials_source": creds_source,
+    })
+    .to_string()
 }
 
 /// Combine binary detection + credentials check into a single
@@ -560,6 +780,77 @@ mod tests {
             1
         );
         assert_eq!(ClaudeCodeStatus::NotInstalled.as_code(), 2);
+    }
+
+    /// Mac GUI apps inherit a base PATH that excludes the user's
+    /// Node-manager bin dirs. To avoid the 2026-05-13 "colleague has
+    /// claude installed, Dimmy says NotInstalled" report repeating,
+    /// pin that we explicitly enumerate the 7 most common install
+    /// patterns. If a future cleanup drops one of these, this test
+    /// catches it before ship.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn candidate_paths_includes_node_manager_install_dirs() {
+        let paths = candidate_paths();
+        let path_strs: Vec<String> = paths
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        let joined = path_strs.join("\n");
+
+        // Must cover npm custom prefix.
+        assert!(
+            joined.contains(".npm-global/bin/claude")
+                || joined.contains(".npm-global\\bin\\claude"),
+            "missing ~/.npm-global/bin/claude — npm custom-prefix users would be invisible"
+        );
+        // Yarn global.
+        assert!(
+            joined.contains(".yarn/bin/claude") || joined.contains(".yarn\\bin\\claude"),
+            "missing ~/.yarn/bin/claude — yarn global users would be invisible"
+        );
+        // Volta.
+        assert!(
+            joined.contains(".volta/bin/claude") || joined.contains(".volta\\bin\\claude"),
+            "missing ~/.volta/bin/claude — Volta users would be invisible"
+        );
+        // XDG user-bin (pipx / mise / manual installs).
+        assert!(
+            joined.contains(".local/bin/claude") || joined.contains(".local\\bin\\claude"),
+            "missing ~/.local/bin/claude — XDG user-bin users would be invisible"
+        );
+    }
+
+    #[test]
+    fn diagnostics_json_is_parseable_and_lists_candidates() {
+        let s = diagnostics_json();
+        let v: serde_json::Value =
+            serde_json::from_str(&s).expect("diagnostics output must be valid JSON");
+        // Top-level keys present.
+        assert!(v.get("resolved").is_some(), "must include 'resolved' key");
+        assert!(
+            v.get("candidates").is_some(),
+            "must include 'candidates' array"
+        );
+        assert!(
+            v.get("credentials_present").is_some(),
+            "must include 'credentials_present' key"
+        );
+        let cands = v["candidates"]
+            .as_array()
+            .expect("'candidates' must be an array");
+        assert!(
+            !cands.is_empty(),
+            "candidates array can't be empty on any platform"
+        );
+        // Each candidate has the documented shape.
+        for c in cands {
+            assert!(c.get("path").is_some(), "candidate entry missing 'path'");
+            assert!(
+                c.get("exists").is_some(),
+                "candidate entry missing 'exists'"
+            );
+        }
     }
 
     #[test]

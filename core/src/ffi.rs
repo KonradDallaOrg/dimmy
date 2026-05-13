@@ -3089,6 +3089,32 @@ pub extern "C" fn dimmy_claude_code_status() -> c_int {
     s.as_code()
 }
 
+/// Diagnostic snapshot of the CLI-detection path search. JSON with
+/// every candidate path tried, which existed, whether the login-
+/// shell fallback resolved one, and whether credentials are
+/// readable. Used by the Settings → About → "Diagnostics" button
+/// to surface why detection failed (most common: GUI app PATH
+/// doesn't include the user's Node-manager bin dir).
+///
+/// Returns bytes written, or -1 on null buf / -2 on too-small buf.
+///
+/// # Safety
+/// `out_buf` must be a valid writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_claude_code_diagnostics(
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let json = crate::claude_code::diagnostics_json();
+    if json.len() + 1 > buf_len as usize {
+        return -2;
+    }
+    write_to_buf(&json, out_buf, buf_len)
+}
+
 /// Return the resolved Claude Code binary path into `out_buf` (as
 /// a NUL-terminated UTF-8 string). Length of bytes written (without
 /// NUL) on success, 0 if not installed, -1 on invalid args / too-
