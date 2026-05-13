@@ -1501,70 +1501,138 @@ public sealed partial class SettingsWindow : Window
     /// reflect into the SettingsCard. Called on tab activation, on
     /// provider switch, and after the Sign-in button completes (or
     /// the user clicks the manual refresh ↻).
+    /// <summary>
+    /// Refresh visibility + state of the Anthropic-auth UI surfaces:
+    /// the LlmAuthMethodCard (radio group, only for Anthropic) and
+    /// the ClaudeCodeStatusCard (only when auth = subscription).
+    /// </summary>
     private void RefreshClaudeCodeStatus()
     {
-        // Only show the card when Claude Code is the active LLM
-        // provider — otherwise the card is dead weight.
-        var isClaudeCode = ViewModel.LlmApiUrl != null
-            && ViewModel.LlmApiUrl.StartsWith("claude-code://", StringComparison.Ordinal);
-        ClaudeCodeStatusCard.Visibility = isClaudeCode ? Visibility.Visible : Visibility.Collapsed;
-        if (!isClaudeCode) return;
+        var url = ViewModel.LlmApiUrl ?? "";
+        var isAnthropic = url.Contains("anthropic.com", StringComparison.OrdinalIgnoreCase)
+            // Legacy: configs that still carry the synthetic URL until
+            // the migration in LoadConfig flips them.
+            || url.StartsWith("claude-code://", StringComparison.Ordinal);
+        var isSubscription = string.Equals(ViewModel.LlmAuthMethod, "subscription",
+            StringComparison.Ordinal);
+
+        // The auth-method radio group only shows for Anthropic
+        // because that's the only provider where we have a non-API-
+        // key auth path today.
+        LlmAuthMethodCard.Visibility = isAnthropic ? Visibility.Visible : Visibility.Collapsed;
+        LlmAuthMethodApiKey.IsChecked = !isSubscription;
+        LlmAuthMethodSubscription.IsChecked = isSubscription;
+
+        // Recap-specific override radio — same visibility gate
+        // (Anthropic only) but the three states differ from the
+        // dictation knob: "" = inherit, "api_key" = force, "subscription" = force.
+        RecapAuthMethodCard.Visibility = isAnthropic ? Visibility.Visible : Visibility.Collapsed;
+        switch (ViewModel.RecapAuthMethod)
+        {
+            case "api_key":
+                RecapAuthApiKey.IsChecked = true;
+                break;
+            case "subscription":
+                RecapAuthSubscription.IsChecked = true;
+                break;
+            default:
+                RecapAuthInherit.IsChecked = true;
+                break;
+        }
+
+        // Effective recap auth — "" inherits from dictation.
+        var recapEffective = ViewModel.RecapAuthMethod switch
+        {
+            "api_key" => "api_key",
+            "subscription" => "subscription",
+            _ => ViewModel.LlmAuthMethod,
+        };
+        // Two booleans drive every visibility choice below:
+        //  - keyPathLive: at least one of dictation/recap actually uses
+        //                 the HTTP+key dispatch. If true, the user
+        //                 must be able to see + enter the API key.
+        //  - subPathLive: at least one of dictation/recap actually uses
+        //                 the subprocess CLI. If true, the user must
+        //                 be able to see the login status card.
+        var keyPathLive = !isAnthropic
+            || ViewModel.LlmAuthMethod == "api_key"
+            || recapEffective == "api_key";
+        var subPathLive = isAnthropic
+            && (ViewModel.LlmAuthMethod == "subscription"
+                || recapEffective == "subscription");
+
+        // API-key surface — only when an HTTP path is live AND we have
+        // any provider that needs a key (i.e. always for non-Anthropic
+        // providers, conditional for Anthropic). Honour the
+        // UseSameKey toggle for the key entry itself.
+        LlmUseSameKeyCard.Visibility = keyPathLive ? Visibility.Visible : Visibility.Collapsed;
+        LlmApiKeyCard.Visibility = (keyPathLive && !ViewModel.LlmUseSameKey)
+            ? Visibility.Visible : Visibility.Collapsed;
+
+        // Subscription status — only when a subscription path is live.
+        // The card is positioned right after the API-key entry so the
+        // two auth surfaces are visually adjacent.
+        ClaudeCodeStatusCard.Visibility = subPathLive ? Visibility.Visible : Visibility.Collapsed;
+
+        if (!subPathLive) return;
+
+        // Tell the user WHICH call sites this subscription serves —
+        // useful when the two radios are split (e.g. dictation = key,
+        // recap = force subscription) so they don't wonder why the
+        // login is being requested while the auth-method radio is on
+        // API key.
+        var scopeSuffix = (ViewModel.LlmAuthMethod == "subscription" && recapEffective == "subscription")
+            ? " — used for dictation + recap"
+            : (ViewModel.LlmAuthMethod == "subscription"
+                ? " — used for dictation only"
+                : " — used for recap only");
 
         var status = Interop.DimmyNative.GetClaudeCodeStatus();
         switch (status)
         {
             case Interop.DimmyNative.ClaudeCodeStatus.Ready:
                 var binary = Interop.DimmyNative.GetClaudeCodeBinaryPath() ?? "";
-                ClaudeCodeStatusLabel.Text =
-                    $"✓ Logged in. Using `claude` at {binary}.";
-                ClaudeCodeSignInBtn.Content = BuildSignInLabel("Re-sign in");
+                // Tilde-collapse the home prefix so the description fits
+                // on one line in a normal-width Settings window.
+                var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                var shown = (!string.IsNullOrEmpty(home) && binary.StartsWith(home, StringComparison.OrdinalIgnoreCase))
+                    ? "~" + binary[home.Length..]
+                    : binary;
+                ClaudeCodeStatusCard.Description = $"✓ Logged in — {shown}{scopeSuffix}";
+                ClaudeCodeSignInLabel.Text = "Re-sign in";
                 ClaudeCodeSignInBtn.IsEnabled = true;
+                ClaudeCodeTestBtn.IsEnabled = true;
                 break;
             case Interop.DimmyNative.ClaudeCodeStatus.NotLoggedIn:
-                ClaudeCodeStatusLabel.Text =
-                    "Claude Code is installed but not logged in. Click Sign in to authenticate via browser.";
-                ClaudeCodeSignInBtn.Content = BuildSignInLabel("Sign in via browser");
+                ClaudeCodeStatusCard.Description =
+                    "Claude Code installed but not logged in — click Sign in to authenticate.";
+                ClaudeCodeSignInLabel.Text = "Sign in";
                 ClaudeCodeSignInBtn.IsEnabled = true;
+                ClaudeCodeTestBtn.IsEnabled = false;
                 break;
             case Interop.DimmyNative.ClaudeCodeStatus.NotInstalled:
             default:
-                ClaudeCodeStatusLabel.Text =
-                    "Claude Code CLI not detected. Install via `npm install -g @anthropic-ai/claude-code` or from anthropic.com, then click ↻.";
+                ClaudeCodeStatusCard.Description =
+                    "Claude Code CLI not detected. Install with `npm i -g @anthropic-ai/claude-code`, then click ↻.";
+                ClaudeCodeSignInLabel.Text = "Install first";
                 ClaudeCodeSignInBtn.IsEnabled = false;
+                ClaudeCodeTestBtn.IsEnabled = false;
                 break;
         }
     }
 
-    private static Microsoft.UI.Xaml.Controls.StackPanel BuildSignInLabel(string text)
-    {
-        // Re-create the icon + label every time so the IsEnabled
-        // state controls the inner color too. Allocation is cheap
-        // and the alternative (keeping a static instance) trips a
-        // "control parent already set" assert in WinUI.
-        var stack = new Microsoft.UI.Xaml.Controls.StackPanel
-        {
-            Orientation = Microsoft.UI.Xaml.Controls.Orientation.Horizontal,
-            Spacing = 6,
-        };
-        stack.Children.Add(new Microsoft.UI.Xaml.Controls.FontIcon
-        {
-            Glyph = "",
-            FontSize = 14,
-        });
-        stack.Children.Add(new TextBlock { Text = text });
-        return stack;
-    }
 
     private async void ClaudeCodeSignIn_Click(object sender, RoutedEventArgs e)
     {
         ClaudeCodeSignInBtn.IsEnabled = false;
-        ClaudeCodeStatusLabel.Text = "Launching browser… complete the Anthropic OAuth flow in the new terminal window.";
+        ClaudeCodeTestBtn.IsEnabled = false;
+        ClaudeCodeStatusCard.Description = "Launching `claude /login` — complete the OAuth flow in the new terminal window.";
         try
         {
             var ok = Interop.DimmyNative.SpawnClaudeCodeLogin();
             if (!ok)
             {
-                ClaudeCodeStatusLabel.Text = "Could not start `claude /login`. Open a terminal and run it manually.";
+                ClaudeCodeStatusCard.Description = "Could not start `claude /login`. Open a terminal and run it manually.";
                 Interop.DimmyNative.TrackEvent(
                     "claude_code.login_completed",
                     new { outcome = "spawn_failed" });
@@ -1589,14 +1657,14 @@ public sealed partial class SettingsWindow : Window
                     return;
                 }
             }
-            ClaudeCodeStatusLabel.Text = "Sign-in not completed in 3 minutes. Click ↻ when ready.";
+            ClaudeCodeStatusCard.Description = "Sign-in not completed in 3 minutes. Click ↻ when ready.";
             Interop.DimmyNative.TrackEvent(
                 "claude_code.login_completed",
                 new { outcome = "timeout" });
         }
         catch (Exception ex)
         {
-            ClaudeCodeStatusLabel.Text = $"Sign-in error: {ex.Message}";
+            ClaudeCodeStatusCard.Description = $"Sign-in error: {ex.Message}";
             App.Log($"ClaudeCode sign-in exc: {ex}", "ClaudeCode");
             Interop.DimmyNative.TrackEvent(
                 "claude_code.login_completed",
@@ -1613,19 +1681,53 @@ public sealed partial class SettingsWindow : Window
         RefreshClaudeCodeStatus();
     }
 
+    /// <summary>
+    /// Fires on both API-key and Subscription radio Checked events.
+    /// Writes through to ViewModel.LlmAuthMethod (single source of
+    /// truth used by ConfigSave) and refreshes card visibility so
+    /// the status card + API-key card swap immediately.
+    /// </summary>
+    private void LlmAuthMethod_Changed(object sender, RoutedEventArgs e)
+    {
+        if (sender is not RadioButton rb || rb.IsChecked != true) return;
+        var picked = rb == LlmAuthMethodSubscription ? "subscription" : "api_key";
+        if (ViewModel.LlmAuthMethod == picked) return;
+        ViewModel.LlmAuthMethod = picked;
+        RefreshClaudeCodeStatus();
+    }
+
+    /// <summary>
+    /// Recap-auth radio: three states (Inherit / API key / Subscription).
+    /// "" = inherit so the dictation knob governs both calls; the other
+    /// two pin the recap regardless. Writes through to ViewModel.RecapAuthMethod.
+    /// </summary>
+    private void RecapAuthMethod_Changed(object sender, RoutedEventArgs e)
+    {
+        if (sender is not RadioButton rb || rb.IsChecked != true) return;
+        string picked;
+        if (rb == RecapAuthApiKey) picked = "api_key";
+        else if (rb == RecapAuthSubscription) picked = "subscription";
+        else picked = "";
+        if (ViewModel.RecapAuthMethod == picked) return;
+        ViewModel.RecapAuthMethod = picked;
+        // Re-render the status card suffix so it reflects "active for
+        // recap only" / "active for dictation + recap" / etc.
+        RefreshClaudeCodeStatus();
+    }
+
     private async void ClaudeCodeTest_Click(object sender, RoutedEventArgs e)
     {
         // Test connection: send a content-free "ping" through the
         // local CLI. Concrete success signal for the user — confirms
         // binary + credentials + Anthropic API in one round-trip.
         ClaudeCodeTestBtn.IsEnabled = false;
-        var originalLabel = ClaudeCodeStatusLabel.Text;
-        ClaudeCodeStatusLabel.Text = "Sending ping…";
+        ClaudeCodeSignInBtn.IsEnabled = false;
+        ClaudeCodeStatusCard.Description = "Sending ping…";
         try
         {
             var (result, elapsedMs) = await System.Threading.Tasks.Task.Run(
                 () => Interop.DimmyNative.PingClaudeCode());
-            ClaudeCodeStatusLabel.Text = result switch
+            ClaudeCodeStatusCard.Description = result switch
             {
                 Interop.DimmyNative.ClaudeCodePingResult.Ok =>
                     $"✓ Connection OK ({elapsedMs} ms round-trip)",
@@ -1646,13 +1748,13 @@ public sealed partial class SettingsWindow : Window
         }
         catch (Exception ex)
         {
-            ClaudeCodeStatusLabel.Text = $"Test error: {ex.Message}";
+            ClaudeCodeStatusCard.Description = $"Test error: {ex.Message}";
             App.Log($"ClaudeCode test exc: {ex}", "ClaudeCode");
         }
         finally
         {
             ClaudeCodeTestBtn.IsEnabled = true;
-            _ = originalLabel; // intentionally unused — we leave the new status visible
+            ClaudeCodeSignInBtn.IsEnabled = true;
         }
     }
 
@@ -3996,7 +4098,11 @@ public sealed partial class SettingsWindow : Window
             ViewModel.NotionTargetTitle = dlg.PickedTargetTitle;
             try
             {
-                var json = ViewModel.ToJson();
+                // includeNotion: true — this is the only "explicit
+                // Notion intent" save site. Generic Settings saves
+                // skip these fields so a transient empty VM never
+                // wipes a valid destination from disk.
+                var json = ViewModel.ToJson(includeNotion: true);
                 int rc = DimmyNative.dimmy_set_config_json(json);
                 App.Log($"Notion wizard saved rc={rc} id={dlg.PickedTargetId} title='{dlg.PickedTargetTitle}'", "Notion");
                 if (rc == 0)
@@ -4058,7 +4164,10 @@ public sealed partial class SettingsWindow : Window
             ViewModel.NotionTargetKind = "";
             ViewModel.NotionTargetTitle = "";
             ViewModel.NotionAutoSend = false;
-            var json = ViewModel.ToJson();
+            // Explicit Disconnect — caller intends to clear the
+            // destination; pass includeNotion: true so the empty
+            // strings reach Rust and wipe the state.
+            var json = ViewModel.ToJson(includeNotion: true);
             int rcCfg = DimmyNative.dimmy_set_config_json(json);
             App.Log($"Notion disconnected rcToken={rcToken} rcCfg={rcCfg}", "Notion");
             App.Instance?.ApplySettings(ViewModel);

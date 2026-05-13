@@ -271,6 +271,8 @@ fn dimmy_init_inner() -> c_int {
         llm_api_url: Mutex::new(file_cfg.llm_api_url),
         llm_api_model: Mutex::new(file_cfg.llm_api_model),
         llm_use_same_key: Mutex::new(file_cfg.llm_use_same_key),
+        llm_auth_method: Mutex::new(file_cfg.llm_auth_method.clone()),
+        recap_auth_method: Mutex::new(file_cfg.recap_auth_method.clone()),
         llm_api_key: Mutex::new(stored_llm_key),
         llm_log_enabled: Mutex::new(file_cfg.llm_log_enabled),
         recap_model_override: Mutex::new(file_cfg.recap_model_override),
@@ -1247,6 +1249,8 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "llm_api_url": *st.llm_api_url.lock().unwrap_or_else(|e| e.into_inner()),
         "llm_api_model": *st.llm_api_model.lock().unwrap_or_else(|e| e.into_inner()),
         "llm_use_same_key": *st.llm_use_same_key.lock().unwrap_or_else(|e| e.into_inner()),
+        "llm_auth_method": st.llm_auth_method.lock().map(|s| s.clone()).unwrap_or_else(|_| "api_key".to_string()),
+        "recap_auth_method": st.recap_auth_method.lock().map(|s| s.clone()).unwrap_or_default(),
         "has_llm_key": has_llm_key,
         "llm_log_enabled": *st.llm_log_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "recap_model_override": st.recap_model_override.lock().unwrap_or_else(|e| e.into_inner()).clone(),
@@ -1546,6 +1550,29 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
     if let Some(b) = v["llm_use_same_key"].as_bool() {
         if let Ok(mut k) = st.llm_use_same_key.lock() {
             *k = b;
+        }
+    }
+    if let Some(s) = v["llm_auth_method"].as_str() {
+        // Allow-list of accepted values so a malformed UI write
+        // can't put the dispatcher into an undefined state.
+        let normalized = match s {
+            "api_key" | "subscription" => s,
+            _ => "api_key",
+        };
+        if let Ok(mut m) = st.llm_auth_method.lock() {
+            *m = normalized.to_string();
+        }
+    }
+    if let Some(s) = v["recap_auth_method"].as_str() {
+        // Empty string is a legitimate "inherit from llm_auth_method"
+        // signal. Anything else must match the same allow-list as
+        // the dictation knob.
+        let normalized = match s {
+            "" | "api_key" | "subscription" => s,
+            _ => "",
+        };
+        if let Ok(mut m) = st.recap_auth_method.lock() {
+            *m = normalized.to_string();
         }
     }
     if let Some(key) = v["llm_api_key"].as_str() {
@@ -2377,20 +2404,36 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
         .lock()
         .map(|m| m.clone())
         .unwrap_or_default();
+    let auth_method = st
+        .llm_auth_method
+        .lock()
+        .map(|s| s.clone())
+        .unwrap_or_else(|_| "api_key".to_string());
 
-    let api_key = if use_same_key {
-        st.api_key.lock().ok().and_then(|k| k.clone())
+    // Subscription mode bypasses the API-key check — the local `claude`
+    // CLI carries auth via the user's saved Anthropic OAuth token in
+    // ~/.claude/credentials.json. The legacy `claude-code://` URL is
+    // also a "no API key" signal, kept for back-compat with configs
+    // from the first iteration.
+    let is_subscription =
+        auth_method == "subscription" || crate::claude_code::is_claude_code_url(&llm_url);
+
+    let api_key = if is_subscription {
+        String::new()
     } else {
-        st.llm_api_key.lock().ok().and_then(|k| k.clone())
-    };
-
-    let api_key = match api_key {
-        Some(k) if !k.is_empty() => k,
-        _ => {
-            log("ERROR: dimmy_process_with_llm: no LLM API key available");
-            emit_event("error", r#"{"message":"No LLM API key configured"}"#);
-            // Return original text on key error (graceful degradation)
-            return write_to_buf(text, out_buf, buf_len);
+        let raw = if use_same_key {
+            st.api_key.lock().ok().and_then(|k| k.clone())
+        } else {
+            st.llm_api_key.lock().ok().and_then(|k| k.clone())
+        };
+        match raw {
+            Some(k) if !k.is_empty() => k,
+            _ => {
+                log("ERROR: dimmy_process_with_llm: no LLM API key available");
+                emit_event("error", r#"{"message":"No LLM API key configured"}"#);
+                // Return original text on key error (graceful degradation)
+                return write_to_buf(text, out_buf, buf_len);
+            }
         }
     };
 
@@ -2430,6 +2473,7 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
         tone,
         &custom_prompt,
         &translate_to,
+        &auth_method,
     ));
     let llm_processing_ms = llm_start.elapsed().as_millis() as u64;
     let llm_provider_static: &'static str = crate::telemetry::sanitize::provider_from_url(&api_url);
@@ -3486,8 +3530,31 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
         .ok()
         .and_then(|k| k.clone())
         .unwrap_or_default();
+    // The recap-specific override wins. Empty string = "inherit"
+    // (fall through to the dictation knob). Lets a user run fast
+    // dictation via API key while routing the meeting recap via
+    // subscription to avoid spending Opus credit.
+    let recap_override = st
+        .recap_auth_method
+        .lock()
+        .map(|s| s.clone())
+        .unwrap_or_default();
+    let auth_method = if recap_override.is_empty() {
+        st.llm_auth_method
+            .lock()
+            .map(|s| s.clone())
+            .unwrap_or_else(|_| "api_key".to_string())
+    } else {
+        recap_override
+    };
 
-    if api_url.is_empty() || api_key.is_empty() {
+    // Subscription mode doesn't need an HTTP URL or an API key —
+    // the local `claude` CLI handles both. The legacy
+    // `claude-code://` URL is also a "no key needed" signal, kept
+    // for back-compat with configs written before this redesign.
+    let is_subscription =
+        auth_method == "subscription" || crate::claude_code::is_claude_code_url(&api_url);
+    if !is_subscription && (api_url.is_empty() || api_key.is_empty()) {
         log("[LlmRaw] missing api_url or api_key — configure an LLM in Settings");
         return -2;
     }
@@ -3514,7 +3581,15 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
         }
     };
     let result = runtime.block_on(async {
-        crate::llm::process_raw_prompt(&api_url, &model, &api_key, &prompt, max_tokens_u).await
+        crate::llm::process_raw_prompt(
+            &api_url,
+            &model,
+            &api_key,
+            &prompt,
+            max_tokens_u,
+            &auth_method,
+        )
+        .await
     });
     match result {
         Ok(text) => {
@@ -5872,6 +5947,8 @@ mod tests {
                 llm_api_url: Mutex::new(String::new()),
                 llm_api_model: Mutex::new(String::new()),
                 llm_use_same_key: Mutex::new(true),
+                llm_auth_method: Mutex::new("api_key".to_string()),
+                recap_auth_method: Mutex::new(String::new()),
                 llm_api_key: Mutex::new(None),
                 llm_log_enabled: Mutex::new(false),
                 recap_model_override: Mutex::new(String::new()),

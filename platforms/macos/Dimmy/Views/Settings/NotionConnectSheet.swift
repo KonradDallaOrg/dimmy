@@ -359,7 +359,12 @@ struct NotionConnectSheet: View {
         appState.notionTargetId = pickedTargetId
         appState.notionTargetKind = pickedTargetKind
         appState.notionTargetTitle = pickedTargetTitle
-        DimmyCore.shared.setConfig(appState.toRustConfig())
+        // includeNotion: true — this is one of the only two sites
+        // (picker + Disconnect) that owns explicit "set/clear"
+        // intent for the Notion destination. Generic Settings
+        // saves omit these fields so a transient empty AppState
+        // never wipes the disk value. See AppState.toRustConfig.
+        DimmyCore.shared.setConfig(appState.toRustConfig(includeNotion: true))
         onClose()
     }
 }

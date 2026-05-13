@@ -1056,7 +1056,20 @@ final class AppState: ObservableObject {
     }
 
     /// Build a config dictionary for sending to Rust via FFI.
-    func toRustConfig() -> [String: Any] {
+    ///
+    /// `includeNotion = false` (default) **omits** the
+    /// `notion_target_id`/`_kind`/`_title` fields so a generic
+    /// Settings save never wipes a valid Notion destination from
+    /// disk. The Rust dispatcher treats an empty `notion_target_id`
+    /// as a clear signal — if the AppState ever holds `""` (race,
+    /// partial load, schema migration), the unguarded save would
+    /// turn a "set" destination into "cleared" on every flush.
+    /// Burned 2026-05-13 when meeting recap kept failing with
+    /// "destination not configured" right after a Settings save.
+    ///
+    /// To explicitly set/clear the Notion destination the Notion
+    /// picker / Disconnect path must call `toRustConfig(includeNotion: true)`.
+    func toRustConfig(includeNotion: Bool = false) -> [String: Any] {
         var config: [String: Any] = [
             "api_url": apiUrl,
             "api_model": apiModel,
@@ -1093,13 +1106,19 @@ final class AppState: ObservableObject {
             "history_audio_max_mb": Int(historyAudioMaxMb),
             "auto_recap_threshold_secs": Int(autoRecapThresholdSecs),
             "recap_model_override": recapModelOverride,
-            "notion_target_id": notionTargetId,
-            "notion_target_kind": notionTargetKind,
-            "notion_target_title": notionTargetTitle,
+            // notion_target_{id,kind,title} are deliberately gated
+            // behind `includeNotion` — see toRustConfig docstring above.
+            // notion_auto_send IS safe to round-trip (bool toggle,
+            // not a load-bearing identifier).
             "notion_auto_send": notionAutoSend,
             "user_dict": userDictWords,
             "app_rules": appRules.map { $0.toDict() },
         ]
+        if includeNotion {
+            config["notion_target_id"] = notionTargetId
+            config["notion_target_kind"] = notionTargetKind
+            config["notion_target_title"] = notionTargetTitle
+        }
         if let dev = selectedDevice {
             config["selected_device"] = dev
         }

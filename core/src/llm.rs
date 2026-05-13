@@ -325,6 +325,14 @@ struct ChatMessage {
 }
 
 /// Send text to an OpenAI-compatible chat completions endpoint for processing.
+///
+/// `auth_method` is the orthogonal-to-URL routing knob. `"subscription"`
+/// means "dispatch via the local `claude` CLI using the user's Anthropic
+/// Pro/Team/Max plan"; any other value (typically `"api_key"`) means
+/// "normal HTTP request with the saved API key". The historic synthetic
+/// `claude-code://` URL also triggers the subscription branch for
+/// backward-compat with configs from the first iteration of this
+/// feature; new code paths set the explicit `auth_method` instead.
 #[allow(clippy::too_many_arguments)]
 pub async fn process_text(
     api_url: &str,
@@ -335,16 +343,22 @@ pub async fn process_text(
     tone: LlmTone,
     custom_prompt: &str,
     translate_to: &str,
+    auth_method: &str,
 ) -> Result<String, crate::error::LlmError> {
     let system_prompt = build_system_prompt(style, tone, custom_prompt, translate_to);
     if system_prompt.is_empty() {
         return Ok(text.to_string());
     }
 
-    // Claude Code branch — see comment in `process_raw_prompt`. The
-    // style-rewrite path builds the same system + user prompt shape
-    // as the HTTP path but ships it through the local CLI subprocess.
-    if crate::claude_code::is_claude_code_url(api_url) {
+    // Subscription branch: route the LLM call through the local
+    // `claude` CLI. Two triggers — the explicit `auth_method` flag
+    // (preferred, set from the new RadioButton in Settings) OR the
+    // legacy `claude-code://` URL scheme from configs that pre-date
+    // the auth-method redesign. Both paths land here so a saved
+    // config from either iteration continues to work.
+    let use_subscription =
+        auth_method == "subscription" || crate::claude_code::is_claude_code_url(api_url);
+    if use_subscription {
         // Glue system + user into a single prompt; the CLI doesn't
         // distinguish them in --print mode. The system prompt acts
         // as a leading instruction block.
@@ -538,6 +552,7 @@ pub async fn process_raw_prompt(
     api_key: &str,
     user_prompt: &str,
     max_tokens: u64,
+    auth_method: &str,
 ) -> Result<String, crate::error::LlmError> {
     assert!(
         !user_prompt.is_empty(),
@@ -549,14 +564,15 @@ pub async fn process_raw_prompt(
         "process_raw_prompt: max_tokens too large"
     );
 
-    // Claude Code CLI branch — synthetic `claude-code://` URL means
-    // "spawn the local Claude Code subprocess using the user's
-    // logged-in Anthropic subscription". No API key consumed; the
-    // user's Pro / Team / Max plan is the auth source. Branch runs
-    // BEFORE `validate_url` because that helper rejects non-HTTPS.
-    // See `core/src/claude_code.rs` for the binary detection +
-    // subprocess plumbing.
-    if crate::claude_code::is_claude_code_url(api_url) {
+    // Subscription branch — dispatch via the local `claude` CLI
+    // instead of HTTP. Triggered by either the explicit
+    // `auth_method = "subscription"` flag (preferred) or the legacy
+    // `claude-code://` URL scheme (kept for back-compat with configs
+    // written before the auth-method redesign). Runs BEFORE
+    // validate_url because that helper rejects non-HTTPS.
+    let use_subscription =
+        auth_method == "subscription" || crate::claude_code::is_claude_code_url(api_url);
+    if use_subscription {
         let model_owned = model.to_string();
         let prompt_owned = user_prompt.to_string();
         let started_at = std::time::Instant::now();
@@ -861,7 +877,15 @@ mod tests {
             .build()
             .expect("build runtime");
         let result = rt.block_on(async {
-            process_raw_prompt("claude-code://default", "claude-opus-4-7", "", "ping", 100).await
+            process_raw_prompt(
+                "claude-code://default",
+                "claude-opus-4-7",
+                "",
+                "ping",
+                100,
+                "api_key", // legacy URL must still trigger subscription dispatch
+            )
+            .await
         });
         // Either NotInstalled (no claude on machine) → NoApiKey, or
         // NotLoggedIn → NoApiKey, or actual success if the dev
