@@ -105,6 +105,39 @@ struct MacOutputPage: View {
         }
     }
 
+    /// Recap model's effective provider tag. Drives both the auth
+    /// gating (Anthropic-only subscription option) and the cross-
+    /// vendor warning ("recap call reuses the LLM URL+key — different
+    /// vendors fail").
+    ///
+    /// Empty when recap is on Auto (inherits LLM provider directly,
+    /// so no separate UI is needed).
+    private var recapProviderTag: String {
+        ProviderTagging.providerTag(forRecapModel: appState.recapModelOverride)
+    }
+
+    /// True when the user has picked a CLOUD recap model whose vendor
+    /// differs from the LLM provider. In that case the current Rust
+    /// dispatcher still reuses `llm_api_url + llm_api_key`, which fails
+    /// HTTP 400. We surface this clearly so the user picks either a
+    /// matching cloud model, a local one, or (for Anthropic) the
+    /// subscription path.
+    private var recapVendorMismatch: Bool {
+        let recap = recapProviderTag
+        let llm = llmProviderTag
+        guard !recap.isEmpty, recap != "local", recap != llm else { return false }
+        return true
+    }
+
+    /// Should we offer the "Use Anthropic subscription for recap"
+    /// toggle? Only when the recap model is Anthropic AND the user
+    /// has actually connected Claude Code. Otherwise the toggle is
+    /// either irrelevant (non-Anthropic recap) or non-actionable
+    /// (no subscription connection yet).
+    private var recapSubscriptionAvailable: Bool {
+        recapProviderTag == "anthropic" && appState.claudeCodeReady
+    }
+
     /// Meeting / long-dictation recap model picker. Always visible so a
     /// fresh user can pick their preferred recap model without flipping
     /// the Advanced toggle. Mirrors the picker in Settings → Advanced;
@@ -127,8 +160,24 @@ struct MacOutputPage: View {
                         }
                     )) {
                         ForEach(RecapModelOption.curated) { opt in
-                            Label(opt.label, systemImage: opt.iconName)
-                                .tag(opt.id)
+                            Label {
+                                Text(opt.label)
+                            } icon: {
+                                // Real vendor logo when we have one, SF
+                                // Symbol fallback for Auto / Local /
+                                // Custom rows (no Anthropic/Gemini/etc.
+                                // brand to render).
+                                if opt.assetName.isEmpty {
+                                    Image(systemName: opt.iconName)
+                                } else {
+                                    Image(opt.assetName)
+                                        .renderingMode(.original)
+                                        .resizable()
+                                        .scaledToFit()
+                                        .frame(width: 18, height: 18)
+                                }
+                            }
+                            .tag(opt.id)
                         }
                         if !appState.recapModelOverride.isEmpty,
                            !RecapModelOption.curated.contains(where: { $0.id == appState.recapModelOverride }) {
@@ -141,6 +190,52 @@ struct MacOutputPage: View {
                     .labelsHidden()
                     .pickerStyle(.menu)
                     .frame(minWidth: 280)
+                }
+
+                // Subscription toggle for the recap call site —
+                // only appears when (a) recap model is Anthropic AND
+                // (b) Claude Code integration is actually connected.
+                // For any other recap provider the toggle is hidden
+                // entirely (user's rule: "se uso modello diverso da
+                // antrop. non devo poter selezionare usa subs
+                // atropic sotto"). Writes `recap_auth_method` so the
+                // recap call routes through the local `claude` CLI
+                // even when dictation stays on API key.
+                if recapSubscriptionAvailable {
+                    MacRow(
+                        "Use Anthropic subscription for recap",
+                        description: "Routes the recap LLM call through Claude Code (Pro / Team / Max). Dictation rewrite keeps its own auth method.",
+                        showsDivider: recapVendorMismatch
+                    ) {
+                        Toggle("", isOn: Binding(
+                            get: { appState.recapAuthMethod == "subscription" },
+                            set: { newValue in
+                                appState.recapAuthMethod = newValue ? "subscription" : ""
+                                persistConfig()
+                            }
+                        ))
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                    }
+                }
+
+                // Cross-vendor warning. The Rust dispatcher reuses
+                // `llm_api_url + llm_api_key` for the recap call
+                // regardless of the model. Picking a recap model
+                // from a different vendor → HTTP 400. Recap on
+                // Anthropic with Anthropic subscription enabled
+                // bypasses this entirely (CLI handles its own
+                // auth), so suppress the warning in that case.
+                if recapVendorMismatch
+                    && !(recapSubscriptionAvailable && appState.recapAuthMethod == "subscription") {
+                    MacRow(
+                        "Provider mismatch",
+                        description: "Recap is \(recapProviderTag.capitalized) but your LLM is \(llmProviderTag.capitalized). The recap call reuses the LLM API URL + key, so it will fail with HTTP 400. Pick a same-vendor recap model, a Local Gemma, or wire up an Anthropic subscription if recap is Anthropic.",
+                        showsDivider: false
+                    ) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                    }
                 }
             }
             MacGroupFooter(text: "Cloud entries use your configured LLM API key. Local entries use the matching Gemma `.gguf` from Settings → Voice (download required).")
@@ -222,10 +317,17 @@ struct MacOutputPage: View {
                                     if preset.iconAssetName.isEmpty {
                                         Image(systemName: "gear")
                                     } else {
+                                        // 18x18 + scaledToFit: 12 was too
+                                        // tight for the Gemini "sparkle"
+                                        // star (thin outline → looked
+                                        // like a single dot). Same size
+                                        // works for the denser logos
+                                        // (Anthropic A, Groq, OpenAI).
                                         Image(preset.iconAssetName)
                                             .renderingMode(.original)
                                             .resizable()
-                                            .frame(width: 12, height: 12)
+                                            .scaledToFit()
+                                            .frame(width: 18, height: 18)
                                     }
                                 }
                                 .tag(preset.id)
@@ -239,39 +341,68 @@ struct MacOutputPage: View {
                     // chooses between an Anthropic API key (pay-as-
                     // you-go) and a Claude Pro / Team / Max
                     // subscription routed via the local `claude` CLI.
-                    // Mirrors the Win redesign — auth is orthogonal to
-                    // provider+model. Shown for any Anthropic URL OR
-                    // for the legacy `claude-code://` synthetic URL.
+                    //
+                    // Subscription is ONLY offered when the Anthropic
+                    // integration is actually connected (binary
+                    // detected + Keychain / credentials.json present).
+                    // No connection → segmented disappears and we show
+                    // a one-line hint pointing to Integrations.
+                    //
+                    // Already-on-subscription users keep seeing the
+                    // picker even if the connection probe goes red
+                    // (e.g. user re-launched without logging back in)
+                    // so they can switch back to API key explicitly.
                     if isAnthropicLlm {
-                        MacRow(
-                            "Authentication",
-                            description: authMethodDescription,
-                            showsDivider: appState.llmAuthMethod == "subscription" || sameKeyShouldShow
-                        ) {
-                            Picker("", selection: Binding(
-                                get: { appState.llmAuthMethod == "subscription" ? "subscription" : "api_key" },
-                                set: { newValue in
-                                    appState.llmAuthMethod = newValue
-                                    normalizeLlmUrlForAuth(newValue)
-                                    persistConfig()
+                        let canSwitchToSubscription =
+                            appState.claudeCodeReady || appState.llmAuthMethod == "subscription"
+                        if canSwitchToSubscription {
+                            MacRow(
+                                "Authentication",
+                                description: authMethodDescription,
+                                showsDivider: appState.llmAuthMethod == "subscription" || sameKeyShouldShow
+                            ) {
+                                Picker("", selection: Binding(
+                                    get: { appState.llmAuthMethod == "subscription" ? "subscription" : "api_key" },
+                                    set: { newValue in
+                                        appState.llmAuthMethod = newValue
+                                        normalizeLlmUrlForAuth(newValue)
+                                        persistConfig()
+                                    }
+                                )) {
+                                    Text("API key").tag("api_key")
+                                    Text("Subscription").tag("subscription")
                                 }
-                            )) {
-                                Text("API key").tag("api_key")
-                                Text("Subscription").tag("subscription")
+                                .pickerStyle(.segmented)
+                                .labelsHidden()
+                                .frame(width: 220)
                             }
-                            .pickerStyle(.segmented)
-                            .labelsHidden()
-                            .frame(width: 220)
+                        } else {
+                            MacRow(
+                                "Subscription auth not available",
+                                description: "Connect Claude Code in Settings → Integrations to use your Anthropic Pro / Team / Max subscription. Otherwise pay-as-you-go API key below.",
+                                showsDivider: true
+                            ) {
+                                EmptyView()
+                            }
                         }
                     }
 
-                    // Subscription branch: show the Claude Code status
-                    // card (binary detection, sign-in via browser, ping
-                    // test). When subscription is selected the API-key
-                    // entry + same-key toggle disappear — the CLI owns
-                    // the credential.
+                    // Subscription branch: the actual sign-in /
+                    // connection card lives in Settings → Integrations
+                    // (Anthropic is a connection like Notion, not a
+                    // pure provider config). Here we just show a tiny
+                    // "Manage in Integrations" pointer so users see
+                    // the auth choice took effect.
                     if appState.llmAuthMethod == "subscription" || appState.llmApiUrl.hasPrefix("claude-code://") {
-                        MacClaudeCodeCard(appState: appState)
+                        MacRow(
+                            "Subscription connection",
+                            description: appState.claudeCodeReady
+                                ? "✓ Connected. Sign-in / disconnect lives in Settings → Integrations. The token is read on every LLM call via the local `claude` CLI."
+                                : "⚠ Subscription selected but Claude Code isn't connected — calls will fail. Open Settings → Integrations to sign in.",
+                            showsDivider: false
+                        ) {
+                            EmptyView()
+                        }
                     } else {
                         // API-key branch. The "Use same key as STT"
                         // toggle is only meaningful when STT and LLM
@@ -381,7 +512,10 @@ struct MacOutputPage: View {
                 }
             }
         }
-        .onAppear { refreshLocalLlmStatus() }
+        .onAppear {
+            refreshLocalLlmStatus()
+            appState.refreshClaudeCodeStatus()
+        }
     }
 
     private func refreshLocalLlmStatus() {

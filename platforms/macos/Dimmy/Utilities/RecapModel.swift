@@ -123,6 +123,19 @@ struct RecapModelOption: Identifiable, Equatable {
         }
     }
 
+    /// Asset Catalog imageset name in `Assets.xcassets/Providers/` for
+    /// the real vendor logo. Empty when we don't have a vendor asset
+    /// (auto / local / custom). The picker UI falls back to
+    /// `iconName` (SF Symbol) for those.
+    var assetName: String {
+        switch provider {
+        case .anthropic: return "anthropic"
+        case .gemini: return "gemini"
+        case .openai: return "openai"
+        case .auto, .local, .custom: return ""
+        }
+    }
+
     var iconColor: String {
         // Symbolic name; consumer maps to a SwiftUI Color.
         switch provider {

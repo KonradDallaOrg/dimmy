@@ -773,6 +773,25 @@ final class AppState: ObservableObject {
     @Published var llmAuthMethod: String = "api_key"
     @Published var recapAuthMethod: String = ""
 
+    /// Cached "is the Anthropic / Claude Code subscription connection
+    /// usable right now" flag. Re-probed by `refreshClaudeCodeStatus()`
+    /// (called from Settings pages on appear). Drives the gate on the
+    /// LLM auth picker — Subscription is only offered when this is
+    /// true. Cached so view bodies don't run the FFI probe on every
+    /// redraw.
+    @Published var claudeCodeReady: Bool = false
+
+    /// Re-probe Claude Code install + credential state. Cheap (a file
+    /// stat + a Keychain query); safe to call from view onAppear /
+    /// auth picker change. Updates `claudeCodeReady`.
+    func refreshClaudeCodeStatus() {
+        guard DimmyCore.shared.isInitialized else {
+            claudeCodeReady = false
+            return
+        }
+        claudeCodeReady = (DimmyCore.shared.claudeCodeStatus == .ready)
+    }
+
     // MARK: - Audio Config
 
     @Published var preprocessingEnabled: Bool = true

@@ -51,4 +51,24 @@ enum ProviderTagging {
         }
         return true
     }
+
+    /// Vendor tag for a `recap_model_override` value. The recap picker
+    /// stores model IDs directly (e.g. `claude-opus-4-7`, `gemini-2.5-pro`,
+    /// `gpt-5`, `local:gemma-4-...gguf`), not URLs — so we map by model
+    /// id prefix.
+    ///
+    /// Returns one of: `anthropic` / `gemini` / `openai` / `local` /
+    /// `""` (auto / unknown / custom).
+    static func providerTag(forRecapModel modelId: String) -> String {
+        let trimmed = modelId.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "" }                 // Auto
+        if trimmed.hasPrefix("local:") { return "local" }
+        let lower = trimmed.lowercased()
+        if lower.hasPrefix("claude") { return "anthropic" }
+        if lower.hasPrefix("gemini") { return "gemini" }
+        if lower.hasPrefix("gpt") || lower.hasPrefix("o1") || lower.hasPrefix("o3") {
+            return "openai"
+        }
+        return ""
+    }
 }

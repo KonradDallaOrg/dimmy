@@ -189,7 +189,8 @@ struct MacVoicePage: View {
                                         Image(preset.iconAssetName)
                                             .renderingMode(.original)
                                             .resizable()
-                                            .frame(width: 12, height: 12)
+                                            .scaledToFit()
+                                            .frame(width: 18, height: 18)
                                     }
                                 }
                                 .tag(preset.id)

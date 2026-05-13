@@ -15,6 +15,17 @@ struct MacIntegrationsPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            MacGroupLabel(text: "Anthropic — Claude Code subscription")
+            // Detailed status + sign-in card. Sign-in opens the
+            // browser via `claude /login` running in Terminal — the
+            // token is stored either in `~/.claude/credentials.json`
+            // or (recent CLIs) macOS Keychain under service
+            // "Claude Code-credentials". Dimmy never touches the
+            // token directly; only probes existence.
+            MacTile { MacClaudeCodeCard(appState: appState) }
+            MacGroupFooter(text: "Sign-in opens Anthropic's OAuth in your browser via the local `claude` CLI. The OAuth token is stored by the CLI in macOS Keychain (or ~/.claude/credentials.json on older versions). Dimmy reads only the existence of the token — never its contents.")
+
+            Spacer().frame(height: 24)
             MacGroupLabel(text: "Notion")
 
             // Summary card — current state + action buttons.
@@ -83,6 +94,12 @@ struct MacIntegrationsPage: View {
             Button("Cancel", role: .cancel) { }
         } message: {
             Text("Dimmy will forget your token and destination. Your Notion content stays untouched.")
+        }
+        .onAppear {
+            // Re-probe Claude Code status so the Anthropic card above
+            // reflects the live install + Keychain state. Cheap call
+            // (file stat + a `security find-generic-password` shell-out).
+            appState.refreshClaudeCodeStatus()
         }
     }
 
