@@ -35,7 +35,8 @@ use std::time::Duration;
 use serial_test::serial;
 
 use dimmy_lib::ffi::{
-    dimmy_clear_app_context, dimmy_get_config_json, dimmy_history_save, dimmy_history_update_audio,
+    dimmy_claude_code_ping, dimmy_claude_code_status, dimmy_clear_app_context,
+    dimmy_get_config_json, dimmy_history_save, dimmy_history_update_audio,
     dimmy_history_update_enhanced, dimmy_history_update_word_timestamps, dimmy_init,
     dimmy_llm_call_raw, dimmy_meeting_is_active, dimmy_meeting_save_post_process,
     dimmy_set_app_context, dimmy_set_config_json, dimmy_transcribe_file, dimmy_user_dict_add,
@@ -542,6 +543,39 @@ fn config_round_trip_preserves_claude_code_url() {
     assert_eq!(
         on_disk["llm_api_url"], "claude-code://default",
         "on-disk URL must be preserved verbatim — UI re-reads this on next launch"
+    );
+}
+
+/// Pin the return-code contract for `dimmy_claude_code_status`. The
+/// Win + Mac UIs cast the int return to an enum (0/1/2) — any value
+/// outside that range would silently break the status card.
+#[test]
+#[serial]
+fn claude_code_status_returns_documented_range() {
+    ensure_init();
+    let rc = dimmy_claude_code_status();
+    assert!(
+        (0..=2).contains(&rc),
+        "claude_code_status must return 0/1/2; got {} — Win/Mac status card decode would break",
+        rc
+    );
+}
+
+/// Pin the return-code contract for `dimmy_claude_code_ping`:
+///   positive = elapsed_ms (success)
+///   -1..=-6 = documented categorical errors
+/// Anything else means the FFI signature drifted and the Test button
+/// would mis-render the result.
+#[test]
+#[serial]
+fn claude_code_ping_return_code_is_in_documented_range() {
+    ensure_init();
+    let rc = dimmy_claude_code_ping();
+    let in_range = rc > 0 || (-6..=-1).contains(&rc);
+    assert!(
+        in_range,
+        "claude_code_ping must return >0 (elapsed_ms) or one of -1..=-6 (error categories); got {}",
+        rc
     );
 }
 
