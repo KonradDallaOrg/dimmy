@@ -80,12 +80,25 @@ jobs:
 
       - name: Generate changelog
         run: |
-          LAST_MAIN=$(git merge-base HEAD origin/main 2>/dev/null || echo "")
-          if [ -n "$LAST_MAIN" ]; then
-            COMMITS=$(git log --pretty=format:"- %s" "${LAST_MAIN}..HEAD" 2>/dev/null || echo "- Initial native build")
+          # Previously used `git merge-base HEAD origin/main` but
+          # `origin/main` in this repo is the long-stale historical
+          # branch (the PR base is `feat/native-ui`, see CLAUDE.md).
+          # That produced a 22 k-char release body listing 50+ commits
+          # going back weeks — every staging-native publish reposted
+          # the same wall of text. Fix: mirror release.yml's logic
+          # and use the latest published version tag as the changelog
+          # base. Falls back to the last 20 commits if no tag exists
+          # (first-ever build / fresh fork).
+          PREV_TAG=$(git tag --sort=-creatordate | grep -E '^v[0-9]' | head -n 1)
+          if [ -n "$PREV_TAG" ]; then
+            COMMITS=$(git log --pretty=format:"- %s" "${PREV_TAG}..HEAD" 2>/dev/null || echo "- (no commits since ${PREV_TAG})")
           else
             COMMITS=$(git log --pretty=format:"- %s" -20 HEAD)
           fi
+          # Clamp the list to 30 lines so a long quiet period (no
+          # tagged releases) doesn't spill the body. Anything longer
+          # is a signal that someone should cut a real tag.
+          COMMITS=$(echo "$COMMITS" | head -n 30)
           {
             echo "## Native UI Staging Build"
             echo ""
