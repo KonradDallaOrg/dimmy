@@ -290,6 +290,18 @@ pub fn run_blocking(
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
+    // Suppress the console window flash on Windows. Dimmy is a GUI
+    // app (no parent console), so without CREATE_NO_WINDOW Windows
+    // allocates a new console for `claude --print` and the user
+    // sees a black cmd window flash for every recap + rewrite.
+    // 0x08000000 = CREATE_NO_WINDOW. Mac + Linux don't have this
+    // problem (no console concept on Unix processes).
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+
     crate::log(&format!(
         "[ClaudeCode] spawn binary={:?} model={:?} prompt_chars={}",
         binary,
