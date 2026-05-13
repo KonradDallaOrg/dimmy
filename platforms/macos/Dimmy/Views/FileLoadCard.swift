@@ -279,10 +279,16 @@ struct FileLoadCard: View {
 
         let path = lastPath ?? ""
         let transcriptCopy = transcript
+        // Capture the @MainActor-isolated notionAutoSend flag here on
+        // the main thread so the background dispatch doesn't need to
+        // touch AppState.shared.notionAutoSend — Swift 6 rejects that
+        // cross-isolation read as a hard error.
+        let notionAutoSend = AppState.shared.notionAutoSend
         DispatchQueue.global(qos: .userInitiated).async {
             let outcome = FileLoadToMeetingService.run(
                 sourceWavPath: path,
-                transcript: transcriptCopy
+                transcript: transcriptCopy,
+                notionAutoSend: notionAutoSend
             )
             DispatchQueue.main.async {
                 recapRunning = false

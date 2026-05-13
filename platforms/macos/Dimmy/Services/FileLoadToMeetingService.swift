@@ -38,7 +38,13 @@ enum FileLoadToMeetingService {
     /// Run the full file-load → meeting pipeline. Blocking — call
     /// from a background thread (the LLM step inside
     /// `MeetingPostProcessService.runRecap` can take 10–60 s).
-    static func run(sourceWavPath: String, transcript: String) -> Outcome {
+    ///
+    /// `notionAutoSend` MUST be captured on the caller's main-actor
+    /// thread before dispatch — Swift 6 strict concurrency rejects
+    /// any read of `AppState.shared.notionAutoSend` (main-actor
+    /// isolated) from a `DispatchQueue.global` closure as a hard
+    /// error.
+    static func run(sourceWavPath: String, transcript: String, notionAutoSend: Bool) -> Outcome {
         let trimmedTranscript = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedTranscript.isEmpty else {
             return Outcome(dir: "", recapMarkdown: nil, error: "empty transcript")
@@ -132,16 +138,17 @@ enum FileLoadToMeetingService {
         // are platform-agnostic.
         DimmyCore.shared.trackEvent("meeting.imported_from_file")
 
-        // Hand off to the shared recap pipeline. notionAutoSend
-        // reads the same config field MeetingWindow uses — keeps
-        // file-load loops consistent with live-meeting behaviour
-        // when the user has Notion auto-send enabled.
-        let notionAutoSend = (AppState.shared.notionAutoSend) && DimmyCore.shared.notionHasToken
+        // Hand off to the shared recap pipeline. `notionAutoSend`
+        // was captured on the caller's main thread (see docstring).
+        // We still gate it on `notionHasToken` here because the
+        // token state is owned by DimmyCore and safe to read from
+        // any thread (it's a thin FFI getter, not @MainActor).
+        let effectiveAutoSend = notionAutoSend && DimmyCore.shared.notionHasToken
         let recapResult = MeetingPostProcessService.runRecap(
             dir: dir.path,
             transcript: trimmedTranscript,
             modelOverride: nil,
-            notionAutoSend: notionAutoSend
+            notionAutoSend: effectiveAutoSend
         )
         switch recapResult {
         case .success(let res):
