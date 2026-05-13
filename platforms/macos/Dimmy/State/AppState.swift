@@ -789,7 +789,19 @@ final class AppState: ObservableObject {
             claudeCodeReady = false
             return
         }
-        claudeCodeReady = (DimmyCore.shared.claudeCodeStatus == .ready)
+        // The probe shells out to `security find-generic-password` for
+        // the Keychain check — on a cold launch that can take ~50-100 ms
+        // (process spawn + Keychain unlock dialog auth). Run it off the
+        // main thread so .onAppear callers in Settings pages don't
+        // block their first paint, then bounce back to update the
+        // @Published. Same dispatch pattern as MacVoicePage's
+        // refreshLocalModelStatus().
+        DispatchQueue.global(qos: .userInitiated).async {
+            let ready = (DimmyCore.shared.claudeCodeStatus == .ready)
+            DispatchQueue.main.async {
+                self.claudeCodeReady = ready
+            }
+        }
     }
 
     // MARK: - Audio Config

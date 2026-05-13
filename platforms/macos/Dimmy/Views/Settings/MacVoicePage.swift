@@ -336,10 +336,24 @@ struct MacVoicePage: View {
             appState.parakeetBundlePresent = false
             return
         }
-        // FFI sync calls, but cheap (just stat() on the files).
-        localModelExists = DimmyCore.shared.modelExists(appState.localModel)
-        appState.parakeetBundlePresent = DimmyCore.shared.parakeetBundlePresent()
-        downloadFailed = nil
+        // Move the FFI probes off the main thread. Each call is a
+        // stat() / directory walk in Rust; individually cheap (<10 ms)
+        // but when this runs synchronously inside `.onAppear` the
+        // first tab-switch into Voice blocks the main thread before
+        // SwiftUI can render the page — visible as a "slow click"
+        // on the sidebar item. Dispatching them async lets the
+        // page paint immediately and the model status fills in a
+        // few milliseconds later.
+        let modelName = appState.localModel
+        DispatchQueue.global(qos: .userInitiated).async {
+            let exists = DimmyCore.shared.modelExists(modelName)
+            let parakeet = DimmyCore.shared.parakeetBundlePresent()
+            DispatchQueue.main.async {
+                self.localModelExists = exists
+                self.appState.parakeetBundlePresent = parakeet
+                self.downloadFailed = nil
+            }
+        }
     }
 
     private func startSttDownload() {
