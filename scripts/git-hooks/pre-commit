@@ -20,7 +20,25 @@
 
 set -e
 
-# Only run if we have staged Rust changes. Pure docs / XAML / C#
+REPO_ROOT=$(git rev-parse --show-toplevel)
+
+# --- Release version preflight ---
+# Burned 2026-05-13: bumped Cargo.toml below a published release.
+# Run the version check whenever the commit touches Cargo.toml.
+STAGED_CARGO=$(git diff --cached --name-only --diff-filter=ACM | grep -E '^core/Cargo\.toml$' || true)
+if [ -n "$STAGED_CARGO" ]; then
+    echo "[pre-commit] Cargo.toml staged — running release-version preflight…"
+    if ! (cd "$REPO_ROOT" && bash scripts/check-release-version.sh); then
+        echo ""
+        echo "✗ Refusing to commit a Cargo.toml version that's ≤ a published"
+        echo "  release. See CLAUDE.md §Versioning for the rule + 3-command"
+        echo "  preflight. Override (e.g. accepting a known-duplicate during"
+        echo "  a backport) with --no-verify."
+        exit 1
+    fi
+fi
+
+# Only run rustfmt if we have staged Rust changes. Pure docs / XAML / C#
 # commits skip the rustfmt step entirely.
 STAGED_RUST=$(git diff --cached --name-only --diff-filter=ACM | grep -E '^core/.*\.rs$' || true)
 if [ -z "$STAGED_RUST" ]; then
