@@ -1502,235 +1502,313 @@ public sealed partial class SettingsWindow : Window
     /// provider switch, and after the Sign-in button completes (or
     /// the user clicks the manual refresh ↻).
     /// <summary>
-    /// Refresh visibility + state of the Anthropic-auth UI surfaces:
-    /// the LlmAuthMethodCard (radio group, only for Anthropic) and
-    /// the ClaudeCodeStatusCard (only when auth = subscription).
-    /// </summary>
-    private void RefreshClaudeCodeStatus()
+    /// Refresh the Settings auth-related UI surfaces in one pass.
+    /// Called on every Settings open + after any state change that
+    /// affects auth (provider switch, integration status flip,
+    /// toggle flip). Owns:
+    ///
+    ///   - INTEGRATIONS → Anthropic card: status text, glyph,
+    ///     Connect/Re-sign in/Test/Refresh button rows.
+    ///   - OUTPUT → LLM section: visibility of
+    ///     LlmUseSubscriptionCard, LlmUseSameKeyCard, LlmApiKeyCard.
+    ///   - OUTPUT → Recap section: visibility of
+    ///     RecapUseSubscriptionCard.
+    ///
+    /// Driven by three booleans:
+    ///   - integrationReady — claude CLI installed + logged in
+    ///   - isAnthropic      — current LLM provider is Anthropic
+    ///   - providerParity   — STT provider == LLM provider
+    ///
+    /// The LLM-section subscription toggle is visible only when
+    /// (isAnthropic AND integrationReady). The same-key toggle is
+    /// visible only when providerParity AND the API-key path is
+    /// live somewhere. The recap toggle is visible only when
+    /// integrationReady.
+    private void RefreshAuthIntegrationStatus()
     {
-        var url = ViewModel.LlmApiUrl ?? "";
-        var isAnthropic = url.Contains("anthropic.com", StringComparison.OrdinalIgnoreCase)
-            // Legacy: configs that still carry the synthetic URL until
-            // the migration in LoadConfig flips them.
-            || url.StartsWith("claude-code://", StringComparison.Ordinal);
-        var isSubscription = string.Equals(ViewModel.LlmAuthMethod, "subscription",
-            StringComparison.Ordinal);
-
-        // The auth-method radio group only shows for Anthropic
-        // because that's the only provider where we have a non-API-
-        // key auth path today.
-        LlmAuthMethodCard.Visibility = isAnthropic ? Visibility.Visible : Visibility.Collapsed;
-        LlmAuthMethodApiKey.IsChecked = !isSubscription;
-        LlmAuthMethodSubscription.IsChecked = isSubscription;
-
-        // Recap-specific override radio — same visibility gate
-        // (Anthropic only) but the three states differ from the
-        // dictation knob: "" = inherit, "api_key" = force, "subscription" = force.
-        RecapAuthMethodCard.Visibility = isAnthropic ? Visibility.Visible : Visibility.Collapsed;
-        switch (ViewModel.RecapAuthMethod)
-        {
-            case "api_key":
-                RecapAuthApiKey.IsChecked = true;
-                break;
-            case "subscription":
-                RecapAuthSubscription.IsChecked = true;
-                break;
-            default:
-                RecapAuthInherit.IsChecked = true;
-                break;
-        }
-
-        // Effective recap auth — "" inherits from dictation.
-        var recapEffective = ViewModel.RecapAuthMethod switch
-        {
-            "api_key" => "api_key",
-            "subscription" => "subscription",
-            _ => ViewModel.LlmAuthMethod,
-        };
-        // Two booleans drive every visibility choice below:
-        //  - keyPathLive: at least one of dictation/recap actually uses
-        //                 the HTTP+key dispatch. If true, the user
-        //                 must be able to see + enter the API key.
-        //  - subPathLive: at least one of dictation/recap actually uses
-        //                 the subprocess CLI. If true, the user must
-        //                 be able to see the login status card.
-        var keyPathLive = !isAnthropic
-            || ViewModel.LlmAuthMethod == "api_key"
-            || recapEffective == "api_key";
-        var subPathLive = isAnthropic
-            && (ViewModel.LlmAuthMethod == "subscription"
-                || recapEffective == "subscription");
-
-        // API-key surface — only when an HTTP path is live AND we have
-        // any provider that needs a key (i.e. always for non-Anthropic
-        // providers, conditional for Anthropic). Honour the
-        // UseSameKey toggle for the key entry itself.
-        LlmUseSameKeyCard.Visibility = keyPathLive ? Visibility.Visible : Visibility.Collapsed;
-        LlmApiKeyCard.Visibility = (keyPathLive && !ViewModel.LlmUseSameKey)
-            ? Visibility.Visible : Visibility.Collapsed;
-
-        // Subscription status — only when a subscription path is live.
-        // The card is positioned right after the API-key entry so the
-        // two auth surfaces are visually adjacent.
-        ClaudeCodeStatusCard.Visibility = subPathLive ? Visibility.Visible : Visibility.Collapsed;
-
-        if (!subPathLive) return;
-
-        // Tell the user WHICH call sites this subscription serves —
-        // useful when the two radios are split (e.g. dictation = key,
-        // recap = force subscription) so they don't wonder why the
-        // login is being requested while the auth-method radio is on
-        // API key.
-        var scopeSuffix = (ViewModel.LlmAuthMethod == "subscription" && recapEffective == "subscription")
-            ? " — used for dictation + recap"
-            : (ViewModel.LlmAuthMethod == "subscription"
-                ? " — used for dictation only"
-                : " — used for recap only");
+        // ── INPUT STATE ──────────────────────────────────────────
+        var llmUrl = ViewModel.LlmApiUrl ?? "";
+        var sttUrl = ViewModel.ApiUrl ?? "";
+        var isAnthropic = IsAnthropicUrl(llmUrl);
+        var providerParity = SameProviderFamily(sttUrl, llmUrl);
 
         var status = Interop.DimmyNative.GetClaudeCodeStatus();
+        var binaryPath = Interop.DimmyNative.GetClaudeCodeBinaryPath() ?? "";
+        var integrationReady = status == Interop.DimmyNative.ClaudeCodeStatus.Ready;
+
+        var llmUseSub = string.Equals(ViewModel.LlmAuthMethod, "subscription",
+            StringComparison.Ordinal);
+        var recapForceSub = string.Equals(ViewModel.RecapAuthMethod, "subscription",
+            StringComparison.Ordinal);
+        // Effective recap auth: "" = inherit from dictation knob.
+        var recapEffectivelySub = recapForceSub
+            || (string.IsNullOrEmpty(ViewModel.RecapAuthMethod) && llmUseSub);
+
+        var keyPathLive = !llmUseSub || !recapEffectivelySub;
+
+        // ── INTEGRATIONS → Anthropic card ────────────────────────
+        // Always rendered when the user navigates to Integrations;
+        // we only update its content here.
         switch (status)
         {
             case Interop.DimmyNative.ClaudeCodeStatus.Ready:
-                var binary = Interop.DimmyNative.GetClaudeCodeBinaryPath() ?? "";
-                // Tilde-collapse the home prefix so the description fits
-                // on one line in a normal-width Settings window.
                 var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-                var shown = (!string.IsNullOrEmpty(home) && binary.StartsWith(home, StringComparison.OrdinalIgnoreCase))
-                    ? "~" + binary[home.Length..]
-                    : binary;
-                ClaudeCodeStatusCard.Description = $"✓ Logged in — {shown}{scopeSuffix}";
-                ClaudeCodeSignInLabel.Text = "Re-sign in";
-                ClaudeCodeSignInBtn.IsEnabled = true;
-                ClaudeCodeTestBtn.IsEnabled = true;
+                var shownPath = (!string.IsNullOrEmpty(home)
+                                 && binaryPath.StartsWith(home, StringComparison.OrdinalIgnoreCase))
+                    ? "~" + binaryPath[home.Length..]
+                    : binaryPath;
+                AnthropicIntegrationStatusText.Text =
+                    $"Connected — using `{shownPath}`. Available for LLM rewrite and meeting recap.";
+                AnthropicIntegrationStatusGlyph.Glyph = ""; // CheckMark
+                AnthropicIntegrationStatusGlyph.Foreground = (Microsoft.UI.Xaml.Media.Brush)
+                    Application.Current.Resources["SystemFillColorSuccessBrush"];
+                AnthropicIntegrationDisconnectedActions.Visibility = Visibility.Collapsed;
+                AnthropicIntegrationConnectedActions.Visibility = Visibility.Visible;
+                AnthropicIntegrationTestBtn.IsEnabled = true;
                 break;
             case Interop.DimmyNative.ClaudeCodeStatus.NotLoggedIn:
-                ClaudeCodeStatusCard.Description =
-                    "Claude Code installed but not logged in — click Sign in to authenticate.";
-                ClaudeCodeSignInLabel.Text = "Sign in";
-                ClaudeCodeSignInBtn.IsEnabled = true;
-                ClaudeCodeTestBtn.IsEnabled = false;
+                AnthropicIntegrationStatusText.Text =
+                    "Claude Code CLI installed but not signed in. Click Sign in to authenticate via browser.";
+                AnthropicIntegrationStatusGlyph.Glyph = ""; // Info
+                AnthropicIntegrationStatusGlyph.Foreground = (Microsoft.UI.Xaml.Media.Brush)
+                    Application.Current.Resources["TextFillColorTertiaryBrush"];
+                AnthropicIntegrationDisconnectedActions.Visibility = Visibility.Visible;
+                AnthropicIntegrationConnectedActions.Visibility = Visibility.Collapsed;
+                AnthropicIntegrationSignInLabel.Text = "Sign in via browser";
+                AnthropicIntegrationSignInBtn.IsEnabled = true;
                 break;
             case Interop.DimmyNative.ClaudeCodeStatus.NotInstalled:
             default:
-                ClaudeCodeStatusCard.Description =
-                    "Claude Code CLI not detected. Install with `npm i -g @anthropic-ai/claude-code`, then click ↻.";
-                ClaudeCodeSignInLabel.Text = "Install first";
-                ClaudeCodeSignInBtn.IsEnabled = false;
-                ClaudeCodeTestBtn.IsEnabled = false;
+                AnthropicIntegrationStatusText.Text =
+                    "Claude Code CLI not detected. Install with `npm i -g @anthropic-ai/claude-code`, then click Refresh.";
+                AnthropicIntegrationStatusGlyph.Glyph = ""; // Info
+                AnthropicIntegrationStatusGlyph.Foreground = (Microsoft.UI.Xaml.Media.Brush)
+                    Application.Current.Resources["TextFillColorTertiaryBrush"];
+                AnthropicIntegrationDisconnectedActions.Visibility = Visibility.Visible;
+                AnthropicIntegrationConnectedActions.Visibility = Visibility.Collapsed;
+                AnthropicIntegrationSignInLabel.Text = "Install Claude Code first";
+                AnthropicIntegrationSignInBtn.IsEnabled = false;
                 break;
+        }
+
+        // ── OUTPUT → LLM section ─────────────────────────────────
+        // The "Use Anthropic subscription" toggle only makes sense
+        // when (a) the LLM provider is Anthropic and (b) the
+        // integration is connected. Otherwise hide entirely.
+        LlmUseSubscriptionCard.Visibility = (isAnthropic && integrationReady)
+            ? Visibility.Visible : Visibility.Collapsed;
+        LlmUseSubscriptionToggle.IsOn = llmUseSub;
+
+        // Same-key toggle: only meaningful when STT and LLM are the
+        // same vendor (e.g. both Anthropic, both Groq). Different
+        // vendors → the user must enter a distinct LLM key.
+        //
+        // CRITICAL: when the toggle is hidden, also COERCE the
+        // underlying ViewModel value to false. Otherwise a previously-
+        // saved true survives, Rust tries to use the STT key for the
+        // (different-vendor) LLM, every call 401s silently, AND the
+        // API-key entry stays hidden (because UseSameKey is still
+        // true) leaving the user stuck with no way to enter a real
+        // LLM key. Burned 2026-05-13 when this exact case was caught
+        // before ship.
+        if (!providerParity && ViewModel.LlmUseSameKey)
+        {
+            ViewModel.LlmUseSameKey = false;
+            // Persist the coercion through to Rust + disk now so the
+            // dispatcher sees the right value on the next call, even
+            // before the user clicks Save. This is a "fix invalid
+            // state" write, not a user-driven change.
+            App.Log("[Auth] coerced llm_use_same_key=false (STT/LLM provider mismatch)", "Auth");
+        }
+        LlmUseSameKeyCard.Visibility = (keyPathLive && providerParity)
+            ? Visibility.Visible : Visibility.Collapsed;
+        // The LLM key entry follows the existing rules: visible when
+        // key path is live AND the same-key toggle is off. After the
+        // coercion above, !providerParity always means !LlmUseSameKey,
+        // so the key entry appears automatically for mismatched vendors.
+        LlmApiKeyCard.Visibility = (keyPathLive && !ViewModel.LlmUseSameKey)
+            ? Visibility.Visible : Visibility.Collapsed;
+
+        // ── OUTPUT → Recap section ───────────────────────────────
+        // The recap subscription toggle is INDEPENDENT of the LLM
+        // provider choice. Recap dispatch reads its own
+        // `recap_auth_method` from config: "subscription" → claude
+        // CLI, otherwise → same HTTP path as the LLM rewrite. So
+        // valid combinations include:
+        //   - LLM=Groq Llama (key) + Recap=Anthropic subscription
+        //   - LLM=local Gemma + Recap=Anthropic subscription
+        //   - LLM=Anthropic (key) + Recap=Anthropic subscription
+        //
+        // The only gate is `integrationReady` — without the `claude`
+        // CLI signed in, there's nothing to dispatch through. Coerce
+        // RecapAuthMethod to "" when the integration goes away so a
+        // saved "subscription" can't silently keep routing.
+        var canShowRecapSub = integrationReady;
+        if (!canShowRecapSub && recapForceSub)
+        {
+            App.Log(
+                "[Auth] coerced recap_auth_method='subscription' → '' (Anthropic integration is not connected — sign in via Integrations)",
+                "Auth");
+            ViewModel.RecapAuthMethod = "";
+            recapForceSub = false;
+            recapEffectivelySub = llmUseSub;
+        }
+        RecapUseSubscriptionCard.Visibility = canShowRecapSub
+            ? Visibility.Visible : Visibility.Collapsed;
+        RecapUseSubscriptionToggle.IsOn = recapForceSub;
+
+        // When recap is going via subscription, the `claude` CLI can
+        // only invoke Anthropic models. Hide the non-Anthropic
+        // ComboBoxItems in the Recap model picker AND coerce the
+        // current selection back to "Auto" if the user previously
+        // saved e.g. gpt-5 or gemini-3.1-pro. Without this the
+        // picker would let the user pick gpt-5 + subscription, then
+        // every recap fails with "model not supported by claude".
+        var visForNonAnthropic = recapForceSub
+            ? Visibility.Collapsed : Visibility.Visible;
+        RecapItemGemini31Pro.Visibility = visForNonAnthropic;
+        RecapItemGemini25Pro.Visibility = visForNonAnthropic;
+        RecapItemGemini31Flash.Visibility = visForNonAnthropic;
+        RecapItemGemini25Flash.Visibility = visForNonAnthropic;
+        RecapItemGpt5.Visibility = visForNonAnthropic;
+        RecapItemGpt5Mini.Visibility = visForNonAnthropic;
+        RecapItemGpt5Nano.Visibility = visForNonAnthropic;
+        RecapItemGpt4o.Visibility = visForNonAnthropic;
+        RecapItemGpt4oMini.Visibility = visForNonAnthropic;
+        RecapItemO3.Visibility = visForNonAnthropic;
+        RecapItemO3Mini.Visibility = visForNonAnthropic;
+        if (recapForceSub && IsNonAnthropicRecapModel(ViewModel.RecapModelOverride))
+        {
+            App.Log(
+                $"[Auth] coerced recap_model_override='{ViewModel.RecapModelOverride}' → '' (subscription only supports Anthropic models)",
+                "Auth");
+            ViewModel.RecapModelOverride = "";
+            // Snap the picker UI to match the coerced model id —
+            // RecapModelOverride = "" maps to the "Auto" entry which
+            // is the first ComboBoxItem.
+            SyncRecapModelPicker();
         }
     }
 
-
-    private async void ClaudeCodeSignIn_Click(object sender, RoutedEventArgs e)
+    /// <summary>True iff the model id looks like a non-Anthropic
+    /// vendor — OpenAI (gpt-* family + o-series reasoning models)
+    /// or Google (gemini-*). Used to coerce the recap override
+    /// when the user flips the Subscription toggle ON, since the
+    /// `claude` CLI can only dispatch to Anthropic models.</summary>
+    private static bool IsNonAnthropicRecapModel(string? modelId)
     {
-        ClaudeCodeSignInBtn.IsEnabled = false;
-        ClaudeCodeTestBtn.IsEnabled = false;
-        ClaudeCodeStatusCard.Description = "Launching `claude /login` — complete the OAuth flow in the new terminal window.";
+        if (string.IsNullOrEmpty(modelId)) return false;
+        var l = modelId.ToLowerInvariant();
+        // OpenAI reasoning models (o1, o3, o3-mini, o4-mini, ...).
+        // Match exact "o" + digit prefix to avoid catching e.g.
+        // "opus" or "olmo" as if they were OpenAI.
+        if (l.Length >= 2 && l[0] == 'o' && char.IsDigit(l[1])) return true;
+        return l.StartsWith("gpt-")
+            || l.Contains("gpt-")
+            || l.StartsWith("gemini-")
+            || l.Contains("gemini-");
+    }
+
+    /// <summary>True iff the URL points at the Anthropic API or the
+    /// legacy synthetic `claude-code://` scheme kept for back-compat.</summary>
+    private static bool IsAnthropicUrl(string url)
+    {
+        return url.Contains("anthropic.com", StringComparison.OrdinalIgnoreCase)
+            || url.StartsWith("claude-code://", StringComparison.Ordinal);
+    }
+
+    /// <summary>True iff STT and LLM URLs map to the same provider
+    /// family. Used to gate the "Use same API key as STT" toggle:
+    /// reusing the key only makes sense for same-vendor pairs.</summary>
+    private static bool SameProviderFamily(string sttUrl, string llmUrl)
+    {
+        static string Family(string url) => url switch
+        {
+            var u when u.Contains("groq.com", StringComparison.OrdinalIgnoreCase) => "groq",
+            var u when u.Contains("openai.com", StringComparison.OrdinalIgnoreCase) => "openai",
+            var u when u.Contains("anthropic.com", StringComparison.OrdinalIgnoreCase) => "anthropic",
+            var u when u.StartsWith("claude-code://", StringComparison.Ordinal) => "anthropic",
+            var u when u.Contains("googleapis.com", StringComparison.OrdinalIgnoreCase) => "gemini",
+            var u when u.Contains("openrouter.ai", StringComparison.OrdinalIgnoreCase) => "openrouter",
+            var u when u.Contains("deepgram.com", StringComparison.OrdinalIgnoreCase) => "deepgram",
+            var u when u.Contains("fireworks.ai", StringComparison.OrdinalIgnoreCase) => "fireworks",
+            var u when u.Contains("together.xyz", StringComparison.OrdinalIgnoreCase) => "together",
+            var u when u.Contains("together.ai", StringComparison.OrdinalIgnoreCase) => "together",
+            _ => "other",
+        };
+        return Family(sttUrl) == Family(llmUrl)
+            && !string.IsNullOrEmpty(Family(sttUrl))
+            && Family(sttUrl) != "other";
+    }
+
+    // Backward-compat alias for code paths that still call the old
+    // refresh name (e.g. SyncLlmProviderComboBox after a provider
+    // dropdown change). Forwards to the new unified method.
+    private void RefreshClaudeCodeStatus() => RefreshAuthIntegrationStatus();
+
+    // ── Integrations → Anthropic card handlers ──────────────────
+
+    private async void AnthropicIntegrationSignIn_Click(object sender, RoutedEventArgs e)
+    {
+        AnthropicIntegrationSignInBtn.IsEnabled = false;
+        AnthropicIntegrationStatusText.Text =
+            "Launching `claude /login` — complete the OAuth flow in the new terminal window.";
         try
         {
             var ok = Interop.DimmyNative.SpawnClaudeCodeLogin();
             if (!ok)
             {
-                ClaudeCodeStatusCard.Description = "Could not start `claude /login`. Open a terminal and run it manually.";
-                Interop.DimmyNative.TrackEvent(
-                    "claude_code.login_completed",
+                AnthropicIntegrationStatusText.Text =
+                    "Could not start `claude /login`. Open a terminal and run it manually.";
+                Interop.DimmyNative.TrackEvent("claude_code.login_completed",
                     new { outcome = "spawn_failed" });
                 return;
             }
             // Poll status every 2 s for 3 min — long enough for the
             // user to complete the OAuth dance even on a slow link.
-            // The Rust side has no completion callback so polling is
-            // the only signal. 2 s is the right balance: short
-            // enough that the UI feels live, long enough that we
-            // don't hammer the disk.
             for (int i = 0; i < 90; i++)
             {
                 await System.Threading.Tasks.Task.Delay(2000);
                 var status = Interop.DimmyNative.GetClaudeCodeStatus();
                 if (status == Interop.DimmyNative.ClaudeCodeStatus.Ready)
                 {
-                    Interop.DimmyNative.TrackEvent(
-                        "claude_code.login_completed",
+                    Interop.DimmyNative.TrackEvent("claude_code.login_completed",
                         new { outcome = "success" });
-                    RefreshClaudeCodeStatus();
+                    RefreshAuthIntegrationStatus();
                     return;
                 }
             }
-            ClaudeCodeStatusCard.Description = "Sign-in not completed in 3 minutes. Click ↻ when ready.";
-            Interop.DimmyNative.TrackEvent(
-                "claude_code.login_completed",
+            AnthropicIntegrationStatusText.Text =
+                "Sign-in not completed in 3 minutes. Click Refresh when ready.";
+            Interop.DimmyNative.TrackEvent("claude_code.login_completed",
                 new { outcome = "timeout" });
         }
         catch (Exception ex)
         {
-            ClaudeCodeStatusCard.Description = $"Sign-in error: {ex.Message}";
-            App.Log($"ClaudeCode sign-in exc: {ex}", "ClaudeCode");
-            Interop.DimmyNative.TrackEvent(
-                "claude_code.login_completed",
+            AnthropicIntegrationStatusText.Text = $"Sign-in error: {ex.Message}";
+            App.Log($"AnthropicIntegration sign-in exc: {ex}", "ClaudeCode");
+            Interop.DimmyNative.TrackEvent("claude_code.login_completed",
                 new { outcome = "spawn_failed" });
         }
         finally
         {
-            ClaudeCodeSignInBtn.IsEnabled = true;
+            AnthropicIntegrationSignInBtn.IsEnabled = true;
         }
     }
 
-    private void ClaudeCodeRefresh_Click(object sender, RoutedEventArgs e)
+    private async void AnthropicIntegrationTest_Click(object sender, RoutedEventArgs e)
     {
-        RefreshClaudeCodeStatus();
-    }
-
-    /// <summary>
-    /// Fires on both API-key and Subscription radio Checked events.
-    /// Writes through to ViewModel.LlmAuthMethod (single source of
-    /// truth used by ConfigSave) and refreshes card visibility so
-    /// the status card + API-key card swap immediately.
-    /// </summary>
-    private void LlmAuthMethod_Changed(object sender, RoutedEventArgs e)
-    {
-        if (sender is not RadioButton rb || rb.IsChecked != true) return;
-        var picked = rb == LlmAuthMethodSubscription ? "subscription" : "api_key";
-        if (ViewModel.LlmAuthMethod == picked) return;
-        ViewModel.LlmAuthMethod = picked;
-        RefreshClaudeCodeStatus();
-    }
-
-    /// <summary>
-    /// Recap-auth radio: three states (Inherit / API key / Subscription).
-    /// "" = inherit so the dictation knob governs both calls; the other
-    /// two pin the recap regardless. Writes through to ViewModel.RecapAuthMethod.
-    /// </summary>
-    private void RecapAuthMethod_Changed(object sender, RoutedEventArgs e)
-    {
-        if (sender is not RadioButton rb || rb.IsChecked != true) return;
-        string picked;
-        if (rb == RecapAuthApiKey) picked = "api_key";
-        else if (rb == RecapAuthSubscription) picked = "subscription";
-        else picked = "";
-        if (ViewModel.RecapAuthMethod == picked) return;
-        ViewModel.RecapAuthMethod = picked;
-        // Re-render the status card suffix so it reflects "active for
-        // recap only" / "active for dictation + recap" / etc.
-        RefreshClaudeCodeStatus();
-    }
-
-    private async void ClaudeCodeTest_Click(object sender, RoutedEventArgs e)
-    {
-        // Test connection: send a content-free "ping" through the
-        // local CLI. Concrete success signal for the user — confirms
-        // binary + credentials + Anthropic API in one round-trip.
-        ClaudeCodeTestBtn.IsEnabled = false;
-        ClaudeCodeSignInBtn.IsEnabled = false;
-        ClaudeCodeStatusCard.Description = "Sending ping…";
+        AnthropicIntegrationTestBtn.IsEnabled = false;
+        var prevText = AnthropicIntegrationStatusText.Text;
+        AnthropicIntegrationStatusText.Text = "Sending ping…";
         try
         {
             var (result, elapsedMs) = await System.Threading.Tasks.Task.Run(
                 () => Interop.DimmyNative.PingClaudeCode());
-            ClaudeCodeStatusCard.Description = result switch
+            AnthropicIntegrationStatusText.Text = result switch
             {
                 Interop.DimmyNative.ClaudeCodePingResult.Ok =>
-                    $"✓ Connection OK ({elapsedMs} ms round-trip)",
+                    $"✓ Connection OK — {elapsedMs} ms round-trip via the local `claude` CLI.",
                 Interop.DimmyNative.ClaudeCodePingResult.NotInstalled =>
                     "✗ `claude` binary not found. Install Claude Code first.",
                 Interop.DimmyNative.ClaudeCodePingResult.NotLoggedIn =>
@@ -1745,17 +1823,46 @@ public sealed partial class SettingsWindow : Window
                     "✗ Unexpected output from `claude`. See dimmy.log.",
                 _ => "✗ Unknown error. See dimmy.log.",
             };
+            _ = prevText;
         }
         catch (Exception ex)
         {
-            ClaudeCodeStatusCard.Description = $"Test error: {ex.Message}";
-            App.Log($"ClaudeCode test exc: {ex}", "ClaudeCode");
+            AnthropicIntegrationStatusText.Text = $"Test error: {ex.Message}";
+            App.Log($"AnthropicIntegration test exc: {ex}", "ClaudeCode");
         }
         finally
         {
-            ClaudeCodeTestBtn.IsEnabled = true;
-            ClaudeCodeSignInBtn.IsEnabled = true;
+            AnthropicIntegrationTestBtn.IsEnabled = true;
         }
+    }
+
+    private void AnthropicIntegrationRefresh_Click(object sender, RoutedEventArgs e)
+    {
+        RefreshAuthIntegrationStatus();
+    }
+
+    // ── Output → LLM section: subscription toggle ───────────────
+
+    private void LlmUseSubscription_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (!_loaded) return;
+        var newAuth = LlmUseSubscriptionToggle.IsOn ? "subscription" : "api_key";
+        if (ViewModel.LlmAuthMethod == newAuth) return;
+        ViewModel.LlmAuthMethod = newAuth;
+        RefreshAuthIntegrationStatus();
+    }
+
+    // ── Output → Recap section: subscription toggle ─────────────
+
+    private void RecapUseSubscription_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (!_loaded) return;
+        // ON  → "subscription" (force, regardless of LLM toggle)
+        // OFF → ""             (inherit from LLM toggle)
+        var newAuth = RecapUseSubscriptionToggle.IsOn ? "subscription" : "";
+        if (ViewModel.RecapAuthMethod == newAuth) return;
+        ViewModel.RecapAuthMethod = newAuth;
+        RefreshAuthIntegrationStatus();
     }
 
     // Per-provider has_key flags cached at Settings open. Maps the
@@ -3353,17 +3460,29 @@ public sealed partial class SettingsWindow : Window
             ViewModel.AudioSource = "mix";
     }
 
+    /// Source-of-truth array of curated recap-model ids. Order MUST
+    /// match the ComboBoxItem order in SettingsWindow.xaml — the
+    /// SyncRecapModelPicker logic uses array index → SelectedIndex
+    /// 1:1. The trailing `__custom__` item is implicit (index =
+    /// _recapModelKnownTags.Length). If you add a curated entry,
+    /// update both this array AND the XAML.
     private static readonly string[] _recapModelKnownTags = new[]
     {
-        "",
-        "claude-opus-4-7",
-        "claude-sonnet-4-6",
-        "claude-haiku-4-5-20251001",
-        "gemini-3.1-pro",
-        "gemini-2.5-pro",
-        "gemini-2.5-flash",
-        "gpt-5",
-        "gpt-4o",
+        "",                              //  0  Auto
+        "claude-opus-4-7",               //  1
+        "claude-sonnet-4-6",             //  2
+        "claude-haiku-4-5-20251001",     //  3
+        "gemini-3.1-pro",                //  4
+        "gemini-2.5-pro",                //  5
+        "gemini-3.1-flash",              //  6
+        "gemini-2.5-flash",              //  7
+        "gpt-5",                         //  8
+        "gpt-5-mini",                    //  9
+        "gpt-5-nano",                    // 10  (added 2026-05-13)
+        "gpt-4o",                        // 11
+        "gpt-4o-mini",                   // 12  (added 2026-05-13)
+        "o3",                            // 13  (added 2026-05-13)
+        "o3-mini",                       // 14  (added 2026-05-13)
     };
 
     /// Snap the recap-model picker + custom textbox to whatever the

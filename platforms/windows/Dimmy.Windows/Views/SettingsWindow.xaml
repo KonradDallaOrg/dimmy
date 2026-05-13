@@ -902,27 +902,22 @@
                     </ComboBoxItem>
                   </ComboBox>
                 </controls:SettingCard>
-                <!-- LLM Authentication — only shown for providers that
-                     actually offer a non-API-key auth option (today:
-                     Anthropic via Claude Code subscription). The
-                     RadioButton group flips ViewModel.LlmAuthMethod
-                     which the Rust dispatcher reads on every LLM
-                     call. -->
-                <controls:SettingCard x:Name="LlmAuthMethodCard"
-                                      Glyph="&#xE192;"
-                                      Label="Authentication"
-                                      Description="How Dimmy authenticates LLM calls for this provider."
+                <!-- Use Anthropic subscription — only visible when
+                     provider = Anthropic AND the Anthropic
+                     integration is "connected" (CLI installed +
+                     logged in). Replaces the older 2-radio so the
+                     decision is a single binary toggle. Connect the
+                     subscription itself from Integrations →
+                     Anthropic. ON → flip ViewModel.LlmAuthMethod =
+                     "subscription"; OFF → "api_key". -->
+                <controls:SettingCard x:Name="LlmUseSubscriptionCard"
+                                      Glyph="&#xE779;"
+                                      Label="Use Anthropic subscription"
+                                      Description="Route LLM rewrite via the local `claude` CLI instead of paying per token. Slower (~5-7 s subprocess cold-start per call) but no credit consumed."
                                       Visibility="Collapsed">
-                  <StackPanel Orientation="Vertical" Spacing="2">
-                    <RadioButton x:Name="LlmAuthMethodApiKey"
-                                 GroupName="LlmAuthMethod"
-                                 Content="API key (classic, pay per token)"
-                                 Checked="LlmAuthMethod_Changed"/>
-                    <RadioButton x:Name="LlmAuthMethodSubscription"
-                                 GroupName="LlmAuthMethod"
-                                 Content="Anthropic subscription (Pro / Team / Max, via local claude CLI)"
-                                 Checked="LlmAuthMethod_Changed"/>
-                  </StackPanel>
+                  <ToggleSwitch x:Name="LlmUseSubscriptionToggle"
+                                Toggled="LlmUseSubscription_Toggled"
+                                OnContent="" OffContent=""/>
                 </controls:SettingCard>
                 <controls:SettingCard x:Name="LlmCustomUrlCard"
                                       Glyph="&#xE71B;"
@@ -960,42 +955,28 @@
                               Visibility="{Binding HasLlmKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
                   </StackPanel>
                 </controls:SettingCard>
-                <!-- Subscription status card. Sits right after the API
-                     key entry so the two auth surfaces (key vs token)
-                     are visually adjacent. Visibility logic in
-                     RefreshClaudeCodeStatus: shown iff at least one
-                     call site (dictation or recap) is currently
-                     routed via the subscription. -->
-                <controls:SettingCard x:Name="ClaudeCodeStatusCard"
-                                      Visibility="Collapsed"
-                                      Glyph="&#xE779;"
-                                      Label="Claude Code subscription"
-                                      Description="Initializing…"
-                                      ToolTipService.ToolTip="Uses your Anthropic Pro / Team / Max plan via the local `claude` CLI. No API key needed. Dimmy never sees your token — the CLI owns it.">
-                  <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                    <Button x:Name="ClaudeCodeSignInBtn"
-                            Click="ClaudeCodeSignIn_Click"
-                            ToolTipService.ToolTip="Open the Anthropic OAuth flow in a terminal window">
-                      <StackPanel Orientation="Horizontal" Spacing="6">
-                        <FontIcon Glyph="&#xE8A7;" FontSize="14"/>
-                        <TextBlock x:Name="ClaudeCodeSignInLabel" Text="Sign in"/>
-                      </StackPanel>
-                    </Button>
-                    <Button x:Name="ClaudeCodeTestBtn"
-                            Click="ClaudeCodeTest_Click"
-                            ToolTipService.ToolTip="Send a small ping prompt to verify end-to-end (binary + login + network)">
-                      <StackPanel Orientation="Horizontal" Spacing="6">
-                        <FontIcon Glyph="&#xE945;" FontSize="14"/>
-                        <TextBlock Text="Test"/>
-                      </StackPanel>
-                    </Button>
-                    <Button x:Name="ClaudeCodeRefreshBtn"
-                            Click="ClaudeCodeRefresh_Click"
-                            ToolTipService.ToolTip="Re-probe Claude Code status">
-                      <FontIcon Glyph="&#xE72C;" FontSize="14"/>
-                    </Button>
-                  </StackPanel>
-                </controls:SettingCard>
+                <!-- Subscription status card moved to Integrations →
+                     Anthropic. The Output section now only exposes
+                     the LlmUseSubscriptionCard toggle above; the
+                     login / sign-in / test surfaces live in their
+                     own integration card alongside Notion. -->
+              </StackPanel>
+
+              <!-- ═══ Recap section ═══
+                   Standalone — NOT inside CloudLlmPanel. Recap must
+                   stay visible regardless of LLM mode (local Gemma
+                   users still get a recap if a configured route
+                   exists: subscription, or eventually local LLM).
+                   Today recap routes via:
+                     1. Subscription if RecapUseSubscriptionToggle=ON
+                        (independent of LLM provider)
+                     2. Else the configured llm_api_url + llm_api_key
+                        (cloud only; local LLM recap not yet wired) -->
+              <TextBlock Text="MEETING RECAP"
+                         FontSize="12" FontWeight="SemiBold"
+                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                         CharacterSpacing="40" Margin="2,20,0,8" />
+              <StackPanel x:Name="RecapPanel" Spacing="4">
                 <controls:SettingCard Glyph="&#xE8B5;"
                                       Label="Meeting recap model"
                                       Description="Which LLM writes the recap when a meeting ends.">
@@ -1028,7 +1009,7 @@
                         <TextBlock Text="Anthropic · Haiku 4.5 (fast)" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
-                    <ComboBoxItem Tag="gemini-3.1-pro">
+                    <ComboBoxItem x:Name="RecapItemGemini31Pro" Tag="gemini-3.1-pro">
                       <StackPanel Orientation="Horizontal" Spacing="8">
                         <Image Width="16" Height="16">
                           <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
@@ -1036,7 +1017,7 @@
                         <TextBlock Text="Google · Gemini 3.1 Pro (best)" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
-                    <ComboBoxItem Tag="gemini-2.5-pro">
+                    <ComboBoxItem x:Name="RecapItemGemini25Pro" Tag="gemini-2.5-pro">
                       <StackPanel Orientation="Horizontal" Spacing="8">
                         <Image Width="16" Height="16">
                           <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
@@ -1044,7 +1025,7 @@
                         <TextBlock Text="Google · Gemini 2.5 Pro" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
-                    <ComboBoxItem Tag="gemini-3.1-flash">
+                    <ComboBoxItem x:Name="RecapItemGemini31Flash" Tag="gemini-3.1-flash">
                       <StackPanel Orientation="Horizontal" Spacing="8">
                         <Image Width="16" Height="16">
                           <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
@@ -1052,7 +1033,7 @@
                         <TextBlock Text="Google · Gemini 3.1 Flash (fast)" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
-                    <ComboBoxItem Tag="gemini-2.5-flash">
+                    <ComboBoxItem x:Name="RecapItemGemini25Flash" Tag="gemini-2.5-flash">
                       <StackPanel Orientation="Horizontal" Spacing="8">
                         <Image Width="16" Height="16">
                           <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
@@ -1060,7 +1041,7 @@
                         <TextBlock Text="Google · Gemini 2.5 Flash" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
-                    <ComboBoxItem Tag="gpt-5">
+                    <ComboBoxItem x:Name="RecapItemGpt5" Tag="gpt-5">
                       <StackPanel Orientation="Horizontal" Spacing="8">
                         <Image Width="16" Height="16">
                           <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/openai.svg"/></Image.Source>
@@ -1068,7 +1049,7 @@
                         <TextBlock Text="OpenAI · GPT-5 (best)" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
-                    <ComboBoxItem Tag="gpt-5-mini">
+                    <ComboBoxItem x:Name="RecapItemGpt5Mini" Tag="gpt-5-mini">
                       <StackPanel Orientation="Horizontal" Spacing="8">
                         <Image Width="16" Height="16">
                           <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/openai.svg"/></Image.Source>
@@ -1076,12 +1057,44 @@
                         <TextBlock Text="OpenAI · GPT-5 mini (fast + cheap)" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
-                    <ComboBoxItem Tag="gpt-4o">
+                    <ComboBoxItem x:Name="RecapItemGpt5Nano" Tag="gpt-5-nano">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/openai.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="OpenAI · GPT-5 nano (fastest)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem x:Name="RecapItemGpt4o" Tag="gpt-4o">
                       <StackPanel Orientation="Horizontal" Spacing="8">
                         <Image Width="16" Height="16">
                           <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/openai.svg"/></Image.Source>
                         </Image>
                         <TextBlock Text="OpenAI · GPT-4o" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem x:Name="RecapItemGpt4oMini" Tag="gpt-4o-mini">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/openai.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="OpenAI · GPT-4o mini" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem x:Name="RecapItemO3" Tag="o3">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/openai.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="OpenAI · o3 (reasoning, deep)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem x:Name="RecapItemO3Mini" Tag="o3-mini">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/openai.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="OpenAI · o3 mini (reasoning, fast)" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
                     <ComboBoxItem Tag="__custom__">
@@ -1100,32 +1113,22 @@
                            Text="{Binding RecapModelOverride, Mode=TwoWay}"
                            LostFocus="RecapModelCustom_LostFocus" />
                 </controls:SettingCard>
-                <!-- Recap-specific authentication override. Only shown
-                     when the dictation provider is Anthropic (the only
-                     vendor with a subscription path today). Lets users
-                     run dictation rewrite via API key (fast, no
-                     subprocess cold-start) and meeting recap via the
-                     Anthropic subscription (overhead amortized across
-                     30-90 s of model inference). -->
-                <controls:SettingCard x:Name="RecapAuthMethodCard"
-                                      Glyph="&#xE192;"
-                                      Label="Recap authentication"
-                                      Description="Override the auth method specifically for the meeting recap call."
+                <!-- Use Anthropic subscription for recap — single
+                     toggle that overrides the LLM-level subscription
+                     choice specifically for the meeting recap call.
+                     Visible only when the Anthropic integration is
+                     "connected" in Integrations → Anthropic. Recap
+                     is the ideal subscription workload because the
+                     ~5-7 s subprocess cold-start is amortized across
+                     30-90 s of model inference. -->
+                <controls:SettingCard x:Name="RecapUseSubscriptionCard"
+                                      Glyph="&#xE779;"
+                                      Label="Use Anthropic subscription for recap"
+                                      Description="Route the meeting recap call via the local `claude` CLI regardless of the LLM rewrite auth above. Recommended: subscription cost is amortized over the recap's longer inference window."
                                       Visibility="Collapsed">
-                  <StackPanel Orientation="Vertical" Spacing="2">
-                    <RadioButton x:Name="RecapAuthInherit"
-                                 GroupName="RecapAuthMethod"
-                                 Content="Same as dictation rewrite (default)"
-                                 Checked="RecapAuthMethod_Changed"/>
-                    <RadioButton x:Name="RecapAuthApiKey"
-                                 GroupName="RecapAuthMethod"
-                                 Content="Force API key (paid, but fast cold start)"
-                                 Checked="RecapAuthMethod_Changed"/>
-                    <RadioButton x:Name="RecapAuthSubscription"
-                                 GroupName="RecapAuthMethod"
-                                 Content="Force subscription (via local claude CLI)"
-                                 Checked="RecapAuthMethod_Changed"/>
-                  </StackPanel>
+                  <ToggleSwitch x:Name="RecapUseSubscriptionToggle"
+                                Toggled="RecapUseSubscription_Toggled"
+                                OnContent="" OffContent=""/>
                 </controls:SettingCard>
               </StackPanel>
 
@@ -1964,6 +1967,101 @@
                       BorderThickness="0" CornerRadius="6" Padding="12,8"
                       Margin="0,16,0,0" Visibility="Collapsed">
                 <TextBlock x:Name="NotionMessageText" FontSize="13" TextWrapping="Wrap" />
+              </Border>
+
+              <!-- Group: ANTHROPIC SUBSCRIPTION
+                   The user's Pro / Team / Max plan, accessed via the
+                   local `claude` CLI. Once "connected" (signed in)
+                   the Output → LLM and Output → Recap sections
+                   expose toggles to route those calls through the
+                   subscription instead of through API keys. -->
+              <TextBlock Text="ANTHROPIC SUBSCRIPTION"
+                         FontSize="12" FontWeight="SemiBold"
+                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                         CharacterSpacing="40" Margin="2,32,0,8" />
+
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="16">
+                <Grid ColumnSpacing="14" RowSpacing="12">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                  </Grid.ColumnDefinitions>
+                  <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                  </Grid.RowDefinitions>
+                  <Image Grid.Column="0" Grid.Row="0" Grid.RowSpan="2"
+                         Width="40" Height="40"
+                         VerticalAlignment="Top">
+                    <Image.Source>
+                      <SvgImageSource UriSource="ms-appx:///Assets/Providers/anthropic.svg"/>
+                    </Image.Source>
+                  </Image>
+                  <StackPanel Grid.Column="1" Grid.Row="0" VerticalAlignment="Center" Spacing="2">
+                    <TextBlock Text="Anthropic" FontSize="16" FontWeight="SemiBold" />
+                    <TextBlock x:Name="AnthropicIntegrationStatusText"
+                               Text="Probing…"
+                               FontSize="13"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               TextWrapping="Wrap"/>
+                  </StackPanel>
+                  <StackPanel Grid.Column="2" Grid.Row="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Top">
+                    <FontIcon x:Name="AnthropicIntegrationStatusGlyph"
+                              Glyph="&#xEA39;"
+                              FontSize="20"
+                              Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                  </StackPanel>
+                  <!-- DISCONNECTED action row: Sign in button (or
+                       disabled "install first" hint when binary missing). -->
+                  <StackPanel x:Name="AnthropicIntegrationDisconnectedActions"
+                              Grid.Column="1" Grid.ColumnSpan="2" Grid.Row="1"
+                              Orientation="Horizontal" Spacing="8"
+                              Visibility="Collapsed">
+                    <Button x:Name="AnthropicIntegrationSignInBtn"
+                            Click="AnthropicIntegrationSignIn_Click"
+                            Style="{ThemeResource AccentButtonStyle}">
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xE8A7;" FontSize="14"/>
+                        <TextBlock x:Name="AnthropicIntegrationSignInLabel" Text="Sign in via browser"/>
+                      </StackPanel>
+                    </Button>
+                    <Button Content="Refresh" Click="AnthropicIntegrationRefresh_Click"
+                            ToolTipService.ToolTip="Re-probe the local `claude` CLI install status"/>
+                  </StackPanel>
+                  <!-- CONNECTED action row: Re-sign in + Test + Refresh. -->
+                  <StackPanel x:Name="AnthropicIntegrationConnectedActions"
+                              Grid.Column="1" Grid.ColumnSpan="2" Grid.Row="1"
+                              Orientation="Horizontal" Spacing="8"
+                              Visibility="Collapsed">
+                    <Button x:Name="AnthropicIntegrationTestBtn"
+                            Click="AnthropicIntegrationTest_Click"
+                            ToolTipService.ToolTip="Send a tiny ping prompt through the CLI to verify end-to-end (binary + login + Anthropic API)">
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xE945;" FontSize="14"/>
+                        <TextBlock Text="Test connection"/>
+                      </StackPanel>
+                    </Button>
+                    <Button Content="Re-sign in" Click="AnthropicIntegrationSignIn_Click"
+                            ToolTipService.ToolTip="Re-run the OAuth flow if your subscription token expired"/>
+                    <Button Content="Refresh" Click="AnthropicIntegrationRefresh_Click"/>
+                  </StackPanel>
+                </Grid>
+              </Border>
+
+              <!-- Help footer. -->
+              <TextBlock Margin="2,16,0,0" FontSize="12"
+                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                         TextWrapping="Wrap"
+                         Text="Uses your Anthropic Pro / Team / Max plan via the local `claude` CLI. No API credit consumed. Dimmy never sees your token — the CLI owns it (~/.claude/credentials.json). Once connected, toggle the use under Output → LLM (rewrite) or Output → Recap." />
+
+              <!-- Status / errors. -->
+              <Border x:Name="AnthropicIntegrationMessageBar" Background="{ThemeResource SystemFillColorAttentionBackgroundBrush}"
+                      BorderThickness="0" CornerRadius="6" Padding="12,8"
+                      Margin="0,16,0,0" Visibility="Collapsed">
+                <TextBlock x:Name="AnthropicIntegrationMessageText" FontSize="13" TextWrapping="Wrap" />
               </Border>
             </StackPanel>
 
