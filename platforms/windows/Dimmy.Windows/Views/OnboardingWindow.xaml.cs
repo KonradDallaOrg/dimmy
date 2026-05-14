@@ -28,6 +28,22 @@ public sealed partial class OnboardingWindow : Window
     private CancellationTokenSource? _keyValidateCts;
     private CancellationTokenSource? _parakeetDownloadCts;
     private bool _onboardingLoaded;
+    private readonly DateTime _onboardingStartedAt = DateTime.UtcNow;
+    private bool _onboardingCompleted; // distinguishes Finish vs window-close abandonment
+
+    /// Map Win wizard step index → canonical step name shared with Mac
+    /// + Rust telemetry allowlist. Keep aligned with the strings in
+    /// `core/src/ffi.rs::dimmy_telemetry_track_typed`'s onboarding
+    /// allowlist (welcome / provider / shortcut / try_it on Win;
+    /// permissions + model_download exist only on Mac).
+    private static string OnboardingStepName(int step) => step switch
+    {
+        0 => "welcome",
+        1 => "provider",
+        2 => "shortcut",
+        3 => "try_it",
+        _ => "welcome",
+    };
 
     public OnboardingWindow()
     {
@@ -59,6 +75,13 @@ public sealed partial class OnboardingWindow : Window
         PopulateOnboardingModelCombo();
         _prefetch.StartBasePrefetch();
         _onboardingLoaded = true;
+
+        // Funnel anchor. Fires once per wizard launch — if the user
+        // dismissed the window before, AppDelegate / startup logic
+        // re-shows the window, that re-fires `.started` which is the
+        // documented behaviour (each abandonment + re-entry is a new
+        // funnel attempt in PostHog).
+        DimmyNative.TrackEvent("onboarding.started");
     }
 
     private void PopulateOnboardingModelCombo()
@@ -341,6 +364,11 @@ public sealed partial class OnboardingWindow : Window
 
     private void NextStep_Click(object sender, RoutedEventArgs e)
     {
+        // Capture the step the user is LEAVING — this is the one that's
+        // "completed" (they finished it and are advancing). The post-
+        // increment ViewModel.CurrentStep change happens below.
+        var leavingStep = OnboardingStepName(ViewModel.CurrentStep);
+
         // Persist model choice when leaving the choice step
         if (ViewModel.CurrentStep == 1)
         {
@@ -348,6 +376,8 @@ public sealed partial class OnboardingWindow : Window
         }
 
         ViewModel.NextStep();
+
+        DimmyNative.TrackEvent("onboarding.step_completed", new { step = leavingStep });
 
         // Reaching "Try It" — activate pill so user can test recording
         if (ViewModel.CurrentStep == 3)
@@ -414,6 +444,26 @@ public sealed partial class OnboardingWindow : Window
             Debug.WriteLine($"[Onboarding] FinishOnboarding persist failed: {ex.Message}");
         }
 
+        // Funnel terminal — the user clicked the explicit "Start
+        // using Dimmy" button. Distinguish from the abandonment
+        // path (window dismissed before reaching this handler) by
+        // setting `_onboardingCompleted` so OnboardingWindow_Closed
+        // doesn't double-emit. `path` records the user's STT choice
+        // for the cloud-vs-local funnel split.
+        _onboardingCompleted = true;
+        var path = ViewModel.Choice switch
+        {
+            ModelChoice.Cloud => "cloud",
+            ModelChoice.Local => "local",
+            _ => "unknown",
+        };
+        var duration = (ulong)Math.Max(0, (DateTime.UtcNow - _onboardingStartedAt).TotalSeconds);
+        DimmyNative.TrackEvent("onboarding.completed", new
+        {
+            path,
+            duration_secs = duration,
+        });
+
         this.Close();
     }
 
@@ -426,6 +476,21 @@ public sealed partial class OnboardingWindow : Window
         if (Application.Current is App app)
         {
             app.AppViewModel.ParakeetDownloadProgress -= OnParakeetDownloadProgress;
+        }
+        // Abandonment: user dismissed the window without clicking
+        // "Start using Dimmy". Skip if FinishOnboarding_Click already
+        // fired (the explicit completion path); otherwise emit the
+        // funnel terminal so PostHog can compute drop-off-by-step.
+        if (!_onboardingCompleted)
+        {
+            try
+            {
+                DimmyNative.TrackEvent("onboarding.abandoned", new
+                {
+                    last_step = OnboardingStepName(ViewModel.CurrentStep),
+                });
+            }
+            catch { /* telemetry must never abort window close */ }
         }
     }
 }
