@@ -229,6 +229,26 @@ fn dimmy_init_inner() -> c_int {
         llm_provider,
         file_cfg.llm_enabled
     ));
+    // Print the resolved config path explicitly. Two builds running
+    // against different paths (e.g. Xcode debug build pointing at
+    // `~/Library/Application Support/dimmy-staging/` while the
+    // installed DMG points at `dimmy/`) is invisible without this
+    // line — the colleague would see "my settings are empty in dev"
+    // with no immediate hint why. One log line per init beats an
+    // hour of `find ~/Library | grep dimmy`.
+    let config_path_repr = crate::config_path()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "<unresolved>".to_string());
+    let build_flavor = crate::build_flavor();
+    log(&format!(
+        "FFI init: config_path={} build_flavor={}",
+        config_path_repr,
+        if build_flavor.is_empty() {
+            "<default>"
+        } else {
+            build_flavor
+        }
+    ));
 
     // Audio thread
     let audio_buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
@@ -2058,6 +2078,18 @@ pub extern "C" fn dimmy_get_loopback_amplitude() -> c_float {
 /// (meeting worker) and aec_ref_ring (AEC3 far-end reference) — identical
 /// to what the Windows WASAPI loopback callback does.
 ///
+/// Sample rate (Hz) of the currently active cpal mic stream. Returns
+/// 0 when no recording is in flight. Used by the macOS
+/// `SystemAudioCaptureService` (ScreenCaptureKit loopback) so it can
+/// configure SCStream at the SAME rate the mic is running at —
+/// hardcoding 48 kHz when the mic is at 16 kHz (BT A2DP) forces
+/// the macOS audio HAL to renegotiate the global mixer, which
+/// degrades headphone output during meetings.
+#[no_mangle]
+pub extern "C" fn dimmy_get_active_mic_sample_rate() -> c_int {
+    crate::audio::active_mic_sample_rate() as c_int
+}
+
 /// `samples`     — interleaved f32 PCM, [-1.0, 1.0] expected (clamped).
 /// `count`       — number of f32 values.
 /// `sample_rate` — native rate (informational; worker does not resample here).

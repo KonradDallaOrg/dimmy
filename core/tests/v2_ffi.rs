@@ -36,8 +36,8 @@ use serial_test::serial;
 
 use dimmy_lib::ffi::{
     dimmy_claude_code_ping, dimmy_claude_code_status, dimmy_clear_app_context,
-    dimmy_get_config_json, dimmy_get_loopback_amplitude, dimmy_history_save,
-    dimmy_history_update_audio, dimmy_history_update_enhanced,
+    dimmy_get_active_mic_sample_rate, dimmy_get_config_json, dimmy_get_loopback_amplitude,
+    dimmy_history_save, dimmy_history_update_audio, dimmy_history_update_enhanced,
     dimmy_history_update_word_timestamps, dimmy_init, dimmy_llm_call_raw, dimmy_meeting_is_active,
     dimmy_meeting_save_post_process, dimmy_push_loopback_audio, dimmy_set_app_context,
     dimmy_set_config_json, dimmy_transcribe_file, dimmy_user_dict_add, dimmy_user_dict_list_json,
@@ -908,6 +908,25 @@ fn user_dict_persists_to_disk_so_next_launch_sees_it() {
     assert!(
         arr.iter().any(|w| w == "LoadBearingWord"),
         "added word not in on-disk config.json — UI persistence broken"
+    );
+}
+
+// ── Tests: active mic sample rate ────────────────────────────────
+
+/// Without an active recording, the cpal mic stream is not built so
+/// the reported rate must be 0 (Swift side falls back to 48 kHz when
+/// it sees 0, so the contract here is "0 when unset, positive when
+/// set"). Pinning this prevents a regression where a stale value
+/// leaks across recordings — Mac would then configure SCStream at
+/// the wrong rate for the NEXT meeting and degrade output again.
+#[test]
+#[serial]
+fn active_mic_sample_rate_is_zero_when_no_recording() {
+    ensure_init();
+    let rate = dimmy_get_active_mic_sample_rate();
+    assert_eq!(
+        rate, 0,
+        "no recording in flight, rate must be 0 (got {rate})"
     );
 }
 
