@@ -2048,13 +2048,7 @@ pub extern "C" fn dimmy_get_loopback_amplitude() -> c_float {
 ///
 /// # Safety
 ///
-/// `samples` must point to at least `count` initialised `f32` values
-/// for the duration of this call. The function does not retain the
-/// pointer past the synchronous slice-copy (samples are cloned into
-/// an owned `Vec<f32>` before being sent on the channel), so the
-/// caller can free / reuse the buffer the moment this returns.
-/// `count` must be positive (a non-positive value triggers the early
-/// `-1` return before any pointer access).
+/// `samples` must be a valid pointer to at least `count` f32 values.
 #[no_mangle]
 pub unsafe extern "C" fn dimmy_push_loopback_audio(
     samples: *const c_float,

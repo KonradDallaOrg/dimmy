@@ -26,7 +26,7 @@ final class SystemAudioCaptureService: NSObject {
 
             let config = SCStreamConfiguration()
             config.capturesAudio = true
-            config.excludesCurrentProcessAudioFromMixerService = true
+            config.excludesCurrentProcessAudio = true
             config.sampleRate = 48_000
             config.channelCount = 1
             // Minimal 2×2 display capture required by SCStream API even for
