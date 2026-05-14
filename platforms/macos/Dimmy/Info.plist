@@ -84,5 +84,7 @@
 	<true/>
 	<key>SUScheduledCheckInterval</key>
 	<integer>21600</integer>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>Dimmy captures system audio to transcribe remote meeting participants.</string>
 </dict>
 </plist>

@@ -301,6 +301,11 @@ int32_t dimmy_transcribe_file(const char * _Nonnull path_ptr,
 /// -1 already-active or unable to lock; -3 audio/session start failure.
 int32_t dimmy_meeting_start(char * _Nonnull out_buf, int32_t buf_len);
 
+/// Push externally-captured system-audio samples (macOS ScreenCaptureKit path).
+/// Forwards to audio_buffer_secondary and aec_ref_ring in the Rust worker.
+/// Returns 0 on success, -1 on error.
+int32_t dimmy_push_loopback_audio(const float * _Nonnull samples, int32_t count, int32_t sample_rate);
+
 /// Stop the active meeting. Returns JSON with id/dir/transcript/
 /// duration_secs/chunk_count/error. Negative on error / no active session.
 int32_t dimmy_meeting_stop(char * _Nonnull out_buf, int32_t buf_len);

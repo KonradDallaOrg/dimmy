@@ -49,6 +49,10 @@ pub enum AudioCommand {
         source: AudioSource,
     },
     Stop,
+    /// Push externally-captured loopback samples (macOS/Linux ScreenCaptureKit
+    /// path). The worker appends to audio_buffer_secondary AND aec_ref_ring,
+    /// mirroring what the Windows cpal loopback callback does.
+    PushLoopback(Vec<f32>),
 }
 
 /// List available input device names.
@@ -386,6 +390,18 @@ pub fn spawn_audio_thread(
                     AudioCommand::Stop => {
                         // Dropping the streams stops recording
                         streams.clear();
+                    }
+                    AudioCommand::PushLoopback(samples) => {
+                        if let Ok(mut b) = buffer_secondary.lock() {
+                            for &s in &samples {
+                                b.push(s.clamp(-1.0, 1.0));
+                            }
+                        }
+                        if let Ok(mut r) = aec_ref_ring.lock() {
+                            for &s in &samples {
+                                r.push(s.clamp(-1.0, 1.0));
+                            }
+                        }
                     }
                 }
             }

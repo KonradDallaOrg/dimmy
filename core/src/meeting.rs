@@ -512,6 +512,14 @@ fn worker_loop(
         let s = audio_buffer_secondary.lock().ok().map(|b| b.len())?;
         // s is in system-rate samples; convert to mic-rate equivalent so
         // the lockstep min() is comparing apples to apples.
+        // If secondary is empty (loopback unavailable — macOS, Linux, or
+        // BT/HFP setups where the output device never feeds the ring),
+        // don't block the primary cursor: fall back to primary length so
+        // mic-only capture still proceeds. The min() only applies when
+        // the secondary ring is actually producing samples.
+        if s == 0 {
+            return Some(p);
+        }
         let s_in_mic_rate = (s as f64 / rate_ratio) as usize;
         Some(p.min(s_in_mic_rate))
     };

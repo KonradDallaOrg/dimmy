@@ -169,6 +169,12 @@ final class MeetingViewModel: ObservableObject {
                 self.titlebarTitle = "Recording…"
                 self.startRecordingPolling()
                 self.loadHistory()  // surfaces the new dir in the sidebar
+                Task {
+                    let ok = await SystemAudioCaptureService.shared.start()
+                    if !ok {
+                        self.showToast("System audio unavailable — mic only. Grant Screen Recording in System Settings → Privacy.")
+                    }
+                }
             }
         }
     }
@@ -208,6 +214,7 @@ final class MeetingViewModel: ObservableObject {
         subStatusLabel = ""
         stopRecordingPolling()
 
+        SystemAudioCaptureService.shared.stop()
         DispatchQueue.global(qos: .userInitiated).async {
             let result = DimmyCore.shared.meetingStop()
             DispatchQueue.main.async {

@@ -2052,6 +2052,42 @@ pub extern "C" fn dimmy_get_loopback_amplitude() -> c_float {
     peak.clamp(0.0, 1.0)
 }
 
+/// Push externally-captured system-audio samples on platforms where cpal
+/// cannot open a loopback device (macOS, Linux). Samples are forwarded via
+/// the audio worker channel so they land in both audio_buffer_secondary
+/// (meeting worker) and aec_ref_ring (AEC3 far-end reference) — identical
+/// to what the Windows WASAPI loopback callback does.
+///
+/// `samples`     — interleaved f32 PCM, [-1.0, 1.0] expected (clamped).
+/// `count`       — number of f32 values.
+/// `sample_rate` — native rate (informational; worker does not resample here).
+///
+/// Returns 0 on success, -1 on null / bad args / channel send failure.
+///
+/// # Safety
+///
+/// `samples` must be a valid pointer to at least `count` f32 values.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_push_loopback_audio(
+    samples: *const c_float,
+    count: c_int,
+    _sample_rate: c_int,
+) -> c_int {
+    if samples.is_null() || count <= 0 {
+        return -1;
+    }
+    let slice = std::slice::from_raw_parts(samples, count as usize);
+    let vec: Vec<f32> = slice.iter().map(|&s| s.clamp(-1.0, 1.0)).collect();
+    let st = state();
+    match st.audio_tx.lock() {
+        Ok(tx) => match tx.send(crate::audio::AudioCommand::PushLoopback(vec)) {
+            Ok(_) => 0,
+            Err(_) => -1,
+        },
+        Err(_) => -1,
+    }
+}
+
 /// Get device list as JSON array. Caller must NOT free the returned pointer.
 /// The string is valid until the next call to this function.
 #[no_mangle]

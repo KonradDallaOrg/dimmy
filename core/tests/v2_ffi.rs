@@ -36,11 +36,12 @@ use serial_test::serial;
 
 use dimmy_lib::ffi::{
     dimmy_claude_code_ping, dimmy_claude_code_status, dimmy_clear_app_context,
-    dimmy_get_config_json, dimmy_history_save, dimmy_history_update_audio,
-    dimmy_history_update_enhanced, dimmy_history_update_word_timestamps, dimmy_init,
-    dimmy_llm_call_raw, dimmy_meeting_is_active, dimmy_meeting_save_post_process,
-    dimmy_set_app_context, dimmy_set_config_json, dimmy_transcribe_file, dimmy_user_dict_add,
-    dimmy_user_dict_list_json, dimmy_user_dict_remove,
+    dimmy_get_config_json, dimmy_get_loopback_amplitude, dimmy_history_save,
+    dimmy_history_update_audio, dimmy_history_update_enhanced,
+    dimmy_history_update_word_timestamps, dimmy_init, dimmy_llm_call_raw, dimmy_meeting_is_active,
+    dimmy_meeting_save_post_process, dimmy_push_loopback_audio, dimmy_set_app_context,
+    dimmy_set_config_json, dimmy_transcribe_file, dimmy_user_dict_add, dimmy_user_dict_list_json,
+    dimmy_user_dict_remove,
 };
 
 // ── Fixture wiring (lifted from ffi_e2e to stay self-contained) ──────
@@ -908,4 +909,36 @@ fn user_dict_persists_to_disk_so_next_launch_sees_it() {
         arr.iter().any(|w| w == "LoadBearingWord"),
         "added word not in on-disk config.json — UI persistence broken"
     );
+}
+
+// ── Tests: push_loopback_audio ─────────────────────────────────────────
+
+#[test]
+#[serial]
+fn push_loopback_audio_feeds_secondary_buffer() {
+    ensure_init();
+    let samples: Vec<f32> = vec![0.5, -0.5, 0.8, 1.5, -1.5]; // last two clamped
+    let rc = unsafe { dimmy_push_loopback_audio(samples.as_ptr(), samples.len() as i32, 48_000) };
+    assert_eq!(rc, 0);
+    let amp = unsafe { dimmy_get_loopback_amplitude() };
+    assert!(amp > 0.0, "loopback amplitude must reflect pushed samples");
+}
+
+#[test]
+#[serial]
+fn push_loopback_audio_null_returns_minus_one() {
+    ensure_init();
+    unsafe {
+        assert_eq!(dimmy_push_loopback_audio(std::ptr::null(), 10, 48_000), -1);
+    }
+}
+
+#[test]
+#[serial]
+fn push_loopback_audio_zero_count_returns_minus_one() {
+    ensure_init();
+    let s = [0.0f32];
+    unsafe {
+        assert_eq!(dimmy_push_loopback_audio(s.as_ptr(), 0, 48_000), -1);
+    }
 }
