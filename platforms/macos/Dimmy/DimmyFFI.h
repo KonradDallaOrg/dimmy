@@ -306,6 +306,12 @@ int32_t dimmy_meeting_start(char * _Nonnull out_buf, int32_t buf_len);
 /// Returns 0 on success, -1 on error.
 int32_t dimmy_push_loopback_audio(const float * _Nonnull samples, int32_t count, int32_t sample_rate);
 
+/// Sample rate (Hz) the cpal mic stream is currently running at, or 0
+/// when no recording is in flight. Used by SystemAudioCaptureService
+/// to match SCStream's rate to the mic's native rate (avoids macOS
+/// audio HAL renegotiation during meetings).
+int32_t dimmy_get_active_mic_sample_rate(void);
+
 /// Stop the active meeting. Returns JSON with id/dir/transcript/
 /// duration_secs/chunk_count/error. Negative on error / no active session.
 int32_t dimmy_meeting_stop(char * _Nonnull out_buf, int32_t buf_len);

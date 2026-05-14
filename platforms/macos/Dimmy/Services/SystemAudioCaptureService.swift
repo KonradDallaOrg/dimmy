@@ -27,8 +27,22 @@ final class SystemAudioCaptureService: NSObject {
             let config = SCStreamConfiguration()
             config.capturesAudio = true
             config.excludesCurrentProcessAudio = true
-            config.sampleRate = 48_000
+            // Match SCStream's rate to whatever cpal has the mic
+            // running at. Hardcoding 48 kHz when the mic is at 16
+            // kHz (BT A2DP, Jabra Evolve 3 / AirPods family) forces
+            // the macOS audio HAL to renegotiate the global mixer
+            // every time recording starts — the user perceives this
+            // as a dirty / quieter audio output in their headphones
+            // for the duration of the meeting. Falling back to
+            // 48 kHz when the Rust side reports 0 (no recording yet
+            // — shouldn't happen because we're called after
+            // meetingStart, but defensive). Reported on 2026-05-14
+            // with Jabra Evolve 3 + meeting recording.
+            let micRate = Int(dimmy_get_active_mic_sample_rate())
+            let chosenRate = micRate > 0 ? micRate : 48_000
+            config.sampleRate = chosenRate
             config.channelCount = 1
+            NSLog("[SystemAudio] SCStream sampleRate=%d (mic native=%d)", chosenRate, micRate)
             // Minimal 2×2 display capture required by SCStream API even for
             // audio-only; GPU cost is negligible at this resolution.
             config.width = 2

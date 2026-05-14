@@ -1,8 +1,30 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::io::Cursor;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
+
+/// Sample rate (Hz) of the currently active cpal mic stream. Set to
+/// the device's native rate when the stream opens, reset to 0 when
+/// it closes. Read via `active_mic_sample_rate()` from inside the
+/// crate and via `dimmy_get_active_mic_sample_rate` from FFI.
+///
+/// Lets the macOS `SystemAudioCaptureService` (ScreenCaptureKit
+/// loopback) configure SCStream at the SAME rate the mic is running
+/// at — without this, mic at 16 kHz (Bluetooth A2DP) + SCStream
+/// forced at 48 kHz forces the macOS audio HAL to renegotiate the
+/// global mixer, which the user perceives as the OUTPUT device's
+/// audio quality dropping during recording. Suspected root cause of
+/// the "audio in cuffia non pulito durante un meeting" report on
+/// 2026-05-14 (Jabra Evolve 3, BT, meeting-only).
+static ACTIVE_MIC_SAMPLE_RATE: AtomicU32 = AtomicU32::new(0);
+
+/// Read the sample rate the cpal mic is currently running at, or 0
+/// when no recording is in flight. Crate-internal.
+pub fn active_mic_sample_rate() -> u32 {
+    ACTIVE_MIC_SAMPLE_RATE.load(Ordering::Relaxed)
+}
 
 /// What the audio thread should capture. `Mic` is the historical default
 /// (default input device — built-in mic, headset, etc). `System` opens
@@ -221,6 +243,12 @@ pub fn spawn_audio_thread(
                         // for the matching-rate fallback chain.
                         let primary_actual_sr = config.sample_rate().0;
                         let canonical_config: cpal::StreamConfig = config.clone().into();
+                        // Publish the live mic sample rate so the
+                        // macOS SystemAudioCaptureService can match
+                        // it on SCStream (avoids the mixer
+                        // renegotiation that degrades headphone
+                        // output during meetings).
+                        ACTIVE_MIC_SAMPLE_RATE.store(primary_actual_sr, Ordering::Relaxed);
                         crate::log(&format!(
                             "[Audio] Primary cpal config (native): sr={} ch={}",
                             primary_actual_sr,
@@ -390,6 +418,10 @@ pub fn spawn_audio_thread(
                     AudioCommand::Stop => {
                         // Dropping the streams stops recording
                         streams.clear();
+                        // Clear the published mic rate so callers
+                        // (e.g. SystemAudioCaptureService on Mac)
+                        // know there is no active mic to match.
+                        ACTIVE_MIC_SAMPLE_RATE.store(0, Ordering::Relaxed);
                     }
                     AudioCommand::PushLoopback(samples) => {
                         if let Ok(mut b) = buffer_secondary.lock() {

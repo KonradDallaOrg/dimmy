@@ -2078,6 +2078,18 @@ pub extern "C" fn dimmy_get_loopback_amplitude() -> c_float {
 /// (meeting worker) and aec_ref_ring (AEC3 far-end reference) — identical
 /// to what the Windows WASAPI loopback callback does.
 ///
+/// Sample rate (Hz) of the currently active cpal mic stream. Returns
+/// 0 when no recording is in flight. Used by the macOS
+/// `SystemAudioCaptureService` (ScreenCaptureKit loopback) so it can
+/// configure SCStream at the SAME rate the mic is running at —
+/// hardcoding 48 kHz when the mic is at 16 kHz (BT A2DP) forces
+/// the macOS audio HAL to renegotiate the global mixer, which
+/// degrades headphone output during meetings.
+#[no_mangle]
+pub extern "C" fn dimmy_get_active_mic_sample_rate() -> c_int {
+    crate::audio::active_mic_sample_rate() as c_int
+}
+
 /// `samples`     — interleaved f32 PCM, [-1.0, 1.0] expected (clamped).
 /// `count`       — number of f32 values.
 /// `sample_rate` — native rate (informational; worker does not resample here).
