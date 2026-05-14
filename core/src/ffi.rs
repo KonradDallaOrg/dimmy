@@ -5318,6 +5318,48 @@ pub unsafe extern "C" fn dimmy_telemetry_track_typed(
         "claude_code.login_completed" => Some(crate::telemetry::Event::ClaudeCodeLoginCompleted {
             outcome: prop_static("outcome", &["success", "timeout", "spawn_failed"]),
         }),
+        // onboarding.* — wizard funnel emitted from the host wizard
+        // window (Win OnboardingWindow, Mac OnboardingContainerView).
+        // Step names are categorical so dashboards can build funnels
+        // without per-version drift: welcome → permissions (Mac
+        // only) → provider → shortcut → model_download (Mac only) →
+        // try_it. `path` on `.completed` records whether the user
+        // landed on cloud STT or local STT — drives the onboarding
+        // success-by-path dashboard.
+        "onboarding.started" => Some(crate::telemetry::Event::OnboardingStarted),
+        "onboarding.step_completed" => Some(crate::telemetry::Event::OnboardingStepCompleted {
+            step: prop_static(
+                "step",
+                &[
+                    "welcome",
+                    "permissions",
+                    "provider",
+                    "shortcut",
+                    "model_download",
+                    "try_it",
+                ],
+            ),
+        }),
+        "onboarding.completed" => Some(crate::telemetry::Event::OnboardingCompleted {
+            path: prop_static("path", &["cloud", "local", "unknown"]),
+            duration_secs: props
+                .get("duration_secs")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
+        }),
+        "onboarding.abandoned" => Some(crate::telemetry::Event::OnboardingAbandoned {
+            last_step: prop_static(
+                "last_step",
+                &[
+                    "welcome",
+                    "permissions",
+                    "provider",
+                    "shortcut",
+                    "model_download",
+                    "try_it",
+                ],
+            ),
+        }),
         _ => None,
     };
     // `prop_str` is unused for now — kept available for any future

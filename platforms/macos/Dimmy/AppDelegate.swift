@@ -658,6 +658,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow, window === onboardingWindow else { return }
+        // Abandonment funnel terminal: the window is closing AND
+        // `isOnboardingComplete` is still false, which means the user
+        // dismissed via the red close button without reaching
+        // TryItStepView's "Start Using Dimmy" CTA. Skipped when the
+        // user completed normally (TryItStepView already emitted
+        // `.completed` and flipped the flag). `last_step` is the
+        // step they were viewing when they bailed — drives the
+        // drop-off-by-step funnel in PostHog.
+        if !appState.isOnboardingComplete {
+            // Best-effort: pull current step out of the hosted
+            // SwiftUI view via UserDefaults so we don't have to
+            // thread a binding through. Falls back to "welcome" if
+            // not yet written (very early dismissal).
+            let lastStep = OnboardingContainerView.stepName(
+                UserDefaults.standard.integer(forKey: "onboarding.lastSeenStep")
+            )
+            DimmyCore.shared.trackEvent("onboarding.abandoned", [
+                "last_step": lastStep,
+            ])
+        }
         onboardingWindow = nil
         applyActivationPolicy()
     }
