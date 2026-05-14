@@ -103,6 +103,8 @@
 		AA000902 /* FileLoadToMeetingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000902 /* FileLoadToMeetingService.swift */; };
 		AA000903 /* MacClaudeCodeCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000903 /* MacClaudeCodeCard.swift */; };
 		AA000904 /* TelemetryBuckets.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000904 /* TelemetryBuckets.swift */; };
+		AA000905 /* SystemAudioCaptureService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000905 /* SystemAudioCaptureService.swift */; };
+		AA001000 /* ScreenCaptureKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AB001000 /* ScreenCaptureKit.framework */; };
 		AA000901 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = XP000001 /* Sparkle */; };
 /* End PBXBuildFile section */
 
@@ -129,6 +131,8 @@
 		AB000902 /* FileLoadToMeetingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileLoadToMeetingService.swift; sourceTree = "<group>"; };
 		AB000903 /* MacClaudeCodeCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacClaudeCodeCard.swift; sourceTree = "<group>"; };
 		AB000904 /* TelemetryBuckets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryBuckets.swift; sourceTree = "<group>"; };
+		AB000905 /* SystemAudioCaptureService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemAudioCaptureService.swift; sourceTree = "<group>"; };
+		AB001000 /* ScreenCaptureKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ScreenCaptureKit.framework; path = System/Library/Frameworks/ScreenCaptureKit.framework; sourceTree = SDKROOT; };
 		AB000602 /* MeetingViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingViewModel.swift; sourceTree = "<group>"; };
 		AB000603 /* MeetingSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSidebar.swift; sourceTree = "<group>"; };
 		AB000604 /* MeetingIdleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingIdleView.swift; sourceTree = "<group>"; };
@@ -224,6 +228,7 @@
 				AA000038 /* Accelerate.framework in Frameworks */,
 				AA000039 /* Metal.framework in Frameworks */,
 				AA000901 /* Sparkle in Frameworks */,
+				AA001000 /* ScreenCaptureKit.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -288,6 +293,7 @@
 				AB000900 /* UpdateService.swift */,
 				AB000902 /* FileLoadToMeetingService.swift */,
 				AB000904 /* TelemetryBuckets.swift */,
+				AB000905 /* SystemAudioCaptureService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -450,6 +456,7 @@
 				AB000037 /* CoreFoundation.framework */,
 				AB000038 /* Accelerate.framework */,
 				AB000039 /* Metal.framework */,
+				AB001000 /* ScreenCaptureKit.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -699,6 +706,7 @@
 				AA000608 /* AudioPlaybackBar.swift in Sources */,
 				AA000609 /* WavPeaks.swift in Sources */,
 				AA000610 /* MeetingAmplitudeAGC.swift in Sources */,
+				AA000905 /* SystemAudioCaptureService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
