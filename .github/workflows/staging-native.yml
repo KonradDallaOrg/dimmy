@@ -1,5 +1,12 @@
-name: Staging Release
+name: Staging Auto-Update (Velopack/Sparkle)
 
+# Triggered on every push to `staging`. Builds the rolling-release
+# artefacts that Velopack (Win) + Sparkle (Mac) auto-update consume
+# from the `staging-latest` GitHub release. Counterpart to
+# `staging-release.yml` (which is tag-driven and produces a SIGNED
+# tester installer side-by-side with prod). The two used to share
+# the display name "Staging Release" — renamed 2026-05-14 to remove
+# the ambiguity in the Actions UI.
 on:
   push:
     branches: [staging]
