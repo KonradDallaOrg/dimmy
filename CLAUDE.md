@@ -198,6 +198,8 @@ Hardening status: see [`docs/dev/system-audio-capture-tests.md`](docs/dev/system
 ### Windows CI
 All 10 invariants live in [`docs/dev/windows-ci.md`](docs/dev/windows-ci.md) — paid in blood, MUST be read before editing `.github/workflows/` or `platforms/windows/`. Run `/windows-ci-preflight` before pushing any workflow change.
 
+**🚨 `cargo clean --release` was dropped from Win build steps 2026-05-14** (`staging-native.yml`, `staging-release.yml`, `release.yml`). The `Swatinem/rust-cache@v2` restore is now load-bearing — saves 20-25 min per Win build. Safety net: the `dumpbin /headers` linker-version gate right after `cargo build` aborts if the produced DLL was linked with `< 14.50` (catches stale-cache miscompiles). **If a Win release ever ships a broken DLL** (linker gate red, `test-install.yml` failing, user-reported crash on Win), **first diagnostic is to re-add `cargo clean --release`** in the build step and re-run the workflow. Then investigate why the rust-cache didn't invalidate via fingerprint. User has explicitly accepted this trade-off — don't silently revert.
+
 ### Versioning — MANDATORY VERSION CHECK BEFORE ANY RELEASE WORK
 
 **STOP. Before you bump, tag, build a release, or even open a release PR — check what version is already out there.** `core/Cargo.toml` on a branch can be stale (rc1 of a version that's already been final-released, or a number behind because someone else shipped while the branch was open). Bumping based only on Cargo.toml content has caused at least one rollback (2026-05-13: bumped `0.6.37-rc1` → `0.6.37` while `v0.6.38-rc1` had already been tagged the night before; had to cancel the in-flight Staging Release and force-bump to `0.6.38` mid-pipeline).

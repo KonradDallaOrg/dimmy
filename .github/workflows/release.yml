@@ -557,7 +557,14 @@ jobs:
           REM vcvars64.bat is a batch script.
           call "%VS2026_PATH%\VC\Auxiliary\Build\vcvars64.bat"
           if errorlevel 1 exit /b 1
-          cargo clean --release 2>nul
+          REM ── DO NOT add `cargo clean --release` back here ──
+          REM     Dropped 2026-05-14 to reuse the Swatinem/rust-cache@v2
+          REM     restore — saves 20-25 min per Win build. Safety net:
+          REM     "Gate — verify dimmy_lib.dll linker version" runs
+          REM     dumpbin and aborts if linker < 14.50.
+          REM     Memory: feedback_cargo_clean_dropped_from_win_ci.md
+          REM     If a Win release ever ships a broken DLL, FIRST add
+          REM     `cargo clean --release` back and re-run.
           cargo build --lib --release --features local-stt-vulkan,local-llm-vulkan,local-stt-parakeet
 
       - name: Gate — verify dimmy_lib.dll linker version
