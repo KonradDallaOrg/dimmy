@@ -845,6 +845,34 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
         appState.liveCaptionIsFinal = isFinal
         appState.liveCaptionTick &+= 1
 
+    case "meeting_chunk":
+        // Emitted by the Rust meeting worker every time it processes
+        // a chunk (~15 s cadence). MeetingViewModel listens to the
+        // published mirror so its live-transcript view updates as
+        // chunks land — no transcripts.txt polling needed.
+        // Payload:
+        //   { "dir": "<abs path>", "speaker": "mic" | "system",
+        //     "elapsed_ms": <u64>, "chunk_count": <u32>,
+        //     "line": "[  12000 ms] [mic] hello\n" }
+        let dir = (payload["dir"] as? String) ?? ""
+        let speaker = (payload["speaker"] as? String) ?? ""
+        let line = (payload["line"] as? String) ?? ""
+        let chunkCount = (payload["chunk_count"] as? Int) ?? 0
+        // Drop events from a stale recording — happens briefly when
+        // the user starts a new meeting before the previous worker
+        // has fully drained.
+        if !appState.meetingActiveDir.isEmpty
+            && appState.meetingActiveDir != dir {
+            break
+        }
+        if appState.meetingActiveDir.isEmpty {
+            appState.meetingActiveDir = dir
+        }
+        appState.meetingLiveTranscript.append(line)
+        appState.meetingChunkCount = chunkCount
+        appState.meetingLastChunkSpeaker = speaker
+        appState.meetingChunkTick &+= 1
+
     default:
         print("[DimmyCore] unhandled event: \(event)")
     }

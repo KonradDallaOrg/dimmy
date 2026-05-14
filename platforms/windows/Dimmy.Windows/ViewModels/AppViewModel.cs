@@ -141,6 +141,14 @@ public partial class AppViewModel : ObservableObject
     /// hide the CaptionWindow and to keep its text in sync.
     public event Action<string, bool>? SttChunkReceived;
 
+    /// Raised on every `meeting_chunk` event from the Rust core —
+    /// fired exactly once per chunk processed by the meeting worker
+    /// (~ every 15 s, matching the chunked-STT cadence). Lets
+    /// MeetingWindow append the new line to its transcript view
+    /// without polling transcripts.txt. Args: (dir, speaker, line,
+    /// elapsedMs, chunkCount).
+    public event Action<string, string, string, long, int>? MeetingChunkReceived;
+
     /// Fires when the Rust core emits a file_transcribe_progress
     /// event during dimmy_transcribe_file. Args: (processed_secs,
     /// total_secs, percent 0-100). Used by Settings → Home → file
@@ -225,6 +233,21 @@ public partial class AppViewModel : ObservableObject
                         Log?.Invoke($"meeting_state event: active={ma} paused={mp}", "Meeting");
                         MeetingActive = ma;
                         MeetingPaused = mp;
+                    }
+                    break;
+                case "meeting_chunk":
+                    // Replaces the 2 s DispatcherTimer that
+                    // MeetingWindow used to run on transcripts.txt.
+                    // Rust emits once per chunk (~15 s cadence), so
+                    // the live transcript updates instantly and the
+                    // window has zero idle CPU between chunks.
+                    {
+                        var dir = payload.GetProperty("dir").GetString() ?? "";
+                        var speaker = payload.GetProperty("speaker").GetString() ?? "";
+                        var line = payload.GetProperty("line").GetString() ?? "";
+                        var elapsedMs = payload.GetProperty("elapsed_ms").GetInt64();
+                        var chunkCount = payload.GetProperty("chunk_count").GetInt32();
+                        MeetingChunkReceived?.Invoke(dir, speaker, line, elapsedMs, chunkCount);
                     }
                     break;
             }

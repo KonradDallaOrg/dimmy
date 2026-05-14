@@ -623,6 +623,32 @@ final class AppState: ObservableObject {
     /// state poll so the bar / status reflects pause state regardless
     /// of which surface flipped it.
     @Published var meetingIsPaused: Bool = false
+    /// Absolute path of the meeting directory currently producing
+    /// chunks — pinned on the first `meeting_chunk` event so later
+    /// events from a stale recording (briefly tail-emitting after
+    /// the next meeting starts) get dropped instead of mixing into
+    /// the new transcript. Cleared by MeetingViewModel on
+    /// `start()` / `stop()`.
+    @Published var meetingActiveDir: String = ""
+    /// Running concatenation of every `meeting_chunk` event's `line`
+    /// for the active recording. Replaces the previous Win pattern
+    /// of re-reading `transcripts.txt` from disk every 2 s — the
+    /// Rust core already produces these lines, we just append on
+    /// receive. MeetingViewModel binds its live-transcript view to
+    /// this property.
+    @Published var meetingLiveTranscript: String = ""
+    /// Last `chunk_count` reported by the Rust meeting worker —
+    /// drives the "N chunks" pill in the meeting recording UI.
+    @Published var meetingChunkCount: Int = 0
+    /// Last speaker tag from a `meeting_chunk` event ("mic" or
+    /// "system"). Currently informational; future: per-speaker
+    /// colour bars in the transcript view.
+    @Published var meetingLastChunkSpeaker: String = ""
+    /// Increments by 1 on every `meeting_chunk` event so views that
+    /// can't bind directly to a String change (eg. attributed-text
+    /// renderers that hold their own buffer) can observe a primitive
+    /// counter and re-render. Same pattern as `liveCaptionTick`.
+    @Published var meetingChunkTick: Int = 0
     @Published var lastTranscript: String = ""
     @Published var lastError: String?
     @Published var hotkeyStatus: HotkeyStatus = .uninstalled

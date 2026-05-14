@@ -31,7 +31,7 @@ public sealed partial class MeetingWindow : Window
     private DateTime _startedAt;
     private string? _activeMeetingDir;       // dir of the LIVE recording (set on Start)
     private string? _viewingMeetingDir;      // dir currently shown in main panel (may differ)
-    private long _lastTranscriptLen = -1;
+    private readonly System.Text.StringBuilder _liveTranscriptBuilder = new();
     private MeetingState _state = MeetingState.Idle;
     // Decoupled from _state so the user can browse past meetings
     // (state == Done) while a recording is still active. RecordingBar
@@ -157,10 +157,25 @@ public sealed partial class MeetingWindow : Window
         }
         catch (Exception ex) { App.Log($"closing-hook exc: {ex.Message}", "Meeting"); }
 
+        // Subscribe to the event-driven live-transcript pipe. Rust
+        // emits a `meeting_chunk` event for every chunk processed by
+        // the meeting worker (~15 s cadence); the AppViewModel re-
+        // dispatches to MeetingChunkReceived on the UI thread.
+        // Replaces the 2 s DispatcherTimer that previously polled
+        // transcripts.txt for changes.
+        if (App.Instance?.AppViewModel is { } vm)
+        {
+            vm.MeetingChunkReceived += OnMeetingChunkReceived;
+        }
+
         Closed += (_, __) =>
         {
             StopPolling();
             StopAmplitudePoll();
+            if (App.Instance?.AppViewModel is { } vmClose)
+            {
+                vmClose.MeetingChunkReceived -= OnMeetingChunkReceived;
+            }
 
             // Stop any audio.wav playback (MediaPlayerElement). Without
             // this, the underlying MediaPlayer keeps holding the audio
@@ -194,7 +209,7 @@ public sealed partial class MeetingWindow : Window
             if (DimmyNative.dimmy_meeting_is_active() == 1)
             {
                 _startedAt = DateTime.UtcNow;       // best-effort; Rust holds the truth
-                _lastTranscriptLen = -1;
+                _liveTranscriptBuilder.Clear();
                 _ampHistory.Clear();
                 _ampHistorySystem.Clear();
                 _recordingActive = true;
@@ -267,7 +282,7 @@ public sealed partial class MeetingWindow : Window
                 if (DimmyNative.dimmy_meeting_is_active() == 1)
                 {
                     _startedAt = DateTime.UtcNow;
-                    _lastTranscriptLen = -1;
+                    _liveTranscriptBuilder.Clear();
                     _ampHistory.Clear();
                     _ampHistorySystem.Clear();
                     _recordingActive = true;
@@ -286,10 +301,10 @@ public sealed partial class MeetingWindow : Window
             }
             var id = System.Text.Encoding.UTF8.GetString(buf, 0, rc);
             _startedAt = DateTime.UtcNow;
-            _lastTranscriptLen = -1;
+            _liveTranscriptBuilder.Clear();
             _ampHistory.Clear();
             _ampHistorySystem.Clear();
-            _activeMeetingDir = null;       // poll fills it once Rust creates the dir
+            _activeMeetingDir = null;       // first meeting_chunk event will set it
             _viewingMeetingDir = null;
 
             var fg = Helpers.AppContextCapture.SnapshotForeground();
@@ -532,15 +547,29 @@ public sealed partial class MeetingWindow : Window
         NextStepsText.Blocks.Clear();
     }
 
-    // ── Polling + amplitude ──────────────────────────────────────
+    // ── Recording-time tick + amplitude ──────────────────────────
+    //
+    // The transcript / chunk count UI is driven by the Rust core's
+    // `meeting_chunk` event (see OnMeetingChunkReceived). The only
+    // thing this timer drives is the elapsed-time label — a 1 Hz
+    // tick on a continuously-changing wall clock, which is a
+    // CLAUDE.md-documented legitimate exception to the no-polling
+    // rule ("continuous sampling that has no event semantics").
+    //
+    // Burned 2026-05-14: this timer USED to ALSO poll transcripts.txt
+    // every 2 s, scan the meetings dir for the latest folder, file-
+    // stat it, read its contents, and re-render the whole transcript
+    // even when nothing had changed. That's the polling pattern
+    // CLAUDE.md explicitly forbids — replaced by the event-driven
+    // path so the window now uses zero CPU between chunks.
 
     private void StartPolling()
     {
         var dq = DispatcherQueue.GetForCurrentThread();
         _pollTimer = dq.CreateTimer();
-        _pollTimer.Interval = TimeSpan.FromSeconds(2);
+        _pollTimer.Interval = TimeSpan.FromSeconds(1);
         _pollTimer.IsRepeating = true;
-        _pollTimer.Tick += OnPollTick;
+        _pollTimer.Tick += OnRecTimerTick;
         _pollTimer.Start();
     }
 
@@ -548,50 +577,42 @@ public sealed partial class MeetingWindow : Window
     {
         if (_pollTimer == null) return;
         _pollTimer.Stop();
-        _pollTimer.Tick -= OnPollTick;
+        _pollTimer.Tick -= OnRecTimerTick;
         _pollTimer = null;
     }
 
-    private void OnPollTick(DispatcherQueueTimer sender, object args)
+    private void OnRecTimerTick(DispatcherQueueTimer sender, object args)
     {
         var elapsed = DateTime.UtcNow - _startedAt;
         RecTimer.Text = $"{(int)elapsed.TotalHours:D2}:{elapsed.Minutes:D2}:{elapsed.Seconds:D2}";
+    }
 
-        try
-        {
-            var meetings = Path.Combine(Services.BuildInfo.ConfigDirPath, "meetings");
-            if (!Directory.Exists(meetings)) return;
-            var latest = new DirectoryInfo(meetings).GetDirectories()
-                .OrderByDescending(d => d.LastWriteTime)
-                .FirstOrDefault();
-            if (latest == null) return;
-            _activeMeetingDir = latest.FullName;
-            var transcriptsPath = Path.Combine(latest.FullName, "transcripts.txt");
-            if (!File.Exists(transcriptsPath)) return;
-            var fi = new FileInfo(transcriptsPath);
-            if (fi.Length == _lastTranscriptLen) return;
-            _lastTranscriptLen = fi.Length;
-
-            string content;
-            using (var fs = new FileStream(transcriptsPath, FileMode.Open,
-                FileAccess.Read, FileShare.ReadWrite))
-            using (var sr = new StreamReader(fs))
-            {
-                content = sr.ReadToEnd();
-            }
-            if (string.IsNullOrWhiteSpace(content)) return;
-
-            App.Log($"poll: {fi.Length} bytes from {latest.Name[..8]}", "Meeting");
-            TranscriptText.Text = HumanizeTranscript(content);
-            var nChunks = content.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length;
-            RecChunks.Text = $"{nChunks} chunks";
-            TranscriptMeta.Text = $"{nChunks} chunks";
-            TranscriptScroll?.ChangeView(null, double.MaxValue, null, true);
+    /// Subscribed in OnLoaded / unsubscribed in OnClosed. Replaces
+    /// the transcripts.txt polling — Rust emits exactly one
+    /// `meeting_chunk` per chunk processed; we append the new line
+    /// to the in-memory transcript and bump the counter. Idempotent
+    /// + race-safe even when the user has navigated to a past
+    /// meeting (we ignore events whose `dir` doesn't match the
+    /// active recording).
+    private void OnMeetingChunkReceived(
+        string dir, string speaker, string line, long elapsedMs, int chunkCount)
+    {
+        // Drop events from a stale recording (e.g. a meeting that
+        // ended a moment ago whose final chunks are still landing).
+        // Match by suffix so we tolerate path normalisation diffs.
+        if (string.IsNullOrEmpty(_activeMeetingDir)) {
+            _activeMeetingDir = dir;
+        } else if (!dir.Equals(_activeMeetingDir, StringComparison.OrdinalIgnoreCase)) {
+            return;
         }
-        catch (Exception ex)
-        {
-            App.Log($"poll exc: {ex.Message}", "Meeting");
-        }
+
+        // Append the new line to the live transcript view. The
+        // line already ends with '\n' from Rust.
+        _liveTranscriptBuilder.Append(line);
+        TranscriptText.Text = HumanizeTranscript(_liveTranscriptBuilder.ToString());
+        RecChunks.Text = $"{chunkCount} chunks";
+        TranscriptMeta.Text = $"{chunkCount} chunks";
+        TranscriptScroll?.ChangeView(null, double.MaxValue, null, true);
     }
 
     private void StartAmplitudePoll()

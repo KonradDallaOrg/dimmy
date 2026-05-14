@@ -62,6 +62,35 @@ final class MeetingViewModel: ObservableObject {
     // ── Toast (blocked-during-recording warning) ───────────────────
     @Published var toastMessage: String?
 
+    /// Combine bag for the live-transcript pipe from AppState.
+    /// DimmyCore.handleEvent writes every `meeting_chunk` event's
+    /// `line` into `AppState.meetingLiveTranscript`; we mirror that
+    /// onto `self.transcript` so the recording view binds to a
+    /// single property on its own view-model (Combine-friendly,
+    /// no AppState reach-through in the View).
+    private var liveTranscriptBag = Set<AnyCancellable>()
+
+    init() {
+        // Replaces the absent 2 s file polling that Win used to run
+        // on transcripts.txt — purely event-driven. Subscription is
+        // permanent (no cancel/re-subscribe per meeting) because
+        // AppState.meetingLiveTranscript is reset to "" on each
+        // start() / stopAndProcess(); we just mirror.
+        AppState.shared.$meetingLiveTranscript
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] value in
+                self?.transcript = value
+            }
+            .store(in: &liveTranscriptBag)
+        AppState.shared.$meetingChunkCount
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] count in
+                guard let self else { return }
+                self.chunkSummary = count > 0 ? "\(count) chunks" : ""
+            }
+            .store(in: &liveTranscriptBag)
+    }
+
     // ── Errors ─────────────────────────────────────────────────────
     @Published var lastError: String?
 
@@ -151,6 +180,12 @@ final class MeetingViewModel: ObservableObject {
         doneAudioURL = nil
         browsingPastMeeting = false
         isPaused = false
+        // Reset the event-driven live-transcript mirror (filled by
+        // DimmyCore.handleEvent on every `meeting_chunk` event).
+        AppState.shared.meetingActiveDir = ""
+        AppState.shared.meetingLiveTranscript = ""
+        AppState.shared.meetingChunkCount = 0
+        AppState.shared.meetingLastChunkSpeaker = ""
 
         DispatchQueue.global(qos: .userInitiated).async {
             let id = DimmyCore.shared.meetingStart()
@@ -213,6 +248,12 @@ final class MeetingViewModel: ObservableObject {
         statusLabel = "Stopping & finalising…"
         subStatusLabel = ""
         stopRecordingPolling()
+        // Snapshot the live transcript into the Done buffer so the
+        // chunks the user just saw stay visible while the recap
+        // pipeline runs. AppState.meetingLiveTranscript will be
+        // cleared on the next start().
+        doneRawTranscript = AppState.shared.meetingLiveTranscript
+        AppState.shared.meetingActiveDir = ""
 
         SystemAudioCaptureService.shared.stop()
         DispatchQueue.global(qos: .userInitiated).async {

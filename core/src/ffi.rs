@@ -229,6 +229,26 @@ fn dimmy_init_inner() -> c_int {
         llm_provider,
         file_cfg.llm_enabled
     ));
+    // Print the resolved config path explicitly. Two builds running
+    // against different paths (e.g. Xcode debug build pointing at
+    // `~/Library/Application Support/dimmy-staging/` while the
+    // installed DMG points at `dimmy/`) is invisible without this
+    // line — the colleague would see "my settings are empty in dev"
+    // with no immediate hint why. One log line per init beats an
+    // hour of `find ~/Library | grep dimmy`.
+    let config_path_repr = crate::config_path()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "<unresolved>".to_string());
+    let build_flavor = crate::build_flavor();
+    log(&format!(
+        "FFI init: config_path={} build_flavor={}",
+        config_path_repr,
+        if build_flavor.is_empty() {
+            "<default>"
+        } else {
+            build_flavor
+        }
+    ));
 
     // Audio thread
     let audio_buffer = Arc::new(Mutex::new(Vec::<f32>::new()));

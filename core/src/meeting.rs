@@ -811,8 +811,15 @@ fn worker_loop(
             let elapsed_ms = started.elapsed().as_millis();
 
             // Append helper: dedup vs the per-speaker accumulator,
-            // append the delta to the speaker's accumulator, and
-            // emit a labeled line into transcripts.txt.
+            // append the delta to the speaker's accumulator, emit a
+            // labeled line into transcripts.txt, AND fire a
+            // `meeting_chunk` event so host UIs can refresh their
+            // live transcript view without polling the on-disk file.
+            // Replaces the 1-2 s DispatcherTimer polling that Win
+            // MeetingWindow used to run on transcripts.txt — event-
+            // driven so Mac (which had no equivalent poll) also lights
+            // up, and idle CPU drops to zero between chunks.
+            let dir_str = dir.to_string_lossy().to_string();
             let mut emit = |speaker: &str, text: &str, accum: &mut String| {
                 if text.trim().is_empty() {
                     return;
@@ -829,6 +836,20 @@ fn worker_loop(
                 let line = format!("[{:>6} ms] [{}] {}\n", elapsed_ms, speaker, delta);
                 let _ = transcripts_file.write_all(line.as_bytes());
                 let _ = transcripts_file.flush();
+
+                // Push event to host UIs. Payload mirrors the line
+                // we just wrote so consumers can either re-render
+                // from transcripts.txt at open + tail this event, or
+                // build their own rolling buffer from `line` deltas.
+                let payload = serde_json::json!({
+                    "dir": dir_str,
+                    "speaker": speaker,
+                    "elapsed_ms": elapsed_ms as u64,
+                    "chunk_count": chunk_count,
+                    "line": line,
+                })
+                .to_string();
+                crate::ffi::emit_event("meeting_chunk", &payload);
             };
 
             emit(mic_label, &mic_text, &mut mic_accum);
