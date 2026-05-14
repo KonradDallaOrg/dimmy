@@ -23,12 +23,27 @@ public static class MarkdownRenderer
     private static readonly MarkdownPipeline Pipeline =
         new MarkdownPipelineBuilder().UseSoftlineBreakAsHardlineBreak().Build();
 
+    /// Tracks the ActualTheme of the host RichTextBlock during a
+    /// Render() pass so deeply-nested inline builders (code spans,
+    /// quotes) can pick a theme-correct fixed color without having
+    /// to thread the host parameter through every helper.
+    /// Reset to Default after Render() so a follow-up call into a
+    /// differently-themed host gets the right value on next entry.
+    [ThreadStatic]
+    private static ElementTheme _currentRenderTheme;
+
     /// Replace the contents of `target` with rendered markdown.
     public static void Render(RichTextBlock target, string markdown)
     {
         target.Blocks.Clear();
         if (string.IsNullOrWhiteSpace(markdown)) return;
 
+        // Capture the visible theme of the host once, so inline
+        // builders can pick brushes that contrast against the actual
+        // rendered surface (acrylic-on-light vs acrylic-on-dark).
+        // ActualTheme reflects what the user SEES, not what
+        // Application.Current is set to (which can drift).
+        _currentRenderTheme = target.ActualTheme;
         try
         {
             var doc = Markdown.Parse(markdown, Pipeline);
@@ -45,6 +60,10 @@ public static class MarkdownRenderer
             var p = new Paragraph();
             p.Inlines.Add(new Run { Text = markdown });
             target.Blocks.Add(p);
+        }
+        finally
+        {
+            _currentRenderTheme = ElementTheme.Default;
         }
     }
 
@@ -212,12 +231,24 @@ public static class MarkdownRenderer
             case EmphasisInline emp:
                 return BuildEmphasis(emp);
             case CodeInline code:
-                return new Run
+                // Code span as plain styled Run, no chip box. Monospace
+                // font + a theme-aware purple: GitHub-dark
+                // (#6F42C1) on Light cards, Tailwind-lavender (#C4B5FD)
+                // on Dark cards. Each picked for clear contrast on
+                // the actual rendered surface.
                 {
-                    Text = code.Content,
-                    FontFamily = new FontFamily("Consolas"),
-                    Foreground = ThemeBrush("TextFillColorSecondaryBrush"),
-                };
+                    bool dark = _currentRenderTheme == ElementTheme.Dark;
+                    var color = dark
+                        ? Microsoft.UI.ColorHelper.FromArgb(0xFF, 0xC4, 0xB5, 0xFD)
+                        : Microsoft.UI.ColorHelper.FromArgb(0xFF, 0x6F, 0x42, 0xC1);
+                    return new Run
+                    {
+                        Text = code.Content,
+                        FontFamily = new FontFamily("Consolas"),
+                        FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                        Foreground = new SolidColorBrush(color),
+                    };
+                }
             case LineBreakInline _:
                 return new LineBreak();
             case LinkInline link:

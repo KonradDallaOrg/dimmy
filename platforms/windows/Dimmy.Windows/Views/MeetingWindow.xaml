@@ -342,73 +342,58 @@
           <!-- DONE: meeting detail (also reused when sidebar selects a past meeting) -->
           <ScrollViewer x:Name="DonePanel" Visibility="Collapsed"
                         VerticalScrollBarVisibility="Auto"
-                        HorizontalScrollBarVisibility="Disabled">
-            <StackPanel Spacing="14" Padding="0,0,0,20">
-              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="8" Padding="14">
-                <Grid ColumnSpacing="12">
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                  </Grid.ColumnDefinitions>
-                  <StackPanel Grid.Column="0" Spacing="2">
-                    <TextBlock x:Name="DoneTitle" Text="Meeting"
-                               FontSize="18" FontWeight="SemiBold"/>
-                    <TextBlock x:Name="DoneMeta" FontSize="11"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                               Text=""/>
-                  </StackPanel>
-                  <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
-                    <Button x:Name="RegenTranscriptBtn" Click="RegenerateTranscript_Click"
-                            ToolTipService.ToolTip="(Re)generate transcript from audio">
-                      <FontIcon Glyph="&#xE720;" FontSize="13"/>
-                    </Button>
-                    <Button x:Name="RegenRecapBtn" Click="RegenerateRecap_Click"
-                            ToolTipService.ToolTip="(Re)generate recap from transcript">
-                      <FontIcon Glyph="&#xE8D4;" FontSize="13"/>
-                    </Button>
-                    <Button x:Name="CopyRecapBtn" Click="CopyRecap_Click"
-                            ToolTipService.ToolTip="Copy recap to clipboard">
-                      <FontIcon Glyph="&#xE8C8;" FontSize="13"/>
-                    </Button>
-                    <Button x:Name="SendToNotionBtn" Click="SendToNotion_Click"
-                            Padding="6,4"
-                            ToolTipService.ToolTip="Send recap to Notion">
-                      <!-- Real Notion logo — bundled SVG asset
-                           (Assets/notion-mark.svg). Renders crisply at
-                           any DPI; black/white squircle works against
-                           both light and dark theming. -->
-                      <Image Width="18" Height="18"
-                             Source="ms-appx:///Assets/notion-mark.svg"/>
-                    </Button>
-                    <Button x:Name="OpenFolderBtn" Click="OpenFolder_Click"
-                            ToolTipService.ToolTip="Open meeting folder">
-                      <FontIcon Glyph="&#xE838;" FontSize="13"/>
-                    </Button>
-                  </StackPanel>
-                </Grid>
-              </Border>
+                        HorizontalScrollBarVisibility="Disabled"
+                        Padding="0,0,4,0">
+            <!-- Right padding 14 leaves breathing room between card
+                 borders and the vertical scrollbar; otherwise on
+                 full-screen the rightmost borders hug the scrollbar
+                 and look "snagged" on the window edge. -->
+            <StackPanel Spacing="14" Padding="0,0,14,20">
 
+              <!-- Title + meta line, no card, sits on the page surface. -->
+              <StackPanel Spacing="6" Padding="0,4,0,2">
+                <TextBlock x:Name="DoneTitle" Text="Meeting"
+                           FontSize="22" FontWeight="SemiBold"/>
+                <TextBlock x:Name="DoneMeta" FontSize="12"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           Text=""/>
+              </StackPanel>
+
+              <!-- Card containing the mirrored-stereo waveform + the
+                   transport controls. Mic (blue) anchors UP from the
+                   midline, system (green) anchors DOWN.
+                   Theme-aware acrylic background: looks near-white on
+                   Light theme + dark-tinted on Dark theme — keeps the
+                   card visually consistent with the recap cards below
+                   instead of a glaring white slab on dark systems.
+                   The Canvas is intentionally lower-profile than v1 so
+                   the recap content below stays the page's focus. -->
               <Border x:Name="DoneWaveCard"
                       Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                       BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="8" Padding="0"
+                      BorderThickness="1" CornerRadius="12" Padding="18,14,18,12"
                       Visibility="Collapsed">
-                <Grid>
+                <Grid RowSpacing="10">
                   <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                   </Grid.RowDefinitions>
-                  <Border Grid.Row="0" Padding="6,4" Height="64">
+                  <Border Grid.Row="0" Height="74">
                     <Canvas x:Name="DoneWaveformCanvas"
                             Background="Transparent"
                             SizeChanged="DoneWaveformCanvas_SizeChanged"
                             PointerPressed="DoneWaveform_PointerPressed"/>
                   </Border>
+                  <!-- Transport controls. The default MediaTransportControls
+                       chrome is ~64-72px tall; capping at 56 cropped the
+                       play/scrub row. RequestedTheme inherits from the
+                       card / window so icons stay readable on Dark mode
+                       (no hard Light theme — the card itself follows
+                       the system now). -->
                   <MediaPlayerElement x:Name="DoneAudioPlayer" Grid.Row="1"
                                       AreTransportControlsEnabled="True"
-                                      AutoPlay="False" MaxHeight="110">
+                                      AutoPlay="False"
+                                      MinHeight="64">
                     <MediaPlayerElement.TransportControls>
                       <MediaTransportControls IsCompact="True"
                                               IsZoomButtonVisible="False"/>
@@ -416,6 +401,83 @@
                   </MediaPlayerElement>
                 </Grid>
               </Border>
+
+              <!-- Tab strip + action icons. Tabs are flat with an
+                   accent-color underline on the selected one. Action
+                   icons live to the right of the tab row so they're
+                   always visible regardless of which tab is selected. -->
+              <Grid Padding="0,4,0,0">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="22">
+                  <StackPanel x:Name="RecapTabHeader" Orientation="Vertical" Spacing="6"
+                              Tag="recap" PointerPressed="DoneTab_PointerPressed">
+                    <TextBlock x:Name="RecapTabLabel" Text="Recap"
+                               FontSize="14" FontWeight="SemiBold"
+                               Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
+                    <Rectangle x:Name="RecapTabUnderline" Height="2"
+                               Fill="{ThemeResource AccentFillColorDefaultBrush}"/>
+                  </StackPanel>
+                  <StackPanel x:Name="TranscriptTabHeader" Orientation="Vertical" Spacing="6"
+                              Tag="transcript" PointerPressed="DoneTab_PointerPressed">
+                    <TextBlock x:Name="TranscriptTabLabel" Text="Transcript"
+                               FontSize="14"
+                               Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                               Opacity="0.6"/>
+                    <Rectangle x:Name="TranscriptTabUnderline" Height="2"
+                               Fill="{ThemeResource AccentFillColorDefaultBrush}"
+                               Visibility="Collapsed"/>
+                  </StackPanel>
+                  <StackPanel x:Name="NotesTabHeader" Orientation="Vertical" Spacing="6"
+                              Tag="notes" PointerPressed="DoneTab_PointerPressed">
+                    <TextBlock x:Name="NotesTabLabel" Text="Notes"
+                               FontSize="14"
+                               Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                               Opacity="0.6"/>
+                    <Rectangle x:Name="NotesTabUnderline" Height="2"
+                               Fill="{ThemeResource AccentFillColorDefaultBrush}"
+                               Visibility="Collapsed"/>
+                  </StackPanel>
+                </StackPanel>
+
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4"
+                            VerticalAlignment="Center">
+                  <Button x:Name="RegenTranscriptBtn" Click="RegenerateTranscript_Click"
+                          ToolTipService.ToolTip="(Re)generate transcript from audio"
+                          Background="Transparent" BorderThickness="0" Padding="8">
+                    <FontIcon Glyph="&#xE720;" FontSize="14"/>
+                  </Button>
+                  <Button x:Name="RegenRecapBtn" Click="RegenerateRecap_Click"
+                          ToolTipService.ToolTip="(Re)generate recap from transcript"
+                          Background="Transparent" BorderThickness="0" Padding="8">
+                    <FontIcon Glyph="&#xE8D4;" FontSize="14"/>
+                  </Button>
+                  <Button x:Name="CopyRecapBtn" Click="CopyRecap_Click"
+                          ToolTipService.ToolTip="Copy recap to clipboard"
+                          Background="Transparent" BorderThickness="0" Padding="8">
+                    <FontIcon Glyph="&#xE8C8;" FontSize="14"/>
+                  </Button>
+                  <Button x:Name="SendToNotionBtn" Click="SendToNotion_Click"
+                          ToolTipService.ToolTip="Send recap to Notion"
+                          Background="Transparent" BorderThickness="0" Padding="8">
+                    <Image Width="16" Height="16"
+                           Source="ms-appx:///Assets/notion-mark.svg"/>
+                  </Button>
+                  <Button x:Name="OpenFolderBtn" Click="OpenFolder_Click"
+                          ToolTipService.ToolTip="Open meeting folder"
+                          Background="Transparent" BorderThickness="0" Padding="8">
+                    <FontIcon Glyph="&#xE838;" FontSize="14"/>
+                  </Button>
+                </StackPanel>
+              </Grid>
+
+              <!-- Tab content: only one panel is visible at a time.
+                   Code-behind DoneTab_PointerPressed swaps Visibility. -->
+
+              <StackPanel x:Name="RecapTabPanel" Spacing="14">
 
               <Border x:Name="TldrCard" Visibility="Collapsed"
                       Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
@@ -520,13 +582,37 @@
                 </StackPanel>
               </Border>
 
-              <Expander Header="Raw transcript" IsExpanded="False">
-                <Border Padding="0,8,0,0">
-                  <RichTextBlock x:Name="RawTranscriptText" TextWrapping="Wrap"
-                                 FontSize="13" LineHeight="22"
-                                 IsTextSelectionEnabled="True"/>
-                </Border>
-              </Expander>
+              </StackPanel>
+              <!-- /RecapTabPanel -->
+
+              <!-- Transcript tab — the raw transcript that was the
+                   Expander in v1, now full-height inside the tab. -->
+              <Border x:Name="TranscriptTabPanel" Visibility="Collapsed"
+                      Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="14">
+                <RichTextBlock x:Name="RawTranscriptText" TextWrapping="Wrap"
+                               FontSize="13" LineHeight="22"
+                               IsTextSelectionEnabled="True"/>
+              </Border>
+
+              <!-- Notes tab — user-typed scratchpad. Local-only for
+                   now; future: prepended to the recap LLM prompt so
+                   the user can steer the recap with context. -->
+              <StackPanel x:Name="NotesTabPanel" Visibility="Collapsed" Spacing="8">
+                <TextBlock Text="Your notes for this meeting"
+                           FontSize="12" FontWeight="SemiBold"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                <TextBox x:Name="NotesBox"
+                         AcceptsReturn="True" TextWrapping="Wrap"
+                         MinHeight="180"
+                         PlaceholderText="Add context, attendees, decisions you want surfaced in the recap. (Not yet sent to the LLM — UI only for now.)"
+                         LostFocus="NotesBox_LostFocus"/>
+                <TextBlock x:Name="NotesHint"
+                           FontSize="11"
+                           Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                           Text="Saved alongside the meeting in notes.md."/>
+              </StackPanel>
             </StackPanel>
           </ScrollViewer>
         </Grid>

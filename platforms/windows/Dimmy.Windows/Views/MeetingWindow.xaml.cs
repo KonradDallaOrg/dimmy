@@ -218,6 +218,11 @@ public sealed partial class MeetingWindow : Window
         RecordingPanel.Visibility = s == MeetingState.Recording ? Visibility.Visible : Visibility.Collapsed;
         ProcessingPanel.Visibility = s == MeetingState.Processing ? Visibility.Visible : Visibility.Collapsed;
         DonePanel.Visibility = s == MeetingState.Done ? Visibility.Visible : Visibility.Collapsed;
+        // Whenever we enter Done, default the tab strip to "Recap" so
+        // the user lands on the summary regardless of which tab was
+        // visible the last time they were in Done. Cheap idempotent
+        // call — safe even if SelectedTab is already "recap".
+        if (s == MeetingState.Done) SelectDoneTab("recap");
         // RecordingBar lifecycle is keyed off _recordingActive (not the
         // visible panel) so the user can navigate to a past meeting
         // while still seeing — and being able to stop — the live one.
@@ -364,6 +369,7 @@ public sealed partial class MeetingWindow : Window
                     ? "(no transcript: VAD may have removed all audio)"
                     : HumanizeTranscript(transcript));
             await LoadDoneAudioAsync(dir);
+            await LoadNotesAsync(dir);
 
             if (GenerateRecapCheck.IsChecked == true && !string.IsNullOrWhiteSpace(transcript))
             {
@@ -821,33 +827,43 @@ public sealed partial class MeetingWindow : Window
         if (w <= 0 || h <= 0) return;
 
         bool dual = _cachedMicPeaks != null && _cachedSystemPeaks != null;
+        double midline = h / 2.0;
         if (dual)
         {
-            // Phase 3+ recording with both per-track files. Top half =
-            // mic (DodgerBlue, AEC-cleaned), bottom half = system
-            // (LimeGreen, raw loopback). Same palette as the live
-            // waveform so the two views are visually consistent.
-            double bandH = h / 2.0;
-            DrawDoneBand(_cachedMicPeaks!,
+            // Mirrored-stereo audiogram (Phase 3+ recordings with both
+            // per-track files). Both waveforms share the canvas's
+            // midline: mic (blue) grows UP, system (green) grows DOWN.
+            // Each band gets the FULL half-canvas height so a loud
+            // moment is readable even on short cards.
+            DrawDoneBandAnchored(_cachedMicPeaks!,
                 new SolidColorBrush(Microsoft.UI.Colors.DodgerBlue),
-                bandH / 2.0, bandH - 2, w);
-            DrawDoneBand(_cachedSystemPeaks!,
+                midline, midline - 2, w, anchorTop: true);
+            DrawDoneBandAnchored(_cachedSystemPeaks!,
                 new SolidColorBrush(Microsoft.UI.Colors.LimeGreen),
-                bandH + bandH / 2.0, bandH - 2, w);
+                midline, midline - 2, w, anchorTop: false);
         }
         else if (_cachedDonePeaks != null && _cachedDonePeaks.Length > 0)
         {
             // Pre-Phase-3 recording (or Mic-only / System-only mode where
-            // one track file is absent). Single-band centered.
-            DrawDoneBand(_cachedDonePeaks,
+            // one track file is absent). Single mirrored band so the
+            // layout matches the dual case visually.
+            DrawDoneBandAnchored(_cachedDonePeaks,
                 new SolidColorBrush(Microsoft.UI.Colors.DodgerBlue),
-                h / 2.0, h - 2, w);
+                midline, midline - 2, w, anchorTop: true);
+            DrawDoneBandAnchored(_cachedDonePeaks,
+                new SolidColorBrush(Microsoft.UI.Colors.DodgerBlue),
+                midline, midline - 2, w, anchorTop: false);
         }
 
         UpdateDonePlayhead(0);
     }
 
-    private void DrawDoneBand(float[] peaks, SolidColorBrush brush, double mid, double maxHeight, double w)
+    /// Draw bars anchored on a shared horizontal midline — anchorTop
+    /// means each bar extends upward from `mid` (top of canvas at 0),
+    /// !anchorTop means it extends downward. Replaces the older
+    /// centered-band drawer to give the audiogram aesthetic.
+    private void DrawDoneBandAnchored(float[] peaks, SolidColorBrush brush,
+        double mid, double maxHeight, double w, bool anchorTop)
     {
         if (peaks.Length == 0) return;
         double slot = w / peaks.Length;
@@ -864,7 +880,10 @@ public sealed partial class MeetingWindow : Window
                 RadiusY = 1,
             };
             Microsoft.UI.Xaml.Controls.Canvas.SetLeft(rect, i * slot);
-            Microsoft.UI.Xaml.Controls.Canvas.SetTop(rect, mid - bh / 2.0);
+            // anchorTop = true → bar's BOTTOM rests on `mid`, grows up.
+            // anchorTop = false → bar's TOP rests on `mid`, grows down.
+            double top = anchorTop ? mid - bh : mid;
+            Microsoft.UI.Xaml.Controls.Canvas.SetTop(rect, top);
             DoneWaveformCanvas.Children.Add(rect);
         }
     }
@@ -985,6 +1004,100 @@ public sealed partial class MeetingWindow : Window
         // button would route them to the wrong fix.
         OpenRecapSettingsButton.Visibility = actionable
             ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// Tab switcher on the Done view. The XAML wires PointerPressed
+    /// on each header StackPanel; the `Tag` carries the tab id
+    /// ("recap" / "transcript" / "notes"). One panel is visible at a
+    /// time + only the selected tab's label is full-emphasis with the
+    /// accent underline shown.
+    private void DoneTab_PointerPressed(object sender,
+        Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement fe) return;
+        var tag = fe.Tag as string ?? "recap";
+        SelectDoneTab(tag);
+    }
+
+    /// Apply the selected-tab state — content panel visibility +
+    /// label foreground + underline. Default selection on a fresh
+    /// Done view is "recap" so the user lands on the summary.
+    private void SelectDoneTab(string tab)
+    {
+        bool recap = tab == "recap";
+        bool transcript = tab == "transcript";
+        bool notes = tab == "notes";
+        RecapTabPanel.Visibility = recap ? Visibility.Visible : Visibility.Collapsed;
+        TranscriptTabPanel.Visibility = transcript ? Visibility.Visible : Visibility.Collapsed;
+        NotesTabPanel.Visibility = notes ? Visibility.Visible : Visibility.Collapsed;
+
+        RecapTabUnderline.Visibility = recap ? Visibility.Visible : Visibility.Collapsed;
+        TranscriptTabUnderline.Visibility = transcript ? Visibility.Visible : Visibility.Collapsed;
+        NotesTabUnderline.Visibility = notes ? Visibility.Visible : Visibility.Collapsed;
+
+        // Selected tab → full opacity + SemiBold. Unselected →
+        // primary brush at 0.6 opacity (much more legible than the
+        // SecondaryBrush which goes near-invisible on Light theme).
+        RecapTabLabel.Opacity = recap ? 1.0 : 0.6;
+        TranscriptTabLabel.Opacity = transcript ? 1.0 : 0.6;
+        NotesTabLabel.Opacity = notes ? 1.0 : 0.6;
+
+        RecapTabLabel.FontWeight = recap
+            ? Microsoft.UI.Text.FontWeights.SemiBold
+            : Microsoft.UI.Text.FontWeights.Normal;
+        TranscriptTabLabel.FontWeight = transcript
+            ? Microsoft.UI.Text.FontWeights.SemiBold
+            : Microsoft.UI.Text.FontWeights.Normal;
+        NotesTabLabel.FontWeight = notes
+            ? Microsoft.UI.Text.FontWeights.SemiBold
+            : Microsoft.UI.Text.FontWeights.Normal;
+    }
+
+    /// Persist the Notes tab textbox to `<meetingDir>/notes.md` on
+    /// LostFocus. Local-only for now — not threaded into the recap
+    /// LLM prompt yet. Empty + non-existing file = no-op so we don't
+    /// litter the meeting dirs with zero-byte files.
+    private async void NotesBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        var dir = _viewingMeetingDir ?? _activeMeetingDir;
+        if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return;
+        try
+        {
+            var path = Path.Combine(dir, "notes.md");
+            var text = NotesBox.Text ?? "";
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                if (File.Exists(path)) File.Delete(path);
+            }
+            else
+            {
+                await File.WriteAllTextAsync(path, text);
+            }
+        }
+        catch (Exception ex)
+        {
+            App.Log($"NotesBox_LostFocus exc: {ex.Message}", "Meeting");
+        }
+    }
+
+    /// Load the saved notes.md (if present) into the Notes textbox
+    /// when opening a meeting from the sidebar or finishing one
+    /// live. Empty file / missing → empty textbox.
+    private async Task LoadNotesAsync(string dir)
+    {
+        try
+        {
+            var path = Path.Combine(dir, "notes.md");
+            if (NotesBox == null) return;
+            NotesBox.Text = File.Exists(path)
+                ? await File.ReadAllTextAsync(path)
+                : "";
+        }
+        catch (Exception ex)
+        {
+            App.Log($"LoadNotesAsync exc: {ex.Message}", "Meeting");
+            if (NotesBox != null) NotesBox.Text = "";
+        }
     }
 
     /// "Open Recap settings" CTA on the Done view fallback — fires
@@ -1368,6 +1481,7 @@ public sealed partial class MeetingWindow : Window
                     HumanizeTranscript(await File.ReadAllTextAsync(txt)));
             }
             await LoadDoneAudioAsync(row.Dir);
+            await LoadNotesAsync(row.Dir);
             SetState(MeetingState.Done);
         }
         catch (Exception ex)
