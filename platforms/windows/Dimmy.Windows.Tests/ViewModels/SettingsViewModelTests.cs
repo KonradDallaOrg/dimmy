@@ -1,3 +1,4 @@
+using System;
 using Dimmy.Windows.ViewModels;
 using Xunit;
 
@@ -471,5 +472,135 @@ public class SettingsViewModelTests
         var vm2 = new SettingsViewModel();
         vm2.LoadFromJson(json);
         Assert.Equal(source, vm2.AudioSource);
+    }
+
+    // ── Recap API URL override (provider-different-from-LLM) ──
+    // Landed on feat/anthropic-subscription-login (2026-05-14).
+    // Empty default → recap inherits llm_api_url + llm key.
+    // Non-empty value → recap uses the override URL + a vendor-
+    // scoped key resolved by the Rust core. Both Rust unit tests
+    // (config_round_trip_persists_recap_api_url_field) and these
+    // C# tests pin the round trip across the boundary.
+
+    [Fact]
+    public void RecapApiUrl_defaults_to_empty()
+    {
+        var vm = new SettingsViewModel();
+        Assert.Equal("", vm.RecapApiUrl);
+    }
+
+    [Fact]
+    public void LoadFromJson_parses_recap_api_url()
+    {
+        var vm = new SettingsViewModel();
+        vm.LoadFromJson("""{"recap_api_url":"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent"}""");
+        Assert.Equal(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent",
+            vm.RecapApiUrl);
+    }
+
+    [Fact]
+    public void LoadFromJson_recap_api_url_missing_keeps_empty()
+    {
+        var vm = new SettingsViewModel();
+        vm.RecapApiUrl = "https://api.openai.com/v1/chat/completions";
+        vm.LoadFromJson("{}");
+        Assert.Equal("", vm.RecapApiUrl);
+    }
+
+    [Fact]
+    public void ToJson_includes_recap_api_url()
+    {
+        var vm = new SettingsViewModel
+        {
+            RecapApiUrl = "https://api.anthropic.com/v1/messages",
+        };
+        var json = vm.ToJson();
+        Assert.Contains("\"recap_api_url\":\"https://api.anthropic.com/v1/messages\"", json);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("https://api.anthropic.com/v1/messages")]
+    [InlineData("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent")]
+    [InlineData("https://api.openai.com/v1/chat/completions")]
+    [InlineData("https://my-private-proxy.internal/v1/chat")]
+    public void RecapApiUrl_round_trips_through_json(string url)
+    {
+        var vm = new SettingsViewModel { RecapApiUrl = url };
+        var json = vm.ToJson();
+        var vm2 = new SettingsViewModel();
+        vm2.LoadFromJson(json);
+        Assert.Equal(url, vm2.RecapApiUrl);
+    }
+
+    // ── Recap rc → user-facing message (Phase 3 UI feedback) ──
+    // Pinned categorical mapping so the user message never echoes
+    // API response bodies (which could contain transcript text via
+    // 4xx error payloads). Each rc maps to exactly one branch — if
+    // a new rc lands in core/src/ffi.rs::dimmy_llm_call_raw, this
+    // test catches the missing case via the fallback branch.
+
+    [Fact]
+    public void RecapRcToUserMessage_unknown_rc_uses_fallback()
+    {
+        var msg = Dimmy.Windows.Helpers.MeetingRecapHelpers
+            .RecapRcToUserMessage(-99, "auto");
+        Assert.Contains("-99", msg);
+        Assert.Contains("dimmy.log", msg);
+    }
+
+    [Theory]
+    [InlineData(-2, "key")]
+    [InlineData(-3, "HTTP")]
+    [InlineData(-4, "Local")]
+    [InlineData(-6, "key")]
+    [InlineData(-7, "rate")]
+    [InlineData(-8, "Network")]
+    public void RecapRcToUserMessage_named_categories_have_text(int rc, string keyword)
+    {
+        var msg = Dimmy.Windows.Helpers.MeetingRecapHelpers
+            .RecapRcToUserMessage(rc, "claude-opus-4-7");
+        Assert.NotEmpty(msg);
+        Assert.Contains(keyword, msg, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RecapRcToUserMessage_minus_five_includes_model_hint()
+    {
+        // -5 ("model not found") gives the user the picker label
+        // so they immediately know which model id needs replacing.
+        var msg = Dimmy.Windows.Helpers.MeetingRecapHelpers
+            .RecapRcToUserMessage(-5, "gemini-3.1-pro");
+        Assert.Contains("gemini-3.1-pro", msg);
+        Assert.Contains("Settings", msg);
+    }
+
+    [Fact]
+    public void RecapRcToUserMessage_minus_five_with_empty_override_says_auto()
+    {
+        // When the user has "Auto" picked, the modelOverride arg
+        // is "" — show a readable "auto" hint instead of an empty
+        // ' '...
+        var msg = Dimmy.Windows.Helpers.MeetingRecapHelpers
+            .RecapRcToUserMessage(-5, "");
+        Assert.Contains("auto", msg);
+    }
+
+    [Fact]
+    public void RecapRcToUserMessage_never_echoes_caller_supplied_body()
+    {
+        // SECURITY: the helper takes ONLY the rc + the user's curated
+        // model id. There is no way to inject HTTP response body text.
+        // This test pins the signature — if someone later adds an
+        // overload that takes a body string, this test still passes
+        // for the legacy overload AND the security review forces
+        // them to think about the new overload.
+        var msg = Dimmy.Windows.Helpers.MeetingRecapHelpers
+            .RecapRcToUserMessage(-6, "claude-opus-4-7");
+        // Should NOT contain anything that looks like an Anthropic
+        // 401 body (which would be the natural -6 cause).
+        Assert.DoesNotContain("authentication_error", msg);
+        Assert.DoesNotContain("x-api-key", msg);
     }
 }

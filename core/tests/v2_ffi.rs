@@ -561,6 +561,39 @@ fn claude_code_status_returns_documented_range() {
     );
 }
 
+/// recap_api_url round-trips through dimmy_set_config_json so a saved
+/// override (different vendor for recap vs dictation) survives a
+/// config save + reload. Burned 2026-05-14 incident: user picked
+/// `gemini-3.1-pro` as recap model with `llm_api_url=anthropic.com`,
+/// the recap dispatch hit Anthropic with a Gemini model → 404.
+/// The fix introduces `recap_api_url` to route recap to a separate
+/// vendor URL. This test pins the schema round-trip.
+#[test]
+#[serial]
+fn config_round_trip_persists_recap_api_url_field() {
+    ensure_init();
+    set_config(
+        &serde_json::json!({
+            "llm_api_url": "https://api.anthropic.com/v1/messages",
+            "recap_api_url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+            "recap_model_override": "gemini-3.1-pro",
+        })
+        .to_string(),
+    );
+    let v = get_config_value();
+    assert_eq!(
+        v["recap_api_url"], "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        "recap_api_url must round-trip — without it the dispatcher can't route recap to a different vendor"
+    );
+    // Reset empty to verify "inherit from llm_api_url" round-trip.
+    set_config(&serde_json::json!({"recap_api_url": ""}).to_string());
+    let v2 = get_config_value();
+    assert_eq!(
+        v2["recap_api_url"], "",
+        "empty recap_api_url must round-trip as the inherit signal"
+    );
+}
+
 /// Pin the return-code contract for `dimmy_claude_code_ping`:
 ///   positive = elapsed_ms (success)
 ///   -1..=-6 = documented categorical errors

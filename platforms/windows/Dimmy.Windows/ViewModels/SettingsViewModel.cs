@@ -212,6 +212,21 @@ public partial class SettingsViewModel : ObservableObject
     /// subprocess cold-start tax) and meeting recap via the
     /// subscription (amortized across 30-90 s of inference).
     [ObservableProperty] private string _recapAuthMethod = "";
+    /// <summary>
+    /// Endpoint URL override for the meeting recap call. Empty
+    /// (default) = inherit `LlmApiUrl`. Non-empty = recap dispatch
+    /// hits this URL instead, with the per-vendor API key fetched
+    /// from keystore for `Provider::from_url(this)`. Lets a user
+    /// run Anthropic Haiku dictation (cheap, fast) + Gemini 3.1
+    /// Pro recap on a separate Gemini key.
+    ///
+    /// Burned 2026-05-14: `recap_model_override="gemini-3.1-pro"`
+    /// + `llm_api_url=anthropic.com` produced a 404 because
+    /// Anthropic doesn't know `gemini-3.1-pro`. The override lives
+    /// behind an Advanced expander in Settings; basic users stay
+    /// in the inherit-from-dictation default.
+    /// </summary>
+    [ObservableProperty] private string _recapApiUrl = "";
     /// User override for the model ID used by the meeting recap LLM call.
     /// Empty = let PickRecapModel pick the provider-default flagship
     /// reasoning model (Opus 4.7 / Gemini 3.1 Pro / GPT-5).
@@ -455,6 +470,12 @@ public partial class SettingsViewModel : ObservableObject
                 "api_key" or "subscription" => savedRecapAuth,
                 _ => "",
             };
+            // Recap URL override — empty (default) = inherit from
+            // LlmApiUrl. Free-form string accepted; the Rust
+            // dispatcher will validate at dispatch time. Trim only
+            // whitespace.
+            RecapApiUrl = (r.TryGetProperty("recap_api_url", out var rau)
+                ? rau.GetString() ?? "" : "").Trim();
             RecapModelOverride = r.TryGetProperty("recap_model_override", out var rmo)
                 ? rmo.GetString() ?? "" : "";
             // Notion target + auto-send flag round-trip through config.
@@ -579,6 +600,7 @@ public partial class SettingsViewModel : ObservableObject
             ["llm_use_same_key"] = LlmUseSameKey,
             ["llm_auth_method"] = LlmAuthMethod,
             ["recap_auth_method"] = RecapAuthMethod,
+            ["recap_api_url"] = RecapApiUrl,
             ["recap_model_override"] = RecapModelOverride,
             // notion_target_{id,kind,title} are deliberately NOT in
             // the generic dict — see the includeNotion docstring above.

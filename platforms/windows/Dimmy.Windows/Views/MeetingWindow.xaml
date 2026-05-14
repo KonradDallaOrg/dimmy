@@ -427,6 +427,11 @@
                              Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
                   <RichTextBlock x:Name="TldrText" TextWrapping="Wrap" FontSize="14"
                                  IsTextSelectionEnabled="True"/>
+                  <Button x:Name="OpenRecapSettingsButton"
+                          Visibility="Collapsed"
+                          Margin="0,6,0,0"
+                          Content="Open Recap settings"
+                          Click="OpenRecapSettings_Click"/>
                 </StackPanel>
               </Border>
 

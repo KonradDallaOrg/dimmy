@@ -55,12 +55,7 @@ public static class MeetingPostProcessService
 
             if (rc <= 0)
             {
-                var msg = rc switch
-                {
-                    -2 => "Configure an LLM API key + URL first.",
-                    -3 => "LLM HTTP call failed (see dimmy.log).",
-                    _ => $"LLM call returned {rc}",
-                };
+                var msg = RecapRcToUserMessage(rc, modelOverride);
                 App.Log($"recap (shared) failed rc={rc}: {msg}", "MeetingRecap");
                 DimmyNative.TrackEvent("meeting.recap_completed", new
                 {
@@ -157,6 +152,16 @@ public static class MeetingPostProcessService
             return false;
         }
     }
+
+    /// Translate a `dimmy_llm_call_raw` rc into a short user-facing
+    /// message. Thin shim that delegates to
+    /// <see cref="Helpers.MeetingRecapHelpers.RecapRcToUserMessage"/>
+    /// so the pure-logic helper can live in a file the xUnit Tests
+    /// project links directly (without dragging in App / FFI / XAML
+    /// deps). Public so MeetingDoneView + MeetingPostProcessService
+    /// + PillWindow all call the same source of truth.
+    public static string RecapRcToUserMessage(int rc, string modelOverride)
+        => Helpers.MeetingRecapHelpers.RecapRcToUserMessage(rc, modelOverride);
 
     /// Read `llm_api_url` from the Rust core config snapshot. Used
     /// only to derive a categorical provider tag for telemetry

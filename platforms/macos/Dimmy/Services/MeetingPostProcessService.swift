@@ -51,6 +51,22 @@ enum MeetingPostProcessService {
                     return "Dimmy core isn't ready yet — wait a moment then click Regenerate."
                 case .localModelMissing:
                     return "Local LLM model not on disk. Open Settings → LLM → download a Gemma variant (E2B Q4 = fast, E4B Q4 = best balance) before generating a recap."
+                case .modelNotSupported:
+                    // -5 from dimmy_llm_call_raw: 404 because the
+                    // picked model id is not valid for the recap
+                    // endpoint's vendor (e.g. gpt-5 vs api.anthropic.com).
+                    return "Recap model is not supported by the recap endpoint. Open Settings → Recap and pick a model that matches the endpoint vendor."
+                case .unauthorized:
+                    // -6: 401/403 — the recap-side key is missing
+                    // or unauthorized for the override URL.
+                    return "Recap API key is missing or unauthorized. Open Settings → Recap to fix it."
+                case .rateLimited:
+                    // -7: 429 — too many requests this minute.
+                    return "Recap rate limited (429). Try again in a minute, or pick a faster model in Settings → Recap."
+                case .networkError:
+                    // -8: socket / DNS / TLS error reaching the
+                    // recap endpoint. Network problem, not auth.
+                    return "Network error reaching the recap endpoint. Check your connection and try again."
                 case .unknown(let code):
                     return "LLM call failed (rc=\(code)). See Console.app under \"dimmy\"."
                 }

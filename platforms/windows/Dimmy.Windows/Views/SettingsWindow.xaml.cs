@@ -1657,56 +1657,113 @@ public sealed partial class SettingsWindow : Window
             ? Visibility.Visible : Visibility.Collapsed;
         RecapUseSubscriptionToggle.IsOn = recapForceSub;
 
-        // When recap is going via subscription, the `claude` CLI can
-        // only invoke Anthropic models. Hide the non-Anthropic
-        // ComboBoxItems in the Recap model picker AND coerce the
-        // current selection back to "Auto" if the user previously
-        // saved e.g. gpt-5 or gemini-3.1-pro. Without this the
-        // picker would let the user pick gpt-5 + subscription, then
-        // every recap fails with "model not supported by claude".
-        var visForNonAnthropic = recapForceSub
-            ? Visibility.Collapsed : Visibility.Visible;
-        RecapItemGemini31Pro.Visibility = visForNonAnthropic;
-        RecapItemGemini25Pro.Visibility = visForNonAnthropic;
-        RecapItemGemini31Flash.Visibility = visForNonAnthropic;
-        RecapItemGemini25Flash.Visibility = visForNonAnthropic;
-        RecapItemGpt5.Visibility = visForNonAnthropic;
-        RecapItemGpt5Mini.Visibility = visForNonAnthropic;
-        RecapItemGpt5Nano.Visibility = visForNonAnthropic;
-        RecapItemGpt4o.Visibility = visForNonAnthropic;
-        RecapItemGpt4oMini.Visibility = visForNonAnthropic;
-        RecapItemO3.Visibility = visForNonAnthropic;
-        RecapItemO3Mini.Visibility = visForNonAnthropic;
-        if (recapForceSub && IsNonAnthropicRecapModel(ViewModel.RecapModelOverride))
+        // Filter the recap model picker by the EFFECTIVE recap
+        // vendor — independent of the subscription toggle. The
+        // effective vendor is:
+        //   - if recap_api_url is set → that URL's vendor
+        //   - else if subscription is on → "anthropic" (CLI only does Anthropic)
+        //   - else → the dictation LLM provider's vendor
+        // The picker shows ONLY models from that vendor (plus Auto
+        // and Custom). Coerce recap_model_override if invalid.
+        //
+        // Burned 2026-05-14: bare picker without vendor filter let
+        // the user pick gpt-5 / gemini-3.1-pro on an anthropic.com
+        // URL → 404 at recap time.
+        var recapEffectiveUrl = !string.IsNullOrEmpty(ViewModel.RecapApiUrl)
+            ? ViewModel.RecapApiUrl
+            : (recapForceSub ? "https://api.anthropic.com/v1/messages" : llmUrl);
+        var recapVendor = RecapVendorFromUrl(recapEffectiveUrl);
+
+        // Show ONLY entries that match the effective vendor. The
+        // Auto entry + Custom entry stay visible regardless.
+        RecapItemGemini31Pro.Visibility = recapVendor == "gemini" ? Visibility.Visible : Visibility.Collapsed;
+        RecapItemGemini25Pro.Visibility = recapVendor == "gemini" ? Visibility.Visible : Visibility.Collapsed;
+        RecapItemGemini31Flash.Visibility = recapVendor == "gemini" ? Visibility.Visible : Visibility.Collapsed;
+        RecapItemGemini25Flash.Visibility = recapVendor == "gemini" ? Visibility.Visible : Visibility.Collapsed;
+        RecapItemGpt5.Visibility = recapVendor == "openai" ? Visibility.Visible : Visibility.Collapsed;
+        RecapItemGpt5Mini.Visibility = recapVendor == "openai" ? Visibility.Visible : Visibility.Collapsed;
+        RecapItemGpt5Nano.Visibility = recapVendor == "openai" ? Visibility.Visible : Visibility.Collapsed;
+        RecapItemGpt4o.Visibility = recapVendor == "openai" ? Visibility.Visible : Visibility.Collapsed;
+        RecapItemGpt4oMini.Visibility = recapVendor == "openai" ? Visibility.Visible : Visibility.Collapsed;
+        RecapItemO3.Visibility = recapVendor == "openai" ? Visibility.Visible : Visibility.Collapsed;
+        RecapItemO3Mini.Visibility = recapVendor == "openai" ? Visibility.Visible : Visibility.Collapsed;
+
+        // Coerce the current selection if it doesn't match the
+        // effective vendor. Auto ("") and Custom (non-known tag)
+        // are vendor-agnostic and not coerced.
+        if (RecapModelBelongsToWrongVendor(ViewModel.RecapModelOverride, recapVendor))
         {
             App.Log(
-                $"[Auth] coerced recap_model_override='{ViewModel.RecapModelOverride}' → '' (subscription only supports Anthropic models)",
+                $"[Auth] coerced recap_model_override='{ViewModel.RecapModelOverride}' → '' (effective recap vendor is '{recapVendor}')",
                 "Auth");
             ViewModel.RecapModelOverride = "";
-            // Snap the picker UI to match the coerced model id —
-            // RecapModelOverride = "" maps to the "Auto" entry which
-            // is the first ComboBoxItem.
             SyncRecapModelPicker();
         }
     }
 
-    /// <summary>True iff the model id looks like a non-Anthropic
-    /// vendor — OpenAI (gpt-* family + o-series reasoning models)
-    /// or Google (gemini-*). Used to coerce the recap override
-    /// when the user flips the Subscription toggle ON, since the
-    /// `claude` CLI can only dispatch to Anthropic models.</summary>
-    private static bool IsNonAnthropicRecapModel(string? modelId)
+    /// <summary>Map a URL to a vendor family tag for filtering the
+    /// recap model picker. Mirrors the Rust-side `Provider::from_url`
+    /// logic + extends with the recap-specific labels (anthropic /
+    /// openai / gemini / other). For unknown URLs returns "anthropic"
+    /// as a safe default — most users start with the Anthropic preset
+    /// and the Anthropic-only models are the most universally tested
+    /// recap targets.</summary>
+    private static string RecapVendorFromUrl(string url)
+    {
+        if (string.IsNullOrEmpty(url)) return "anthropic";
+        var lower = url.ToLowerInvariant();
+        if (lower.Contains("anthropic.com") || lower.StartsWith("claude-code://", StringComparison.Ordinal))
+            return "anthropic";
+        if (lower.Contains("openai.com")) return "openai";
+        if (lower.Contains("googleapis.com")) return "gemini";
+        // Unknown vendors (custom URLs, Groq, OpenRouter, etc.) get
+        // "anthropic" as a default for the picker — but the user can
+        // always pick Auto or type a Custom model id, so this is a
+        // soft fallback, not a hard restriction.
+        return "anthropic";
+    }
+
+    /// <summary>True iff the model id matches a curated entry that
+    /// does NOT belong to the target vendor. "Auto" ("") and Custom
+    /// (any string not in `_recapModelKnownTags`) are vendor-agnostic
+    /// and never coerced.</summary>
+    private static bool RecapModelBelongsToWrongVendor(string? modelId, string targetVendor)
     {
         if (string.IsNullOrEmpty(modelId)) return false;
-        var l = modelId.ToLowerInvariant();
-        // OpenAI reasoning models (o1, o3, o3-mini, o4-mini, ...).
-        // Match exact "o" + digit prefix to avoid catching e.g.
-        // "opus" or "olmo" as if they were OpenAI.
-        if (l.Length >= 2 && l[0] == 'o' && char.IsDigit(l[1])) return true;
-        return l.StartsWith("gpt-")
-            || l.Contains("gpt-")
-            || l.StartsWith("gemini-")
-            || l.Contains("gemini-");
+        var lower = modelId.ToLowerInvariant();
+        // Custom values are not curated — leave alone.
+        bool isCurated = false;
+        foreach (var tag in _recapModelKnownTags)
+        {
+            if (string.Equals(tag, modelId, StringComparison.OrdinalIgnoreCase))
+            {
+                isCurated = true;
+                break;
+            }
+        }
+        if (!isCurated) return false;
+        // Derive the model's vendor.
+        string modelVendor;
+        if (lower.StartsWith("claude-")) modelVendor = "anthropic";
+        else if (lower.StartsWith("gpt-")) modelVendor = "openai";
+        else if (lower.Length >= 2 && lower[0] == 'o' && char.IsDigit(lower[1])) modelVendor = "openai";
+        else if (lower.StartsWith("gemini-")) modelVendor = "gemini";
+        else modelVendor = "other";
+        return modelVendor != targetVendor && modelVendor != "other";
+    }
+
+    /// <summary>TextBox LostFocus on the Recap URL override box —
+    /// trim whitespace + refresh the picker filter so the user
+    /// immediately sees the model list shrink to the new vendor's
+    /// entries.</summary>
+    private void RecapApiUrl_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (!_loaded) return;
+        ViewModel.RecapApiUrl = (ViewModel.RecapApiUrl ?? "").Trim();
+        // Persist the new override + refresh the picker so the model
+        // list shrinks/expands to match the new vendor.
+        App.Instance?.ApplySettings(ViewModel);
+        RefreshAuthIntegrationStatus();
     }
 
     /// <summary>True iff the URL points at the Anthropic API or the

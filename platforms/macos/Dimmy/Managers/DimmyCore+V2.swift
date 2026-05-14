@@ -234,6 +234,10 @@ extension DimmyCore {
             case -2: return .failure(.notConfigured)
             case -3: return .failure(.httpError)
             case -4: return .failure(.localModelMissing)
+            case -5: return .failure(.modelNotSupported)
+            case -6: return .failure(.unauthorized)
+            case -7: return .failure(.rateLimited)
+            case -8: return .failure(.networkError)
             default: return .failure(.unknown(Int(rc)))
             }
         }
@@ -247,6 +251,10 @@ extension DimmyCore {
         case notConfigured  // missing api key/url
         case httpError
         case localModelMissing  // llm_mode=local but the picked Gemma .gguf isn't on disk
+        case modelNotSupported  // -5: 404 from the recap endpoint (wrong model id for vendor)
+        case unauthorized       // -6: 401/403 — bad / missing recap key
+        case rateLimited        // -7: 429 — too many requests
+        case networkError       // -8: socket / DNS / TLS error
         case unknown(Int)
 
         var description: String {
@@ -257,6 +265,10 @@ extension DimmyCore {
             case .notConfigured: return "LLM API URL or key is not configured"
             case .httpError: return "LLM HTTP / parse error — see dimmy.log"
             case .localModelMissing: return "Local LLM model not downloaded — open Settings → LLM and download a Gemma variant"
+            case .modelNotSupported: return "Recap model not supported by the recap endpoint — pick a different model in Settings → Recap"
+            case .unauthorized: return "Recap API key is missing or unauthorized — open Settings → Recap"
+            case .rateLimited: return "Recap rate limited (429) — try again in a minute"
+            case .networkError: return "Network error reaching the recap endpoint — check connection"
             case .unknown(let code): return "llm_call_raw failed (code \(code))"
             }
         }

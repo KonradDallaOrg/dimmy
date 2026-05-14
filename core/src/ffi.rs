@@ -273,6 +273,7 @@ fn dimmy_init_inner() -> c_int {
         llm_use_same_key: Mutex::new(file_cfg.llm_use_same_key),
         llm_auth_method: Mutex::new(file_cfg.llm_auth_method.clone()),
         recap_auth_method: Mutex::new(file_cfg.recap_auth_method.clone()),
+        recap_api_url: Mutex::new(file_cfg.recap_api_url.clone()),
         llm_api_key: Mutex::new(stored_llm_key),
         llm_log_enabled: Mutex::new(file_cfg.llm_log_enabled),
         recap_model_override: Mutex::new(file_cfg.recap_model_override),
@@ -1251,6 +1252,7 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "llm_use_same_key": *st.llm_use_same_key.lock().unwrap_or_else(|e| e.into_inner()),
         "llm_auth_method": st.llm_auth_method.lock().map(|s| s.clone()).unwrap_or_else(|_| "api_key".to_string()),
         "recap_auth_method": st.recap_auth_method.lock().map(|s| s.clone()).unwrap_or_default(),
+        "recap_api_url": st.recap_api_url.lock().map(|s| s.clone()).unwrap_or_default(),
         "has_llm_key": has_llm_key,
         "llm_log_enabled": *st.llm_log_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "recap_model_override": st.recap_model_override.lock().unwrap_or_else(|e| e.into_inner()).clone(),
@@ -1574,6 +1576,22 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
         if let Ok(mut m) = st.recap_auth_method.lock() {
             *m = normalized.to_string();
         }
+    }
+    if let Some(s) = v["recap_api_url"].as_str() {
+        // Empty string = "use llm_api_url" (inherit). Non-empty must
+        // be a sane URL — the dispatcher re-validates per request so
+        // we don't gate here, but log the change so it's traceable.
+        if let Ok(mut m) = st.recap_api_url.lock() {
+            *m = s.to_string();
+        }
+        log(&format!(
+            "[Config] recap_api_url set to {}",
+            if s.is_empty() {
+                "<inherit from llm_api_url>".to_string()
+            } else {
+                format!("'{}'", s)
+            }
+        ));
     }
     if let Some(key) = v["llm_api_key"].as_str() {
         if !key.is_empty() {
@@ -3538,10 +3556,20 @@ pub(crate) fn parse_recap_override(input: &str) -> (&'static str, String) {
 /// Returns the response byte length on success. Negative on error:
 /// - -1 invalid args (null pointers, empty prompt)
 /// - -2 no LLM API key / URL configured
-/// - -3 HTTP / parsing / local-inference error (truncated in dimmy.log)
+/// - -3 generic HTTP / parsing error (back-compat — kept for
+///   callers that just check `< 0`)
 /// - -4 llm_mode=local (or `local:` prefix) but the requested Gemma
 ///   `.gguf` isn't on disk — caller surfaces "download from
 ///   Settings → LLM"
+/// - -5 404 model-not-supported — the requested recap model is not
+///   known to the configured provider URL. UI surfaces "Recap
+///   model X is not supported by the configured provider. Settings
+///   → Recap to fix." Most common when recap_model_override is a
+///   Gemini / OpenAI model but the URL is Anthropic.
+/// - -6 401 / 403 auth — invalid or missing API key for the
+///   effective recap provider.
+/// - -7 429 rate-limit — too many calls, retry later.
+/// - -8 network / DNS / TLS — couldn't reach the endpoint.
 ///
 /// # Safety
 /// `prompt_ptr` must be a valid null-terminated UTF-8 C string.
@@ -3682,13 +3710,61 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
     }
 
     // ── Cloud branch ─────────────────────────────────────────────
+    // Recap-specific URL override: if `recap_api_url` is non-empty,
+    // route the recap to that vendor; the key is looked up via the
+    // existing per-vendor LLM keystore scope (no separate
+    // `recap_api_key` field — the recap re-uses the dictation-side
+    // per-vendor key entries). Empty `recap_api_url` = inherit the
+    // dictation URL + key (current behaviour, backward compat).
+    //
+    // Subscription mode short-circuits all of this — the CLI owns
+    // both URL and auth.
+    let recap_url_override = st
+        .recap_api_url
+        .lock()
+        .map(|s| s.clone())
+        .unwrap_or_default();
+    let effective_url = if recap_url_override.is_empty() {
+        api_url.clone()
+    } else {
+        recap_url_override.clone()
+    };
+    let effective_key = if recap_url_override.is_empty() || recap_url_override == api_url {
+        // Same vendor as dictation → reuse the live api_key (already
+        // fetched from keystore at app init / FFI key-set time).
+        api_key.clone()
+    } else {
+        // Different vendor → look up the keystore for THAT vendor's
+        // LLM key. Same scope structure dictation uses; the user
+        // saves the recap-vendor key by switching the dictation
+        // provider to that vendor and saving once. Future enhancement
+        // could expose a "recap API key" entry in Settings to set
+        // this without round-tripping through the provider dropdown.
+        let use_kr = st.use_keyring.lock().map(|k| *k).unwrap_or(false);
+        let recap_provider = crate::provider::Provider::from_url(&recap_url_override);
+        crate::load_key_with_store(
+            &st.key_store,
+            crate::provider::KeyringScope::Llm(recap_provider),
+            use_kr,
+        )
+        .unwrap_or_default()
+    };
+
     // Subscription mode (Claude Code CLI) needs no api_url/api_key —
     // the local `claude` binary handles both. Legacy `claude-code://`
     // URL also counts as a "no key needed" signal for back-compat.
     let is_subscription =
-        auth_method == "subscription" || crate::claude_code::is_claude_code_url(&api_url);
-    if !is_subscription && (api_url.is_empty() || api_key.is_empty()) {
-        log("[LlmRaw] missing api_url or api_key — configure an LLM in Settings");
+        auth_method == "subscription" || crate::claude_code::is_claude_code_url(&effective_url);
+    if !is_subscription && (effective_url.is_empty() || effective_key.is_empty()) {
+        log(&format!(
+            "[LlmRaw] missing recap URL or key (effective_url={}, key_present={})",
+            if effective_url.is_empty() {
+                "<empty>"
+            } else {
+                "<set>"
+            },
+            !effective_key.is_empty(),
+        ));
         return -2;
     }
     // Model: prefix-stripped override, OR legacy bare override, OR api_model.
@@ -3714,11 +3790,18 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
             return -3;
         }
     };
+    log(&format!(
+        "[LlmRaw] dispatch url={} model={} auth={} (recap_override={})",
+        effective_url,
+        model,
+        auth_method,
+        !recap_url_override.is_empty(),
+    ));
     let result = runtime.block_on(async {
         crate::llm::process_raw_prompt(
-            &api_url,
+            &effective_url,
             &model,
-            &api_key,
+            &effective_key,
             &prompt,
             max_tokens_u,
             &auth_method,
@@ -3735,12 +3818,73 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
             write_to_buf(&text, out_buf, buf_len)
         }
         Err(e) => {
-            let msg = format!("{}", e);
-            let mut truncated = msg;
+            // SECURITY: Display strips the body so the Sentry / event
+            // path never leaks the prompt. The full body still lands
+            // in dimmy.log for local debugging via the explicit log
+            // call below.
+            let display_short = format!("{}", e);
+            let mut truncated = display_short;
             truncated.truncate(200);
             log(&format!("[LlmRaw] failed: {}", truncated));
-            -3
+
+            // Categorize the error so the UI can render a specific,
+            // actionable message instead of a generic "failed". The
+            // body INSPECTION here is INTERNAL only — only the
+            // categorical &'static str escapes via the return code,
+            // never the body text itself.
+            categorize_llm_error_to_rc(&e)
         }
+    }
+}
+
+/// Map an LlmError into the dimmy_llm_call_raw return code so the
+/// UI can show a categorical, actionable message without ever
+/// seeing the response body (which would contain the user's prompt
+/// echoed back by the provider — a transcript leak risk).
+///
+/// Return-code contract (documented also in `dimmy_llm_call_raw`'s
+/// rustdoc — keep in sync):
+/// - -3 generic HTTP / parse error (kept for back-compat)
+/// - -5 404 model-not-supported — the requested model id is not
+///   known to the configured provider URL. Most common cause:
+///   user picked a Gemini / OpenAI model as recap_model_override
+///   but the recap dispatch URL is `api.anthropic.com`. UI
+///   should point at Settings → Recap to fix.
+/// - -6 401 / 403 auth — invalid or missing API key for the
+///   effective recap provider.
+/// - -7 429 rate-limit — too many calls, retry later.
+/// - -8 network / DNS — couldn't reach the endpoint.
+fn categorize_llm_error_to_rc(err: &crate::error::LlmError) -> c_int {
+    use crate::error::LlmError;
+    match err {
+        LlmError::Api { status, body } => {
+            match *status {
+                401 | 403 => -6,
+                429 => -7,
+                404 => {
+                    // Model-not-found is the specific case we care
+                    // about most. Anthropic 404 bodies contain
+                    // `"type":"not_found_error"` + `"model:"`; OpenAI
+                    // returns `"model_not_found"` in the error code
+                    // field; Google returns `"NOT_FOUND"` and lists
+                    // the bad model. All three include the substring
+                    // "model" in the JSON body. False positives are
+                    // unlikely because a generic 404 has no "model"
+                    // mention.
+                    let lower = body.to_ascii_lowercase();
+                    if lower.contains("model") {
+                        -5
+                    } else {
+                        -3
+                    }
+                }
+                s if (500..600).contains(&s) => -3, // 5xx server — generic for now
+                _ => -3,
+            }
+        }
+        LlmError::Network(_) => -8,
+        LlmError::NoApiKey(_) => -6, // user-visible as "key issue"
+        LlmError::LocalModel(_) => -4,
     }
 }
 
@@ -5907,6 +6051,115 @@ mod tests {
     use super::*;
     use std::ffi::c_char;
 
+    // ── categorize_llm_error_to_rc tests ─────────────────────────
+    //
+    // Burned 2026-05-14: a recap_model_override of "gemini-3.1-pro"
+    // with llm_api_url=anthropic.com produced a 404 + body
+    // `{"error":{"type":"not_found_error","message":"model: gemini-3.1-pro"}}`
+    // — the old dispatch returned generic rc=-3 and the UI rendered
+    // "recap failed (rc=-3)" with no actionable hint. The fix
+    // categorises the error so the UI can render
+    // "Recap model X not supported by configured provider. Open
+    // Settings → Recap to fix." Pin each branch.
+
+    use crate::error::LlmError;
+
+    #[test]
+    fn categorize_404_model_not_found_returns_minus_5() {
+        // The exact body shape Anthropic returned for the
+        // 2026-05-14 incident.
+        let e = LlmError::Api {
+            status: 404,
+            body: r#"{"type":"error","error":{"type":"not_found_error","message":"model: gemini-3.1-pro"},"request_id":"req_..."}"#.to_string(),
+        };
+        assert_eq!(categorize_llm_error_to_rc(&e), -5);
+    }
+
+    #[test]
+    fn categorize_404_without_model_substring_returns_generic_minus_3() {
+        let e = LlmError::Api {
+            status: 404,
+            body: "Not Found".to_string(),
+        };
+        assert_eq!(categorize_llm_error_to_rc(&e), -3);
+    }
+
+    #[test]
+    fn categorize_401_403_auth_returns_minus_6() {
+        for status in [401u16, 403] {
+            let e = LlmError::Api {
+                status,
+                body: "Unauthorized".into(),
+            };
+            assert_eq!(
+                categorize_llm_error_to_rc(&e),
+                -6,
+                "status {} should map to -6",
+                status
+            );
+        }
+    }
+
+    #[test]
+    fn categorize_429_rate_limit_returns_minus_7() {
+        let e = LlmError::Api {
+            status: 429,
+            body: "Too Many Requests".into(),
+        };
+        assert_eq!(categorize_llm_error_to_rc(&e), -7);
+    }
+
+    #[test]
+    fn categorize_5xx_returns_generic_minus_3() {
+        for status in [500u16, 502, 503, 504] {
+            let e = LlmError::Api {
+                status,
+                body: "server".into(),
+            };
+            assert_eq!(categorize_llm_error_to_rc(&e), -3, "status {}", status);
+        }
+    }
+
+    #[test]
+    fn categorize_network_returns_minus_8() {
+        let e = LlmError::Network("connection refused".into());
+        assert_eq!(categorize_llm_error_to_rc(&e), -8);
+    }
+
+    #[test]
+    fn categorize_no_api_key_returns_minus_6() {
+        // Treat NoApiKey as "auth issue" — same rc as 401/403 so
+        // the Win UI can render a single "fix your key" message.
+        let e = LlmError::NoApiKey("groq".into());
+        assert_eq!(categorize_llm_error_to_rc(&e), -6);
+    }
+
+    #[test]
+    fn categorize_local_model_returns_minus_4() {
+        let e = LlmError::LocalModel("model file not found".into());
+        assert_eq!(categorize_llm_error_to_rc(&e), -4);
+    }
+
+    /// SECURITY guard: the body field of LlmError::Api can contain
+    /// the user's prompt echoed back. Categorisation must NEVER
+    /// surface the body — only the categorical rc. This test
+    /// asserts the function returns a plain integer (no body
+    /// content can possibly leak via the rc).
+    #[test]
+    fn categorize_never_leaks_body_text_via_return() {
+        let secret = "MY-SECRET-TRANSCRIPT-CONTENT";
+        let e = LlmError::Api {
+            status: 404,
+            body: format!(r#"{{"error":"model:{}"}}"#, secret),
+        };
+        let rc = categorize_llm_error_to_rc(&e);
+        // rc is a plain integer; if it were a string buffer, this
+        // assertion would catch the leak. The test exists to fail
+        // visibly if a future refactor changes the return type to
+        // include the body in any form.
+        assert!(rc.abs() < 100, "rc must be a small integer, got {}", rc);
+    }
+
     // ── parse_recap_override tests ──────────────────────────────────
 
     #[test]
@@ -6139,6 +6392,7 @@ mod tests {
                 llm_use_same_key: Mutex::new(true),
                 llm_auth_method: Mutex::new("api_key".to_string()),
                 recap_auth_method: Mutex::new(String::new()),
+                recap_api_url: Mutex::new(String::new()),
                 llm_api_key: Mutex::new(None),
                 llm_log_enabled: Mutex::new(false),
                 recap_model_override: Mutex::new(String::new()),

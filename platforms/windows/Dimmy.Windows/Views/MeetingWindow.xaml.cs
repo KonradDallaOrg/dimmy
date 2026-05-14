@@ -940,13 +940,14 @@ public sealed partial class MeetingWindow : Window
                 DimmyNative.dimmy_llm_call_raw(prompt, modelOverride, 16000, buf, buf.Length));
             if (rc <= 0)
             {
-                var msg = rc switch
-                {
-                    -2 => "Configure an LLM API key + URL first.",
-                    -3 => "LLM HTTP call failed (see dimmy.log).",
-                    _ => $"LLM call returned {rc}",
-                };
-                ShowDoneFallback(transcript, msg);
+                var msg = Services.MeetingPostProcessService
+                    .RecapRcToUserMessage(rc, modelOverride);
+                // Recap-specific failures (-5/-6/-7) point at the
+                // recap config. Pop a "Open Recap settings" CTA so
+                // the user has one click between "recap failed" and
+                // the picker they need to fix.
+                var actionable = rc == -5 || rc == -6 || rc == -7;
+                ShowDoneFallback(transcript, msg, actionable);
                 return;
             }
             var raw = System.Text.Encoding.UTF8.GetString(buf, 0, rc);
@@ -972,9 +973,37 @@ public sealed partial class MeetingWindow : Window
     private Dictionary<string, string> _lastDoneSections = new();
 
     private void ShowDoneFallback(string transcript, string note)
+        => ShowDoneFallback(transcript, note, false);
+
+    private void ShowDoneFallback(string transcript, string note, bool actionable)
     {
         SetPlainText(TldrText, note);
         TldrCard.Visibility = Visibility.Visible;
+        // Show the "Open Recap settings" CTA only when the error is
+        // something the user can plausibly fix from that page (model
+        // mismatch / auth / rate limit). For generic -3/-4/-8 the
+        // button would route them to the wrong fix.
+        OpenRecapSettingsButton.Visibility = actionable
+            ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// "Open Recap settings" CTA on the Done view fallback — fires
+    /// when a recap failed with a recap-config-related rc (-5/-6/-7)
+    /// and opens Settings scrolled to the Recap section.
+    private void OpenRecapSettings_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            // Plain settings open — the user-facing error message
+            // names the section ("Settings → Recap") so scrolling
+            // them there manually is a 1-click step. A future
+            // improvement would be a deep-link parameter.
+            App.Instance?.OpenSettingsWindow();
+        }
+        catch (Exception ex)
+        {
+            App.Log($"OpenRecapSettings_Click exc: {ex.Message}", "Meeting");
+        }
     }
 
     private void ApplyDoneSections(Dictionary<string, string> sections)

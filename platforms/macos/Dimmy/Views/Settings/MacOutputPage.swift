@@ -192,6 +192,30 @@ struct MacOutputPage: View {
                     .frame(minWidth: 280)
                 }
 
+                // Advanced — different provider for recap than for
+                // dictation. The TextField writes `recap_api_url`;
+                // empty = inherit `llm_api_url` (default for users
+                // who don't need a separate recap provider).
+                if appState.showAdvanced {
+                    MacRow(
+                        "Recap endpoint URL (override)",
+                        description: "Empty = use the LLM provider URL above. Set this to point the recap call at a different vendor (e.g. Anthropic for recap while dictation runs on Groq). The Rust core picks the matching API key from the keystore.",
+                        showsDivider: true
+                    ) {
+                        TextField("https://api.anthropic.com/v1/messages",
+                                  text: Binding<String>(
+                                    get: { appState.recapApiUrl },
+                                    set: { newValue in
+                                        appState.recapApiUrl = newValue
+                                            .trimmingCharacters(in: .whitespaces)
+                                        persistConfig()
+                                    }
+                                  ))
+                        .textFieldStyle(.roundedBorder)
+                        .frame(minWidth: 320)
+                    }
+                }
+
                 // Subscription toggle for the recap call site —
                 // only appears when (a) recap model is Anthropic AND
                 // (b) Claude Code integration is actually connected.

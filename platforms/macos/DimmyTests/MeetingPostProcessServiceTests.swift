@@ -230,4 +230,74 @@ final class MeetingPostProcessServiceTests: XCTestCase {
             XCTAssertTrue(keys.contains(required), "Section key set missing \(required)")
         }
     }
+
+    // MARK: - rc → user-facing message (Phase 3 mirror)
+    //
+    // Mirrors the Win `RecapRcToUserMessage` table. Each rc that the
+    // Rust core can emit maps to one named LlmRawError case + a
+    // user-facing description. The description is what the Done view
+    // displays in the TL;DR fallback when the recap fails.
+
+    func testFailureDescriptionForModelNotSupportedNamesTheSection() {
+        let f = MeetingPostProcessService.Failure.llm(.modelNotSupported)
+        XCTAssertTrue(
+            f.description.contains("Settings"),
+            "modelNotSupported (-5) must mention Settings: \(f.description)"
+        )
+        XCTAssertTrue(
+            f.description.contains("Recap"),
+            "modelNotSupported (-5) must reference Recap config: \(f.description)"
+        )
+    }
+
+    func testFailureDescriptionForUnauthorizedMentionsKey() {
+        let f = MeetingPostProcessService.Failure.llm(.unauthorized)
+        XCTAssertTrue(
+            f.description.lowercased().contains("key"),
+            "unauthorized (-6) must mention the API key: \(f.description)"
+        )
+    }
+
+    func testFailureDescriptionForRateLimitedMentions429() {
+        let f = MeetingPostProcessService.Failure.llm(.rateLimited)
+        XCTAssertTrue(
+            f.description.contains("429") || f.description.lowercased().contains("rate"),
+            "rateLimited (-7) must signal 429 / rate limiting: \(f.description)"
+        )
+    }
+
+    func testFailureDescriptionForNetworkErrorMentionsConnection() {
+        let f = MeetingPostProcessService.Failure.llm(.networkError)
+        XCTAssertTrue(
+            f.description.lowercased().contains("network")
+                || f.description.lowercased().contains("connection"),
+            "networkError (-8) must mention network/connection: \(f.description)"
+        )
+    }
+
+    func testFailureDescriptionNeverEchoesApiResponseBody() {
+        // SECURITY: the Failure enum carries only the categorical rc
+        // (no body string). The description is derived from the enum
+        // case alone, so it cannot leak transcript content via API
+        // 4xx response bodies. Pin the shape: feeding each rc
+        // produces a non-empty string that doesn't contain typical
+        // body shapes ("authentication_error", "x-api-key", etc.).
+        for e: DimmyCore.LlmRawError in [
+            .notConfigured, .httpError, .invalidArgs, .emptyPrompt,
+            .notInitialized, .localModelMissing,
+            .modelNotSupported, .unauthorized, .rateLimited, .networkError,
+            .unknown(-99),
+        ] {
+            let desc = MeetingPostProcessService.Failure.llm(e).description
+            XCTAssertFalse(desc.isEmpty)
+            XCTAssertFalse(
+                desc.contains("authentication_error"),
+                "Failure description for \(e) must not echo API body: \(desc)"
+            )
+            XCTAssertFalse(
+                desc.contains("x-api-key"),
+                "Failure description for \(e) must not echo API body: \(desc)"
+            )
+        }
+    }
 }

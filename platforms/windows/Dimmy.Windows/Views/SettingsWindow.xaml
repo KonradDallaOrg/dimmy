@@ -1130,6 +1130,33 @@
                                 Toggled="RecapUseSubscription_Toggled"
                                 OnContent="" OffContent=""/>
                 </controls:SettingCard>
+                <!-- Advanced — different provider URL for recap.
+                     Hidden by default; expanded only by advanced
+                     users who want e.g. Anthropic dictation + Gemini
+                     recap. The keystore key for the recap vendor is
+                     the same one used by the LLM provider dropdown
+                     (so the user just needs to have saved a Gemini
+                     key once via Settings → LLM provider = Gemini).
+                     Burned 2026-05-14: bare model picker without
+                     vendor filter let users pick gemini-3.1-pro on
+                     an anthropic.com URL → 404. -->
+                <Expander HorizontalAlignment="Stretch" Margin="0,4,0,0"
+                          Header="Advanced — different provider for recap">
+                  <StackPanel Spacing="4" Margin="0,8,0,0">
+                    <controls:SettingCard Glyph="&#xE71B;"
+                                          Label="Recap endpoint URL (override)"
+                                          Description="Empty = use the LLM provider URL above. Set a different vendor URL to route recap to that vendor. The API key is fetched from the keystore for the URL's vendor — save it once via Settings → LLM provider = that vendor.">
+                      <TextBox x:Name="RecapApiUrlBox" MinWidth="320"
+                               PlaceholderText="e.g. https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+                               Text="{Binding RecapApiUrl, Mode=TwoWay}"
+                               LostFocus="RecapApiUrl_LostFocus"/>
+                    </controls:SettingCard>
+                    <TextBlock Margin="2,4,0,0" FontSize="12"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               TextWrapping="Wrap"
+                               Text="The recap model picker above is filtered by the URL's vendor — change the URL first, then pick a model from that vendor's list."/>
+                  </StackPanel>
+                </Expander>
               </StackPanel>
 
               <TextBlock Text="CLIPBOARD"

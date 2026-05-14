@@ -405,6 +405,26 @@ pub struct AppConfig {
     ///   - `"subscription"` — force subprocess CLI for the recap
     ///     regardless of dictation auth.
     pub recap_auth_method: String,
+    /// Endpoint URL for the recap call. Empty = inherit from
+    /// `llm_api_url` (the most common case: same vendor for
+    /// dictation + recap, different model). Non-empty = use this
+    /// URL instead. Lets a user run Anthropic Haiku dictation
+    /// (cheap, fast) + Gemini 3.1 Pro recap on a separate Gemini
+    /// key (deep analytical model for long transcripts).
+    ///
+    /// The recap API key is NOT a separate config field — the
+    /// dispatcher derives `Provider::from_url(recap_api_url)` and
+    /// looks up the existing per-vendor LLM key in the keystore
+    /// (`KeyringScope::Llm(<vendor>)`). So a Gemini recap with
+    /// override URL = `googleapis.com/...` works iff the user
+    /// has already saved a Gemini key via the LLM provider
+    /// dropdown at any point.
+    ///
+    /// SECURITY: gated by the same `validate_url` rules as
+    /// `llm_api_url`. Bare `claude-code://` is rejected here
+    /// (subscription path is owned by `recap_auth_method`, not
+    /// by URL scheme).
+    pub recap_api_url: String,
     /// Model ID override for the meeting recap call (empty = use the
     /// provider-default flagship reasoning model picked by the C# side
     /// via PickRecapModel — claude-opus-4-7 / gemini-3-1-pro / gpt-5).
@@ -548,6 +568,7 @@ impl Default for AppConfig {
             llm_log_enabled: false,
             llm_auth_method: "api_key".to_string(),
             recap_auth_method: String::new(),
+            recap_api_url: String::new(),
             recap_model_override: String::new(),
             chunk_streaming_enabled: false,
             preprocessing_enabled: true,
@@ -650,6 +671,7 @@ pub fn save_config_file(cfg: &AppConfig) {
             "llm_log_enabled": cfg.llm_log_enabled,
             "llm_auth_method": cfg.llm_auth_method,
             "recap_auth_method": cfg.recap_auth_method,
+            "recap_api_url": cfg.recap_api_url,
             "recap_model_override": cfg.recap_model_override,
             "chunk_streaming_enabled": cfg.chunk_streaming_enabled,
             "preprocessing_enabled": cfg.preprocessing_enabled,
@@ -774,6 +796,10 @@ pub fn load_config_file() -> AppConfig {
                     recap_auth_method: v["recap_auth_method"]
                         .as_str()
                         .unwrap_or(&defaults.recap_auth_method)
+                        .to_string(),
+                    recap_api_url: v["recap_api_url"]
+                        .as_str()
+                        .unwrap_or(&defaults.recap_api_url)
                         .to_string(),
                     recap_model_override: v["recap_model_override"]
                         .as_str()
@@ -1078,6 +1104,7 @@ pub struct AppState {
     pub llm_use_same_key: Mutex<bool>,
     pub llm_auth_method: Mutex<String>,
     pub recap_auth_method: Mutex<String>,
+    pub recap_api_url: Mutex<String>,
     pub recap_model_override: Mutex<String>,
     pub llm_api_key: Mutex<Option<String>>,
     pub llm_log_enabled: Mutex<bool>,
@@ -1214,6 +1241,7 @@ impl AppState {
             llm_use_same_key: Mutex::new(file_cfg.llm_use_same_key),
             llm_auth_method: Mutex::new(file_cfg.llm_auth_method),
             recap_auth_method: Mutex::new(file_cfg.recap_auth_method),
+            recap_api_url: Mutex::new(file_cfg.recap_api_url),
             recap_model_override: Mutex::new(file_cfg.recap_model_override),
             llm_api_key: Mutex::new(stored_llm_key),
             llm_log_enabled: Mutex::new(file_cfg.llm_log_enabled),
@@ -1329,6 +1357,11 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         .lock()
         .map_err(|e| e.to_string())?
         .clone();
+    let recap_api_url = state
+        .recap_api_url
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
     let recap_model_override = state
         .recap_model_override
         .lock()
@@ -1400,6 +1433,7 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         llm_log_enabled,
         llm_auth_method,
         recap_auth_method,
+        recap_api_url,
         recap_model_override,
         chunk_streaming_enabled,
         preprocessing_enabled,

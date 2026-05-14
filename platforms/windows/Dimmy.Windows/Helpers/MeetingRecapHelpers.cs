@@ -270,4 +270,32 @@ public static class MeetingRecapHelpers
         }
         return sb.ToString();
     }
+
+    /// Translate a `dimmy_llm_call_raw` rc into a short user-facing
+    /// message. Pure logic — no XAML / FFI / App dependencies — so it
+    /// lives here alongside the prompt + parser helpers and the Tests
+    /// project can link this file without dragging the rest of the
+    /// app in. Keep in sync with the rc table on `dimmy_llm_call_raw`
+    /// in core/src/ffi.rs.
+    ///
+    /// SECURITY: the helper takes ONLY the rc + the user's curated
+    /// model id. It NEVER reads an HTTP response body — that would
+    /// risk leaking transcript fragments via 4xx error payloads. The
+    /// xUnit test `RecapRcToUserMessage_never_echoes_caller_supplied_body`
+    /// pins this invariant.
+    public static string RecapRcToUserMessage(int rc, string modelOverride)
+    {
+        var modelHint = string.IsNullOrWhiteSpace(modelOverride) ? "auto" : modelOverride;
+        return rc switch
+        {
+            -2 => "Configure an LLM API key + URL first.",
+            -3 => "LLM HTTP call failed — provider returned an unexpected error. See dimmy.log.",
+            -4 => "Local LLM model is not available. Pick a model in Settings → LLM.",
+            -5 => $"Recap model '{modelHint}' is not supported by the recap endpoint. Pick a different model in Settings → Recap.",
+            -6 => "Recap API key is missing or unauthorized. Open Settings → Recap to fix it.",
+            -7 => "Recap rate limited (429). Try again in a minute, or pick a faster model.",
+            -8 => "Network error reaching the recap endpoint. Check your connection.",
+            _ => $"LLM call returned {rc} — see dimmy.log.",
+        };
+    }
 }
