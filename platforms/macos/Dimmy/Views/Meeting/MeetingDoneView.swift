@@ -5,11 +5,20 @@ import AVFoundation
 // MARK: - MeetingDoneView
 //
 // Done state — shows a finished meeting (just-stopped OR a sidebar
-// selection of a past meeting). Mirror of Win DonePanel: header with
-// title + meta + toolbar (regen transcript, regen recap, copy, open
-// folder), audio playback card, then a stack of recap section cards
-// (TLDR, Decisions, Topics, Actions, Open Questions, Risks, Next
-// Steps), and a raw-transcript expander at the bottom.
+// selection of a past meeting). Mirror of Win MeetingWindow.xaml
+// DonePanel: a title+meta header card, an audio playback card with a
+// click-to-seek waveform (dual-band mirrored stereo when per-track
+// WAVs are present), then a 3-tab strip — "Recap | Transcript | Notes"
+// — with the action toolbar (regen transcript, regen recap, copy,
+// send-to-notion, open-folder) pinned to its right.
+//
+//   • Recap     : TL;DR accent card + structural section cards
+//                 (Context, Highlights, Narrative, Key decisions,
+//                 Topics, Actions, Open Questions, Risks, Next steps,
+//                 Follow-ups).
+//   • Transcript: full `transcripts.txt` in monospaced selectable text.
+//   • Notes     : local TextEditor persisted to `<dir>/notes.md` on
+//                 focus-loss / tab-switch / view-disappear.
 //
 // Markdown rendering uses Apple's native `AttributedString.markdown`
 // initialiser — no extra dependency, and it's the same vocabulary
@@ -17,47 +26,58 @@ import AVFoundation
 
 struct MeetingDoneView: View {
     @ObservedObject var vm: MeetingViewModel
-    @State private var rawExpanded: Bool = false
     @State private var copiedFlash: Bool = false
+    @FocusState private var notesFocused: Bool
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                header
-                if let url = vm.doneAudioURL {
-                    audioCard(url: url)
-                }
-                if let tldr = vm.doneSections["TLDR"], !tldr.isEmpty {
-                    tldrCard(tldr)
-                }
-                cardIfPresent(key: "CONTEXT", title: "Context", systemImage: "info.circle", tint: .secondary)
-                cardIfPresent(key: "HIGHLIGHTS", title: "Highlights", systemImage: "sparkles", tint: .yellow)
-                cardIfPresent(key: "NARRATIVE", title: "Narrative", systemImage: "text.alignleft", tint: .secondary)
-                cardIfPresent(key: "KEY_DECISIONS", title: "Key decisions", systemImage: "checkmark.seal", tint: .green)
-                cardIfPresent(key: "TOPICS", title: "Topics discussed", systemImage: "list.bullet.rectangle", tint: .blue)
-                cardIfPresent(key: "ACTIONS", title: "Action items", systemImage: "checklist", tint: .orange)
-                cardIfPresent(key: "OPEN_QUESTIONS", title: "Open questions", systemImage: "questionmark.circle", tint: .purple)
-                cardIfPresent(key: "RISKS", title: "Risks & blockers", systemImage: "exclamationmark.triangle", tint: .red)
-                cardIfPresent(key: "NEXT_STEPS", title: "Next steps", systemImage: "arrow.right.circle", tint: .accentColor)
-                cardIfPresent(key: "FOLLOWUPS", title: "Follow-ups", systemImage: "envelope.open", tint: .secondary)
-                rawTranscriptExpander
+        VStack(alignment: .leading, spacing: 14) {
+            header
+            if let url = vm.doneAudioURL {
+                audioCard(url: url)
             }
-            .padding(.vertical, 8)
+            tabStripWithToolbar
+            tabContent
         }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 4)
+        .onDisappear { vm.saveNotes() }
     }
 
-    // MARK: Header
+    // MARK: Header (title + meta only — toolbar moved next to tab strip)
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(vm.doneTitle)
-                    .font(.system(size: 18, weight: .semibold))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Text(vm.doneMeta)
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color.macTextSecondary)
+        VStack(alignment: .leading, spacing: 2) {
+            Text(vm.doneTitle)
+                .font(.system(size: 18, weight: .semibold))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Text(vm.doneMeta)
+                .font(.system(size: 11))
+                .foregroundStyle(Color.macTextSecondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(cardBackground)
+    }
+
+    private var activeDirFromAudio: String? {
+        vm.doneAudioURL?.deletingLastPathComponent().path
+    }
+
+    // MARK: Tab strip + action toolbar
+    //
+    // Mirror of Win MeetingWindow.xaml:409-475 — tab labels on the
+    // left with a 2pt accent underline on the selected entry, action
+    // icons on the right always visible regardless of which tab is
+    // active. Selected tab = SemiBold + full opacity + accent
+    // underline; the others go to opacity 0.6 + Regular weight.
+
+    private var tabStripWithToolbar: some View {
+        HStack(alignment: .bottom, spacing: 18) {
+            HStack(spacing: 22) {
+                ForEach(MeetingViewModel.DoneTab.allCases) { tab in
+                    tabLabel(tab)
+                }
             }
             Spacer()
             HStack(spacing: 6) {
@@ -87,12 +107,119 @@ struct MeetingDoneView: View {
                 }
             }
         }
-        .padding(14)
-        .background(cardBackground)
+        .padding(.horizontal, 4)
     }
 
-    private var activeDirFromAudio: String? {
-        vm.doneAudioURL?.deletingLastPathComponent().path
+    private func tabLabel(_ tab: MeetingViewModel.DoneTab) -> some View {
+        let selected = vm.doneSelectedTab == tab
+        return Button {
+            // Save any in-flight notes edit before switching away — the
+            // TextEditor's focus loss already triggers a save, but a
+            // tab click before focus change wouldn't.
+            if vm.doneSelectedTab == .notes && tab != .notes { vm.saveNotes() }
+            vm.doneSelectedTab = tab
+        } label: {
+            VStack(spacing: 4) {
+                Text(tab.title)
+                    .font(.system(size: 14, weight: selected ? .semibold : .regular))
+                    .foregroundStyle(selected ? Color.primary : Color.primary.opacity(0.6))
+                Rectangle()
+                    .fill(selected ? Color.accentColor : Color.clear)
+                    .frame(height: 2)
+            }
+            .frame(minWidth: 56)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: Per-tab content
+
+    @ViewBuilder
+    private var tabContent: some View {
+        switch vm.doneSelectedTab {
+        case .recap:
+            recapContent
+        case .transcript:
+            transcriptContent
+        case .notes:
+            notesContent
+        }
+    }
+
+    private var recapContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                if let tldr = vm.doneSections["TLDR"], !tldr.isEmpty {
+                    tldrCard(tldr)
+                }
+                cardIfPresent(key: "CONTEXT", title: "Context", systemImage: "info.circle", tint: .secondary)
+                cardIfPresent(key: "HIGHLIGHTS", title: "Highlights", systemImage: "sparkles", tint: .yellow)
+                cardIfPresent(key: "NARRATIVE", title: "Narrative", systemImage: "text.alignleft", tint: .secondary)
+                cardIfPresent(key: "KEY_DECISIONS", title: "Key decisions", systemImage: "checkmark.seal", tint: .green)
+                cardIfPresent(key: "TOPICS", title: "Topics discussed", systemImage: "list.bullet.rectangle", tint: .blue)
+                cardIfPresent(key: "ACTIONS", title: "Action items", systemImage: "checklist", tint: .orange)
+                cardIfPresent(key: "OPEN_QUESTIONS", title: "Open questions", systemImage: "questionmark.circle", tint: .purple)
+                cardIfPresent(key: "RISKS", title: "Risks & blockers", systemImage: "exclamationmark.triangle", tint: .red)
+                cardIfPresent(key: "NEXT_STEPS", title: "Next steps", systemImage: "arrow.right.circle", tint: .accentColor)
+                cardIfPresent(key: "FOLLOWUPS", title: "Follow-ups", systemImage: "envelope.open", tint: .secondary)
+                if vm.doneSections.isEmpty {
+                    Text("No recap yet — click the (Re)generate recap button to run the LLM, or wait if it's still processing.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.macTextSecondary)
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(cardBackground)
+                }
+            }
+        }
+    }
+
+    private var transcriptContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(vm.doneRawTranscript.isEmpty
+                     ? "No transcript on disk yet. Re-run transcription with the (Re)generate transcript button."
+                     : vm.doneRawTranscript)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(vm.doneRawTranscript.isEmpty
+                                      ? Color.macTextSecondary
+                                      : Color.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+            .padding(14)
+            .background(cardBackground)
+        }
+    }
+
+    private var notesContent: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Local notes — saved to notes.md in the meeting folder. Markdown supported.")
+                .font(.system(size: 11))
+                .foregroundStyle(Color.macTextSecondary)
+                .padding(.horizontal, 4)
+            ZStack(alignment: .topLeading) {
+                if vm.doneNotes.isEmpty {
+                    Text("Write notes about this meeting…")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.macTextSecondary.opacity(0.7))
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 16)
+                        .allowsHitTesting(false)
+                }
+                TextEditor(text: $vm.doneNotes)
+                    .font(.system(size: 13))
+                    .scrollContentBackground(.hidden)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .focused($notesFocused)
+                    .onChange(of: notesFocused) { _, isFocused in
+                        if !isFocused { vm.saveNotes() }
+                    }
+            }
+            .background(cardBackground)
+        }
     }
 
     private func toolbarButton(systemImage: String, help: String, action: @escaping () -> Void) -> some View {
@@ -202,10 +329,14 @@ struct MeetingDoneView: View {
     /// See `~/Library/Application Support/dimmy/dimmy.log` for the
     /// SIGABRT we hit on first repro.
     private func audioCard(url: URL) -> some View {
-        AudioPlaybackBar(url: url)
-            .frame(height: 60)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 8)
+        AudioPlaybackBar(
+            url: url,
+            micURL: vm.doneAudioMicURL,
+            systemURL: vm.doneAudioSystemURL
+        )
+            .frame(height: 64)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
             .background(cardBackground)
     }
 
@@ -255,33 +386,14 @@ struct MeetingDoneView: View {
         }
     }
 
-    private var rawTranscriptExpander: some View {
-        DisclosureGroup(isExpanded: $rawExpanded) {
-            Text(vm.doneRawTranscript.isEmpty
-                 ? "(no transcript)"
-                 : vm.doneRawTranscript)
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(vm.doneRawTranscript.isEmpty
-                                  ? Color.macTextSecondary
-                                  : Color.primary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .textSelection(.enabled)
-                .padding(.top, 8)
-        } label: {
-            Text("Raw transcript")
-                .font(.system(size: 13, weight: .semibold))
-        }
-        .padding(14)
-        .background(cardBackground)
-    }
-
     private var cardBackground: some View {
         RoundedRectangle(cornerRadius: MacTheme.tileCornerRadius, style: .continuous)
-            .fill(Color(nsColor: .windowBackgroundColor).opacity(0.6))
+            .fill(Color(nsColor: .controlBackgroundColor))
             .overlay(
                 RoundedRectangle(cornerRadius: MacTheme.tileCornerRadius, style: .continuous)
-                    .stroke(Color.macStrokeHairline, lineWidth: 0.5)
+                    .stroke(Color.primary.opacity(0.09), lineWidth: 1)
             )
+            .shadow(color: Color.black.opacity(0.06), radius: 6, x: 0, y: 1)
     }
 
     // MARK: - Markdown rendering helper

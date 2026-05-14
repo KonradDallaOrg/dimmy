@@ -19,9 +19,30 @@ import AVFoundation
 
 struct AudioPlaybackBar: View {
     let url: URL
+    let micURL: URL?
+    let systemURL: URL?
     @StateObject private var model = AudioPlaybackModel()
 
     private let waveformBucketCount: Int = 120
+
+    init(url: URL, micURL: URL? = nil, systemURL: URL? = nil) {
+        self.url = url
+        self.micURL = micURL
+        self.systemURL = systemURL
+    }
+
+    private var dualBand: Bool {
+        !model.peaksMic.isEmpty && !model.peaksSystem.isEmpty
+    }
+
+    private var progress: CGFloat {
+        model.duration > 0 ? CGFloat(model.elapsed / model.duration) : 0
+    }
+
+    private func handleSeek(_ fraction: CGFloat) {
+        guard model.duration > 0 else { return }
+        model.seek(to: model.duration * Double(fraction))
+    }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -40,16 +61,22 @@ struct AudioPlaybackBar: View {
                 .foregroundStyle(Color.macTextSecondary)
                 .frame(width: 44, alignment: .leading)
 
-            WaveformStrip(
-                peaks: model.peaks,
-                progress: model.duration > 0
-                    ? CGFloat(model.elapsed / model.duration)
-                    : 0,
-                onSeekFraction: { fraction in
-                    guard model.duration > 0 else { return }
-                    model.seek(to: model.duration * Double(fraction))
+            Group {
+                if dualBand {
+                    DualBandWaveformStrip(
+                        peaksMic: model.peaksMic,
+                        peaksSystem: model.peaksSystem,
+                        progress: progress,
+                        onSeekFraction: handleSeek
+                    )
+                } else {
+                    WaveformStrip(
+                        peaks: model.peaks,
+                        progress: progress,
+                        onSeekFraction: handleSeek
+                    )
                 }
-            )
+            }
             .frame(maxWidth: .infinity)
             .frame(height: 44)
 
@@ -60,10 +87,22 @@ struct AudioPlaybackBar: View {
                 .frame(width: 44, alignment: .trailing)
         }
         .padding(.horizontal, 8)
-        .onAppear { model.load(url: url, bucketCount: waveformBucketCount) }
+        .onAppear {
+            model.load(
+                url: url,
+                micURL: micURL,
+                systemURL: systemURL,
+                bucketCount: waveformBucketCount
+            )
+        }
         .onDisappear { model.stop() }
         .onChange(of: url) { _, newURL in
-            model.load(url: newURL, bucketCount: waveformBucketCount)
+            model.load(
+                url: newURL,
+                micURL: micURL,
+                systemURL: systemURL,
+                bucketCount: waveformBucketCount
+            )
         }
     }
 }
@@ -165,6 +204,99 @@ private struct WaveformStrip: View {
     }
 }
 
+// MARK: - Dual-band waveform strip
+//
+// Mirror of Win MeetingWindow.xaml.cs:841-910 — mic peaks anchored on
+// the shared midline grow UP (DodgerBlue), system peaks grow DOWN
+// (LimeGreen). A single accent playhead sweeps both bands. Click /
+// drag seeks the underlying AVAudioPlayer through `onSeekFraction`.
+//
+// Falls back to a thin baseline if either band has zero samples, but
+// the caller (`AudioPlaybackBar`) only routes here when both arrays
+// are non-empty.
+
+private struct DualBandWaveformStrip: View {
+    let peaksMic: [Float]
+    let peaksSystem: [Float]
+    let progress: CGFloat
+    let onSeekFraction: (CGFloat) -> Void
+
+    private static let micColor = Color(red: 0.118, green: 0.565, blue: 1.000)        // DodgerBlue
+    private static let systemColor = Color(red: 0.196, green: 0.804, blue: 0.196)     // LimeGreen
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Canvas { ctx, size in
+                    drawBand(ctx: &ctx, size: size, peaks: peaksMic,
+                             color: Self.micColor.opacity(0.45), direction: .up)
+                    drawBand(ctx: &ctx, size: size, peaks: peaksSystem,
+                             color: Self.systemColor.opacity(0.45), direction: .down)
+                }
+                Canvas { ctx, size in
+                    let clipWidth = size.width * max(0, min(1, progress))
+                    ctx.clip(to: Path(CGRect(x: 0, y: 0, width: clipWidth, height: size.height)))
+                    drawBand(ctx: &ctx, size: size, peaks: peaksMic,
+                             color: Self.micColor, direction: .up)
+                    drawBand(ctx: &ctx, size: size, peaks: peaksSystem,
+                             color: Self.systemColor, direction: .down)
+                }
+                // Centre baseline so the empty stretches at start/end
+                // don't look broken — and so the two bands feel like
+                // one continuous strip.
+                Rectangle()
+                    .fill(Color.macTextSecondary.opacity(0.25))
+                    .frame(height: 0.5)
+                    .offset(y: 0)
+                Rectangle()
+                    .fill(Color.accentColor)
+                    .frame(width: 1.5)
+                    .shadow(color: Color.accentColor.opacity(0.6), radius: 3)
+                    .offset(x: geo.size.width * max(0, min(1, progress)) - 0.75)
+                    .opacity(progress > 0 ? 0.95 : 0)
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let f = max(0, min(1, value.location.x / geo.size.width))
+                        onSeekFraction(f)
+                    }
+            )
+        }
+    }
+
+    private enum BandDirection { case up, down }
+
+    private func drawBand(ctx: inout GraphicsContext,
+                          size: CGSize,
+                          peaks: [Float],
+                          color: Color,
+                          direction: BandDirection) {
+        guard !peaks.isEmpty else { return }
+        let n = peaks.count
+        let gap: CGFloat = 2
+        let barWidth = max(2, (size.width - CGFloat(n - 1) * gap) / CGFloat(n))
+        let mid = size.height / 2
+        let maxReach = max(2, size.height / 2 - 2)
+        let cornerRadius: CGFloat = 2
+        let shading = GraphicsContext.Shading.color(color)
+        for (i, peak) in peaks.enumerated() {
+            let x = CGFloat(i) * (barWidth + gap)
+            let h = max(1.0, CGFloat(peak) * maxReach)
+            let rect: CGRect
+            switch direction {
+            case .up:
+                rect = CGRect(x: x, y: mid - h, width: barWidth, height: h)
+            case .down:
+                rect = CGRect(x: x, y: mid, width: barWidth, height: h)
+            }
+            ctx.fill(Path(roundedRect: rect, cornerRadius: cornerRadius, style: .continuous),
+                     with: shading)
+        }
+    }
+}
+
 // MARK: - Model
 
 @MainActor
@@ -173,12 +305,17 @@ final class AudioPlaybackModel: ObservableObject {
     @Published var duration: TimeInterval = 0
     @Published var isPlaying: Bool = false
     @Published var peaks: [Float] = []
+    /// Per-track mic peaks (read from `audio_mic.wav`). Empty when the
+    /// caller didn't pass `micURL` or the file is missing.
+    @Published var peaksMic: [Float] = []
+    /// Per-track system peaks (read from `audio_system.wav`).
+    @Published var peaksSystem: [Float] = []
 
     private var player: AVAudioPlayer?
     private var timer: Timer?
     private var lastUrl: URL?
 
-    func load(url: URL, bucketCount: Int) {
+    func load(url: URL, micURL: URL? = nil, systemURL: URL? = nil, bucketCount: Int) {
         guard url != lastUrl else { return }
         stop()
         lastUrl = url
@@ -197,12 +334,18 @@ final class AudioPlaybackModel: ObservableObject {
         // is ~6 MB, parses in <50 ms, but we don't want to block the
         // first paint of the Done view on it.
         let path = url.path
+        let micPath = micURL?.path
+        let systemPath = systemURL?.path
         let n = bucketCount
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let read = WavPeaks.readPeaks(path: path, bucketCount: n)
+            let mix = WavPeaks.readPeaks(path: path, bucketCount: n)
+            let mic = micPath.map { WavPeaks.readPeaks(path: $0, bucketCount: n) } ?? []
+            let sys = systemPath.map { WavPeaks.readPeaks(path: $0, bucketCount: n) } ?? []
             DispatchQueue.main.async {
                 guard let self, self.lastUrl == url else { return }
-                self.peaks = read
+                self.peaks = mix
+                self.peaksMic = mic
+                self.peaksSystem = sys
             }
         }
     }
@@ -234,6 +377,8 @@ final class AudioPlaybackModel: ObservableObject {
         elapsed = 0
         duration = 0
         peaks = []
+        peaksMic = []
+        peaksSystem = []
         lastUrl = nil
     }
 

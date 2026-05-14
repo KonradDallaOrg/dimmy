@@ -56,8 +56,37 @@ final class MeetingViewModel: ObservableObject {
     @Published var doneSections: [String: String] = [:]
     @Published var doneRawTranscript: String = ""
     @Published var doneAudioURL: URL?
+    /// Per-track mic WAV (`audio_mic.wav`). When both mic + system are
+    /// present the Done audio card renders a mirrored-stereo waveform
+    /// (mic UP from midline, system DOWN); when nil it falls back to
+    /// the single-band waveform reading `audio.wav`.
+    @Published var doneAudioMicURL: URL?
+    /// Per-track system-loopback WAV (`audio_system.wav`). See
+    /// `doneAudioMicURL` for the dual-band semantics.
+    @Published var doneAudioSystemURL: URL?
     @Published var browsingPastMeeting: Bool = false  // true when the user clicked a sidebar row while recording is in flight
     @Published var processingStep: ProcessingStep = .saving
+
+    // ── Done-view tab selection ────────────────────────────────────
+    enum DoneTab: String, CaseIterable, Identifiable {
+        case recap
+        case transcript
+        case notes
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .recap: return "Recap"
+            case .transcript: return "Transcript"
+            case .notes: return "Notes"
+            }
+        }
+    }
+    @Published var doneSelectedTab: DoneTab = .recap
+
+    /// Local-only meeting notes, persisted as `<dir>/notes.md`. Loaded
+    /// by `loadDoneFromDisk` and `loadNotes`; written by `saveNotes`.
+    /// Mirror of the Win Notes tab (`SelectDoneTab(\"Notes\")`).
+    @Published var doneNotes: String = ""
 
     // ── Toast (blocked-during-recording warning) ───────────────────
     @Published var toastMessage: String?
@@ -169,6 +198,9 @@ final class MeetingViewModel: ObservableObject {
 
     func start() {
         guard !isWorking, phase == .idle || phase == .done else { return }
+        // Flush any unsaved notes from the previous Done view before
+        // we wipe the buffer — matches the LostFocus save on Win.
+        saveNotes()
         isWorking = true
         phase = .recording
         statusLabel = "Starting…"
@@ -178,6 +210,10 @@ final class MeetingViewModel: ObservableObject {
         doneSections = [:]
         doneRawTranscript = ""
         doneAudioURL = nil
+        doneAudioMicURL = nil
+        doneAudioSystemURL = nil
+        doneNotes = ""
+        doneSelectedTab = .recap
         browsingPastMeeting = false
         isPaused = false
         // Reset the event-driven live-transcript mirror (filled by
@@ -275,6 +311,10 @@ final class MeetingViewModel: ObservableObject {
                     format: "%.0fs · %d chunks", result.durationSecs, result.chunkCount
                 )
                 self.doneAudioURL = self.audioURL(for: result.dir)
+                self.doneAudioMicURL = self.micAudioURL(for: result.dir)
+                self.doneAudioSystemURL = self.systemAudioURL(for: result.dir)
+                self.doneNotes = Self.readNotes(dir: result.dir)
+                self.doneSelectedTab = .recap
                 self.titlebarTitle = self.doneTitle
 
                 if cleanTranscript.isEmpty {
@@ -471,6 +511,7 @@ final class MeetingViewModel: ObservableObject {
             showToast("Stop the current recording first to start a new one.")
             return
         }
+        saveNotes()
         selectedDir = nil
         browsingPastMeeting = false
         phase = .idle
@@ -480,6 +521,10 @@ final class MeetingViewModel: ObservableObject {
         doneSections = [:]
         doneRawTranscript = ""
         doneAudioURL = nil
+        doneAudioMicURL = nil
+        doneAudioSystemURL = nil
+        doneNotes = ""
+        doneSelectedTab = .recap
         transcript = ""
     }
 
@@ -633,6 +678,16 @@ final class MeetingViewModel: ObservableObject {
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
+    private func micAudioURL(for dir: String) -> URL? {
+        let url = URL(fileURLWithPath: dir).appendingPathComponent("audio_mic.wav")
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
+    private func systemAudioURL(for dir: String) -> URL? {
+        let url = URL(fileURLWithPath: dir).appendingPathComponent("audio_system.wav")
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
     private func titleFromDir(_ dir: String) -> String {
         // Convention: dir is named `2026-05-09T14-32-08` or similar;
         // turn the leading date into a friendly label. If the user
@@ -642,6 +697,10 @@ final class MeetingViewModel: ObservableObject {
     }
 
     func loadDoneFromDisk(dir: String) {
+        // Flush unsaved notes from whatever dir was on screen before we
+        // swap. Cheap (text file write); idempotent if no change.
+        saveNotes()
+
         let url = URL(fileURLWithPath: dir)
         doneTitle = titleFromDir(dir)
         let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
@@ -657,10 +716,49 @@ final class MeetingViewModel: ObservableObject {
         let transcriptURL = url.appendingPathComponent("transcripts.txt")
         doneRawTranscript = (try? String(contentsOf: transcriptURL, encoding: .utf8)) ?? ""
         doneAudioURL = audioURL(for: dir)
+        doneAudioMicURL = micAudioURL(for: dir)
+        doneAudioSystemURL = systemAudioURL(for: dir)
+        doneNotes = Self.readNotes(dir: dir)
+        doneSelectedTab = .recap
         if !browsingPastMeeting {
             phase = .done
             titlebarTitle = doneTitle
         }
+    }
+
+    // MARK: - Notes (local-only, persisted as <dir>/notes.md)
+
+    /// Resolve the dir notes should land in: explicit sidebar selection
+    /// wins, otherwise fall back to the just-finished meeting. Returns
+    /// nil when there's no concrete meeting on screen yet.
+    private var notesTargetDir: String? {
+        if let sel = selectedDir, !sel.isEmpty { return sel }
+        if !activeMeetingDir.isEmpty { return activeMeetingDir }
+        return nil
+    }
+
+    /// Read `<dir>/notes.md` into a string, or "" if missing. Static so
+    /// the stop / loadDoneFromDisk paths can hydrate `doneNotes` in one
+    /// line without going through an instance method.
+    private static func readNotes(dir: String) -> String {
+        let url = URL(fileURLWithPath: dir).appendingPathComponent("notes.md")
+        return (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+    }
+
+    /// Write the current `doneNotes` buffer to `<dir>/notes.md`. No-op
+    /// when there's no target dir (Idle state) — avoids creating an
+    /// orphan notes file on disk. Mirrors the Win LostFocus save.
+    func saveNotes() {
+        guard let dir = notesTargetDir else { return }
+        let url = URL(fileURLWithPath: dir).appendingPathComponent("notes.md")
+        // Empty notes → delete any leftover file so the meeting dir
+        // stays clean. Best-effort: a write failure leaves the file
+        // alone, which is fine.
+        if doneNotes.isEmpty {
+            try? FileManager.default.removeItem(at: url)
+            return
+        }
+        try? doneNotes.write(to: url, atomically: true, encoding: .utf8)
     }
 
     // MARK: - Toast
