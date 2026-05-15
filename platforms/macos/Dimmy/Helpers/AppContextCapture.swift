@@ -81,8 +81,24 @@ enum AppContextCapture {
     /// Cached per-session: NSWorkspace.icon(forFile:) hits the disk + the
     /// IconServices DB, expensive enough to memoise across the rules list
     /// + history detail render passes.
+    ///
+    /// Apple's media-content apps (Music / Photos / TV / Podcasts /
+    /// iTunes) are short-circuited to nil because resolving their
+    /// `.app` icon through IconServices on macOS Sequoia 15.x routes
+    /// through `iconservicesagent` and triggers the corresponding TCC
+    /// prompt ("Dimmy would like to access Apple Music, your music and
+    /// video activity, and your media library" / "...your Photo
+    /// Library") — IconServices asks the media app for the current
+    /// "now playing" / library-aware icon and the OS treats that as
+    /// reading the media library. Dimmy never actually reads those
+    /// libraries; the SF Symbol fallback in `AppRuleIcon` /
+    /// `HistorySettingsView` is fine here. Reported by user against
+    /// staging on 2026-05-15.
     static func appIcon(for bundleId: String) -> NSImage? {
         if bundleId.isEmpty { return nil }
+        if mediaAppBundleIds.contains(bundleId) {
+            return nil
+        }
         if let cached = iconCache.value(for: bundleId) { return cached }
 
         // Fast path: running app's NSImage already in memory.
@@ -102,6 +118,19 @@ enum AppContextCapture {
         iconCache.set(icon, for: bundleId)
         return icon
     }
+
+    /// Bundle IDs whose icon resolution triggers a TCC media-library
+    /// prompt on macOS Sequoia 15.x. Kept narrow on purpose — any app
+    /// we add here loses its real icon in the rules / history UI, so
+    /// only include the ones that have actually been observed to
+    /// prompt. The fallback path renders a generic SF Symbol.
+    private static let mediaAppBundleIds: Set<String> = [
+        "com.apple.Music",
+        "com.apple.Photos",
+        "com.apple.TV",
+        "com.apple.Podcasts",
+        "com.apple.iTunes",
+    ]
 
     private static let iconCache = ImageCache()
 
