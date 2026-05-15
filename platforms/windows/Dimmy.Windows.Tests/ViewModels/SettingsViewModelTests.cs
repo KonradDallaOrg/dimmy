@@ -114,6 +114,176 @@ public class SettingsViewModelTests
         Assert.Contains("\"notion_target_title\":\"My Workspace\"", json);
     }
 
+    // ── LLM wipe guard (2026-05-15) ─────────────────────────────────────
+    // Same pattern as Notion: when a non-LLM-page save fires with a
+    // transient-empty VM, ToJson() default MUST NOT emit llm_api_url /
+    // llm_api_model / etc. — otherwise the Rust core sees `"": ""` and
+    // wipes a valid LLM provider config from disk. Found 2026-05-15
+    // when the user's `llm_api_url` had been silently emptied: the
+    // Settings Save path wrote the VM's (empty) state and zero'd the
+    // file.
+
+    [Fact]
+    public void ToJson_DefaultDoesNotIncludeLlmIdentityFields()
+    {
+        var vm = new SettingsViewModel
+        {
+            LlmApiUrl = "https://api.anthropic.com/v1/messages",
+            LlmApiModel = "claude-opus-4-7",
+            LlmUseSameKey = true,
+            LlmAuthMethod = "subscription",
+            LlmMode = "cloud",
+            LocalLlmModel = "gemma-4-E2B-it-Q4_K_M.gguf",
+        };
+        var json = vm.ToJson(); // default: includeLlm = false
+        Assert.DoesNotContain("\"llm_api_url\"", json);
+        Assert.DoesNotContain("\"llm_api_model\"", json);
+        Assert.DoesNotContain("\"llm_use_same_key\"", json);
+        Assert.DoesNotContain("\"llm_auth_method\"", json);
+        Assert.DoesNotContain("\"llm_mode\"", json);
+        Assert.DoesNotContain("\"local_llm_model\"", json);
+        // llm_enabled is derived from llm_style and lives under the
+        // same gate — otherwise a non-LLM save could flip the kill
+        // switch when style happens to be "off".
+        Assert.DoesNotContain("\"llm_enabled\"", json);
+        // BUT llm_style stays default-emitted: it's a user preference
+        // (the rewrite style chip), re-pickable from any UI, not an
+        // identity field. Wiping it would only force re-pick, not
+        // brick a provider.
+        Assert.Contains("\"llm_style\"", json);
+    }
+
+    [Fact]
+    public void ToJson_IncludeLlmTrue_ContainsAllLlmIdentityFields()
+    {
+        var vm = new SettingsViewModel
+        {
+            LlmApiUrl = "https://api.anthropic.com/v1/messages",
+            LlmApiModel = "claude-opus-4-7",
+            LlmUseSameKey = true,
+            LlmAuthMethod = "subscription",
+            LlmMode = "cloud",
+            LocalLlmModel = "gemma-4-E2B-it-Q4_K_M.gguf",
+            LlmStyle = "correct",
+        };
+        var json = vm.ToJson(includeLlm: true);
+        Assert.Contains("\"llm_api_url\":\"https://api.anthropic.com/v1/messages\"", json);
+        Assert.Contains("\"llm_api_model\":\"claude-opus-4-7\"", json);
+        Assert.Contains("\"llm_use_same_key\":true", json);
+        Assert.Contains("\"llm_auth_method\":\"subscription\"", json);
+        Assert.Contains("\"llm_mode\":\"cloud\"", json);
+        Assert.Contains("\"local_llm_model\":\"gemma-4-E2B-it-Q4_K_M.gguf\"", json);
+        // llm_enabled flips true when style != "off".
+        Assert.Contains("\"llm_enabled\":true", json);
+    }
+
+    [Fact]
+    public void ToJson_IncludeLlmTrue_EmitsExplicitEmptyClearsField()
+    {
+        // The LLM page's "Disconnect" flow needs the ability to
+        // explicitly clear llm_api_url — passing includeLlm:true with
+        // an empty value MUST emit `""` so the Rust core wipes the
+        // field. Without this, the user can never remove a stale
+        // provider config.
+        var vm = new SettingsViewModel
+        {
+            LlmApiUrl = "",
+            LlmApiModel = "",
+            LlmAuthMethod = "api_key",
+        };
+        var json = vm.ToJson(includeLlm: true);
+        Assert.Contains("\"llm_api_url\":\"\"", json);
+        Assert.Contains("\"llm_api_model\":\"\"", json);
+    }
+
+    [Fact]
+    public void ToJson_DefaultDoesNotIncludeRecapIdentityFields()
+    {
+        var vm = new SettingsViewModel
+        {
+            RecapApiUrl = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+            RecapAuthMethod = "subscription",
+            RecapModelOverride = "gemini-3.1-pro",
+        };
+        var json = vm.ToJson(); // default: includeRecap = false
+        Assert.DoesNotContain("\"recap_api_url\"", json);
+        Assert.DoesNotContain("\"recap_auth_method\"", json);
+        Assert.DoesNotContain("\"recap_model_override\"", json);
+    }
+
+    [Fact]
+    public void ToJson_IncludeRecapTrue_ContainsAllRecapIdentityFields()
+    {
+        var vm = new SettingsViewModel
+        {
+            RecapApiUrl = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+            RecapAuthMethod = "subscription",
+            RecapModelOverride = "gemini-3.1-pro",
+        };
+        var json = vm.ToJson(includeRecap: true);
+        Assert.Contains("\"recap_api_url\":\"https://generativelanguage.googleapis.com/v1beta/openai/chat/completions\"", json);
+        Assert.Contains("\"recap_auth_method\":\"subscription\"", json);
+        Assert.Contains("\"recap_model_override\":\"gemini-3.1-pro\"", json);
+    }
+
+    [Fact]
+    public void LoadThenDefaultSave_PreservesLlmAndRecapByOmission()
+    {
+        // The "wipe protection" round-trip: a config on disk has valid
+        // LLM + Recap. The Settings UI loads it. A NON-LLM/NON-RECAP
+        // save fires (e.g. user toggled theme). The default ToJson()
+        // must omit llm_* + recap_* entirely so the Rust core, seeing
+        // missing fields, preserves the on-disk state. Before this
+        // fix, ToJson() emitted `"llm_api_url": ""` and the Rust core
+        // wrote the empty string → permanent wipe.
+        var src = """
+            {
+              "llm_api_url": "https://api.anthropic.com/v1/messages",
+              "llm_api_model": "claude-opus-4-7",
+              "llm_auth_method": "subscription",
+              "recap_api_url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+              "recap_model_override": "gemini-3.1-pro",
+              "language": "it"
+            }
+            """;
+        var vm = new SettingsViewModel();
+        vm.LoadFromJson(src);
+        // VM has the values internally:
+        Assert.Equal("https://api.anthropic.com/v1/messages", vm.LlmApiUrl);
+        Assert.Equal("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", vm.RecapApiUrl);
+        // But default ToJson() OMITS them — Rust core preserves disk state.
+        var json = vm.ToJson();
+        Assert.DoesNotContain("llm_api_url", json);
+        Assert.DoesNotContain("recap_api_url", json);
+        // Universal field round-trips:
+        Assert.Contains("\"language\":\"it\"", json);
+    }
+
+    [Fact]
+    public void IsDirty_FiresWhenLlmFieldsChangeEvenThoughDefaultToJsonOmitsThem()
+    {
+        // IsDirty MUST see ALL fields — otherwise a user editing only
+        // LlmApiUrl would have Save stay disabled, lose the change.
+        // The fix: ToJsonFull() (includeLlm:true, includeRecap:true,
+        // includeNotion:true) is used by snapshot capture + IsDirty
+        // comparison.
+        var vm = new SettingsViewModel();
+        vm.LoadFromJson("""{ "llm_api_url": "https://api.anthropic.com/v1/messages" }""");
+        Assert.False(vm.IsDirty);
+        vm.LlmApiUrl = "https://api.openai.com/v1/chat/completions";
+        Assert.True(vm.IsDirty);
+    }
+
+    [Fact]
+    public void IsDirty_FiresWhenRecapFieldsChange()
+    {
+        var vm = new SettingsViewModel();
+        vm.LoadFromJson("""{ "recap_api_url": "https://api.anthropic.com/v1/messages" }""");
+        Assert.False(vm.IsDirty);
+        vm.RecapModelOverride = "claude-sonnet-4-6";
+        Assert.True(vm.IsDirty);
+    }
+
     /// <summary>
     /// Migration regression guard: a legacy config that still
     /// carries the synthetic <c>claude-code://default</c> URL must
@@ -414,8 +584,12 @@ public class SettingsViewModelTests
     [Fact]
     public void ToJson_includes_recap_model_override()
     {
+        // recap_* fields are gated behind includeRecap:true since the
+        // 2026-05-15 wipe-protection fix. The Recap section in Settings
+        // → Output owns these fields; this test pins the "explicit
+        // emit" path used by Save_Click / AutoSaveOnClose.
         var vm = new SettingsViewModel { RecapModelOverride = "gemini-3.1-pro" };
-        var json = vm.ToJson();
+        var json = vm.ToJson(includeRecap: true);
         Assert.Contains("\"recap_model_override\"", json);
         Assert.Contains("gemini-3.1-pro", json);
     }
@@ -436,8 +610,10 @@ public class SettingsViewModelTests
         // The dropdown's curated tags + the Custom escape hatch must all
         // round-trip cleanly. Whatever the user picks, that's exactly
         // what should land in config.json and come back out on reload.
+        // Pass includeRecap:true to simulate the Settings → Save path
+        // (the only site that's allowed to persist recap_* fields).
         var vm = new SettingsViewModel { RecapModelOverride = modelId };
-        var json = vm.ToJson();
+        var json = vm.ToJson(includeRecap: true);
         var vm2 = new SettingsViewModel();
         vm2.LoadFromJson(json);
         Assert.Equal(modelId, vm2.RecapModelOverride);
@@ -511,11 +687,13 @@ public class SettingsViewModelTests
     [Fact]
     public void ToJson_includes_recap_api_url()
     {
+        // recap_api_url is gated since 2026-05-15. The Recap section
+        // page (Settings → Output) passes includeRecap:true on save.
         var vm = new SettingsViewModel
         {
             RecapApiUrl = "https://api.anthropic.com/v1/messages",
         };
-        var json = vm.ToJson();
+        var json = vm.ToJson(includeRecap: true);
         Assert.Contains("\"recap_api_url\":\"https://api.anthropic.com/v1/messages\"", json);
     }
 
@@ -527,8 +705,10 @@ public class SettingsViewModelTests
     [InlineData("https://my-private-proxy.internal/v1/chat")]
     public void RecapApiUrl_round_trips_through_json(string url)
     {
+        // Round-trip through the explicit Recap-save path (the only
+        // one allowed to persist recap_api_url since the wipe fix).
         var vm = new SettingsViewModel { RecapApiUrl = url };
-        var json = vm.ToJson();
+        var json = vm.ToJson(includeRecap: true);
         var vm2 = new SettingsViewModel();
         vm2.LoadFromJson(json);
         Assert.Equal(url, vm2.RecapApiUrl);

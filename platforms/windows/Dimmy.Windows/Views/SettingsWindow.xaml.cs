@@ -3454,7 +3454,13 @@ public sealed partial class SettingsWindow : Window
         if (!string.IsNullOrEmpty(LlmApiKeyBox.Password))
             ViewModel.LlmApiKey = LlmApiKeyBox.Password;
 
-        var json = ViewModel.ToJson();
+        // includeLlm + includeRecap: this is the Settings → Save
+        // path — the user has been editing everything (incl. LLM
+        // provider + Recap section) and explicitly clicks Save, so
+        // we MUST persist those fields. Other save sites (per-field
+        // LostFocus, theme toggle, …) call ToJson() default and so
+        // omit the gated blocks → no accidental wipe on transient VM.
+        var json = ViewModel.ToJson(includeLlm: true, includeRecap: true);
 
         // Tell Rust to update in-memory state and save config.json
         // Rust now knows all fields (including UI appearance), so one writer only.
@@ -3482,7 +3488,12 @@ public sealed partial class SettingsWindow : Window
                 ViewModel.ApiKey = CloudApiKeyBox.Password;
             if (!string.IsNullOrEmpty(LlmApiKeyBox?.Password))
                 ViewModel.LlmApiKey = LlmApiKeyBox.Password;
-            var json = ViewModel.ToJson();
+            // Same rationale as Save_Click — closing Settings with X/ESC
+            // is the user's "save what I touched" intent; include LLM
+            // + Recap so a user who edited those blocks doesn't lose
+            // their work, and a user who DIDN'T also doesn't get wipe-d
+            // because the VM still holds the loaded values.
+            var json = ViewModel.ToJson(includeLlm: true, includeRecap: true);
             DimmyNative.dimmy_set_config_json(json);
             App.Instance?.ReloadConfig();
             App.Instance?.ApplySettings(ViewModel);

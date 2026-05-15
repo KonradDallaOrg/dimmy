@@ -601,7 +601,11 @@ struct MacOutputPage: View {
 
     private func saveLlmKey() {
         guard !llmKeyInput.isEmpty else { return }
-        var config = appState.toRustConfig()
+        // includeLlm:true — user is wiring up the LLM key and the
+        // RECAP section + LLM URL fields must travel with it, else
+        // the Rust core sees only `llm_api_key` and the URL/model
+        // chosen in this same UI step never makes it to disk.
+        var config = appState.toRustConfig(includeLlm: true, includeRecap: true)
         config["llm_api_key"] = llmKeyInput
         DimmyCore.shared.setConfig(config)
         llmKeyInput = ""
@@ -730,6 +734,12 @@ struct MacOutputPage: View {
     }
 
     private func persistConfig() {
-        DimmyCore.shared.setConfig(appState.toRustConfig())
+        // MacOutputPage owns LLM provider + Recap settings. ALL its
+        // saves must include both flags, otherwise the Picker /
+        // Toggle / TextField interactions in this page are silently
+        // dropped. Found 2026-05-15 — same bug pattern as Notion.
+        DimmyCore.shared.setConfig(
+            appState.toRustConfig(includeLlm: true, includeRecap: true)
+        )
     }
 }

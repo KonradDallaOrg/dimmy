@@ -1163,31 +1163,35 @@ final class AppState: ObservableObject {
     ///
     /// To explicitly set/clear the Notion destination the Notion
     /// picker / Disconnect path must call `toRustConfig(includeNotion: true)`.
-    func toRustConfig(includeNotion: Bool = false) -> [String: Any] {
+    ///
+    /// Same gating now applies to LLM + Recap identity fields
+    /// (added 2026-05-15 after `llm_api_url` was silently wiped on
+    /// the user's machine — same bug pattern as Notion, found
+    /// during meeting-recap triage). `includeLlm` / `includeRecap`
+    /// must be passed by the LLM/Recap-page save sites; everything
+    /// else (theme toggle, hotkey change, etc.) omits those fields
+    /// so the Rust core preserves the on-disk state.
+    func toRustConfig(
+        includeNotion: Bool = false,
+        includeLlm: Bool = false,
+        includeRecap: Bool = false
+    ) -> [String: Any] {
         var config: [String: Any] = [
             "api_url": apiUrl,
             "api_model": apiModel,
             "language": Self.languageCode(for: selectedLanguage),
             "prompt": prompt,
             "shortcut_mode": preferredMode == .pushToTalk ? "hold" : "toggle",
-            "llm_enabled": llmEnabled,
             "llm_style": llmStyle,
             "llm_tone": llmTone,
             "llm_custom_prompt": llmCustomPrompt,
             "llm_translate_to": llmTranslateTo,
-            "llm_api_url": llmApiUrl,
-            "llm_api_model": llmApiModel,
-            "llm_use_same_key": llmUseSameKey,
             "llm_log_enabled": llmLogEnabled,
-            "llm_auth_method": llmAuthMethod,
-            "recap_auth_method": recapAuthMethod,
             "stt_mode": sttMode,
             "local_model": localModel,
             "local_stt_backend": localSttBackend,
             "live_captions_enabled": liveCaptionsEnabled,
             "filler_removal_enabled": fillerRemovalEnabled,
-            "llm_mode": llmMode,
-            "local_llm_model": localLlmModel,
             "preprocessing_enabled": preprocessingEnabled,
             "chunk_streaming_enabled": chunkStreamingEnabled,
             "audio_debug_enabled": audioDebugEnabled,
@@ -1201,8 +1205,6 @@ final class AppState: ObservableObject {
             "history_audio_keep_days": Int(historyAudioKeepDays),
             "history_audio_max_mb": Int(historyAudioMaxMb),
             "auto_recap_threshold_secs": Int(autoRecapThresholdSecs),
-            "recap_model_override": recapModelOverride,
-            "recap_api_url": recapApiUrl,
             // notion_target_{id,kind,title} are deliberately gated
             // behind `includeNotion` — see toRustConfig docstring above.
             // notion_auto_send IS safe to round-trip (bool toggle,
@@ -1211,6 +1213,27 @@ final class AppState: ObservableObject {
             "user_dict": userDictWords,
             "app_rules": appRules.map { $0.toDict() },
         ]
+        if includeLlm {
+            // LLM provider identity — wiping these silently kills
+            // the user's LLM setup. The Settings → LLM page is the
+            // single legitimate writer; other save sites must omit
+            // them so the Rust core preserves disk state.
+            config["llm_api_url"] = llmApiUrl
+            config["llm_api_model"] = llmApiModel
+            config["llm_use_same_key"] = llmUseSameKey
+            config["llm_auth_method"] = llmAuthMethod
+            config["llm_mode"] = llmMode
+            config["local_llm_model"] = localLlmModel
+            // `llm_enabled` is derived from `llm_style != "off"`
+            // upstream; keep it gated with the rest of LLM identity.
+            config["llm_enabled"] = llmEnabled
+        }
+        if includeRecap {
+            // Recap section in Settings → Output owns these fields.
+            config["recap_api_url"] = recapApiUrl
+            config["recap_auth_method"] = recapAuthMethod
+            config["recap_model_override"] = recapModelOverride
+        }
         if includeNotion {
             config["notion_target_id"] = notionTargetId
             config["notion_target_kind"] = notionTargetKind

@@ -416,7 +416,19 @@ public partial class SettingsViewModel : ObservableObject
     }
 
     private string _snapshotJson = "";
-    public bool IsDirty => ToJson() != _snapshotJson;
+    // IsDirty must see EVERY field — even the ones gated out of the
+    // default ToJson() (Notion/LLM/Recap blocks). Otherwise a user
+    // editing only an LLM field would have IsDirty stay false → Save
+    // button stays disabled → change silently lost. Snapshot is
+    // captured with the same full-include flags at load time so the
+    // comparison is symmetric.
+    public bool IsDirty => ToJsonFull() != _snapshotJson;
+
+    /// Full-include serialization — used ONLY for IsDirty tracking
+    /// and snapshot capture. NEVER call this for FFI writes (it would
+    /// re-introduce the wipe bug the includeLlm/includeRecap gates
+    /// are designed to prevent).
+    private string ToJsonFull() => ToJson(includeNotion: true, includeLlm: true, includeRecap: true);
 
     public void LoadFromJson(string json)
     {
@@ -550,7 +562,7 @@ public partial class SettingsViewModel : ObservableObject
                 Devices = list;
             }
 
-            _snapshotJson = ToJson();
+            _snapshotJson = ToJsonFull();
         }
         catch (JsonException) { }
     }
@@ -574,8 +586,13 @@ public partial class SettingsViewModel : ObservableObject
     /// Disconnect path does the same. Generic Settings saves never
     /// touch these fields.</para>
     /// </summary>
-    public string ToJson(bool includeNotion = false)
+    public string ToJson(bool includeNotion = false, bool includeLlm = false, bool includeRecap = false)
     {
+        // Universal fields — preferences, cosmetics, debug toggles, audio
+        // pipeline knobs. Safe to round-trip on EVERY save site because
+        // they're either user preferences (re-pickable from any UI) or
+        // booleans with sensible defaults. None of these is a "credential
+        // / identity" field whose wipe would silently break the user.
         var dict = new Dictionary<string, object?>
         {
             ["language"] = Language,
@@ -594,14 +611,6 @@ public partial class SettingsViewModel : ObservableObject
             ["history_audio_keep_days"] = HistoryAudioKeepDays,
             ["history_audio_max_mb"] = HistoryAudioMaxMb,
             ["use_keyring"] = false,  // Always local encrypted file
-            ["llm_enabled"] = LlmStyle != "off",
-            ["llm_api_url"] = LlmApiUrl,
-            ["llm_api_model"] = LlmApiModel,
-            ["llm_use_same_key"] = LlmUseSameKey,
-            ["llm_auth_method"] = LlmAuthMethod,
-            ["recap_auth_method"] = RecapAuthMethod,
-            ["recap_api_url"] = RecapApiUrl,
-            ["recap_model_override"] = RecapModelOverride,
             // notion_target_{id,kind,title} are deliberately NOT in
             // the generic dict — see the includeNotion docstring above.
             // notion_auto_send IS safe to round-trip (it's a bool
@@ -616,8 +625,6 @@ public partial class SettingsViewModel : ObservableObject
             ["local_model"] = LocalModel,
             ["local_stt_backend"] = LocalSttBackend,
             ["filler_removal_enabled"] = FillerRemovalEnabled,
-            ["llm_mode"] = LlmMode,
-            ["local_llm_model"] = LocalLlmModel,
             ["border_style"] = BorderStyle,
             ["waveform_style"] = WaveformStyle,
             ["overlay_position"] = OverlayPosition,
@@ -628,6 +635,36 @@ public partial class SettingsViewModel : ObservableObject
         };
         if (!string.IsNullOrEmpty(ApiKey)) dict["api_key"] = ApiKey;
         if (!string.IsNullOrEmpty(LlmApiKey)) dict["llm_api_key"] = LlmApiKey;
+        if (includeLlm)
+        {
+            // Caller is the LLM-provider page Save / AutoSave — they own
+            // the semantics of "the user touched the LLM config and wants
+            // to persist exactly what's in the VM, even if empty". Other
+            // callers MUST NOT pass true: a transient empty VM (window
+            // just opened, fields not yet populated by LoadFromJson)
+            // would otherwise wipe a valid LLM setup from disk. Pattern
+            // mirrors the includeNotion fix shipped 2026-05-13 after the
+            // exact same bug pattern destroyed Notion destinations.
+            dict["llm_api_url"] = LlmApiUrl;
+            dict["llm_api_model"] = LlmApiModel;
+            dict["llm_use_same_key"] = LlmUseSameKey;
+            dict["llm_auth_method"] = LlmAuthMethod;
+            dict["llm_mode"] = LlmMode;
+            dict["local_llm_model"] = LocalLlmModel;
+            // `llm_enabled` is derived from `llm_style != "off"` — keep
+            // it under the same gate so a non-LLM-page save can't
+            // accidentally flip the kill switch.
+            dict["llm_enabled"] = LlmStyle != "off";
+        }
+        if (includeRecap)
+        {
+            // Same rationale as includeLlm — the Recap section in
+            // Settings → Output owns these fields; other call sites
+            // MUST omit them to avoid wiping a valid recap setup.
+            dict["recap_api_url"] = RecapApiUrl;
+            dict["recap_auth_method"] = RecapAuthMethod;
+            dict["recap_model_override"] = RecapModelOverride;
+        }
         if (includeNotion)
         {
             // Caller is the Notion picker/disconnect — they own the
