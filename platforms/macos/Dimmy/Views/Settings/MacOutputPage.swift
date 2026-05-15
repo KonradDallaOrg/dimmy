@@ -936,6 +936,21 @@ struct MacOutputPage: View {
                 if let preset = LlmPreset.presets.first(where: { $0.id == newValue }) {
                     appState.llmApiUrl = preset.apiUrl
                     appState.llmApiModel = preset.model
+                    // Symmetric counterpart of `normalizeLlmUrlForAuth`:
+                    // when the user picks a non-Anthropic preset while
+                    // the dictation LLM was on subscription auth, snap
+                    // `llmAuthMethod` back to "api_key". The Authentication
+                    // picker only renders for Anthropic, so a stale
+                    // "subscription" string after switching to Gemini /
+                    // OpenAI / etc. silently hid the LLM API key card
+                    // with no way for the user to flip it back. User
+                    // report: "se in llm metto antropic e subs e poi
+                    // cambio e metto gemini, non riesco più a inserire
+                    // la apikey per llm."
+                    let newTag = ProviderTagging.providerTag(forUrl: preset.apiUrl)
+                    if newTag != "anthropic" && appState.llmAuthMethod == "subscription" {
+                        appState.llmAuthMethod = "api_key"
+                    }
                     persistConfig()
                 }
             }
