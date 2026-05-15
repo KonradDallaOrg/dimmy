@@ -61,6 +61,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         statusItem?.menu = menu
 
         // Refresh icon to reflect current state.
+        refreshIcon()
+    }
+
+    private func refreshIcon() {
         updateIcon(for: appState.recordingState, hotkey: appState.hotkeyStatus)
     }
 
@@ -116,6 +120,25 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     private func updateIcon(for state: RecordingState, hotkey: HotkeyStatus) {
         guard let button = statusItem?.button else { return }
+
+        // Meeting state takes precedence over dictation state — meetings
+        // last for minutes/hours and dictation `recordingState` stays
+        // `.idle` for the whole duration. Without this branch the icon
+        // would not reflect that a meeting is recording.
+        if appState.meetingActive {
+            if appState.meetingIsPaused {
+                button.image = Self.menuBarImage(symbolName: "pause.circle.fill",
+                                                 accessibility: "Dimmy - Meeting paused",
+                                                 paletteColor: .systemOrange)
+                button.toolTip = "Meeting paused"
+            } else {
+                button.image = Self.menuBarImage(symbolName: "record.circle.fill",
+                                                 accessibility: "Dimmy - Meeting recording",
+                                                 paletteColor: .systemRed)
+                button.toolTip = "Meeting recording"
+            }
+            return
+        }
 
         // Hotkey health overlays a small yellow badge on top of the regular
         // Dimmy icon — keeps the brand recognisable in the menubar instead
