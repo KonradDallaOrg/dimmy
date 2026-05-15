@@ -13,10 +13,14 @@ struct MacOutputPage: View {
 
     // Recap-vendor key save — separate field from the dictation
     // llmKeyInput. Routes to `dimmy_save_llm_provider_key` under
-    // KeyringScope::Llm(<recap_provider>), leaving the dictation
-    // llm_api_url + dictation key untouched. Used only when the
-    // user picks a recap provider different from the dictation one.
+    // KeyringScope::Recap(<recap_provider>), leaving the dictation
+    // llm_api_url + dictation key untouched. Used when the user
+    // picks a recap provider that needs its own key (either cross-
+    // vendor or same-vendor with the toggle turned off). The
+    // `showRecapKeyField` flag mirrors `showLlmKeyField` so the
+    // reveal-on-button pattern is identical across STT / LLM / Recap.
     @State private var recapKeyInput: String = ""
+    @State private var showRecapKeyField: Bool = false
 
     @State private var localLlmExists: Bool = false
     @State private var llmDownloadFailed: String? = nil
@@ -381,7 +385,7 @@ struct MacOutputPage: View {
                         description: !recapUpstreamKeyAvailable
                             ? "Encrypted locally. No upstream \(recapProviderTag.capitalized) key found for STT/LLM, so the recap call needs a dedicated one."
                             : "Encrypted locally. Used because you turned off key sharing above.",
-                        showsDivider: !recapKeyAlreadySaved
+                        showsDivider: showRecapKeyField
                     ) {
                         if recapKeyAlreadySaved {
                             HStack(spacing: 4) {
@@ -392,17 +396,17 @@ struct MacOutputPage: View {
                                     .foregroundStyle(.green)
                             }
                         }
+                        Button(recapKeyAlreadySaved
+                               ? (showRecapKeyField ? "Cancel" : "Replace…")
+                               : (showRecapKeyField ? "Cancel" : "Add key…")) {
+                            showRecapKeyField.toggle()
+                            if !showRecapKeyField { recapKeyInput = "" }
+                        }
+                        .controlSize(.small)
                     }
 
-                    MacRow("", showsDivider: false) {
-                        SecureField("sk-…", text: $recapKeyInput)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: 320)
-                            .onSubmit { saveRecapProviderKey() }
-                        Button("Save") { saveRecapProviderKey() }
-                            .controlSize(.small)
-                            .keyboardShortcut(.return)
-                            .disabled(recapKeyInput.isEmpty)
+                    if showRecapKeyField {
+                        recapKeyEntryRow
                     }
                 }
             }
@@ -754,6 +758,41 @@ struct MacOutputPage: View {
         DimmyCore.shared.setConfig(config)
         llmKeyInput = ""
         showLlmKeyField = false
+        if let cfg = DimmyCore.shared.getConfig() {
+            appState.loadFromRustConfig(cfg)
+        }
+    }
+
+    /// Inline SecureField revealed under "Recap API key" when the user
+    /// opts in via the Add/Replace button. Same shape as
+    /// `apiKeyEntryRow` (STT) and `llmKeyEntryRow` (LLM) — uniform UI
+    /// across the three key sections per the user's "stessi componenti"
+    /// rule. The Save action calls the shared
+    /// `dimmy_save_llm_provider_key("recap", vendor, key)` FFI and
+    /// re-reads the config so the `has_<vendor>_recap_key` snapshot
+    /// flips → green ✓ surfaces.
+    private var recapKeyEntryRow: some View {
+        MacRow("Paste key", showsDivider: false) {
+            SecureField("sk-…", text: $recapKeyInput)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 240)
+                .onSubmit { saveRecapKeyAndRefresh() }
+            Button("Save") { saveRecapKeyAndRefresh() }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(recapKeyInput.isEmpty)
+        }
+    }
+
+    /// Wrap `saveRecapProviderKey` with the same close-the-field +
+    /// refresh-AppState dance that `saveLlmKey` / `saveApiKey` do, so
+    /// the row collapses back to the "Saved" + Replace… state after a
+    /// successful save (without this the SecureField stayed open with
+    /// the cleared buffer and looked like a no-op to the user).
+    private func saveRecapKeyAndRefresh() {
+        guard !recapKeyInput.isEmpty else { return }
+        saveRecapProviderKey()
+        showRecapKeyField = false
         if let cfg = DimmyCore.shared.getConfig() {
             appState.loadFromRustConfig(cfg)
         }
