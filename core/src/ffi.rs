@@ -4757,6 +4757,12 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
                         let _ = store.save(&text, &language_cloud, total_secs_pre);
                     }
                 }
+                // Stats: file load contributes to Total words +
+                // Time saved the same way pill dictation does. Was
+                // missing 2026-05-15; without it a 60-min imported
+                // WAV vanished from the user's cumulative counters.
+                let words = text.split_whitespace().count() as c_int;
+                let _ = dimmy_update_stats(words, total_secs_pre);
                 return write_to_buf(&text, out_buf, buf_len);
             }
             Err(e) => {
@@ -4915,6 +4921,10 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
             }
         }
     }
+    // Stats: same rationale as the cloud branch above — file load
+    // contributes to the cumulative counters in Settings.
+    let words = text.split_whitespace().count() as c_int;
+    let _ = dimmy_update_stats(words, total_secs);
 
     write_to_buf(&text, out_buf, buf_len)
 }
