@@ -73,16 +73,28 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private func observeState() {
         appState.$recordingState
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] state in
-                self?.updateIcon(for: state, hotkey: self?.appState.hotkeyStatus ?? .uninstalled)
-            }
+            .sink { [weak self] _ in self?.refreshIcon() }
             .store(in: &cancellables)
 
         appState.$hotkeyStatus
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] status in
-                self?.updateIcon(for: self?.appState.recordingState ?? .idle, hotkey: status)
-            }
+            .sink { [weak self] _ in self?.refreshIcon() }
+            .store(in: &cancellables)
+
+        // Meeting state also drives the icon — without these, the menubar
+        // stayed on the idle outline glyph for the entire meeting recording,
+        // making it look like nothing was happening. Now meeting-active
+        // reuses the red recording glyph (same visual contract as dictation
+        // recording: red = mic is hot somewhere) and meeting-paused gets
+        // the orange pause glyph.
+        appState.$meetingActive
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refreshIcon() }
+            .store(in: &cancellables)
+
+        appState.$meetingIsPaused
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refreshIcon() }
             .store(in: &cancellables)
 
         appState.$showInMenuBar
@@ -98,19 +110,39 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             .store(in: &cancellables)
     }
 
+    private func refreshIcon() {
+        updateIcon(for: appState.recordingState, hotkey: appState.hotkeyStatus)
+    }
+
     private func updateIcon(for state: RecordingState, hotkey: HotkeyStatus) {
         guard let button = statusItem?.button else { return }
 
         // Hotkey health overlays a small yellow badge on top of the regular
         // Dimmy icon — keeps the brand recognisable in the menubar instead
         // of replacing it with a generic warning triangle.
-        if case .idle = state, hotkey != .installed {
+        if case .idle = state, hotkey != .installed, !appState.meetingActive {
             button.image = Self.makeWarningBadgedIcon()
             button.toolTip = Self.tooltip(for: hotkey)
             return
         }
 
         button.toolTip = nil
+
+        // Dictation states win over meeting states when both are non-idle
+        // (you can still do a dictation hotkey during a meeting). Only
+        // when dictation is idle do we surface the meeting status.
+        if case .idle = state, appState.meetingActive {
+            if appState.meetingIsPaused {
+                button.image = Self.menuBarImage(symbolName: "pause.circle.fill",
+                                                 accessibility: "Dimmy - Meeting paused",
+                                                 paletteColor: .systemOrange)
+            } else {
+                button.image = Self.menuBarImage(symbolName: "waveform.circle.fill",
+                                                 accessibility: "Dimmy - Meeting recording",
+                                                 paletteColor: .systemRed)
+            }
+            return
+        }
 
         switch state {
         case .idle:
