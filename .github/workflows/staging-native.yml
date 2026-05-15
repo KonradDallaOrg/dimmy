@@ -37,7 +37,7 @@ jobs:
     name: Rust Lint & Test
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -74,7 +74,7 @@ jobs:
       release_id: ${{ steps.create.outputs.id }}
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -148,7 +148,7 @@ jobs:
 
       - name: Create GitHub Release
         id: create
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: staging-latest
           name: "Dimmy ${{ steps.version.outputs.version }} (Native Staging)"
@@ -162,7 +162,7 @@ jobs:
     needs: create-release
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -195,7 +195,7 @@ jobs:
           shared-key: macos-staging
 
       - name: Cache FluidAudio Swift build
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           # `swift build` runs as part of fluidaudio-rs's build.rs and
           # rebuilds 500+ Swift files (~5 min cold) for FluidAudio +
@@ -320,7 +320,7 @@ jobs:
             "$APP_PATH"
 
       - name: Upload DMG to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: staging-latest
           files: platforms/macos/build/Dimmy-native-macos-arm64.dmg
@@ -339,7 +339,7 @@ jobs:
     needs: [create-release]
     runs-on: windows-2025
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -543,12 +543,12 @@ jobs:
           exit 0
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '8.0.x'
 
       - name: Cache NuGet packages
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.nuget/packages
           key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
@@ -631,7 +631,7 @@ jobs:
           Get-ChildItem platforms/windows/velopack-output | ForEach-Object { Write-Host "$($_.Name) ($([math]::Round($_.Length/1MB, 1)) MB)" }
 
       - name: Upload to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: staging-latest
           # Upload the full Velopack output set, not just the
@@ -660,7 +660,7 @@ jobs:
     needs: [create-release]
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -668,7 +668,7 @@ jobs:
           components: clippy
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -737,13 +737,13 @@ jobs:
           mv Dimmy*.AppImage Dimmy-native-linux-x86_64.AppImage
 
       - name: Upload AppImage to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: staging-latest
           files: Dimmy-native-linux-x86_64.AppImage
 
       - name: Upload raw binary (artifact)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: dimmy-linux
           path: platforms/linux/target/release/dimmy-linux
@@ -767,7 +767,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Publish release
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             await github.rest.repos.updateRelease({

@@ -43,7 +43,7 @@ jobs:
       release_id: ${{ steps.create.outputs.id }}
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -90,7 +90,7 @@ jobs:
 
       - name: Create GitHub Release
         id: create
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           name: "Dimmy ${{ steps.version.outputs.version }} (staging)"
@@ -104,7 +104,7 @@ jobs:
     needs: create-release
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -131,7 +131,7 @@ jobs:
           shared-key: macos-staging
 
       - name: Cache FluidAudio Swift build
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/Library/Developer/Xcode/DerivedData/FluidAudio*
@@ -209,7 +209,7 @@ jobs:
             "$APP_PATH"
 
       - name: Upload DMG
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           files: platforms/macos/build/Dimmy-Staging-macos-arm64.dmg
@@ -220,7 +220,7 @@ jobs:
     needs: create-release
     runs-on: windows-2025
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -314,7 +314,7 @@ jobs:
           cargo build --lib --release --features local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,license-client
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '8.0.x'
 
@@ -361,7 +361,7 @@ jobs:
           vpk pack --packId Dimmy-Staging --packVersion $version --packDir "$pubDir" --mainExe Dimmy.Windows.exe --icon "platforms/windows/Dimmy.Windows/Assets/dimmy.ico" --framework "vcredist143-x64" --channel staging --outputDir platforms/windows/velopack-output
 
       - name: Upload to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           files: |
