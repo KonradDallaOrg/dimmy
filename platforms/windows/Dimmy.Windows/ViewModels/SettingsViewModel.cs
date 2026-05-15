@@ -35,24 +35,26 @@ public partial class SettingsViewModel : ObservableObject
     [
         new("Groq", "https://api.groq.com/openai/v1/audio/transcriptions", "whisper-large-v3-turbo"),
         new("Groq-v3", "https://api.groq.com/openai/v1/audio/transcriptions", "whisper-large-v3"),
-        new("Groq-Distil", "https://api.groq.com/openai/v1/audio/transcriptions", "distil-whisper-large-v3-en"),
+        // "Groq-Distil" (distil-whisper-large-v3-en) removed
+        // 2026-05-15 — decommissioned by Groq, returns
+        // HTTP 400 model_decommissioned. Migration in
+        // SettingsViewModel.LoadFromJson coerces saved
+        // configs to whisper-large-v3-turbo.
         new("OpenAI", "https://api.openai.com/v1/audio/transcriptions", "whisper-1"),
         new("OpenAI-4o", "https://api.openai.com/v1/audio/transcriptions", "gpt-4o-transcribe"),
         new("OpenAI-4o-mini", "https://api.openai.com/v1/audio/transcriptions", "gpt-4o-mini-transcribe"),
         new("Deepgram", "https://api.deepgram.com/v1/listen", "nova-3"),
         new("Deepgram-Nova2", "https://api.deepgram.com/v1/listen", "nova-2"),
-        // "Gemini" alias (back-compat: tests + users with persisted
-        // Name="Gemini" still match) → points at the current best
-        // fast tier (3.1-flash, May 2026). Explicit -3.1-flash /
-        // -3.1-pro / -2.5-flash / -2.5-pro entries below for users
-        // who want the exact tier.
-        new("Gemini", "https://generativelanguage.googleapis.com/v1beta/models", "gemini-3.1-flash"),
-        new("Gemini-3.1-Pro", "https://generativelanguage.googleapis.com/v1beta/models", "gemini-3.1-pro"),
-        // Older 2.5 line kept as fallback — same multimodal API; 3.x
-        // is preview tier on Google's side so users may want the
-        // stable 2.5 path for production until 3.x graduates.
+        // Gemini STT — Flash variants only. Pro models are slower
+        // and more expensive than Flash without meaningful accuracy
+        // gain for transcription; the user explicitly preferred fast
+        // STT tier 2026-05-15. Pro stays available for LLM rewrite
+        // + recap (interactive vs background workloads).
+        new("Gemini-3.1-Flash-Lite", "https://generativelanguage.googleapis.com/v1beta/models", "gemini-3.1-flash-lite"),
+        new("Gemini-3-Flash", "https://generativelanguage.googleapis.com/v1beta/models", "gemini-3-flash-preview"),
         new("Gemini-2.5-Flash", "https://generativelanguage.googleapis.com/v1beta/models", "gemini-2.5-flash"),
-        new("Gemini-2.5-Pro", "https://generativelanguage.googleapis.com/v1beta/models", "gemini-2.5-pro"),
+        // Legacy "Gemini" alias for back-compat → stable 2.5-flash.
+        new("Gemini", "https://generativelanguage.googleapis.com/v1beta/models", "gemini-2.5-flash"),
         // Phase 1 cloud expansion (2026-05-04 benchmark drove the model picks)
         new("Fireworks", "https://audio-turbo.api.fireworks.ai/v1/audio/transcriptions", "whisper-v3-turbo"),
         new("Together-Parakeet", "https://api.together.xyz/v1/audio/transcriptions", "nvidia/parakeet-tdt-0.6b-v3"),
@@ -62,24 +64,42 @@ public partial class SettingsViewModel : ObservableObject
 
     public static readonly List<ProviderPreset> LlmProviderPresets =
     [
+        // Curated cloud LLM presets — audit done 2026-05-15 against
+        // each provider's live /models endpoint. Mirrored 1:1 on
+        // Mac `LlmPreset.presets` + Linux LLM presets. Adding /
+        // removing here MUST be reflected on both other platforms.
+        //
+        // ── Groq (free for moderate use, OpenAI-compatible) ────
         new("Groq", "https://api.groq.com/openai/v1/chat/completions", "llama-3.3-70b-versatile"),
-        // OpenAI default = gpt-5-mini (fast + cheap, same chat-completions
-        // endpoint as gpt-4 family — no code change needed). gpt-5 (top
-        // tier) and gpt-5-nano (fastest) also surface in the recap-model
-        // dropdown for users who want the quality / speed extremes.
+        new("Groq-GptOss120b", "https://api.groq.com/openai/v1/chat/completions", "openai/gpt-oss-120b"),
+        new("Groq-Llama4Scout", "https://api.groq.com/openai/v1/chat/completions", "meta-llama/llama-4-scout-17b-16e-instruct"),
+        new("Groq-Llama8bInstant", "https://api.groq.com/openai/v1/chat/completions", "llama-3.1-8b-instant"),
+        new("Groq-Qwen3-32b", "https://api.groq.com/openai/v1/chat/completions", "qwen/qwen3-32b"),
+        // ── OpenAI ─────────────────────────────────────────────
         new("OpenAI", "https://api.openai.com/v1/chat/completions", "gpt-5-mini"),
         new("OpenAI-GPT5", "https://api.openai.com/v1/chat/completions", "gpt-5"),
+        new("OpenAI-GPT51", "https://api.openai.com/v1/chat/completions", "gpt-5.1"),
         new("OpenAI-4o-mini", "https://api.openai.com/v1/chat/completions", "gpt-4o-mini"),
+        // ── OpenRouter (free tiers for testing) ────────────────
         new("OpenRouter", "https://openrouter.ai/api/v1/chat/completions", "meta-llama/llama-3.3-70b-instruct:free"),
         new("OpenRouter-Deepseek", "https://openrouter.ai/api/v1/chat/completions", "deepseek/deepseek-r1:free"),
-        // Gemini default = 3.1-flash (preview, latest fast). Same
-        // OpenAI-shim endpoint we already use; multimodal generateContent
-        // is the other path used for STT.
-        new("Gemini", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-3.1-flash"),
-        new("Gemini-3.1-Pro", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-3.1-pro"),
+        // ── Gemini (full live-API spread, audit 2026-05-15) ────
+        // 3.1 generation: only `-preview` and `-lite` variants exist.
+        // 3 generation: only `-preview` variants exist.
+        // 2.5 generation: plain names work (stable production tier).
+        new("Gemini-3.1-Pro", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-3.1-pro-preview"),
+        new("Gemini-3.1-Flash-Lite", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-3.1-flash-lite"),
+        new("Gemini-3-Pro", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-3-pro-preview"),
+        new("Gemini-3-Flash", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-3-flash-preview"),
+        new("Gemini-2.5-Pro", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-2.5-pro"),
         new("Gemini-2.5-Flash", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-2.5-flash"),
+        // Legacy "Gemini" alias for saved configs — falls to the
+        // stable 2.5-flash tier. Older "Gemini-3.1-Pro" / -Flash
+        // references in configs are migrated at load time.
+        new("Gemini", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-2.5-flash"),
+        // ── Anthropic ──────────────────────────────────────────
         new("Anthropic", "https://api.anthropic.com/v1/messages", "claude-haiku-4-5-20251001"),
-        new("Anthropic-Sonnet", "https://api.anthropic.com/v1/messages", "claude-sonnet-4-20250514"),
+        new("Anthropic-Sonnet", "https://api.anthropic.com/v1/messages", "claude-sonnet-4-6"),
         new("Anthropic-Opus", "https://api.anthropic.com/v1/messages", "claude-opus-4-7"),
         // The dedicated "Claude-Code" preset is gone — the same
         // routing now lives behind the Authentication radio group
@@ -456,6 +476,24 @@ public partial class SettingsViewModel : ObservableObject
             LlmTone = r.TryGetProperty("llm_tone", out var tone) ? tone.GetString() ?? "none" : "none";
             ApiUrl = r.TryGetProperty("api_url", out var url) ? url.GetString() ?? "" : "";
             ApiModel = r.TryGetProperty("api_model", out var model) ? model.GetString() ?? "" : "";
+            // Decommissioned-model migration (mirror of Rust
+            // `migrate_decommissioned_models`). Each rule = one
+            // upstream API regression audited 2026-05-15.
+            if (ApiModel == "distil-whisper-large-v3-en"
+                && ApiUrl.Contains("groq.com", StringComparison.OrdinalIgnoreCase))
+            {
+                // Groq decommissioned (HTTP 400 model_decommissioned).
+                ApiModel = "whisper-large-v3-turbo";
+            }
+            if (ApiUrl.Contains("googleapis.com", StringComparison.OrdinalIgnoreCase))
+            {
+                if (ApiModel == "gemini-3.1-flash") ApiModel = "gemini-3.1-flash-lite";
+                // STT Pro → Flash (Pro is LLM-only now, UX policy 2026-05-15).
+                if (ApiModel == "gemini-3.1-pro" || ApiModel == "gemini-3.1-pro-preview")
+                    ApiModel = "gemini-3.1-flash-lite";
+                if (ApiModel == "gemini-3-pro-preview") ApiModel = "gemini-3-flash-preview";
+                if (ApiModel == "gemini-2.5-pro") ApiModel = "gemini-2.5-flash";
+            }
             HasApiKey = r.TryGetProperty("has_key", out var hk) && hk.GetBoolean();
             Prompt = r.TryGetProperty("prompt", out var prompt) ? prompt.GetString() ?? "" : "";
             Shortcut = r.TryGetProperty("shortcut", out var sc) ? sc.GetString() ?? "Win+Alt" : "Win+Alt";
@@ -472,6 +510,19 @@ public partial class SettingsViewModel : ObservableObject
             LlmEnabled = r.TryGetProperty("llm_enabled", out var le) && le.GetBoolean();
             LlmApiUrl = r.TryGetProperty("llm_api_url", out var lu) ? lu.GetString() ?? "" : "";
             LlmApiModel = r.TryGetProperty("llm_api_model", out var lm) ? lm.GetString() ?? "" : "";
+            // LLM-side decommissioned-model migration. Mirror of
+            // Rust `migrate_decommissioned_models`.
+            if (LlmApiUrl.Contains("googleapis.com", StringComparison.OrdinalIgnoreCase))
+            {
+                if (LlmApiModel == "gemini-3.1-flash") LlmApiModel = "gemini-3.1-flash-lite";
+                if (LlmApiModel == "gemini-3.1-pro") LlmApiModel = "gemini-3.1-pro-preview";
+            }
+            if (LlmApiUrl.Contains("anthropic.com", StringComparison.OrdinalIgnoreCase)
+                && LlmApiModel == "claude-sonnet-4-20250514")
+            {
+                // Upgrade dated Sonnet 4 to the named-tier successor.
+                LlmApiModel = "claude-sonnet-4-6";
+            }
             LlmUseSameKey = !r.TryGetProperty("llm_use_same_key", out var lsk) || lsk.GetBoolean();
             // Auth-method flag — "api_key" (default) or "subscription".
             // Migrate the legacy `claude-code://` URL scheme to the

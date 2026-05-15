@@ -13,7 +13,9 @@ use adw::prelude::*;
 const STT_PRESETS: &[(&str, &str, &str)] = &[
     ("Groq — whisper-large-v3-turbo", "https://api.groq.com/openai/v1/audio/transcriptions", "whisper-large-v3-turbo"),
     ("Groq — whisper-large-v3", "https://api.groq.com/openai/v1/audio/transcriptions", "whisper-large-v3"),
-    ("Groq — distil-whisper-large-v3-en", "https://api.groq.com/openai/v1/audio/transcriptions", "distil-whisper-large-v3-en"),
+    // "Groq — distil-whisper-large-v3-en" removed 2026-05-15 — Groq
+    // decommissioned (HTTP 400 model_decommissioned). Saved configs
+    // migrated by `migrate_decommissioned_models` in core/lib.rs.
     ("OpenAI — whisper-1", "https://api.openai.com/v1/audio/transcriptions", "whisper-1"),
     ("OpenAI — gpt-4o-transcribe", "https://api.openai.com/v1/audio/transcriptions", "gpt-4o-transcribe"),
     ("OpenAI — gpt-4o-mini-transcribe", "https://api.openai.com/v1/audio/transcriptions", "gpt-4o-mini-transcribe"),

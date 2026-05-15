@@ -437,14 +437,13 @@
                         <TextBlock Text="Groq · whisper-large-v3 (free)" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
-                    <ComboBoxItem Tag="groq-distil">
-                      <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Image Width="16" Height="16">
-                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/groq.svg"/></Image.Source>
-                        </Image>
-                        <TextBlock Text="Groq · distil-whisper-en (free)" VerticalAlignment="Center"/>
-                      </StackPanel>
-                    </ComboBoxItem>
+                    <!-- "Groq · distil-whisper-en" removed 2026-05-15 —
+                         Groq decommissioned the distil-whisper-large-v3-en
+                         model (HTTP 400 model_decommissioned). Saved
+                         configs that still point at it are migrated to
+                         whisper-large-v3-turbo by
+                         SettingsViewModel.LoadFromJson + the Rust core
+                         `migrate_decommissioned_models` helper. -->
                     <ComboBoxItem Tag="openai">
                       <StackPanel Orientation="Horizontal" Spacing="8">
                         <Image Width="16" Height="16">
@@ -485,20 +484,32 @@
                         <TextBlock Text="Deepgram · nova-2" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
-                    <ComboBoxItem Tag="gemini">
+                    <!-- STT only shows Flash variants — Pro is slower
+                         and pricier without meaningful accuracy gain
+                         for transcription. Pro stays in the LLM
+                         dropdown (Output → LLM) for rewrite + recap. -->
+                    <ComboBoxItem Tag="gemini-3.1-flash-lite">
                       <StackPanel Orientation="Horizontal" Spacing="8">
                         <Image Width="16" Height="16">
                           <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
                         </Image>
-                        <TextBlock Text="Gemini · gemini-2.5-flash (free)" VerticalAlignment="Center"/>
+                        <TextBlock Text="Gemini · 3.1-flash-lite (newest fast)" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
-                    <ComboBoxItem Tag="gemini-pro">
+                    <ComboBoxItem Tag="gemini-3-flash">
                       <StackPanel Orientation="Horizontal" Spacing="8">
                         <Image Width="16" Height="16">
                           <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
                         </Image>
-                        <TextBlock Text="Gemini · gemini-2.5-pro (free)" VerticalAlignment="Center"/>
+                        <TextBlock Text="Gemini · 3-flash-preview" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="gemini-2.5-flash">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Gemini · 2.5-flash (stable fast)" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
                     <ComboBoxItem Tag="fireworks">
@@ -830,12 +841,68 @@
                         <TextBlock Text="Groq · llama-3.3-70b (free)" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
+                    <ComboBoxItem Tag="groq-gptoss120b">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/groq.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Groq · gpt-oss-120b (top quality)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="groq-llama4scout">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/groq.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Groq · llama-4-scout-17b (MoE, balanced)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="groq-llama8binstant">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/groq.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Groq · llama-3.1-8b instant (fastest)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="groq-qwen3-32b">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/groq.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Groq · qwen3-32b (multilingual)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
                     <ComboBoxItem Tag="openai">
                       <StackPanel Orientation="Horizontal" Spacing="8">
                         <Image Width="16" Height="16">
                           <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/openai.svg"/></Image.Source>
                         </Image>
-                        <TextBlock Text="OpenAI · gpt-4o-mini" VerticalAlignment="Center"/>
+                        <TextBlock Text="OpenAI · gpt-5-mini (fast + cheap)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="openai-gpt5">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/openai.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="OpenAI · gpt-5 (top)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="openai-gpt51">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/openai.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="OpenAI · gpt-5.1 (latest)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="openai-4o-mini">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/openai.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="OpenAI · gpt-4o-mini (legacy)" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
                     <ComboBoxItem Tag="openrouter">
@@ -854,12 +921,52 @@
                         <TextBlock Text="OpenRouter · DeepSeek R1 (free)" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
-                    <ComboBoxItem Tag="gemini">
+                    <ComboBoxItem Tag="gemini-3.1-pro">
                       <StackPanel Orientation="Horizontal" Spacing="8">
                         <Image Width="16" Height="16">
                           <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
                         </Image>
-                        <TextBlock Text="Gemini · gemini-2.5-flash (free)" VerticalAlignment="Center"/>
+                        <TextBlock Text="Gemini · 3.1-pro-preview (newest top)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="gemini-3.1-flash-lite">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Gemini · 3.1-flash-lite (newest fast)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="gemini-3-pro">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Gemini · 3-pro-preview" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="gemini-3-flash">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Gemini · 3-flash-preview" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="gemini-2.5-pro">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Gemini · 2.5-pro (stable top)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="gemini-2.5-flash">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Gemini · 2.5-flash (stable fast)" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
                     <ComboBoxItem Tag="anthropic">
@@ -875,7 +982,15 @@
                         <Image Width="16" Height="16">
                           <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/anthropic.svg"/></Image.Source>
                         </Image>
-                        <TextBlock Text="Anthropic · claude-sonnet-4" VerticalAlignment="Center"/>
+                        <TextBlock Text="Anthropic · claude-sonnet-4.6" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="anthropic-opus">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/anthropic.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Anthropic · claude-opus-4.7 (top)" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
                     <ComboBoxItem Tag="fireworks">

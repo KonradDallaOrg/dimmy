@@ -727,7 +727,7 @@ pub fn load_config_file() -> AppConfig {
     if let Some(path) = config_path() {
         if let Ok(data) = std::fs::read_to_string(&path) {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
-                return AppConfig {
+                let mut cfg = AppConfig {
                     api_url: v["api_url"]
                         .as_str()
                         .filter(|s| !s.is_empty())
@@ -901,10 +901,77 @@ pub fn load_config_file() -> AppConfig {
                         .unwrap_or(0.0),
                     app_rules: serde_json::from_value(v["app_rules"].clone()).unwrap_or_default(),
                 };
+                migrate_decommissioned_models(&mut cfg);
+                return cfg;
             }
         }
     }
     defaults
+}
+
+/// In-place migration: rewrite STT model ids that the provider has
+/// retired so the dispatcher doesn't HTTP-400 silently. Today: only
+/// the Groq `distil-whisper-large-v3-en` model (decommissioned by
+/// Groq 2026-05-15, returns `model_decommissioned`). Coerce to
+/// `whisper-large-v3-turbo` (their fastest current English+multi).
+///
+/// Logged so users tracing dimmy.log can see the migration kicked in
+/// once after upgrade.
+fn migrate_decommissioned_models(cfg: &mut AppConfig) {
+    // ── Groq STT: distil-whisper-large-v3-en decommissioned ────
+    // Returns HTTP 400 {"code":"model_decommissioned"}.
+    if cfg.api_model == "distil-whisper-large-v3-en" && cfg.api_url.contains("groq.com") {
+        log(&format!(
+            "[Config] migrating decommissioned Groq STT model '{}' → 'whisper-large-v3-turbo'",
+            cfg.api_model
+        ));
+        cfg.api_model = "whisper-large-v3-turbo".to_string();
+    }
+    // ── Gemini STT/LLM: gemini-3.1-flash / gemini-3.1-pro never
+    //    existed as plain ids (Google ships only `-lite` and
+    //    `-preview` suffixes for 3.1). Returns HTTP 404. Coerce to
+    //    the closest same-tier id that actually exists.
+    if cfg.api_url.contains("googleapis.com") {
+        // Plain 3.1 ids never existed → coerce to the closest
+        // working same-family id.
+        if cfg.api_model == "gemini-3.1-flash" {
+            log("[Config] migrating Gemini STT 'gemini-3.1-flash' → 'gemini-3.1-flash-lite'");
+            cfg.api_model = "gemini-3.1-flash-lite".to_string();
+        }
+        // STT Pro variants → Flash variants (UX policy 2026-05-15:
+        // Pro is slower without accuracy gain for transcription).
+        if cfg.api_model == "gemini-3.1-pro" || cfg.api_model == "gemini-3.1-pro-preview" {
+            log("[Config] migrating Gemini Pro STT → 'gemini-3.1-flash-lite' (Pro = LLM-only now)");
+            cfg.api_model = "gemini-3.1-flash-lite".to_string();
+        }
+        if cfg.api_model == "gemini-3-pro-preview" {
+            log("[Config] migrating Gemini 3-pro STT → 'gemini-3-flash-preview'");
+            cfg.api_model = "gemini-3-flash-preview".to_string();
+        }
+        if cfg.api_model == "gemini-2.5-pro" {
+            log("[Config] migrating Gemini 2.5-pro STT → 'gemini-2.5-flash'");
+            cfg.api_model = "gemini-2.5-flash".to_string();
+        }
+    }
+    if cfg.llm_api_url.contains("googleapis.com") {
+        if cfg.llm_api_model == "gemini-3.1-flash" {
+            log("[Config] migrating Gemini LLM 'gemini-3.1-flash' → 'gemini-3.1-flash-lite'");
+            cfg.llm_api_model = "gemini-3.1-flash-lite".to_string();
+        }
+        if cfg.llm_api_model == "gemini-3.1-pro" {
+            log("[Config] migrating Gemini LLM 'gemini-3.1-pro' → 'gemini-3.1-pro-preview'");
+            cfg.llm_api_model = "gemini-3.1-pro-preview".to_string();
+        }
+    }
+    // ── Anthropic LLM: upgrade Sonnet 4 (May 2025 dated id) to
+    //    Sonnet 4.6 (named-tier successor, October 2026). Old id
+    //    still works server-side but the dropdown labels Sonnet
+    //    entries as 4.6 so the config should match.
+    if cfg.llm_api_url.contains("anthropic.com") && cfg.llm_api_model == "claude-sonnet-4-20250514"
+    {
+        log("[Config] upgrading Anthropic LLM 'claude-sonnet-4-20250514' → 'claude-sonnet-4-6'");
+        cfg.llm_api_model = "claude-sonnet-4-6".to_string();
+    }
 }
 
 /// Migrate from old "pai-voice" config/keyring to "dimmy" for existing users.

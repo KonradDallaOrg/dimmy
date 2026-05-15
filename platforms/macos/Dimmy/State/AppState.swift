@@ -184,19 +184,21 @@ struct SttPreset: Identifiable, Hashable {
     static let presets: [SttPreset] = [
         SttPreset(id: "groq-whisper-turbo", displayName: "Groq \u{00B7} whisper-large-v3-turbo (free)", provider: .groq, apiUrl: "https://api.groq.com/openai/v1/audio/transcriptions", model: "whisper-large-v3-turbo"),
         SttPreset(id: "groq-whisper-v3", displayName: "Groq \u{00B7} whisper-large-v3 (free)", provider: .groq, apiUrl: "https://api.groq.com/openai/v1/audio/transcriptions", model: "whisper-large-v3"),
-        SttPreset(id: "groq-distil-en", displayName: "Groq \u{00B7} distil-whisper-en (free)", provider: .groq, apiUrl: "https://api.groq.com/openai/v1/audio/transcriptions", model: "distil-whisper-large-v3-en"),
+        // groq-distil-en removed 2026-05-15 — Groq decommissioned
+        // distil-whisper-large-v3-en (HTTP 400 model_decommissioned).
+        // Saved configs migrated by Rust `migrate_decommissioned_models`.
         SttPreset(id: "openai-whisper1", displayName: "OpenAI \u{00B7} whisper-1", provider: .openai, apiUrl: "https://api.openai.com/v1/audio/transcriptions", model: "whisper-1"),
         SttPreset(id: "openai-4o-transcribe", displayName: "OpenAI \u{00B7} gpt-4o-transcribe", provider: .openai, apiUrl: "https://api.openai.com/v1/audio/transcriptions", model: "gpt-4o-transcribe"),
         SttPreset(id: "openai-4o-mini-transcribe", displayName: "OpenAI \u{00B7} gpt-4o-mini-transcribe", provider: .openai, apiUrl: "https://api.openai.com/v1/audio/transcriptions", model: "gpt-4o-mini-transcribe"),
         SttPreset(id: "deepgram-nova3", displayName: "Deepgram \u{00B7} nova-3", provider: .deepgram, apiUrl: "https://api.deepgram.com/v1/listen", model: "nova-3"),
         SttPreset(id: "deepgram-nova2", displayName: "Deepgram \u{00B7} nova-2", provider: .deepgram, apiUrl: "https://api.deepgram.com/v1/listen", model: "nova-2"),
-        // Latest Gemini 3.1 preview line (May 2026) — same multimodal
-        // generateContent endpoint as 2.5, drop-in replacement. 2.5
-        // entries kept as fallback for users who prefer stable tier.
-        SttPreset(id: "gemini-3.1-flash", displayName: "Gemini \u{00B7} gemini-3.1-flash (free, latest)", provider: .gemini, apiUrl: "https://generativelanguage.googleapis.com/v1beta/models", model: "gemini-3.1-flash"),
-        SttPreset(id: "gemini-3.1-pro", displayName: "Gemini \u{00B7} gemini-3.1-pro (free, latest)", provider: .gemini, apiUrl: "https://generativelanguage.googleapis.com/v1beta/models", model: "gemini-3.1-pro"),
-        SttPreset(id: "gemini-flash", displayName: "Gemini \u{00B7} gemini-2.5-flash (free)", provider: .gemini, apiUrl: "https://generativelanguage.googleapis.com/v1beta/models", model: "gemini-2.5-flash"),
-        SttPreset(id: "gemini-pro", displayName: "Gemini \u{00B7} gemini-2.5-pro (free)", provider: .gemini, apiUrl: "https://generativelanguage.googleapis.com/v1beta/models", model: "gemini-2.5-pro"),
+        // Gemini STT — Flash-only (Pro is slower and pricier without
+        // accuracy gain for transcription, user pref 2026-05-15).
+        // Pro stays in LLM dropdown for rewrite + recap. Mirror of
+        // Win STT presets.
+        SttPreset(id: "gemini-3.1-flash-lite", displayName: "Gemini \u{00B7} gemini-3.1-flash-lite (newest fast)", provider: .gemini, apiUrl: "https://generativelanguage.googleapis.com/v1beta/models", model: "gemini-3.1-flash-lite"),
+        SttPreset(id: "gemini-3-flash", displayName: "Gemini \u{00B7} gemini-3-flash-preview", provider: .gemini, apiUrl: "https://generativelanguage.googleapis.com/v1beta/models", model: "gemini-3-flash-preview"),
+        SttPreset(id: "gemini-2.5-flash", displayName: "Gemini \u{00B7} gemini-2.5-flash (stable fast)", provider: .gemini, apiUrl: "https://generativelanguage.googleapis.com/v1beta/models", model: "gemini-2.5-flash"),
         // Phase 1 cloud expansion (2026-05-04 benchmark drove the model picks)
         SttPreset(id: "fireworks-whisper-turbo", displayName: "Fireworks \u{00B7} whisper-v3-turbo", provider: .fireworks, apiUrl: "https://audio-turbo.api.fireworks.ai/v1/audio/transcriptions", model: "whisper-v3-turbo"),
         SttPreset(id: "together-parakeet", displayName: "Together \u{00B7} parakeet-tdt-0.6b-v3", provider: .together, apiUrl: "https://api.together.xyz/v1/audio/transcriptions", model: "nvidia/parakeet-tdt-0.6b-v3"),
@@ -232,21 +234,35 @@ struct LlmPreset: Identifiable, Hashable {
     }
 
     static let presets: [LlmPreset] = [
+        // Curated cloud LLM presets — audit done 2026-05-15 against
+        // each provider's live /models endpoint. MIRROR of Win
+        // `LlmProviderPresets` + Linux LLM presets. Adding / removing
+        // here MUST be reflected on both other platforms.
+        // ── Groq (free for moderate use, OpenAI-compatible) ────
         LlmPreset(id: "groq-llama70b", displayName: "Groq \u{00B7} llama-3.3-70b (free)", apiUrl: "https://api.groq.com/openai/v1/chat/completions", model: "llama-3.3-70b-versatile"),
+        LlmPreset(id: "groq-gpt-oss-120b", displayName: "Groq \u{00B7} gpt-oss-120b (top quality)", apiUrl: "https://api.groq.com/openai/v1/chat/completions", model: "openai/gpt-oss-120b"),
+        LlmPreset(id: "groq-llama4-scout", displayName: "Groq \u{00B7} llama-4-scout-17b (MoE, balanced)", apiUrl: "https://api.groq.com/openai/v1/chat/completions", model: "meta-llama/llama-4-scout-17b-16e-instruct"),
+        LlmPreset(id: "groq-llama8b-instant", displayName: "Groq \u{00B7} llama-3.1-8b instant (fastest)", apiUrl: "https://api.groq.com/openai/v1/chat/completions", model: "llama-3.1-8b-instant"),
+        LlmPreset(id: "groq-qwen3-32b", displayName: "Groq \u{00B7} qwen3-32b (multilingual)", apiUrl: "https://api.groq.com/openai/v1/chat/completions", model: "qwen/qwen3-32b"),
         // OpenAI tier (May 2026): gpt-5 family on same chat-completions
         // endpoint — drop-in. Default = mini for speed+cost.
+        // ── OpenAI ─────────────────────────────────────────────
         LlmPreset(id: "openai-gpt5-mini", displayName: "OpenAI \u{00B7} gpt-5-mini (fast + cheap)", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-5-mini"),
-        LlmPreset(id: "openai-gpt5", displayName: "OpenAI \u{00B7} gpt-5 (best)", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-5"),
-        LlmPreset(id: "openai-4o-mini", displayName: "OpenAI \u{00B7} gpt-4o-mini", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-4o-mini"),
+        LlmPreset(id: "openai-gpt5", displayName: "OpenAI \u{00B7} gpt-5 (top)", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-5"),
+        LlmPreset(id: "openai-gpt51", displayName: "OpenAI \u{00B7} gpt-5.1 (latest)", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-5.1"),
+        LlmPreset(id: "openai-4o-mini", displayName: "OpenAI \u{00B7} gpt-4o-mini (legacy)", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-4o-mini"),
         LlmPreset(id: "openrouter-llama70b", displayName: "OpenRouter \u{00B7} llama-3.3-70b (free)", apiUrl: "https://openrouter.ai/api/v1/chat/completions", model: "meta-llama/llama-3.3-70b-instruct:free"),
         LlmPreset(id: "openrouter-deepseek", displayName: "OpenRouter \u{00B7} DeepSeek R1 (free)", apiUrl: "https://openrouter.ai/api/v1/chat/completions", model: "deepseek/deepseek-r1:free"),
         // Gemini 3.1 preview line (May 2026) — same generateContent endpoint.
-        LlmPreset(id: "gemini-3.1-flash", displayName: "Gemini \u{00B7} gemini-3.1-flash (free, latest)", apiUrl: "https://generativelanguage.googleapis.com/v1beta/models", model: "gemini-3.1-flash"),
-        LlmPreset(id: "gemini-3.1-pro", displayName: "Gemini \u{00B7} gemini-3.1-pro (free, latest)", apiUrl: "https://generativelanguage.googleapis.com/v1beta/models", model: "gemini-3.1-pro"),
-        LlmPreset(id: "gemini-flash", displayName: "Gemini \u{00B7} gemini-2.5-flash (free)", apiUrl: "https://generativelanguage.googleapis.com/v1beta/models", model: "gemini-2.5-flash"),
-        LlmPreset(id: "anthropic-haiku", displayName: "Anthropic \u{00B7} claude-haiku-4.5", apiUrl: "https://api.anthropic.com/v1/messages", model: "claude-haiku-4.5-20250315"),
-        LlmPreset(id: "anthropic-sonnet", displayName: "Anthropic \u{00B7} claude-sonnet-4", apiUrl: "https://api.anthropic.com/v1/messages", model: "claude-sonnet-4-20250514"),
-        LlmPreset(id: "anthropic-opus", displayName: "Anthropic \u{00B7} claude-opus-4.7", apiUrl: "https://api.anthropic.com/v1/messages", model: "claude-opus-4-7"),
+        // ── Gemini (preview = newest, stable = production) ─────
+        LlmPreset(id: "gemini-3-pro", displayName: "Gemini \u{00B7} gemini-3-pro-preview (top, new)", apiUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-3-pro-preview"),
+        LlmPreset(id: "gemini-3-flash", displayName: "Gemini \u{00B7} gemini-3-flash-preview (fast, new)", apiUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-3-flash-preview"),
+        LlmPreset(id: "gemini-2.5-pro", displayName: "Gemini \u{00B7} gemini-2.5-pro (stable top)", apiUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-2.5-pro"),
+        LlmPreset(id: "gemini-2.5-flash", displayName: "Gemini \u{00B7} gemini-2.5-flash (stable fast)", apiUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-2.5-flash"),
+        // ── Anthropic ──────────────────────────────────────────
+        LlmPreset(id: "anthropic-haiku", displayName: "Anthropic \u{00B7} claude-haiku-4.5", apiUrl: "https://api.anthropic.com/v1/messages", model: "claude-haiku-4-5-20251001"),
+        LlmPreset(id: "anthropic-sonnet", displayName: "Anthropic \u{00B7} claude-sonnet-4.6", apiUrl: "https://api.anthropic.com/v1/messages", model: "claude-sonnet-4-6"),
+        LlmPreset(id: "anthropic-opus", displayName: "Anthropic \u{00B7} claude-opus-4.7 (top)", apiUrl: "https://api.anthropic.com/v1/messages", model: "claude-opus-4-7"),
         // Claude Code (subscription) — synthetic provider using
         // user's Pro/Team/Max plan via the local `claude` CLI. No
         // API key needed; auth handled by `claude login` browser
@@ -402,10 +418,10 @@ enum SttProvider: String, CaseIterable, Identifiable {
 
     var models: [String] {
         switch self {
-        case .groq: return ["whisper-large-v3-turbo", "whisper-large-v3", "distil-whisper-large-v3-en"]
+        case .groq: return ["whisper-large-v3-turbo", "whisper-large-v3"] // distil-whisper-large-v3-en decommissioned 2026-05-15
         case .openai: return ["whisper-1", "gpt-4o-transcribe", "gpt-4o-mini-transcribe"]
         case .deepgram: return ["nova-2", "nova-3"]
-        case .gemini: return ["gemini-2.0-flash", "gemini-2.0-flash-lite"]
+        case .gemini: return ["gemini-3.1-flash-lite", "gemini-3-flash-preview", "gemini-2.5-flash"]
         case .fireworks: return ["whisper-v3-turbo"]  // whisper-v3 large rejected by 2026-05-04 benchmark (too slow)
         case .together: return ["nvidia/parakeet-tdt-0.6b-v3", "openai/whisper-large-v3"]  // Voxtral skipped (lower match%)
         case .custom: return []
