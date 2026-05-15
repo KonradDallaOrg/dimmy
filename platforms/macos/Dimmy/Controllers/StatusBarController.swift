@@ -61,6 +61,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         statusItem?.menu = menu
 
         // Refresh icon to reflect current state.
+        refreshIcon()
+    }
+
+    private func refreshIcon() {
         updateIcon(for: appState.recordingState, hotkey: appState.hotkeyStatus)
     }
 
@@ -73,16 +77,29 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private func observeState() {
         appState.$recordingState
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] state in
-                self?.updateIcon(for: state, hotkey: self?.appState.hotkeyStatus ?? .uninstalled)
-            }
+            .sink { [weak self] _ in self?.refreshIcon() }
             .store(in: &cancellables)
 
         appState.$hotkeyStatus
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] status in
-                self?.updateIcon(for: self?.appState.recordingState ?? .idle, hotkey: status)
-            }
+            .sink { [weak self] _ in self?.refreshIcon() }
+            .store(in: &cancellables)
+
+        // Meeting state has its own publisher (set by the
+        // `meeting_state` FFI event in DimmyCore.handleEvent). Without
+        // this subscription the menubar icon stayed on the idle
+        // waveform.circle while a meeting was recording, because the
+        // dictation `recordingState` is `.idle` throughout a meeting —
+        // user reported "menu bar icon does not show recording" on
+        // 2026-05-15.
+        appState.$meetingActive
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refreshIcon() }
+            .store(in: &cancellables)
+
+        appState.$meetingIsPaused
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refreshIcon() }
             .store(in: &cancellables)
 
         appState.$showInMenuBar
@@ -100,6 +117,25 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     private func updateIcon(for state: RecordingState, hotkey: HotkeyStatus) {
         guard let button = statusItem?.button else { return }
+
+        // Meeting state takes precedence over dictation state — meetings
+        // last for minutes/hours and dictation `recordingState` stays
+        // `.idle` for the whole duration. Without this branch the icon
+        // would not reflect that a meeting is recording.
+        if appState.meetingActive {
+            if appState.meetingIsPaused {
+                button.image = Self.menuBarImage(symbolName: "pause.circle.fill",
+                                                 accessibility: "Dimmy - Meeting paused",
+                                                 paletteColor: .systemOrange)
+                button.toolTip = "Meeting paused"
+            } else {
+                button.image = Self.menuBarImage(symbolName: "record.circle.fill",
+                                                 accessibility: "Dimmy - Meeting recording",
+                                                 paletteColor: .systemRed)
+                button.toolTip = "Meeting recording"
+            }
+            return
+        }
 
         // Hotkey health overlays a small yellow badge on top of the regular
         // Dimmy icon — keeps the brand recognisable in the menubar instead
