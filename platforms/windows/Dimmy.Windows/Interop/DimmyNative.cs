@@ -239,6 +239,24 @@ public static class DimmyNative
     public static extern int dimmy_user_dict_list_json(
         byte[] outBuf, int bufLen);
 
+    // ── Recap LLM provider key (multi-vendor + multi-scope keystore) ─
+    /// Save an API key for a specific provider into the chosen
+    /// keystore scope, WITHOUT changing `llm_api_url`. Used by the
+    /// Recap section: pass scope="llm" for the LLM-scope key (cross-
+    /// vendor recap that reuses the LLM scope) or scope="recap" for
+    /// the dedicated Recap-scope key (toggle "Use my saved <Vendor>
+    /// key" OFF). Empty `key` clears the stored key for that
+    /// (scope, vendor) pair.
+    /// Returns:
+    ///   0  saved/cleared
+    ///   -1 invalid arg (NULL, bad UTF-8, unknown scope, unknown / unmapped vendor)
+    ///   -2 keystore write failed
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_save_llm_provider_key(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string scope,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string provider,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string key);
+
     // ── Notion integration ──────────────────────────────────────────
     /// Save the user's Notion integration token to the AES-256 keystore.
     /// Empty string clears it. Returns 0 on success, -1 on failure.

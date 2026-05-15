@@ -366,6 +366,19 @@ int32_t dimmy_meeting_resume(void);
 /// while a meeting started from the pill is still running).
 int32_t dimmy_meeting_is_paused(void);
 
+// ── Recap LLM provider key (multi-vendor keystore) ───────────────
+
+/// Save an API key for a specific provider into the chosen keystore
+/// scope, WITHOUT changing `llm_api_url`. Pass `scope_ptr="llm"` for
+/// the LLM-scope (cross-vendor recap that reuses LLM scope) or
+/// `scope_ptr="recap"` for the dedicated Recap-scope (toggle "Use my
+/// saved <Vendor> key" OFF). Empty `key_ptr` clears the stored key
+/// for that (scope, provider) pair.
+/// Returns: 0 saved/cleared, -1 invalid arg, -2 keystore write failed.
+int32_t dimmy_save_llm_provider_key(const char * _Nonnull scope_ptr,
+                                    const char * _Nonnull provider_ptr,
+                                    const char * _Nonnull key_ptr);
+
 // ── Notion integration ────────────────────────────────────────────
 
 /// Save the user's Notion integration token to the AES-256 keystore.

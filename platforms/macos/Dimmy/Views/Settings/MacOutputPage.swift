@@ -11,6 +11,13 @@ struct MacOutputPage: View {
     @State private var llmKeyInput: String = ""
     @State private var showLlmKeyField: Bool = false
 
+    // Recap-vendor key save — separate field from the dictation
+    // llmKeyInput. Routes to `dimmy_save_llm_provider_key` under
+    // KeyringScope::Llm(<recap_provider>), leaving the dictation
+    // llm_api_url + dictation key untouched. Used only when the
+    // user picks a recap provider different from the dictation one.
+    @State private var recapKeyInput: String = ""
+
     @State private var localLlmExists: Bool = false
     @State private var llmDownloadFailed: String? = nil
 
@@ -105,13 +112,14 @@ struct MacOutputPage: View {
         }
     }
 
-    /// Recap model's effective provider tag. Drives both the auth
-    /// gating (Anthropic-only subscription option) and the cross-
-    /// vendor warning ("recap call reuses the LLM URL+key — different
-    /// vendors fail").
+    /// Recap effective provider tag — derived purely from the chosen
+    /// recap model id. claude-* → anthropic, gpt-/o3 → openai,
+    /// gemini-* → gemini, "" (Auto) or unknown → "" (falls back to
+    /// the dictation provider in the dispatcher).
     ///
-    /// Empty when recap is on Auto (inherits LLM provider directly,
-    /// so no separate UI is needed).
+    /// Drives auth gating (subscription only for Anthropic) and the
+    /// conditional "Recap API key" field that appears when the
+    /// model's vendor differs from the dictation LLM.
     private var recapProviderTag: String {
         ProviderTagging.providerTag(forRecapModel: appState.recapModelOverride)
     }
@@ -136,6 +144,47 @@ struct MacOutputPage: View {
     /// (no subscription connection yet).
     private var recapSubscriptionAvailable: Bool {
         recapProviderTag == "anthropic" && appState.claudeCodeReady
+    }
+
+    /// True when a Recap API key for the chosen vendor is already
+    /// saved in the keystore. Surfaces a green check next to the key
+    /// field so the user knows they don't need to re-paste. Read
+    /// on-demand from the Rust config snapshot
+    /// (`has_<vendor>_llm_key` boolean fields) — Mac AppState
+    /// doesn't mirror these per-vendor flags as @Published yet, so
+    /// we fetch directly. Snapshot read is cheap (~200 µs).
+    private var recapKeyAlreadySaved: Bool {
+        let vendor = appState.recapProvider
+        guard !vendor.isEmpty,
+              let cfg = DimmyCore.shared.getConfig(),
+              let has = cfg["has_\(vendor)_llm_key"] as? Bool
+        else { return false }
+        return has
+    }
+
+    /// Persist the recap-vendor's key via the dedicated FFI. Vendor
+    /// is DERIVED from the chosen recap model (no separate provider
+    /// control). Routes to `KeyringScope::Llm(<vendor>)` without
+    /// touching the dictation llm_api_url. Empty key clears the entry.
+    private func saveRecapProviderKey() {
+        let vendor = recapProviderTag
+        guard !vendor.isEmpty, vendor != llmProviderTag else { return }
+        // scope="recap" → dedicated Recap(<vendor>) keystore entry,
+        // separate from the LLM scope for the same vendor.
+        let rc = "recap".withCString { sp -> Int32 in
+            vendor.withCString { vp in
+                recapKeyInput.withCString { kp in
+                    dimmy_save_llm_provider_key(sp, vp, kp)
+                }
+            }
+        }
+        if rc == 0 {
+            recapKeyInput = ""
+            // No explicit refresh needed — `recapKeyAlreadySaved`
+            // reads `dimmy_get_config_json` on demand each render.
+        } else {
+            NSLog("[Auth] dimmy_save_llm_provider_key rc=\(rc) provider=\(vendor)")
+        }
     }
 
     /// Meeting / long-dictation recap model picker. Always visible so a
@@ -190,30 +239,6 @@ struct MacOutputPage: View {
                     .labelsHidden()
                     .pickerStyle(.menu)
                     .frame(minWidth: 280)
-                }
-
-                // Advanced — different provider for recap than for
-                // dictation. The TextField writes `recap_api_url`;
-                // empty = inherit `llm_api_url` (default for users
-                // who don't need a separate recap provider).
-                if appState.showAdvanced {
-                    MacRow(
-                        "Recap endpoint URL (override)",
-                        description: "Empty = use the LLM provider URL above. Set this to point the recap call at a different vendor (e.g. Anthropic for recap while dictation runs on Groq). The Rust core picks the matching API key from the keystore.",
-                        showsDivider: true
-                    ) {
-                        TextField("https://api.anthropic.com/v1/messages",
-                                  text: Binding<String>(
-                                    get: { appState.recapApiUrl },
-                                    set: { newValue in
-                                        appState.recapApiUrl = newValue
-                                            .trimmingCharacters(in: .whitespaces)
-                                        persistConfig()
-                                    }
-                                  ))
-                        .textFieldStyle(.roundedBorder)
-                        .frame(minWidth: 320)
-                    }
                 }
 
                 // Subscription toggle for the recap call site —
@@ -601,7 +626,11 @@ struct MacOutputPage: View {
 
     private func saveLlmKey() {
         guard !llmKeyInput.isEmpty else { return }
-        var config = appState.toRustConfig()
+        // includeLlm:true — user is wiring up the LLM key and the
+        // RECAP section + LLM URL fields must travel with it, else
+        // the Rust core sees only `llm_api_key` and the URL/model
+        // chosen in this same UI step never makes it to disk.
+        var config = appState.toRustConfig(includeLlm: true, includeRecap: true)
         config["llm_api_key"] = llmKeyInput
         DimmyCore.shared.setConfig(config)
         llmKeyInput = ""
@@ -730,6 +759,12 @@ struct MacOutputPage: View {
     }
 
     private func persistConfig() {
-        DimmyCore.shared.setConfig(appState.toRustConfig())
+        // MacOutputPage owns LLM provider + Recap settings. ALL its
+        // saves must include both flags, otherwise the Picker /
+        // Toggle / TextField interactions in this page are silently
+        // dropped. Found 2026-05-15 — same bug pattern as Notion.
+        DimmyCore.shared.setConfig(
+            appState.toRustConfig(includeLlm: true, includeRecap: true)
+        )
     }
 }
