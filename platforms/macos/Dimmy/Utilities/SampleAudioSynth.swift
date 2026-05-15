@@ -19,13 +19,14 @@ enum SampleAudioSynth {
     /// freestanding helper so we don't need an FFI getter for a path
     /// that's stable by Application Support convention.
     static func historyAudioDir() -> URL? {
-        guard let support = try? FileManager.default.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        ) else { return nil }
-        let dir = support.appendingPathComponent("dimmy/history_audio", isDirectory: true)
+        // Honour the build flavor — staging writes under
+        // `dimmy-staging/history_audio/`, prod under `dimmy/`.
+        // Hardcoding "dimmy" made the staging "Seed sample history"
+        // button write into the prod dir while the staging-flavor
+        // history.db scanned the staging dir — sample rows linked to
+        // audio paths that didn't exist for that flavor.
+        guard let dir = DimmyCore.shared.configDirURL?
+            .appendingPathComponent("history_audio", isDirectory: true) else { return nil }
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }

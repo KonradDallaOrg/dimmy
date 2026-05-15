@@ -727,7 +727,7 @@ private func crashLogPath() -> String {
     // and we fall back to /tmp.
     let dir = DimmyCore.shared.configDirURL
         ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
-            .first?.appendingPathComponent("dimmy", isDirectory: true)
+            .first?.appendingPathComponent(DimmyCore.shared.configDirName, isDirectory: true)
     return dir?.appendingPathComponent("dimmy.log").path
         ?? "/tmp/dimmy-crash.log"
 }
