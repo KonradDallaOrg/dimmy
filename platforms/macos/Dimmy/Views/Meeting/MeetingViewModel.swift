@@ -118,6 +118,22 @@ final class MeetingViewModel: ObservableObject {
                 self.chunkSummary = count > 0 ? "\(count) chunks" : ""
             }
             .store(in: &liveTranscriptBag)
+        // Pause state is also event-driven: DimmyCore.handleEvent
+        // writes `meeting_state` → `AppState.meetingIsPaused`. Mirror
+        // it onto `self.isPaused` (plus the statusLabel hint) so the
+        // recording bar / banner read a single vm property instead of
+        // reaching into AppState. Replaces the old 1 Hz mirror in
+        // pollTick — no polling needed.
+        AppState.shared.$meetingIsPaused
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] paused in
+                guard let self else { return }
+                if paused != self.isPaused {
+                    self.isPaused = paused
+                    self.statusLabel = paused ? "Paused" : "Recording"
+                }
+            }
+            .store(in: &liveTranscriptBag)
     }
 
     // ── Errors ─────────────────────────────────────────────────────
@@ -595,7 +611,14 @@ final class MeetingViewModel: ObservableObject {
 
     private func startRecordingPolling() {
         stopRecordingPolling()
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+        // 1 Hz — CLAUDE.md "documented exceptions" lists the recording
+        // clock at 1 Hz for the elapsed-time label. The old 2 s
+        // interval made the timer visibly jump (00:00 → 00:02 → 00:04)
+        // and felt frozen. pollTick is cheap (Date diff + a Combine
+        // mirror); ticking at 1 Hz is well within budget. FFI poll for
+        // pause state was already removed (event-driven via
+        // `meeting_state`), so no extra Rust work.
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.pollTick() }
         }
         amplitudeTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 12.0, repeats: true) { [weak self] _ in
@@ -616,35 +639,23 @@ final class MeetingViewModel: ObservableObject {
     }
 
     private func pollTick() {
-        if let started = startedAt {
-            let secs = Int(Date().timeIntervalSince(started))
-            let h = secs / 3600
-            let m = (secs % 3600) / 60
-            let s = secs % 60
-            timerLabel = String(format: "%02d:%02d:%02d", h, m, s)
-        }
-        // Pause state now flows from the `meeting_state` event in
-        // DimmyCore.handleEvent into AppState.shared.meetingIsPaused —
-        // no need to re-poll FFI here. Mirror the shared flag so
-        // existing `vm.isPaused` consumers in MeetingRecordingView
-        // keep working without a constructor-signature change.
-        let livePaused = AppState.shared.meetingIsPaused
-        if livePaused != isPaused {
-            isPaused = livePaused
-            statusLabel = isPaused ? "Paused" : "Recording"
-        }
-
-        // Don't fight a sidebar selection: only refresh transcript if
-        // the user is on the live view, not browsing a past meeting.
-        if browsingPastMeeting { return }
-        guard let url = activeMeetingURL() else { return }
-        let transcriptsPath = url.appendingPathComponent("transcripts.txt")
-        if let content = try? String(contentsOf: transcriptsPath, encoding: .utf8),
-           !content.isEmpty {
-            transcript = content
-            let chunkCount = content.split(separator: "\n", omittingEmptySubsequences: true).count
-            chunkSummary = "\(chunkCount) chunk\(chunkCount == 1 ? "" : "s")"
-        }
+        // Pure local clock — no FFI poll, no disk read. CLAUDE.md
+        // "documented exceptions" allows the recording clock at 1 Hz.
+        // Pause state and live transcript come in via Combine from
+        // AppState (event-driven, hooked in init()), so they're NOT
+        // mirrored here anymore. Before this cleanup, the function:
+        //   • re-read AppState.meetingIsPaused on every tick
+        //   • re-read transcripts.txt off disk on every tick AND
+        //     overwrote the Combine-driven `self.transcript`,
+        //     creating a redundant race against the `meeting_chunk`
+        //     event pipe.
+        // Both removed — the timer label is the only thing left.
+        guard let started = startedAt else { return }
+        let secs = Int(Date().timeIntervalSince(started))
+        let h = secs / 3600
+        let m = (secs % 3600) / 60
+        let s = secs % 60
+        timerLabel = String(format: "%02d:%02d:%02d", h, m, s)
     }
 
     private func amplitudeTick() {

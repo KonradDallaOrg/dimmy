@@ -335,9 +335,35 @@ struct MacOutputPage: View {
                         showsDivider: recapUseSameKeyToggleShouldShow || recapKeyFieldShouldShow
                     ) {
                         Toggle("", isOn: Binding(
-                            get: { appState.recapAuthMethod == "subscription" },
+                            // GET reflects the EFFECTIVE recap auth, not
+                            // just the literal field. When the user has
+                            // never touched the toggle (`recapAuthMethod`
+                            // empty) we inherit from the dictation LLM —
+                            // so if LLM is on subscription the toggle
+                            // should READ as ON even though the field is
+                            // blank, otherwise the user sees "OFF" but
+                            // recap is still being routed through CC.
+                            get: {
+                                if appState.recapAuthMethod == "subscription" { return true }
+                                if appState.recapAuthMethod.isEmpty
+                                    && appState.llmAuthMethod == "subscription" {
+                                    return true
+                                }
+                                return false
+                            },
+                            // SET writes an EXPLICIT choice. Critical:
+                            // turning the toggle OFF writes "api_key",
+                            // NOT empty — otherwise "" would re-trigger
+                            // the inherit-from-LLM rule and the toggle
+                            // would silently flip back to ON whenever
+                            // LLM is on subscription. The user's report
+                            // "se in llm uso anthropic con subs sono
+                            // obbligato a usare subs anche in recap"
+                            // was exactly this loop. Explicit "api_key"
+                            // breaks out of inheritance and lets recap
+                            // use its own (or shared) API key.
                             set: { newValue in
-                                appState.recapAuthMethod = newValue ? "subscription" : ""
+                                appState.recapAuthMethod = newValue ? "subscription" : "api_key"
                                 persistConfig()
                             }
                         ))
@@ -910,6 +936,21 @@ struct MacOutputPage: View {
                 if let preset = LlmPreset.presets.first(where: { $0.id == newValue }) {
                     appState.llmApiUrl = preset.apiUrl
                     appState.llmApiModel = preset.model
+                    // Symmetric counterpart of `normalizeLlmUrlForAuth`:
+                    // when the user picks a non-Anthropic preset while
+                    // the dictation LLM was on subscription auth, snap
+                    // `llmAuthMethod` back to "api_key". The Authentication
+                    // picker only renders for Anthropic, so a stale
+                    // "subscription" string after switching to Gemini /
+                    // OpenAI / etc. silently hid the LLM API key card
+                    // with no way for the user to flip it back. User
+                    // report: "se in llm metto antropic e subs e poi
+                    // cambio e metto gemini, non riesco più a inserire
+                    // la apikey per llm."
+                    let newTag = ProviderTagging.providerTag(forUrl: preset.apiUrl)
+                    if newTag != "anthropic" && appState.llmAuthMethod == "subscription" {
+                        appState.llmAuthMethod = "api_key"
+                    }
                     persistConfig()
                 }
             }
