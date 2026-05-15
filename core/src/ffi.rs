@@ -1179,6 +1179,29 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         }
         Err(e) => {
             let err_msg = format!("{}", e);
+            // Write the actual error to dimmy.log so failures don't go
+            // silent. Truncate to 300 chars per CLAUDE.md "error bodies
+            // ≤ 200 chars" rule (with slack for the prefix). The
+            // upstream `TranscribeError::Display` already strips the
+            // response body before this point, so no secret leak.
+            // Burned 2026-05-15 — Groq decommissioned the
+            // distil-whisper-large-v3-en model and Dimmy emitted only
+            // `transcription.failed` telemetry without the body, so
+            // the user had no way to find out why dictation broke.
+            let truncated = if err_msg.len() > 300 {
+                format!("{}…", &err_msg[..300])
+            } else {
+                err_msg.clone()
+            };
+            log(&format!(
+                "[STT] {} transcription failed: {}",
+                if stt_mode == "local" {
+                    "local"
+                } else {
+                    "cloud"
+                },
+                truncated
+            ));
             emit_event(
                 "error",
                 &format!(r#"{{"message":"{}"}}"#, err_msg.replace('"', "\\\"")),

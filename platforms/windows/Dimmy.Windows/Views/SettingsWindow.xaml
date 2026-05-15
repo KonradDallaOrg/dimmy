@@ -437,14 +437,13 @@
                         <TextBlock Text="Groq · whisper-large-v3 (free)" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
-                    <ComboBoxItem Tag="groq-distil">
-                      <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Image Width="16" Height="16">
-                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/groq.svg"/></Image.Source>
-                        </Image>
-                        <TextBlock Text="Groq · distil-whisper-en (free)" VerticalAlignment="Center"/>
-                      </StackPanel>
-                    </ComboBoxItem>
+                    <!-- "Groq · distil-whisper-en" removed 2026-05-15 —
+                         Groq decommissioned the distil-whisper-large-v3-en
+                         model (HTTP 400 model_decommissioned). Saved
+                         configs that still point at it are migrated to
+                         whisper-large-v3-turbo by
+                         SettingsViewModel.LoadFromJson + the Rust core
+                         `migrate_decommissioned_models` helper. -->
                     <ComboBoxItem Tag="openai">
                       <StackPanel Orientation="Horizontal" Spacing="8">
                         <Image Width="16" Height="16">

@@ -727,7 +727,7 @@ pub fn load_config_file() -> AppConfig {
     if let Some(path) = config_path() {
         if let Ok(data) = std::fs::read_to_string(&path) {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
-                return AppConfig {
+                let mut cfg = AppConfig {
                     api_url: v["api_url"]
                         .as_str()
                         .filter(|s| !s.is_empty())
@@ -901,10 +901,30 @@ pub fn load_config_file() -> AppConfig {
                         .unwrap_or(0.0),
                     app_rules: serde_json::from_value(v["app_rules"].clone()).unwrap_or_default(),
                 };
+                migrate_decommissioned_models(&mut cfg);
+                return cfg;
             }
         }
     }
     defaults
+}
+
+/// In-place migration: rewrite STT model ids that the provider has
+/// retired so the dispatcher doesn't HTTP-400 silently. Today: only
+/// the Groq `distil-whisper-large-v3-en` model (decommissioned by
+/// Groq 2026-05-15, returns `model_decommissioned`). Coerce to
+/// `whisper-large-v3-turbo` (their fastest current English+multi).
+///
+/// Logged so users tracing dimmy.log can see the migration kicked in
+/// once after upgrade.
+fn migrate_decommissioned_models(cfg: &mut AppConfig) {
+    if cfg.api_model == "distil-whisper-large-v3-en" && cfg.api_url.contains("groq.com") {
+        log(&format!(
+            "[Config] migrating decommissioned Groq STT model '{}' → 'whisper-large-v3-turbo'",
+            cfg.api_model
+        ));
+        cfg.api_model = "whisper-large-v3-turbo".to_string();
+    }
 }
 
 /// Migrate from old "pai-voice" config/keyring to "dimmy" for existing users.

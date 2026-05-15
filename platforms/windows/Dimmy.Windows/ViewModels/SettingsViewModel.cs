@@ -35,7 +35,11 @@ public partial class SettingsViewModel : ObservableObject
     [
         new("Groq", "https://api.groq.com/openai/v1/audio/transcriptions", "whisper-large-v3-turbo"),
         new("Groq-v3", "https://api.groq.com/openai/v1/audio/transcriptions", "whisper-large-v3"),
-        new("Groq-Distil", "https://api.groq.com/openai/v1/audio/transcriptions", "distil-whisper-large-v3-en"),
+        // "Groq-Distil" (distil-whisper-large-v3-en) removed
+        // 2026-05-15 — decommissioned by Groq, returns
+        // HTTP 400 model_decommissioned. Migration in
+        // SettingsViewModel.LoadFromJson coerces saved
+        // configs to whisper-large-v3-turbo.
         new("OpenAI", "https://api.openai.com/v1/audio/transcriptions", "whisper-1"),
         new("OpenAI-4o", "https://api.openai.com/v1/audio/transcriptions", "gpt-4o-transcribe"),
         new("OpenAI-4o-mini", "https://api.openai.com/v1/audio/transcriptions", "gpt-4o-mini-transcribe"),
@@ -456,6 +460,16 @@ public partial class SettingsViewModel : ObservableObject
             LlmTone = r.TryGetProperty("llm_tone", out var tone) ? tone.GetString() ?? "none" : "none";
             ApiUrl = r.TryGetProperty("api_url", out var url) ? url.GetString() ?? "" : "";
             ApiModel = r.TryGetProperty("api_model", out var model) ? model.GetString() ?? "" : "";
+            // Decommissioned-model migration (mirror of Rust
+            // `migrate_decommissioned_models`). Groq retired
+            // `distil-whisper-large-v3-en` 2026-05-15 → silently
+            // upgrade saved configs to `whisper-large-v3-turbo` so
+            // dictation doesn't HTTP-400 on next call.
+            if (ApiModel == "distil-whisper-large-v3-en"
+                && ApiUrl.Contains("groq.com", StringComparison.OrdinalIgnoreCase))
+            {
+                ApiModel = "whisper-large-v3-turbo";
+            }
             HasApiKey = r.TryGetProperty("has_key", out var hk) && hk.GetBoolean();
             Prompt = r.TryGetProperty("prompt", out var prompt) ? prompt.GetString() ?? "" : "";
             Shortcut = r.TryGetProperty("shortcut", out var sc) ? sc.GetString() ?? "Win+Alt" : "Win+Alt";

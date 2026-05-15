@@ -184,7 +184,9 @@ struct SttPreset: Identifiable, Hashable {
     static let presets: [SttPreset] = [
         SttPreset(id: "groq-whisper-turbo", displayName: "Groq \u{00B7} whisper-large-v3-turbo (free)", provider: .groq, apiUrl: "https://api.groq.com/openai/v1/audio/transcriptions", model: "whisper-large-v3-turbo"),
         SttPreset(id: "groq-whisper-v3", displayName: "Groq \u{00B7} whisper-large-v3 (free)", provider: .groq, apiUrl: "https://api.groq.com/openai/v1/audio/transcriptions", model: "whisper-large-v3"),
-        SttPreset(id: "groq-distil-en", displayName: "Groq \u{00B7} distil-whisper-en (free)", provider: .groq, apiUrl: "https://api.groq.com/openai/v1/audio/transcriptions", model: "distil-whisper-large-v3-en"),
+        // groq-distil-en removed 2026-05-15 — Groq decommissioned
+        // distil-whisper-large-v3-en (HTTP 400 model_decommissioned).
+        // Saved configs migrated by Rust `migrate_decommissioned_models`.
         SttPreset(id: "openai-whisper1", displayName: "OpenAI \u{00B7} whisper-1", provider: .openai, apiUrl: "https://api.openai.com/v1/audio/transcriptions", model: "whisper-1"),
         SttPreset(id: "openai-4o-transcribe", displayName: "OpenAI \u{00B7} gpt-4o-transcribe", provider: .openai, apiUrl: "https://api.openai.com/v1/audio/transcriptions", model: "gpt-4o-transcribe"),
         SttPreset(id: "openai-4o-mini-transcribe", displayName: "OpenAI \u{00B7} gpt-4o-mini-transcribe", provider: .openai, apiUrl: "https://api.openai.com/v1/audio/transcriptions", model: "gpt-4o-mini-transcribe"),
@@ -402,7 +404,7 @@ enum SttProvider: String, CaseIterable, Identifiable {
 
     var models: [String] {
         switch self {
-        case .groq: return ["whisper-large-v3-turbo", "whisper-large-v3", "distil-whisper-large-v3-en"]
+        case .groq: return ["whisper-large-v3-turbo", "whisper-large-v3"] // distil-whisper-large-v3-en decommissioned 2026-05-15
         case .openai: return ["whisper-1", "gpt-4o-transcribe", "gpt-4o-mini-transcribe"]
         case .deepgram: return ["nova-2", "nova-3"]
         case .gemini: return ["gemini-2.0-flash", "gemini-2.0-flash-lite"]
