@@ -46,28 +46,12 @@ struct MeetingRecordingView: View {
             }
             Spacer()
             HStack(spacing: 6) {
-                if vm.browsingPastMeeting {
-                    // Prominent CTA so the user spots it next to the
-                    // tucked-away Pause/Stop buttons. While browsing a
-                    // past meeting the sidebar row is highlighted but
-                    // the main view still shows the live recording —
-                    // without this prominent button users miss the
-                    // way back. Tint accent + .borderedProminent so it
-                    // visually outranks the regular Pause button.
-                    Button(action: { vm.backToLive() }) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "dot.radiowaves.left.and.right")
-                                .font(.system(size: 13, weight: .semibold))
-                            Text("Back to live")
-                                .font(.system(size: 12, weight: .semibold))
-                        }
-                        .padding(.horizontal, 6)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.accentColor)
-                    .help("Return to the live recording view")
-                    .keyboardShortcut("l", modifiers: [.command])
-                }
+                // Back-to-live CTA lives in the parent MeetingView's
+                // `liveRecordingBanner` now — it's only relevant when
+                // `vm.browsingPastMeeting == true`, and that state
+                // routes the main panel to MeetingDoneView (not here),
+                // so this button would have been unreachable from this
+                // view.
                 Button(action: { vm.togglePause() }) {
                     HStack(spacing: 6) {
                         Image(systemName: vm.isPaused ? "play.fill" : "pause.fill")

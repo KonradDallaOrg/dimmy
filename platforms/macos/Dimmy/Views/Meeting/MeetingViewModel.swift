@@ -522,6 +522,15 @@ final class MeetingViewModel: ObservableObject {
 
     func backToLive() {
         guard DimmyCore.shared.meetingIsActive else { return }
+        // Flush any pending notes for the past meeting BEFORE clearing
+        // selectedDir. MeetingDoneView fires `vm.saveNotes()` on its
+        // `.onDisappear`, but by that point selectedDir would already
+        // be nil → `notesTargetDir` falls back to `activeMeetingDir`
+        // → the past meeting's `doneNotes` buffer would be written
+        // into the LIVE meeting's `notes.md`. Saving here (while
+        // selectedDir still points at the past meeting) lets the
+        // onDisappear save become a harmless idempotent rewrite.
+        saveNotes()
         browsingPastMeeting = false
         selectedDir = nil
         attachToInflightMeeting()
