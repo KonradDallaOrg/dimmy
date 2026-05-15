@@ -114,10 +114,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             .store(in: &cancellables)
     }
 
-    private func refreshIcon() {
-        updateIcon(for: appState.recordingState, hotkey: appState.hotkeyStatus)
-    }
-
     private func updateIcon(for state: RecordingState, hotkey: HotkeyStatus) {
         guard let button = statusItem?.button else { return }
 
@@ -150,22 +146,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         }
 
         button.toolTip = nil
-
-        // Dictation states win over meeting states when both are non-idle
-        // (you can still do a dictation hotkey during a meeting). Only
-        // when dictation is idle do we surface the meeting status.
-        if case .idle = state, appState.meetingActive {
-            if appState.meetingIsPaused {
-                button.image = Self.menuBarImage(symbolName: "pause.circle.fill",
-                                                 accessibility: "Dimmy - Meeting paused",
-                                                 paletteColor: .systemOrange)
-            } else {
-                button.image = Self.menuBarImage(symbolName: "waveform.circle.fill",
-                                                 accessibility: "Dimmy - Meeting recording",
-                                                 paletteColor: .systemRed)
-            }
-            return
-        }
 
         switch state {
         case .idle:
