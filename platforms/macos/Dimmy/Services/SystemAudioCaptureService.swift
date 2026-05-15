@@ -74,7 +74,42 @@ final class SystemAudioCaptureService: NSObject {
             config.width = 2
             config.height = 2
 
-            let filter = SCContentFilter(display: display, excludingWindows: [])
+            // Exclude Apple's media-content apps from capture so
+            // ScreenCaptureKit doesn't trigger the kTCCServiceMediaLibrary
+            // / kTCCServicePhotos TCC prompts on macOS Sequoia 15.x.
+            // SCKit asks for those grants when `capturesAudio=true` AND
+            // one of these apps is currently producing audio — even
+            // though our actual goal is to capture meeting / browser /
+            // Zoom output, not the user's music library. Dropping the
+            // media apps from the capture filter keeps audio_system.wav
+            // focused on what users actually want transcribed AND
+            // sidesteps the prompts. Bundle ids align with
+            // AppContextCapture.mediaAppBundleIds so the same allowlist
+            // governs both icon-resolution and audio capture.
+            let mediaBundleIds: Set<String> = [
+                "com.apple.Music",
+                "com.apple.Photos",
+                "com.apple.TV",
+                "com.apple.Podcasts",
+                "com.apple.iTunes",
+            ]
+            let mediaApps = content.applications.filter {
+                mediaBundleIds.contains($0.bundleIdentifier)
+            }
+            let filter: SCContentFilter
+            if mediaApps.isEmpty {
+                filter = SCContentFilter(display: display, excludingWindows: [])
+            } else {
+                filter = SCContentFilter(
+                    display: display,
+                    excludingApplications: mediaApps,
+                    exceptingWindows: []
+                )
+                NSLog(
+                    "[SystemAudio] excluding %d media app(s) from capture filter",
+                    mediaApps.count
+                )
+            }
             let s = SCStream(filter: filter, configuration: config, delegate: nil)
             try s.addStreamOutput(
                 self, type: .audio,
