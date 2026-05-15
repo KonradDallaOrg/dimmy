@@ -888,7 +888,7 @@
 					"$(inherited)",
 					"$(PROJECT_DIR)/../../core/target/aarch64-apple-darwin/release",
 				);
-				MARKETING_VERSION = 0.6.44;
+				MARKETING_VERSION = 0.6.45;
 				OTHER_LDFLAGS = (
 					"-lc++",
 					"-lresolv",
@@ -938,7 +938,7 @@
 					"$(inherited)",
 					"$(PROJECT_DIR)/../../core/target/aarch64-apple-darwin/release",
 				);
-				MARKETING_VERSION = 0.6.44;
+				MARKETING_VERSION = 0.6.45;
 				OTHER_LDFLAGS = (
 					"-lc++",
 					"-lresolv",
