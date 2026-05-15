@@ -595,7 +595,14 @@ final class MeetingViewModel: ObservableObject {
 
     private func startRecordingPolling() {
         stopRecordingPolling()
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+        // 1 Hz — CLAUDE.md "documented exceptions" lists the recording
+        // clock at 1 Hz for the elapsed-time label. The old 2 s
+        // interval made the timer visibly jump (00:00 → 00:02 → 00:04)
+        // and felt frozen. pollTick is cheap (Date diff + a Combine
+        // mirror); ticking at 1 Hz is well within budget. FFI poll for
+        // pause state was already removed (event-driven via
+        // `meeting_state`), so no extra Rust work.
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.pollTick() }
         }
         amplitudeTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 12.0, repeats: true) { [weak self] _ in

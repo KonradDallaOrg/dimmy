@@ -164,6 +164,13 @@ private struct MeetingSidebarRow: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
+            // Make the WHOLE row hit-test, not just the Text/badges.
+            // Without an explicit contentShape, the transparent Spacer
+            // and the no-fill `rowBackground` (when idle) leave dead
+            // zones where clicks fall through. User report: "vorrei
+            // che la selezione fosse per tutta la card del singolo
+            // meeting, non solo dove c'è il testo".
+            .contentShape(Rectangle())
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(rowBackground)
