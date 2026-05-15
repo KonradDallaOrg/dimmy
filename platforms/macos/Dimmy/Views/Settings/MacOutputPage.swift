@@ -154,7 +154,7 @@ struct MacOutputPage: View {
     /// doesn't mirror these per-vendor flags as @Published yet, so
     /// we fetch directly. Snapshot read is cheap (~200 µs).
     private var recapKeyAlreadySaved: Bool {
-        let vendor = appState.recapProvider
+        let vendor = recapProviderTag
         guard !vendor.isEmpty,
               let cfg = DimmyCore.shared.getConfig(),
               let has = cfg["has_\(vendor)_llm_key"] as? Bool
