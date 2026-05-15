@@ -243,9 +243,15 @@ struct FileLoadCard: View {
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
-        // .audio covers a broad set; we still gate by extension below
-        // because dimmy_transcribe_file only decodes WAV today.
-        panel.allowedContentTypes = [.wav, .audio]
+        // Only the specific UTType we actually decode today. Previously
+        // this used `.audio` (the parent type) which made the OS panel
+        // expose the Music sidebar shortcut on macOS Sequoia 15.x and
+        // triggered the "Dimmy would like to access Apple Music, your
+        // music and video activity, and your media library" TCC prompt
+        // as soon as the user clicked it — even though Dimmy never
+        // reads the Music library. Narrow to .wav and we never trip
+        // that prompt path.
+        panel.allowedContentTypes = [.wav]
         panel.message = "Pick a WAV file to transcribe"
         if panel.runModal() == .OK, let url = panel.url {
             if !isAcceptableAudioPath(url.path) {
