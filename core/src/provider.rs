@@ -80,9 +80,8 @@ impl Provider {
         let m = model.to_ascii_lowercase();
         if m.starts_with("claude-") {
             Some(Self::Anthropic)
-        } else if m.starts_with("gpt-") {
-            Some(Self::OpenAI)
-        } else if m == "o1"
+        } else if m.starts_with("gpt-")
+            || m == "o1"
             || m == "o3"
             || m == "o4"
             || m.starts_with("o1-")
