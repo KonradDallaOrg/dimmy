@@ -213,20 +213,34 @@ public partial class SettingsViewModel : ObservableObject
     /// subscription (amortized across 30-90 s of inference).
     [ObservableProperty] private string _recapAuthMethod = "";
     /// <summary>
-    /// Endpoint URL override for the meeting recap call. Empty
-    /// (default) = inherit `LlmApiUrl`. Non-empty = recap dispatch
-    /// hits this URL instead, with the per-vendor API key fetched
-    /// from keystore for `Provider::from_url(this)`. Lets a user
-    /// run Anthropic Haiku dictation (cheap, fast) + Gemini 3.1
-    /// Pro recap on a separate Gemini key.
+    /// Mirror of <see cref="LlmUseSameKey"/> at the recap layer. When
+    /// the chosen recap model's vendor matches a vendor we already have
+    /// a key for upstream (LLM-scope or STT-scope), should the recap
+    /// reuse that key (true, default) or load a dedicated Recap-scope
+    /// key the user types separately (false)?
     ///
-    /// Burned 2026-05-14: `recap_model_override="gemini-3.1-pro"`
-    /// + `llm_api_url=anthropic.com` produced a 404 because
-    /// Anthropic doesn't know `gemini-3.1-pro`. The override lives
-    /// behind an Advanced expander in Settings; basic users stay
-    /// in the inherit-from-dictation default.
+    /// The toggle is visible in Settings → Output only when an upstream
+    /// key for the derived recap vendor actually exists; otherwise it
+    /// is hidden (the key field shows up directly because there's
+    /// nothing to inherit from). Same pattern as the LLM section.
     /// </summary>
-    [ObservableProperty] private string _recapApiUrl = "";
+    [ObservableProperty] private bool _recapUseSameKey = true;
+    /// <summary>
+    /// Set by <c>UpdateRecapKeyCardVisibility</c> based on the
+    /// `has_<recap_vendor>_recap_key` snapshot field. Drives the
+    /// green ✓ badge + placeholder text on the Recap API key
+    /// PasswordBox (mirror of <see cref="HasLlmKey"/>).
+    /// </summary>
+    [ObservableProperty] private bool _hasRecapKey;
+    /// <summary>
+    /// Recap-vendor key entered in the PasswordBox during this
+    /// Settings session. Drained on Save / AutoSaveOnClose via
+    /// `dimmy_save_llm_provider_key("recap", &lt;vendor&gt;, key)`.
+    /// Never persisted in config.json (the Rust keystore is the
+    /// single source of truth) — held here only between the user
+    /// typing and the next save.
+    /// </summary>
+    [ObservableProperty] private string _recapApiKey = "";
     /// User override for the model ID used by the meeting recap LLM call.
     /// Empty = let PickRecapModel pick the provider-default flagship
     /// reasoning model (Opus 4.7 / Gemini 3.1 Pro / GPT-5).
@@ -482,12 +496,8 @@ public partial class SettingsViewModel : ObservableObject
                 "api_key" or "subscription" => savedRecapAuth,
                 _ => "",
             };
-            // Recap URL override — empty (default) = inherit from
-            // LlmApiUrl. Free-form string accepted; the Rust
-            // dispatcher will validate at dispatch time. Trim only
-            // whitespace.
-            RecapApiUrl = (r.TryGetProperty("recap_api_url", out var rau)
-                ? rau.GetString() ?? "" : "").Trim();
+            RecapUseSameKey = !r.TryGetProperty("recap_use_same_key", out var rusk)
+                || rusk.ValueKind != System.Text.Json.JsonValueKind.False;
             RecapModelOverride = r.TryGetProperty("recap_model_override", out var rmo)
                 ? rmo.GetString() ?? "" : "";
             // Notion target + auto-send flag round-trip through config.
@@ -661,8 +671,8 @@ public partial class SettingsViewModel : ObservableObject
             // Same rationale as includeLlm — the Recap section in
             // Settings → Output owns these fields; other call sites
             // MUST omit them to avoid wiping a valid recap setup.
-            dict["recap_api_url"] = RecapApiUrl;
             dict["recap_auth_method"] = RecapAuthMethod;
+            dict["recap_use_same_key"] = RecapUseSameKey;
             dict["recap_model_override"] = RecapModelOverride;
         }
         if (includeNotion)

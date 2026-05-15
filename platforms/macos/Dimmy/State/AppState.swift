@@ -900,16 +900,6 @@ final class AppState: ObservableObject {
     /// `recap_model_override` in config.json.
     @Published var recapModelOverride: String = ""
 
-    /// Optional recap-only endpoint URL. Empty = inherit `llmApiUrl`
-    /// (the dictation LLM endpoint) and the matching key. Non-empty
-    /// = the recap path uses this URL + the vendor-scoped key the
-    /// Rust core resolves from the keystore. Used to mix providers:
-    /// e.g. fast Groq Llama for dictation rewrite + Anthropic /
-    /// Gemini for the heavier meeting recap. Round-tripped through
-    /// `recap_api_url` in config.json. Mirror of Win
-    /// `SettingsViewModel.RecapApiUrl`.
-    @Published var recapApiUrl: String = ""
-
     // MARK: - Notion integration
 
     /// True if a Notion integration token is currently stored. Driven
@@ -1124,10 +1114,6 @@ final class AppState: ObservableObject {
         // Phase 6.4 auto-recap
         if let v = config["auto_recap_threshold_secs"] as? Int { autoRecapThresholdSecs = UInt32(max(0, v)) }
         if let v = config["recap_model_override"] as? String { recapModelOverride = v }
-        // recap_api_url — empty string is the documented "inherit
-        // llm_api_url" sentinel, so we read it unconditionally and
-        // let the Rust dispatcher decide which URL flows through.
-        recapApiUrl = (config["recap_api_url"] as? String) ?? ""
 
         // Notion integration — see top of file.
         if let v = config["has_notion_token"] as? Bool { hasNotionToken = v }
@@ -1230,7 +1216,6 @@ final class AppState: ObservableObject {
         }
         if includeRecap {
             // Recap section in Settings → Output owns these fields.
-            config["recap_api_url"] = recapApiUrl
             config["recap_auth_method"] = recapAuthMethod
             config["recap_model_override"] = recapModelOverride
         }

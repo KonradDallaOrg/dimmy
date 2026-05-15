@@ -1599,35 +1599,51 @@ public sealed partial class SettingsWindow : Window
             ? Visibility.Visible : Visibility.Collapsed;
         LlmUseSubscriptionToggle.IsOn = llmUseSub;
 
-        // Same-key toggle: only meaningful when STT and LLM are the
-        // same vendor (e.g. both Anthropic, both Groq). Different
-        // vendors → the user must enter a distinct LLM key.
+        // Same-key toggle visibility — VENDOR-KEYED design (mirror of
+        // the recap section):
+        //   1. Derive the LLM vendor from llm_url.
+        //   2. Check if ANY upstream scope has a key for that vendor
+        //      (Stt-scope OR Llm-scope, see `_sttKeyByProvider` +
+        //      `_llmKeyByProvider`). This decouples "reuse saved key"
+        //      from "STT and LLM must share the vendor" — a user
+        //      with a Gemini STT key and Anthropic LLM gets NO
+        //      toggle (no Anthropic key exists), but with a Gemini
+        //      STT key and Gemini LLM they DO get the toggle even
+        //      if STT is currently set to a third provider.
+        //   3. Toggle visible when upstream key exists + keyPathLive.
+        //   4. Coerce LlmUseSameKey=false when toggle hidden so the
+        //      LLM key input appears (mirror of recap section).
         //
-        // CRITICAL: when the toggle is hidden, also COERCE the
-        // underlying ViewModel value to false. Otherwise a previously-
-        // saved true survives, Rust tries to use the STT key for the
-        // (different-vendor) LLM, every call 401s silently, AND the
-        // API-key entry stays hidden (because UseSameKey is still
-        // true) leaving the user stuck with no way to enter a real
-        // LLM key. Burned 2026-05-13 when this exact case was caught
-        // before ship.
-        if (!providerParity && ViewModel.LlmUseSameKey)
+        // The dispatcher (Rust `dimmy_process_with_llm`) reads the
+        // matching scope at call time: with toggle ON it tries
+        // `Llm(vendor)` first then `Stt(vendor)`.
+        var llmVendor = VendorTagFromAnyUrl(llmUrl);
+        var hasLlmScopeKey = !string.IsNullOrEmpty(llmVendor)
+                             && _llmKeyByProvider.TryGetValue(llmVendor, out var llmKey) && llmKey;
+        var hasSttScopeKey = !string.IsNullOrEmpty(llmVendor)
+                             && _sttKeyByProvider.TryGetValue(llmVendor, out var sttKey) && sttKey;
+        var hasUpstreamKey = hasLlmScopeKey || hasSttScopeKey;
+        App.Log(
+            $"[Auth] refresh: sttUrl='{sttUrl}' llmUrl='{llmUrl}' llmVendor='{llmVendor}' hasLlmScope={hasLlmScopeKey} hasSttScope={hasSttScopeKey} hasUpstreamKey={hasUpstreamKey} keyPathLive={keyPathLive} llmUseSub={llmUseSub}",
+            "Auth");
+        if (!hasUpstreamKey && ViewModel.LlmUseSameKey)
         {
             ViewModel.LlmUseSameKey = false;
-            // Persist the coercion through to Rust + disk now so the
-            // dispatcher sees the right value on the next call, even
-            // before the user clicks Save. This is a "fix invalid
-            // state" write, not a user-driven change.
-            App.Log("[Auth] coerced llm_use_same_key=false (STT/LLM provider mismatch)", "Auth");
+            App.Log("[Auth] coerced llm_use_same_key=false (no upstream key for LLM vendor)", "Auth");
         }
-        LlmUseSameKeyCard.Visibility = (keyPathLive && providerParity)
+        LlmUseSameKeyCard.Visibility = (keyPathLive && hasUpstreamKey)
             ? Visibility.Visible : Visibility.Collapsed;
-        // The LLM key entry follows the existing rules: visible when
-        // key path is live AND the same-key toggle is off. After the
-        // coercion above, !providerParity always means !LlmUseSameKey,
-        // so the key entry appears automatically for mismatched vendors.
+        // LLM API key input: visible when the key path is live AND
+        // the toggle is OFF (the dispatcher needs an LLM-scope key).
+        // When the toggle is hidden (no upstream key), the coercion
+        // above flips LlmUseSameKey=false → input appears so the
+        // user can type a key.
         LlmApiKeyCard.Visibility = (keyPathLive && !ViewModel.LlmUseSameKey)
             ? Visibility.Visible : Visibility.Collapsed;
+        // Surface the green ✓ when a key for the LLM vendor already
+        // exists in Llm-scope (drives `HasLlmKey` binding on the
+        // PasswordBox placeholder + check icon).
+        ViewModel.HasLlmKey = hasLlmScopeKey;
 
         // ── OUTPUT → Recap section ───────────────────────────────
         // The recap subscription toggle is INDEPENDENT of the LLM
@@ -1643,11 +1659,24 @@ public sealed partial class SettingsWindow : Window
         // CLI signed in, there's nothing to dispatch through. Coerce
         // RecapAuthMethod to "" when the integration goes away so a
         // saved "subscription" can't silently keep routing.
-        var canShowRecapSub = integrationReady;
+        // Subscription path is Anthropic-only (Claude CLI does Anthropic).
+        // Hide the "Use Anthropic subscription for recap" toggle when:
+        //   - the integration isn't connected (CLI not signed in), OR
+        //   - the chosen recap model isn't Anthropic (CLI can't dispatch
+        //     to Gemini / OpenAI, so the toggle would be inactionable)
+        //
+        // Coerce a saved `subscription` value to `""` when the toggle
+        // becomes invisible — otherwise the dispatcher would keep
+        // routing through the CLI even when the user picked a
+        // non-Anthropic recap model.
+        var recapVendorForSubGate = RecapVendorFromModel(ViewModel.RecapModelOverride, llmUrl);
+        var recapModelIsAnthropic = string.Equals(
+            recapVendorForSubGate, "anthropic", StringComparison.OrdinalIgnoreCase);
+        var canShowRecapSub = integrationReady && recapModelIsAnthropic;
         if (!canShowRecapSub && recapForceSub)
         {
             App.Log(
-                "[Auth] coerced recap_auth_method='subscription' → '' (Anthropic integration is not connected — sign in via Integrations)",
+                $"[Auth] coerced recap_auth_method='subscription' → '' (integration={integrationReady}, model_is_anthropic={recapModelIsAnthropic})",
                 "Auth");
             ViewModel.RecapAuthMethod = "";
             recapForceSub = false;
@@ -1657,48 +1686,36 @@ public sealed partial class SettingsWindow : Window
             ? Visibility.Visible : Visibility.Collapsed;
         RecapUseSubscriptionToggle.IsOn = recapForceSub;
 
-        // Filter the recap model picker by the EFFECTIVE recap
-        // vendor — independent of the subscription toggle. The
-        // effective vendor is:
-        //   - if recap_api_url is set → that URL's vendor
-        //   - else if subscription is on → "anthropic" (CLI only does Anthropic)
-        //   - else → the dictation LLM provider's vendor
-        // The picker shows ONLY models from that vendor (plus Auto
-        // and Custom). Coerce recap_model_override if invalid.
+        // The recap model picker shows ALL curated entries (any
+        // vendor) — the user can pick a Gemini model with an
+        // Anthropic dictation provider; the dispatcher derives the
+        // recap vendor from the model and looks up its keystore key.
+        // No vendor filter needed anymore.
         //
-        // Burned 2026-05-14: bare picker without vendor filter let
-        // the user pick gpt-5 / gemini-3.1-pro on an anthropic.com
-        // URL → 404 at recap time.
-        var recapEffectiveUrl = !string.IsNullOrEmpty(ViewModel.RecapApiUrl)
-            ? ViewModel.RecapApiUrl
-            : (recapForceSub ? "https://api.anthropic.com/v1/messages" : llmUrl);
-        var recapVendor = RecapVendorFromUrl(recapEffectiveUrl);
+        // The chosen recap vendor for the model picker's "current
+        // selection coercion" + the conditional Recap-key card is
+        // derived from the model id directly.
+        var recapVendor = recapForceSub
+            ? "anthropic"
+            : RecapVendorFromModel(ViewModel.RecapModelOverride, llmUrl);
+        // Refresh the conditional UI for the "different provider" case:
+        // - PasswordBox + Save visible only when the model's vendor
+        //   differs from the dictation vendor AND auth != subscription.
+        UpdateRecapKeyCardVisibility(llmUrl);
 
-        // Show ONLY entries that match the effective vendor. The
-        // Auto entry + Custom entry stay visible regardless.
-        RecapItemGemini31Pro.Visibility = recapVendor == "gemini" ? Visibility.Visible : Visibility.Collapsed;
-        RecapItemGemini25Pro.Visibility = recapVendor == "gemini" ? Visibility.Visible : Visibility.Collapsed;
-        RecapItemGemini31Flash.Visibility = recapVendor == "gemini" ? Visibility.Visible : Visibility.Collapsed;
-        RecapItemGemini25Flash.Visibility = recapVendor == "gemini" ? Visibility.Visible : Visibility.Collapsed;
-        RecapItemGpt5.Visibility = recapVendor == "openai" ? Visibility.Visible : Visibility.Collapsed;
-        RecapItemGpt5Mini.Visibility = recapVendor == "openai" ? Visibility.Visible : Visibility.Collapsed;
-        RecapItemGpt5Nano.Visibility = recapVendor == "openai" ? Visibility.Visible : Visibility.Collapsed;
-        RecapItemGpt4o.Visibility = recapVendor == "openai" ? Visibility.Visible : Visibility.Collapsed;
-        RecapItemGpt4oMini.Visibility = recapVendor == "openai" ? Visibility.Visible : Visibility.Collapsed;
-        RecapItemO3.Visibility = recapVendor == "openai" ? Visibility.Visible : Visibility.Collapsed;
-        RecapItemO3Mini.Visibility = recapVendor == "openai" ? Visibility.Visible : Visibility.Collapsed;
-
-        // Coerce the current selection if it doesn't match the
-        // effective vendor. Auto ("") and Custom (non-known tag)
-        // are vendor-agnostic and not coerced.
-        if (RecapModelBelongsToWrongVendor(ViewModel.RecapModelOverride, recapVendor))
-        {
-            App.Log(
-                $"[Auth] coerced recap_model_override='{ViewModel.RecapModelOverride}' → '' (effective recap vendor is '{recapVendor}')",
-                "Auth");
-            ViewModel.RecapModelOverride = "";
-            SyncRecapModelPicker();
-        }
+        // Per-vendor filter of the recap-model picker is INTENTIONALLY
+        // dropped: the user picks any model (claude / gpt / gemini),
+        // the dispatcher derives the recap vendor from the model id
+        // and pulls the matching per-vendor key from the keystore.
+        // The conditional "Recap API key" card below the picker
+        // collects the key if the vendor differs from dictation.
+        //
+        // The subscription toggle gate above already pinned
+        // recapVendor → "anthropic" when subscription is forced, so
+        // the toggle visibility math doesn't need any cross-vendor
+        // coercion either.
+        _ = recapVendor; // retained for future use if we re-introduce
+                         // any vendor-conditional UI here
     }
 
     /// <summary>Map a URL to a vendor family tag for filtering the
@@ -1752,20 +1769,6 @@ public sealed partial class SettingsWindow : Window
         return modelVendor != targetVendor && modelVendor != "other";
     }
 
-    /// <summary>TextBox LostFocus on the Recap URL override box —
-    /// trim whitespace + refresh the picker filter so the user
-    /// immediately sees the model list shrink to the new vendor's
-    /// entries.</summary>
-    private void RecapApiUrl_LostFocus(object sender, RoutedEventArgs e)
-    {
-        if (!_loaded) return;
-        ViewModel.RecapApiUrl = (ViewModel.RecapApiUrl ?? "").Trim();
-        // Persist the new override + refresh the picker so the model
-        // list shrinks/expands to match the new vendor.
-        App.Instance?.ApplySettings(ViewModel);
-        RefreshAuthIntegrationStatus();
-    }
-
     /// <summary>True iff the URL points at the Anthropic API or the
     /// legacy synthetic `claude-code://` scheme kept for back-compat.</summary>
     private static bool IsAnthropicUrl(string url)
@@ -1777,6 +1780,29 @@ public sealed partial class SettingsWindow : Window
     /// <summary>True iff STT and LLM URLs map to the same provider
     /// family. Used to gate the "Use same API key as STT" toggle:
     /// reusing the key only makes sense for same-vendor pairs.</summary>
+    /// Map an API URL to a vendor tag matching the keystore cache
+    /// keys (groq / openai / anthropic / gemini / openrouter /
+    /// deepgram / fireworks / together / custom). Empty string for
+    /// unknown URLs so callers can distinguish "this is a custom
+    /// endpoint, no upstream key" from "matches anthropic" etc.
+    /// Used by the LLM section to look up `_sttKeyByProvider` and
+    /// `_llmKeyByProvider` per the chosen LLM URL.
+    private static string VendorTagFromAnyUrl(string url)
+    {
+        if (string.IsNullOrEmpty(url)) return "";
+        if (url.Contains("groq.com", StringComparison.OrdinalIgnoreCase)) return "groq";
+        if (url.Contains("openai.com", StringComparison.OrdinalIgnoreCase)) return "openai";
+        if (url.Contains("anthropic.com", StringComparison.OrdinalIgnoreCase)) return "anthropic";
+        if (url.StartsWith("claude-code://", StringComparison.Ordinal)) return "anthropic";
+        if (url.Contains("googleapis.com", StringComparison.OrdinalIgnoreCase)) return "gemini";
+        if (url.Contains("openrouter.ai", StringComparison.OrdinalIgnoreCase)) return "openrouter";
+        if (url.Contains("deepgram.com", StringComparison.OrdinalIgnoreCase)) return "deepgram";
+        if (url.Contains("fireworks.ai", StringComparison.OrdinalIgnoreCase)) return "fireworks";
+        if (url.Contains("together.xyz", StringComparison.OrdinalIgnoreCase)
+            || url.Contains("together.ai", StringComparison.OrdinalIgnoreCase)) return "together";
+        return "custom";
+    }
+
     private static bool SameProviderFamily(string sttUrl, string llmUrl)
     {
         static string Family(string url) => url switch
@@ -1907,6 +1933,16 @@ public sealed partial class SettingsWindow : Window
         if (ViewModel.LlmAuthMethod == newAuth) return;
         ViewModel.LlmAuthMethod = newAuth;
         RefreshAuthIntegrationStatus();
+    }
+
+    // "Use my saved API key" toggle — flip immediately so the LLM
+    // API key input appears/disappears without waiting for the next
+    // RefreshAuthIntegrationStatus tick. Mirror of the recap toggle.
+    private void LlmUseSameKey_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (!_loaded) return;
+        RefreshAuthIntegrationStatus();
+        App.Instance?.ApplySettings(ViewModel);
     }
 
     // ── Output → Recap section: subscription toggle ─────────────
@@ -2137,12 +2173,11 @@ public sealed partial class SettingsWindow : Window
     private void ApplySttModeVisibility(bool isLocal)
     {
         LocalSttPanel.Visibility = isLocal ? Visibility.Visible : Visibility.Collapsed;
+        // Cloud STT panel now bundles Provider + API key + Custom
+        // URL/Model together (mirror of Output → LLM layout). Toggled
+        // off in Local mode. Vocabulary panel has the same gating.
         CloudSttPanel.Visibility = isLocal ? Visibility.Collapsed : Visibility.Visible;
-        // Provider details + custom URL/model + prompt are cloud-only —
-        // they live inside CloudAdvancedPanel so a single toggle hides
-        // them all when the user switches to Local mode. Microphone +
-        // gain + preprocessing are general and stay visible.
-        CloudAdvancedPanel.Visibility = isLocal ? Visibility.Collapsed : Visibility.Visible;
+        CloudVocabularyPanel.Visibility = isLocal ? Visibility.Collapsed : Visibility.Visible;
     }
 
     /// Convenience: progress callback from Rust during a Parakeet
@@ -2421,6 +2456,13 @@ public sealed partial class SettingsWindow : Window
             // Without this, switching to a provider with a saved key still
             // showed "no key" until the user closed + reopened Settings.
             ViewModel.HasApiKey = LookupSttKeyForTag(tag);
+            // ALSO refresh the LLM section visibility — the
+            // "Use my saved API key" toggle and the LLM key input
+            // depend on STT's HasApiKey + provider parity. Without
+            // this call, switching STT to Gemini (while LLM was
+            // already Gemini) wouldn't reveal the toggle until the
+            // user touched the LLM dropdown too. Burned 2026-05-15.
+            RefreshAuthIntegrationStatus();
         }
     }
 
@@ -3453,6 +3495,11 @@ public sealed partial class SettingsWindow : Window
             ViewModel.ApiKey = CloudApiKeyBox.Password;
         if (!string.IsNullOrEmpty(LlmApiKeyBox.Password))
             ViewModel.LlmApiKey = LlmApiKeyBox.Password;
+        // Recap key drain — saves to KeyringScope::Recap(<vendor>)
+        // via the dedicated FFI. Empty PasswordBox = no-op, so a
+        // user closing Settings without touching this field can't
+        // wipe an existing Recap-scope key.
+        DrainRecapKeyToKeystore();
 
         // includeLlm + includeRecap: this is the Settings → Save
         // path — the user has been editing everything (incl. LLM
@@ -3488,6 +3535,8 @@ public sealed partial class SettingsWindow : Window
                 ViewModel.ApiKey = CloudApiKeyBox.Password;
             if (!string.IsNullOrEmpty(LlmApiKeyBox?.Password))
                 ViewModel.LlmApiKey = LlmApiKeyBox.Password;
+            // Recap key drain — same as Save_Click. Empty box = no-op.
+            DrainRecapKeyToKeystore();
             // Same rationale as Save_Click — closing Settings with X/ESC
             // is the user's "save what I touched" intent; include LLM
             // + Recap so a user who edited those blocks doesn't lose
@@ -3585,6 +3634,195 @@ public sealed partial class SettingsWindow : Window
         }
     }
 
+    /// Derive the recap vendor from the chosen recap_model_override.
+    /// Mirrors Rust's `Provider::from_model_id`:
+    ///   claude-*                → "anthropic"
+    ///   gpt-*, o1, o3, o4(-...) → "openai"
+    ///   gemini-*                → "gemini"
+    ///   "" (Auto) or unknown    → fall back to the dictation vendor
+    ///
+    /// The fallback for empty / unknown is what makes "Auto" mean
+    /// "inherit dictation provider" without needing a separate enum
+    /// override field.
+    private static string RecapVendorFromModel(string? model, string llmUrl)
+    {
+        if (string.IsNullOrEmpty(model)) return RecapVendorFromUrl(llmUrl);
+        var m = model.ToLowerInvariant();
+        if (m.StartsWith("claude-", StringComparison.Ordinal)) return "anthropic";
+        if (m.StartsWith("gpt-", StringComparison.Ordinal)) return "openai";
+        if (m == "o1" || m == "o3" || m == "o4"
+            || m.StartsWith("o1-", StringComparison.Ordinal)
+            || m.StartsWith("o3-", StringComparison.Ordinal)
+            || m.StartsWith("o4-", StringComparison.Ordinal)) return "openai";
+        if (m.StartsWith("gemini-", StringComparison.Ordinal)) return "gemini";
+        return RecapVendorFromUrl(llmUrl);
+    }
+
+    /// Refresh the conditional Recap section UI (UseSameKey toggle +
+    /// PasswordBox) based on the derived recap vendor + upstream key
+    /// availability + subscription state. Mirrors the LLM section's
+    /// LlmUseSameKeyCard / LlmApiKeyCard pattern one layer down.
+    ///
+    /// Visibility matrix:
+    ///   recap_vendor empty / unknown
+    ///     → toggle hidden, key card hidden (inherits LLM dispatch)
+    ///   recap_vendor == anthropic AND subscription active
+    ///     → toggle hidden, key card hidden (CLI handles auth)
+    ///   upstream key exists (LLM scope OR STT scope for recap_vendor)
+    ///     → toggle visible (default ON)
+    ///         toggle ON  → key card hidden, dispatcher reuses upstream
+    ///         toggle OFF → key card visible, write to Recap(vendor) scope
+    ///   no upstream key
+    ///     → toggle hidden + coerced false, key card visible (need a key)
+    ///
+    /// Snapshot reads: `has_<vendor>_llm_key` (LLM scope) +
+    /// `has_<vendor>_key` (STT scope) + `has_<vendor>_recap_key`
+    /// (Recap scope, for the "already saved" check icon).
+    private void UpdateRecapKeyCardVisibility(string llmUrl)
+    {
+        if (RecapKeyCard == null || RecapUseSameKeyCard == null) return;
+
+        var recapVendor = RecapVendorFromModel(ViewModel.RecapModelOverride, llmUrl);
+        var subscriptionActive =
+            string.Equals(ViewModel.RecapAuthMethod, "subscription", StringComparison.OrdinalIgnoreCase) ||
+            (string.IsNullOrEmpty(ViewModel.RecapAuthMethod) &&
+             string.Equals(ViewModel.LlmAuthMethod, "subscription", StringComparison.OrdinalIgnoreCase) &&
+             string.Equals(recapVendor, "anthropic", StringComparison.OrdinalIgnoreCase));
+
+        // Read the full snapshot once — we need three has_* fields.
+        bool hasLlmScopeKey = false;
+        bool hasSttScopeKey = false;
+        bool hasRecapScopeKey = false;
+        if (!string.IsNullOrEmpty(recapVendor))
+        {
+            try
+            {
+                var json = Interop.DimmyNative.ReadBuffer(
+                    Interop.DimmyNative.dimmy_get_config_json, 16384);
+                if (!string.IsNullOrEmpty(json))
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(json);
+                    var root = doc.RootElement;
+                    if (root.TryGetProperty($"has_{recapVendor}_llm_key", out var vl)
+                        && vl.ValueKind == System.Text.Json.JsonValueKind.True) hasLlmScopeKey = true;
+                    if (root.TryGetProperty($"has_{recapVendor}_key", out var vs)
+                        && vs.ValueKind == System.Text.Json.JsonValueKind.True) hasSttScopeKey = true;
+                    if (root.TryGetProperty($"has_{recapVendor}_recap_key", out var vr)
+                        && vr.ValueKind == System.Text.Json.JsonValueKind.True) hasRecapScopeKey = true;
+                }
+            }
+            catch { /* keep all booleans false on parse / FFI errors */ }
+        }
+
+        var hasUpstreamKey = hasLlmScopeKey || hasSttScopeKey;
+
+        // ─── Subscription branch — hides all key UI ─────────────
+        if (subscriptionActive)
+        {
+            RecapUseSameKeyCard.Visibility = Visibility.Collapsed;
+            RecapKeyCard.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        // ─── Recap vendor unknown (Auto / Local / Custom) ───────
+        // No way to derive a URL or a key — inherits the entire LLM
+        // dispatch path. Hide all recap-specific key UI.
+        if (string.IsNullOrEmpty(recapVendor))
+        {
+            RecapUseSameKeyCard.Visibility = Visibility.Collapsed;
+            RecapKeyCard.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        // ─── Recap vendor known (same OR different from dictation)
+        // ALWAYS show the toggle when an upstream key exists for this
+        // vendor, including the same-vendor case — the user might
+        // want a separate Recap-scope key (e.g. different billing
+        // account on the same vendor). Toggle ON = reuse upstream,
+        // OFF = type a dedicated Recap key. When no upstream key
+        // exists, hide the toggle + show the input directly.
+        if (hasUpstreamKey)
+        {
+            // Show the toggle so the user can opt out of inheriting.
+            RecapUseSameKeyCard.Visibility = Visibility.Visible;
+            // Key card shows when the user has explicitly opted OUT.
+            RecapKeyCard.Visibility = ViewModel.RecapUseSameKey
+                ? Visibility.Collapsed : Visibility.Visible;
+        }
+        else
+        {
+            // No upstream key for this vendor — toggle is meaningless,
+            // hide it AND coerce the underlying value to false so a
+            // stale `true` from a previous config doesn't keep the
+            // key card hidden (would lock the user out).
+            RecapUseSameKeyCard.Visibility = Visibility.Collapsed;
+            if (ViewModel.RecapUseSameKey)
+            {
+                ViewModel.RecapUseSameKey = false;
+                App.Log("[Auth] coerced recap_use_same_key=false (no upstream key for vendor)", "Auth");
+            }
+            RecapKeyCard.Visibility = Visibility.Visible;
+        }
+
+        // Update the bound `HasRecapKey` so the PasswordBox shows the
+        // ✓ badge + "Already saved · paste to replace" placeholder
+        // when a Recap-scope key for the derived vendor exists.
+        // Mirror of the LLM's `HasLlmKey` binding.
+        ViewModel.HasRecapKey = hasRecapScopeKey;
+    }
+
+    /// Toggled handler for the Recap UseSameKey switch — flips the
+    /// PasswordBox visibility immediately without waiting for the
+    /// next auth refresh, and persists via the auto-save pipeline.
+    private void RecapUseSameKey_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (!_loaded) return;
+        // Visibility recompute happens here so the user sees the key
+        // field appear/disappear under the toggle without latency.
+        UpdateRecapKeyCardVisibility(ViewModel.LlmApiUrl ?? "");
+        // ApplySettings persists the new bool to Rust + disk.
+        App.Instance?.ApplySettings(ViewModel);
+    }
+
+    /// Drain the Recap PasswordBox into the Rust keystore under the
+    /// `Recap(<vendor>)` scope. Called from Save_Click + AutoSaveOnClose
+    /// to mirror the inline LLM key drain pattern (no per-card Save
+    /// button — the global Settings save persists everything).
+    ///
+    /// Vendor is DERIVED from the currently-selected recap model.
+    /// Empty Password = no-op (don't clear an existing entry just
+    /// because the user opened Settings without typing).
+    private void DrainRecapKeyToKeystore()
+    {
+        var key = RecapKeyBox?.Password ?? "";
+        if (string.IsNullOrEmpty(key)) return;
+        var llmUrl = ViewModel.LlmApiUrl ?? "";
+        var vendor = RecapVendorFromModel(ViewModel.RecapModelOverride, llmUrl);
+        if (string.IsNullOrEmpty(vendor)) return;
+        int rc;
+        try
+        {
+            // scope="recap" → dedicated Recap(<vendor>) keystore entry
+            // distinct from the LLM-scope key for the same vendor.
+            rc = Interop.DimmyNative.dimmy_save_llm_provider_key("recap", vendor, key);
+        }
+        catch (Exception ex)
+        {
+            App.Log($"[Auth] save_llm_provider_key threw: {ex.Message}", "Auth");
+            return;
+        }
+        if (rc == 0)
+        {
+            App.Log($"[Auth] saved recap key for provider={vendor}", "Auth");
+            RecapKeyBox.Password = "";
+            ViewModel.HasRecapKey = true;
+        }
+        else
+        {
+            App.Log($"[Auth] save_llm_provider_key failed rc={rc} provider={vendor}", "Auth");
+        }
+    }
+
     private void RecapModel_SelectionChanged(object sender,
         Microsoft.UI.Xaml.Controls.SelectionChangedEventArgs e)
     {
@@ -3599,7 +3837,15 @@ public sealed partial class SettingsWindow : Window
         }
         RecapModelCustomCard.Visibility = Visibility.Collapsed;
         ViewModel.RecapModelOverride = tag;
-        if (_loaded) App.Instance?.ApplySettings(ViewModel);
+        if (_loaded)
+        {
+            App.Instance?.ApplySettings(ViewModel);
+            // Recompute the full conditional Recap section (subscription
+            // toggle visibility depends on whether the new model is
+            // Anthropic; key card visibility depends on the derived
+            // vendor and upstream key state).
+            RefreshAuthIntegrationStatus();
+        }
     }
 
     private void RecapModelCustom_LostFocus(object sender, RoutedEventArgs e)

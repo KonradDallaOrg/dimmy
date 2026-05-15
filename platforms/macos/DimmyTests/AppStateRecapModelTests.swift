@@ -89,68 +89,40 @@ final class AppStateRecapModelTests: XCTestCase {
         XCTAssertEqual(state.recapModelOverride, "gpt-4o")
     }
 
-    // MARK: - recap_api_url (override for different-provider recap)
-    //
-    // Mirror of the Win xUnit RecapApiUrl_* tests. Empty default =
-    // "inherit llm_api_url". Non-empty = the recap call uses the
-    // override URL + vendor-scoped key resolved by Rust.
+    // MARK: - recap_provider (vendor enum override)
 
-    private var savedRecapApiUrl: String = ""
-
-    func testApplyConfigPicksUpRecapApiUrl() {
+    func testApplyConfigPicksUpRecapProvider() {
         let state = AppState.shared
-        savedRecapApiUrl = state.recapApiUrl
-        defer { state.recapApiUrl = savedRecapApiUrl }
+        let saved = state.recapProvider
+        defer { state.recapProvider = saved }
 
-        state.recapApiUrl = ""
-        state.loadFromRustConfig([
-            "recap_api_url": "https://api.anthropic.com/v1/messages"
-        ])
-        XCTAssertEqual(state.recapApiUrl, "https://api.anthropic.com/v1/messages")
+        state.recapProvider = ""
+        state.loadFromRustConfig(["recap_provider": "gemini"])
+        XCTAssertEqual(state.recapProvider, "gemini")
     }
 
-    func testApplyConfigMissingRecapApiUrlClearsToEmpty() {
-        // The override is a "set-or-empty" field — a config without
-        // the key means "no override" (= inherit). Pin that the
-        // loader normalises a missing key to empty rather than
-        // preserving a stale prior value (different from
-        // recap_model_override which preserves on missing).
+    func testToRustConfigEmitsRecapProvider() {
         let state = AppState.shared
-        savedRecapApiUrl = state.recapApiUrl
-        defer { state.recapApiUrl = savedRecapApiUrl }
+        let saved = state.recapProvider
+        defer { state.recapProvider = saved }
 
-        state.recapApiUrl = "https://stale.example.com/v1/chat"
-        state.loadFromRustConfig(["llm_api_url": "https://api.openai.com/v1"])
-        XCTAssertEqual(state.recapApiUrl, "")
+        state.recapProvider = "anthropic"
+        let cfg = state.toRustConfig(includeRecap: true)
+        XCTAssertEqual(cfg["recap_provider"] as? String, "anthropic")
     }
 
-    func testToRustConfigEmitsRecapApiUrl() {
+    func testToRustConfigDefaultOmitsRecapProvider() {
         let state = AppState.shared
-        savedRecapApiUrl = state.recapApiUrl
-        defer { state.recapApiUrl = savedRecapApiUrl }
+        let saved = state.recapProvider
+        defer { state.recapProvider = saved }
 
-        state.recapApiUrl =
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent"
-        let config = state.toRustConfig(includeRecap: true)
-        XCTAssertEqual(
-            config["recap_api_url"] as? String,
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent"
-        )
+        state.recapProvider = "openai"
+        let cfg = state.toRustConfig()
+        XCTAssertNil(cfg["recap_provider"],
+                     "recap_provider must be omitted from default toRustConfig — wipe protection")
     }
 
-    func testToRustConfigDefaultOmitsRecapApiUrl() {
-        // Wipe protection — default toRustConfig must NOT emit
-        // recap_api_url. Pin the contract so a future refactor can't
-        // accidentally re-introduce the 2026-05-15 wipe bug.
-        let state = AppState.shared
-        savedRecapApiUrl = state.recapApiUrl
-        defer { state.recapApiUrl = savedRecapApiUrl }
-
-        state.recapApiUrl = "https://api.anthropic.com/v1/messages"
-        let config = state.toRustConfig()
-        XCTAssertNil(config["recap_api_url"],
-                     "recap_api_url must be omitted from default toRustConfig")
-    }
+    // MARK: - LLM identity wipe protection
 
     func testToRustConfigDefaultOmitsLlmIdentityFields() {
         // Sibling protection for LLM identity. A non-LLM-page save
@@ -208,25 +180,4 @@ final class AppStateRecapModelTests: XCTestCase {
                        "subscription")
     }
 
-    func testToRustConfigEmitsEmptyForInheritDefault() {
-        let state = AppState.shared
-        savedRecapApiUrl = state.recapApiUrl
-        defer { state.recapApiUrl = savedRecapApiUrl }
-
-        state.recapApiUrl = ""
-        let config = state.toRustConfig(includeRecap: true)
-        XCTAssertEqual(config["recap_api_url"] as? String, "")
-    }
-
-    func testFullRoundtripPreservesRecapApiUrl() {
-        let state = AppState.shared
-        savedRecapApiUrl = state.recapApiUrl
-        defer { state.recapApiUrl = savedRecapApiUrl }
-
-        state.recapApiUrl = "https://my-private-proxy.internal/v1/chat"
-        let snapshot = state.toRustConfig(includeRecap: true)
-        state.recapApiUrl = "something else"
-        state.loadFromRustConfig(snapshot)
-        XCTAssertEqual(state.recapApiUrl, "https://my-private-proxy.internal/v1/chat")
-    }
 }

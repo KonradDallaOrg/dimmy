@@ -201,13 +201,13 @@ public class SettingsViewModelTests
     {
         var vm = new SettingsViewModel
         {
-            RecapApiUrl = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
             RecapAuthMethod = "subscription",
+            RecapUseSameKey = false,
             RecapModelOverride = "gemini-3.1-pro",
         };
         var json = vm.ToJson(); // default: includeRecap = false
-        Assert.DoesNotContain("\"recap_api_url\"", json);
         Assert.DoesNotContain("\"recap_auth_method\"", json);
+        Assert.DoesNotContain("\"recap_use_same_key\"", json);
         Assert.DoesNotContain("\"recap_model_override\"", json);
     }
 
@@ -216,14 +216,49 @@ public class SettingsViewModelTests
     {
         var vm = new SettingsViewModel
         {
-            RecapApiUrl = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
             RecapAuthMethod = "subscription",
+            RecapUseSameKey = false,
             RecapModelOverride = "gemini-3.1-pro",
         };
         var json = vm.ToJson(includeRecap: true);
-        Assert.Contains("\"recap_api_url\":\"https://generativelanguage.googleapis.com/v1beta/openai/chat/completions\"", json);
         Assert.Contains("\"recap_auth_method\":\"subscription\"", json);
+        Assert.Contains("\"recap_use_same_key\":false", json);
         Assert.Contains("\"recap_model_override\":\"gemini-3.1-pro\"", json);
+    }
+
+    [Fact]
+    public void RecapUseSameKey_defaults_to_true()
+    {
+        var vm = new SettingsViewModel();
+        Assert.True(vm.RecapUseSameKey);
+    }
+
+    [Fact]
+    public void LoadFromJson_parses_recap_use_same_key_false()
+    {
+        var vm = new SettingsViewModel();
+        vm.LoadFromJson("""{"recap_use_same_key":false}""");
+        Assert.False(vm.RecapUseSameKey);
+    }
+
+    [Fact]
+    public void LoadFromJson_missing_recap_use_same_key_defaults_true()
+    {
+        // Forward compat: a config without the field (older app
+        // version) must land on the default ON, not silently OFF.
+        var vm = new SettingsViewModel();
+        vm.LoadFromJson("""{"recap_auth_method":""}""");
+        Assert.True(vm.RecapUseSameKey);
+    }
+
+    [Fact]
+    public void IsDirty_FiresWhenRecapUseSameKeyFlips()
+    {
+        var vm = new SettingsViewModel();
+        vm.LoadFromJson("""{"recap_use_same_key":true}""");
+        Assert.False(vm.IsDirty);
+        vm.RecapUseSameKey = false;
+        Assert.True(vm.IsDirty);
     }
 
     [Fact]
@@ -241,7 +276,6 @@ public class SettingsViewModelTests
               "llm_api_url": "https://api.anthropic.com/v1/messages",
               "llm_api_model": "claude-opus-4-7",
               "llm_auth_method": "subscription",
-              "recap_api_url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
               "recap_model_override": "gemini-3.1-pro",
               "language": "it"
             }
@@ -250,11 +284,11 @@ public class SettingsViewModelTests
         vm.LoadFromJson(src);
         // VM has the values internally:
         Assert.Equal("https://api.anthropic.com/v1/messages", vm.LlmApiUrl);
-        Assert.Equal("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", vm.RecapApiUrl);
+        Assert.Equal("gemini-3.1-pro", vm.RecapModelOverride);
         // But default ToJson() OMITS them — Rust core preserves disk state.
         var json = vm.ToJson();
         Assert.DoesNotContain("llm_api_url", json);
-        Assert.DoesNotContain("recap_api_url", json);
+        Assert.DoesNotContain("recap_model_override", json);
         // Universal field round-trips:
         Assert.Contains("\"language\":\"it\"", json);
     }
@@ -275,10 +309,10 @@ public class SettingsViewModelTests
     }
 
     [Fact]
-    public void IsDirty_FiresWhenRecapFieldsChange()
+    public void IsDirty_FiresWhenRecapModelChanges()
     {
         var vm = new SettingsViewModel();
-        vm.LoadFromJson("""{ "recap_api_url": "https://api.anthropic.com/v1/messages" }""");
+        vm.LoadFromJson("""{ "recap_model_override": "claude-opus-4-7" }""");
         Assert.False(vm.IsDirty);
         vm.RecapModelOverride = "claude-sonnet-4-6";
         Assert.True(vm.IsDirty);
@@ -648,70 +682,6 @@ public class SettingsViewModelTests
         var vm2 = new SettingsViewModel();
         vm2.LoadFromJson(json);
         Assert.Equal(source, vm2.AudioSource);
-    }
-
-    // ── Recap API URL override (provider-different-from-LLM) ──
-    // Landed on feat/anthropic-subscription-login (2026-05-14).
-    // Empty default → recap inherits llm_api_url + llm key.
-    // Non-empty value → recap uses the override URL + a vendor-
-    // scoped key resolved by the Rust core. Both Rust unit tests
-    // (config_round_trip_persists_recap_api_url_field) and these
-    // C# tests pin the round trip across the boundary.
-
-    [Fact]
-    public void RecapApiUrl_defaults_to_empty()
-    {
-        var vm = new SettingsViewModel();
-        Assert.Equal("", vm.RecapApiUrl);
-    }
-
-    [Fact]
-    public void LoadFromJson_parses_recap_api_url()
-    {
-        var vm = new SettingsViewModel();
-        vm.LoadFromJson("""{"recap_api_url":"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent"}""");
-        Assert.Equal(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent",
-            vm.RecapApiUrl);
-    }
-
-    [Fact]
-    public void LoadFromJson_recap_api_url_missing_keeps_empty()
-    {
-        var vm = new SettingsViewModel();
-        vm.RecapApiUrl = "https://api.openai.com/v1/chat/completions";
-        vm.LoadFromJson("{}");
-        Assert.Equal("", vm.RecapApiUrl);
-    }
-
-    [Fact]
-    public void ToJson_includes_recap_api_url()
-    {
-        // recap_api_url is gated since 2026-05-15. The Recap section
-        // page (Settings → Output) passes includeRecap:true on save.
-        var vm = new SettingsViewModel
-        {
-            RecapApiUrl = "https://api.anthropic.com/v1/messages",
-        };
-        var json = vm.ToJson(includeRecap: true);
-        Assert.Contains("\"recap_api_url\":\"https://api.anthropic.com/v1/messages\"", json);
-    }
-
-    [Theory]
-    [InlineData("")]
-    [InlineData("https://api.anthropic.com/v1/messages")]
-    [InlineData("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent")]
-    [InlineData("https://api.openai.com/v1/chat/completions")]
-    [InlineData("https://my-private-proxy.internal/v1/chat")]
-    public void RecapApiUrl_round_trips_through_json(string url)
-    {
-        // Round-trip through the explicit Recap-save path (the only
-        // one allowed to persist recap_api_url since the wipe fix).
-        var vm = new SettingsViewModel { RecapApiUrl = url };
-        var json = vm.ToJson(includeRecap: true);
-        var vm2 = new SettingsViewModel();
-        vm2.LoadFromJson(json);
-        Assert.Equal(url, vm2.RecapApiUrl);
     }
 
     // ── Recap rc → user-facing message (Phase 3 UI feedback) ──

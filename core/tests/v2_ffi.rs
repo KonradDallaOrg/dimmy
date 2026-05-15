@@ -547,6 +547,134 @@ fn config_round_trip_preserves_claude_code_url() {
     );
 }
 
+// ── recap vendor derivation + per-vendor keystore ───────────────
+//
+// The recap vendor is DERIVED from the chosen model id at dispatch
+// time (no separate `recap_provider` config field — keeps the UI to
+// a single picker). claude-* → Anthropic, gpt-* / o3 / o4 → OpenAI,
+// gemini-* → Gemini. The dictation URL + key are reused unless the
+// model's vendor differs.
+
+/// Per-vendor key save via `dimmy_save_llm_provider_key`. Pinned
+/// rc contract so the Win/Mac UIs can render the right status
+/// (saved vs invalid-provider vs unknown-scope vs keystore-error)
+/// without ambiguity.
+#[test]
+#[serial]
+fn save_llm_provider_key_rejects_invalid_provider() {
+    use dimmy_lib::ffi::dimmy_save_llm_provider_key;
+    ensure_init();
+    let scope = CString::new("llm").unwrap();
+    let bad = CString::new("nonexistent").unwrap();
+    let key = CString::new("sk-test").unwrap();
+    let rc = unsafe { dimmy_save_llm_provider_key(scope.as_ptr(), bad.as_ptr(), key.as_ptr()) };
+    assert_eq!(rc, -1, "unknown provider tag must return -1");
+
+    // 'deepgram' is a real Provider variant but has no default_llm_url
+    // → save must reject (LLM keystore would never be read for it).
+    let dg = CString::new("deepgram").unwrap();
+    let rc2 = unsafe { dimmy_save_llm_provider_key(scope.as_ptr(), dg.as_ptr(), key.as_ptr()) };
+    assert_eq!(
+        rc2, -1,
+        "vendor without default_llm_url must be rejected at save time"
+    );
+}
+
+#[test]
+#[serial]
+fn save_llm_provider_key_rejects_invalid_scope() {
+    use dimmy_lib::ffi::dimmy_save_llm_provider_key;
+    ensure_init();
+    let bad_scope = CString::new("stt").unwrap(); // not allowed via this FFI
+    let p = CString::new("anthropic").unwrap();
+    let k = CString::new("sk-test").unwrap();
+    let rc = unsafe { dimmy_save_llm_provider_key(bad_scope.as_ptr(), p.as_ptr(), k.as_ptr()) };
+    assert_eq!(
+        rc, -1,
+        "scope tag must be 'llm' or 'recap'; STT save has its own FFI"
+    );
+    let nonsense = CString::new("foobar").unwrap();
+    let rc2 = unsafe { dimmy_save_llm_provider_key(nonsense.as_ptr(), p.as_ptr(), k.as_ptr()) };
+    assert_eq!(rc2, -1);
+}
+
+#[test]
+#[serial]
+fn save_llm_provider_key_accepts_known_vendor() {
+    use dimmy_lib::ffi::dimmy_save_llm_provider_key;
+    ensure_init();
+    // anthropic / openai / gemini all have default_llm_url mappings —
+    // round-trip through BOTH scopes.
+    for scope_tag in &["llm", "recap"] {
+        let scope = CString::new(*scope_tag).unwrap();
+        for tag in &["anthropic", "openai", "gemini", "groq"] {
+            let p = CString::new(*tag).unwrap();
+            let k = CString::new(format!("sk-test-{}-{}", scope_tag, tag)).unwrap();
+            let rc = unsafe { dimmy_save_llm_provider_key(scope.as_ptr(), p.as_ptr(), k.as_ptr()) };
+            assert_eq!(
+                rc, 0,
+                "save for scope={} vendor={} must return 0",
+                scope_tag, tag
+            );
+        }
+    }
+}
+
+/// Null-pointer safety on the save FFI. The UI normally hands valid
+/// CStrings but defensive testing here keeps the contract pinned —
+/// any future refactor that drops the null check would be caught.
+#[test]
+#[serial]
+fn save_llm_provider_key_null_ptr_rejected() {
+    use dimmy_lib::ffi::dimmy_save_llm_provider_key;
+    ensure_init();
+    let scope = CString::new("llm").unwrap();
+    let p = CString::new("anthropic").unwrap();
+    let k = CString::new("sk").unwrap();
+    let rc1 = unsafe { dimmy_save_llm_provider_key(std::ptr::null(), p.as_ptr(), k.as_ptr()) };
+    assert_eq!(rc1, -1);
+    let rc2 = unsafe { dimmy_save_llm_provider_key(scope.as_ptr(), std::ptr::null(), k.as_ptr()) };
+    assert_eq!(rc2, -1);
+    let rc3 = unsafe { dimmy_save_llm_provider_key(scope.as_ptr(), p.as_ptr(), std::ptr::null()) };
+    assert_eq!(rc3, -1);
+}
+
+/// `recap_use_same_key` round-trips through config + the per-vendor
+/// `has_*_recap_key` snapshot fields appear after a save into the
+/// new `Recap(vendor)` scope. Pinned so the UI can rely on these
+/// fields to render the "key already saved" check icon.
+#[test]
+#[serial]
+fn recap_use_same_key_round_trips_and_recap_scope_snapshot_populated() {
+    use dimmy_lib::ffi::dimmy_save_llm_provider_key;
+    ensure_init();
+    // Default = true.
+    set_config(&serde_json::json!({"recap_use_same_key": false}).to_string());
+    let v = get_config_value();
+    assert_eq!(v["recap_use_same_key"], false);
+    set_config(&serde_json::json!({"recap_use_same_key": true}).to_string());
+    let v2 = get_config_value();
+    assert_eq!(v2["recap_use_same_key"], true);
+
+    // Save into the Recap scope and verify the snapshot flag flips.
+    let scope = CString::new("recap").unwrap();
+    let p = CString::new("openai").unwrap();
+    let k = CString::new("sk-openai-recap").unwrap();
+    let rc = unsafe { dimmy_save_llm_provider_key(scope.as_ptr(), p.as_ptr(), k.as_ptr()) };
+    assert_eq!(rc, 0);
+    let v3 = get_config_value();
+    assert_eq!(
+        v3["has_openai_recap_key"], true,
+        "snapshot must reflect Recap-scope key presence"
+    );
+    // Clear and verify the flag drops back.
+    let empty = CString::new("").unwrap();
+    let rc2 = unsafe { dimmy_save_llm_provider_key(scope.as_ptr(), p.as_ptr(), empty.as_ptr()) };
+    assert_eq!(rc2, 0);
+    let v4 = get_config_value();
+    assert_eq!(v4["has_openai_recap_key"], false);
+}
+
 /// Pin the return-code contract for `dimmy_claude_code_status`. The
 /// Win + Mac UIs cast the int return to an enum (0/1/2) — any value
 /// outside that range would silently break the status card.
@@ -559,39 +687,6 @@ fn claude_code_status_returns_documented_range() {
         (0..=2).contains(&rc),
         "claude_code_status must return 0/1/2; got {} — Win/Mac status card decode would break",
         rc
-    );
-}
-
-/// recap_api_url round-trips through dimmy_set_config_json so a saved
-/// override (different vendor for recap vs dictation) survives a
-/// config save + reload. Burned 2026-05-14 incident: user picked
-/// `gemini-3.1-pro` as recap model with `llm_api_url=anthropic.com`,
-/// the recap dispatch hit Anthropic with a Gemini model → 404.
-/// The fix introduces `recap_api_url` to route recap to a separate
-/// vendor URL. This test pins the schema round-trip.
-#[test]
-#[serial]
-fn config_round_trip_persists_recap_api_url_field() {
-    ensure_init();
-    set_config(
-        &serde_json::json!({
-            "llm_api_url": "https://api.anthropic.com/v1/messages",
-            "recap_api_url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-            "recap_model_override": "gemini-3.1-pro",
-        })
-        .to_string(),
-    );
-    let v = get_config_value();
-    assert_eq!(
-        v["recap_api_url"], "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-        "recap_api_url must round-trip — without it the dispatcher can't route recap to a different vendor"
-    );
-    // Reset empty to verify "inherit from llm_api_url" round-trip.
-    set_config(&serde_json::json!({"recap_api_url": ""}).to_string());
-    let v2 = get_config_value();
-    assert_eq!(
-        v2["recap_api_url"], "",
-        "empty recap_api_url must round-trip as the inherit signal"
     );
 }
 
