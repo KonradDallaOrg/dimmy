@@ -254,10 +254,21 @@ jobs:
       - name: Build Xcode project
         working-directory: platforms/macos
         run: |
+          # Derive the version from core/Cargo.toml so CFBundleShortVersionString
+          # matches the staging tag — without this override xcodebuild falls back
+          # to MARKETING_VERSION in the .pbxproj (0.1.0), which is what users saw
+          # in the sidebar footer of every staging DMG. release.yml already does
+          # this; staging-native.yml didn't, so the two pipelines silently shipped
+          # different version strings.
+          VERSION=$(grep -m1 '^version = ' ../../core/Cargo.toml | sed -E 's/.*"(.*)".*/\1/')
+          if [ -z "$VERSION" ]; then echo "::error::could not parse version from core/Cargo.toml"; exit 1; fi
+          echo "Building Dimmy.app with MARKETING_VERSION=$VERSION"
           xcodebuild -project Dimmy.xcodeproj \
             -scheme Dimmy \
             -configuration Release \
             -derivedDataPath build/derived \
+            MARKETING_VERSION="$VERSION" \
+            CURRENT_PROJECT_VERSION="$VERSION" \
             build \
             CODE_SIGN_IDENTITY="-"
 

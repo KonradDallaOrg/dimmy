@@ -27,6 +27,9 @@ struct MeetingView: View {
         VStack(spacing: 0) {
             titlebar
             Divider().opacity(0.4)
+            if vm.phase == .recording && vm.browsingPastMeeting {
+                liveRecordingBanner
+            }
             HStack(spacing: 0) {
                 MeetingSidebar(vm: vm)
                 mainPanel
@@ -98,11 +101,78 @@ struct MeetingView: View {
         case .idle:
             MeetingIdleView(vm: vm)
         case .recording:
-            MeetingRecordingView(vm: vm)
+            // When the user clicked a past meeting in the sidebar while
+            // the live recording is in flight, swap in MeetingDoneView
+            // so they actually see the past meeting's content. The live
+            // recording bar disappears from view, but the `liveRecordingBanner`
+            // pinned above keeps "you're still recording" visible at a
+            // glance plus a prominent Back-to-live CTA. The pollTimer
+            // and FFI capture keep running untouched — nothing about
+            // the actual recording changes here, only the on-screen
+            // mapping.
+            if vm.browsingPastMeeting {
+                MeetingDoneView(vm: vm)
+            } else {
+                MeetingRecordingView(vm: vm)
+            }
         case .processing:
             MeetingProcessingView(vm: vm)
         case .done:
             MeetingDoneView(vm: vm)
         }
+    }
+
+    // MARK: Live recording banner
+    //
+    // Pinned strip between the title bar and the sidebar/main split,
+    // visible only when the user is browsing a past meeting while a
+    // live recording is in flight. Carries the same red/orange dot +
+    // timer pair used in the recording bar, plus a `.borderedProminent`
+    // Back-to-live button (also bound to ⌘L). The banner spans the
+    // full window width so the user can't miss it even with the
+    // sidebar collapsed.
+    private var liveRecordingBanner: some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(vm.isPaused ? Color.orange : Color.red)
+                .frame(width: 8, height: 8)
+                .shadow(color: (vm.isPaused ? Color.orange : Color.red).opacity(0.6),
+                        radius: 3)
+            Text(vm.isPaused ? "Recording paused" : "Recording")
+                .font(.system(size: 12, weight: .semibold))
+            Text(vm.timerLabel)
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .monospacedDigit()
+                .foregroundStyle(vm.isPaused ? Color.orange : Color.red)
+            Text("· viewing past meeting")
+                .font(.system(size: 11))
+                .foregroundStyle(Color.macTextSecondary)
+            Spacer()
+            Button(action: { vm.backToLive() }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "dot.radiowaves.left.and.right")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text("Back to live")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .padding(.horizontal, 4)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.accentColor)
+            .keyboardShortcut("l", modifiers: [.command])
+            .help("Return to the live recording view (⌘L)")
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 8)
+        .background(
+            (vm.isPaused ? Color.orange : Color.red)
+                .opacity(0.08)
+                .overlay(
+                    Rectangle()
+                        .fill((vm.isPaused ? Color.orange : Color.red).opacity(0.35))
+                        .frame(height: 0.5),
+                    alignment: .bottom
+                )
+        )
     }
 }

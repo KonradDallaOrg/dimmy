@@ -815,6 +815,24 @@ final class AppState: ObservableObject {
     @Published var llmAuthMethod: String = "api_key"
     @Published var recapAuthMethod: String = ""
 
+    /// "Use same key as LLM/STT" for the meeting-recap call. Mirrors
+    /// `llmUseSameKey` one layer down — when ON (default), the recap
+    /// dispatcher reuses an existing upstream key (LLM-scope first,
+    /// STT-scope as fallback) for the recap vendor instead of asking
+    /// for a dedicated Recap-scope key. Win parity (PR #62).
+    @Published var recapUseSameKey: Bool = true
+
+    /// Per-vendor "has key" snapshots for the LLM and Recap keystore
+    /// scopes, mirrored from the Rust config JSON (`has_<vendor>_llm_key`,
+    /// `has_<vendor>_recap_key`). Refreshed on every `loadConfig` so
+    /// MacOutputPage's recap visibility matrix can answer "does an
+    /// upstream key exist for this vendor?" in O(1) without re-reading
+    /// the config snapshot on every render. STT-scope flags
+    /// (`has_<vendor>_key`) are mirrored separately as individual
+    /// `hasGroqKey` / `hasOpenaiKey` / … @Published vars above.
+    @Published var llmKeyByVendor: [String: Bool] = [:]
+    @Published var recapKeyByVendor: [String: Bool] = [:]
+
     /// Cached "is the Anthropic / Claude Code subscription connection
     /// usable right now" flag. Re-probed by `refreshClaudeCodeStatus()`
     /// (called from Settings pages on appear). Drives the gate on the
@@ -1113,7 +1131,7 @@ final class AppState: ObservableObject {
         // Keyring — always local encrypted file, ignore stored value
         useKeyring = false
 
-        // Per-provider key flags
+        // Per-provider key flags — STT scope (`has_<vendor>_key`)
         if let v = config["has_groq_key"] as? Bool { hasGroqKey = v }
         if let v = config["has_openai_key"] as? Bool { hasOpenaiKey = v }
         if let v = config["has_gemini_key"] as? Bool { hasGeminiKey = v }
@@ -1121,6 +1139,24 @@ final class AppState: ObservableObject {
         if let v = config["has_fireworks_key"] as? Bool { hasFireworksKey = v }
         if let v = config["has_together_key"] as? Bool { hasTogetherKey = v }
         if let v = config["has_custom_key"] as? Bool { hasCustomKey = v }
+
+        // Per-vendor key flags — LLM scope (`has_<vendor>_llm_key`) and
+        // Recap scope (`has_<vendor>_recap_key`). Drives the recap
+        // visibility matrix in MacOutputPage (use-same-key toggle vs
+        // dedicated recap key field). Mirrors Win _llmKeyByProvider +
+        // HasRecapKey lookups.
+        let llmVendors = ["groq", "openai", "anthropic", "gemini",
+                          "openrouter", "fireworks", "together", "custom"]
+        var llmMap: [String: Bool] = [:]
+        var recapMap: [String: Bool] = [:]
+        for v in llmVendors {
+            if let b = config["has_\(v)_llm_key"] as? Bool { llmMap[v] = b }
+            if let b = config["has_\(v)_recap_key"] as? Bool { recapMap[v] = b }
+        }
+        llmKeyByVendor = llmMap
+        recapKeyByVendor = recapMap
+
+        if let v = config["recap_use_same_key"] as? Bool { recapUseSameKey = v }
 
         // History v2 retention
         if let v = config["save_audio_in_history"] as? Bool { saveAudioInHistory = v }
@@ -1234,6 +1270,7 @@ final class AppState: ObservableObject {
             // Recap section in Settings → Output owns these fields.
             config["recap_auth_method"] = recapAuthMethod
             config["recap_model_override"] = recapModelOverride
+            config["recap_use_same_key"] = recapUseSameKey
         }
         if includeNotion {
             config["notion_target_id"] = notionTargetId
