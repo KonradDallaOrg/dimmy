@@ -26,6 +26,40 @@ pub fn active_mic_sample_rate() -> u32 {
     ACTIVE_MIC_SAMPLE_RATE.load(Ordering::Relaxed)
 }
 
+/// Externally-supplied sample rate for the macOS / Linux loopback
+/// push path (`dimmy_push_loopback_audio`). On Windows the secondary
+/// stream is driven by cpal so its rate is read directly from the
+/// device config and this override stays 0. On Mac, SCStream's
+/// `SCStreamConfiguration.sampleRate` is matched to the live cpal
+/// mic rate (typically 16 kHz on BT-HFP, 48 kHz on built-in) — the
+/// Swift side stashes that rate here so `secondary_sample_rate()`
+/// (read by `dimmy_meeting_start` to size the WAV header for
+/// `audio_system.wav`) returns the rate samples will actually arrive
+/// at, instead of the historical hardcoded 48 kHz. Without this the
+/// WAV header advertises 48 kHz while samples are at 16 kHz, so
+/// playback runs at 3× speed and the loopback STT call downsamples
+/// against the wrong rate and returns empty. Set via
+/// `dimmy_set_loopback_sample_rate` (one-shot, before
+/// `dimmy_meeting_start`) and refreshed on every
+/// `dimmy_push_loopback_audio` whose `sample_rate` arg is non-zero.
+/// Cleared when the audio worker stops, so a subsequent recording
+/// re-probes the rate from a clean slate.
+static LOOPBACK_SAMPLE_RATE_OVERRIDE: AtomicU32 = AtomicU32::new(0);
+
+/// Stash the loopback sample rate so `secondary_sample_rate()` returns
+/// it on the next read. `rate == 0` clears the override (used by the
+/// audio worker on Stop).
+pub fn set_loopback_sample_rate_override(rate: u32) {
+    if rate != 0 {
+        assert!(
+            (8_000..=192_000).contains(&rate),
+            "set_loopback_sample_rate_override: rate {} out of audio range",
+            rate
+        );
+    }
+    LOOPBACK_SAMPLE_RATE_OVERRIDE.store(rate, Ordering::Relaxed);
+}
+
 /// What the audio thread should capture. `Mic` is the historical default
 /// (default input device — built-in mic, headset, etc). `System` opens
 /// the default OUTPUT device in WASAPI loopback mode on Windows so we
@@ -422,6 +456,11 @@ pub fn spawn_audio_thread(
                         // (e.g. SystemAudioCaptureService on Mac)
                         // know there is no active mic to match.
                         ACTIVE_MIC_SAMPLE_RATE.store(0, Ordering::Relaxed);
+                        // And clear the externally-supplied loopback
+                        // rate so the next recording re-probes from a
+                        // clean slate instead of inheriting a stale
+                        // value from a prior meeting.
+                        LOOPBACK_SAMPLE_RATE_OVERRIDE.store(0, Ordering::Relaxed);
                     }
                     AudioCommand::PushLoopback(samples) => {
                         if let Ok(mut b) = buffer_secondary.lock() {
@@ -818,14 +857,31 @@ pub fn primary_sample_rate(device_name: &Option<String>, source: &AudioSource) -
     rate
 }
 
-/// Native sample rate of the loopback (system audio) device. Used by
+/// Native sample rate of the loopback (system audio) source. Used by
 /// meeting.rs in Mix mode to write `audio_system.wav` with the correct
 /// header rate when the mic and loopback devices have different native
 /// rates (typical: BT mic in HFP at 16 kHz + speakers loopback at 48 kHz).
-/// Returns 48000 as fallback when no output device exists or non-Windows.
-pub fn secondary_sample_rate() -> u32 {
+///
+/// Resolution order:
+///   1. Explicit override set via `set_loopback_sample_rate_override`
+///      (Swift / Linux push paths publish the SCStream / Pulse rate
+///      here BEFORE the meeting worker creates the WAV file).
+///   2. On Windows — cpal default output device's config rate
+///      (WASAPI loopback runs at this rate).
+///   3. On Mac / Linux — `primary_fallback`, the cpal mic rate. The
+///      external push path (`SystemAudioCaptureService` on macOS)
+///      matches SCStream to that rate so the two streams collapse to
+///      a single rate and `audio.wav` (the mix) plays back without
+///      rate distortion. Pre-fix this fell through to a hardcoded
+///      48 kHz that broke playback whenever the mic was on BT-HFP.
+pub fn secondary_sample_rate(primary_fallback: u32) -> u32 {
+    let override_rate = LOOPBACK_SAMPLE_RATE_OVERRIDE.load(Ordering::Relaxed);
+    if override_rate != 0 {
+        return override_rate;
+    }
     #[cfg(target_os = "windows")]
     {
+        let _ = primary_fallback;
         let host = cpal::default_host();
         host.default_output_device()
             .and_then(|d| d.default_output_config().ok())
@@ -834,7 +890,11 @@ pub fn secondary_sample_rate() -> u32 {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        48_000
+        if primary_fallback >= 8_000 {
+            primary_fallback
+        } else {
+            48_000
+        }
     }
 }
 
