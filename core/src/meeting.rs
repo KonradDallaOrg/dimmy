@@ -857,6 +857,37 @@ fn worker_loop(
                 emit("system", &system_text, &mut system_accum);
             }
 
+            // Stats: this chunk contributed transcribed words +
+            // captured audio time. Mirror the bookkeeping that
+            // `dimmy_stop_recording` does for pill dictation so the
+            // Settings → Stats card ("Total words", "Time saved")
+            // reflects meeting usage too. Time is counted ONCE per
+            // chunk window (mic + system cover the same wall-time);
+            // words sum across both speakers.
+            //
+            // We approximate words from the FULL chunk text (not the
+            // post-dedup `delta`) — the overlap dedup removes 1-3
+            // words per chunk-pair which is ~1-3% over-count, well
+            // inside "Settings shows an approximate counter" budget.
+            // The line that lands on disk in transcripts.txt is the
+            // delta — but the user's STT minutes are spent on the
+            // full chunk, so counting full text is also more honest
+            // about throughput.
+            let chunk_words = mic_text.split_whitespace().count() as std::os::raw::c_int
+                + if mix_active {
+                    system_text.split_whitespace().count() as std::os::raw::c_int
+                } else {
+                    0
+                };
+            let chunk_secs = if device_sample_rate > 0 {
+                (end - start) as f64 / device_sample_rate as f64
+            } else {
+                0.0
+            };
+            if chunk_words > 0 || chunk_secs > 0.0 {
+                let _ = crate::ffi::dimmy_update_stats(chunk_words, chunk_secs);
+            }
+
             last_processed = end;
         }
 
