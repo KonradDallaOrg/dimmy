@@ -180,16 +180,29 @@ final class MeetingViewModel: ObservableObject {
         statusLabel = isPaused ? "Paused" : "Recording"
         subStatusLabel = "Reattached to in-flight meeting"
         isPaused = DimmyCore.shared.meetingIsPaused
-        // Best-effort: pick the freshest meeting dir off disk so the
-        // timer + transcript reflect the live session. The Rust side
-        // also writes mtime as it appends transcripts.txt, so the
-        // newest dir is the right one.
-        if let dir = freshestMeetingDir() {
+
+        // Prefer the already-attached `activeMeetingDir` when we have
+        // one — that's the cheap-and-correct path for "Back to live"
+        // after the user browsed a past meeting in the sidebar. Falling
+        // back to `freshestMeetingDir()` was risky: it sorts by mtime,
+        // and any file we just wrote inside a past dir (transcript
+        // load, notes save) would mask the real live dir.
+        //
+        // Likewise, leave `startedAt` alone when it's already set —
+        // the pollTimer clock has been ticking since `start()` and
+        // re-deriving from the dir's `creationDate` introduces drift
+        // (FS mtime granularity, copy-on-write timestamps).
+        if activeMeetingDir.isEmpty, let dir = freshestMeetingDir() {
             activeMeetingDir = dir.path
-            startedAt = (try? dir.resourceValues(forKeys: [.creationDateKey]).creationDate)
-                ?? Date()
-        } else {
-            startedAt = Date()
+        }
+        if startedAt == nil {
+            if !activeMeetingDir.isEmpty {
+                let url = URL(fileURLWithPath: activeMeetingDir)
+                startedAt = (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate)
+                    ?? Date()
+            } else {
+                startedAt = Date()
+            }
         }
         startRecordingPolling()
     }
@@ -489,9 +502,17 @@ final class MeetingViewModel: ObservableObject {
     }
 
     func selectHistory(_ row: MeetingHistoryRow) {
-        // While recording is in flight, viewing a past meeting must
-        // not stop the recording — the user can browse, then click
-        // "Back to live" to return.
+        // Flush pending notes BEFORE we switch selectedDir. saveNotes
+        // resolves the target via `notesTargetDir` which prefers
+        // `selectedDir` — so doing it after the assignment would write
+        // the LIVE meeting's (typically empty) notes buffer into the
+        // PAST meeting's `notes.md`, either overwriting or deleting it.
+        // The empty-notes branch in saveNotes also touches the past
+        // dir's mtime, which then makes `freshestMeetingDir()` return
+        // the past dir on the next "Back to live", so the timer label
+        // jumps to the past meeting's age. This single re-ordering
+        // fixes both bugs.
+        saveNotes()
         if phase == .recording {
             browsingPastMeeting = true
         }
@@ -697,10 +718,12 @@ final class MeetingViewModel: ObservableObject {
     }
 
     func loadDoneFromDisk(dir: String) {
-        // Flush unsaved notes from whatever dir was on screen before we
-        // swap. Cheap (text file write); idempotent if no change.
-        saveNotes()
-
+        // Callers are responsible for flushing pending notes BEFORE
+        // they call us (via `saveNotes()` while `selectedDir` still
+        // points at the previous target). Doing the save here would
+        // resolve `notesTargetDir` to the NEW dir we're loading and
+        // happily blow away its `notes.md`. See `selectHistory` for
+        // the canonical order.
         let url = URL(fileURLWithPath: dir)
         doneTitle = titleFromDir(dir)
         let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
