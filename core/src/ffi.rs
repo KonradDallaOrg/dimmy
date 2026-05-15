@@ -2090,9 +2090,40 @@ pub extern "C" fn dimmy_get_active_mic_sample_rate() -> c_int {
     crate::audio::active_mic_sample_rate() as c_int
 }
 
+/// Probe the sample rate cpal WOULD open the configured mic at,
+/// without actually opening a stream. Reads `default_input_config()`
+/// on the user-selected device (or system default if none picked).
+///
+/// Useful for callers that need to know the rate BEFORE cpal has
+/// activated the stream — e.g. macOS `SystemAudioCaptureService`
+/// closes the race where `dimmy_get_active_mic_sample_rate` returns
+/// 0 because the cpal Start command (sent by `dimmy_meeting_start`)
+/// hasn't been serviced yet when SCStream starts. With this probe
+/// the SCStream rate always matches what cpal will use, so the
+/// secondary samples land in the audio_buffer_secondary at the same
+/// rate as the audio.wav / audio_system.wav header.
+///
+/// Returns the probed rate (Hz), or 0 if no device is available.
+#[no_mangle]
+pub extern "C" fn dimmy_probe_primary_sample_rate() -> c_int {
+    let st = state();
+    let selected = st.selected_device.lock().ok().and_then(|d| d.clone());
+    crate::audio::primary_sample_rate(&selected, &crate::audio::AudioSource::Mic) as c_int
+}
+
 /// `samples`     — interleaved f32 PCM, [-1.0, 1.0] expected (clamped).
 /// `count`       — number of f32 values.
-/// `sample_rate` — native rate (informational; worker does not resample here).
+/// `sample_rate` — native rate of the SCStream / loopback source. When
+///                 `> 0` it ALSO updates the loopback rate the meeting
+///                 worker uses to size `audio_system.wav`'s WAV header
+///                 (via `crate::audio::secondary_sample_rate`). The
+///                 first non-zero push during a meeting is therefore
+///                 enough to keep header and samples in sync — but
+///                 prefer pre-setting via `dimmy_set_loopback_sample_rate`
+///                 so the WAV is opened at the right rate from the
+///                 first byte. `sample_rate <= 0` is treated as "no
+///                 information"; the prior override (or platform
+///                 fallback) stays in effect.
 ///
 /// Returns 0 on success, -1 on null / bad args / channel send failure.
 ///
@@ -2103,10 +2134,16 @@ pub extern "C" fn dimmy_get_active_mic_sample_rate() -> c_int {
 pub unsafe extern "C" fn dimmy_push_loopback_audio(
     samples: *const c_float,
     count: c_int,
-    _sample_rate: c_int,
+    sample_rate: c_int,
 ) -> c_int {
     if samples.is_null() || count <= 0 {
         return -1;
+    }
+    if sample_rate > 0 {
+        let rate = sample_rate as u32;
+        if (8_000..=192_000).contains(&rate) {
+            crate::audio::set_loopback_sample_rate_override(rate);
+        }
     }
     let slice = std::slice::from_raw_parts(samples, count as usize);
     let vec: Vec<f32> = slice.iter().map(|&s| s.clamp(-1.0, 1.0)).collect();
@@ -2118,6 +2155,33 @@ pub unsafe extern "C" fn dimmy_push_loopback_audio(
         },
         Err(_) => -1,
     }
+}
+
+/// Tell the Rust core the sample rate at which the next
+/// `dimmy_push_loopback_audio` stream will deliver samples. Called by
+/// the macOS `SystemAudioCaptureService` BEFORE `dimmy_meeting_start`
+/// so the meeting worker opens `audio_system.wav` with the correct
+/// header (otherwise the WAV is sized at the legacy 48 kHz fallback
+/// while SCStream pushes at the cpal mic rate, e.g. 16 kHz on BT-HFP,
+/// and playback / STT are 3× off).
+///
+/// `rate == 0` clears the override (next read falls back to the
+/// platform default). Out-of-range values (outside 8 kHz..=192 kHz)
+/// are ignored — caller-side input range error, not worth aborting.
+///
+/// Returns 0 on success, -1 on out-of-range input (override not
+/// changed).
+#[no_mangle]
+pub extern "C" fn dimmy_set_loopback_sample_rate(rate: c_int) -> c_int {
+    if rate < 0 {
+        return -1;
+    }
+    let r = rate as u32;
+    if r != 0 && !(8_000..=192_000).contains(&r) {
+        return -1;
+    }
+    crate::audio::set_loopback_sample_rate_override(r);
+    0
 }
 
 /// Get device list as JSON array. Caller must NOT free the returned pointer.
@@ -2780,7 +2844,7 @@ pub unsafe extern "C" fn dimmy_meeting_start(out_buf: *mut c_char, buf_len: c_in
     // writes audio_system.wav with this rate so playback is correct
     // regardless of the mic/system mismatch.
     let system_sr = if matches!(mt_source, crate::audio::AudioSource::Mix) {
-        crate::audio::secondary_sample_rate()
+        crate::audio::secondary_sample_rate(device_sr)
     } else {
         device_sr
     };

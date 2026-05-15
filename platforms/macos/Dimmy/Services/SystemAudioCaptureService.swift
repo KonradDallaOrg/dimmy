@@ -15,6 +15,27 @@ final class SystemAudioCaptureService: NSObject {
     private var isRunning = false
     private override init() {}
 
+    /// Sample rate SCStream will be (or is currently) configured at.
+    /// Mirrors the cpal mic rate when one is live; falls back through
+    /// a cpal probe (no stream opened) and finally to 48 kHz so we
+    /// always pick a rate before SCStream is created.
+    ///
+    /// Resolution order:
+    ///   1. `dimmy_get_active_mic_sample_rate()` — the rate the live
+    ///      cpal stream is actually running at.
+    ///   2. `dimmy_probe_primary_sample_rate()` — what cpal would open
+    ///      the selected mic at; closes the race where SCStream starts
+    ///      before the cpal Start command has been serviced.
+    ///   3. Hardcoded 48 000 Hz when no input device is available
+    ///      (SCStream still needs some rate).
+    static func plannedSampleRate() -> Int {
+        let active = Int(dimmy_get_active_mic_sample_rate())
+        if active > 0 { return active }
+        let probed = Int(dimmy_probe_primary_sample_rate())
+        if probed > 0 { return probed }
+        return 48_000
+    }
+
     func start() async -> Bool {
         guard !isRunning else { return true }
 
@@ -33,16 +54,21 @@ final class SystemAudioCaptureService: NSObject {
             // the macOS audio HAL to renegotiate the global mixer
             // every time recording starts — the user perceives this
             // as a dirty / quieter audio output in their headphones
-            // for the duration of the meeting. Falling back to
-            // 48 kHz when the Rust side reports 0 (no recording yet
-            // — shouldn't happen because we're called after
-            // meetingStart, but defensive). Reported on 2026-05-14
-            // with Jabra Evolve 3 + meeting recording.
-            let micRate = Int(dimmy_get_active_mic_sample_rate())
-            let chosenRate = micRate > 0 ? micRate : 48_000
+            // for the duration of the meeting. `plannedSampleRate()`
+            // falls back to a non-stream cpal probe when the active
+            // stream hasn't published a rate yet (race between
+            // `dimmy_meeting_start` and SCStream config), then to
+            // 48 kHz only if no input device is available at all.
+            let chosenRate = Self.plannedSampleRate()
             config.sampleRate = chosenRate
             config.channelCount = 1
-            NSLog("[SystemAudio] SCStream sampleRate=%d (mic native=%d)", chosenRate, micRate)
+            // Pre-publish the chosen rate so the meeting worker's
+            // STT downsample path uses the right source rate even
+            // before the first sample buffer's ASBD has been read.
+            // The actual rate published on each push (from ASBD)
+            // wins if it differs.
+            _ = dimmy_set_loopback_sample_rate(Int32(chosenRate))
+            NSLog("[SystemAudio] SCStream sampleRate=%d", chosenRate)
             // Minimal 2×2 display capture required by SCStream API even for
             // audio-only; GPU cost is negligible at this resolution.
             config.width = 2
@@ -81,10 +107,22 @@ extension SystemAudioCaptureService: SCStreamOutput {
         guard type == .audio,
               let blockBuffer = sampleBuffer.dataBuffer else { return }
 
-        // Guard: only handle float32 linear PCM (ScreenCaptureKit default).
+        // Read the actual rate ScreenCaptureKit ships samples at from
+        // the sample buffer's ASBD. `SCStreamConfiguration.sampleRate`
+        // is a hint that the OS may honour or quietly override (e.g.
+        // device renegotiation, route changes). Trusting the hint and
+        // hardcoding 48 000 here is exactly what made `audio_system.wav`
+        // ship a 48 kHz header while samples were 16 kHz on BT-HFP
+        // mics — playback ran at 3× speed and the loopback STT call
+        // downsampled against the wrong rate and returned empty.
+        var bufferRate: Int32 = 0
         if let fmt = sampleBuffer.formatDescription,
-           let asbd = fmt.audioStreamBasicDescription,
-           (asbd.mFormatFlags & kAudioFormatFlagIsFloat) == 0 {
+           let asbd = fmt.audioStreamBasicDescription {
+            if (asbd.mFormatFlags & kAudioFormatFlagIsFloat) == 0 {
+                return
+            }
+            bufferRate = Int32(asbd.mSampleRate)
+        } else {
             return
         }
 
@@ -100,7 +138,7 @@ extension SystemAudioCaptureService: SCStreamOutput {
         guard sampleCount > 0 else { return }
 
         ptr.withMemoryRebound(to: Float.self, capacity: sampleCount) { floatPtr in
-            _ = dimmy_push_loopback_audio(floatPtr, Int32(sampleCount), 48_000)
+            _ = dimmy_push_loopback_audio(floatPtr, Int32(sampleCount), bufferRate)
         }
     }
 }

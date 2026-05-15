@@ -312,6 +312,18 @@ int32_t dimmy_push_loopback_audio(const float * _Nonnull samples, int32_t count,
 /// audio HAL renegotiation during meetings).
 int32_t dimmy_get_active_mic_sample_rate(void);
 
+/// Probed sample rate cpal would open the configured mic at (no stream
+/// opened). Use this when `dimmy_get_active_mic_sample_rate` returns 0
+/// because cpal hasn't started yet — typical for macOS SCStream config
+/// that runs concurrently with the first dimmy_meeting_start.
+int32_t dimmy_probe_primary_sample_rate(void);
+
+/// Tell the Rust core which rate the next dimmy_push_loopback_audio
+/// stream will run at. Called by SystemAudioCaptureService BEFORE
+/// dimmy_meeting_start so audio_system.wav is opened with the correct
+/// header. Pass 0 to clear. Returns 0 on success, -1 on out-of-range.
+int32_t dimmy_set_loopback_sample_rate(int32_t rate);
+
 /// Stop the active meeting. Returns JSON with id/dir/transcript/
 /// duration_secs/chunk_count/error. Negative on error / no active session.
 int32_t dimmy_meeting_stop(char * _Nonnull out_buf, int32_t buf_len);

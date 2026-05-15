@@ -40,8 +40,8 @@ use dimmy_lib::ffi::{
     dimmy_history_save, dimmy_history_update_audio, dimmy_history_update_enhanced,
     dimmy_history_update_word_timestamps, dimmy_init, dimmy_llm_call_raw, dimmy_meeting_is_active,
     dimmy_meeting_save_post_process, dimmy_push_loopback_audio, dimmy_set_app_context,
-    dimmy_set_config_json, dimmy_transcribe_file, dimmy_user_dict_add, dimmy_user_dict_list_json,
-    dimmy_user_dict_remove,
+    dimmy_set_config_json, dimmy_set_loopback_sample_rate, dimmy_transcribe_file,
+    dimmy_user_dict_add, dimmy_user_dict_list_json, dimmy_user_dict_remove,
 };
 
 // ── Fixture wiring (lifted from ffi_e2e to stay self-contained) ──────
@@ -960,4 +960,88 @@ fn push_loopback_audio_zero_count_returns_minus_one() {
     unsafe {
         assert_eq!(dimmy_push_loopback_audio(s.as_ptr(), 0, 48_000), -1);
     }
+}
+
+// ── Tests: set_loopback_sample_rate ─────────────────────────────────
+//
+// These pin the rate-plumbing fix for the macOS meeting bug where
+// `audio_system.wav` shipped a 48 kHz header while SCStream pushed at
+// the cpal mic rate (16 kHz on BT-HFP). The override the Swift side
+// sets BEFORE `dimmy_meeting_start` must be readable by
+// `secondary_sample_rate` so the WAV is created with the right rate
+// from byte 0.
+
+#[test]
+#[serial]
+fn set_loopback_sample_rate_updates_secondary_rate() {
+    ensure_init();
+    // Clean slate: prior tests may have left an override set.
+    assert_eq!(dimmy_set_loopback_sample_rate(0), 0);
+    let baseline = dimmy_lib::audio::secondary_sample_rate(48_000);
+    assert!(
+        baseline >= 8_000,
+        "platform fallback should be a sane audio rate, got {baseline}"
+    );
+
+    assert_eq!(dimmy_set_loopback_sample_rate(16_000), 0);
+    assert_eq!(dimmy_lib::audio::secondary_sample_rate(48_000), 16_000);
+
+    assert_eq!(dimmy_set_loopback_sample_rate(48_000), 0);
+    assert_eq!(dimmy_lib::audio::secondary_sample_rate(16_000), 48_000);
+
+    // Cleanup so neighbour tests start from the platform default.
+    assert_eq!(dimmy_set_loopback_sample_rate(0), 0);
+    assert_eq!(dimmy_lib::audio::secondary_sample_rate(48_000), baseline);
+}
+
+#[test]
+#[serial]
+fn set_loopback_sample_rate_rejects_out_of_range() {
+    ensure_init();
+    assert_eq!(dimmy_set_loopback_sample_rate(0), 0);
+    let baseline = dimmy_lib::audio::secondary_sample_rate(48_000);
+
+    assert_eq!(dimmy_set_loopback_sample_rate(-1), -1);
+    assert_eq!(dimmy_set_loopback_sample_rate(7_999), -1);
+    assert_eq!(dimmy_set_loopback_sample_rate(192_001), -1);
+
+    assert_eq!(
+        dimmy_lib::audio::secondary_sample_rate(48_000),
+        baseline,
+        "rejected rates must not change the override"
+    );
+}
+
+#[test]
+#[serial]
+fn push_loopback_audio_with_rate_updates_override() {
+    ensure_init();
+    assert_eq!(dimmy_set_loopback_sample_rate(0), 0);
+    let samples = [0.1f32, -0.1, 0.2, -0.2];
+    let rc = unsafe { dimmy_push_loopback_audio(samples.as_ptr(), samples.len() as i32, 16_000) };
+    assert_eq!(rc, 0);
+    assert_eq!(
+        dimmy_lib::audio::secondary_sample_rate(48_000),
+        16_000,
+        "non-zero sample_rate arg should refresh the loopback rate override"
+    );
+    assert_eq!(dimmy_set_loopback_sample_rate(0), 0);
+}
+
+// On non-Windows the fallback when no override is set must follow the
+// primary (mic) rate so SCStream's `audio_system.wav` matches the cpal
+// mic rate (BT-HFP common case: 16 kHz on both). Pre-fix this returned
+// a hardcoded 48 kHz and made playback run at 3× speed.
+#[test]
+#[cfg(not(target_os = "windows"))]
+#[serial]
+fn secondary_sample_rate_falls_back_to_primary_on_non_windows() {
+    ensure_init();
+    assert_eq!(dimmy_set_loopback_sample_rate(0), 0);
+    assert_eq!(dimmy_lib::audio::secondary_sample_rate(16_000), 16_000);
+    assert_eq!(dimmy_lib::audio::secondary_sample_rate(44_100), 44_100);
+    assert_eq!(dimmy_lib::audio::secondary_sample_rate(48_000), 48_000);
+    // Out-of-range primary is replaced with the canonical 48 kHz so a
+    // bug in the primary probe never propagates to the WAV header.
+    assert_eq!(dimmy_lib::audio::secondary_sample_rate(0), 48_000);
 }
