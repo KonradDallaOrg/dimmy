@@ -63,6 +63,80 @@ impl Provider {
         }
     }
 
+    /// Derive a provider from a model id. Used by the recap dispatcher:
+    /// the user picks a model (claude-opus-4-7 / gemini-3.1-pro / gpt-5)
+    /// and the URL + key are derived from the model's vendor. Returns
+    /// None for unrecognised model patterns (Custom / Local) so the
+    /// caller falls back to the dictation provider.
+    ///
+    /// Patterns (case-insensitive prefix match, conservative on edges
+    /// to avoid false positives like a "gpt2-something-else" custom):
+    ///   claude-*       → Anthropic
+    ///   gpt-*          → OpenAI
+    ///   o1, o3, o4-... → OpenAI (reasoning models)
+    ///   gemini-*       → Gemini
+    ///   else           → None
+    pub fn from_model_id(model: &str) -> Option<Self> {
+        let m = model.to_ascii_lowercase();
+        if m.starts_with("claude-") {
+            Some(Self::Anthropic)
+        } else if m.starts_with("gpt-")
+            || m == "o1"
+            || m == "o3"
+            || m == "o4"
+            || m.starts_with("o1-")
+            || m.starts_with("o3-")
+            || m.starts_with("o4-")
+        {
+            Some(Self::OpenAI)
+        } else if m.starts_with("gemini-") {
+            Some(Self::Gemini)
+        } else {
+            None
+        }
+    }
+
+    /// Inverse of `as_str()` — parse a lowercase vendor tag back to the
+    /// enum. Returns None for unknown values so callers can distinguish
+    /// "empty / inherit" from "unrecognised vendor". Used by the
+    /// per-vendor keystore save FFI (`dimmy_save_llm_provider_key`)
+    /// where the UI passes vendor tags like "anthropic" / "openai".
+    pub fn from_tag(tag: &str) -> Option<Self> {
+        match tag {
+            "groq" => Some(Self::Groq),
+            "openai" => Some(Self::OpenAI),
+            "openrouter" => Some(Self::OpenRouter),
+            "gemini" => Some(Self::Gemini),
+            "deepgram" => Some(Self::Deepgram),
+            "anthropic" => Some(Self::Anthropic),
+            "fireworks" => Some(Self::Fireworks),
+            "together" => Some(Self::Together),
+            _ => None,
+        }
+    }
+
+    /// Default LLM endpoint URL for this provider. Used by the recap
+    /// dispatcher when `recap_provider` selects a different vendor:
+    /// the user picks "Gemini" in the Recap section, the dispatcher
+    /// derives the URL via this method (no free-form URL field in the
+    /// UI). Returns None for vendors that don't expose a standard
+    /// LLM completions endpoint (Deepgram = STT-only) — callers must
+    /// fall back to the inherit-from-dictation path.
+    pub fn default_llm_url(&self) -> Option<&'static str> {
+        match self {
+            Self::Anthropic => Some("https://api.anthropic.com/v1/messages"),
+            Self::OpenAI => Some("https://api.openai.com/v1/chat/completions"),
+            Self::Gemini => {
+                Some("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")
+            }
+            Self::Groq => Some("https://api.groq.com/openai/v1/chat/completions"),
+            Self::OpenRouter => Some("https://openrouter.ai/api/v1/chat/completions"),
+            Self::Fireworks => Some("https://api.fireworks.ai/inference/v1/chat/completions"),
+            Self::Together => Some("https://api.together.ai/v1/chat/completions"),
+            Self::Deepgram | Self::Custom | Self::Local => None,
+        }
+    }
+
     /// Maximum file size in bytes this provider accepts for STT upload.
     /// Used to decide whether to chunk a long recording before sending.
     /// Returns a conservative 25MB default for unknown/custom providers.
@@ -168,8 +242,14 @@ impl Provider {
 pub enum KeyringScope {
     /// Transcription / STT API key
     Stt(Provider),
-    /// LLM post-processing API key
+    /// LLM post-processing API key (dictation rewrite)
     Llm(Provider),
+    /// Meeting / long-dictation recap API key. Distinct scope from
+    /// `Llm` so a user can keep two accounts for the same vendor:
+    /// one for fast dictation rewrites, one for the heavier recap
+    /// pass. Only populated when the user explicitly turns OFF the
+    /// "Use my saved <vendor> key" toggle in Settings → Output.
+    Recap(Provider),
     /// Notion internal integration token (notion.so/my-integrations).
     /// Stored under the same AES-256 keystore as STT/LLM keys; not a
     /// per-provider variant because there's exactly one Notion service
@@ -183,6 +263,7 @@ impl KeyringScope {
         let name = match self {
             Self::Stt(p) => format!("api-key-{}", p.as_str()),
             Self::Llm(p) => format!("llm-key-{}", p.as_str()),
+            Self::Recap(p) => format!("recap-key-{}", p.as_str()),
             Self::NotionToken => "integration-notion-token".to_string(),
         };
         // Entry name must be non-empty and contain a dash separator
@@ -199,7 +280,7 @@ impl KeyringScope {
     /// Returns `None` for non-provider scopes (e.g. Notion integration token).
     pub fn provider(&self) -> Option<Provider> {
         match self {
-            Self::Stt(p) | Self::Llm(p) => Some(*p),
+            Self::Stt(p) | Self::Llm(p) | Self::Recap(p) => Some(*p),
             Self::NotionToken => None,
         }
     }
@@ -307,6 +388,79 @@ mod tests {
             Provider::from_url("https://my-custom-server.com/v1/transcriptions"),
             Provider::Custom
         );
+    }
+
+    #[test]
+    fn from_model_id_canonical_patterns() {
+        assert_eq!(
+            Provider::from_model_id("claude-opus-4-7"),
+            Some(Provider::Anthropic)
+        );
+        assert_eq!(
+            Provider::from_model_id("claude-sonnet-4-6"),
+            Some(Provider::Anthropic)
+        );
+        assert_eq!(
+            Provider::from_model_id("claude-haiku-4-5-20251001"),
+            Some(Provider::Anthropic)
+        );
+        assert_eq!(Provider::from_model_id("gpt-5"), Some(Provider::OpenAI));
+        assert_eq!(Provider::from_model_id("gpt-4o"), Some(Provider::OpenAI));
+        assert_eq!(
+            Provider::from_model_id("gpt-4o-mini"),
+            Some(Provider::OpenAI)
+        );
+        assert_eq!(Provider::from_model_id("o3"), Some(Provider::OpenAI));
+        assert_eq!(Provider::from_model_id("o3-mini"), Some(Provider::OpenAI));
+        assert_eq!(Provider::from_model_id("o4-mini"), Some(Provider::OpenAI));
+        assert_eq!(
+            Provider::from_model_id("gemini-3.1-pro"),
+            Some(Provider::Gemini)
+        );
+        assert_eq!(
+            Provider::from_model_id("gemini-2.5-flash"),
+            Some(Provider::Gemini)
+        );
+    }
+
+    #[test]
+    fn from_model_id_case_insensitive() {
+        assert_eq!(
+            Provider::from_model_id("Claude-Opus-4-7"),
+            Some(Provider::Anthropic)
+        );
+        assert_eq!(Provider::from_model_id("GPT-5"), Some(Provider::OpenAI));
+        assert_eq!(
+            Provider::from_model_id("Gemini-3.1-Pro"),
+            Some(Provider::Gemini)
+        );
+    }
+
+    #[test]
+    fn from_model_id_returns_none_for_unknown() {
+        // Empty → None so the dispatcher falls back to dictation.
+        assert_eq!(Provider::from_model_id(""), None);
+        // Local Gemma id → None (no cloud URL to derive).
+        assert_eq!(Provider::from_model_id("gemma-3n-e2b-it-q4_k_m.gguf"), None);
+        // Custom hand-edited id → None.
+        assert_eq!(Provider::from_model_id("my-private-model"), None);
+        // Avoid false positives on partial matches.
+        assert_eq!(Provider::from_model_id("gpt2-something"), None);
+        assert_eq!(Provider::from_model_id("o5"), None);
+    }
+
+    #[test]
+    fn default_llm_url_present_for_recap_targets() {
+        // Recap dispatch relies on these being non-None for every
+        // vendor the UI can offer.
+        assert!(Provider::Anthropic.default_llm_url().is_some());
+        assert!(Provider::OpenAI.default_llm_url().is_some());
+        assert!(Provider::Gemini.default_llm_url().is_some());
+        // Local / Custom / Deepgram have no LLM completions endpoint
+        // — dispatch must fall back to the dictation URL+key.
+        assert!(Provider::Local.default_llm_url().is_none());
+        assert!(Provider::Custom.default_llm_url().is_none());
+        assert!(Provider::Deepgram.default_llm_url().is_none());
     }
 
     #[test]

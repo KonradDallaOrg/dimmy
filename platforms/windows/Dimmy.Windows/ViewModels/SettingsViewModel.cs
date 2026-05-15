@@ -35,24 +35,26 @@ public partial class SettingsViewModel : ObservableObject
     [
         new("Groq", "https://api.groq.com/openai/v1/audio/transcriptions", "whisper-large-v3-turbo"),
         new("Groq-v3", "https://api.groq.com/openai/v1/audio/transcriptions", "whisper-large-v3"),
-        new("Groq-Distil", "https://api.groq.com/openai/v1/audio/transcriptions", "distil-whisper-large-v3-en"),
+        // "Groq-Distil" (distil-whisper-large-v3-en) removed
+        // 2026-05-15 — decommissioned by Groq, returns
+        // HTTP 400 model_decommissioned. Migration in
+        // SettingsViewModel.LoadFromJson coerces saved
+        // configs to whisper-large-v3-turbo.
         new("OpenAI", "https://api.openai.com/v1/audio/transcriptions", "whisper-1"),
         new("OpenAI-4o", "https://api.openai.com/v1/audio/transcriptions", "gpt-4o-transcribe"),
         new("OpenAI-4o-mini", "https://api.openai.com/v1/audio/transcriptions", "gpt-4o-mini-transcribe"),
         new("Deepgram", "https://api.deepgram.com/v1/listen", "nova-3"),
         new("Deepgram-Nova2", "https://api.deepgram.com/v1/listen", "nova-2"),
-        // "Gemini" alias (back-compat: tests + users with persisted
-        // Name="Gemini" still match) → points at the current best
-        // fast tier (3.1-flash, May 2026). Explicit -3.1-flash /
-        // -3.1-pro / -2.5-flash / -2.5-pro entries below for users
-        // who want the exact tier.
-        new("Gemini", "https://generativelanguage.googleapis.com/v1beta/models", "gemini-3.1-flash"),
-        new("Gemini-3.1-Pro", "https://generativelanguage.googleapis.com/v1beta/models", "gemini-3.1-pro"),
-        // Older 2.5 line kept as fallback — same multimodal API; 3.x
-        // is preview tier on Google's side so users may want the
-        // stable 2.5 path for production until 3.x graduates.
+        // Gemini STT — Flash variants only. Pro models are slower
+        // and more expensive than Flash without meaningful accuracy
+        // gain for transcription; the user explicitly preferred fast
+        // STT tier 2026-05-15. Pro stays available for LLM rewrite
+        // + recap (interactive vs background workloads).
+        new("Gemini-3.1-Flash-Lite", "https://generativelanguage.googleapis.com/v1beta/models", "gemini-3.1-flash-lite"),
+        new("Gemini-3-Flash", "https://generativelanguage.googleapis.com/v1beta/models", "gemini-3-flash-preview"),
         new("Gemini-2.5-Flash", "https://generativelanguage.googleapis.com/v1beta/models", "gemini-2.5-flash"),
-        new("Gemini-2.5-Pro", "https://generativelanguage.googleapis.com/v1beta/models", "gemini-2.5-pro"),
+        // Legacy "Gemini" alias for back-compat → stable 2.5-flash.
+        new("Gemini", "https://generativelanguage.googleapis.com/v1beta/models", "gemini-2.5-flash"),
         // Phase 1 cloud expansion (2026-05-04 benchmark drove the model picks)
         new("Fireworks", "https://audio-turbo.api.fireworks.ai/v1/audio/transcriptions", "whisper-v3-turbo"),
         new("Together-Parakeet", "https://api.together.xyz/v1/audio/transcriptions", "nvidia/parakeet-tdt-0.6b-v3"),
@@ -62,24 +64,42 @@ public partial class SettingsViewModel : ObservableObject
 
     public static readonly List<ProviderPreset> LlmProviderPresets =
     [
+        // Curated cloud LLM presets — audit done 2026-05-15 against
+        // each provider's live /models endpoint. Mirrored 1:1 on
+        // Mac `LlmPreset.presets` + Linux LLM presets. Adding /
+        // removing here MUST be reflected on both other platforms.
+        //
+        // ── Groq (free for moderate use, OpenAI-compatible) ────
         new("Groq", "https://api.groq.com/openai/v1/chat/completions", "llama-3.3-70b-versatile"),
-        // OpenAI default = gpt-5-mini (fast + cheap, same chat-completions
-        // endpoint as gpt-4 family — no code change needed). gpt-5 (top
-        // tier) and gpt-5-nano (fastest) also surface in the recap-model
-        // dropdown for users who want the quality / speed extremes.
+        new("Groq-GptOss120b", "https://api.groq.com/openai/v1/chat/completions", "openai/gpt-oss-120b"),
+        new("Groq-Llama4Scout", "https://api.groq.com/openai/v1/chat/completions", "meta-llama/llama-4-scout-17b-16e-instruct"),
+        new("Groq-Llama8bInstant", "https://api.groq.com/openai/v1/chat/completions", "llama-3.1-8b-instant"),
+        new("Groq-Qwen3-32b", "https://api.groq.com/openai/v1/chat/completions", "qwen/qwen3-32b"),
+        // ── OpenAI ─────────────────────────────────────────────
         new("OpenAI", "https://api.openai.com/v1/chat/completions", "gpt-5-mini"),
         new("OpenAI-GPT5", "https://api.openai.com/v1/chat/completions", "gpt-5"),
+        new("OpenAI-GPT51", "https://api.openai.com/v1/chat/completions", "gpt-5.1"),
         new("OpenAI-4o-mini", "https://api.openai.com/v1/chat/completions", "gpt-4o-mini"),
+        // ── OpenRouter (free tiers for testing) ────────────────
         new("OpenRouter", "https://openrouter.ai/api/v1/chat/completions", "meta-llama/llama-3.3-70b-instruct:free"),
         new("OpenRouter-Deepseek", "https://openrouter.ai/api/v1/chat/completions", "deepseek/deepseek-r1:free"),
-        // Gemini default = 3.1-flash (preview, latest fast). Same
-        // OpenAI-shim endpoint we already use; multimodal generateContent
-        // is the other path used for STT.
-        new("Gemini", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-3.1-flash"),
-        new("Gemini-3.1-Pro", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-3.1-pro"),
+        // ── Gemini (full live-API spread, audit 2026-05-15) ────
+        // 3.1 generation: only `-preview` and `-lite` variants exist.
+        // 3 generation: only `-preview` variants exist.
+        // 2.5 generation: plain names work (stable production tier).
+        new("Gemini-3.1-Pro", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-3.1-pro-preview"),
+        new("Gemini-3.1-Flash-Lite", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-3.1-flash-lite"),
+        new("Gemini-3-Pro", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-3-pro-preview"),
+        new("Gemini-3-Flash", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-3-flash-preview"),
+        new("Gemini-2.5-Pro", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-2.5-pro"),
         new("Gemini-2.5-Flash", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-2.5-flash"),
+        // Legacy "Gemini" alias for saved configs — falls to the
+        // stable 2.5-flash tier. Older "Gemini-3.1-Pro" / -Flash
+        // references in configs are migrated at load time.
+        new("Gemini", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-2.5-flash"),
+        // ── Anthropic ──────────────────────────────────────────
         new("Anthropic", "https://api.anthropic.com/v1/messages", "claude-haiku-4-5-20251001"),
-        new("Anthropic-Sonnet", "https://api.anthropic.com/v1/messages", "claude-sonnet-4-20250514"),
+        new("Anthropic-Sonnet", "https://api.anthropic.com/v1/messages", "claude-sonnet-4-6"),
         new("Anthropic-Opus", "https://api.anthropic.com/v1/messages", "claude-opus-4-7"),
         // The dedicated "Claude-Code" preset is gone — the same
         // routing now lives behind the Authentication radio group
@@ -213,20 +233,34 @@ public partial class SettingsViewModel : ObservableObject
     /// subscription (amortized across 30-90 s of inference).
     [ObservableProperty] private string _recapAuthMethod = "";
     /// <summary>
-    /// Endpoint URL override for the meeting recap call. Empty
-    /// (default) = inherit `LlmApiUrl`. Non-empty = recap dispatch
-    /// hits this URL instead, with the per-vendor API key fetched
-    /// from keystore for `Provider::from_url(this)`. Lets a user
-    /// run Anthropic Haiku dictation (cheap, fast) + Gemini 3.1
-    /// Pro recap on a separate Gemini key.
+    /// Mirror of <see cref="LlmUseSameKey"/> at the recap layer. When
+    /// the chosen recap model's vendor matches a vendor we already have
+    /// a key for upstream (LLM-scope or STT-scope), should the recap
+    /// reuse that key (true, default) or load a dedicated Recap-scope
+    /// key the user types separately (false)?
     ///
-    /// Burned 2026-05-14: `recap_model_override="gemini-3.1-pro"`
-    /// + `llm_api_url=anthropic.com` produced a 404 because
-    /// Anthropic doesn't know `gemini-3.1-pro`. The override lives
-    /// behind an Advanced expander in Settings; basic users stay
-    /// in the inherit-from-dictation default.
+    /// The toggle is visible in Settings → Output only when an upstream
+    /// key for the derived recap vendor actually exists; otherwise it
+    /// is hidden (the key field shows up directly because there's
+    /// nothing to inherit from). Same pattern as the LLM section.
     /// </summary>
-    [ObservableProperty] private string _recapApiUrl = "";
+    [ObservableProperty] private bool _recapUseSameKey = true;
+    /// <summary>
+    /// Set by <c>UpdateRecapKeyCardVisibility</c> based on the
+    /// `has_<recap_vendor>_recap_key` snapshot field. Drives the
+    /// green ✓ badge + placeholder text on the Recap API key
+    /// PasswordBox (mirror of <see cref="HasLlmKey"/>).
+    /// </summary>
+    [ObservableProperty] private bool _hasRecapKey;
+    /// <summary>
+    /// Recap-vendor key entered in the PasswordBox during this
+    /// Settings session. Drained on Save / AutoSaveOnClose via
+    /// `dimmy_save_llm_provider_key("recap", &lt;vendor&gt;, key)`.
+    /// Never persisted in config.json (the Rust keystore is the
+    /// single source of truth) — held here only between the user
+    /// typing and the next save.
+    /// </summary>
+    [ObservableProperty] private string _recapApiKey = "";
     /// User override for the model ID used by the meeting recap LLM call.
     /// Empty = let PickRecapModel pick the provider-default flagship
     /// reasoning model (Opus 4.7 / Gemini 3.1 Pro / GPT-5).
@@ -416,7 +450,19 @@ public partial class SettingsViewModel : ObservableObject
     }
 
     private string _snapshotJson = "";
-    public bool IsDirty => ToJson() != _snapshotJson;
+    // IsDirty must see EVERY field — even the ones gated out of the
+    // default ToJson() (Notion/LLM/Recap blocks). Otherwise a user
+    // editing only an LLM field would have IsDirty stay false → Save
+    // button stays disabled → change silently lost. Snapshot is
+    // captured with the same full-include flags at load time so the
+    // comparison is symmetric.
+    public bool IsDirty => ToJsonFull() != _snapshotJson;
+
+    /// Full-include serialization — used ONLY for IsDirty tracking
+    /// and snapshot capture. NEVER call this for FFI writes (it would
+    /// re-introduce the wipe bug the includeLlm/includeRecap gates
+    /// are designed to prevent).
+    private string ToJsonFull() => ToJson(includeNotion: true, includeLlm: true, includeRecap: true);
 
     public void LoadFromJson(string json)
     {
@@ -430,6 +476,24 @@ public partial class SettingsViewModel : ObservableObject
             LlmTone = r.TryGetProperty("llm_tone", out var tone) ? tone.GetString() ?? "none" : "none";
             ApiUrl = r.TryGetProperty("api_url", out var url) ? url.GetString() ?? "" : "";
             ApiModel = r.TryGetProperty("api_model", out var model) ? model.GetString() ?? "" : "";
+            // Decommissioned-model migration (mirror of Rust
+            // `migrate_decommissioned_models`). Each rule = one
+            // upstream API regression audited 2026-05-15.
+            if (ApiModel == "distil-whisper-large-v3-en"
+                && ApiUrl.Contains("groq.com", StringComparison.OrdinalIgnoreCase))
+            {
+                // Groq decommissioned (HTTP 400 model_decommissioned).
+                ApiModel = "whisper-large-v3-turbo";
+            }
+            if (ApiUrl.Contains("googleapis.com", StringComparison.OrdinalIgnoreCase))
+            {
+                if (ApiModel == "gemini-3.1-flash") ApiModel = "gemini-3.1-flash-lite";
+                // STT Pro → Flash (Pro is LLM-only now, UX policy 2026-05-15).
+                if (ApiModel == "gemini-3.1-pro" || ApiModel == "gemini-3.1-pro-preview")
+                    ApiModel = "gemini-3.1-flash-lite";
+                if (ApiModel == "gemini-3-pro-preview") ApiModel = "gemini-3-flash-preview";
+                if (ApiModel == "gemini-2.5-pro") ApiModel = "gemini-2.5-flash";
+            }
             HasApiKey = r.TryGetProperty("has_key", out var hk) && hk.GetBoolean();
             Prompt = r.TryGetProperty("prompt", out var prompt) ? prompt.GetString() ?? "" : "";
             Shortcut = r.TryGetProperty("shortcut", out var sc) ? sc.GetString() ?? "Win+Alt" : "Win+Alt";
@@ -446,6 +510,19 @@ public partial class SettingsViewModel : ObservableObject
             LlmEnabled = r.TryGetProperty("llm_enabled", out var le) && le.GetBoolean();
             LlmApiUrl = r.TryGetProperty("llm_api_url", out var lu) ? lu.GetString() ?? "" : "";
             LlmApiModel = r.TryGetProperty("llm_api_model", out var lm) ? lm.GetString() ?? "" : "";
+            // LLM-side decommissioned-model migration. Mirror of
+            // Rust `migrate_decommissioned_models`.
+            if (LlmApiUrl.Contains("googleapis.com", StringComparison.OrdinalIgnoreCase))
+            {
+                if (LlmApiModel == "gemini-3.1-flash") LlmApiModel = "gemini-3.1-flash-lite";
+                if (LlmApiModel == "gemini-3.1-pro") LlmApiModel = "gemini-3.1-pro-preview";
+            }
+            if (LlmApiUrl.Contains("anthropic.com", StringComparison.OrdinalIgnoreCase)
+                && LlmApiModel == "claude-sonnet-4-20250514")
+            {
+                // Upgrade dated Sonnet 4 to the named-tier successor.
+                LlmApiModel = "claude-sonnet-4-6";
+            }
             LlmUseSameKey = !r.TryGetProperty("llm_use_same_key", out var lsk) || lsk.GetBoolean();
             // Auth-method flag — "api_key" (default) or "subscription".
             // Migrate the legacy `claude-code://` URL scheme to the
@@ -470,12 +547,8 @@ public partial class SettingsViewModel : ObservableObject
                 "api_key" or "subscription" => savedRecapAuth,
                 _ => "",
             };
-            // Recap URL override — empty (default) = inherit from
-            // LlmApiUrl. Free-form string accepted; the Rust
-            // dispatcher will validate at dispatch time. Trim only
-            // whitespace.
-            RecapApiUrl = (r.TryGetProperty("recap_api_url", out var rau)
-                ? rau.GetString() ?? "" : "").Trim();
+            RecapUseSameKey = !r.TryGetProperty("recap_use_same_key", out var rusk)
+                || rusk.ValueKind != System.Text.Json.JsonValueKind.False;
             RecapModelOverride = r.TryGetProperty("recap_model_override", out var rmo)
                 ? rmo.GetString() ?? "" : "";
             // Notion target + auto-send flag round-trip through config.
@@ -550,7 +623,7 @@ public partial class SettingsViewModel : ObservableObject
                 Devices = list;
             }
 
-            _snapshotJson = ToJson();
+            _snapshotJson = ToJsonFull();
         }
         catch (JsonException) { }
     }
@@ -574,8 +647,13 @@ public partial class SettingsViewModel : ObservableObject
     /// Disconnect path does the same. Generic Settings saves never
     /// touch these fields.</para>
     /// </summary>
-    public string ToJson(bool includeNotion = false)
+    public string ToJson(bool includeNotion = false, bool includeLlm = false, bool includeRecap = false)
     {
+        // Universal fields — preferences, cosmetics, debug toggles, audio
+        // pipeline knobs. Safe to round-trip on EVERY save site because
+        // they're either user preferences (re-pickable from any UI) or
+        // booleans with sensible defaults. None of these is a "credential
+        // / identity" field whose wipe would silently break the user.
         var dict = new Dictionary<string, object?>
         {
             ["language"] = Language,
@@ -594,14 +672,6 @@ public partial class SettingsViewModel : ObservableObject
             ["history_audio_keep_days"] = HistoryAudioKeepDays,
             ["history_audio_max_mb"] = HistoryAudioMaxMb,
             ["use_keyring"] = false,  // Always local encrypted file
-            ["llm_enabled"] = LlmStyle != "off",
-            ["llm_api_url"] = LlmApiUrl,
-            ["llm_api_model"] = LlmApiModel,
-            ["llm_use_same_key"] = LlmUseSameKey,
-            ["llm_auth_method"] = LlmAuthMethod,
-            ["recap_auth_method"] = RecapAuthMethod,
-            ["recap_api_url"] = RecapApiUrl,
-            ["recap_model_override"] = RecapModelOverride,
             // notion_target_{id,kind,title} are deliberately NOT in
             // the generic dict — see the includeNotion docstring above.
             // notion_auto_send IS safe to round-trip (it's a bool
@@ -616,8 +686,6 @@ public partial class SettingsViewModel : ObservableObject
             ["local_model"] = LocalModel,
             ["local_stt_backend"] = LocalSttBackend,
             ["filler_removal_enabled"] = FillerRemovalEnabled,
-            ["llm_mode"] = LlmMode,
-            ["local_llm_model"] = LocalLlmModel,
             ["border_style"] = BorderStyle,
             ["waveform_style"] = WaveformStyle,
             ["overlay_position"] = OverlayPosition,
@@ -628,6 +696,36 @@ public partial class SettingsViewModel : ObservableObject
         };
         if (!string.IsNullOrEmpty(ApiKey)) dict["api_key"] = ApiKey;
         if (!string.IsNullOrEmpty(LlmApiKey)) dict["llm_api_key"] = LlmApiKey;
+        if (includeLlm)
+        {
+            // Caller is the LLM-provider page Save / AutoSave — they own
+            // the semantics of "the user touched the LLM config and wants
+            // to persist exactly what's in the VM, even if empty". Other
+            // callers MUST NOT pass true: a transient empty VM (window
+            // just opened, fields not yet populated by LoadFromJson)
+            // would otherwise wipe a valid LLM setup from disk. Pattern
+            // mirrors the includeNotion fix shipped 2026-05-13 after the
+            // exact same bug pattern destroyed Notion destinations.
+            dict["llm_api_url"] = LlmApiUrl;
+            dict["llm_api_model"] = LlmApiModel;
+            dict["llm_use_same_key"] = LlmUseSameKey;
+            dict["llm_auth_method"] = LlmAuthMethod;
+            dict["llm_mode"] = LlmMode;
+            dict["local_llm_model"] = LocalLlmModel;
+            // `llm_enabled` is derived from `llm_style != "off"` — keep
+            // it under the same gate so a non-LLM-page save can't
+            // accidentally flip the kill switch.
+            dict["llm_enabled"] = LlmStyle != "off";
+        }
+        if (includeRecap)
+        {
+            // Same rationale as includeLlm — the Recap section in
+            // Settings → Output owns these fields; other call sites
+            // MUST omit them to avoid wiping a valid recap setup.
+            dict["recap_auth_method"] = RecapAuthMethod;
+            dict["recap_use_same_key"] = RecapUseSameKey;
+            dict["recap_model_override"] = RecapModelOverride;
+        }
         if (includeNotion)
         {
             // Caller is the Notion picker/disconnect — they own the

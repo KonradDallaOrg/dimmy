@@ -105,7 +105,11 @@ struct MacAdvancedPage: View {
                         get: { appState.recapModelOverride },
                         set: { newValue in
                             appState.recapModelOverride = newValue
-                            DimmyCore.shared.setConfig(appState.toRustConfig())
+                            // includeRecap:true — this Picker writes
+                            // recap_model_override; without the flag
+                            // the field is omitted from the payload
+                            // and the save would be a no-op.
+                            DimmyCore.shared.setConfig(appState.toRustConfig(includeRecap: true))
                         }
                     )) {
                         ForEach(RecapModelOption.curated) { opt in

@@ -405,38 +405,17 @@
                 </controls:SettingCard>
               </StackPanel>
 
-              <!-- Cloud STT (when Cloud selected) -->
+              <!-- Cloud STT (when Cloud selected). Order matches the
+                   Output → LLM section for visual uniformity:
+                     1. Provider (the model picker — what you pick
+                        determines the URL Dimmy talks to)
+                     2. API key
+                     3. Custom URL/Model (conditional, only when
+                        Provider == Custom endpoint)
+                   The "Prompt / vocabulary" card sits in its own
+                   section below — it's not strictly STT auth, it's
+                   recognition biasing. -->
               <StackPanel x:Name="CloudSttPanel" Spacing="4" Visibility="Collapsed">
-                <controls:SettingCard Glyph="&#xE192;"
-                                      Label="Cloud STT API key"
-                                      Description="Encrypted locally. The provider receives only audio + key, never anything else.">
-                  <!-- StackPanel + fixed Width on the PasswordBox: same shape
-                       as the LLM API-key card below. Avoid HorizontalAlignment
-                       Stretch — it eats the SettingCard's label/description
-                       column and squeezes the heading into a vertical strip
-                       (witnessed live 2026-05-04). -->
-                  <StackPanel Orientation="Horizontal" Spacing="8">
-                    <PasswordBox x:Name="CloudApiKeyBox" Width="320"
-                                 PlaceholderText="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}" />
-                    <FontIcon Glyph="&#xE73E;" FontSize="16" Foreground="#4ade80"
-                              VerticalAlignment="Center"
-                              Visibility="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
-                  </StackPanel>
-                </controls:SettingCard>
-              </StackPanel>
-
-              <!-- Advanced cards: Provider details + Microphone -->
-              <StackPanel Spacing="4"
-                          Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
-
-                <!-- Provider details — cloud-only. Hidden when stt_mode == "local"
-                     since picking a cloud STT provider has no effect there. The
-                     Microphone group below stays visible for both modes. -->
-                <StackPanel x:Name="CloudAdvancedPanel" Spacing="4">
-                <TextBlock Text="PROVIDER DETAILS"
-                           FontSize="12" FontWeight="SemiBold"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                           CharacterSpacing="40" Margin="2,20,0,8" />
                 <controls:SettingCard Glyph="&#xE968;"
                                       Label="Provider"
                                       Description="Choose the cloud STT model to send audio to.">
@@ -458,14 +437,13 @@
                         <TextBlock Text="Groq · whisper-large-v3 (free)" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
-                    <ComboBoxItem Tag="groq-distil">
-                      <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Image Width="16" Height="16">
-                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/groq.svg"/></Image.Source>
-                        </Image>
-                        <TextBlock Text="Groq · distil-whisper-en (free)" VerticalAlignment="Center"/>
-                      </StackPanel>
-                    </ComboBoxItem>
+                    <!-- "Groq · distil-whisper-en" removed 2026-05-15 —
+                         Groq decommissioned the distil-whisper-large-v3-en
+                         model (HTTP 400 model_decommissioned). Saved
+                         configs that still point at it are migrated to
+                         whisper-large-v3-turbo by
+                         SettingsViewModel.LoadFromJson + the Rust core
+                         `migrate_decommissioned_models` helper. -->
                     <ComboBoxItem Tag="openai">
                       <StackPanel Orientation="Horizontal" Spacing="8">
                         <Image Width="16" Height="16">
@@ -506,20 +484,32 @@
                         <TextBlock Text="Deepgram · nova-2" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
-                    <ComboBoxItem Tag="gemini">
+                    <!-- STT only shows Flash variants — Pro is slower
+                         and pricier without meaningful accuracy gain
+                         for transcription. Pro stays in the LLM
+                         dropdown (Output → LLM) for rewrite + recap. -->
+                    <ComboBoxItem Tag="gemini-3.1-flash-lite">
                       <StackPanel Orientation="Horizontal" Spacing="8">
                         <Image Width="16" Height="16">
                           <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
                         </Image>
-                        <TextBlock Text="Gemini · gemini-2.5-flash (free)" VerticalAlignment="Center"/>
+                        <TextBlock Text="Gemini · 3.1-flash-lite (newest fast)" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
-                    <ComboBoxItem Tag="gemini-pro">
+                    <ComboBoxItem Tag="gemini-3-flash">
                       <StackPanel Orientation="Horizontal" Spacing="8">
                         <Image Width="16" Height="16">
                           <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
                         </Image>
-                        <TextBlock Text="Gemini · gemini-2.5-pro (free)" VerticalAlignment="Center"/>
+                        <TextBlock Text="Gemini · 3-flash-preview" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="gemini-2.5-flash">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Gemini · 2.5-flash (stable fast)" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
                     <ComboBoxItem Tag="fireworks">
@@ -554,6 +544,19 @@
                     </ComboBoxItem>
                   </ComboBox>
                 </controls:SettingCard>
+                <!-- API key — second in the order, matches the Output
+                     LLM card directly below it visually. -->
+                <controls:SettingCard Glyph="&#xE192;"
+                                      Label="API key"
+                                      Description="Encrypted locally. The provider receives only audio + key, never anything else.">
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <PasswordBox x:Name="CloudApiKeyBox" Width="320"
+                                 PlaceholderText="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}" />
+                    <FontIcon Glyph="&#xE73E;" FontSize="16" Foreground="#4ade80"
+                              VerticalAlignment="Center"
+                              Visibility="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
+                  </StackPanel>
+                </controls:SettingCard>
                 <controls:SettingCard x:Name="CustomUrlCard"
                                       Glyph="&#xE71B;"
                                       Label="Custom endpoint URL"
@@ -570,16 +573,32 @@
                   <TextBox x:Name="CustomModelBox" MinWidth="240"
                            Text="{Binding ApiModel, Mode=TwoWay}" />
                 </controls:SettingCard>
+              </StackPanel>
+              <!-- /CloudSttPanel -->
+
+              <!-- Vocabulary / recognition prompt — separate section so
+                   the user sees auth (Provider + key) clean and only
+                   then runs into the optional biasing field. Same
+                   visibility gating as CloudSttPanel (cloud-only).
+                   The CustomDictionary section below this is the
+                   per-word hotkey-add list — different concept. -->
+              <StackPanel x:Name="CloudVocabularyPanel" Spacing="4" Visibility="Collapsed">
+                <TextBlock Text="VOCABULARY"
+                           FontSize="12" FontWeight="SemiBold"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           CharacterSpacing="40" Margin="2,20,0,8" />
                 <controls:SettingCard Glyph="&#xE82D;"
-                                      Label="Prompt / vocabulary"
+                                      Label="Recognition prompt"
                                       Description="Optional context that primes the recognizer with names, jargon, brands.">
                   <TextBox MinWidth="320" MaxWidth="360"
                            AcceptsReturn="True" TextWrapping="Wrap" Height="80"
                            Text="{Binding Prompt, Mode=TwoWay}" />
                 </controls:SettingCard>
-                </StackPanel>
-                <!-- /CloudAdvancedPanel -->
+              </StackPanel>
 
+              <!-- Microphone section: still gated by IsAdvanced toggle. -->
+              <StackPanel Spacing="4"
+                          Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
                 <TextBlock Text="MICROPHONE"
                            FontSize="12" FontWeight="SemiBold"
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
@@ -822,12 +841,68 @@
                         <TextBlock Text="Groq · llama-3.3-70b (free)" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
+                    <ComboBoxItem Tag="groq-gptoss120b">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/groq.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Groq · gpt-oss-120b (top quality)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="groq-llama4scout">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/groq.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Groq · llama-4-scout-17b (MoE, balanced)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="groq-llama8binstant">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/groq.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Groq · llama-3.1-8b instant (fastest)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="groq-qwen3-32b">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/groq.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Groq · qwen3-32b (multilingual)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
                     <ComboBoxItem Tag="openai">
                       <StackPanel Orientation="Horizontal" Spacing="8">
                         <Image Width="16" Height="16">
                           <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/openai.svg"/></Image.Source>
                         </Image>
-                        <TextBlock Text="OpenAI · gpt-4o-mini" VerticalAlignment="Center"/>
+                        <TextBlock Text="OpenAI · gpt-5-mini (fast + cheap)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="openai-gpt5">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/openai.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="OpenAI · gpt-5 (top)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="openai-gpt51">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/openai.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="OpenAI · gpt-5.1 (latest)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="openai-4o-mini">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/openai.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="OpenAI · gpt-4o-mini (legacy)" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
                     <ComboBoxItem Tag="openrouter">
@@ -846,12 +921,52 @@
                         <TextBlock Text="OpenRouter · DeepSeek R1 (free)" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
-                    <ComboBoxItem Tag="gemini">
+                    <ComboBoxItem Tag="gemini-3.1-pro">
                       <StackPanel Orientation="Horizontal" Spacing="8">
                         <Image Width="16" Height="16">
                           <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
                         </Image>
-                        <TextBlock Text="Gemini · gemini-2.5-flash (free)" VerticalAlignment="Center"/>
+                        <TextBlock Text="Gemini · 3.1-pro-preview (newest top)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="gemini-3.1-flash-lite">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Gemini · 3.1-flash-lite (newest fast)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="gemini-3-pro">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Gemini · 3-pro-preview" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="gemini-3-flash">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Gemini · 3-flash-preview" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="gemini-2.5-pro">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Gemini · 2.5-pro (stable top)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="gemini-2.5-flash">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Gemini · 2.5-flash (stable fast)" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
                     <ComboBoxItem Tag="anthropic">
@@ -867,7 +982,15 @@
                         <Image Width="16" Height="16">
                           <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/anthropic.svg"/></Image.Source>
                         </Image>
-                        <TextBlock Text="Anthropic · claude-sonnet-4" VerticalAlignment="Center"/>
+                        <TextBlock Text="Anthropic · claude-sonnet-4.6" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
+                    <ComboBoxItem Tag="anthropic-opus">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/anthropic.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Anthropic · claude-opus-4.7 (top)" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
                     <ComboBoxItem Tag="fireworks">
@@ -935,18 +1058,35 @@
                   <TextBox x:Name="LlmCustomModelBox" MinWidth="240"
                            Text="{Binding LlmApiModel, Mode=TwoWay}" />
                 </controls:SettingCard>
+                <!-- "Use my saved STT key" — mirror of the Recap
+                     toggle one layer up. Visible only when STT and
+                     LLM are the same vendor AND STT actually has a
+                     saved key for that vendor. Without the
+                     HasApiKey gate the toggle would offer to
+                     "reuse" a non-existent STT key. Default ON.
+                     OFF reveals the LLM API key input below so the
+                     user can save a dedicated LLM-scope key. -->
                 <controls:SettingCard x:Name="LlmUseSameKeyCard"
                                       Glyph="&#xE192;"
-                                      Label="Use same API key as STT"
-                                      Description="Reuse the speech-to-text key for the LLM provider when both are the same vendor.">
-                  <ToggleSwitch IsOn="{Binding LlmUseSameKey, Mode=TwoWay}"
+                                      Label="Use my saved API key for this provider"
+                                      Description="Reuse the key already saved for STT (same vendor). Turn off to enter a dedicated LLM key."
+                                      Visibility="Collapsed">
+                  <ToggleSwitch x:Name="LlmUseSameKeyToggle"
+                                IsOn="{Binding LlmUseSameKey, Mode=TwoWay}"
+                                Toggled="LlmUseSameKey_Toggled"
                                 OnContent="" OffContent="" />
                 </controls:SettingCard>
+                <!-- LLM API key input. Visibility set by code-behind
+                     (RefreshAuthIntegrationStatus) to follow the
+                     full matrix: visible when (STT and LLM differ
+                     in vendor) OR (same vendor AND LlmUseSameKey
+                     toggle OFF) OR (STT has no key for this
+                     vendor). Hidden when subscription path active. -->
                 <controls:SettingCard x:Name="LlmApiKeyCard"
                                       Glyph="&#xE192;"
                                       Label="LLM API key"
                                       Description="Encrypted locally. Used when not sharing with STT."
-                                      Visibility="{Binding LlmUseSameKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Invert}">
+                                      Visibility="Collapsed">
                   <StackPanel Orientation="Horizontal" Spacing="8">
                     <PasswordBox x:Name="LlmApiKeyBox" Width="320"
                                  PlaceholderText="{Binding HasLlmKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}" />
@@ -1104,23 +1244,12 @@
                     </ComboBoxItem>
                   </ComboBox>
                 </controls:SettingCard>
-                <controls:SettingCard Glyph="&#xE932;"
-                                      Label="Custom recap model id"
-                                      Description="Used only when the picker above is set to Custom."
-                                      x:Name="RecapModelCustomCard">
-                  <TextBox x:Name="RecapModelOverrideBox" MinWidth="280"
-                           PlaceholderText="e.g. claude-opus-4-7-thinking-extra"
-                           Text="{Binding RecapModelOverride, Mode=TwoWay}"
-                           LostFocus="RecapModelCustom_LostFocus" />
-                </controls:SettingCard>
-                <!-- Use Anthropic subscription for recap — single
-                     toggle that overrides the LLM-level subscription
-                     choice specifically for the meeting recap call.
-                     Visible only when the Anthropic integration is
-                     "connected" in Integrations → Anthropic. Recap
-                     is the ideal subscription workload because the
-                     ~5-7 s subprocess cold-start is amortized across
-                     30-90 s of model inference. -->
+                <!-- Use Anthropic subscription for recap. Position
+                     RIGHT AFTER the recap model picker (the user's
+                     mental model: "I pick a model, then I decide the
+                     auth"). Visible only when the picked model is
+                     Anthropic AND Claude CLI is signed in. When ON,
+                     hides the key UI below. -->
                 <controls:SettingCard x:Name="RecapUseSubscriptionCard"
                                       Glyph="&#xE779;"
                                       Label="Use Anthropic subscription for recap"
@@ -1130,33 +1259,57 @@
                                 Toggled="RecapUseSubscription_Toggled"
                                 OnContent="" OffContent=""/>
                 </controls:SettingCard>
-                <!-- Advanced — different provider URL for recap.
-                     Hidden by default; expanded only by advanced
-                     users who want e.g. Anthropic dictation + Gemini
-                     recap. The keystore key for the recap vendor is
-                     the same one used by the LLM provider dropdown
-                     (so the user just needs to have saved a Gemini
-                     key once via Settings → LLM provider = Gemini).
-                     Burned 2026-05-14: bare model picker without
-                     vendor filter let users pick gemini-3.1-pro on
-                     an anthropic.com URL → 404. -->
-                <Expander HorizontalAlignment="Stretch" Margin="0,4,0,0"
-                          Header="Advanced — different provider for recap">
-                  <StackPanel Spacing="4" Margin="0,8,0,0">
-                    <controls:SettingCard Glyph="&#xE71B;"
-                                          Label="Recap endpoint URL (override)"
-                                          Description="Empty = use the LLM provider URL above. Set a different vendor URL to route recap to that vendor. The API key is fetched from the keystore for the URL's vendor — save it once via Settings → LLM provider = that vendor.">
-                      <TextBox x:Name="RecapApiUrlBox" MinWidth="320"
-                               PlaceholderText="e.g. https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-                               Text="{Binding RecapApiUrl, Mode=TwoWay}"
-                               LostFocus="RecapApiUrl_LostFocus"/>
-                    </controls:SettingCard>
-                    <TextBlock Margin="2,4,0,0" FontSize="12"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                               TextWrapping="Wrap"
-                               Text="The recap model picker above is filtered by the URL's vendor — change the URL first, then pick a model from that vendor's list."/>
+                <controls:SettingCard Glyph="&#xE932;"
+                                      Label="Custom recap model id"
+                                      Description="Used only when the picker above is set to Custom."
+                                      x:Name="RecapModelCustomCard">
+                  <TextBox x:Name="RecapModelOverrideBox" MinWidth="280"
+                           PlaceholderText="e.g. claude-opus-4-7-thinking-extra"
+                           Text="{Binding RecapModelOverride, Mode=TwoWay}"
+                           LostFocus="RecapModelCustom_LostFocus" />
+                </controls:SettingCard>
+                <!-- Recap "use my saved key" toggle. Mirrors the LLM
+                     UseSameKey card. Visible only when an upstream
+                     key (LLM-scope or STT-scope) exists for the
+                     derived recap vendor. Hidden + coerced when no
+                     upstream key exists (the key field below takes
+                     over). Hidden also when the recap is on
+                     subscription (no key needed). -->
+                <controls:SettingCard x:Name="RecapUseSameKeyCard"
+                                      Glyph="&#xE192;"
+                                      Label="Use my saved API key for this provider"
+                                      Description="When you already have a key for the recap's vendor (saved via STT or LLM), reuse it. Turn off to enter a dedicated recap key for the same vendor."
+                                      Visibility="Collapsed">
+                  <ToggleSwitch x:Name="RecapUseSameKeyToggle"
+                                IsOn="{Binding RecapUseSameKey, Mode=TwoWay}"
+                                Toggled="RecapUseSameKey_Toggled"
+                                OnContent="" OffContent=""/>
+                </controls:SettingCard>
+                <!-- Recap API key field. Visible when (a) the toggle
+                     above is OFF, OR (b) no upstream key exists for
+                     the recap vendor. Writes via
+                     dimmy_save_llm_provider_key("recap", vendor, key)
+                     into a dedicated Recap(<vendor>) keystore entry,
+                     separate from the LLM scope. -->
+                <controls:SettingCard x:Name="RecapKeyCard"
+                                      Glyph="&#xE192;"
+                                      Label="Recap API key"
+                                      Description="Saved separately for the recap provider. The dictation key is untouched."
+                                      Visibility="Collapsed">
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <!-- Persisted by Save_Click / AutoSaveOnClose
+                         (mirror of LlmApiKeyBox). No inline Save
+                         button — the user types and the value is
+                         drained into the Rust keystore on the next
+                         Settings save (button or window close). -->
+                    <PasswordBox x:Name="RecapKeyBox" Width="320"
+                                 PlaceholderText="{Binding HasRecapKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}"/>
+                    <FontIcon Glyph="&#xE73E;" FontSize="16" Foreground="#4ade80"
+                              VerticalAlignment="Center"
+                              Visibility="{Binding HasRecapKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                              ToolTipService.ToolTip="A key is already saved for this provider"/>
                   </StackPanel>
-                </Expander>
+                </controls:SettingCard>
               </StackPanel>
 
               <TextBlock Text="CLIPBOARD"

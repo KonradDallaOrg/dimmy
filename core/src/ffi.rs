@@ -293,7 +293,7 @@ fn dimmy_init_inner() -> c_int {
         llm_use_same_key: Mutex::new(file_cfg.llm_use_same_key),
         llm_auth_method: Mutex::new(file_cfg.llm_auth_method.clone()),
         recap_auth_method: Mutex::new(file_cfg.recap_auth_method.clone()),
-        recap_api_url: Mutex::new(file_cfg.recap_api_url.clone()),
+        recap_use_same_key: Mutex::new(file_cfg.recap_use_same_key),
         llm_api_key: Mutex::new(stored_llm_key),
         llm_log_enabled: Mutex::new(file_cfg.llm_log_enabled),
         recap_model_override: Mutex::new(file_cfg.recap_model_override),
@@ -1179,6 +1179,29 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         }
         Err(e) => {
             let err_msg = format!("{}", e);
+            // Write the actual error to dimmy.log so failures don't go
+            // silent. Truncate to 300 chars per CLAUDE.md "error bodies
+            // ≤ 200 chars" rule (with slack for the prefix). The
+            // upstream `TranscribeError::Display` already strips the
+            // response body before this point, so no secret leak.
+            // Burned 2026-05-15 — Groq decommissioned the
+            // distil-whisper-large-v3-en model and Dimmy emitted only
+            // `transcription.failed` telemetry without the body, so
+            // the user had no way to find out why dictation broke.
+            let truncated = if err_msg.len() > 300 {
+                format!("{}…", &err_msg[..300])
+            } else {
+                err_msg.clone()
+            };
+            log(&format!(
+                "[STT] {} transcription failed: {}",
+                if stt_mode == "local" {
+                    "local"
+                } else {
+                    "cloud"
+                },
+                truncated
+            ));
             emit_event(
                 "error",
                 &format!(r#"{{"message":"{}"}}"#, err_msg.replace('"', "\\\"")),
@@ -1272,7 +1295,14 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "llm_use_same_key": *st.llm_use_same_key.lock().unwrap_or_else(|e| e.into_inner()),
         "llm_auth_method": st.llm_auth_method.lock().map(|s| s.clone()).unwrap_or_else(|_| "api_key".to_string()),
         "recap_auth_method": st.recap_auth_method.lock().map(|s| s.clone()).unwrap_or_default(),
-        "recap_api_url": st.recap_api_url.lock().map(|s| s.clone()).unwrap_or_default(),
+        "recap_use_same_key": *st.recap_use_same_key.lock().unwrap_or_else(|e| e.into_inner()),
+        "has_anthropic_recap_key": st.key_store.has_key(KeyringScope::Recap(Provider::Anthropic), use_kr),
+        "has_openai_recap_key": st.key_store.has_key(KeyringScope::Recap(Provider::OpenAI), use_kr),
+        "has_gemini_recap_key": st.key_store.has_key(KeyringScope::Recap(Provider::Gemini), use_kr),
+        "has_groq_recap_key": st.key_store.has_key(KeyringScope::Recap(Provider::Groq), use_kr),
+        "has_openrouter_recap_key": st.key_store.has_key(KeyringScope::Recap(Provider::OpenRouter), use_kr),
+        "has_fireworks_recap_key": st.key_store.has_key(KeyringScope::Recap(Provider::Fireworks), use_kr),
+        "has_together_recap_key": st.key_store.has_key(KeyringScope::Recap(Provider::Together), use_kr),
         "has_llm_key": has_llm_key,
         "llm_log_enabled": *st.llm_log_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "recap_model_override": st.recap_model_override.lock().unwrap_or_else(|e| e.into_inner()).clone(),
@@ -1597,21 +1627,10 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
             *m = normalized.to_string();
         }
     }
-    if let Some(s) = v["recap_api_url"].as_str() {
-        // Empty string = "use llm_api_url" (inherit). Non-empty must
-        // be a sane URL — the dispatcher re-validates per request so
-        // we don't gate here, but log the change so it's traceable.
-        if let Ok(mut m) = st.recap_api_url.lock() {
-            *m = s.to_string();
+    if let Some(b) = v["recap_use_same_key"].as_bool() {
+        if let Ok(mut m) = st.recap_use_same_key.lock() {
+            *m = b;
         }
-        log(&format!(
-            "[Config] recap_api_url set to {}",
-            if s.is_empty() {
-                "<inherit from llm_api_url>".to_string()
-            } else {
-                format!("'{}'", s)
-            }
-        ));
     }
     if let Some(key) = v["llm_api_key"].as_str() {
         if !key.is_empty() {
@@ -2568,23 +2587,44 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
     let is_subscription =
         auth_method == "subscription" || crate::claude_code::is_claude_code_url(&llm_url);
 
+    // Resolve the dispatch API key. The LLM vendor is derived from
+    // `llm_url`; with `use_same_key=true` we try the per-vendor
+    // upstream keystore (Llm-scope first, then Stt-scope as a
+    // cross-layer fallback). With `use_same_key=false` we only use
+    // the dedicated Llm-scope entry. This mirrors the recap
+    // dispatcher's per-vendor lookup and decouples "reuse saved key"
+    // from "STT and LLM must be the same provider" — a user with a
+    // Groq STT key and Anthropic LLM can no longer accidentally
+    // pull the Groq key into the Anthropic call.
     let api_key = if is_subscription {
         String::new()
     } else {
+        let llm_vendor = Provider::from_url(&llm_url);
+        let use_kr = st.use_keyring.lock().map(|k| *k).unwrap_or(false);
         let raw = if use_same_key {
-            st.api_key.lock().ok().and_then(|k| k.clone())
-        } else {
-            st.llm_api_key.lock().ok().and_then(|k| k.clone())
-        };
-        match raw {
-            Some(k) if !k.is_empty() => k,
-            _ => {
-                log("ERROR: dimmy_process_with_llm: no LLM API key available");
-                emit_event("error", r#"{"message":"No LLM API key configured"}"#);
-                // Return original text on key error (graceful degradation)
-                return write_to_buf(text, out_buf, buf_len);
+            let llm_scope =
+                crate::load_key_with_store(&st.key_store, KeyringScope::Llm(llm_vendor), use_kr)
+                    .unwrap_or_default();
+            if !llm_scope.is_empty() {
+                llm_scope
+            } else {
+                // Cross-layer skip — pull the STT-scope key for the
+                // SAME vendor (user saved a Gemini STT key, now uses
+                // Gemini for LLM too).
+                crate::load_key_with_store(&st.key_store, KeyringScope::Stt(llm_vendor), use_kr)
+                    .unwrap_or_default()
             }
+        } else {
+            crate::load_key_with_store(&st.key_store, KeyringScope::Llm(llm_vendor), use_kr)
+                .unwrap_or_default()
+        };
+        if raw.is_empty() {
+            log("ERROR: dimmy_process_with_llm: no LLM API key available");
+            emit_event("error", r#"{"message":"No LLM API key configured"}"#);
+            // Return original text on key error (graceful degradation)
+            return write_to_buf(text, out_buf, buf_len);
         }
+        raw
     };
 
     // Resolve URL: use LLM-specific URL or default
@@ -3424,6 +3464,95 @@ pub extern "C" fn dimmy_notion_has_token() -> c_int {
     }
 }
 
+/// Save an API key for a specific provider into a specific keystore
+/// scope, WITHOUT changing the dictation `llm_api_url`. Used by the
+/// Recap LLM Settings section to save a key for a vendor different
+/// from the dictation provider, or a second key for the SAME vendor
+/// (when the recap toggle "Use my saved <vendor> key" is OFF).
+///
+/// `scope_ptr` must be one of: "llm" (KeyringScope::Llm) or "recap"
+/// (KeyringScope::Recap). Anything else is rejected.
+/// `provider_ptr` must be a lowercase tag accepted by
+/// `Provider::from_tag` AND have a `default_llm_url` mapping (so:
+/// anthropic, openai, gemini, groq, openrouter, fireworks, together).
+/// Local / Custom / Deepgram are rejected (no LLM completions
+/// endpoint).
+///
+/// Returns:
+///   0  = saved (or cleared)
+///   -1 = invalid arg (NULL ptr, bad UTF-8, unknown scope, unknown / unmapped vendor)
+///   -2 = keystore write failed
+///
+/// # Safety
+/// All three pointers must be valid null-terminated UTF-8 C strings.
+/// NULL is rejected (-1). Empty `key` clears the stored key for that
+/// (scope, vendor) pair.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_save_llm_provider_key(
+    scope_ptr: *const c_char,
+    provider_ptr: *const c_char,
+    key_ptr: *const c_char,
+) -> c_int {
+    if scope_ptr.is_null() || provider_ptr.is_null() || key_ptr.is_null() {
+        return -1;
+    }
+    let scope_tag = match unsafe { CStr::from_ptr(scope_ptr) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let provider_tag = match unsafe { CStr::from_ptr(provider_ptr) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let key = match unsafe { CStr::from_ptr(key_ptr) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let provider = match Provider::from_tag(provider_tag) {
+        Some(p) if p.default_llm_url().is_some() => p,
+        _ => {
+            log(&format!(
+                "[Keystore] rejecting save for unknown/unmapped provider tag '{}'",
+                provider_tag
+            ));
+            return -1;
+        }
+    };
+    let scope = match scope_tag {
+        "llm" => KeyringScope::Llm(provider),
+        "recap" => KeyringScope::Recap(provider),
+        _ => {
+            log(&format!(
+                "[Keystore] rejecting save for unknown scope tag '{}' (expected 'llm' or 'recap')",
+                scope_tag
+            ));
+            return -1;
+        }
+    };
+    let st = state();
+    let use_kr = st.use_keyring.lock().map(|k| *k).unwrap_or(false);
+    match save_key_with_store(&st.key_store, scope, key, use_kr) {
+        Ok(_) => {
+            log(&format!(
+                "[Keystore] {} key {} for provider={}",
+                scope_tag,
+                if key.is_empty() { "cleared" } else { "saved" },
+                provider.as_str()
+            ));
+            0
+        }
+        Err(e) => {
+            log(&format!(
+                "[Keystore] save failed for scope={} provider={}: {}",
+                scope_tag,
+                provider.as_str(),
+                e
+            ));
+            -2
+        }
+    }
+}
+
 /// Verify the stored Notion token by calling /v1/users/me. Writes a
 /// JSON envelope to `out_buf`:
 ///   `{"ok":true,"bot_name":"Dimmy","workspace_name":"Konrad's Workspace"}`
@@ -3842,49 +3971,99 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
     }
 
     // ── Cloud branch ─────────────────────────────────────────────
-    // Recap-specific URL override: if `recap_api_url` is non-empty,
-    // route the recap to that vendor; the key is looked up via the
-    // existing per-vendor LLM keystore scope (no separate
-    // `recap_api_key` field — the recap re-uses the dictation-side
-    // per-vendor key entries). Empty `recap_api_url` = inherit the
-    // dictation URL + key (current behaviour, backward compat).
+    // Recap vendor is DERIVED from the parsed model id (no separate
+    // provider config field — single picker UI). Key resolution:
     //
-    // Subscription mode short-circuits all of this — the CLI owns
-    // both URL and auth.
-    let recap_url_override = st
-        .recap_api_url
-        .lock()
-        .map(|s| s.clone())
-        .unwrap_or_default();
-    let effective_url = if recap_url_override.is_empty() {
-        api_url.clone()
-    } else {
-        recap_url_override.clone()
-    };
-    let effective_key = if recap_url_override.is_empty() || recap_url_override == api_url {
-        // Same vendor as dictation → reuse the live api_key (already
-        // fetched from keystore at app init / FFI key-set time).
-        api_key.clone()
-    } else {
-        // Different vendor → look up the keystore for THAT vendor's
-        // LLM key. Same scope structure dictation uses; the user
-        // saves the recap-vendor key by switching the dictation
-        // provider to that vendor and saving once. Future enhancement
-        // could expose a "recap API key" entry in Settings to set
-        // this without round-tripping through the provider dropdown.
-        let use_kr = st.use_keyring.lock().map(|k| *k).unwrap_or(false);
-        let recap_provider = crate::provider::Provider::from_url(&recap_url_override);
-        crate::load_key_with_store(
-            &st.key_store,
-            crate::provider::KeyringScope::Llm(recap_provider),
-            use_kr,
-        )
-        .unwrap_or_default()
-    };
-
+    //   1. model empty / unknown vendor → inherit dictation URL+key
+    //   2. model vendor == dictation vendor:
+    //        - `recap_use_same_key` ON  → reuse dictation key
+    //        - `recap_use_same_key` OFF → load `Recap(vendor)` key
+    //   3. model vendor != dictation vendor:
+    //        - `recap_use_same_key` ON  → try `Llm(vendor)`, fall
+    //          back to `Stt(vendor)` (cross-layer skip — user's STT
+    //          may share a vendor with the recap even if the LLM
+    //          sits on a different one)
+    //        - `recap_use_same_key` OFF → load `Recap(vendor)` key
+    //
     // Subscription mode (Claude Code CLI) needs no api_url/api_key —
     // the local `claude` binary handles both. Legacy `claude-code://`
     // URL also counts as a "no key needed" signal for back-compat.
+    let dictation_vendor = Provider::from_url(&api_url);
+    let recap_vendor_derived = if parsed_model.is_empty() {
+        None
+    } else {
+        Provider::from_model_id(&parsed_model).filter(|v| v.default_llm_url().is_some())
+    };
+    let use_kr = st.use_keyring.lock().map(|k| *k).unwrap_or(false);
+    let recap_same_key = st.recap_use_same_key.lock().map(|b| *b).unwrap_or(true);
+    let (effective_url, effective_key) = match recap_vendor_derived {
+        None => (api_url.clone(), api_key.clone()),
+        Some(vendor) if vendor == dictation_vendor => {
+            // Same vendor as dictation. Toggle picks: reuse dictation
+            // key (default) or load a dedicated `Recap(vendor)` key.
+            let url = api_url.clone();
+            let key = if recap_same_key {
+                api_key.clone()
+            } else {
+                crate::load_key_with_store(
+                    &st.key_store,
+                    crate::provider::KeyringScope::Recap(vendor),
+                    use_kr,
+                )
+                .unwrap_or_default()
+            };
+            log(&format!(
+                "[LlmRaw] recap same-vendor ({}) — same_key={} key_present={}",
+                vendor.as_str(),
+                recap_same_key,
+                !key.is_empty()
+            ));
+            (url, key)
+        }
+        Some(vendor) => {
+            // Different vendor from dictation. Derive URL; key comes
+            // from `Recap(vendor)` if same_key is OFF; else fall back
+            // to upstream-saved keys (LLM scope first, STT scope second).
+            let derived_url = vendor.default_llm_url().unwrap_or("").to_string();
+            let key = if recap_same_key {
+                let llm_key = crate::load_key_with_store(
+                    &st.key_store,
+                    crate::provider::KeyringScope::Llm(vendor),
+                    use_kr,
+                )
+                .unwrap_or_default();
+                if !llm_key.is_empty() {
+                    llm_key
+                } else {
+                    // Cross-layer skip: STT scope may have it. Useful
+                    // when the user runs e.g. Anthropic STT + OpenAI
+                    // LLM + Anthropic recap and wants to reuse the
+                    // already-saved Anthropic STT key.
+                    crate::load_key_with_store(
+                        &st.key_store,
+                        crate::provider::KeyringScope::Stt(vendor),
+                        use_kr,
+                    )
+                    .unwrap_or_default()
+                }
+            } else {
+                crate::load_key_with_store(
+                    &st.key_store,
+                    crate::provider::KeyringScope::Recap(vendor),
+                    use_kr,
+                )
+                .unwrap_or_default()
+            };
+            log(&format!(
+                "[LlmRaw] recap cross-vendor ({}) — same_key={} url={} key_present={}",
+                vendor.as_str(),
+                recap_same_key,
+                derived_url,
+                !key.is_empty()
+            ));
+            (derived_url, key)
+        }
+    };
     let is_subscription =
         auth_method == "subscription" || crate::claude_code::is_claude_code_url(&effective_url);
     if !is_subscription && (effective_url.is_empty() || effective_key.is_empty()) {
@@ -3923,11 +4102,8 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
         }
     };
     log(&format!(
-        "[LlmRaw] dispatch url={} model={} auth={} (recap_override={})",
-        effective_url,
-        model,
-        auth_method,
-        !recap_url_override.is_empty(),
+        "[LlmRaw] dispatch url={} model={} auth={}",
+        effective_url, model, auth_method,
     ));
     let result = runtime.block_on(async {
         crate::llm::process_raw_prompt(
@@ -6576,7 +6752,7 @@ mod tests {
                 llm_use_same_key: Mutex::new(true),
                 llm_auth_method: Mutex::new("api_key".to_string()),
                 recap_auth_method: Mutex::new(String::new()),
-                recap_api_url: Mutex::new(String::new()),
+                recap_use_same_key: Mutex::new(true),
                 llm_api_key: Mutex::new(None),
                 llm_log_enabled: Mutex::new(false),
                 recap_model_override: Mutex::new(String::new()),

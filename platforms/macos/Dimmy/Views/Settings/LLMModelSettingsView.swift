@@ -155,7 +155,11 @@ struct LLMModelSettingsView: View {
     }
 
     private func syncConfigToRust() {
-        DimmyCore.shared.setConfig(appState.toRustConfig())
+        // includeLlm:true — this view writes localLlmModel (selecting
+        // which Gemma .gguf to use). Without the flag the
+        // local_llm_model field is omitted and the picker's choice
+        // never reaches disk.
+        DimmyCore.shared.setConfig(appState.toRustConfig(includeLlm: true))
     }
 
     private func formatMb(_ mb: Int) -> String {
