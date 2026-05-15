@@ -98,7 +98,7 @@ struct MeetingRecordingView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "mic.fill")
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(DualBandWaveform.micColor)
                     Text("Mic")
                         .font(.system(size: 12, weight: .medium))
                 }
@@ -106,7 +106,7 @@ struct MeetingRecordingView: View {
                     HStack(spacing: 6) {
                         Image(systemName: "speaker.wave.2.fill")
                             .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(Color.accentColor.opacity(0.55))
+                            .foregroundStyle(DualBandWaveform.systemColor)
                         Text("System")
                             .font(.system(size: 12, weight: .medium))
                     }
@@ -205,6 +205,16 @@ struct DualBandWaveform: View {
     private static let barGap: CGFloat = 2
     private static let cornerRadius: CGFloat = 1.5
 
+    // Match the playback waveform colours in
+    // `AudioPlaybackBar.DualBandWaveformStrip` so the live view and the
+    // Done-tab playback view are visually identical: DodgerBlue for the
+    // mic band (above the centre line), LimeGreen for the system-audio
+    // band (below). Before this they both used `Color.accentColor` with
+    // a 0.55 opacity on the system band, which read as a single
+    // mirrored mic waveform.
+    static let micColor = Color(red: 0.118, green: 0.565, blue: 1.000)
+    static let systemColor = Color(red: 0.196, green: 0.804, blue: 0.196)
+
     var body: some View {
         GeometryReader { proxy in
             let centreY = proxy.size.height / 2
@@ -229,11 +239,11 @@ struct DualBandWaveform: View {
         // signal is silent so the waveform stays anchored.
         VStack(spacing: 0) {
             RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
-                .fill(Color.accentColor)
+                .fill(Self.micColor)
                 .frame(width: Self.barWidth,
                        height: max(2, sample.mic * halfHeight))
             RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
-                .fill(Color.accentColor.opacity(0.55))
+                .fill(Self.systemColor)
                 .frame(width: Self.barWidth,
                        height: max(2, sample.system * halfHeight))
         }
