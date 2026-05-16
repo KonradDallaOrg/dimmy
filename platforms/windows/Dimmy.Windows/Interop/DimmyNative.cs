@@ -343,6 +343,14 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_build_flavor(byte[] outBuf, int bufLen);
 
+    /// Returns the per-install config dir name embedded at build time
+    /// via DIMMY_CONFIG_NAMESPACE (default "dimmy"). MUST be used to
+    /// derive %APPDATA% paths in C# — deriving from
+    /// `dimmy_build_flavor` produces the wrong dir when a
+    /// flavor=staging build ships under the prod packId.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_config_dir_name(byte[] outBuf, int bufLen);
+
     // ── Managed helpers ──────────────────────────────────────────────
 
     /// <summary>Read a buffer-returning FFI call into a C# string.</summary>

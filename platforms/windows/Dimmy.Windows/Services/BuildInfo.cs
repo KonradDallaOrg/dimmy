@@ -49,15 +49,34 @@ public static class BuildInfo
 
     /// <summary>
     /// Folder name under %APPDATA% that holds config.json + history.db
-    /// + license.json + onboarding marker. MUST match the Rust core's
-    /// `config_dir_name()`: `dimmy` for prod, `dimmy-staging` for
-    /// staging — otherwise C# reads the wrong file, then writes UI
-    /// state back through the FFI which overwrites the real
-    /// Rust-owned file with empty defaults. Burned 2026-05-12 on
-    /// app_rules loss after a staging install side-by-side a prod
-    /// install. Use this everywhere — never hardcode "dimmy".
+    /// + license.json + onboarding marker. Resolved at startup from
+    /// the Rust core via `dimmy_config_dir_name()` — DO NOT derive
+    /// from <see cref="IsStaging"/> here, the two are decoupled since
+    /// 2026-05-16 (a flavor=staging build that ships under the prod
+    /// packId keeps the prod config dir so channel-prerelease
+    /// auto-updates don't appear to wipe user data). The previous
+    /// flavor-derived value caused the 2026-05-16 onboarding-restart
+    /// bug: C# read `dimmy-staging/.onboarding_done` (absent) while
+    /// Rust wrote to `dimmy/.onboarding_done` (present) and the
+    /// wizard re-launched on every start. Use this everywhere —
+    /// never hardcode "dimmy" or "dimmy-staging".
     /// </summary>
-    public static string ConfigDirName => IsStaging ? "dimmy-staging" : "dimmy";
+    private static readonly Lazy<string> _configDirName = new(() =>
+    {
+        try
+        {
+            var name = DimmyNative.ReadBuffer(DimmyNative.dimmy_config_dir_name, 64);
+            return string.IsNullOrEmpty(name) ? "dimmy" : name!;
+        }
+        catch
+        {
+            // FFI not available (unit-test host without dimmy_lib.dll).
+            // Fall back to prod default — staging tester install can't
+            // happen without the FFI anyway.
+            return "dimmy";
+        }
+    });
+    public static string ConfigDirName => _configDirName.Value;
 
     /// <summary>
     /// Full path to the config-folder under %APPDATA%. Helper around

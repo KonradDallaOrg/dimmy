@@ -1538,13 +1538,16 @@ public sealed partial class SettingsWindow : Window
 
         var llmUseSub = string.Equals(ViewModel.LlmAuthMethod, "subscription",
             StringComparison.Ordinal);
+        // Recap auth is INDEPENDENT of the dictation knob. Empty =
+        // api_key (the dedicated toggle below decides subscription).
+        // The previous inherit semantics (empty → copy llm_auth_method)
+        // produced the 2026-05-16 "HTTP 1" bug: a Gemini recap inherited
+        // `subscription` from an Anthropic dictation config and was
+        // routed to the `claude` CLI which doesn't know Gemini models.
         var recapForceSub = string.Equals(ViewModel.RecapAuthMethod, "subscription",
             StringComparison.Ordinal);
-        // Effective recap auth: "" = inherit from dictation knob.
-        var recapEffectivelySub = recapForceSub
-            || (string.IsNullOrEmpty(ViewModel.RecapAuthMethod) && llmUseSub);
 
-        var keyPathLive = !llmUseSub || !recapEffectivelySub;
+        var keyPathLive = !llmUseSub || !recapForceSub;
 
         // ── INTEGRATIONS → Anthropic card ────────────────────────
         // Always rendered when the user navigates to Integrations;
@@ -1680,7 +1683,12 @@ public sealed partial class SettingsWindow : Window
                 "Auth");
             ViewModel.RecapAuthMethod = "";
             recapForceSub = false;
-            recapEffectivelySub = llmUseSub;
+            // Push the coerced value into the Rust core immediately —
+            // otherwise the next meeting recap reads the stale
+            // `subscription` value from `st.recap_auth_method` and
+            // dispatches a Gemini model through the `claude` CLI
+            // (the 2026-05-16 "HTTP 1" bug we're fixing).
+            if (_loaded) App.Instance?.ApplySettings(ViewModel);
         }
         RecapUseSubscriptionCard.Visibility = canShowRecapSub
             ? Visibility.Visible : Visibility.Collapsed;
@@ -3683,11 +3691,12 @@ public sealed partial class SettingsWindow : Window
         if (RecapKeyCard == null || RecapUseSameKeyCard == null) return;
 
         var recapVendor = RecapVendorFromModel(ViewModel.RecapModelOverride, llmUrl);
+        // Recap subscription is INDEPENDENT of dictation. Empty
+        // recap_auth_method = api_key path (the dedicated toggle is
+        // what flips this on). Mirror of the change in
+        // RefreshAuthIntegrationStatus.
         var subscriptionActive =
-            string.Equals(ViewModel.RecapAuthMethod, "subscription", StringComparison.OrdinalIgnoreCase) ||
-            (string.IsNullOrEmpty(ViewModel.RecapAuthMethod) &&
-             string.Equals(ViewModel.LlmAuthMethod, "subscription", StringComparison.OrdinalIgnoreCase) &&
-             string.Equals(recapVendor, "anthropic", StringComparison.OrdinalIgnoreCase));
+            string.Equals(ViewModel.RecapAuthMethod, "subscription", StringComparison.OrdinalIgnoreCase);
 
         // Read the full snapshot once — we need three has_* fields.
         bool hasLlmScopeKey = false;

@@ -3880,16 +3880,22 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
     // (fall through to the dictation knob). Lets a user run fast
     // dictation via API key while routing the meeting recap via
     // subscription to avoid spending Opus credit.
+    // Recap auth is independent of the dictation `llm_auth_method`.
+    // The Settings UI exposes a dedicated toggle ("Use Anthropic
+    // subscription for recap"); when off, the field is empty here and
+    // we default to `api_key` — NEVER inherit `subscription` from the
+    // dictation knob. Reason: a user can run dictation via subscription
+    // (Anthropic Claude) and recap via Gemini API key — those two
+    // paths are orthogonal. The previous inherit semantics routed the
+    // Gemini recap through `claude` CLI, which doesn't know the model
+    // and exits non-zero ("HTTP 1" surfaced in dimmy.log 2026-05-16).
     let recap_override = st
         .recap_auth_method
         .lock()
         .map(|s| s.clone())
         .unwrap_or_default();
-    let auth_method = if recap_override.is_empty() {
-        st.llm_auth_method
-            .lock()
-            .map(|s| s.clone())
-            .unwrap_or_else(|_| "api_key".to_string())
+    let mut auth_method = if recap_override.is_empty() {
+        "api_key".to_string()
     } else {
         recap_override
     };
@@ -4064,6 +4070,25 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
             (derived_url, key)
         }
     };
+    // Defensive guard: subscription path goes through the local
+    // `claude` CLI which only knows Claude-family models. If the
+    // recap model is Gemini / OpenAI / Groq, fall back to the api_key
+    // HTTP path (so the user gets the recap they configured) and log
+    // a single, actionable warning instead of letting the CLI exit 1
+    // and surface the cryptic "HTTP 1" error to the user.
+    if auth_method == "subscription" {
+        let model_is_claude = Provider::from_model_id(&parsed_model)
+            .map(|v| v.is_anthropic())
+            .unwrap_or(false);
+        if !model_is_claude {
+            log(&format!(
+                "[LlmRaw] subscription requested but model '{}' is not Claude-family — \
+                 falling back to api_key path (subscription only routes to `claude` CLI)",
+                parsed_model
+            ));
+            auth_method = "api_key".to_string();
+        }
+    }
     let is_subscription =
         auth_method == "subscription" || crate::claude_code::is_claude_code_url(&effective_url);
     if !is_subscription && (effective_url.is_empty() || effective_key.is_empty()) {
@@ -4204,6 +4229,20 @@ fn categorize_llm_error_to_rc(err: &crate::error::LlmError) -> c_int {
 #[no_mangle]
 pub extern "C" fn dimmy_build_flavor(out_buf: *mut c_char, buf_len: c_int) -> c_int {
     write_to_buf(crate::build_flavor(), out_buf, buf_len)
+}
+
+/// Get the per-install config-dir name as embedded at build time via
+/// `DIMMY_CONFIG_NAMESPACE` (default `dimmy`). Native UIs MUST use this
+/// instead of deriving the path from the build flavor — since 2026-05-16
+/// flavor and config-dir are decoupled (a flavor=staging build that
+/// ships under the prod packId keeps the prod config dir so a
+/// channel-prerelease auto-update doesn't appear to wipe user data).
+/// Reading from `build_flavor()` to derive the dir name produced the
+/// 2026-05-16 onboarding-restart bug (C# looked under `dimmy-staging`
+/// while Rust read+wrote under `dimmy`). Returns bytes written, or -1.
+#[no_mangle]
+pub extern "C" fn dimmy_config_dir_name(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    write_to_buf(crate::config_dir_name(), out_buf, buf_len)
 }
 
 /// Check if recording is active. Returns 1=yes, 0=no.
