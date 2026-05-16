@@ -654,17 +654,18 @@ public partial class SettingsViewModel : ObservableObject
         // they're either user preferences (re-pickable from any UI) or
         // booleans with sensible defaults. None of these is a "credential
         // / identity" field whose wipe would silently break the user.
+        // STT identity fields (api_url, api_model, selected_device,
+        // local_model) live BELOW this dict with the same `if-empty-omit`
+        // protection used for ApiKey/LlmApiKey — see comment + 2026-05-16
+        // incident below.
         var dict = new Dictionary<string, object?>
         {
             ["language"] = Language,
             ["llm_style"] = LlmStyle,
             ["llm_tone"] = LlmTone,
-            ["api_url"] = ApiUrl,
-            ["api_model"] = ApiModel,
             ["prompt"] = Prompt,
             ["shortcut"] = Shortcut,
             ["shortcut_mode"] = ShortcutMode,
-            ["selected_device"] = SelectedDevice,
             ["preprocessing_enabled"] = PreprocessingEnabled,
             ["chunk_streaming_enabled"] = ChunkStreamingEnabled,
             ["live_captions_enabled"] = LiveCaptionsEnabled,
@@ -683,7 +684,6 @@ public partial class SettingsViewModel : ObservableObject
             ["audio_debug_enabled"] = AudioDebugEnabled,
             ["ggml_debug_logging"] = GgmlDebugLogging,
             ["stt_mode"] = SttMode,
-            ["local_model"] = LocalModel,
             ["local_stt_backend"] = LocalSttBackend,
             ["filler_removal_enabled"] = FillerRemovalEnabled,
             ["border_style"] = BorderStyle,
@@ -694,6 +694,24 @@ public partial class SettingsViewModel : ObservableObject
             ["input_gain"] = InputGainPercent / 100.0,
             ["audio_source"] = AudioSource,
         };
+        // ── Identity + credential fields — omit when empty ─────────────
+        // Wipe protection for fields where empty VM means "transient
+        // page state, don't touch disk" rather than "user wants to
+        // clear this". The Rust side reads each key only if PRESENT,
+        // so omitting preserves whatever was previously saved.
+        // Incident 2026-05-16: a save triggered from the Recap page
+        // (RecapModel_SelectionChanged) reached ToJson with a
+        // partially-populated ViewModel; api_url + llm_api_url were
+        // emitted as "" and the Rust core dutifully cleared them on
+        // disk, requiring a manual config.json restore from a log
+        // bisect. The pre-existing ApiKey/LlmApiKey lines below were
+        // already on this pattern; this extends it to the URL +
+        // model identity fields that PR #60 acknowledged as a
+        // "follow-up" risk.
+        if (!string.IsNullOrEmpty(ApiUrl)) dict["api_url"] = ApiUrl;
+        if (!string.IsNullOrEmpty(ApiModel)) dict["api_model"] = ApiModel;
+        if (!string.IsNullOrEmpty(SelectedDevice)) dict["selected_device"] = SelectedDevice;
+        if (!string.IsNullOrEmpty(LocalModel)) dict["local_model"] = LocalModel;
         if (!string.IsNullOrEmpty(ApiKey)) dict["api_key"] = ApiKey;
         if (!string.IsNullOrEmpty(LlmApiKey)) dict["llm_api_key"] = LlmApiKey;
         if (includeLlm)
@@ -706,12 +724,19 @@ public partial class SettingsViewModel : ObservableObject
             // would otherwise wipe a valid LLM setup from disk. Pattern
             // mirrors the includeNotion fix shipped 2026-05-13 after the
             // exact same bug pattern destroyed Notion destinations.
-            dict["llm_api_url"] = LlmApiUrl;
-            dict["llm_api_model"] = LlmApiModel;
+            //
+            // Defense in depth (same 2026-05-16 incident as the STT
+            // fields above): even inside `includeLlm:true`, omit the
+            // URL + model when empty. The transient-VM scenario that
+            // triggered the STT wipe applies symmetrically here —
+            // including `"llm_api_url": ""` would still clear the
+            // saved provider on disk.
+            if (!string.IsNullOrEmpty(LlmApiUrl)) dict["llm_api_url"] = LlmApiUrl;
+            if (!string.IsNullOrEmpty(LlmApiModel)) dict["llm_api_model"] = LlmApiModel;
             dict["llm_use_same_key"] = LlmUseSameKey;
             dict["llm_auth_method"] = LlmAuthMethod;
             dict["llm_mode"] = LlmMode;
-            dict["local_llm_model"] = LocalLlmModel;
+            if (!string.IsNullOrEmpty(LocalLlmModel)) dict["local_llm_model"] = LocalLlmModel;
             // `llm_enabled` is derived from `llm_style != "off"` — keep
             // it under the same gate so a non-LLM-page save can't
             // accidentally flip the kill switch.

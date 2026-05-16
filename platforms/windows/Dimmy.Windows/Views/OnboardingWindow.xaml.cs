@@ -120,9 +120,24 @@ public sealed partial class OnboardingWindow : Window
                 Content = $"Parakeet TDT v3 FP32 ({(parakeetReady ? "Ready" : "2.5GB")})",
                 Tag = ParakeetTag,
             });
+            int parakeetIdx = OnboardingLocalModelComboBox.Items.Count - 1;
 
-            OnboardingLocalModelComboBox.SelectedIndex = defaultIdx;
-            ViewModel.SelectedLocalModelTag = ModelPaths.BaseModelFilename;
+            // Parakeet TDT v3 is the recommended Local default — better
+            // quality than Whisper base, runs well on CPU. When the
+            // bundle is already present pick it outright; when it isn't,
+            // also prefer it (label clearly shows "2.5GB" so the user
+            // sees the download cost). Falls back to Whisper Base only
+            // if the Parakeet item failed to mount (defensive).
+            if (parakeetIdx >= 0)
+            {
+                OnboardingLocalModelComboBox.SelectedIndex = parakeetIdx;
+                ViewModel.SelectedLocalModelTag = ParakeetTag;
+            }
+            else
+            {
+                OnboardingLocalModelComboBox.SelectedIndex = defaultIdx;
+                ViewModel.SelectedLocalModelTag = ModelPaths.BaseModelFilename;
+            }
         }
         catch (Exception ex)
         {
@@ -362,6 +377,37 @@ public sealed partial class OnboardingWindow : Window
         }, ct);
     }
 
+    // Subscriber to AppViewModel.TranscriptReady installed when the
+    // wizard enters Step 3 ("Try It"), removed when the wizard
+    // advances away from it OR when the window closes. Stored so the
+    // unsubscribe always pairs with the subscribe.
+    private Action<string>? _trialTranscriptHandler;
+
+    private void SubscribeTrialTranscript()
+    {
+        if (_trialTranscriptHandler != null) return;
+        var appVm = App.Instance?.AppViewModel;
+        if (appVm == null) return;
+        _trialTranscriptHandler = text =>
+        {
+            _dq.TryEnqueue(() =>
+            {
+                ViewModel.TrialText = text;
+                ViewModel.IsTrialSuccess = !string.IsNullOrWhiteSpace(text);
+                ViewModel.IsRecordingTrial = false;
+            });
+        };
+        appVm.TranscriptReady += _trialTranscriptHandler;
+    }
+
+    private void UnsubscribeTrialTranscript()
+    {
+        if (_trialTranscriptHandler == null) return;
+        var appVm = App.Instance?.AppViewModel;
+        if (appVm != null) appVm.TranscriptReady -= _trialTranscriptHandler;
+        _trialTranscriptHandler = null;
+    }
+
     private void NextStep_Click(object sender, RoutedEventArgs e)
     {
         // Capture the step the user is LEAVING — this is the one that's
@@ -375,14 +421,22 @@ public sealed partial class OnboardingWindow : Window
             PersistModelChoice();
         }
 
+        // Leaving Step 3 → unsubscribe so a transcript captured AFTER
+        // the wizard closes doesn't try to push into a stale ViewModel.
+        if (ViewModel.CurrentStep == 3) UnsubscribeTrialTranscript();
+
         ViewModel.NextStep();
 
         DimmyNative.TrackEvent("onboarding.step_completed", new { step = leavingStep });
 
-        // Reaching "Try It" — activate pill so user can test recording
+        // Reaching "Try It" — activate pill so user can test recording,
+        // and wire up the transcript preview so what they dictate shows
+        // up inline in the TrialText box (otherwise the result is pasted
+        // into whatever app has focus + the user sees nothing here).
         if (ViewModel.CurrentStep == 3)
         {
             App.Instance?.ShowPillAndHotkey();
+            SubscribeTrialTranscript();
         }
     }
 
@@ -473,6 +527,10 @@ public sealed partial class OnboardingWindow : Window
         _parakeetDownloadCts?.Cancel();
         try { _prefetch.StateChanged -= Prefetch_StateChanged; } catch { }
         try { _prefetch.Dispose(); } catch { }
+        // Detach the "Try It" transcript subscriber even if the user
+        // closed the window mid-step — otherwise the next dictation
+        // after onboarding tries to push into a disposed ViewModel.
+        UnsubscribeTrialTranscript();
         if (Application.Current is App app)
         {
             app.AppViewModel.ParakeetDownloadProgress -= OnParakeetDownloadProgress;

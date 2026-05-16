@@ -185,14 +185,14 @@ struct MacOutputPage: View {
     /// True when the recap call is effectively routed through the
     /// Anthropic subscription (Claude Code CLI). When active, the
     /// Recap key UI is entirely hidden — the CLI handles its own auth.
-    /// Win parity: SettingsWindow.xaml.cs:3686-3690.
+    /// Win parity: SettingsWindow.xaml.cs:3686.
+    /// Recap auth is INDEPENDENT of dictation since 2026-05-16 — the
+    /// previous "empty == inherit from llm_auth_method" loop caused
+    /// the dictation=subscription + recap=Gemini bug where the Gemini
+    /// model was routed to the `claude` CLI ("HTTP 1" error).
     private var recapSubscriptionActive: Bool {
         guard recapSubscriptionAvailable else { return false }
-        if appState.recapAuthMethod == "subscription" { return true }
-        // Inherited from dictation: blank recap auth + LLM on subscription
-        // + recap vendor is anthropic (already checked by
-        // recapSubscriptionAvailable).
-        return appState.recapAuthMethod.isEmpty && appState.llmAuthMethod == "subscription"
+        return appState.recapAuthMethod == "subscription"
     }
 
     /// True when the chosen recap model has a concrete cloud vendor
@@ -335,33 +335,19 @@ struct MacOutputPage: View {
                         showsDivider: recapUseSameKeyToggleShouldShow || recapKeyFieldShouldShow
                     ) {
                         Toggle("", isOn: Binding(
-                            // GET reflects the EFFECTIVE recap auth, not
-                            // just the literal field. When the user has
-                            // never touched the toggle (`recapAuthMethod`
-                            // empty) we inherit from the dictation LLM —
-                            // so if LLM is on subscription the toggle
-                            // should READ as ON even though the field is
-                            // blank, otherwise the user sees "OFF" but
-                            // recap is still being routed through CC.
+                            // Recap auth is independent of dictation
+                            // since 2026-05-16. GET reads the literal
+                            // recap_auth_method only — no inheritance.
+                            // Empty == api_key (default).
                             get: {
-                                if appState.recapAuthMethod == "subscription" { return true }
-                                if appState.recapAuthMethod.isEmpty
-                                    && appState.llmAuthMethod == "subscription" {
-                                    return true
-                                }
-                                return false
+                                appState.recapAuthMethod == "subscription"
                             },
-                            // SET writes an EXPLICIT choice. Critical:
-                            // turning the toggle OFF writes "api_key",
-                            // NOT empty — otherwise "" would re-trigger
-                            // the inherit-from-LLM rule and the toggle
-                            // would silently flip back to ON whenever
-                            // LLM is on subscription. The user's report
-                            // "se in llm uso anthropic con subs sono
-                            // obbligato a usare subs anche in recap"
-                            // was exactly this loop. Explicit "api_key"
-                            // breaks out of inheritance and lets recap
-                            // use its own (or shared) API key.
+                            // SET writes an EXPLICIT choice. We still
+                            // write "api_key" for OFF (not "") so the
+                            // field is unambiguous in config.json —
+                            // an empty string is also accepted by the
+                            // Rust core as api_key, but explicit values
+                            // are easier to grep in logs.
                             set: { newValue in
                                 appState.recapAuthMethod = newValue ? "subscription" : "api_key"
                                 persistConfig()

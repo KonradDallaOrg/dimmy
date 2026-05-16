@@ -155,7 +155,7 @@ pub fn compose_stt_prompt(prompt: &str, user_dict: &[String]) -> String {
 /// pipeline (different packId, truly side-by-side install) sets
 /// `DIMMY_CONFIG_NAMESPACE=dimmy-staging` so its install can coexist
 /// with prod on the same machine without stomping its files.
-fn config_dir_name() -> &'static str {
+pub fn config_dir_name() -> &'static str {
     match option_env!("DIMMY_CONFIG_NAMESPACE") {
         Some(s) if !s.is_empty() => s,
         _ => "dimmy",

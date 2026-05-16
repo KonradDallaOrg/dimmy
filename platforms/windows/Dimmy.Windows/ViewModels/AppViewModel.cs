@@ -155,6 +155,13 @@ public partial class AppViewModel : ObservableObject
     /// load card to drive a determinate progress bar.
     public event Action<double, double, double>? FileTranscribeProgress;
 
+    /// Fires when the Rust core emits a `transcript_ready` event with
+    /// the final dictation text. Args: (text). Used by the onboarding
+    /// "Try It" step to preview the user's first dictation inline
+    /// instead of letting it disappear into the focused-app paste.
+    /// Pure observer — does NOT affect the paste flow in StopAndProcess.
+    public event Action<string>? TranscriptReady;
+
     public void HandleEvent(string? json)
     {
         if (string.IsNullOrEmpty(json)) return;
@@ -217,6 +224,19 @@ public partial class AppViewModel : ObservableObject
                     // Completing state is set by App.xaml.cs StopAndProcess AFTER paste.
                     // Do NOT set it here — it would race with StopAndProcess and cause
                     // double Completing (Completing→Idle→Completing→Idle).
+                    //
+                    // Surface the text via TranscriptReady so subscribers
+                    // (currently: OnboardingWindow Step 3 "Try It" preview)
+                    // get the final transcript without having to scrape the
+                    // paste buffer or poll history.db. Pure additive: the
+                    // paste path in StopAndProcess is unaffected.
+                    {
+                        var text = payload.TryGetProperty("text", out var t)
+                            ? (t.GetString() ?? "")
+                            : "";
+                        if (!string.IsNullOrEmpty(text))
+                            TranscriptReady?.Invoke(text);
+                    }
                     break;
                 case "error":
                     var msg = payload.GetProperty("message").GetString() ?? "Unknown error";
