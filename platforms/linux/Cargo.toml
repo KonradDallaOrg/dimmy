@@ -28,3 +28,7 @@ async-channel = "2"
 default = ["x11-fallback"]
 x11-fallback = []
 layer-shell = ["gtk4-layer-shell"]
+# Pass-through to the core crate. Release pipelines must build with
+# `--features license-client` so the linux binary actually verifies
+# tokens against the embedded pubkey instead of returning Unrestricted.
+license-client = ["dimmy_lib/license-client"]
