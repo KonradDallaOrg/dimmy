@@ -240,7 +240,7 @@ jobs:
           # FluidInference's CoreML bundle. Target-scoped to macOS
           # arm64 so the feature has no effect on Win/Linux jobs.
           cargo build --lib --release --target aarch64-apple-darwin \
-            --features local-stt-metal,local-llm-metal,local-stt-parakeet-coreml,local-stt-parakeet-fluid
+            --features local-stt-metal,local-llm-metal,local-stt-parakeet-coreml,local-stt-parakeet-fluid,license-client
 
       - name: Verify static library
         run: |
@@ -512,7 +512,7 @@ jobs:
           REM     gate fail, test-install red, user-reported Win crash),
           REM     FIRST diagnostic = re-add `cargo clean --release` and
           REM     re-run. Then investigate why the cache went stale.
-          cargo build --lib --release --features local-stt-vulkan,local-llm-vulkan,local-stt-parakeet
+          cargo build --lib --release --features local-stt-vulkan,local-llm-vulkan,local-stt-parakeet,license-client
 
       - name: Gate — verify dimmy_lib.dll linker version
         shell: pwsh
@@ -709,7 +709,7 @@ jobs:
           DIMMY_LICENSE_PUBKEY: avlM65dRGDHomOzqGICiuIXf6_dY21w653AOnza2fzU
           DIMMY_LICENSE_SERVER_URL: https://license-staging.dimmy.app
           DIMMY_BUILD_FLAVOR: staging
-        run: cargo build --release
+        run: cargo build --release --features license-client
 
       - name: Package AppImage
         run: |
