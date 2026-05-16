@@ -233,14 +233,37 @@ fn main() {
         license_server_url
     );
     println!("cargo:rustc-env=DIMMY_BUILD_FLAVOR={}", build_flavor);
+
+    // Config dir namespace (decoupled from build_flavor since 2026-05-16).
+    // Default empty -> Rust uses "dimmy". staging-release.yml sets this to
+    // "dimmy-staging" so the tester install lives side-by-side with prod.
+    // staging-native.yml does NOT set it: a channel-prerelease auto-update
+    // must keep the user's prod config dir intact.
+    let config_namespace =
+        sanitize_secret(std::env::var("DIMMY_CONFIG_NAMESPACE").unwrap_or_default());
+    println!(
+        "cargo:rustc-env=DIMMY_CONFIG_NAMESPACE={}",
+        config_namespace
+    );
     if build_flavor == "staging" {
-        println!("cargo:warning=DIMMY_BUILD_FLAVOR=staging — config dir will be 'dimmy-staging' and UI will show STAGING watermark");
+        let resolved = if config_namespace.is_empty() {
+            "dimmy".to_string()
+        } else {
+            config_namespace.clone()
+        };
+        println!(
+            "cargo:warning=DIMMY_BUILD_FLAVOR=staging — UI will show STAGING watermark; \
+             config dir = '{}' (set DIMMY_CONFIG_NAMESPACE to override; default 'dimmy' \
+             keeps a channel-prerelease build sharing the prod user data).",
+            resolved
+        );
     }
     println!("cargo:rerun-if-env-changed=POSTHOG_API_KEY");
     println!("cargo:rerun-if-env-changed=SENTRY_DSN");
     println!("cargo:rerun-if-env-changed=DIMMY_LICENSE_PUBKEY");
     println!("cargo:rerun-if-env-changed=DIMMY_LICENSE_SERVER_URL");
     println!("cargo:rerun-if-env-changed=DIMMY_BUILD_FLAVOR");
+    println!("cargo:rerun-if-env-changed=DIMMY_CONFIG_NAMESPACE");
 }
 
 /// Strip leading UTF-8 BOM, then ASCII-trim. Returns owned String so

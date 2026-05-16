@@ -99,9 +99,11 @@ fn default_shortcut() -> &'static str {
 
 /// Build flavor — "" (prod, default) or "staging". Embedded at compile
 /// time via build.rs from the `DIMMY_BUILD_FLAVOR` env var. A staging
-/// build uses a distinct config dir, single-instance mutex name, and
-/// surfaces a "STAGING" badge in the UI so a tester running both
-/// flavors side-by-side never confuses one for the other.
+/// build surfaces a "STAGING" badge in the UI and uses the staging
+/// licensing endpoint, but its config dir is now controlled
+/// independently via `DIMMY_CONFIG_NAMESPACE` so a channel-prerelease
+/// auto-update doesn't appear to wipe the user's data — see
+/// `config_dir_name` below.
 pub fn build_flavor() -> &'static str {
     option_env!("DIMMY_BUILD_FLAVOR").unwrap_or("")
 }
@@ -143,15 +145,20 @@ pub fn compose_stt_prompt(prompt: &str, user_dict: &[String]) -> String {
     }
 }
 
-/// Per-flavor config dir name. Prod = `dimmy`, staging = `dimmy-staging`.
-/// Splitting these names is what keeps a staging install from
-/// overwriting prod's `license.json` / `config.json` / `keys.enc` on
-/// the same machine.
+/// Config dir name on disk. Controlled by the `DIMMY_CONFIG_NAMESPACE`
+/// build-time env var (default `dimmy`). Decoupled from `build_flavor`
+/// since 2026-05-16: a staging-flavored build that ships under the
+/// same Velopack packId as prod (the channel-prerelease auto-update
+/// case) MUST keep using the prod config dir, otherwise the user's
+/// history / license / app-rules appear wiped every time Velopack
+/// swaps in a prerelease build. Only the `staging-release.yml` tester
+/// pipeline (different packId, truly side-by-side install) sets
+/// `DIMMY_CONFIG_NAMESPACE=dimmy-staging` so its install can coexist
+/// with prod on the same machine without stomping its files.
 fn config_dir_name() -> &'static str {
-    if is_staging_build() {
-        "dimmy-staging"
-    } else {
-        "dimmy"
+    match option_env!("DIMMY_CONFIG_NAMESPACE") {
+        Some(s) if !s.is_empty() => s,
+        _ => "dimmy",
     }
 }
 
