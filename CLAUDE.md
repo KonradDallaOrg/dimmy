@@ -25,6 +25,9 @@ Cross-platform voice-transcription overlay. Records audio via global hotkey, tra
 | Local LLM feasibility study | [`docs/dev/local-llm-feasibility.md`](docs/dev/local-llm-feasibility.md) |
 | **Telemetry implementation (PostHog + Sentry)** | [`docs/dev/telemetry-implementation.md`](docs/dev/telemetry-implementation.md) |
 | **Licensing v2 PoC — local server, Ed25519 tokens, 7 test scenarios** | [`docs/dev/licensing-poc.md`](docs/dev/licensing-poc.md) |
+| **Licensing flow — state machine + sequence diagrams (ground truth)** | [`docs/dev/licensing-flow.md`](docs/dev/licensing-flow.md) |
+| **Licensing prod — Cloudflare Worker + Stripe production setup** | [`docs/dev/licensing-prod.md`](docs/dev/licensing-prod.md) |
+| **Staging tester guide — what to test in the side-by-side staging install** | [`docs/dev/staging-testing.md`](docs/dev/staging-testing.md) |
 | **Claude Code subscription backend (LLM via local `claude` CLI)** | [`docs/dev/claude-code-backend.md`](docs/dev/claude-code-backend.md) |
 | **User-facing privacy policy** | [`PRIVACY.md`](PRIVACY.md) |
 | Per-platform notes | [`platforms/windows/README.md`](platforms/windows/README.md), [`platforms/macos/README.md`](platforms/macos/README.md), [`platforms/linux/README.md`](platforms/linux/README.md) |
@@ -180,6 +183,10 @@ Hardening status: see [`docs/dev/system-audio-capture-tests.md`](docs/dev/system
 | Add a Parakeet feature | `core/src/parakeet.rs` (Win/Linux ONNX path) + `parakeet_fluid.rs` (Mac ANE, gated by `local-stt-parakeet-fluid`). Realtime chunking lives in `chunked_stt.rs` |
 | Touch macOS FFI | Read `docs/dev/known-bugs.md` MACOS-001/002/003 first |
 | Touch Windows CI / installer | Read `docs/dev/windows-ci.md` — 10 invariants, all paid in blood |
+| Touch the recap auth dispatch | `core/src/ffi.rs::dimmy_llm_call_raw` — `recap_auth_method` is INDEPENDENT of `llm_auth_method`; defensive guard already falls back to `api_key` when `subscription` is requested with a non-Claude model. Win mirror in `SettingsWindow.xaml.cs::RefreshAuthIntegrationStatus`, Mac in `MacOutputPage.swift::recapSubscriptionActive`. |
+| Save anything in C# Settings → ToJson | `SettingsViewModel.cs::ToJson` — **identity fields (api_url, api_model, llm_api_url, llm_api_model, local_model, selected_device) emit ONLY when non-empty** (`if-empty-omit` pattern). Adding a new identity-class field? Mirror that pattern, otherwise a transient empty VM will wipe the saved value via `dimmy_set_config_json`. Burned 2026-05-16 (config.json wiped after a recap_model_override save). |
+| Derive %APPDATA% / config dir in host UI | Use `BuildInfo.ConfigDirName` (Win) / `appState.configDirURL` (Mac), which read from `dimmy_config_dir_name()` FFI. **NEVER** derive from `IsStaging` / build flavor — the two are decoupled. |
+| Trigger a release / pre-release | See the **Release pipelines** table below. Wrong trigger = wrong licensing endpoint (Stripe Live vs Test). |
 | Add a test | Read `docs/dev/testing.md` (tier definitions) + `docs/dev/v2-test-hardening-plan.md` (Phase 7+8 hardening) |
 | Add a doc | `docs/dev/` (permanent) or `docs/superpowers/handoffs/` (time-bound). DO NOT link handoffs from `CLAUDE.md` — they decay; this file describes the codebase, not work-in-progress. |
 
@@ -199,6 +206,30 @@ Hardening status: see [`docs/dev/system-audio-capture-tests.md`](docs/dev/system
 All 10 invariants live in [`docs/dev/windows-ci.md`](docs/dev/windows-ci.md) — paid in blood, MUST be read before editing `.github/workflows/` or `platforms/windows/`. Run `/windows-ci-preflight` before pushing any workflow change.
 
 **🚨 `cargo clean --release` was dropped from Win build steps 2026-05-14** (`staging-native.yml`, `staging-release.yml`, `release.yml`). The `Swatinem/rust-cache@v2` restore is now load-bearing — saves 20-25 min per Win build. Safety net: the `dumpbin /headers` linker-version gate right after `cargo build` aborts if the produced DLL was linked with `< 14.50` (catches stale-cache miscompiles). **If a Win release ever ships a broken DLL** (linker gate red, `test-install.yml` failing, user-reported crash on Win), **first diagnostic is to re-add `cargo clean --release`** in the build step and re-run the workflow. Then investigate why the rust-cache didn't invalidate via fingerprint. User has explicitly accepted this trade-off — don't silently revert.
+
+### Release pipelines — which workflow does what
+
+Three workflows publish artifacts; they look similar but speak to
+**different licensing endpoints + Stripe accounts**. Picking the wrong
+trigger ships a binary that bills real money instead of Test mode (or
+vice versa). Memorise:
+
+| Workflow | Trigger | flavor | `DIMMY_LICENSE_PUBKEY` | server URL | packId | config dir | Stripe |
+|---|---|---|---|---|---|---|---|
+| **`staging-native.yml`** | push to `staging` | `staging` | `avlM65...` hardcoded inline | **license-staging**.dimmy.app | `Dimmy` (same as prod) | `dimmy` (same as prod) | Test |
+| **`staging-release.yml`** | tag `v*-staging*` (e.g. `v0.6.46-staging.1`) | `staging` | `avlM65...` hardcoded inline | **license-staging**.dimmy.app | `Dimmy-Staging` (separate) | `dimmy-staging` (separate, set via `DIMMY_CONFIG_NAMESPACE`) | Test |
+| **`release.yml`** | tag `v*` *not* matching `-staging` (e.g. `v0.6.46-rc1` or `v0.6.46`) | prod (empty) | `${{ secrets.DIMMY_LICENSE_PUBKEY }}` | **license**.dimmy.app | `Dimmy` | `dimmy` | **Live** |
+
+Practical consequences:
+
+- **A `v*-rcN` tag triggers `release.yml`, NOT staging.** Cutting `v0.6.46-rc1` builds against PROD endpoints. Velopack channel `prerelease` users see it; if anyone clicks "Buy plan" Stripe Live bills them. Recommended trial-only testing on rcN — `Start trial` and `/api/activate` magic-link redemption are free in both modes.
+- **`staging-latest` rolling tag is invisible to Velopack** because it's not semver. `staging-native.yml` produces useful artifacts (Setup.exe etc) but the in-app auto-update never sees them. Useful for manual download + sideloading by the team; not for delivering to channel-prerelease users.
+- **`v*-staging.N` is the tester path.** `staging-release.yml` produces a side-by-side install (packId `Dimmy-Staging`) that coexists with a prod install on the same machine; talks to license-staging + Stripe Test so the full pay flow can be exercised without a real charge.
+- **Flavor ≠ config dir.** Since 2026-05-16 the config dir is keyed off `DIMMY_CONFIG_NAMESPACE` (default `dimmy`), not `DIMMY_BUILD_FLAVOR`. A flavor=staging build that ships under the prod packId (i.e. `staging-native.yml`) shares the prod `Roaming\dimmy\` so a channel-prerelease auto-update doesn't appear to wipe the user's data. Only `staging-release.yml` sets `DIMMY_CONFIG_NAMESPACE=dimmy-staging` (paired with packId `Dimmy-Staging`).
+- **`license-client` cargo feature is mandatory** in every release pipeline. Without it the Rust core short-circuits `LicenseStatus::Unrestricted` regardless of the embedded pubkey, and the binary ships with the DEV badge + free everything. All three workflows pass `--features ...,license-client` explicitly; a fresh contributor `cargo build` (no env) still defaults to no `license-client` so it builds cleanly without `DIMMY_LICENSE_PUBKEY`.
+- **C# `BuildInfo.ConfigDirName` reads from FFI**, not from the flavor. After PR #70 + the 2026-05-16 onboarding-restart fix, the host UI calls `dimmy_config_dir_name()` to learn which dir to use. **Never derive the dir from `IsStaging` in C# / Swift**.
+
+Full runbook + recovery procedures: [`docs/RELEASING.md`](docs/RELEASING.md). When in doubt about which trigger you want, re-read this table.
 
 ### Versioning — MANDATORY VERSION CHECK BEFORE ANY RELEASE WORK
 
