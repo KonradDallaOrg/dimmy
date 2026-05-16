@@ -178,13 +178,19 @@ public class SettingsViewModelTests
     }
 
     [Fact]
-    public void ToJson_IncludeLlmTrue_EmitsExplicitEmptyClearsField()
+    public void ToJson_IncludeLlmTrue_OmitsEmptyIdentityFields()
     {
-        // The LLM page's "Disconnect" flow needs the ability to
-        // explicitly clear llm_api_url — passing includeLlm:true with
-        // an empty value MUST emit `""` so the Rust core wipes the
-        // field. Without this, the user can never remove a stale
-        // provider config.
+        // 2026-05-16: behaviour changed from "explicit empty wipes" to
+        // "if-empty-omit" as defense-in-depth against transient-empty
+        // ViewModels destroying saved config. A user who really wants
+        // to wipe an LLM provider doesn't have a Disconnect button in
+        // the current UI; if/when one is added, the right shape is a
+        // dedicated `forceClearLlm:true` parameter, NOT empty-string-
+        // as-clear (which can't distinguish "user really wants to
+        // wipe" from "VM not yet loaded").
+        //
+        // Rationale + incident: see CLAUDE.md "Decision tree — Save
+        // anything in C# Settings → ToJson" and PR #73.
         var vm = new SettingsViewModel
         {
             LlmApiUrl = "",
@@ -192,8 +198,52 @@ public class SettingsViewModelTests
             LlmAuthMethod = "api_key",
         };
         var json = vm.ToJson(includeLlm: true);
-        Assert.Contains("\"llm_api_url\":\"\"", json);
-        Assert.Contains("\"llm_api_model\":\"\"", json);
+        Assert.DoesNotContain("\"llm_api_url\":\"\"", json);
+        Assert.DoesNotContain("\"llm_api_model\":\"\"", json);
+        // Non-identity LLM fields under includeLlm still emit so the
+        // user can flip llm_mode / auth_method even on a fresh page
+        // without losing the empty-identity safeguard.
+        Assert.Contains("\"llm_auth_method\":\"api_key\"", json);
+        Assert.Contains("\"llm_mode\":\"cloud\"", json);
+    }
+
+    [Fact]
+    public void ToJson_DefaultOmitsEmptySttIdentityFields()
+    {
+        // Mirror of the LLM-side protection — api_url / api_model /
+        // selected_device / local_model are no longer in the universal
+        // dict; they emit only when non-empty. Burned 2026-05-16:
+        // PR #60 gated llm_*/recap_* but left STT identity in the
+        // universal dict, so any per-field save (e.g. NotionAutoSend
+        // toggle) wiped api_url when the VM was transient-empty.
+        var vm = new SettingsViewModel
+        {
+            ApiUrl = "",
+            ApiModel = "",
+            SelectedDevice = "",
+            LocalModel = "",
+        };
+        var json = vm.ToJson();
+        Assert.DoesNotContain("\"api_url\":\"\"", json);
+        Assert.DoesNotContain("\"api_model\":\"\"", json);
+        Assert.DoesNotContain("\"selected_device\":\"\"", json);
+        Assert.DoesNotContain("\"local_model\":\"\"", json);
+    }
+
+    [Fact]
+    public void ToJson_DefaultEmitsPopulatedSttIdentityFields()
+    {
+        // Sanity counterpart to the omit test — when fields ARE set,
+        // they MUST round-trip on every save (the user reaches Save
+        // expecting their STT config to persist).
+        var vm = new SettingsViewModel
+        {
+            ApiUrl = "https://api.groq.com/openai/v1/audio/transcriptions",
+            ApiModel = "whisper-large-v3-turbo",
+        };
+        var json = vm.ToJson();
+        Assert.Contains("\"api_url\":\"https://api.groq.com/openai/v1/audio/transcriptions\"", json);
+        Assert.Contains("\"api_model\":\"whisper-large-v3-turbo\"", json);
     }
 
     [Fact]
