@@ -2,6 +2,51 @@
 
 > **Runbook for cutting a release.** For build commands, see [`BUILD.md`](BUILD.md). For Windows CI invariants, see [`dev/windows-ci.md`](dev/windows-ci.md) — read it before touching any workflow.
 
+## Release pipelines — what triggers what
+
+Three workflows publish artifacts. They look similar but produce binaries that **speak to different licensing endpoints and Stripe accounts**. Pick the wrong trigger and you ship a binary that bills real money in Stripe Live when you meant Stripe Test (or vice versa).
+
+| Workflow | Trigger | flavor | `DIMMY_LICENSE_PUBKEY` source | server URL | packId | config dir | Stripe |
+|---|---|---|---|---|---|---|---|
+| **`staging-native.yml`** | push to `staging` branch | `staging` | hardcoded inline (`avlM65...`) | **license-staging**.dimmy.app | `Dimmy` (= prod) | `dimmy` (= prod) | Test |
+| **`staging-release.yml`** | tag matching `v*-staging*` (e.g. `v0.6.46-staging.1`) | `staging` | hardcoded inline (`avlM65...`) | **license-staging**.dimmy.app | `Dimmy-Staging` (separate) | `dimmy-staging` (via `DIMMY_CONFIG_NAMESPACE`) | Test |
+| **`release.yml`** | tag matching `v*` that does NOT contain `-staging` (e.g. `v0.6.46-rc1` OR `v0.6.46`) | prod (env unset → empty) | `${{ secrets.DIMMY_LICENSE_PUBKEY }}` | **license**.dimmy.app | `Dimmy` | `dimmy` | **Live** |
+
+### Pick-the-right-trigger cheat sheet
+
+> Match what you're trying to accomplish to a row. If none of these fit, **stop and re-read** before tagging anything.
+
+| Goal | Trigger to use | How |
+|---|---|---|
+| Internal smoke build after a `staging` merge (no auto-update visible to users) | `staging-native.yml` | Push to `staging`. Asset URL: `staging-latest`. Download `Dimmy-win-Setup.exe` manually. **Velopack won't see this build** — tag is rolling, not semver. |
+| Ship a pre-release to **prerelease channel** users (Stripe Live, real billing) | `release.yml` | `git tag -a v0.6.46-rc1 -m '...'` + `git push origin v0.6.46-rc1`. GitHub Release is marked `prerelease=true`. **Trial / activation-code free in both modes — only "Buy plan" charges.** |
+| Ship a stable release to **all** users (channel-stable + prerelease) | `release.yml` | Tag `v0.6.46` (no `-rcN` suffix). GitHub Release is marked `prerelease=false`, becomes "Latest". |
+| Test the full pay flow against Stripe Test (Buy → checkout → webhook → license active), side-by-side with a prod install | `staging-release.yml` | `git tag -a v0.6.46-staging.1 -m '...'` + push. Produces installer that lives in `Local\Dimmy-Staging\` + reads `Roaming\dimmy-staging\`. Both packId and config dir are separate from prod. Doesn't touch the prod install. |
+| Reproduce a bug against the staging licensing endpoint without going through a CI build | Local Debug build | Set `DIMMY_LICENSE_PUBKEY=avlM65... DIMMY_LICENSE_SERVER_URL=https://license-staging.dimmy.app DIMMY_BUILD_FLAVOR=staging`, then `cargo build --release --lib --features local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,license-client`. Drop the DLL into the Debug bin and run from there. Same caveat as `staging-native.yml`: packId stays prod, install dir is prod — your debug runs share license.json with prod. |
+
+### Why this matters (and what the failure modes look like)
+
+- **A `v*-rcN` tag = PROD endpoint.** This caught us once already (2026-05-16): tag `v0.6.46-rc1` looks "rc-y" but `release.yml` fires, builds against `secrets.DIMMY_LICENSE_PUBKEY`, points to `license.dimmy.app`, and any "Buy plan" click in that binary hits Stripe Live. We cancelled the run + deleted the draft release before it was published. For RC binaries that exercise paid flows, use `staging-release.yml`'s `v*-staging.N` tag instead, OR restrict RC testing to trial/activation-code paths (free in both modes).
+- **`staging-latest` rolling tag is invisible to Velopack** because the tag name isn't valid semver. `staging-native.yml` produces useful artifacts for manual sideloading, but no in-app auto-update will deliver them.
+- **`license-client` cargo feature is mandatory** in every shipping pipeline. All three workflows pass `--features ...,license-client` explicitly. Without it the Rust core short-circuits to `LicenseStatus::Unrestricted` regardless of the embedded pubkey, and the binary ships with the "DEV / Source build (no licensing)" badge + every scope unlocked. A fresh contributor `cargo build` (no env) deliberately does NOT enable `license-client` so contributors can build without `DIMMY_LICENSE_PUBKEY`.
+- **Flavor ≠ config dir since 2026-05-16.** The config dir is keyed off `DIMMY_CONFIG_NAMESPACE` (default `dimmy`), not `DIMMY_BUILD_FLAVOR`. A flavor=staging build that ships under the prod packId (the `staging-native.yml` case) shares the prod `Roaming\dimmy\` config dir so a channel-prerelease auto-update doesn't appear to wipe the user's data. Only `staging-release.yml` sets `DIMMY_CONFIG_NAMESPACE=dimmy-staging`. The C# host learns this at runtime via the `dimmy_config_dir_name()` FFI — **never derive the dir from the flavor in host code**.
+
+### How to test the licensing flow without spending money
+
+- **Trial + magic link + `/api/activate?code=...` redemption** — free in both Stripe Test and Live. Safe to exercise on any binary (prod RC included).
+- **Buy / Checkout / subscription created / `/api/refresh`** — bills real money in Stripe Live. Use only `staging-release.yml` builds (or local Debug with staging env), which point to `license-staging.dimmy.app` + Stripe Test.
+- **Stripe Customer Portal** — same: free to open, but any "Update payment method" / "Cancel subscription" interaction touches whatever account the binary's endpoint says.
+
+### See also
+
+- [`dev/licensing-flow.md`](dev/licensing-flow.md) — state machine + sequence diagrams (the ground-truth doc for what each `/api/...` endpoint does).
+- [`dev/staging-testing.md`](dev/staging-testing.md) — the tester-facing guide for someone who installed the `Dimmy-Staging` build (Stripe test cards, expected watermarks, side-by-side caveats).
+- [`dev/licensing-prod.md`](dev/licensing-prod.md) — Cloudflare Worker + Stripe production setup notes (for when a real prod tier needs server-side changes).
+- [`dev/licensing-poc.md`](dev/licensing-poc.md) — original PoC: local axum server, 7 test scenarios, design rationale. Useful when changing the Ed25519 envelope shape.
+
+---
+
+
 ## Versioning
 
 Semantic versioning. Bump in `core/Cargo.toml` → `version = "x.y.z"`.
