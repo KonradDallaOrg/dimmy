@@ -473,6 +473,17 @@ mod platform {
     const LLKHF_INJECTED: u32 = 0x10;
     const INPUT_KEYBOARD: u32 = 1;
     const KEYEVENTF_KEYUP: u32 = 0x0002;
+    /// `VK_NONAME` (`0xFC`) — Windows VK code reserved by Microsoft, no
+    /// shipping app reacts to it. We inject a down+up burst of it as a
+    /// "chord-buster": the Windows shell only treats NON-MODIFIER key
+    /// input as the chord that prevents Start Menu opening on Win
+    /// release. Other modifiers (Alt, Ctrl, Shift) don't count — that's
+    /// why Win+E suppresses Start Menu but Win+Alt doesn't (empirically
+    /// confirmed 2026-05-18: `f69d3db` let Alt down reach the shell and
+    /// Start Menu still opened on the subsequent synthetic Win UP).
+    /// AutoHotkey + Talon Voice use the same VK_NONAME trick for the
+    /// same reason.
+    const VK_NONAME: u16 = 0xFC;
 
     #[repr(C)]
     #[derive(Default, Clone, Copy)]
@@ -547,14 +558,48 @@ mod platform {
         }
     }
 
+    /// Inject a single KEYDOWN for the given virtual-key, marked INJECTED
+    /// so our own hook recognises and ignores it. Paired with
+    /// `emit_synthetic_keyup` for the VK_NONAME chord-buster.
+    fn emit_synthetic_keydown(vk: u16) {
+        let input = INPUT {
+            r#type: INPUT_KEYBOARD,
+            u: INPUT_U {
+                ki: KEYBDINPUT {
+                    wVk: vk,
+                    wScan: 0,
+                    dwFlags: 0,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        };
+        unsafe {
+            SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
+        }
+    }
+
     /// Synthetic UP burst for every shortcut key — both sides of each
     /// modifier group (LWin + RWin, LMENU + RMENU, …) so the burst is
     /// idempotent regardless of which side the user actually pressed.
     /// Spurious UPs for keys the kernel doesn't track as down are no-ops.
+    ///
+    /// When the combo includes the WIN modifier group, the burst is
+    /// prefixed by a VK_NONAME down+up "chord-buster" so that the
+    /// Windows shell classifies the upcoming synthetic Win UP as
+    /// "released-after-chord" instead of "solo Win press-release". See
+    /// VK_NONAME doc comment for the full incident note.
     fn emit_synthetic_combo_release() {
         let k1 = KEY1_CODES.load(Ordering::SeqCst);
         let k2 = KEY2_CODES.load(Ordering::SeqCst);
         let k3 = KEY3_CODE.load(Ordering::SeqCst);
+
+        let win_packed = pack_keys(VK_LWIN, VK_RWIN);
+        if k1 == win_packed || k2 == win_packed {
+            emit_synthetic_keydown(VK_NONAME);
+            emit_synthetic_keyup(VK_NONAME);
+        }
+
         for packed in [k1, k2] {
             let left = packed >> 16;
             let right = packed & 0xFFFF;
@@ -657,21 +702,15 @@ mod platform {
 
     /// Keyboard hook callback — combo detection + modifier suppression.
     ///
-    /// Suppression contract (the fix landed 2026-05-18, refined same evening):
+    /// Suppression contract (the fix landed 2026-05-18, refined twice same evening):
     /// - When the configured combo (KEY1+KEY2[+KEY3]) becomes fully pressed,
     ///   the hook (a) emits a synthetic UP for every shortcut key to flush
-    ///   the kernel's modifier state, then (b) sets `MODIFIER_SUPPRESS=true`.
-    /// - **The activation event itself is NOT consumed** — it falls through
-    ///   to `CallNextHookEx`. This is load-bearing: when the user presses
-    ///   Win first then Alt, the OS shell needs to see the Alt-down event
-    ///   to register "Win+Alt chord". Otherwise the shell sees only
-    ///   `Win down → synthetic Win UP` with no chord context, and opens the
-    ///   Start Menu on Win release. Empirically reported 2026-05-18 — first
-    ///   version of this fix consumed the activation event and broke
-    ///   Win-first press. Equivalent symptom would hit Alt-first press if
-    ///   the OS treated Alt the same way (it doesn't, but the fix is
-    ///   symmetric).
-    /// - While `MODIFIER_SUPPRESS=true`, every SUBSEQUENT event matching a
+    ///   the kernel's modifier state — preceded by a VK_NONAME down+up
+    ///   "chord-buster" if WIN is one of the modifiers, so the shell
+    ///   classifies the upcoming Win UP as released-after-chord (Alt does
+    ///   not count as chord input for the shell's Start-Menu logic — only
+    ///   non-modifier keys do). Then (b) sets `MODIFIER_SUPPRESS=true`.
+    /// - While `MODIFIER_SUPPRESS=true`, every event matching a
     ///   shortcut key is consumed (return 1) instead of forwarded. The OS
     ///   shell therefore never sees an orphan Win-alone-release (no Start
     ///   Menu) or Alt-alone-release (no Notepad++ menu-mode activation).
@@ -720,14 +759,6 @@ mod platform {
         let is_combo_key =
             matches_key_group(vk, k1) || matches_key_group(vk, k2) || (k3 != 0 && vk == k3);
 
-        // Set true only on the event that flips COMBO_ACTIVE from false→true.
-        // The activation event must NOT be consumed — the OS shell needs to
-        // see the chord-completing key down to register the chord context,
-        // otherwise it interprets the leading modifier as a solo press
-        // (Start Menu / menu mode on later synthetic UP). See doc comment
-        // above for the full rationale.
-        let mut just_activated = false;
-
         if k3 == 0 {
             // ── 2-modifier combo ──
             if matches_key_group(vk, k1) {
@@ -738,7 +769,6 @@ mod platform {
                     {
                         HOTKEY_EVENT.store(EVENT_PRESSED, Ordering::SeqCst);
                         MODIFIER_SUPPRESS.store(true, Ordering::SeqCst);
-                        just_activated = true;
                         emit_synthetic_combo_release();
                     }
                 } else if is_up {
@@ -758,7 +788,6 @@ mod platform {
                     {
                         HOTKEY_EVENT.store(EVENT_PRESSED, Ordering::SeqCst);
                         MODIFIER_SUPPRESS.store(true, Ordering::SeqCst);
-                        just_activated = true;
                         emit_synthetic_combo_release();
                     }
                 } else if is_up {
@@ -804,7 +833,6 @@ mod platform {
                 if all && !COMBO_ACTIVE.swap(true, Ordering::SeqCst) {
                     HOTKEY_EVENT.store(EVENT_PRESSED, Ordering::SeqCst);
                     MODIFIER_SUPPRESS.store(true, Ordering::SeqCst);
-                    just_activated = true;
                     emit_synthetic_combo_release();
                 } else if !all && COMBO_ACTIVE.swap(false, Ordering::SeqCst) {
                     HOTKEY_EVENT.store(EVENT_RELEASED, Ordering::SeqCst);
@@ -818,7 +846,7 @@ mod platform {
             }
         }
 
-        if is_combo_key && MODIFIER_SUPPRESS.load(Ordering::SeqCst) && !just_activated {
+        if is_combo_key && MODIFIER_SUPPRESS.load(Ordering::SeqCst) {
             return 1;
         }
 
