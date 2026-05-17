@@ -368,12 +368,17 @@ jobs:
           # update on a staging install never picks up a prod build.
           vpk pack --packId Dimmy-Staging --packVersion $version --packDir "$pubDir" --mainExe Dimmy.Windows.exe --icon "platforms/windows/Dimmy.Windows/Assets/dimmy.ico" --framework "vcredist143-x64" --channel staging --outputDir platforms/windows/velopack-output
 
+      - name: List Velopack output (for log forensics)
+        shell: pwsh
+        run: Get-ChildItem platforms/windows/velopack-output/ | Format-Table Name, Length
+
       - name: Upload to release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
+          fail_on_unmatched_files: true
           files: |
-            platforms/windows/velopack-output/Dimmy-Staging-win-Setup.exe
-            platforms/windows/velopack-output/Dimmy-Staging-win-Portable.zip
+            platforms/windows/velopack-output/Dimmy-Staging-*Setup.exe
+            platforms/windows/velopack-output/Dimmy-Staging-*Portable.zip
             platforms/windows/velopack-output/Dimmy-Staging-*-full.nupkg
-            platforms/windows/velopack-output/releases.staging.win.json
+            platforms/windows/velopack-output/releases*.json
