@@ -93,10 +93,17 @@ pub const AVAILABLE_MODELS: &[LocalModel] = &[
 
 // ── Model directory helpers ───────────────────────────────────────
 
-/// Returns `<data_dir>/dimmy/models` (e.g. `~/Library/Application Support/dimmy/models`).
+/// Returns `<data_dir>/<config-namespace>/models` (e.g. `~/Library/Application Support/dimmy/models`).
+///
+/// The namespace segment honours `DIMMY_CONFIG_NAMESPACE` (compile-time env, set by
+/// `staging-release.yml` to `dimmy-staging`) so a side-by-side staging install reads
+/// and writes its own model tree instead of clobbering the prod one. Burned 2026-05-17:
+/// `staging-release.yml`'s side-by-side install was reading whisper models from the
+/// prod `dimmy/models/` dir, which only "worked" because the same machine had a prod
+/// install — a clean staging-only machine would have failed silently.
 pub fn model_directory() -> PathBuf {
     let base = dirs::data_dir().expect("data_dir must be available on all supported platforms");
-    base.join("dimmy").join("models")
+    base.join(crate::config_dir_name()).join("models")
 }
 
 /// Check whether a given model file already exists on disk.

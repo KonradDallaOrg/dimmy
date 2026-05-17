@@ -71,10 +71,15 @@ pub const AVAILABLE_LLM_MODELS: &[LlmModel] = &[
 
 // ── Model directory helpers ──────────────────────────────────────
 
-/// Returns `<data_dir>/dimmy/llm-models` (separate from whisper models).
+/// Returns `<data_dir>/<config-namespace>/llm-models` (separate from whisper models).
+///
+/// The namespace segment honours `DIMMY_CONFIG_NAMESPACE` (compile-time env, set by
+/// `staging-release.yml` to `dimmy-staging`) so a side-by-side staging install reads
+/// and writes its own LLM model tree. Same rationale as
+/// `local_stt::model_directory` — see that comment.
 pub fn llm_model_directory() -> PathBuf {
     let base = dirs::data_dir().expect("data_dir must be available on all supported platforms");
-    base.join("dimmy").join("llm-models")
+    base.join(crate::config_dir_name()).join("llm-models")
 }
 
 /// Check whether a given LLM model file already exists on disk.

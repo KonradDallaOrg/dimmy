@@ -321,6 +321,19 @@ jobs:
           # "Windows local DLL build — feature flag set is FROZEN".
           cargo build --lib --release --features local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,license-client
 
+      - name: Fetch onnxruntime win-x64 DLL (Parakeet ort path)
+        # ort 2.0.0-rc.10 binds to onnxruntime 1.22.0; the .csproj
+        # CopyOrtDll target reads this path so the DLL ends up next to
+        # dimmy_lib.dll in publish/. Mirror of release.yml. Without
+        # this step the Velopack staging bundle ships WITHOUT
+        # onnxruntime.dll, the ort crate falls back to the System32
+        # onnxruntime.dll (v1.17.1), and Parakeet panics on first
+        # session create with "expected 1.22.x, but got 1.17.1" —
+        # poisoning the mutex so every subsequent chunk fails too.
+        # Burned 2026-05-17 on v0.6.47-staging.2.
+        shell: pwsh
+        run: scripts/download-onnxruntime.ps1
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
         with:
@@ -350,8 +363,18 @@ jobs:
       - name: Prepare distribution
         shell: pwsh
         run: |
-          Copy-Item "D:\t\release\dimmy_lib.dll" "platforms/windows/Dimmy.Windows/publish/"
-          Get-ChildItem "platforms/windows/Dimmy.Windows/publish" -Filter "*.pdb" -Recurse | Remove-Item -ErrorAction SilentlyContinue
+          $pubDir = "platforms/windows/Dimmy.Windows/publish"
+          Copy-Item "D:\t\release\dimmy_lib.dll" "$pubDir/"
+          # onnxruntime — Parakeet ort path's runtime dependency. Same
+          # rationale as release.yml: dotnet publish dropped its output
+          # in publish/, so we co-locate the native DLLs there. Without
+          # these two lines the Velopack staging bundle ships without
+          # onnxruntime.dll → ort panics at runtime (see "Fetch
+          # onnxruntime" step above for full incident note).
+          $ortLib = "core/target/onnxruntime-win-x64-1.22.0/lib"
+          Copy-Item "$ortLib/onnxruntime.dll" "$pubDir/"
+          Copy-Item "$ortLib/onnxruntime_providers_shared.dll" "$pubDir/"
+          Get-ChildItem "$pubDir" -Filter "*.pdb" -Recurse | Remove-Item -ErrorAction SilentlyContinue
 
       - name: Install Velopack CLI
         run: dotnet tool install -g vpk
