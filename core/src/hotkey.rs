@@ -657,11 +657,21 @@ mod platform {
 
     /// Keyboard hook callback — combo detection + modifier suppression.
     ///
-    /// Suppression contract (the fix landed 2026-05-18):
+    /// Suppression contract (the fix landed 2026-05-18, refined same evening):
     /// - When the configured combo (KEY1+KEY2[+KEY3]) becomes fully pressed,
     ///   the hook (a) emits a synthetic UP for every shortcut key to flush
     ///   the kernel's modifier state, then (b) sets `MODIFIER_SUPPRESS=true`.
-    /// - While `MODIFIER_SUPPRESS=true`, every subsequent event matching a
+    /// - **The activation event itself is NOT consumed** — it falls through
+    ///   to `CallNextHookEx`. This is load-bearing: when the user presses
+    ///   Win first then Alt, the OS shell needs to see the Alt-down event
+    ///   to register "Win+Alt chord". Otherwise the shell sees only
+    ///   `Win down → synthetic Win UP` with no chord context, and opens the
+    ///   Start Menu on Win release. Empirically reported 2026-05-18 — first
+    ///   version of this fix consumed the activation event and broke
+    ///   Win-first press. Equivalent symptom would hit Alt-first press if
+    ///   the OS treated Alt the same way (it doesn't, but the fix is
+    ///   symmetric).
+    /// - While `MODIFIER_SUPPRESS=true`, every SUBSEQUENT event matching a
     ///   shortcut key is consumed (return 1) instead of forwarded. The OS
     ///   shell therefore never sees an orphan Win-alone-release (no Start
     ///   Menu) or Alt-alone-release (no Notepad++ menu-mode activation).
@@ -710,6 +720,14 @@ mod platform {
         let is_combo_key =
             matches_key_group(vk, k1) || matches_key_group(vk, k2) || (k3 != 0 && vk == k3);
 
+        // Set true only on the event that flips COMBO_ACTIVE from false→true.
+        // The activation event must NOT be consumed — the OS shell needs to
+        // see the chord-completing key down to register the chord context,
+        // otherwise it interprets the leading modifier as a solo press
+        // (Start Menu / menu mode on later synthetic UP). See doc comment
+        // above for the full rationale.
+        let mut just_activated = false;
+
         if k3 == 0 {
             // ── 2-modifier combo ──
             if matches_key_group(vk, k1) {
@@ -720,6 +738,7 @@ mod platform {
                     {
                         HOTKEY_EVENT.store(EVENT_PRESSED, Ordering::SeqCst);
                         MODIFIER_SUPPRESS.store(true, Ordering::SeqCst);
+                        just_activated = true;
                         emit_synthetic_combo_release();
                     }
                 } else if is_up {
@@ -739,6 +758,7 @@ mod platform {
                     {
                         HOTKEY_EVENT.store(EVENT_PRESSED, Ordering::SeqCst);
                         MODIFIER_SUPPRESS.store(true, Ordering::SeqCst);
+                        just_activated = true;
                         emit_synthetic_combo_release();
                     }
                 } else if is_up {
@@ -784,6 +804,7 @@ mod platform {
                 if all && !COMBO_ACTIVE.swap(true, Ordering::SeqCst) {
                     HOTKEY_EVENT.store(EVENT_PRESSED, Ordering::SeqCst);
                     MODIFIER_SUPPRESS.store(true, Ordering::SeqCst);
+                    just_activated = true;
                     emit_synthetic_combo_release();
                 } else if !all && COMBO_ACTIVE.swap(false, Ordering::SeqCst) {
                     HOTKEY_EVENT.store(EVENT_RELEASED, Ordering::SeqCst);
@@ -797,7 +818,7 @@ mod platform {
             }
         }
 
-        if is_combo_key && MODIFIER_SUPPRESS.load(Ordering::SeqCst) {
+        if is_combo_key && MODIFIER_SUPPRESS.load(Ordering::SeqCst) && !just_activated {
             return 1;
         }
 
