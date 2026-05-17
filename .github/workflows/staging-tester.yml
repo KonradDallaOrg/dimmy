@@ -53,12 +53,20 @@ jobs:
 
       - name: Generate changelog
         run: |
-          PREV_TAG=$(git tag --sort=-creatordate --list 'v*-staging*' | head -n 2 | tail -n 1)
-          if [ -z "$PREV_TAG" ] || [ "$PREV_TAG" = "$GITHUB_REF_NAME" ]; then
-            COMMITS=$(git log --pretty=format:"- %s" HEAD | head -50)
+          # Pick prev tag matching the same staging shape, never a
+          # prod rc/final. Cap visible commits at 10, collapse the
+          # rest in <details>. Same rationale + incident as release.yml.
+          PREV_TAG=$(git tag --sort=-creatordate --list 'v*-staging*' | grep -v "^${GITHUB_REF_NAME}$" | head -n 1)
+          if [ -z "$PREV_TAG" ]; then
+            ALL=$(git log --pretty=format:"- %s" --no-merges HEAD | head -n 50)
+            HEADER="## What's Changed"
           else
-            COMMITS=$(git log --pretty=format:"- %s" "${PREV_TAG}..HEAD")
+            ALL=$(git log --pretty=format:"- %s" --no-merges "${PREV_TAG}..HEAD")
+            HEADER="## What's Changed since \`${PREV_TAG}\`"
           fi
+          TOTAL=$(printf '%s\n' "$ALL" | grep -c .)
+          FIRST=$(printf '%s\n' "$ALL" | head -n 10)
+          REST=$(printf '%s\n' "$ALL" | tail -n +11)
           {
             echo "## Staging build"
             echo ""
@@ -69,9 +77,18 @@ jobs:
             echo "**This binary will NOT process real payments.** All purchases"
             echo "are simulated. See [staging-testing.md](https://github.com/${{ github.repository }}/blob/feat/licensing-poc/docs/dev/staging-testing.md)."
             echo ""
-            echo "## What's Changed"
+            echo "$HEADER"
             echo ""
-            echo "$COMMITS"
+            echo "$FIRST"
+            if [ -n "$REST" ]; then
+              MORE=$((TOTAL - 10))
+              echo ""
+              echo "<details><summary><b>$MORE more commit(s)…</b></summary>"
+              echo ""
+              echo "$REST"
+              echo ""
+              echo "</details>"
+            fi
             echo ""
             echo "## Downloads"
             echo ""

@@ -67,16 +67,36 @@ jobs:
 
       - name: Generate changelog
         run: |
-          PREV_TAG=$(git tag --sort=-creatordate | head -n 2 | tail -n 1)
-          if [ -z "$PREV_TAG" ] || [ "$PREV_TAG" = "$GITHUB_REF_NAME" ]; then
-            COMMITS=$(git log --pretty=format:"- %s" HEAD)
+          # Shape-matched previous tag: rc / final → previous prod tag,
+          # never a staging tag. Without this filter the diff range
+          # ended up at the chronologically previous tag (often a
+          # staging.N cut minutes before), which on a long-running
+          # branch produced a 64 KB body for v0.6.47-rc1. Burned
+          # 2026-05-17.
+          PREV_TAG=$(git tag --sort=-creatordate --list 'v*' | grep -vE -- '-staging\.|^'"$GITHUB_REF_NAME"'$' | head -n 1)
+          if [ -z "$PREV_TAG" ]; then
+            ALL=$(git log --pretty=format:"- %s" --no-merges HEAD | head -n 50)
+            HEADER="## What's Changed"
           else
-            COMMITS=$(git log --pretty=format:"- %s" "${PREV_TAG}..HEAD")
+            ALL=$(git log --pretty=format:"- %s" --no-merges "${PREV_TAG}..HEAD")
+            HEADER="## What's Changed since \`${PREV_TAG}\`"
           fi
+          TOTAL=$(printf '%s\n' "$ALL" | grep -c .)
+          FIRST=$(printf '%s\n' "$ALL" | head -n 10)
+          REST=$(printf '%s\n' "$ALL" | tail -n +11)
           {
-            echo "## What's Changed"
+            echo "$HEADER"
             echo ""
-            echo "$COMMITS"
+            echo "$FIRST"
+            if [ -n "$REST" ]; then
+              MORE=$((TOTAL - 10))
+              echo ""
+              echo "<details><summary><b>$MORE more commit(s)…</b></summary>"
+              echo ""
+              echo "$REST"
+              echo ""
+              echo "</details>"
+            fi
             echo ""
             echo "## Downloads"
             echo ""

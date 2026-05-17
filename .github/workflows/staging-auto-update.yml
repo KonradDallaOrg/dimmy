@@ -96,16 +96,17 @@ jobs:
           # and use the latest published version tag as the changelog
           # base. Falls back to the last 20 commits if no tag exists
           # (first-ever build / fresh fork).
-          PREV_TAG=$(git tag --sort=-creatordate | grep -E '^v[0-9]' | head -n 1)
+          PREV_TAG=$(git tag --sort=-creatordate --list 'v*' | grep -vE -- '-staging\.' | head -n 1)
           if [ -n "$PREV_TAG" ]; then
-            COMMITS=$(git log --pretty=format:"- %s" "${PREV_TAG}..HEAD" 2>/dev/null || echo "- (no commits since ${PREV_TAG})")
+            ALL=$(git log --pretty=format:"- %s" --no-merges "${PREV_TAG}..HEAD" 2>/dev/null || echo "- (no commits since ${PREV_TAG})")
+            HEADER="### Changes since \`${PREV_TAG}\`"
           else
-            COMMITS=$(git log --pretty=format:"- %s" -20 HEAD)
+            ALL=$(git log --pretty=format:"- %s" --no-merges -20 HEAD)
+            HEADER="### Recent changes"
           fi
-          # Clamp the list to 30 lines so a long quiet period (no
-          # tagged releases) doesn't spill the body. Anything longer
-          # is a signal that someone should cut a real tag.
-          COMMITS=$(echo "$COMMITS" | head -n 30)
+          TOTAL=$(printf '%s\n' "$ALL" | grep -c .)
+          FIRST=$(printf '%s\n' "$ALL" | head -n 10)
+          REST=$(printf '%s\n' "$ALL" | tail -n +11)
           {
             echo "## Staging Build (rolling)"
             echo ""
@@ -116,8 +117,18 @@ jobs:
             echo "(rolling tag isn't semver). For the staging-tester install with side-by-side"
             echo "Dimmy-Staging + Stripe Test, see the \`v*-staging.N\` releases instead."
             echo ""
-            echo "### Changes"
-            echo "$COMMITS"
+            echo "$HEADER"
+            echo ""
+            echo "$FIRST"
+            if [ -n "$REST" ]; then
+              MORE=$((TOTAL - 10))
+              echo ""
+              echo "<details><summary><b>$MORE more commit(s)…</b></summary>"
+              echo ""
+              echo "$REST"
+              echo ""
+              echo "</details>"
+            fi
             echo ""
             echo "## Downloads"
             echo ""
