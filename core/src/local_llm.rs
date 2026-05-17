@@ -11,7 +11,14 @@ use crate::error::LlmError;
 // ── Model catalogue ───────────────────────────────────────────────
 
 const LLM_MODEL_BASE_URL: &str = "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main";
-pub const DEFAULT_LLM_MODEL: &str = "gemma-4-E2B-it-Q4_K_M.gguf";
+/// Default local LLM model. Switched 2026-05-18 from `gemma-4-E2B-it-Q4_K_M.gguf`
+/// to `phi-4-mini-instruct-q4_k_m.gguf` — Phi-4 Mini (3.8B) is heavily tuned
+/// for instruction-following whereas Gemma 4 E2B (5B) drifted into "playful"
+/// persona on small prompts (emoji spam, meta-commentary, hallucinations).
+/// Both work with the embedded-chat-template path landed in the same commit,
+/// so users who prefer Gemma can still select it from Settings without losing
+/// the prompt-quality improvements.
+pub const DEFAULT_LLM_MODEL: &str = "phi-4-mini-instruct-q4_k_m.gguf";
 
 pub struct LlmModel {
     pub name: &'static str,
@@ -419,7 +426,7 @@ mod llm_cache {
     use llama_cpp_4::llama_backend::LlamaBackend;
     use llama_cpp_4::llama_batch::LlamaBatch;
     use llama_cpp_4::model::params::LlamaModelParams;
-    use llama_cpp_4::model::{AddBos, LlamaModel};
+    use llama_cpp_4::model::{AddBos, LlamaChatMessage, LlamaModel};
     use llama_cpp_4::sampling::LlamaSampler;
 
     struct CachedLlmModel {
@@ -511,8 +518,39 @@ mod llm_cache {
             .as_ref()
             .expect("LLM cache must be populated after load");
 
-        // ── Build prompt and tokenize ───────────────────────────
-        let full_prompt = super::build_local_prompt(system_prompt, user_text);
+        // ── Build prompt via embedded chat template ─────────────
+        // Every modern gguf carries `tokenizer.chat_template` in its
+        // metadata (seen in `llama_model_loader: kv 47:
+        // tokenizer.chat_template str = …` log line). `apply_chat_template`
+        // reads it and emits the correct turn format for the family —
+        // `<start_of_turn>` for Gemma 4, `<|im_start|>` for Phi-4,
+        // `<|start_header_id|>` for Llama 3, etc. — without per-family
+        // branches in our code. Replaces the hand-rolled Gemma-only
+        // template at `build_local_prompt` which carried a Qwen3-specific
+        // `<|/think|>` marker that confused Gemma instruct-tuning and
+        // produced meta-commentary outputs ("La frase originale è molto
+        // informale e grammaticalmente incompleta…" instead of the actual
+        // rewrite). 2026-05-18.
+        //
+        // System role separation: Gemma + Phi + Llama all treat the
+        // system turn as a strict instruction rather than as conversation,
+        // which dramatically improves compliance on small models. The
+        // hand-rolled prompt jammed everything into a single user turn,
+        // making the model "respond to" the instruction instead of
+        // executing it.
+        let messages = vec![
+            LlamaChatMessage::new("system".to_string(), system_prompt.to_string()).map_err(
+                |e| crate::error::LlmError::LocalModel(format!("chat msg system: {}", e)),
+            )?,
+            LlamaChatMessage::new("user".to_string(), user_text.to_string())
+                .map_err(|e| crate::error::LlmError::LocalModel(format!("chat msg user: {}", e)))?,
+        ];
+        let full_prompt = cached
+            .model
+            .apply_chat_template(None, &messages, /* add_ass */ true)
+            .map_err(|e| {
+                crate::error::LlmError::LocalModel(format!("chat template apply: {}", e))
+            })?;
 
         let tokens = cached
             .model
@@ -554,8 +592,36 @@ mod llm_cache {
         })?;
 
         // ── Generate tokens ─────────────────────────────────────
-        let mut sampler =
-            LlamaSampler::chain_simple([LlamaSampler::temp(0.3), LlamaSampler::greedy()]);
+        // Probabilistic sampling chain. The previous `[temp(0.3), greedy()]`
+        // was effectively greedy (greedy ignores the temperature-shaped
+        // distribution), which caused:
+        //   • repetition collapse ("abbiamo fatto e abbiamo fatto e
+        //     abbiamo mangiato la torta")
+        //   • emoji-spam persona drift ("🎉🎂🥳🎈🎁🎊")
+        //   • word-level hallucination ("mangiato la città")
+        // The new chain:
+        //   penalties_simple  → light repetition penalty on the last 64
+        //                       tokens, breaks degenerate loops
+        //   top_k(40)         → drop everything past rank 40, kills the
+        //                       low-probability emoji tail
+        //   top_p(0.9)        → nucleus sampling, keep tokens summing to
+        //                       0.9 of mass
+        //   temp(0.6)         → mild creativity
+        //   dist(seed)        → final probabilistic pick (seeded by
+        //                       nanos timestamp so successive calls
+        //                       differ but a single call is deterministic)
+        // 2026-05-18.
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u32)
+            .unwrap_or(0xDEAD_BEEF);
+        let mut sampler = LlamaSampler::chain_simple([
+            LlamaSampler::penalties_simple(&cached.model, 64),
+            LlamaSampler::top_k(40),
+            LlamaSampler::top_p(0.9, 1),
+            LlamaSampler::temp(0.6),
+            LlamaSampler::dist(seed),
+        ]);
 
         let eos = cached.model.token_eos();
         let mut output = String::new();
