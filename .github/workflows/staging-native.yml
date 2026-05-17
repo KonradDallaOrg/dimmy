@@ -107,9 +107,14 @@ jobs:
           # is a signal that someone should cut a real tag.
           COMMITS=$(echo "$COMMITS" | head -n 30)
           {
-            echo "## Native UI Staging Build"
+            echo "## Staging Build (rolling)"
             echo ""
-            echo "**Pre-release for testing native UIs (no WebView). Not for production.**"
+            echo "**Rolling pre-release. Updated on every push to \`staging\`. Not for production.**"
+            echo ""
+            echo "Same code as the next tagged \`v*-rcN\` release will ship — only useful for"
+            echo "manual smoke-test by the team. Velopack auto-update does NOT pick this up"
+            echo "(rolling tag isn't semver). For the staging-tester install with side-by-side"
+            echo "Dimmy-Staging + Stripe Test, see the \`v*-staging.N\` releases instead."
             echo ""
             echo "### Changes"
             echo "$COMMITS"
