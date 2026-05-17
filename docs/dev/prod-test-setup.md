@@ -96,12 +96,14 @@ Se qualcosa non funziona in prod live:
 
 ## File coinvolti — riferimento
 
+Backend code lives in the private repo [`KonradDallaOrg/dimmy-backend`](https://github.com/KonradDallaOrg/dimmy-backend) (moved out of this repo 2026-05-17). Clone it as a sibling: `~/code/dimmy-backend/`. Paths in the Worker column below are relative to that repo's root.
+
 | Layer | File |
 |---|---|
-| Worker handlers | `backend/src/handlers/{trial,activate,refresh,stripe,checkout,billing-portal,devices,delete}.ts` |
-| Worker entry + routes | `backend/src/index.ts` |
-| Worker DB helpers | `backend/src/db.ts` |
-| Worker tests (121) | `backend/tests/*.test.ts` |
+| Worker handlers | *(private repo)* `src/handlers/{trial,activate,refresh,stripe,checkout,billing-portal,devices,delete}.ts` |
+| Worker entry + routes | *(private repo)* `src/index.ts` |
+| Worker DB helpers | *(private repo)* `src/db.ts` |
+| Worker tests (121) | *(private repo)* `tests/*.test.ts` |
 | Rust client core | `core/src/license.rs` |
 | Rust FFI surface | `core/src/ffi.rs` |
 | Win UI | `platforms/windows/Dimmy.Windows/Views/SettingsWindow.xaml{,.cs}` |
@@ -109,4 +111,4 @@ Se qualcosa non funziona in prod live:
 | Mac UI | `platforms/macos/Dimmy/Views/Settings/MacLicensePage.swift` |
 | Mac FFI bindings | `platforms/macos/Dimmy/Managers/DimmyCore+License.swift` + `DimmyFFI.h` |
 
-Ogni endpoint ha test integration coperti — vedi `backend/tests/`.
+Ogni endpoint ha test integration coperti — vedi `tests/` nel repo backend privato.

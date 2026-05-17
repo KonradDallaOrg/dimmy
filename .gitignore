@@ -31,10 +31,13 @@ platforms/macos/build/
 # never commit it.
 data/licensing/
 core/data/
-backend/.dev-data/
-# Wrangler dev runtime — secrets in plain text, MUST never reach git.
-backend/.dev.vars
-backend/.wrangler/
+# Backend moved to private repo KonradDallaOrg/dimmy-backend on
+# 2026-05-17. `backend/` is still kept on disk by some devs (clone
+# of the sibling repo alongside this one) — ignoring the whole
+# directory prevents accidental re-commit of any backend source,
+# secrets (wrangler .dev.vars), or runtime state (.wrangler cache,
+# .dev-data) into this public repo.
+backend/
 licensing-data/
 **/dimmy_jumplist.log
 **/dimmy_startup.log
