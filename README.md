@@ -391,7 +391,7 @@ Per-platform notes: [`platforms/linux/README.md`](platforms/linux/README.md).
 | Workflow | Trigger | Runner | What it does |
 |---|---|---|---|
 | [`ci.yml`](.github/workflows/ci.yml) | Push / PR to `main` or `staging` | ubuntu-22.04 + ubuntu-24.04 | `cargo fmt --check`, `cargo clippy --features local-stt,local-llm -D warnings`, `cargo test --lib`, Linux GTK4 crate clippy + test |
-| [`staging-native.yml`](.github/workflows/staging-native.yml) | Push to `staging` | windows-2025, macos-14, ubuntu-24.04 | Build all 3 native UIs in parallel, package installers (Velopack / DMG / AppImage), run `test-install` smoke check, publish `staging-latest` pre-release |
+| [`staging-auto-update.yml`](.github/workflows/staging-auto-update.yml) | Push to `staging` | windows-2025, macos-14, ubuntu-24.04 | Build all 3 native UIs in parallel, package installers (Velopack / DMG / AppImage), run `test-install` smoke check, publish `staging-latest` pre-release |
 | [`release.yml`](.github/workflows/release.yml) | Tag push matching `v*` | Same as staging | Same as staging, but publishes a real GitHub Release |
 | [`test-install.yml`](.github/workflows/test-install.yml) | `workflow_call` from staging/release, or manual | windows-latest (clean) | Install shipped `Dimmy-Setup.exe`, launch for 15 s, fail if `crash.log` contains CRASH or bundle integrity breaks |
 

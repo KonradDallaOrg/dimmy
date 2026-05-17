@@ -4,7 +4,7 @@ on:
   push:
     tags:
       # Prod tags only. Staging tags use the `v*-staging*` shape and
-      # are handled by staging-release.yml — exclude them here so a
+      # are handled by staging-tester.yml — exclude them here so a
       # staging tag doesn't accidentally fire BOTH pipelines (we hit
       # this on 2026-05-04 with v0.6.27-staging.2: GitHub only honors
       # the first pattern hit, but having both fire-able is brittle).
@@ -652,7 +652,7 @@ jobs:
           $pubDir = "platforms/windows/Dimmy.Windows/publish"
           Copy-Item "D:\t\release\dimmy_lib.dll" "$pubDir/"
           # onnxruntime — Parakeet ort path's runtime dependency. Same
-          # rationale as staging-native.yml: dotnet publish dropped its
+          # rationale as staging-auto-update.yml: dotnet publish dropped its
           # output in publish/, so we co-locate the native DLLs there.
           $ortLib = "core/target/onnxruntime-win-x64-1.22.0/lib"
           Copy-Item "$ortLib/onnxruntime.dll" "$pubDir/"

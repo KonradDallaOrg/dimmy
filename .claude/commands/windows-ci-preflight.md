@@ -7,7 +7,7 @@ Run each check and report OK or FAIL with the invariant ID from `docs/dev/window
 
 **I8** — `windows-2025` runner in `build-windows` jobs:
 ```
-grep -n 'runs-on: windows-latest' .github/workflows/release.yml .github/workflows/staging-native.yml || echo OK
+grep -n 'runs-on: windows-latest' .github/workflows/release.yml .github/workflows/staging-auto-update.yml || echo OK
 ```
 Any match = FAIL (test-install.yml is allowed to use `windows-latest`; do not grep it).
 
@@ -25,7 +25,7 @@ Any match = FAIL (print the offending line).
 
 **I10** — `--framework vcredist143-x64` present in `vpk pack`:
 ```
-grep -n 'vcredist143-x64' .github/workflows/release.yml .github/workflows/staging-native.yml
+grep -n 'vcredist143-x64' .github/workflows/release.yml .github/workflows/staging-auto-update.yml
 ```
 Must match in BOTH files. Missing in either = FAIL.
 

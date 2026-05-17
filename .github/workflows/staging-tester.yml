@@ -150,7 +150,7 @@ jobs:
           DIMMY_LICENSE_SERVER_URL: https://license-staging.dimmy.app
           DIMMY_BUILD_FLAVOR: staging
           # Side-by-side install with prod: distinct packId (Dimmy-Staging) +
-          # distinct config dir. The other staging pipeline (staging-native.yml,
+          # distinct config dir. The other staging pipeline (staging-auto-update.yml,
           # same Velopack packId as prod for channel-prerelease auto-update)
           # does NOT set this — its users share the prod config dir.
           DIMMY_CONFIG_NAMESPACE: dimmy-staging

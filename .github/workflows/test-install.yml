@@ -6,7 +6,7 @@ name: Test Install (Clean Windows)
 # no CRASH line.
 #
 # Triggers:
-#   - workflow_call: invoked as a reusable job by staging-native.yml and
+#   - workflow_call: invoked as a reusable job by staging-auto-update.yml and
 #     release.yml immediately after the Windows build uploads the installer.
 #     Gate the "publish release" step on this so broken bundles never ship.
 #   - workflow_dispatch: ad-hoc re-runs for any existing tag.

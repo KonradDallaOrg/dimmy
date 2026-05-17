@@ -169,7 +169,7 @@ Not shipped. Would validate the whole stack including WASAPI capture via a virtu
 
 **Production pipeline — do NOT touch** (see [`windows-ci.md`](windows-ci.md) for invariants):
 - `ci.yml` — fast Rust lint/test + Linux GTK4 lint; runs on every push and PR
-- `staging-native.yml` — full installer build on push to `staging`
+- `staging-auto-update.yml` — full installer build on push to `staging`
 - `release.yml` — tagged release builds
 - `test-install.yml` — clean-Windows install test, triggered by release workflows
 

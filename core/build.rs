@@ -235,9 +235,9 @@ fn main() {
     println!("cargo:rustc-env=DIMMY_BUILD_FLAVOR={}", build_flavor);
 
     // Config dir namespace (decoupled from build_flavor since 2026-05-16).
-    // Default empty -> Rust uses "dimmy". staging-release.yml sets this to
+    // Default empty -> Rust uses "dimmy". staging-tester.yml sets this to
     // "dimmy-staging" so the tester install lives side-by-side with prod.
-    // staging-native.yml does NOT set it: a channel-prerelease auto-update
+    // staging-auto-update.yml does NOT set it: a channel-prerelease auto-update
     // must keep the user's prod config dir intact.
     let config_namespace =
         sanitize_secret(std::env::var("DIMMY_CONFIG_NAMESPACE").unwrap_or_default());

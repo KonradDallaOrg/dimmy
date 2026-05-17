@@ -3,7 +3,7 @@
 > Every rule here is paid for in blood. Between v0.6.11 and v0.6.20, eight iterations were burned getting the Windows installer building cleanly on `windows-2025` with MSVC 14.50+. Stamping on one of these = reintroducing that specific shipped bug. Read this page before editing:
 >
 > - `.github/workflows/release.yml`
-> - `.github/workflows/staging-native.yml`
+> - `.github/workflows/staging-auto-update.yml`
 > - `.github/workflows/test-install.yml` (on BOTH `staging` AND `main`)
 > - `platforms/windows/verify-self-contained.ps1`
 
@@ -17,7 +17,7 @@ The CHANGELOG entries for v0.6.11–v0.6.20 are the per-rule archaeology. Read t
 
 **Why.** MSVC 14.44 (the `windows-2025` runner's default VS 2022 toolchain) miscompiles the whisper.cpp `ggml-vulkan` state-init path. The installer crashes silently on the first transcription inside `whisper_backend_init_gpu` during `create_state()`. Pre-v0.6.20 releases shipped this bug. Empirical proof: swapping the installer's DLL for a locally-built one (linker 14.50) on the same machine resolved the crash.
 
-**How to check.** Both `release.yml` and `staging-native.yml` must:
+**How to check.** Both `release.yml` and `staging-auto-update.yml` must:
 1. Install `visualstudio2026buildtools-preview` via chocolatey with `--pre`
 2. Locate it via `vswhere -version "[18.0,19.0)" -prerelease`
 3. Activate its `vcvars64.bat` inside the Rust build step (shell: cmd)
@@ -51,7 +51,7 @@ Step names to preserve (don't rename, CI logs reference them by name):
 **Why.** Velopack's `--framework vcredist143-x64` (in the `vpk pack` call) installs the official Microsoft VC Redist to System32 at setup time. Bundling a second copy next to `dimmy_lib.dll` is at best redundant; historically, it caused the v0.6.10 ABI mismatch crash — Windows' DLL search loaded the co-located older `msvcp140` (14.29.30157 from 2021, picked by `Get-ChildItem | Select -First 1` without a version sort — see I9) before the System32 one, and our DLL was compiled against the newer ABI. System32 alone is the correct path.
 
 **How to check.**
-- `release.yml` + `staging-native.yml` "Prepare distribution" step must NOT copy `vcruntime140.dll` / `msvcp140.dll` into the publish folder
+- `release.yml` + `staging-auto-update.yml` "Prepare distribution" step must NOT copy `vcruntime140.dll` / `msvcp140.dll` into the publish folder
 - `verify-self-contained.ps1` must NOT list them in `$requiredFiles`
 - `test-install.yml` must NOT list them in `$critical`
 
@@ -120,7 +120,7 @@ Get-ChildItem ... | Sort-Object { [version]$_.Name } -Descending | Select-Object
 
 **Why.** The `--framework vcredist143-x64` flag is what delegates VC Redist installation to Velopack Setup. Invariant I4 relies on this — System32 is where `msvcp140` / `vcruntime140` live. If someone "cleans this up" because the app seems self-contained, clean-install users will have no VC Redist in System32 and the app will fail to load `dimmy_lib.dll` with a cryptic "missing dependency" error.
 
-**How to check.** `vpk pack ... --framework vcredist143-x64` is present in the "Package with Velopack" step of both `release.yml` and `staging-native.yml`.
+**How to check.** `vpk pack ... --framework vcredist143-x64` is present in the "Package with Velopack" step of both `release.yml` and `staging-auto-update.yml`.
 
 ---
 

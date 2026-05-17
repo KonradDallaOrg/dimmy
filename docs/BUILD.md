@@ -124,7 +124,7 @@ Or from the repo root: `powershell -File build-windows.ps1` (this is the one-sho
 
 ### Windows CI critical notes
 - CI uses `windows-2025` runner + VS 2026 BuildTools (side-by-side with VS 2022) — MSVC linker ≥ 14.50 is required to avoid the `ggml-vulkan` miscompile.
-- Do not touch `release.yml`, `staging-native.yml`, or `test-install.yml` without reading **[`dev/windows-ci.md`](dev/windows-ci.md)** first. Every rule there is paid for in blood.
+- Do not touch `release.yml`, `staging-auto-update.yml`, or `test-install.yml` without reading **[`dev/windows-ci.md`](dev/windows-ci.md)** first. Every rule there is paid for in blood.
 
 ## macOS
 
@@ -191,7 +191,7 @@ cargo test
 | Workflow | Trigger | What it does |
 |---|---|---|
 | `ci.yml` | Push/PR to `main` or `staging` | Rust core: fmt + clippy + test (ubuntu-22.04, `local-stt,local-llm`). Linux GTK4 crate: clippy + test (ubuntu-24.04). |
-| `staging-native.yml` | Push to `staging` | Builds all 3 native UIs in parallel, packages installers, runs `test-install` smoke check on the Windows one, uploads `staging-latest` release. |
+| `staging-auto-update.yml` | Push to `staging` | Builds all 3 native UIs in parallel, packages installers, runs `test-install` smoke check on the Windows one, uploads `staging-latest` release. |
 | `release.yml` | Tag push (`v*`) | Same as staging but publishes a GitHub Release instead of `staging-latest`. |
 | `test-install.yml` | `workflow_call` from staging/release, or manual `workflow_dispatch` | Downloads the Windows Setup.exe, installs it silently on a clean `windows-latest`, launches for 15s, fails if `dimmy_startup.log` contains CRASH or required files are missing. |
 

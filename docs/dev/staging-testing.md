@@ -2,7 +2,7 @@
 
 > **Devs / maintainers**: this page is for testers installing the
 > `Dimmy-Staging` build (the side-by-side installer produced by
-> `staging-release.yml`). For the broader question of "which workflow
+> `staging-tester.yml`). For the broader question of "which workflow
 > ships to which endpoint", see the **Release pipelines** table in
 > [`../RELEASING.md`](../RELEASING.md#release-pipelines--what-triggers-what)
 > — there are three workflows that look similar and only one of them

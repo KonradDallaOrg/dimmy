@@ -151,7 +151,7 @@ pub fn compose_stt_prompt(prompt: &str, user_dict: &[String]) -> String {
 /// same Velopack packId as prod (the channel-prerelease auto-update
 /// case) MUST keep using the prod config dir, otherwise the user's
 /// history / license / app-rules appear wiped every time Velopack
-/// swaps in a prerelease build. Only the `staging-release.yml` tester
+/// swaps in a prerelease build. Only the `staging-tester.yml` tester
 /// pipeline (different packId, truly side-by-side install) sets
 /// `DIMMY_CONFIG_NAMESPACE=dimmy-staging` so its install can coexist
 /// with prod on the same machine without stomping its files.

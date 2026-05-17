@@ -74,7 +74,7 @@ pub const AVAILABLE_LLM_MODELS: &[LlmModel] = &[
 /// Returns `<data_dir>/<config-namespace>/llm-models` (separate from whisper models).
 ///
 /// The namespace segment honours `DIMMY_CONFIG_NAMESPACE` (compile-time env, set by
-/// `staging-release.yml` to `dimmy-staging`) so a side-by-side staging install reads
+/// `staging-tester.yml` to `dimmy-staging`) so a side-by-side staging install reads
 /// and writes its own LLM model tree. Same rationale as
 /// `local_stt::model_directory` — see that comment.
 pub fn llm_model_directory() -> PathBuf {

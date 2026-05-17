@@ -92,7 +92,7 @@ pai-voice/
 │   ├── v2_ffi.rs / v2_followups.rs  v2 config-field round-trip + retention
 │   └── stress_tests.rs       Offline stress (no API calls)
 │
-├── .github/workflows/        ci.yml, staging-native.yml, staging-release.yml,
+├── .github/workflows/        ci.yml, staging-auto-update.yml, staging-tester.yml,
 │                             release.yml, test-install.yml, e2e-tests.yml
 ├── docs/                     You are here
 │   ├── ARCHITECTURE.md       This file
