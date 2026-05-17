@@ -21,6 +21,20 @@ static KEY3_DOWN: AtomicBool = AtomicBool::new(false);
 static COMBO_ACTIVE: AtomicBool = AtomicBool::new(false);
 static HOTKEY_EVENT: AtomicU8 = AtomicU8::new(EVENT_NONE);
 
+/// When `true`, the LL keyboard hook consumes (returns 1 for) every event
+/// matching the configured shortcut keys, instead of forwarding to the OS
+/// via `CallNextHookEx`. Flipped to `true` the instant the combo is fully
+/// pressed; cleared back to `false` only when every shortcut key is
+/// physically released. While true, the hook also flushes the kernel's
+/// modifier state by injecting synthetic UPs for the combo keys (since
+/// the first modifier already passed through to the kernel before we
+/// knew it was a combo). Net effect: during a dictation hold the OS
+/// shell + focused app never see orphan Win/Alt up events, so they can't
+/// open Start Menu, activate Alt-menu-mode in Notepad++, or otherwise
+/// hijack the input stream that our subsequent synthetic Ctrl+V would
+/// then collide with. Event-driven, no timing.
+static MODIFIER_SUPPRESS: AtomicBool = AtomicBool::new(false);
+
 /// Modifier group 1 and 2 (packed L/R VK codes).
 static KEY1_CODES: AtomicU32 = AtomicU32::new(0);
 static KEY2_CODES: AtomicU32 = AtomicU32::new(0);
@@ -448,6 +462,112 @@ mod platform {
         fn GetMessageW(lpMsg: *mut MSG, hWnd: isize, wMsgFilterMin: u32, wMsgFilterMax: u32)
             -> i32;
         fn GetAsyncKeyState(vKey: i32) -> i16;
+        fn SendInput(cInputs: u32, pInputs: *const INPUT, cbSize: i32) -> u32;
+    }
+
+    /// `LLKHF_INJECTED` (`0x10`) — set on any keyboard event injected by
+    /// `SendInput` (ours or another process). The hook recognises its own
+    /// synthetic UP burst by this bit and passes it straight through
+    /// without re-running combo state machine logic. Without this guard
+    /// the suppression flag would flap on every injected event.
+    const LLKHF_INJECTED: u32 = 0x10;
+    const INPUT_KEYBOARD: u32 = 1;
+    const KEYEVENTF_KEYUP: u32 = 0x0002;
+
+    #[repr(C)]
+    #[derive(Default, Clone, Copy)]
+    #[allow(non_snake_case, clippy::upper_case_acronyms)]
+    struct KEYBDINPUT {
+        wVk: u16,
+        wScan: u16,
+        dwFlags: u32,
+        time: u32,
+        dwExtraInfo: usize,
+    }
+
+    #[repr(C)]
+    #[derive(Default, Clone, Copy)]
+    #[allow(non_snake_case, clippy::upper_case_acronyms)]
+    struct MOUSEINPUT {
+        dx: i32,
+        dy: i32,
+        mouseData: u32,
+        dwFlags: u32,
+        time: u32,
+        dwExtraInfo: usize,
+    }
+
+    #[repr(C)]
+    #[derive(Default, Clone, Copy)]
+    #[allow(non_snake_case, clippy::upper_case_acronyms)]
+    struct HARDWAREINPUT {
+        uMsg: u32,
+        wParamL: u16,
+        wParamH: u16,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    #[allow(non_snake_case, dead_code)]
+    union INPUT_U {
+        mi: MOUSEINPUT,
+        ki: KEYBDINPUT,
+        hi: HARDWAREINPUT,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    #[allow(non_snake_case, clippy::upper_case_acronyms)]
+    struct INPUT {
+        r#type: u32,
+        u: INPUT_U,
+    }
+
+    /// Inject a single KEYUP for the given virtual-key, marked INJECTED so
+    /// our own hook recognises and ignores it on its way through the chain.
+    /// Used to flush the kernel's modifier state right after we decide a
+    /// shortcut chord is active — the first modifier reached the OS before
+    /// we knew it was part of a combo, so without this flush the OS would
+    /// still consider it held throughout the dictation.
+    fn emit_synthetic_keyup(vk: u16) {
+        let input = INPUT {
+            r#type: INPUT_KEYBOARD,
+            u: INPUT_U {
+                ki: KEYBDINPUT {
+                    wVk: vk,
+                    wScan: 0,
+                    dwFlags: KEYEVENTF_KEYUP,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        };
+        unsafe {
+            SendInput(1, &input, std::mem::size_of::<INPUT>() as i32);
+        }
+    }
+
+    /// Synthetic UP burst for every shortcut key — both sides of each
+    /// modifier group (LWin + RWin, LMENU + RMENU, …) so the burst is
+    /// idempotent regardless of which side the user actually pressed.
+    /// Spurious UPs for keys the kernel doesn't track as down are no-ops.
+    fn emit_synthetic_combo_release() {
+        let k1 = KEY1_CODES.load(Ordering::SeqCst);
+        let k2 = KEY2_CODES.load(Ordering::SeqCst);
+        let k3 = KEY3_CODE.load(Ordering::SeqCst);
+        for packed in [k1, k2] {
+            let left = packed >> 16;
+            let right = packed & 0xFFFF;
+            if left != 0 {
+                emit_synthetic_keyup(left as u16);
+            }
+            if right != 0 {
+                emit_synthetic_keyup(right as u16);
+            }
+        }
+        if k3 != 0 {
+            emit_synthetic_keyup(k3 as u16);
+        }
     }
 
     fn is_key_pressed(vk: u32) -> bool {
@@ -535,90 +655,152 @@ mod platform {
         }
     }
 
-    /// Keyboard hook callback — handles normal hotkey detection only.
+    /// Keyboard hook callback — combo detection + modifier suppression.
+    ///
+    /// Suppression contract (the fix landed 2026-05-18):
+    /// - When the configured combo (KEY1+KEY2[+KEY3]) becomes fully pressed,
+    ///   the hook (a) emits a synthetic UP for every shortcut key to flush
+    ///   the kernel's modifier state, then (b) sets `MODIFIER_SUPPRESS=true`.
+    /// - While `MODIFIER_SUPPRESS=true`, every subsequent event matching a
+    ///   shortcut key is consumed (return 1) instead of forwarded. The OS
+    ///   shell therefore never sees an orphan Win-alone-release (no Start
+    ///   Menu) or Alt-alone-release (no Notepad++ menu-mode activation).
+    /// - The flag clears only when every shortcut key has been physically
+    ///   released, so the second key's UP is suppressed too.
+    /// - Injected events (LLKHF_INJECTED set, i.e. our own synthetic UPs
+    ///   or another app's SendInput) bypass the state machine entirely.
+    /// - Suppression is SCOPED to the configured shortcut keys — pressing
+    ///   any other Win-prefixed shortcut (Win+E, Win+L, Win+Tab, …)
+    ///   continues to reach the OS as normal because COMBO_ACTIVE never
+    ///   activates without both configured keys held.
     unsafe extern "system" fn keyboard_proc(code: i32, wparam: usize, lparam: isize) -> isize {
-        if code >= 0 && lparam != 0 {
-            let kb = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
-            let vk = kb.vkCode;
-            let is_down = wparam == WM_KEYDOWN || wparam == WM_SYSKEYDOWN;
-            let is_up = wparam == WM_KEYUP || wparam == WM_SYSKEYUP;
+        if code < 0 || lparam == 0 {
+            return unsafe {
+                CallNextHookEx(HOOK_HANDLE.load(Ordering::SeqCst), code, wparam, lparam)
+            };
+        }
+        let kb = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
 
-            // Skip hotkey detection while recording a new shortcut
-            if !RECORDING.load(Ordering::SeqCst) {
-                let k1 = KEY1_CODES.load(Ordering::SeqCst);
-                let k2 = KEY2_CODES.load(Ordering::SeqCst);
-                let k3 = KEY3_CODE.load(Ordering::SeqCst);
+        // Skip injected events (including our own synthetic UPs) so the
+        // suppression flag doesn't flap and KEY*_DOWN reflects only
+        // physical key state.
+        if kb.flags & LLKHF_INJECTED != 0 {
+            return unsafe {
+                CallNextHookEx(HOOK_HANDLE.load(Ordering::SeqCst), code, wparam, lparam)
+            };
+        }
 
-                if k3 == 0 {
-                    // ── 2-modifier combo ──
-                    if matches_key_group(vk, k1) {
-                        if is_down {
-                            KEY1_DOWN.store(true, Ordering::SeqCst);
-                            if KEY2_DOWN.load(Ordering::SeqCst)
-                                && !COMBO_ACTIVE.swap(true, Ordering::SeqCst)
-                            {
-                                HOTKEY_EVENT.store(EVENT_PRESSED, Ordering::SeqCst);
-                            }
-                        } else if is_up {
-                            KEY1_DOWN.store(false, Ordering::SeqCst);
-                            if COMBO_ACTIVE.swap(false, Ordering::SeqCst) {
-                                HOTKEY_EVENT.store(EVENT_RELEASED, Ordering::SeqCst);
-                            }
-                        }
-                    } else if matches_key_group(vk, k2) {
-                        if is_down {
-                            KEY2_DOWN.store(true, Ordering::SeqCst);
-                            if KEY1_DOWN.load(Ordering::SeqCst)
-                                && !COMBO_ACTIVE.swap(true, Ordering::SeqCst)
-                            {
-                                HOTKEY_EVENT.store(EVENT_PRESSED, Ordering::SeqCst);
-                            }
-                        } else if is_up {
-                            KEY2_DOWN.store(false, Ordering::SeqCst);
-                            if COMBO_ACTIVE.swap(false, Ordering::SeqCst) {
-                                HOTKEY_EVENT.store(EVENT_RELEASED, Ordering::SeqCst);
-                            }
-                        }
+        let vk = kb.vkCode;
+        let is_down = wparam == WM_KEYDOWN || wparam == WM_SYSKEYDOWN;
+        let is_up = wparam == WM_KEYUP || wparam == WM_SYSKEYUP;
+
+        // Skip hotkey detection while recording a new shortcut. Suppression
+        // also stays off — the user needs to actually press combos to
+        // configure them.
+        if RECORDING.load(Ordering::SeqCst) {
+            return unsafe {
+                CallNextHookEx(HOOK_HANDLE.load(Ordering::SeqCst), code, wparam, lparam)
+            };
+        }
+
+        let k1 = KEY1_CODES.load(Ordering::SeqCst);
+        let k2 = KEY2_CODES.load(Ordering::SeqCst);
+        let k3 = KEY3_CODE.load(Ordering::SeqCst);
+
+        let is_combo_key =
+            matches_key_group(vk, k1) || matches_key_group(vk, k2) || (k3 != 0 && vk == k3);
+
+        if k3 == 0 {
+            // ── 2-modifier combo ──
+            if matches_key_group(vk, k1) {
+                if is_down {
+                    KEY1_DOWN.store(true, Ordering::SeqCst);
+                    if KEY2_DOWN.load(Ordering::SeqCst)
+                        && !COMBO_ACTIVE.swap(true, Ordering::SeqCst)
+                    {
+                        HOTKEY_EVENT.store(EVENT_PRESSED, Ordering::SeqCst);
+                        MODIFIER_SUPPRESS.store(true, Ordering::SeqCst);
+                        emit_synthetic_combo_release();
                     }
-                } else {
-                    // ── 2-modifier + 1-key combo ──
-                    let mut changed = false;
-                    if matches_key_group(vk, k1) {
-                        if is_down {
-                            KEY1_DOWN.store(true, Ordering::SeqCst);
-                        } else if is_up {
-                            KEY1_DOWN.store(false, Ordering::SeqCst);
-                        }
-                        changed = true;
-                    } else if matches_key_group(vk, k2) {
-                        if is_down {
-                            KEY2_DOWN.store(true, Ordering::SeqCst);
-                        } else if is_up {
-                            KEY2_DOWN.store(false, Ordering::SeqCst);
-                        }
-                        changed = true;
-                    } else if vk == k3 {
-                        if is_down {
-                            KEY3_DOWN.store(true, Ordering::SeqCst);
-                        } else if is_up {
-                            KEY3_DOWN.store(false, Ordering::SeqCst);
-                        }
-                        changed = true;
+                } else if is_up {
+                    KEY1_DOWN.store(false, Ordering::SeqCst);
+                    if COMBO_ACTIVE.swap(false, Ordering::SeqCst) {
+                        HOTKEY_EVENT.store(EVENT_RELEASED, Ordering::SeqCst);
                     }
-
-                    if changed {
-                        let all = KEY1_DOWN.load(Ordering::SeqCst)
-                            && (k2 == 0 || KEY2_DOWN.load(Ordering::SeqCst))
-                            && KEY3_DOWN.load(Ordering::SeqCst);
-                        if all && !COMBO_ACTIVE.swap(true, Ordering::SeqCst) {
-                            HOTKEY_EVENT.store(EVENT_PRESSED, Ordering::SeqCst);
-                        } else if !all && COMBO_ACTIVE.swap(false, Ordering::SeqCst) {
-                            HOTKEY_EVENT.store(EVENT_RELEASED, Ordering::SeqCst);
-                        }
+                    if !KEY1_DOWN.load(Ordering::SeqCst) && !KEY2_DOWN.load(Ordering::SeqCst) {
+                        MODIFIER_SUPPRESS.store(false, Ordering::SeqCst);
+                    }
+                }
+            } else if matches_key_group(vk, k2) {
+                if is_down {
+                    KEY2_DOWN.store(true, Ordering::SeqCst);
+                    if KEY1_DOWN.load(Ordering::SeqCst)
+                        && !COMBO_ACTIVE.swap(true, Ordering::SeqCst)
+                    {
+                        HOTKEY_EVENT.store(EVENT_PRESSED, Ordering::SeqCst);
+                        MODIFIER_SUPPRESS.store(true, Ordering::SeqCst);
+                        emit_synthetic_combo_release();
+                    }
+                } else if is_up {
+                    KEY2_DOWN.store(false, Ordering::SeqCst);
+                    if COMBO_ACTIVE.swap(false, Ordering::SeqCst) {
+                        HOTKEY_EVENT.store(EVENT_RELEASED, Ordering::SeqCst);
+                    }
+                    if !KEY1_DOWN.load(Ordering::SeqCst) && !KEY2_DOWN.load(Ordering::SeqCst) {
+                        MODIFIER_SUPPRESS.store(false, Ordering::SeqCst);
                     }
                 }
             }
+        } else {
+            // ── 2-modifier + 1-key combo ──
+            let mut changed = false;
+            if matches_key_group(vk, k1) {
+                if is_down {
+                    KEY1_DOWN.store(true, Ordering::SeqCst);
+                } else if is_up {
+                    KEY1_DOWN.store(false, Ordering::SeqCst);
+                }
+                changed = true;
+            } else if matches_key_group(vk, k2) {
+                if is_down {
+                    KEY2_DOWN.store(true, Ordering::SeqCst);
+                } else if is_up {
+                    KEY2_DOWN.store(false, Ordering::SeqCst);
+                }
+                changed = true;
+            } else if vk == k3 {
+                if is_down {
+                    KEY3_DOWN.store(true, Ordering::SeqCst);
+                } else if is_up {
+                    KEY3_DOWN.store(false, Ordering::SeqCst);
+                }
+                changed = true;
+            }
+
+            if changed {
+                let all = KEY1_DOWN.load(Ordering::SeqCst)
+                    && (k2 == 0 || KEY2_DOWN.load(Ordering::SeqCst))
+                    && KEY3_DOWN.load(Ordering::SeqCst);
+                if all && !COMBO_ACTIVE.swap(true, Ordering::SeqCst) {
+                    HOTKEY_EVENT.store(EVENT_PRESSED, Ordering::SeqCst);
+                    MODIFIER_SUPPRESS.store(true, Ordering::SeqCst);
+                    emit_synthetic_combo_release();
+                } else if !all && COMBO_ACTIVE.swap(false, Ordering::SeqCst) {
+                    HOTKEY_EVENT.store(EVENT_RELEASED, Ordering::SeqCst);
+                }
+                if !KEY1_DOWN.load(Ordering::SeqCst)
+                    && !KEY2_DOWN.load(Ordering::SeqCst)
+                    && !KEY3_DOWN.load(Ordering::SeqCst)
+                {
+                    MODIFIER_SUPPRESS.store(false, Ordering::SeqCst);
+                }
+            }
         }
+
+        if is_combo_key && MODIFIER_SUPPRESS.load(Ordering::SeqCst) {
+            return 1;
+        }
+
         unsafe { CallNextHookEx(HOOK_HANDLE.load(Ordering::SeqCst), code, wparam, lparam) }
     }
 
