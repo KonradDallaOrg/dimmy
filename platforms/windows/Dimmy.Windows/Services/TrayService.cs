@@ -140,8 +140,6 @@ public class TrayService : IDisposable
     }
 
     private const int TRANSPARENT = 1;
-    private string _statusText = "Ready";
-    private uint _statusDotColor = 0x0040C040; // green (BGR)
 
     private const uint IMAGE_ICON = 1;
     private const uint LR_LOADFROMFILE = 0x0010;

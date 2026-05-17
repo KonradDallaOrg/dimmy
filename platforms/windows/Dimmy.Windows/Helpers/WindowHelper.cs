@@ -47,7 +47,7 @@ public static class WindowHelper
 
     private const int GWL_STYLE = -16;
     private const int GWL_EXSTYLE = -20;
-    private static readonly nint WS_POPUP = (nint)0x80000000L;
+    private static readonly nint WS_POPUP = unchecked((nint)0x80000000L);
     private const nint WS_CAPTION = 0x00C00000;
     private const nint WS_THICKFRAME = 0x00040000;
     private const nint WS_SYSMENU = 0x00080000;

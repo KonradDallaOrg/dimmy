@@ -360,19 +360,19 @@ public sealed partial class SettingsWindow : Window
     // never touches drag-drop. See microsoft-ui-xaml issues #5607,
     // #7690 — no fix in WindowsAppSDK through 2.0.1.
 
-    private AppRuleViewModel _appRuleDragSource;
-    private ListViewItem _appRuleDragSourceContainer;
+    private AppRuleViewModel? _appRuleDragSource;
+    private ListViewItem? _appRuleDragSourceContainer;
     // Cached source-row bitmap (rendered once at PointerPressed) for
     // the floating ghost preview. RenderTargetBitmap.RenderAsync is
     // ~5–30 ms on a typical row — fast enough to be perceived as
     // synchronous when fired off as fire-and-forget from Pressed.
-    private Microsoft.UI.Xaml.Media.Imaging.RenderTargetBitmap _appRuleDragGhostBmp;
+    private Microsoft.UI.Xaml.Media.Imaging.RenderTargetBitmap? _appRuleDragGhostBmp;
     // Auto-scroll while dragging near the top / bottom edge of the
     // ListView. Built-in CanReorderItems would do this for free; manual
     // reorder needs us to drive the ScrollViewer ourselves.
-    private Microsoft.UI.Xaml.DispatcherTimer _appRuleDragScrollTimer;
+    private Microsoft.UI.Xaml.DispatcherTimer? _appRuleDragScrollTimer;
     private double _appRuleDragScrollDelta;
-    private ScrollViewer _appRulesScrollViewer;
+    private ScrollViewer? _appRulesScrollViewer;
     // Last pointer position in ListView coordinates — needed by the
     // scroll timer tick so the drop indicator can refresh after each
     // auto-scroll step (PointerMoved alone wouldn't fire when the
@@ -539,7 +539,7 @@ public sealed partial class SettingsWindow : Window
         }
     }
 
-    private void AppRuleDragScrollTimer_Tick(object sender, object e)
+    private void AppRuleDragScrollTimer_Tick(object? sender, object e)
     {
         if (_appRuleDragSource == null || _appRuleDragScrollDelta == 0)
         {
@@ -572,7 +572,7 @@ public sealed partial class SettingsWindow : Window
         _appRuleDragScrollDelta = 0;
     }
 
-    private ScrollViewer GetAppRulesScrollViewer()
+    private ScrollViewer? GetAppRulesScrollViewer()
     {
         if (_appRulesScrollViewer != null) return _appRulesScrollViewer;
         // Walk UP the visual tree, not down. AppRulesListView lives
@@ -585,7 +585,7 @@ public sealed partial class SettingsWindow : Window
         return _appRulesScrollViewer;
     }
 
-    private static T FindFirstAncestor<T>(DependencyObject d) where T : DependencyObject
+    private static T? FindFirstAncestor<T>(DependencyObject d) where T : DependencyObject
     {
         var p = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(d);
         while (p != null)
@@ -606,7 +606,7 @@ public sealed partial class SettingsWindow : Window
         FinishAppRuleDrag(sender as FrameworkElement, e);
     }
 
-    private void FinishAppRuleDrag(FrameworkElement handle, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    private void FinishAppRuleDrag(FrameworkElement? handle, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
     {
         var rule = _appRuleDragSource;
         var srcContainer = _appRuleDragSourceContainer;
@@ -3823,7 +3823,7 @@ public sealed partial class SettingsWindow : Window
         if (rc == 0)
         {
             App.Log($"[Auth] saved recap key for provider={vendor}", "Auth");
-            RecapKeyBox.Password = "";
+            RecapKeyBox!.Password = "";
             ViewModel.HasRecapKey = true;
         }
         else
@@ -4375,7 +4375,7 @@ public sealed partial class SettingsWindow : Window
         {
             case 0:
                 DictStatusText.Text = $"Added “{word}”.";
-                DictAddTextBox.Text = "";
+                DictAddTextBox!.Text = "";
                 break;
             case 1:
                 DictStatusText.Text = $"“{word}” is already in the dictionary.";
