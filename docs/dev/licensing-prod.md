@@ -29,7 +29,7 @@ Going from "PoC running on localhost" to "production licensing live at `license.
 Dimmy app  ──── /api/activate, /api/refresh, /api/account/delete ─────► Worker
 ```
 
-Code lives in `backend/`, see [`backend/README.md`](../../backend/README.md) for the per-file map.
+Code lives in the **private** repo [`KonradDallaOrg/dimmy-backend`](https://github.com/KonradDallaOrg/dimmy-backend) (moved out of this public repo on 2026-05-17 to keep handler logic + Stripe wire shapes private). Clone it as a sibling of this repo (`~/code/dimmy-backend/`) and see its `README.md` for the per-file map. Production secrets stay in Cloudflare Worker Secrets + 1Password, never in either repo.
 
 ## Manual ops checklist (for Konrad)
 
