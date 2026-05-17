@@ -81,7 +81,7 @@ jobs:
             ALL=$(git log --pretty=format:"- %s" --no-merges "${PREV_TAG}..HEAD")
             HEADER="## What's Changed since \`${PREV_TAG}\`"
           fi
-          TOTAL=$(printf '%s\n' "$ALL" | grep -c .)
+          TOTAL=$(printf '%s\n' "$ALL" | grep -c . || true)
           FIRST=$(printf '%s\n' "$ALL" | head -n 10)
           REST=$(printf '%s\n' "$ALL" | tail -n +11)
           {
