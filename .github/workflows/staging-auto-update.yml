@@ -363,7 +363,7 @@ jobs:
     # green; the cost when Mac fails is ~30 min of wasted Win
     # runner — acceptable.
     needs: [create-release]
-    runs-on: windows-2025
+    runs-on: windows-2025-vs2026
     steps:
       - uses: actions/checkout@v5
 
