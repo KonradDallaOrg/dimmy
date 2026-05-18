@@ -904,7 +904,14 @@ public partial class App : Application
         if (_captionWindow == null)
         {
             _captionWindow = new CaptionWindow();
-            _captionWindow.Activate();
+            // Never Activate(): the caption overlay is movie-subtitle
+            // chrome, it must NOT steal focus from the user's target
+            // app (otherwise the final Ctrl+V paste lands on this
+            // borderless transparent window and the text disappears).
+            // Mac parity: CaptionWindowController uses an NSPanel with
+            // `.nonactivatingPanel` + `orderFrontRegardless` — same
+            // intent, different API.
+            Helpers.WindowHelper.ShowWithoutActivating(_captionWindow);
         }
 
         // Compute the per-chunk delta from the cumulative diff. The
@@ -1238,7 +1245,39 @@ public partial class App : Application
                 if (target == null)
                     PttLog($"PASTE pre: no target snapshot recorded; current fg={prePaste.ToLogString()}");
                 else if (prePaste.Hwnd != target.Hwnd)
+                {
                     PttLog($"PASTE pre: FOCUS DRIFT — target was 0x{target.Hwnd.ToInt64():X} '{target.WindowTitle}', now 0x{prePaste.Hwnd.ToInt64():X} '{prePaste.WindowTitle}' (proc='{prePaste.ProcessName}')");
+                    // Defense-in-depth: restore the recorded target as
+                    // foreground before SendInput, otherwise Ctrl+V
+                    // lands wherever focus drifted (CaptionWindow,
+                    // Toast notification, Teams popup, etc.). Same
+                    // topmost-toggle pattern Settings/Meeting windows
+                    // use to defeat Win11's foreground lock (see
+                    // ForegroundSettingsWindow / OpenMeetingWindow).
+                    if (target.Hwnd != IntPtr.Zero)
+                    {
+                        try
+                        {
+                            ShowWindow(target.Hwnd, SW_RESTORE);
+                            SetWindowPos(target.Hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                            SetWindowPos(target.Hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                            bool ok = SetForegroundWindow(target.Hwnd);
+                            // 40 ms gives the foreground change time
+                            // to land before SendInput; without it
+                            // the OS can still route the synthetic
+                            // Ctrl+V to the old foreground in flight.
+                            await System.Threading.Tasks.Task.Delay(40);
+                            var post = Helpers.AppContextCapture.SnapshotForeground();
+                            PttLog($"PASTE pre: foreground-restore SetForegroundWindow={ok}, now=0x{post.Hwnd.ToInt64():X} '{post.ProcessName}'");
+                        }
+                        catch (Exception ex)
+                        {
+                            PttLog($"PASTE pre: foreground-restore EXC: {ex.Message}");
+                        }
+                    }
+                }
                 else
                     PttLog($"PASTE pre: foreground unchanged ({prePaste.ToLogString()})");
 

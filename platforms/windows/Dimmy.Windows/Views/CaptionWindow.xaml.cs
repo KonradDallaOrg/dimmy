@@ -117,8 +117,12 @@ public sealed partial class CaptionWindow : Window
 
     public void Show()
     {
-        var appWindow = WindowHelper.GetAppWindow(this);
-        appWindow?.Show();
+        // SW_SHOWNOACTIVATE — every chunk re-shows the caption (after
+        // the user shifted focus to/from it) WITHOUT promoting it to
+        // foreground. AppWindow.Show() defaults to activate=true and
+        // would otherwise re-steal focus on every chunk, defeating
+        // the foreground-restore safety net in StopAndProcessAsync.
+        WindowHelper.ShowWithoutActivating(this);
     }
 
     public void Hide()
