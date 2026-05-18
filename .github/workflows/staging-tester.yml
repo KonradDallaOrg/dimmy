@@ -240,7 +240,7 @@ jobs:
   build-windows:
     name: Build Windows Native (staging)
     needs: create-release
-    runs-on: windows-2025
+    runs-on: windows-2025-vs2026
     steps:
       - uses: actions/checkout@v5
 
@@ -363,8 +363,15 @@ jobs:
       - name: Locate VS AppxPackage tools
         shell: pwsh
         run: |
-          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -version "[17.0,18.0)" -products "*" -property installationPath | Select-Object -First 1
-          if (-not $vs) { throw "vswhere did not find a VS 2022 install" }
+          # Accept either VS 2022 (17.x) or VS 2026 Enterprise (18.x).
+          # The candidates array below probes both v17.0/AppxPackage and
+          # v18.0/AppxPackage subpaths, so vswhere just needs to surface
+          # ANY VS install with the UWP workload. On the new
+          # windows-2025-vs2026 runner image VS 2022 is gone and VS 2026
+          # Enterprise ships in its place — restricting to [17.0,18.0)
+          # would fail there.
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -version "[17.0,19.0)" -prerelease -products "*" -property installationPath | Select-Object -First 1
+          if (-not $vs) { throw "vswhere did not find a VS 2022 or VS 2026 install" }
           $candidates = @(
             "$vs\MSBuild\Microsoft\VisualStudio\v17.0\AppxPackage\",
             "$vs\MSBuild\Microsoft\VisualStudio\v18.0\AppxPackage\"

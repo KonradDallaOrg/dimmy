@@ -54,7 +54,7 @@ jobs:
 
       - name: Install macOS dependencies
         if: matrix.os == 'macos-latest'
-        run: brew install cmake
+        run: brew list cmake >/dev/null 2>&1 || brew install cmake
 
       # windows-2025 ships cmake + VS 2022 BuildTools — no Vulkan needed for CPU whisper
 
@@ -88,7 +88,7 @@ jobs:
 
   windows-ui-smoke:
     name: Windows UI smoke (FlaUI)
-    runs-on: windows-2025
+    runs-on: windows-2025-vs2026
     needs: ffi-integration
     steps:
       - uses: actions/checkout@v5
@@ -171,7 +171,7 @@ jobs:
 
       - name: Install macOS dependencies
         if: matrix.os == 'macos-latest'
-        run: brew install cmake
+        run: brew list cmake >/dev/null 2>&1 || brew install cmake
 
       - name: Build dimmy_lib (cdylib) + dimmy_smoke
         working-directory: core
