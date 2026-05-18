@@ -1536,6 +1536,23 @@ public sealed partial class SettingsWindow : Window
         var binaryPath = Interop.DimmyNative.GetClaudeCodeBinaryPath() ?? "";
         var integrationReady = status == Interop.DimmyNative.ClaudeCodeStatus.Ready;
 
+        // Coerce LLM subscription off when the provider is not Anthropic —
+        // subscription is Claude Code CLI only (Anthropic-only). Without this
+        // a leftover llm_auth_method="subscription" from a previous Anthropic
+        // session keeps `llmUseSub=true` even after switching to Groq/OpenAI/
+        // etc., which collapses `llmKeyPathLive=false` and hides BOTH the
+        // "Use saved api key" toggle AND the api-key input — stuck state, no
+        // way to save a key. Burned 2026-05-18 on the first-time Groq pick
+        // from a fresh Anthropic+subscription baseline. Mirror of the recap
+        // auth-method coercion below.
+        if (!isAnthropic
+            && string.Equals(ViewModel.LlmAuthMethod, "subscription", StringComparison.Ordinal))
+        {
+            ViewModel.LlmAuthMethod = "api_key";
+            App.Log(
+                $"[Auth] coerced llm_auth_method='subscription' → 'api_key' (provider not Anthropic: '{llmUrl}')",
+                "Auth");
+        }
         var llmUseSub = string.Equals(ViewModel.LlmAuthMethod, "subscription",
             StringComparison.Ordinal);
         // Recap auth is INDEPENDENT of the dictation knob. Empty =
