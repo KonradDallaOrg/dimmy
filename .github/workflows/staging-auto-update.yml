@@ -594,8 +594,15 @@ jobs:
           # Pin to VS 2022 (17.x) — the side-by-side VS 2026 BuildTools used
           # for the Rust build lacks UWP/AppxPackage workloads entirely, so
           # a naive `-latest` would pick VS 2026 and this step would fail.
-          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -version "[17.0,18.0)" -products "*" -property installationPath | Select-Object -First 1
-          if (-not $vs) { throw "vswhere did not find a VS 2022 install" }
+          # Accept either VS 2022 (17.x) or VS 2026 Enterprise (18.x).
+          # The candidates array below probes both v17.0/AppxPackage and
+          # v18.0/AppxPackage subpaths, so vswhere just needs to surface
+          # ANY VS install with the UWP workload. On the new
+          # windows-2025-vs2026 runner image VS 2022 is gone and VS 2026
+          # Enterprise ships in its place — restricting to [17.0,18.0)
+          # would fail there.
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -version "[17.0,19.0)" -prerelease -products "*" -property installationPath | Select-Object -First 1
+          if (-not $vs) { throw "vswhere did not find a VS 2022 or VS 2026 install" }
           $candidates = @(
             "$vs\MSBuild\Microsoft\VisualStudio\v17.0\AppxPackage\",
             "$vs\MSBuild\Microsoft\VisualStudio\v18.0\AppxPackage\"
