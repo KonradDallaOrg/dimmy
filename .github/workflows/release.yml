@@ -155,7 +155,7 @@ jobs:
 
       - name: Install CMake
         run: |
-          brew install cmake
+          brew list cmake >/dev/null 2>&1 || brew install cmake
           cmake --version
 
       - name: Verify Swift toolchain (need 5.10+ for FluidAudio)
