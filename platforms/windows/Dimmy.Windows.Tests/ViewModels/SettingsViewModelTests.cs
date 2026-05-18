@@ -34,7 +34,7 @@ public class SettingsViewModelTests
             "llm_tone": "formal",
             "shortcut": "Win+Alt",
             "shortcut_mode": "toggle",
-            "has_key": true,
+            "has_groq_key": true,
             "preprocessing_enabled": true,
             "chunk_streaming_enabled": false,
             "use_keyring": true,
