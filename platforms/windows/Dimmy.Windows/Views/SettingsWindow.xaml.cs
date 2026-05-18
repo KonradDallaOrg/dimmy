@@ -2141,7 +2141,16 @@ public sealed partial class SettingsWindow : Window
             if (tag == ParakeetTag)
             {
                 ViewModel.LocalSttBackend = "parakeet";
-                App.Log("→ set LocalSttBackend=parakeet", "Settings");
+                // Auto-enable chunk streaming on the Parakeet switch — chunk
+                // streaming is Parakeet-only at runtime (ffi.rs gates it on
+                // `chunk_streaming_enabled && backend == parakeet`), and the
+                // low-latency live-caption experience it unlocks is the whole
+                // reason to pick Parakeet over Whisper. We set it only on the
+                // explicit user pick, so if they later toggle it off manually
+                // for debugging we respect that until the next time they
+                // re-select Parakeet from the combo.
+                ViewModel.ChunkStreamingEnabled = true;
+                App.Log("→ set LocalSttBackend=parakeet, ChunkStreamingEnabled=true", "Settings");
                 // Keep LocalModel pointing at the previous whisper choice
                 // so flipping back to a whisper entry restores it.
             }

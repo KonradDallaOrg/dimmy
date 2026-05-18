@@ -320,6 +320,12 @@ struct MacVoicePage: View {
             set: { newValue in
                 if newValue == Self.parakeetTag {
                     appState.localSttBackend = "parakeet"
+                    // Auto-enable chunk streaming on Parakeet pick. Mirror
+                    // of SettingsWindow.xaml.cs:LocalModel_SelectionChanged
+                    // on Windows — chunk streaming is Parakeet-only at
+                    // runtime and the low-latency live-caption experience
+                    // is the whole reason users pick Parakeet over Whisper.
+                    appState.chunkStreamingEnabled = true
                 } else {
                     appState.localSttBackend = "whisper"
                     appState.localModel = newValue
