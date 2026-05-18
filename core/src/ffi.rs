@@ -1303,6 +1303,7 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "has_openrouter_recap_key": st.key_store.has_key(KeyringScope::Recap(Provider::OpenRouter), use_kr),
         "has_fireworks_recap_key": st.key_store.has_key(KeyringScope::Recap(Provider::Fireworks), use_kr),
         "has_together_recap_key": st.key_store.has_key(KeyringScope::Recap(Provider::Together), use_kr),
+        "has_custom_recap_key": st.key_store.has_key(KeyringScope::Recap(Provider::Custom), use_kr),
         "has_llm_key": has_llm_key,
         "llm_log_enabled": *st.llm_log_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "recap_model_override": st.recap_model_override.lock().unwrap_or_else(|e| e.into_inner()).clone(),
@@ -1326,9 +1327,13 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "audio_source": st.audio_source.lock().map(|s| s.clone()).unwrap_or_else(|_| "mic".to_string()),
         "stats_total_words": *st.stats_total_words.lock().unwrap_or_else(|e| e.into_inner()),
         "stats_total_speaking_secs": *st.stats_total_speaking_secs.lock().unwrap_or_else(|e| e.into_inner()),
-        // Per-provider key flags — STT
+        // Per-provider key flags — STT. Covers every Provider enum variant
+        // that can offer STT (Anthropic is skipped — it doesn't have a
+        // dictation endpoint). Keep this list in sync with the Provider
+        // enum in provider.rs; the UI relies on the green-check per-row.
         "has_groq_key": st.key_store.has_key(KeyringScope::Stt(Provider::Groq), use_kr),
         "has_openai_key": st.key_store.has_key(KeyringScope::Stt(Provider::OpenAI), use_kr),
+        "has_openrouter_key": st.key_store.has_key(KeyringScope::Stt(Provider::OpenRouter), use_kr),
         "has_gemini_key": st.key_store.has_key(KeyringScope::Stt(Provider::Gemini), use_kr),
         "has_deepgram_key": st.key_store.has_key(KeyringScope::Stt(Provider::Deepgram), use_kr),
         "has_fireworks_key": st.key_store.has_key(KeyringScope::Stt(Provider::Fireworks), use_kr),

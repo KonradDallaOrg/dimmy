@@ -774,7 +774,18 @@ final class AppState: ObservableObject {
     // MARK: - STT Config (synced with Rust via FFI)
 
     @Published var sttProvider: SttProvider = .groq
-    @Published var apiUrl: String = "https://api.groq.com/openai/v1/audio/transcriptions"
+    @Published var apiUrl: String = "https://api.groq.com/openai/v1/audio/transcriptions" {
+        didSet {
+            // Re-derive the STT green ✓ flag on every URL change so the
+            // dropdown reflects "key saved for this provider" in real time.
+            // applyConfigSnapshot loads per-provider flags AFTER apiUrl, so
+            // a stale recompute can fire during the initial config load —
+            // harmless because applyConfigSnapshot does a final recompute
+            // at its tail. UI-driven provider changes always see the
+            // up-to-date flags.
+            if apiUrl != oldValue { hasKey = sttKeyPresent(forUrl: apiUrl) }
+        }
+    }
     @Published var apiModel: String = "whisper-large-v3-turbo"
     @Published var selectedLanguage: String = ""
     @Published var prompt: String = ""
@@ -795,7 +806,11 @@ final class AppState: ObservableObject {
     @Published var llmToneEnum: LlmTone = .none
     @Published var llmCustomPrompt: String = ""
     @Published var llmTranslateTo: String = "none"
-    @Published var llmApiUrl: String = ""
+    @Published var llmApiUrl: String = "" {
+        didSet {
+            if llmApiUrl != oldValue { hasLlmKey = llmKeyPresent(forUrl: llmApiUrl) }
+        }
+    }
     @Published var llmApiModel: String = ""
     @Published var llmUseSameKey: Bool = true
     @Published var hasLlmKey: Bool = false
@@ -994,6 +1009,7 @@ final class AppState: ObservableObject {
 
     @Published var hasGroqKey: Bool = false
     @Published var hasOpenaiKey: Bool = false
+    @Published var hasOpenrouterKey: Bool = false
     @Published var hasGeminiKey: Bool = false
     @Published var hasDeepgramKey: Bool = false
     @Published var hasFireworksKey: Bool = false
@@ -1070,7 +1086,13 @@ final class AppState: ObservableObject {
             selectedLanguage = Self.displayLanguage(for: effectiveLang)
         }
         if let p = config["prompt"] as? String { prompt = p }
-        if let hk = config["has_key"] as? Bool { hasKey = hk }
+        // `has_key` (session-active global) was the source of the
+        // "phantom key saved" bug on the green ✓ badge — it stayed `true`
+        // for any provider once any STT key existed in the session.
+        // Win mirror dropped it (ViewModels/SettingsViewModel.cs). On Mac we
+        // recompute `hasKey` further down from the per-provider STT flags
+        // resolved against the current `apiUrl`, after `apiUrl` itself
+        // has been loaded from the snapshot.
         if let dev = config["selected_device"] as? String { selectedDevice = dev }
         if let devs = config["devices"] as? [String] { devices = devs }
 
@@ -1099,7 +1121,8 @@ final class AppState: ObservableObject {
         if let u = config["llm_api_url"] as? String { llmApiUrl = u }
         if let m = config["llm_api_model"] as? String { llmApiModel = m }
         if let sk = config["llm_use_same_key"] as? Bool { llmUseSameKey = sk }
-        if let hlk = config["has_llm_key"] as? Bool { hasLlmKey = hlk }
+        // `has_llm_key` (session-active global) had the same bug — recomputed
+        // from per-provider LLM flags + `llmApiUrl` further down.
         if let ll = config["llm_log_enabled"] as? Bool { llmLogEnabled = ll }
         if let am = config["llm_auth_method"] as? String { llmAuthMethod = am }
         if let ram = config["recap_auth_method"] as? String { recapAuthMethod = ram }
@@ -1134,6 +1157,7 @@ final class AppState: ObservableObject {
         // Per-provider key flags — STT scope (`has_<vendor>_key`)
         if let v = config["has_groq_key"] as? Bool { hasGroqKey = v }
         if let v = config["has_openai_key"] as? Bool { hasOpenaiKey = v }
+        if let v = config["has_openrouter_key"] as? Bool { hasOpenrouterKey = v }
         if let v = config["has_gemini_key"] as? Bool { hasGeminiKey = v }
         if let v = config["has_deepgram_key"] as? Bool { hasDeepgramKey = v }
         if let v = config["has_fireworks_key"] as? Bool { hasFireworksKey = v }
@@ -1185,6 +1209,82 @@ final class AppState: ObservableObject {
         } else {
             appRules = []
         }
+
+        // Derive `hasKey` + `hasLlmKey` from the per-provider flags using
+        // the current `apiUrl` / `llmApiUrl` as the selector. Must run AFTER
+        // both URLs and all per-provider flags have been populated above —
+        // the order matters, don't move this earlier. Win mirror is in
+        // ViewModels/SettingsViewModel.cs (HasSttKeyForUrl/HasLlmKeyForUrl).
+        hasKey = sttKeyPresent(forUrl: apiUrl)
+        hasLlmKey = llmKeyPresent(forUrl: llmApiUrl)
+    }
+
+    /// Resolve the STT key flag for a given API URL. Returns `true` only when
+    /// the keystore actually has a key for the URL's vendor — fixes the
+    /// pre-2026-05-18 "phantom green ✓" bug where the global `has_key`
+    /// (session-active) stayed `true` for every provider once any STT key
+    /// existed in the session.
+    func sttKeyPresent(forUrl url: String) -> Bool {
+        switch sttProviderTag(forUrl: url) {
+        case "groq": return hasGroqKey
+        case "openai": return hasOpenaiKey
+        case "openrouter": return hasOpenrouterKey
+        case "gemini": return hasGeminiKey
+        case "deepgram": return hasDeepgramKey
+        case "fireworks": return hasFireworksKey
+        case "together": return hasTogetherKey
+        default: return hasCustomKey
+        }
+    }
+
+    /// Resolve the LLM key flag for a given LLM API URL. Same pattern as
+    /// `sttKeyPresent(forUrl:)` but uses `llmKeyByVendor` populated from the
+    /// `has_<vendor>_llm_key` Rust flags.
+    func llmKeyPresent(forUrl url: String) -> Bool {
+        let vendor = llmProviderTag(forUrl: url)
+        return llmKeyByVendor[vendor] == true
+    }
+
+    /// Does ANY scope (LLM or STT) have a saved key for the LLM provider's
+    /// vendor? Drives the "Use my saved API key for this provider" toggle
+    /// visibility — show only when there's actually a key to reuse. Mirror
+    /// of the Win `hasUpstreamKey` calculation in
+    /// SettingsWindow.xaml.cs:RefreshAuthIntegrationStatus.
+    func hasUpstreamKey(forLlmUrl url: String) -> Bool {
+        let vendor = llmProviderTag(forUrl: url)
+        guard !vendor.isEmpty else { return false }
+        if llmKeyByVendor[vendor] == true { return true }
+        switch vendor {
+        case "groq": return hasGroqKey
+        case "openai": return hasOpenaiKey
+        case "openrouter": return hasOpenrouterKey
+        case "gemini": return hasGeminiKey
+        case "fireworks": return hasFireworksKey
+        case "together": return hasTogetherKey
+        case "custom": return hasCustomKey
+        // Anthropic doesn't have STT scope (no Anthropic STT endpoint).
+        default: return false
+        }
+    }
+
+    private func sttProviderTag(forUrl url: String) -> String {
+        if url.isEmpty { return "groq" }
+        if url.contains("groq.com") { return "groq" }
+        if url.contains("openai.com") { return "openai" }
+        if url.contains("openrouter.ai") { return "openrouter" }
+        if url.contains("googleapis.com") { return "gemini" }
+        if url.contains("deepgram.com") { return "deepgram" }
+        return "custom"
+    }
+
+    private func llmProviderTag(forUrl url: String) -> String {
+        if url.isEmpty { return "groq" }
+        if url.contains("groq.com") { return "groq" }
+        if url.contains("openai.com") { return "openai" }
+        if url.contains("openrouter.ai") { return "openrouter" }
+        if url.contains("googleapis.com") { return "gemini" }
+        if url.contains("anthropic.com") { return "anthropic" }
+        return "custom"
     }
 
     /// Build a config dictionary for sending to Rust via FFI.

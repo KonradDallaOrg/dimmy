@@ -58,11 +58,14 @@ struct MacOutputPage: View {
     /// auth. Logic lives in `ProviderTagging.sameKeyShouldShow` so it
     /// can be unit-tested.
     private var sameKeyShouldShow: Bool {
-        ProviderTagging.sameKeyShouldShow(
-            sttUrl: appState.apiUrl,
-            llmUrl: appState.llmApiUrl,
-            llmAuthMethod: appState.llmAuthMethod
-        )
+        // 2026-05-18: broadened from "STT and LLM must share a vendor" to
+        // "any scope has a key for the LLM vendor". Win parity:
+        // SettingsWindow.xaml.cs:RefreshAuthIntegrationStatus where the
+        // toggle visibility is gated on hasUpstreamKey = hasLlmScopeKey
+        // || hasSttScopeKey. Toggle hides when subscription is on (no
+        // key needed for the CLI path).
+        guard appState.llmAuthMethod != "subscription" else { return false }
+        return appState.hasUpstreamKey(forLlmUrl: appState.llmApiUrl)
     }
 
     /// Human-readable label for the STT provider — used in the
@@ -595,8 +598,8 @@ struct MacOutputPage: View {
                         // we hide the toggle and force a dedicated key.
                         if sameKeyShouldShow {
                             MacRow(
-                                "Use same key as STT",
-                                description: "Reuse the \(sttProviderLabel) key for the LLM provider — both endpoints accept the same token.",
+                                "Use my saved API key for this provider",
+                                description: "When you already have a key for the LLM's vendor (saved via STT or LLM), reuse it. Turn off to enter a dedicated LLM key for the same vendor.",
                                 showsDivider: !appState.llmUseSameKey
                             ) {
                                 Toggle("", isOn: Binding(

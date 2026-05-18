@@ -288,10 +288,26 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _hasNotionToken;
 
     /// Per-provider snapshot of "is an LLM key already stored?" — sourced from
-    /// the `has_llm_*_key` fields of `dimmy_get_config_json`. Used by the
-    /// dropdown handler to refresh `HasLlmKey` (the green ✓ badge) without an
-    /// FFI roundtrip when the user picks a different provider before saving.
+    /// the `has_<provider>_llm_key` fields of `dimmy_get_config_json`. Used by
+    /// the dropdown handler to refresh `HasLlmKey` (the green ✓ badge) without
+    /// an FFI roundtrip when the user picks a different provider before saving.
+    ///
+    /// Bug burned 2026-05-18: the JSON field names here used to be the
+    /// inverted order `has_llm_<provider>_key` which doesn't match what
+    /// Rust emits in ffi.rs:1341 (`has_<provider>_llm_key`). Result: every
+    /// `TryGetProperty` returned false, this dict was always all-false,
+    /// `HasLlmKeyForUrl` always returned false, and the UI fell back to the
+    /// session-active global flag — green check stayed on the wrong provider.
     private Dictionary<string, bool> _llmHasKeyByProvider = new();
+
+    /// Per-provider snapshot of "is an STT key already stored?" — sourced from
+    /// the `has_<provider>_key` fields of `dimmy_get_config_json` (STT scope
+    /// flags, no `_llm` infix). Drives the green ✓ badge on STT provider
+    /// dropdown changes. Same shape + same incident as `_llmHasKeyByProvider`
+    /// — previously the STT side fell through to `has_key` (session-active
+    /// global) so the green check was wrong any time the user switched
+    /// providers without restarting.
+    private Dictionary<string, bool> _sttHasKeyByProvider = new();
 
     /// Returns whether the LLM keystore has a key for the given provider URL.
     /// Mirrors `Provider::from_url` in `core/src/provider.rs` — keep in sync
@@ -302,6 +318,15 @@ public partial class SettingsViewModel : ObservableObject
         return _llmHasKeyByProvider.TryGetValue(key, out var v) && v;
     }
 
+    /// Returns whether the STT keystore has a key for the given provider URL.
+    /// Mirror of `HasLlmKeyForUrl`; STT-specific provider mapping (Deepgram +
+    /// custom-URL fallback differ from the LLM list).
+    public bool HasSttKeyForUrl(string url)
+    {
+        var key = SttProviderKeyFromUrl(url);
+        return _sttHasKeyByProvider.TryGetValue(key, out var v) && v;
+    }
+
     private static string LlmProviderKeyFromUrl(string url)
     {
         if (string.IsNullOrEmpty(url)) return "groq"; // matches Rust default
@@ -310,6 +335,17 @@ public partial class SettingsViewModel : ObservableObject
         if (url.Contains("openrouter.ai")) return "openrouter";
         if (url.Contains("googleapis.com")) return "gemini";
         if (url.Contains("anthropic.com")) return "anthropic";
+        return "custom";
+    }
+
+    private static string SttProviderKeyFromUrl(string url)
+    {
+        if (string.IsNullOrEmpty(url)) return "groq"; // matches Rust default
+        if (url.Contains("groq.com")) return "groq";
+        if (url.Contains("openai.com")) return "openai";
+        if (url.Contains("openrouter.ai")) return "openrouter";
+        if (url.Contains("googleapis.com")) return "gemini";
+        if (url.Contains("deepgram.com")) return "deepgram";
         return "custom";
     }
     [ObservableProperty] private string _llmCustomPrompt = "";
@@ -336,6 +372,24 @@ public partial class SettingsViewModel : ObservableObject
     // workstream (the Rust core needs config.telemetry_enabled fields).
     [ObservableProperty] private bool _telemetryEnabled = true;
     [ObservableProperty] private bool _crashReportsEnabled = true;
+
+    /// Auto-refresh `HasApiKey` (the STT green ✓ badge) when the user
+    /// switches providers via the URL dropdown, without waiting for a
+    /// save+reload roundtrip. The per-provider dict was populated on the
+    /// last `LoadFromJson`, so a URL change just rebinds to the new
+    /// provider's entry. Mirror of the explicit `HasLlmKeyForUrl(url)`
+    /// call inside the LLM provider dropdown handler — but as a
+    /// partial-method it covers ALL paths that mutate `ApiUrl` (preset
+    /// click, typed entry, programmatic save).
+    partial void OnApiUrlChanged(string value)
+    {
+        HasApiKey = HasSttKeyForUrl(value);
+    }
+
+    partial void OnLlmApiUrlChanged(string value)
+    {
+        HasLlmKey = HasLlmKeyForUrl(value);
+    }
 
     partial void OnTelemetryEnabledChanged(bool value)
     {
@@ -494,7 +548,24 @@ public partial class SettingsViewModel : ObservableObject
                 if (ApiModel == "gemini-3-pro-preview") ApiModel = "gemini-3-flash-preview";
                 if (ApiModel == "gemini-2.5-pro") ApiModel = "gemini-2.5-flash";
             }
-            HasApiKey = r.TryGetProperty("has_key", out var hk) && hk.GetBoolean();
+            // Per-provider STT key snapshot. Drives the green ✓ badge in real
+            // time when the user switches providers in the dropdown. The
+            // legacy `has_key` field (session-active global) is ignored — it
+            // produced the "phantom key saved" bug where the badge stayed on
+            // for any provider once any key existed in the session. The keys
+            // here MUST match the Rust emitter exactly — see ffi.rs ~1330.
+            _sttHasKeyByProvider = new Dictionary<string, bool>
+            {
+                ["groq"] = r.TryGetProperty("has_groq_key", out var hsg) && hsg.GetBoolean(),
+                ["openai"] = r.TryGetProperty("has_openai_key", out var hso) && hso.GetBoolean(),
+                ["openrouter"] = r.TryGetProperty("has_openrouter_key", out var hsor) && hsor.GetBoolean(),
+                ["gemini"] = r.TryGetProperty("has_gemini_key", out var hsge) && hsge.GetBoolean(),
+                ["deepgram"] = r.TryGetProperty("has_deepgram_key", out var hsd) && hsd.GetBoolean(),
+                ["fireworks"] = r.TryGetProperty("has_fireworks_key", out var hsf) && hsf.GetBoolean(),
+                ["together"] = r.TryGetProperty("has_together_key", out var hst) && hst.GetBoolean(),
+                ["custom"] = r.TryGetProperty("has_custom_key", out var hsc) && hsc.GetBoolean(),
+            };
+            HasApiKey = HasSttKeyForUrl(ApiUrl);
             Prompt = r.TryGetProperty("prompt", out var prompt) ? prompt.GetString() ?? "" : "";
             Shortcut = r.TryGetProperty("shortcut", out var sc) ? sc.GetString() ?? "Win+Alt" : "Win+Alt";
             ShortcutMode = r.TryGetProperty("shortcut_mode", out var sm) ? sm.GetString() ?? "toggle" : "toggle";
@@ -564,18 +635,29 @@ public partial class SettingsViewModel : ObservableObject
                 ? ntt.GetString() ?? "" : "";
             NotionAutoSend = r.TryGetProperty("notion_auto_send", out var nas) && nas.GetBoolean();
             HasNotionToken = r.TryGetProperty("has_notion_token", out var hnt) && hnt.GetBoolean();
-            HasLlmKey = r.TryGetProperty("has_llm_key", out var hlk) && hlk.GetBoolean();
-            // Per-provider snapshot — drives real-time green ✓ when user picks
-            // another LLM provider in the dropdown before saving.
+            // Per-provider LLM key snapshot. JSON field names MUST match the
+            // Rust emitter in ffi.rs:1341 — `has_<provider>_llm_key`, NOT the
+            // inverted `has_llm_<provider>_key` that was here pre-2026-05-18.
+            // The old names returned false for every TryGetProperty, the dict
+            // was all-false, HasLlmKeyForUrl always returned false, and the
+            // UI ended up reading the legacy `has_llm_key` global flag below
+            // — same "phantom key saved" symptom as the STT side.
             _llmHasKeyByProvider = new Dictionary<string, bool>
             {
-                ["groq"] = r.TryGetProperty("has_llm_groq_key", out var hlg) && hlg.GetBoolean(),
-                ["openai"] = r.TryGetProperty("has_llm_openai_key", out var hlo) && hlo.GetBoolean(),
-                ["anthropic"] = r.TryGetProperty("has_llm_anthropic_key", out var hla) && hla.GetBoolean(),
-                ["gemini"] = r.TryGetProperty("has_llm_gemini_key", out var hlge) && hlge.GetBoolean(),
-                ["openrouter"] = r.TryGetProperty("has_llm_openrouter_key", out var hlor) && hlor.GetBoolean(),
-                ["custom"] = r.TryGetProperty("has_llm_custom_key", out var hlc) && hlc.GetBoolean(),
+                ["groq"] = r.TryGetProperty("has_groq_llm_key", out var hlg) && hlg.GetBoolean(),
+                ["openai"] = r.TryGetProperty("has_openai_llm_key", out var hlo) && hlo.GetBoolean(),
+                ["anthropic"] = r.TryGetProperty("has_anthropic_llm_key", out var hla) && hla.GetBoolean(),
+                ["gemini"] = r.TryGetProperty("has_gemini_llm_key", out var hlge) && hlge.GetBoolean(),
+                ["openrouter"] = r.TryGetProperty("has_openrouter_llm_key", out var hlor) && hlor.GetBoolean(),
+                ["fireworks"] = r.TryGetProperty("has_fireworks_llm_key", out var hlf) && hlf.GetBoolean(),
+                ["together"] = r.TryGetProperty("has_together_llm_key", out var hlt) && hlt.GetBoolean(),
+                ["custom"] = r.TryGetProperty("has_custom_llm_key", out var hlc) && hlc.GetBoolean(),
             };
+            // Initial green ✓ for LLM — derived from the per-provider dict via
+            // the current LLM URL, NOT from the legacy `has_llm_key` session
+            // global (which stayed `true` for any provider once any LLM key
+            // had been used in the session).
+            HasLlmKey = HasLlmKeyForUrl(LlmApiUrl);
             LlmCustomPrompt = r.TryGetProperty("llm_custom_prompt", out var lcp) ? lcp.GetString() ?? "" : "";
             // Normalise legacy values: pre-V19 the dropdown used uppercase
             // codes ("EN", "IT") plus the string "none"; the pill used

@@ -1069,7 +1069,7 @@
                 <controls:SettingCard x:Name="LlmUseSameKeyCard"
                                       Glyph="&#xE192;"
                                       Label="Use my saved API key for this provider"
-                                      Description="Reuse the key already saved for STT (same vendor). Turn off to enter a dedicated LLM key."
+                                      Description="When you already have a key for the LLM's vendor (saved via STT or LLM), reuse it. Turn off to enter a dedicated LLM key for the same vendor."
                                       Visibility="Collapsed">
                   <ToggleSwitch x:Name="LlmUseSameKeyToggle"
                                 IsOn="{Binding LlmUseSameKey, Mode=TwoWay}"

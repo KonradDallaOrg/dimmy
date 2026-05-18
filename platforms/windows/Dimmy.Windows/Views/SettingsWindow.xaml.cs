@@ -1547,7 +1547,18 @@ public sealed partial class SettingsWindow : Window
         var recapForceSub = string.Equals(ViewModel.RecapAuthMethod, "subscription",
             StringComparison.Ordinal);
 
-        var keyPathLive = !llmUseSub || !recapForceSub;
+        // Per-tier "key path live?" flags. The previous shared `keyPathLive`
+        // OR'd LLM and Recap together, which leaked one tier's subscription
+        // choice into the other's UI: switching LLM to Anthropic subscription
+        // would NOT hide the LLM key input if Recap was still on api-key.
+        // The user-reported bug 2026-05-18 — when LLM = Anthropic +
+        // subscription ON, the "Use saved api key" toggle + key input should
+        // disappear, regardless of Recap state. Same logic mirrors for Recap.
+        var llmKeyPathLive = !llmUseSub;
+        var recapKeyPathLive = !recapForceSub;
+        // Legacy combined flag kept for the Recap section below until that
+        // block is refactored to use `recapKeyPathLive` directly.
+        var keyPathLive = llmKeyPathLive || recapKeyPathLive;
 
         // ── INTEGRATIONS → Anthropic card ────────────────────────
         // Always rendered when the user navigates to Integrations;
@@ -1634,14 +1645,20 @@ public sealed partial class SettingsWindow : Window
             ViewModel.LlmUseSameKey = false;
             App.Log("[Auth] coerced llm_use_same_key=false (no upstream key for LLM vendor)", "Auth");
         }
-        LlmUseSameKeyCard.Visibility = (keyPathLive && hasUpstreamKey)
+        // Use the LLM-specific path flag so an Anthropic + subscription LLM
+        // hides BOTH the "use saved key" toggle and the api-key input,
+        // regardless of Recap configuration. Bug burned 2026-05-18: with the
+        // legacy OR'd `keyPathLive`, the LLM key surfaces stayed visible if
+        // Recap was still on api-key, contradicting the "subscription
+        // bypasses keys" intent.
+        LlmUseSameKeyCard.Visibility = (llmKeyPathLive && hasUpstreamKey)
             ? Visibility.Visible : Visibility.Collapsed;
-        // LLM API key input: visible when the key path is live AND
-        // the toggle is OFF (the dispatcher needs an LLM-scope key).
-        // When the toggle is hidden (no upstream key), the coercion
-        // above flips LlmUseSameKey=false → input appears so the
-        // user can type a key.
-        LlmApiKeyCard.Visibility = (keyPathLive && !ViewModel.LlmUseSameKey)
+        // LLM API key input: visible when the key path is live AND the
+        // toggle is OFF (the dispatcher needs an LLM-scope key). When the
+        // toggle is hidden (no upstream key OR subscription on), the
+        // coercion above flips LlmUseSameKey=false → input appears so the
+        // user can type a key. Under subscription the entire block hides.
+        LlmApiKeyCard.Visibility = (llmKeyPathLive && !ViewModel.LlmUseSameKey)
             ? Visibility.Visible : Visibility.Collapsed;
         // Surface the green ✓ when a key for the LLM vendor already
         // exists in Llm-scope (drives `HasLlmKey` binding on the
@@ -1981,6 +1998,7 @@ public sealed partial class SettingsWindow : Window
         foreach (var (key, prov) in new[] {
             ("has_groq_key", "groq"),
             ("has_openai_key", "openai"),
+            ("has_openrouter_key", "openrouter"),
             ("has_gemini_key", "gemini"),
             ("has_deepgram_key", "deepgram"),
             ("has_fireworks_key", "fireworks"),
