@@ -2835,15 +2835,19 @@ pub unsafe extern "C" fn dimmy_meeting_start(out_buf: *mut c_char, buf_len: c_in
     // tracks regardless of what the user had configured pre-refactor.
     let mt_source = crate::audio::AudioSource::Mix;
     let _legacy_source_unused = st.audio_source.lock();
-    // CRITICAL: when source = System, the primary capture stream is the
-    // OUTPUT device in WASAPI loopback mode (~48 kHz on most systems),
-    // NOT the mic. Querying the mic's rate here and feeding it to the
-    // meeting writer makes audio.wav play back at 1/3 speed ("metallic,
-    // very slow") because the WAV header advertises 16 kHz but the
-    // shared buffer was actually filling at 48 kHz.
-    let device_sr = crate::audio::primary_sample_rate(&selected_device, &mt_source);
+    // Meeting buffers always run at the canonical rate (48 kHz). The
+    // cpal callbacks in audio.rs resample from the device-native rate
+    // before pushing, so the WAV writer + STT both see a stable rate
+    // regardless of the mic/loopback's actual hardware rate AND
+    // regardless of any mid-meeting device swap (BT ↔ speakers ↔ USB
+    // headset). Pre-resampling design (2026-05-19) used the mic's
+    // native rate which broke when a device-swap mid-meeting changed
+    // the effective rate without updating the WAV header — audio
+    // played back "rallentato" because the writer thought it was
+    // still at the original device rate.
+    let device_sr = crate::audio::MEETING_CANONICAL_RATE;
     log(&format!(
-        "[Meeting] primary_sample_rate={} source={:?}",
+        "[Meeting] canonical_rate={} source={:?}",
         device_sr, mt_source
     ));
     if let Ok(mut sr) = st.audio_sample_rate.lock() {
@@ -2923,15 +2927,9 @@ pub unsafe extern "C" fn dimmy_meeting_start(out_buf: *mut c_char, buf_len: c_in
             .unwrap_or_else(|| "auto".to_string()),
         chunk_secs: st.meeting_chunk_secs.lock().ok().map(|s| *s),
     };
-    // Loopback device runs at its OWN native rate which may differ from
-    // the mic (typical: BT mic 16k HFP + speakers 48k A2DP). meeting.rs
-    // writes audio_system.wav with this rate so playback is correct
-    // regardless of the mic/system mismatch.
-    let system_sr = if matches!(mt_source, crate::audio::AudioSource::Mix) {
-        crate::audio::secondary_sample_rate(device_sr)
-    } else {
-        device_sr
-    };
+    // Both buffers always run at the canonical 48 kHz (see device_sr
+    // comment above) — secondary cpal callback resamples too.
+    let system_sr = crate::audio::MEETING_CANONICAL_RATE;
     log(&format!(
         "[Meeting] mic_sr={} system_sr={} source={:?}",
         device_sr, system_sr, mt_source

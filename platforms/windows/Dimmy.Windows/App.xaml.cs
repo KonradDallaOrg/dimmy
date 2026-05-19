@@ -1377,9 +1377,14 @@ public partial class App : Application
 
     private void InitCallDetection()
     {
+        Log($"InitCallDetection ENTRY: _callDetection={(_callDetection == null ? "null" : "set")} _dispatcherQueue={(_dispatcherQueue == null ? "null" : "set")} CallDetectEnabled={_appViewModel.CallDetectEnabled}", "CallDetect");
         try
         {
-            if (_callDetection != null || _dispatcherQueue == null) return;
+            if (_callDetection != null || _dispatcherQueue == null)
+            {
+                Log("InitCallDetection EARLY-RETURN", "CallDetect");
+                return;
+            }
             _callDetection = new Services.CallDetectionService(_dispatcherQueue);
             _callDetection.SetEnabled(_appViewModel.CallDetectEnabled);
             _callDetection.Start();

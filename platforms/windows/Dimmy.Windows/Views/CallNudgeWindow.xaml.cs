@@ -4,6 +4,7 @@ using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using Windows.Graphics;
 
 using Dimmy.Windows.Helpers;
@@ -22,8 +23,8 @@ namespace Dimmy.Windows.Views;
 /// cooldown applies and the user gets another chance later).
 public sealed partial class CallNudgeWindow : Window
 {
-    private const int CardWidthDip = 360;
-    private const int CardHeightDip = 132;
+    private const int CardWidthDip = 380;
+    private const int CardHeightDip = 148;
     private const int BottomMarginPx = 80;
     private const int RightMarginPx = 20;
     private static readonly TimeSpan AutoDismiss = TimeSpan.FromSeconds(30);
@@ -59,11 +60,15 @@ public sealed partial class CallNudgeWindow : Window
         Title = "Dimmy Call Detected";
 
         ExtendsContentIntoTitleBar = true;
-        var backdrop = new TransparentBackdrop
-        {
-            Hwnd = WindowHelper.GetHwnd(this),
-        };
-        this.SystemBackdrop = backdrop;
+        // Solid theme-aware brushes instead of Acrylic + ThemeResource:
+        // WinUI 3 DesktopAcrylicBackdrop and ThemeResource lookups
+        // resolve against Application.RequestedTheme (frozen at
+        // process-start) and ignore Content.RequestedTheme — verified
+        // empirically in PillWindow's MenuFlyout patch (2026-05-10).
+        // Setting explicit Background/Foreground brushes here bypasses
+        // the lookup entirely so the popup honours the user's saved
+        // Settings → Appearance choice on every launch.
+        ApplyTheme(ThemeHelper.ResolvedElementTheme());
 
         var appWindow = WindowHelper.GetAppWindow(this);
         if (appWindow?.Presenter is OverlappedPresenter presenter)
@@ -78,12 +83,7 @@ public sealed partial class CallNudgeWindow : Window
         {
             try { appWindow.IsShownInSwitchers = false; } catch { }
         }
-        WindowHelper.EnableTransparency(this);
-
-        if (Content is FrameworkElement root)
-        {
-            root.RequestedTheme = ElementTheme.Dark;
-        }
+        WindowHelper.MarkNoActivate(this);
 
         _dismissTimer = DispatcherQueue.CreateTimer();
         _dismissTimer.Interval = AutoDismiss;
@@ -201,4 +201,34 @@ public sealed partial class CallNudgeWindow : Window
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern uint GetDpiForWindow(IntPtr hwnd);
+
+    private void ApplyTheme(ElementTheme theme)
+    {
+        bool dark = theme == ElementTheme.Dark;
+        // Match Win11 native notification palette (same tones the pill
+        // uses for its MenuFlyoutPresenter): near-black panel + soft
+        // white text on dark, near-white panel + near-black text on
+        // light. Border is a subtle 1px stroke that picks the readable
+        // colour for each theme.
+        var bg = new Microsoft.UI.Xaml.Media.SolidColorBrush(dark
+            ? global::Windows.UI.Color.FromArgb(0xFF, 0x2B, 0x2B, 0x2B)
+            : global::Windows.UI.Color.FromArgb(0xFF, 0xF9, 0xF9, 0xF9));
+        var fg = new Microsoft.UI.Xaml.Media.SolidColorBrush(dark
+            ? global::Windows.UI.Color.FromArgb(0xFF, 0xF2, 0xF2, 0xF2)
+            : global::Windows.UI.Color.FromArgb(0xFF, 0x1A, 0x1A, 0x1A));
+        var stroke = new Microsoft.UI.Xaml.Media.SolidColorBrush(dark
+            ? global::Windows.UI.Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF)
+            : global::Windows.UI.Color.FromArgb(0x20, 0x00, 0x00, 0x00));
+        RootBorder.Background = bg;
+        RootBorder.BorderBrush = stroke;
+        // Propagate theme to ThemeResource consumers (AccentButtonStyle).
+        if (Content is FrameworkElement root) root.RequestedTheme = theme;
+        // Explicit Foreground on the text/icon nodes so they don't fall
+        // back to the system text colour bleeding through.
+        TitleText.Foreground = fg;
+        BodyText.Foreground = fg;
+        HeaderIcon.Foreground = fg;
+        CloseButton.Foreground = fg;
+        NotNowButton.Foreground = fg;
+    }
 }

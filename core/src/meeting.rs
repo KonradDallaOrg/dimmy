@@ -457,7 +457,56 @@ fn worker_loop(
     // time-coherent. Without this, the mix WAV plays system content
     // at the wrong speed (3x slow mumbling at low pitch when
     // mic_sr=16k & system_sr=48k were mixed into a 16k container).
+    // Both buffers are at the same canonical rate (48 kHz, enforced
+    // by the resampler in audio.rs callbacks). `rate_ratio` is
+    // therefore always 1.0 — kept for backward compatibility with
+    // existing call sites in case a future single-source mode needs
+    // a different secondary rate.
     let rate_ratio = system_sample_rate as f64 / device_sample_rate as f64;
+
+    // ── Continuous secondary alignment ─────────────────────────
+    //
+    // The WASAPI loopback driver does NOT emit callbacks while the
+    // default output device is silent (no apps producing audio).
+    // The user-reported scenario "I talk to the mic for 10 s, THEN
+    // I start the Teams call" makes the loopback wake up only at
+    // t=10s. Without intervention, secondary[0] would land at
+    // primary index 0, mixing the LATE loopback sample with the
+    // EARLY mic sample → 10 s wall-clock skew.
+    //
+    // Robust fix: enforce the invariant `secondary.len() ==
+    // primary.len()` at the top of every worker tick. We pad the
+    // secondary buffer with zeros up to the primary's length under
+    // a lock. When the loopback finally fires its first callback,
+    // its samples are appended at the END of the padded zeros — at
+    // a buffer index that corresponds to "wall-clock NOW" both for
+    // primary and secondary. From that point on, every new chunk
+    // appended by the cpal callback maps 1:1 to the simultaneously
+    // arriving mic samples.
+    //
+    // Effect across the whole meeting:
+    //   - audio_mic.wav    : full meeting duration
+    //   - audio_system.wav : full meeting duration (zeros while the
+    //                        loopback was dormant; real audio after)
+    //   - audio.wav (mix)  : primary[i] + secondary[i], always
+    //                        time-aligned regardless of when (or
+    //                        how many times) the loopback woke up
+    //
+    // No timeout, no polling magic, no offset bookkeeping — just a
+    // single resize() per tick under lock.
+    let align_secondary =
+        |audio_buffer: &Arc<Mutex<Vec<f32>>>, audio_buffer_secondary: &Arc<Mutex<Vec<f32>>>| {
+            if !mix_active {
+                return;
+            }
+            let p_len = audio_buffer.lock().map(|b| b.len()).unwrap_or(0);
+            if let Ok(mut s) = audio_buffer_secondary.lock() {
+                if s.len() < p_len {
+                    s.resize(p_len, 0.0);
+                }
+            }
+        };
+
     let read_synth = |start: usize,
                       end: usize,
                       audio_buffer: &Arc<Mutex<Vec<f32>>>,
@@ -470,59 +519,38 @@ fn worker_loop(
         if !mix_active {
             return primary;
         }
-        // Read the time-aligned window from the secondary buffer.
-        // start_sys / end_sys are computed via rate_ratio so that
-        // primary[i] and secondary[i*ratio] correspond to the same
-        // wall-time instant.
-        let start_sys = (start as f64 * rate_ratio) as usize;
-        let end_sys = (end as f64 * rate_ratio) as usize;
+        // Both buffers are aligned: secondary[i] = same wall-time
+        // instant as primary[i] (zero-padded where loopback was
+        // dormant). Read the same window from secondary; if for
+        // some reason it's shorter (race with align_secondary that
+        // hasn't run yet), missing tail = zeros.
         let secondary = match audio_buffer_secondary.lock() {
-            Ok(b) if end_sys <= b.len() => b[start_sys..end_sys].to_vec(),
+            Ok(b) => {
+                let take_end = end.min(b.len());
+                if start < take_end {
+                    b[start..take_end].to_vec()
+                } else {
+                    Vec::new()
+                }
+            }
             _ => Vec::new(),
         };
         let n = primary.len();
         let mut out = Vec::with_capacity(n);
         for (i, &p) in primary.iter().enumerate() {
-            // Pick the system sample at the corresponding wall-time
-            // index. Simple nearest-neighbour decimation; for typical
-            // 3:1 ratios (48k → 16k) this is ~equivalent to taking
-            // every 3rd sample, which is good enough for voice
-            // playback. A proper anti-aliased filter could replace
-            // this if/when audio quality needs to match the per-track
-            // audio_system.wav (which stays at native rate as the
-            // source of truth).
-            let sys_idx = (i as f64 * rate_ratio) as usize;
-            let s = secondary.get(sys_idx).copied().unwrap_or(0.0);
+            let s = secondary.get(i).copied().unwrap_or(0.0);
             out.push((p + s).clamp(-1.0, 1.0));
         }
         out
     };
 
-    // Helper: snapshot the synced length of the synth stream. In Mix
-    // mode this is the min of both buffers (so we never advance past
-    // what BOTH have produced). In single-source modes it's just the
-    // primary length.
+    // Snapshot the primary buffer length we can safely write up to.
+    // No coupling with secondary because the alignment invariant
+    // (secondary.len() >= primary.len() after align_secondary) is
+    // guaranteed by every worker tick.
     let synth_len = |audio_buffer: &Arc<Mutex<Vec<f32>>>,
-                     audio_buffer_secondary: &Arc<Mutex<Vec<f32>>>|
-     -> Option<usize> {
-        let p = audio_buffer.lock().ok().map(|b| b.len())?;
-        if !mix_active {
-            return Some(p);
-        }
-        let s = audio_buffer_secondary.lock().ok().map(|b| b.len())?;
-        // s is in system-rate samples; convert to mic-rate equivalent so
-        // the lockstep min() is comparing apples to apples.
-        // If secondary is empty (loopback unavailable — macOS, Linux, or
-        // BT/HFP setups where the output device never feeds the ring),
-        // don't block the primary cursor: fall back to primary length so
-        // mic-only capture still proceeds. The min() only applies when
-        // the secondary ring is actually producing samples.
-        if s == 0 {
-            return Some(p);
-        }
-        let s_in_mic_rate = (s as f64 / rate_ratio) as usize;
-        Some(p.min(s_in_mic_rate))
-    };
+                     _audio_buffer_secondary: &Arc<Mutex<Vec<f32>>>|
+     -> Option<usize> { audio_buffer.lock().ok().map(|b| b.len()) };
 
     // Track pause transitions so we can both (a) skip the paused
     // window when writing/transcribing and (b) emit a [paused N s]
@@ -533,6 +561,11 @@ fn worker_loop(
     loop {
         let cancelled = cancel.load(Ordering::SeqCst);
         thread::sleep(POLL_INTERVAL);
+
+        // Enforce the secondary-tracks-primary invariant. Zero-pads
+        // the loopback buffer up to the mic buffer's length, so
+        // every WAV cursor we maintain sees a time-coherent pair.
+        align_secondary(&audio_buffer, &audio_buffer_secondary);
 
         // Pause gate. While paused: cpal is still filling the audio
         // buffers (we don't bounce the streams — that would race with
@@ -615,10 +648,10 @@ fn worker_loop(
                 _ => Vec::new(),
             };
             let new_system: Vec<f32> = if mix_active {
-                let sys_start = (samples_written as f64 * rate_ratio) as usize;
-                let sys_end = (buf_len_now as f64 * rate_ratio) as usize;
+                // Both buffers are aligned 1:1. Read the same window
+                // from the secondary as we did from the primary.
                 match audio_buffer_secondary.lock() {
-                    Ok(b) if sys_end <= b.len() => b[sys_start..sys_end].to_vec(),
+                    Ok(b) if buf_len_now <= b.len() => b[samples_written..buf_len_now].to_vec(),
                     _ => Vec::new(),
                 }
             } else {
@@ -687,14 +720,11 @@ fn worker_loop(
                 Ok(b) if end <= b.len() => b[start..end].to_vec(),
                 _ => Vec::new(),
             };
-            // System chunk is read at SYSTEM rate from secondary buffer —
-            // window indices scaled by rate_ratio so it covers the same
-            // wall-time as the mic chunk (when rates differ).
+            // System chunk: aligned 1:1 with mic chunk thanks to the
+            // align_secondary invariant; same window indices.
             let system_chunk: Vec<f32> = if mix_active {
-                let sys_start = (start as f64 * rate_ratio) as usize;
-                let sys_end = (end as f64 * rate_ratio) as usize;
                 match audio_buffer_secondary.lock() {
-                    Ok(b) if sys_end <= b.len() => b[sys_start..sys_end].to_vec(),
+                    Ok(b) if end <= b.len() => b[start..end].to_vec(),
                     _ => Vec::new(),
                 }
             } else {

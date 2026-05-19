@@ -35,6 +35,12 @@ internal sealed class CallDetectionService : IDisposable
     private DispatcherQueueTimer? _timer;
     private bool _disposed;
     private bool _isEnabled;
+    private bool _prevMicActive;
+    private string? _prevAppId;
+    private int _logSuppressCounter;
+    private int _bootDiagTicks = 5;
+    private int _lastSessionCount = -1;
+    private int _lastActiveCount = -1;
 
     // Win process name → canonical app id. Names are matched
     // case-insensitively (ProcessName comparator). Multiple variants
@@ -103,113 +109,137 @@ internal sealed class CallDetectionService : IDisposable
         if (!_isEnabled) return;
         try
         {
-            var (active, appId) = SampleMicState();
+            var (active, appId, sessionCount, activeCount) = SampleMicStateDiag();
             DimmyNative.dimmy_call_signal(active ? 1 : 0, appId);
+            bool boot = _bootDiagTicks > 0;
+            if (boot) _bootDiagTicks--;
+            bool sessionShapeChanged = sessionCount != _lastSessionCount || activeCount != _lastActiveCount;
+            _lastSessionCount = sessionCount;
+            _lastActiveCount = activeCount;
+            if (boot || active != _prevMicActive || appId != _prevAppId || sessionShapeChanged)
+            {
+                App.Log($"tick: mic_active={active} app={appId ?? "<none>"} sessions={sessionCount} active_sessions={activeCount}", "CallDetect");
+                _prevMicActive = active;
+                _prevAppId = appId;
+                _logSuppressCounter = 0;
+            }
+            else if (++_logSuppressCounter >= 30)
+            {
+                _logSuppressCounter = 0;
+                App.Log($"heartbeat: mic_active={active} app={appId ?? "<none>"} sessions={sessionCount}", "CallDetect");
+            }
         }
         catch (Exception ex)
         {
-            // Never let a transient COM error kill the timer — log
-            // and try again next tick. Audio endpoints can disappear
-            // briefly during device-switch events.
             App.Log($"call-detection tick failed: {ex.Message}", "CallDetect");
         }
     }
 
-    /// Enumerate active capture sessions and pair with a VoIP app
-    /// match. Returns (anyActive, canonicalAppIdOrNull).
+    private static (bool active, string? appId, int sessionCount, int activeCount) SampleMicStateDiag()
+    {
+        var sniffer = SampleMicStateInternal();
+        return sniffer;
+    }
+
     private static (bool active, string? appId) SampleMicState()
     {
+        var (a, b, _, _) = SampleMicStateInternal();
+        return (a, b);
+    }
+
+    /// Enumerate every active capture endpoint (not just the default
+    /// eMultimedia one) and aggregate their session counts. This is the
+    /// critical fix for BT-HFP / headset / Logitech-meeting-room rigs:
+    /// when the user switches input to a Bluetooth headset, Teams moves
+    /// its capture session to that endpoint and the previous default
+    /// goes quiet. A single `GetDefaultAudioEndpoint` call would miss
+    /// it. Enumerating all active endpoints catches the call regardless
+    /// of which device currently owns the stream.
+    private static (bool active, string? appId, int sessionCount, int activeCount) SampleMicStateInternal()
+    {
         bool anyActive = false;
-        // Pull capturing PIDs so we can prefer "Teams that owns the
-        // mic stream" over "Teams just running in tray". When PID
-        // resolution fails (system sounds session, expired session),
-        // we still set anyActive but leave app inference to the
-        // running-processes scan below.
+        int totalSessions = 0;
+        int activeSessions = 0;
         var capturingPids = new HashSet<uint>();
 
         IMMDeviceEnumerator? enumerator = null;
-        IMMDevice? device = null;
-        IAudioSessionManager2? manager = null;
-        IAudioSessionEnumerator? sessionEnum = null;
+        IMMDeviceCollection? devices = null;
         try
         {
             var enumType = Type.GetTypeFromCLSID(CLSID_MMDeviceEnumerator);
-            if (enumType == null) return (false, null);
+            if (enumType == null) return (false, null, totalSessions, activeSessions);
             enumerator = (IMMDeviceEnumerator?)Activator.CreateInstance(enumType);
-            if (enumerator == null) return (false, null);
+            if (enumerator == null) return (false, null, totalSessions, activeSessions);
 
-            int hr = enumerator.GetDefaultAudioEndpoint(EDataFlow.eCapture, ERole.eMultimedia, out device);
-            if (hr != 0 || device == null) return (false, null);
+            int hr = enumerator.EnumAudioEndpoints(EDataFlow.eCapture, DEVICE_STATE_ACTIVE, out devices);
+            if (hr != 0 || devices == null) return (false, null, totalSessions, activeSessions);
+            hr = devices.GetCount(out uint deviceCount);
+            if (hr != 0) return (false, null, totalSessions, activeSessions);
 
-            var iid = IID_IAudioSessionManager2;
-            hr = device.Activate(ref iid, CLSCTX_ALL, IntPtr.Zero, out object pManager);
-            if (hr != 0 || pManager == null) return (false, null);
-            manager = (IAudioSessionManager2)pManager;
-
-            hr = manager.GetSessionEnumerator(out sessionEnum);
-            if (hr != 0 || sessionEnum == null) return (false, null);
-
-            hr = sessionEnum.GetCount(out int count);
-            if (hr != 0) return (false, null);
-
-            for (int i = 0; i < count; i++)
+            for (uint d = 0; d < deviceCount; d++)
             {
-                IAudioSessionControl? control = null;
-                IAudioSessionControl2? control2 = null;
+                IMMDevice? device = null;
+                IAudioSessionManager2? manager = null;
+                IAudioSessionEnumerator? sessionEnum = null;
                 try
                 {
-                    hr = sessionEnum.GetSession(i, out control);
-                    if (hr != 0 || control == null) continue;
-                    hr = control.GetState(out int stateRaw);
-                    if (hr != 0) continue;
-                    if (stateRaw != (int)AudioSessionState.Active) continue;
+                    if (devices.Item(d, out device) != 0 || device == null) continue;
 
-                    anyActive = true;
-                    try
+                    var iid = IID_IAudioSessionManager2;
+                    if (device.Activate(ref iid, CLSCTX_ALL, IntPtr.Zero, out object pManager) != 0 || pManager == null) continue;
+                    manager = (IAudioSessionManager2)pManager;
+
+                    if (manager.GetSessionEnumerator(out sessionEnum) != 0 || sessionEnum == null) continue;
+                    if (sessionEnum.GetCount(out int count) != 0) continue;
+                    totalSessions += count;
+
+                    for (int i = 0; i < count; i++)
                     {
-                        control2 = (IAudioSessionControl2)control;
-                        if (control2.GetProcessId(out int pid) == 0 && pid > 0)
+                        IAudioSessionControl? control = null;
+                        IAudioSessionControl2? control2 = null;
+                        try
                         {
-                            capturingPids.Add((uint)pid);
+                            if (sessionEnum.GetSession(i, out control) != 0 || control == null) continue;
+                            if (control.GetState(out int stateRaw) != 0) continue;
+                            if (stateRaw != (int)AudioSessionState.Active) continue;
+                            activeSessions++;
+                            anyActive = true;
+                            try
+                            {
+                                control2 = (IAudioSessionControl2)control;
+                                if (control2.GetProcessId(out int pid) == 0 && pid > 0)
+                                    capturingPids.Add((uint)pid);
+                            }
+                            catch { }
                         }
-                    }
-                    catch
-                    {
-                        // QI to IAudioSessionControl2 can fail on
-                        // synthetic sessions (system sounds, kernel).
-                        // Already counted as active — just skip the
-                        // PID enrichment for this session.
+                        finally
+                        {
+                            if (control2 != null) Marshal.ReleaseComObject(control2);
+                            if (control != null) Marshal.ReleaseComObject(control);
+                        }
                     }
                 }
                 finally
                 {
-                    if (control2 != null) Marshal.ReleaseComObject(control2);
-                    if (control != null) Marshal.ReleaseComObject(control);
+                    if (sessionEnum != null) Marshal.ReleaseComObject(sessionEnum);
+                    if (manager != null) Marshal.ReleaseComObject(manager);
+                    if (device != null) Marshal.ReleaseComObject(device);
                 }
             }
         }
         catch
         {
-            // Surface as "mic not active" rather than throwing —
-            // we'll retry next tick.
             anyActive = false;
         }
         finally
         {
-            if (sessionEnum != null) Marshal.ReleaseComObject(sessionEnum);
-            if (manager != null) Marshal.ReleaseComObject(manager);
-            if (device != null) Marshal.ReleaseComObject(device);
+            if (devices != null) Marshal.ReleaseComObject(devices);
             if (enumerator != null) Marshal.ReleaseComObject(enumerator);
         }
 
-        if (!anyActive) return (false, null);
-
-        // App inference, best-effort. Prefer matching a capturing-PID
-        // to a whitelist process. Fall back to "any VoIP process is
-        // running" so the popup still gets a hint when PID resolution
-        // failed on the active session.
+        if (!anyActive) return (false, null, totalSessions, activeSessions);
         var appId = InferAppIdFromProcesses(capturingPids);
-        return (true, appId);
+        return (true, appId, totalSessions, activeSessions);
     }
 
     private static string? InferAppIdFromProcesses(HashSet<uint> capturingPids)
@@ -263,6 +293,7 @@ internal sealed class CallDetectionService : IDisposable
     private static readonly Guid IID_IAudioSessionManager2 =
         new("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F");
     private const uint CLSCTX_ALL = 0x17;
+    private const int DEVICE_STATE_ACTIVE = 0x00000001;
 
     private enum EDataFlow { eRender = 0, eCapture = 1, eAll = 2 }
     private enum ERole { eConsole = 0, eMultimedia = 1, eCommunications = 2 }
@@ -272,11 +303,19 @@ internal sealed class CallDetectionService : IDisposable
      InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     private interface IMMDeviceEnumerator
     {
-        [PreserveSig] int EnumAudioEndpoints(EDataFlow dataFlow, int dwStateMask, out IntPtr ppDevices);
+        [PreserveSig] int EnumAudioEndpoints(EDataFlow dataFlow, int dwStateMask, out IMMDeviceCollection? ppDevices);
         [PreserveSig] int GetDefaultAudioEndpoint(EDataFlow dataFlow, ERole role, out IMMDevice? ppEndpoint);
         [PreserveSig] int GetDevice([MarshalAs(UnmanagedType.LPWStr)] string pwstrId, out IMMDevice? ppDevice);
         [PreserveSig] int RegisterEndpointNotificationCallback(IntPtr pClient);
         [PreserveSig] int UnregisterEndpointNotificationCallback(IntPtr pClient);
+    }
+
+    [ComImport, Guid("0BD7A1BE-7A1A-44DB-8397-CC5392387B5E"),
+     InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IMMDeviceCollection
+    {
+        [PreserveSig] int GetCount(out uint pcDevices);
+        [PreserveSig] int Item(uint nDevice, out IMMDevice? ppDevice);
     }
 
     [ComImport, Guid("D666063F-1587-4E43-81F1-B948E807363F"),

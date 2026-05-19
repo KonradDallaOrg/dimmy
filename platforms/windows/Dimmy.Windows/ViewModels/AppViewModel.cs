@@ -320,6 +320,20 @@ public partial class AppViewModel : ObservableObject
                         MeetingChunkReceived?.Invoke(dir, speaker, line, elapsedMs, chunkCount);
                     }
                     break;
+                case "audio.stream_error":
+                    {
+                        var role = payload.TryGetProperty("role", out var rEl) ? rEl.GetString() : "?";
+                        var fmt = payload.TryGetProperty("format", out var fEl) ? fEl.GetString() : "?";
+                        var kind = payload.TryGetProperty("kind", out var kEl) ? kEl.GetString() : "?";
+                        Log?.Invoke($"AUDIO STREAM ERROR role={role} fmt={fmt} kind={kind} (mid-recording device-change?)", "Audio");
+                    }
+                    break;
+                case "audio.device_change_recovery":
+                    {
+                        var trigger = payload.TryGetProperty("trigger", out var tEl) ? tEl.GetString() : "?";
+                        Log?.Invoke($"AUDIO DEVICE-CHANGE RECOVERY (trigger={trigger}) — reopening streams on new default", "Audio");
+                    }
+                    break;
                 case "call_detected":
                     {
                         string? app = null;

@@ -5,6 +5,131 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+/// Canonical sample rate the meeting writer + STT pipeline run on.
+/// All capture streams (primary mic + secondary loopback) resample
+/// to this rate inside their cpal callbacks via LinearResampler.
+///
+/// Why fixed 48 kHz (decided 2026-05-19 after the BT-disconnect / output
+/// device swap incident):
+/// - Choosing the primary's native rate as canonical breaks when the
+///   primary is BT-HFP (16 kHz) and the secondary is BT-A2DP (48 kHz):
+///   downsampling 48 → 16 with a plain LinearResampler aliases badly
+///   ("audio sistema è na merda") because there's no anti-alias filter.
+/// - A floating canonical (re-derived on each device swap) breaks the
+///   WAV writer in meeting.rs, which is bound to ONE rate per session.
+/// - 48 kHz is what AEC3 already expects (see aec.rs comment), what
+///   WASAPI shared-mode resamples to internally, and matches every
+///   modern output device — so resampling is always UPWARD or identity,
+///   which linear interpolation handles cleanly (no aliasing).
+pub const MEETING_CANONICAL_RATE: u32 = 48_000;
+
+/// Stateful linear-interpolation resampler for streaming audio.
+/// Used by `build_secondary_stream` so the loopback callback can
+/// emit samples at the meeting's canonical rate even when the
+/// underlying device's native rate differs (BT-A2DP 48 kHz → laptop
+/// speakers 44.1 kHz mid-meeting, or any other endpoint swap).
+///
+/// Linear is sufficient for speech bandwidth (telephony / Teams /
+/// Zoom) — anti-aliasing artifacts above 4 kHz are inaudible for
+/// the recap use case. Phase + last-sample state persists across
+/// callbacks so chunk boundaries don't introduce clicks.
+struct LinearResampler {
+    src_rate: u32,
+    dst_rate: u32,
+    /// Fractional position in source-sample units. Negative values
+    /// mean "interpolate against the previous chunk's tail" (held
+    /// in `last`). Re-based to subtract `input.len()` after each
+    /// chunk so the next call sees a small fractional offset.
+    pos: f64,
+    /// Last sample of the previous input chunk, used as the "left"
+    /// neighbour when `pos` lands before index 0 of the new chunk.
+    last: f32,
+}
+
+impl LinearResampler {
+    fn new(src_rate: u32, dst_rate: u32) -> Self {
+        assert!(src_rate > 0 && dst_rate > 0);
+        Self {
+            src_rate,
+            dst_rate,
+            pos: 0.0,
+            last: 0.0,
+        }
+    }
+
+    fn process(&mut self, input: &[f32], output: &mut Vec<f32>) {
+        if input.is_empty() {
+            return;
+        }
+        let step = self.src_rate as f64 / self.dst_rate as f64;
+        let len_i64 = input.len() as i64;
+        loop {
+            let i_floor_f = self.pos.floor();
+            let i_floor = i_floor_f as i64;
+            // Need both input[i_floor] (a) and input[i_floor+1] (b)
+            // for linear interpolation. When i_floor+1 falls beyond
+            // the current chunk we defer to the next callback.
+            if (i_floor + 1) >= len_i64 {
+                break;
+            }
+            let frac = (self.pos - i_floor_f) as f32;
+            let a = if i_floor < 0 {
+                self.last
+            } else {
+                input[i_floor as usize]
+            };
+            // i_floor+1 is guaranteed in [0, len) by the check above.
+            let b = if (i_floor + 1) < 0 {
+                self.last
+            } else {
+                input[(i_floor + 1) as usize]
+            };
+            output.push(a + (b - a) * frac);
+            self.pos += step;
+        }
+        // Re-base position so the next chunk's index 0 is "at" pos-len.
+        self.pos -= input.len() as f64;
+        self.last = *input.last().unwrap();
+    }
+}
+
+/// Set true the first time a cpal stream error_callback fires. The
+/// flag is reset whenever a fresh stream successfully opens. Used by
+/// `dimmy_audio_stream_dead()` so the UI / meeting worker can tell
+/// "the mic stream silently died mid-recording" from "no recording
+/// in flight" — the smoking-gun pattern for the audio-loss incident
+/// 2026-05-19 (Logitech meeting-room device-swap, 36/41 min lost).
+///
+/// First iteration emits a `audio.stream_error` event and sets this
+/// flag; the auto-recovery path (close + reopen on new default
+/// endpoint) will land in a follow-up commit. For now the goal is to
+/// MAKE THE FAILURE VISIBLE so we can correlate UI reports with the
+/// timestamped error and confirm the swap really is what kills the
+/// stream.
+pub(crate) static AUDIO_STREAM_DEAD: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Helper invoked from each cpal error_callback in this module.
+/// Logs (with role + sample-format context) and emits an event to the
+/// host UI so the failure shows up in the C# / Swift log AND in any
+/// future "device lost" diagnostic without polling the flag.
+fn notify_audio_stream_error(stream_role: &str, format: &str, err: &cpal::StreamError) {
+    let kind = match err {
+        cpal::StreamError::DeviceNotAvailable => "device_not_available",
+        cpal::StreamError::BackendSpecific { .. } => "backend_specific",
+    };
+    AUDIO_STREAM_DEAD.store(true, Ordering::Relaxed);
+    crate::log(&format!(
+        "[Audio] {} stream error ({}): kind={} err={}",
+        stream_role, format, kind, err
+    ));
+    let payload = format!(
+        r#"{{"role":"{}","format":"{}","kind":"{}"}}"#,
+        stream_role, format, kind
+    );
+    crate::ffi::emit_event("audio.stream_error", &payload);
+}
+
 /// Sample rate (Hz) of the currently active cpal mic stream. Set to
 /// the device's native rate when the stream opens, reset to 0 when
 /// it closes. Read via `active_mic_sample_rate()` from inside the
@@ -167,8 +292,59 @@ pub fn spawn_audio_thread(
             // stops/starts. `Mix` mode keeps two streams alive in parallel.
             let mut streams: Vec<cpal::Stream> = Vec::new();
 
-            // Event loop: wait for commands
-            for cmd in rx {
+            // Last successful Start params — used by the device-change
+            // auto-recovery path. When the cpal stream error_callback
+            // sets AUDIO_STREAM_DEAD (e.g. user unplugged BT headset
+            // mid-meeting), the next idle tick of this loop synthesises
+            // a fresh Start using these params so the recording picks
+            // up on the new default endpoint without losing the WAV
+            // writer in meeting.rs. `None` until the first Start, and
+            // reset to `None` on explicit Stop so a stray dead-flag
+            // can't reopen a stream the user no longer wants.
+            let mut last_start_params: Option<(Option<String>, AudioSource)> = None;
+            // True when the next AudioCommand::Start came from the
+            // auto-recovery branch (not from a fresh user request).
+            // The Start body must NOT clear the buffers in that case:
+            // meeting.rs is tracking `samples_written` against the
+            // continuously growing buffer, and clearing it mid-stream
+            // would make `samples_written` larger than `buffer.len()`,
+            // permanently freezing all WAV writes for the rest of the
+            // meeting. Resampler state in the new callback is created
+            // fresh; new samples are appended in coherent time order.
+            let mut is_recovery_start = false;
+
+            // Event loop: wait for commands, with a 1 s timeout that
+            // doubles as the heartbeat for device-change auto-recovery.
+            loop {
+                let cmd = match rx.recv_timeout(std::time::Duration::from_secs(1)) {
+                    Ok(c) => c,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        if AUDIO_STREAM_DEAD.load(Ordering::Relaxed) {
+                            if let Some((ref dn, src)) = last_start_params {
+                                crate::log(&format!(
+                                    "[Audio] device-change auto-recovery: restarting streams (device={:?} source={:?}) — preserving buffers",
+                                    dn, src
+                                ));
+                                crate::ffi::emit_event(
+                                    "audio.device_change_recovery",
+                                    r#"{"trigger":"stream_dead"}"#,
+                                );
+                                streams.clear();
+                                AUDIO_STREAM_DEAD.store(false, Ordering::Relaxed);
+                                is_recovery_start = true;
+                                AudioCommand::Start {
+                                    device_name: dn.clone(),
+                                    source: src,
+                                }
+                            } else {
+                                continue;
+                            }
+                        } else {
+                            continue;
+                        }
+                    }
+                };
                 match cmd {
                     AudioCommand::Start {
                         device_name,
@@ -178,6 +354,10 @@ pub fn spawn_audio_thread(
                             "[Audio] Start command received, device_name={:?}, source={:?}",
                             device_name, source
                         ));
+                        // Remember so device-change auto-recovery can
+                        // resynthesise a Start with the same intent
+                        // after a mid-recording disconnect.
+                        last_start_params = Some((device_name.clone(), source));
                         // Drop any prior streams before re-opening.
                         streams.clear();
 
@@ -277,35 +457,62 @@ pub fn spawn_audio_thread(
                         // for the matching-rate fallback chain.
                         let primary_actual_sr = config.sample_rate().0;
                         let canonical_config: cpal::StreamConfig = config.clone().into();
-                        // Publish the live mic sample rate so the
-                        // macOS SystemAudioCaptureService can match
-                        // it on SCStream (avoids the mixer
-                        // renegotiation that degrades headphone
-                        // output during meetings).
-                        ACTIVE_MIC_SAMPLE_RATE.store(primary_actual_sr, Ordering::Relaxed);
+                        // The buffer always receives samples at the
+                        // meeting's canonical rate (48 kHz); the cpal
+                        // callback resamples from the device-native
+                        // rate before pushing. This is what makes
+                        // mid-meeting device swaps (BT-HFP 16 k →
+                        // Realtek 48 k → USB headset 44.1 k → …) safe:
+                        // the WAV writer + STT both see a stable rate.
+                        ACTIVE_MIC_SAMPLE_RATE.store(MEETING_CANONICAL_RATE, Ordering::Relaxed);
                         crate::log(&format!(
-                            "[Audio] Primary cpal config (native): sr={} ch={}",
+                            "[Audio] Primary cpal config: device_sr={} ch={} → canonical_sr={} (resample={})",
                             primary_actual_sr,
-                            config.channels()
+                            config.channels(),
+                            MEETING_CANONICAL_RATE,
+                            if primary_actual_sr != MEETING_CANONICAL_RATE { "yes" } else { "no" }
                         ));
+                        let primary_resampler: Arc<Mutex<Option<LinearResampler>>> =
+                            Arc::new(Mutex::new(if primary_actual_sr != MEETING_CANONICAL_RATE {
+                                Some(LinearResampler::new(
+                                    primary_actual_sr,
+                                    MEETING_CANONICAL_RATE,
+                                ))
+                            } else {
+                                None
+                            }));
 
-                        // Clear all buffers + AEC rings — Mix uses a separate
-                        // secondary buffer for the loopback so meeting.rs can
-                        // mix primary+secondary per-sample, and the AEC rings
-                        // must start empty so WebRTC's delay estimator
-                        // converges from a clean slate.
-                        if let Ok(mut b) = buffer.lock() {
-                            b.clear();
+                        // Fresh stream means whatever killed the previous one
+                        // is moot — reset the sticky stream-dead flag so the
+                        // UI / meeting worker doesn't keep treating us as
+                        // broken when the device-change recovery succeeds.
+                        AUDIO_STREAM_DEAD.store(false, Ordering::Relaxed);
+
+                        // Clear buffers + AEC rings ONLY on a fresh
+                        // user-initiated Start. Recovery Start must
+                        // preserve the buffers because meeting.rs is
+                        // tracking `samples_written` against the
+                        // continuously growing primary buffer; new
+                        // samples produced by the freshly-built stream
+                        // are appended in coherent time order. The AEC
+                        // rings are drained 10 ms at a time by the AEC
+                        // worker, so any stale tail from the old device
+                        // flushes through in a single frame.
+                        if !is_recovery_start {
+                            if let Ok(mut b) = buffer.lock() {
+                                b.clear();
+                            }
+                            if let Ok(mut b) = buffer_secondary.lock() {
+                                b.clear();
+                            }
+                            if let Ok(mut r) = aec_mic_ring.lock() {
+                                r.clear();
+                            }
+                            if let Ok(mut r) = aec_ref_ring.lock() {
+                                r.clear();
+                            }
                         }
-                        if let Ok(mut b) = buffer_secondary.lock() {
-                            b.clear();
-                        }
-                        if let Ok(mut r) = aec_mic_ring.lock() {
-                            r.clear();
-                        }
-                        if let Ok(mut r) = aec_ref_ring.lock() {
-                            r.clear();
-                        }
+                        is_recovery_start = false;
 
                         // In Mix mode the mic primary feeds the AEC mic ring
                         // (NOT audio_buffer directly) — the AEC worker writes
@@ -323,54 +530,68 @@ pub fn spawn_audio_thread(
                             std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
                         let sc1 = sample_count.clone();
                         let s = match config.sample_format() {
-                            cpal::SampleFormat::F32 => device.build_input_stream(
-                                &canonical_config,
-                                move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                                    let prev = sc1.fetch_add(
-                                        data.len(),
-                                        std::sync::atomic::Ordering::Relaxed,
-                                    );
-                                    if prev == 0 {
-                                        crate::log(&format!(
-                                            "[Audio] First F32 callback: {} samples",
-                                            data.len()
-                                        ));
-                                    }
-                                    let gain = f32::from_bits(
-                                        gain_ref.load(std::sync::atomic::Ordering::Relaxed),
-                                    );
-                                    assert!(
-                                        gain.is_finite(),
-                                        "audio callback F32: gain must be finite, got {}",
-                                        gain
-                                    );
-                                    assert!(
-                                        (0.0..=2.0).contains(&gain),
-                                        "audio callback F32: gain must be in [0.0, 2.0], got {}",
-                                        gain
-                                    );
-                                    if let Ok(mut b) = buf.lock() {
-                                        if channels > 1 {
-                                            for chunk in data.chunks(channels) {
-                                                let mono = chunk.iter().sum::<f32>()
-                                                    / channels as f32
-                                                    * gain;
-                                                b.push(mono);
-                                            }
-                                        } else if (gain - 1.0).abs() < 0.001 {
-                                            b.extend_from_slice(data);
-                                        } else {
-                                            b.extend(data.iter().map(|&s| s * gain));
+                            cpal::SampleFormat::F32 => {
+                                let pr = primary_resampler.clone();
+                                device.build_input_stream(
+                                    &canonical_config,
+                                    move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                                        let prev = sc1.fetch_add(
+                                            data.len(),
+                                            std::sync::atomic::Ordering::Relaxed,
+                                        );
+                                        if prev == 0 {
+                                            crate::log(&format!(
+                                                "[Audio] First F32 callback: {} samples",
+                                                data.len()
+                                            ));
                                         }
-                                    }
-                                },
-                                |err| crate::log(&format!("[Audio] Stream error (F32): {}", err)),
-                                None,
-                            ),
+                                        let gain = f32::from_bits(
+                                            gain_ref.load(std::sync::atomic::Ordering::Relaxed),
+                                        );
+                                        assert!(
+                                            gain.is_finite(),
+                                            "audio callback F32: gain must be finite, got {}",
+                                            gain
+                                        );
+                                        assert!(
+                                            (0.0..=2.0).contains(&gain),
+                                            "audio callback F32: gain must be in [0.0, 2.0], got {}",
+                                            gain
+                                        );
+                                        // Mono-mix + gain BEFORE resampling so the
+                                        // resampler operates on a single channel.
+                                        let mono_samples: Vec<f32> = if channels > 1 {
+                                            data.chunks(channels)
+                                                .map(|chunk| chunk.iter().sum::<f32>() / channels as f32 * gain)
+                                                .collect()
+                                        } else if (gain - 1.0).abs() < 0.001 {
+                                            data.to_vec()
+                                        } else {
+                                            data.iter().map(|&s| s * gain).collect()
+                                        };
+                                        let to_push: Vec<f32> = {
+                                            let mut guard = pr.lock().expect("primary resampler poisoned");
+                                            if let Some(r) = guard.as_mut() {
+                                                let mut out = Vec::with_capacity(mono_samples.len() * 4);
+                                                r.process(&mono_samples, &mut out);
+                                                out
+                                            } else {
+                                                mono_samples
+                                            }
+                                        };
+                                        if let Ok(mut b) = buf.lock() {
+                                            b.extend_from_slice(&to_push);
+                                        }
+                                    },
+                                    |err| notify_audio_stream_error("primary", "F32", &err),
+                                    None,
+                                )
+                            }
                             cpal::SampleFormat::I16 => {
                                 let buf2 = buffer.clone();
                                 let gain_ref2 = input_gain.clone();
                                 let sc2 = sample_count.clone();
+                                let pr = primary_resampler.clone();
                                 device.build_input_stream(
                                     &canonical_config,
                                     move |data: &[i16], _: &cpal::InputCallbackInfo| {
@@ -381,18 +602,27 @@ pub fn spawn_audio_thread(
                                         let gain = f32::from_bits(gain_ref2.load(std::sync::atomic::Ordering::Relaxed));
                                         assert!(gain.is_finite(), "audio callback I16: gain must be finite, got {}", gain);
                                         assert!((0.0..=2.0).contains(&gain), "audio callback I16: gain must be in [0.0, 2.0], got {}", gain);
-                                        if let Ok(mut b) = buf2.lock() {
-                                            for chunk in data.chunks(channels) {
-                                                let mono: f32 = chunk
-                                                    .iter()
-                                                    .map(|&s| s as f32 / 32768.0)
-                                                    .sum::<f32>()
-                                                    / channels as f32 * gain;
-                                                b.push(mono);
+                                        let mono_samples: Vec<f32> = data
+                                            .chunks(channels)
+                                            .map(|chunk| {
+                                                chunk.iter().map(|&s| s as f32 / 32768.0).sum::<f32>() / channels as f32 * gain
+                                            })
+                                            .collect();
+                                        let to_push: Vec<f32> = {
+                                            let mut guard = pr.lock().expect("primary resampler poisoned");
+                                            if let Some(r) = guard.as_mut() {
+                                                let mut out = Vec::with_capacity(mono_samples.len() * 4);
+                                                r.process(&mono_samples, &mut out);
+                                                out
+                                            } else {
+                                                mono_samples
                                             }
+                                        };
+                                        if let Ok(mut b) = buf2.lock() {
+                                            b.extend_from_slice(&to_push);
                                         }
                                     },
-                                    |err| crate::log(&format!("[Audio] Stream error (I16): {}", err)),
+                                    |err| notify_audio_stream_error("primary", "I16", &err),
                                     None,
                                 )
                             }
@@ -437,8 +667,14 @@ pub fn spawn_audio_thread(
                                     &input_gain,
                                     &loopback_gain,
                                     /* is_loopback */ true,
-                                    /* prefer_sr */
-                                    None, // use native — fewest failures
+                                    /* prefer_sr = MEETING_CANONICAL_RATE.
+                                     * Both primary and secondary always
+                                     * resample to the meeting canonical
+                                     * rate (48 kHz) inside their cpal
+                                     * callbacks. Any device swap (BT
+                                     * ↔ speakers ↔ USB headset) keeps
+                                     * the WAV writer + mix coherent. */
+                                    Some(MEETING_CANONICAL_RATE),
                                 ) {
                                     let _ = s.play();
                                     streams.push(s);
@@ -452,6 +688,12 @@ pub fn spawn_audio_thread(
                     AudioCommand::Stop => {
                         // Dropping the streams stops recording
                         streams.clear();
+                        // Explicit stop clears the recovery hint — we
+                        // don't want a stale stream-dead flag to spin
+                        // the recording back up after the user (or the
+                        // meeting worker) explicitly asked us to halt.
+                        last_start_params = None;
+                        AUDIO_STREAM_DEAD.store(false, Ordering::Relaxed);
                         // Clear the published mic rate so callers
                         // (e.g. SystemAudioCaptureService on Mac)
                         // know there is no active mic to match.
@@ -590,36 +832,35 @@ fn build_secondary_stream(
     };
     let channels = config.channels() as usize;
     let buf = buffer.clone();
-    // Build the secondary cpal config: prefer matching the primary's
-    // sample rate (so meeting.rs's per-sample mix and WAV headers stay
-    // aligned). If the device rejects the primary rate (some BT loopback
-    // configurations only accept native), fall back to the device's
-    // native config and accept that audio_system.wav may need to be
-    // played back at its own rate — the WAV header is correct either
-    // way.
-    let native_config: cpal::StreamConfig = config.clone().into();
-    let canonical_config = match prefer_sr {
-        Some(sr) if sr != config.sample_rate().0 => {
-            crate::log(&format!(
-                "[Audio] Secondary trying preferred sr={} (native was {})",
-                sr,
-                config.sample_rate().0
-            ));
-            cpal::StreamConfig {
-                channels: config.channels(),
-                sample_rate: cpal::SampleRate(sr),
-                buffer_size: cpal::BufferSize::Default,
-            }
-        }
-        _ => {
-            crate::log(&format!(
-                "[Audio] Secondary using native config: sr={} ch={}",
-                config.sample_rate().0,
-                config.channels()
-            ));
-            native_config.clone()
-        }
-    };
+    // Open the cpal device at its NATIVE rate, then run a software
+    // resampler in the callback to deliver samples at the meeting's
+    // canonical rate. Two reasons we don't try to force-bind cpal to
+    // `prefer_sr`:
+    //   1. WASAPI shared-mode silently accepts a "wrong" rate on some
+    //      drivers and produces samples-at-native while pretending it
+    //      honoured the request — leads to "rallentato" playback in
+    //      audio_system.wav exactly like the BT-disconnect symptom
+    //      the user reported 2026-05-19.
+    //   2. BT-HFP explicitly rejects anything but native, breaking the
+    //      stream entirely.
+    // Native + LinearResampler is the path that handles every device
+    // transition (BT-A2DP ↔ laptop speakers ↔ USB headset) cleanly.
+    let canonical_config: cpal::StreamConfig = config.clone().into();
+    let device_sr = config.sample_rate().0;
+    let target_sr = prefer_sr.unwrap_or(device_sr);
+    crate::log(&format!(
+        "[Audio] Secondary native config: sr={} ch={} → meeting canonical sr={} (resample={})",
+        device_sr,
+        config.channels(),
+        target_sr,
+        if device_sr != target_sr { "yes" } else { "no" }
+    ));
+    let resampler: Arc<Mutex<Option<LinearResampler>>> =
+        Arc::new(Mutex::new(if device_sr != target_sr {
+            Some(LinearResampler::new(device_sr, target_sr))
+        } else {
+            None
+        }));
     // Optional second destination: in Mix mode the AEC worker needs the
     // SAME loopback samples as a `render` reference so it can subtract
     // the speaker echo from the mic capture. We push to both buffers
@@ -655,6 +896,7 @@ fn build_secondary_stream(
             let dc = diag_count.clone();
             let dw = diag_window.clone();
             let lg = loopback_gain_ref.clone();
+            let rs = resampler.clone();
             device.build_input_stream(
                 &canonical_config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
@@ -665,15 +907,25 @@ fn build_secondary_stream(
                         1.0
                     };
                     let mono_samples: Vec<f32> = if channels > 1 {
+                        let chf = channels as f32;
                         data.chunks(channels)
                             .map(|chunk| {
-                                // Sum stereo to mono, apply makeup gain,
-                                // soft-clip via tanh so peaks don't click.
-                                (chunk.iter().sum::<f32>() * g).tanh()
+                                // Stereo→mono via AVERAGE (not sum):
+                                // sum doubles amplitude for centre-
+                                // panned voice (0.7 L + 0.7 R = 1.4 →
+                                // clamp = 1.0 → harmonic clipping
+                                // distortion EVEN with gain=1.0). Avg
+                                // keeps amplitude in the natural range.
+                                // If the user wants the loopback louder
+                                // than the mic, the loopback_gain knob
+                                // (config) makes that explicit instead
+                                // of hard-clipping the sum.
+                                let avg = chunk.iter().sum::<f32>() / chf;
+                                (avg * g).clamp(-1.0, 1.0)
                             })
                             .collect()
                     } else {
-                        data.iter().map(|&s| (s * g).tanh()).collect()
+                        data.iter().map(|&s| (s * g).clamp(-1.0, 1.0)).collect()
                     };
                     // Update diagnostic peak (atomic max via CAS loop) and
                     // sample count. Cheap; runs on every callback.
@@ -706,14 +958,24 @@ fn build_secondary_stream(
                             total, peak
                         ));
                     }
+                    let to_push: Vec<f32> = {
+                        let mut guard = rs.lock().expect("resampler mutex poisoned");
+                        if let Some(r) = guard.as_mut() {
+                            let mut out = Vec::with_capacity(mono_samples.len() * 2);
+                            r.process(&mono_samples, &mut out);
+                            out
+                        } else {
+                            mono_samples
+                        }
+                    };
                     if let Ok(mut b) = buf.lock() {
-                        b.extend_from_slice(&mono_samples);
+                        b.extend_from_slice(&to_push);
                     }
                     if let Some(ref aec) = aec_ref {
-                        crate::aec::push_to_ring(aec, &mono_samples);
+                        crate::aec::push_to_ring(aec, &to_push);
                     }
                 },
-                |err| crate::log(&format!("[Audio] Secondary stream error (F32): {}", err)),
+                |err| notify_audio_stream_error("secondary", "F32", &err),
                 None,
             )
         }
@@ -722,6 +984,7 @@ fn build_secondary_stream(
             let dc = diag_count.clone();
             let dw = diag_window.clone();
             let lg = loopback_gain_ref.clone();
+            let rs = resampler.clone();
             device.build_input_stream(
                 &canonical_config,
                 move |data: &[i16], _: &cpal::InputCallbackInfo| {
@@ -731,12 +994,21 @@ fn build_secondary_stream(
                     } else {
                         1.0
                     };
-                    let mono_samples: Vec<f32> = data
-                        .chunks(channels)
-                        .map(|chunk| {
-                            (chunk.iter().map(|&s| s as f32 / 32768.0).sum::<f32>() * g).tanh()
-                        })
-                        .collect();
+                    let mono_samples: Vec<f32> = {
+                        let chf = channels as f32;
+                        data.chunks(channels)
+                            .map(|chunk| {
+                                // Average channels (see F32 branch
+                                // comment for why avg, not sum).
+                                let avg = chunk
+                                    .iter()
+                                    .map(|&s| s as f32 / 32768.0)
+                                    .sum::<f32>()
+                                    / chf;
+                                (avg * g).clamp(-1.0, 1.0)
+                            })
+                            .collect()
+                    };
                     let chunk_peak = mono_samples
                         .iter()
                         .fold(0.0f32, |m, &s| m.max(s.abs()));
@@ -766,14 +1038,24 @@ fn build_secondary_stream(
                             total, peak
                         ));
                     }
+                    let to_push: Vec<f32> = {
+                        let mut guard = rs.lock().expect("resampler mutex poisoned");
+                        if let Some(r) = guard.as_mut() {
+                            let mut out = Vec::with_capacity(mono_samples.len() * 2);
+                            r.process(&mono_samples, &mut out);
+                            out
+                        } else {
+                            mono_samples
+                        }
+                    };
                     if let Ok(mut b) = buf.lock() {
-                        b.extend_from_slice(&mono_samples);
+                        b.extend_from_slice(&to_push);
                     }
                     if let Some(ref aec) = aec_ref {
-                        crate::aec::push_to_ring(aec, &mono_samples);
+                        crate::aec::push_to_ring(aec, &to_push);
                     }
                 },
-                |err| crate::log(&format!("[Audio] Secondary stream error (I16): {}", err)),
+                |err| notify_audio_stream_error("secondary", "I16", &err),
                 None,
             )
         }
