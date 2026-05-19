@@ -458,11 +458,10 @@ fn worker_loop(
     // at the wrong speed (3x slow mumbling at low pitch when
     // mic_sr=16k & system_sr=48k were mixed into a 16k container).
     // Both buffers are at the same canonical rate (48 kHz, enforced
-    // by the resampler in audio.rs callbacks). `rate_ratio` is
-    // therefore always 1.0 — kept for backward compatibility with
-    // existing call sites in case a future single-source mode needs
-    // a different secondary rate.
-    let rate_ratio = system_sample_rate as f64 / device_sample_rate as f64;
+    // by the resampler in audio.rs callbacks), so this is always 1.0.
+    // Kept for backward compatibility — read-only diagnostic at info
+    // level on entry.
+    let _rate_ratio = system_sample_rate as f64 / device_sample_rate as f64;
 
     // ── Continuous secondary alignment ─────────────────────────
     //

@@ -1,6 +1,6 @@
 [package]
 name = "dimmy"
-version = "0.6.48"
+version = "0.6.49"
 edition = "2021"
 description = "Dimmy — Cross-platform voice transcription overlay"
 license = "AGPL-3.0-only"
@@ -79,6 +79,16 @@ name = "parakeet_fluid_smoke"
 path = "src/bin/parakeet_fluid_smoke.rs"
 required-features = ["local-stt-parakeet-fluid"]
 
+# Offline noise-suppression compare tool. Reads a mono WAV file
+# (any sample rate — resamples to 48 kHz if needed), runs it through
+# the DfnProcessor (currently nnnoiseless) one 480-sample frame at a
+# time, writes the denoised WAV next to the input with a `_dfn`
+# suffix. Used to A/B the recap audio quality with vs without
+# noise suppression on a real meeting recording.
+[[bin]]
+name = "denoise_offline"
+path = "src/bin/denoise_offline.rs"
+
 [features]
 default = ["local-stt", "telemetry-sentry"]
 local-stt = ["dep:whisper-rs"]
@@ -101,11 +111,10 @@ local-stt-parakeet-coreml = ["local-stt-parakeet", "ort/coreml"]
 # documented at 100-300x; intended as the Mac-only fast path while
 # Win/Linux stay on ort.
 local-stt-parakeet-fluid = ["dep:fluidaudio-rs"]
-# DeepFilterNet ML noise suppression on the mic capture path. The
-# scaffolding (`dfn.rs` module + AEC worker hook) is in place but the
-# `deep_filter` crate dependency is currently commented out due to
-# upstream build issues with `tract` feature. Re-enable by adding
-# `dep:deep_filter` here and uncommenting the dependency above.
+# DeepFilterNet ML noise suppression — feature flag kept for the
+# day the upstream blocker (see deep_filter dep comment above) is
+# unblocked. Currently a no-op: dfn3.rs is gated on this feature
+# and stays out of the build until `dep:deep_filter` is restored.
 local-dfn = []
 local-llm = ["dep:llama-cpp-4"]
 local-llm-metal = ["local-llm", "llama-cpp-4/metal", "llama-cpp-4/dynamic-link"]
@@ -143,6 +152,29 @@ chrono = "0.4"
 url = "2"
 base64 = "0.22"
 nnnoiseless = "0.5"
+# DeepFilterNet3 — bitrotted as of 2026-05-20.
+# Upstream `Rikorose/DeepFilterNet` main branch fails to compile
+# against current `tract` API (17 errors, notably `m.symbol_table`
+# → `m.symbols` rename). Unblocking requires one of:
+#   (a) Forking the repo + porting the libDF/src/tract.rs file to
+#       the new tract API (~2-4 h).
+#   (b) Pinning `tract = "0.20.x"` via `[patch.crates-io]` (risks
+#       conflicting with the `tract` features pulled in by ort for
+#       Parakeet — needs careful version solving).
+#   (c) Re-implementing the DFN3 inference stack from scratch on
+#       `ort` runtime (~4-6 h: STFT, ERB filterbank, model load,
+#       mask application, iSTFT, overlap-add).
+# Tracked in BACKLOG.md / docs. The nnnoiseless MVP is shipped and
+# the `Dfn3Processor` wrapper in `core/src/dfn3.rs` is ready to
+# accept a working backend; only the dep line below needs to come
+# alive once one of the unblocking paths above is done.
+# deep_filter (DFN3) — see comment block above. The path-dep
+# experiment with a sed-patched local clone of the upstream repo
+# (C:\code\deepfilternet-patched) cleared the 3 `symbol_table` →
+# `symbols` rename errors but still hits 14 `mismatched types`
+# errors against current tract / ndarray. Type-level porting is
+# needed (1+ h focused work). Re-enable here once the port lands.
+# deep_filter = { path = "../../deepfilternet-patched/libDF", default-features = false, features = ["tract", "wav-utils", "default-model"], optional = true }
 biquad = "0.4"
 dagc = "0.1"
 # Acoustic echo cancellation — pure Rust port of WebRTC AEC3.
