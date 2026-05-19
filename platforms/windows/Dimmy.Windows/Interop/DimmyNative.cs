@@ -25,6 +25,26 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern void dimmy_set_event_callback(EventCallback cb);
 
+    // ── Call auto-detect ─────────────────────────────────────────────
+    /// Push one mic-in-use observation. `appId` may be null when the
+    /// host could not infer a VoIP process from the running set. Return
+    /// codes: 1 = call_detected emitted, 2 = call_ended emitted,
+    /// 0 = no transition (suppressed / debouncing / unchanged), -1 = malformed ptr.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_call_signal(
+        int micActive,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? appId);
+
+    /// Record the user's response to a call-detected nudge.
+    /// `response` ∈ {"record_now","not_now","never","timeout"}.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_call_signal_response(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? appId,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string response);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_call_detector_state(byte[] outBuf, int bufLen);
+
     // ── Recording ────────────────────────────────────────────────────
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_start_recording();

@@ -57,6 +57,8 @@ public partial class App : Application
     private UiPreferences _uiPrefs = new();
     private DispatcherQueue? _dispatcherQueue;
     private DictHotkeyService? _dictHotkey;
+    private CallNudgeWindow? _callNudgeWindow;
+    private Services.CallDetectionService? _callDetection;
 
     /// <summary>Set on launch if `dimmy://activate?…` was the trigger
     /// AND no running instance was reachable to forward to. Picked up
@@ -380,6 +382,7 @@ public partial class App : Application
 
         InitTaskbarAnchor();
         InitCommandPipeAndJumpList();
+        InitCallDetection();
 
         // If the launch came from a `dimmy://activate?…` URL but no
         // running instance was around to handle it, we stashed the
@@ -1026,6 +1029,27 @@ public partial class App : Application
             // window. Independent of chunk_streaming_enabled.
             _appViewModel.LiveCaptionsEnabled =
                 !r.TryGetProperty("live_captions_enabled", out var lce) || lce.GetBoolean();
+            // call_detect_enabled — default true. The Rust state machine
+            // is the source of truth for what fires; this mirror is just
+            // a fast no-op gate in OnCallDetected for the in-flight
+            // tick after a toggle-off (config round-trip hasn't reached
+            // Rust yet).
+            _appViewModel.CallDetectEnabled =
+                !r.TryGetProperty("call_detect_enabled", out var cde) || cde.GetBoolean();
+            if (r.TryGetProperty("call_detect_excluded_apps", out var cdex)
+                && cdex.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                _appViewModel.CallDetectExcludedApps.Clear();
+                foreach (var item in cdex.EnumerateArray())
+                {
+                    var s = item.GetString();
+                    if (!string.IsNullOrEmpty(s))
+                        _appViewModel.CallDetectExcludedApps.Add(s);
+                }
+            }
+            // Reconfigure the service so a runtime toggle takes effect
+            // without restarting the app.
+            _callDetection?.SetEnabled(_appViewModel.CallDetectEnabled);
             PttLog($"LoadConfig: shortcut={_appViewModel.Shortcut}, mode={_appViewModel.ShortcutMode}");
         }
         catch (Exception ex) { PttLog($"LoadConfig: parse error: {ex.Message}"); }
@@ -1349,6 +1373,143 @@ public partial class App : Application
 
     /// Open the dedicated MeetingWindow (or activate it if already
     /// open). Triggered from the jump-list "Meetings" entry and from
+    // ── Call auto-detect wiring ──────────────────────────────────────
+
+    private void InitCallDetection()
+    {
+        try
+        {
+            if (_callDetection != null || _dispatcherQueue == null) return;
+            _callDetection = new Services.CallDetectionService(_dispatcherQueue);
+            _callDetection.SetEnabled(_appViewModel.CallDetectEnabled);
+            _callDetection.Start();
+            _appViewModel.CallDetected += OnCallDetected;
+            _appViewModel.CallEnded += OnCallEnded;
+            Log("Call detection initialised", "CallDetect");
+        }
+        catch (Exception ex)
+        {
+            Log($"InitCallDetection EXC: {ex.Message}", "CallDetect");
+        }
+    }
+
+    private void OnCallDetected(string? appId, long sinceSeconds)
+    {
+        _dispatcherQueue?.TryEnqueue(() =>
+        {
+            try
+            {
+                // If user has the master toggle off in the running VM
+                // but the Rust state already fired (race between config
+                // round-trip and the in-flight tick), swallow silently.
+                if (!_appViewModel.CallDetectEnabled) return;
+
+                if (_callNudgeWindow == null)
+                {
+                    _callNudgeWindow = new CallNudgeWindow();
+                    _callNudgeWindow.RecordRequested += OnNudgeRecord;
+                    _callNudgeWindow.NotNowRequested += OnNudgeNotNow;
+                    _callNudgeWindow.NeverRequested += OnNudgeNever;
+                    _callNudgeWindow.TimedOut += OnNudgeTimeout;
+                }
+                Log($"call_detected: app={appId ?? "<none>"} since={sinceSeconds}s", "CallDetect");
+                _callNudgeWindow.ShowFor(appId);
+            }
+            catch (Exception ex)
+            {
+                Log($"OnCallDetected EXC: {ex.Message}", "CallDetect");
+            }
+        });
+    }
+
+    private void OnCallEnded(string? appId)
+    {
+        _dispatcherQueue?.TryEnqueue(() =>
+        {
+            try
+            {
+                _callNudgeWindow?.Hide();
+            }
+            catch (Exception ex)
+            {
+                Log($"OnCallEnded EXC: {ex.Message}", "CallDetect");
+            }
+        });
+    }
+
+    private void OnNudgeRecord(string? appId)
+    {
+        try
+        {
+            DimmyNative.dimmy_call_signal_response(appId, "record_now");
+            StartMeetingFromCallDetect();
+        }
+        catch (Exception ex)
+        {
+            Log($"OnNudgeRecord EXC: {ex.Message}", "CallDetect");
+        }
+    }
+
+    private void OnNudgeNotNow(string? appId)
+    {
+        try { DimmyNative.dimmy_call_signal_response(appId, "not_now"); }
+        catch (Exception ex) { Log($"OnNudgeNotNow EXC: {ex.Message}", "CallDetect"); }
+    }
+
+    private void OnNudgeNever(string? appId)
+    {
+        try
+        {
+            DimmyNative.dimmy_call_signal_response(appId, "never");
+            // Rust persisted the exclusion to disk via save_config_file.
+            // Refresh the VM's mirror so Settings reflects it immediately.
+            _appViewModel.RefreshCallDetectExclusions();
+        }
+        catch (Exception ex)
+        {
+            Log($"OnNudgeNever EXC: {ex.Message}", "CallDetect");
+        }
+    }
+
+    private void OnNudgeTimeout(string? appId)
+    {
+        try { DimmyNative.dimmy_call_signal_response(appId, "timeout"); }
+        catch (Exception ex) { Log($"OnNudgeTimeout EXC: {ex.Message}", "CallDetect"); }
+    }
+
+    /// Kick off a meeting recording from the call-detect nudge.
+    /// Mirrors MeetingWindow.Start_Click's happy path but doesn't
+    /// require the window to be open already — closes the loop
+    /// between detection and recording with a single user click.
+    private void StartMeetingFromCallDetect()
+    {
+        try
+        {
+            // If a meeting is already active (e.g. user clicked
+            // Record on a re-emit), don't start a second one —
+            // just surface the existing window.
+            if (DimmyNative.dimmy_meeting_is_active() == 1)
+            {
+                Log("StartMeetingFromCallDetect: meeting already active, opening window", "CallDetect");
+                OpenMeetingWindow();
+                return;
+            }
+            var buf = new byte[256];
+            int rc = DimmyNative.dimmy_meeting_start(buf, buf.Length);
+            if (rc <= 0)
+            {
+                Log($"StartMeetingFromCallDetect: dimmy_meeting_start rc={rc}", "CallDetect");
+                return;
+            }
+            Log("StartMeetingFromCallDetect: meeting started, opening window", "CallDetect");
+            OpenMeetingWindow();
+        }
+        catch (Exception ex)
+        {
+            Log($"StartMeetingFromCallDetect EXC: {ex.Message}", "CallDetect");
+        }
+    }
+
     /// the Settings home → Meeting card.
     /// Called by PillWindow.StopMeetingFromPillAsync after the recap
     /// pipeline successfully writes recap.md / actions to disk. If a
@@ -1573,6 +1734,8 @@ public partial class App : Application
         _commandPipe?.Dispose();
         _appViewModel.PropertyChanged -= OnAppViewModelPropertyChangedForTaskbar;
         _taskbarService?.Dispose();
+        _callDetection?.Dispose();
+        try { _callNudgeWindow?.Close(); } catch { }
         try { _taskbarAnchor?.Close(); } catch { }
 
         // Cancel any active recording before shutdown to release microphone

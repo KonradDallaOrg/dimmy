@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Linq;
 using System.Text.Json;
 using CommunityToolkit.Mvvm.ComponentModel;
 
@@ -196,6 +197,8 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _preprocessingEnabled = true;
     [ObservableProperty] private bool _chunkStreamingEnabled;
     [ObservableProperty] private bool _liveCaptionsEnabled = true;
+    [ObservableProperty] private bool _callDetectEnabled = true;
+    public ObservableCollection<string> CallDetectExcludedApps { get; } = new();
     [ObservableProperty] private bool _saveAudioInHistory = false;
     [ObservableProperty] private int _historyAudioKeepDays = 30;
     [ObservableProperty] private int _historyAudioMaxMb = 5_000;
@@ -573,6 +576,18 @@ public partial class SettingsViewModel : ObservableObject
             PreprocessingEnabled = !r.TryGetProperty("preprocessing_enabled", out var pe) || pe.GetBoolean();
             ChunkStreamingEnabled = r.TryGetProperty("chunk_streaming_enabled", out var cs) && cs.GetBoolean();
             LiveCaptionsEnabled = !r.TryGetProperty("live_captions_enabled", out var lce) || lce.GetBoolean();
+            CallDetectEnabled = !r.TryGetProperty("call_detect_enabled", out var cde) || cde.GetBoolean();
+            CallDetectExcludedApps.Clear();
+            if (r.TryGetProperty("call_detect_excluded_apps", out var cdex)
+                && cdex.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                foreach (var item in cdex.EnumerateArray())
+                {
+                    var s = item.GetString();
+                    if (!string.IsNullOrEmpty(s))
+                        CallDetectExcludedApps.Add(s);
+                }
+            }
             SaveAudioInHistory = r.TryGetProperty("save_audio_in_history", out var sah) && sah.GetBoolean();
             HistoryAudioKeepDays = r.TryGetProperty("history_audio_keep_days", out var hkd) ? hkd.GetInt32() : 30;
             HistoryAudioMaxMb = r.TryGetProperty("history_audio_max_mb", out var hmm) ? hmm.GetInt32() : 5_000;
@@ -751,6 +766,8 @@ public partial class SettingsViewModel : ObservableObject
             ["preprocessing_enabled"] = PreprocessingEnabled,
             ["chunk_streaming_enabled"] = ChunkStreamingEnabled,
             ["live_captions_enabled"] = LiveCaptionsEnabled,
+            ["call_detect_enabled"] = CallDetectEnabled,
+            ["call_detect_excluded_apps"] = CallDetectExcludedApps.ToList(),
             ["save_audio_in_history"] = SaveAudioInHistory,
             ["history_audio_keep_days"] = HistoryAudioKeepDays,
             ["history_audio_max_mb"] = HistoryAudioMaxMb,

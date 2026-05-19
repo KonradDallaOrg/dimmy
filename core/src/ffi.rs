@@ -306,6 +306,11 @@ fn dimmy_init_inner() -> c_int {
         local_model: Mutex::new(file_cfg.local_model),
         local_stt_backend: Mutex::new(file_cfg.local_stt_backend),
         live_captions_enabled: Mutex::new(file_cfg.live_captions_enabled),
+        call_detect_enabled: Mutex::new(file_cfg.call_detect_enabled),
+        call_detect_excluded_apps: Mutex::new(file_cfg.call_detect_excluded_apps),
+        call_detect_cooldown_secs: Mutex::new(file_cfg.call_detect_cooldown_secs),
+        call_detect_min_active_secs: Mutex::new(file_cfg.call_detect_min_active_secs),
+        call_detect_timeout_cooldown_secs: Mutex::new(file_cfg.call_detect_timeout_cooldown_secs),
         save_audio_in_history: Mutex::new(file_cfg.save_audio_in_history),
         history_audio_keep_days: Mutex::new(file_cfg.history_audio_keep_days),
         history_audio_max_mb: Mutex::new(file_cfg.history_audio_max_mb),
@@ -1316,6 +1321,11 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "local_model": *st.local_model.lock().unwrap_or_else(|e| e.into_inner()),
         "local_stt_backend": *st.local_stt_backend.lock().unwrap_or_else(|e| e.into_inner()),
         "live_captions_enabled": *st.live_captions_enabled.lock().unwrap_or_else(|e| e.into_inner()),
+        "call_detect_enabled": *st.call_detect_enabled.lock().unwrap_or_else(|e| e.into_inner()),
+        "call_detect_excluded_apps": st.call_detect_excluded_apps.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+        "call_detect_cooldown_secs": *st.call_detect_cooldown_secs.lock().unwrap_or_else(|e| e.into_inner()),
+        "call_detect_min_active_secs": *st.call_detect_min_active_secs.lock().unwrap_or_else(|e| e.into_inner()),
+        "call_detect_timeout_cooldown_secs": *st.call_detect_timeout_cooldown_secs.lock().unwrap_or_else(|e| e.into_inner()),
         "filler_removal_enabled": *st.filler_removal_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "llm_mode": *st.llm_mode.lock().unwrap_or_else(|e| e.into_inner()),
         "local_llm_model": *st.local_llm_model.lock().unwrap_or_else(|e| e.into_inner()),
@@ -1736,6 +1746,35 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
     if let Some(b) = v["live_captions_enabled"].as_bool() {
         if let Ok(mut f) = st.live_captions_enabled.lock() {
             *f = b;
+        }
+    }
+    if let Some(b) = v["call_detect_enabled"].as_bool() {
+        if let Ok(mut f) = st.call_detect_enabled.lock() {
+            *f = b;
+        }
+    }
+    if let Some(arr) = v["call_detect_excluded_apps"].as_array() {
+        let parsed: Vec<String> = arr
+            .iter()
+            .filter_map(|x| x.as_str().map(|s| s.to_string()))
+            .collect();
+        if let Ok(mut f) = st.call_detect_excluded_apps.lock() {
+            *f = parsed;
+        }
+    }
+    if let Some(n) = v["call_detect_cooldown_secs"].as_u64() {
+        if let Ok(mut f) = st.call_detect_cooldown_secs.lock() {
+            *f = n as u32;
+        }
+    }
+    if let Some(n) = v["call_detect_min_active_secs"].as_u64() {
+        if let Ok(mut f) = st.call_detect_min_active_secs.lock() {
+            *f = n as u32;
+        }
+    }
+    if let Some(n) = v["call_detect_timeout_cooldown_secs"].as_u64() {
+        if let Ok(mut f) = st.call_detect_timeout_cooldown_secs.lock() {
+            *f = n as u32;
         }
     }
     if let Some(b) = v["save_audio_in_history"].as_bool() {
@@ -6450,6 +6489,189 @@ pub unsafe extern "C" fn dimmy_inject_pcm_for_test(
     0
 }
 
+// ── Call auto-detect singleton + FFI ────────────────────────────────
+
+/// State machine for the audio-driven "is the user in a call?" detector.
+/// Configured from AppState's `call_detect_*` fields each time the host
+/// pushes a signal — that way the detector always reflects the latest
+/// saved config without a separate apply step on init / set_config_json.
+static CALL_DETECTOR: OnceLock<Mutex<crate::call_detector::CallDetectorState>> = OnceLock::new();
+
+fn call_detector_lock() -> std::sync::MutexGuard<'static, crate::call_detector::CallDetectorState> {
+    let m =
+        CALL_DETECTOR.get_or_init(|| Mutex::new(crate::call_detector::CallDetectorState::new()));
+    let mut g = m.lock().expect("call_detector mutex poisoned");
+    if let Some(st) = GLOBAL_STATE.get() {
+        let enabled = *st
+            .call_detect_enabled
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let min_active = (*st
+            .call_detect_min_active_secs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()))
+        .max(1);
+        let cooldown = (*st
+            .call_detect_cooldown_secs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()))
+        .max(1);
+        let timeout_cd = (*st
+            .call_detect_timeout_cooldown_secs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()))
+        .max(1);
+        let excluded: std::collections::HashSet<String> = st
+            .call_detect_excluded_apps
+            .lock()
+            .map(|v| v.iter().cloned().collect())
+            .unwrap_or_default();
+        g.configure(enabled, min_active, cooldown, timeout_cd, excluded);
+    }
+    g
+}
+
+fn now_epoch_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Push one mic-in-use observation. Returns:
+///   1 = call_detected event emitted on this call,
+///   2 = call_ended event emitted on this call,
+///   0 = no transition (suppressed / debouncing / unchanged),
+///  -1 = malformed app_id ptr.
+///
+/// `mic_active` = 0/1. `app_id` = optional NUL-terminated lowercase
+/// canonical id ("teams"/"zoom"/"slack"/"discord"/"webex") or NULL /
+/// empty if the host could not infer a VoIP process. The detector
+/// uses the app id (when present) for per-app cooldown + exclusion
+/// list lookups; absent ids fall back to a single global cooldown
+/// slot so a generic "mic in use" doesn't spam the user.
+///
+/// # Safety
+/// `app_id` must be NULL or a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_call_signal(mic_active: c_int, app_id: *const c_char) -> c_int {
+    let app: Option<String> = if app_id.is_null() {
+        None
+    } else {
+        match CStr::from_ptr(app_id).to_str() {
+            Ok(s) if !s.trim().is_empty() => Some(s.trim().to_lowercase()),
+            Ok(_) => None,
+            Err(_) => return -1,
+        }
+    };
+
+    let is_meeting_active = MEETING.lock().map(|g| g.is_some()).unwrap_or(false);
+    let now = now_epoch_secs();
+
+    let outcome = {
+        let mut g = call_detector_lock();
+        g.signal(mic_active != 0, app, is_meeting_active, now)
+    };
+
+    use crate::call_detector::CallSignalOutcome;
+    match outcome {
+        CallSignalOutcome::Detected { app, since_seconds } => {
+            let payload = serde_json::json!({
+                "app": app,
+                "since_seconds": since_seconds,
+            })
+            .to_string();
+            emit_event("call_detected", &payload);
+            1
+        }
+        CallSignalOutcome::Ended { app } => {
+            let payload = serde_json::json!({ "app": app }).to_string();
+            emit_event("call_ended", &payload);
+            2
+        }
+        CallSignalOutcome::Suppressed(_) | CallSignalOutcome::NoChange => 0,
+    }
+}
+
+/// Record the user's response to a call-detected nudge.
+/// `response` ∈ {"record_now","not_now","never","timeout"}.
+/// On "never" with a non-empty app_id the exclusion list is persisted
+/// to disk via the AppState + save_config_file round-trip so the
+/// decision survives restarts. Returns 0 / -1 (null) / -2 (unknown
+/// response string).
+///
+/// # Safety
+/// `app_id` must be NULL or a valid null-terminated UTF-8 C string.
+/// `response` must be a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_call_signal_response(
+    app_id: *const c_char,
+    response: *const c_char,
+) -> c_int {
+    if response.is_null() {
+        return -1;
+    }
+    let resp_str = match CStr::from_ptr(response).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    use crate::call_detector::NudgeResponse;
+    let resp = match resp_str {
+        "record_now" => NudgeResponse::RecordNow,
+        "not_now" => NudgeResponse::NotNow,
+        "never" => NudgeResponse::Never,
+        "timeout" => NudgeResponse::Timeout,
+        _ => return -2,
+    };
+    let app: Option<String> = if app_id.is_null() {
+        None
+    } else {
+        match CStr::from_ptr(app_id).to_str() {
+            Ok(s) if !s.trim().is_empty() => Some(s.trim().to_lowercase()),
+            _ => None,
+        }
+    };
+
+    let persist_excluded = matches!(resp, NudgeResponse::Never) && app.is_some();
+    if persist_excluded {
+        if let Some(a) = app.as_ref() {
+            if let Some(st) = GLOBAL_STATE.get() {
+                if let Ok(mut list) = st.call_detect_excluded_apps.lock() {
+                    if !list.contains(a) {
+                        list.push(a.clone());
+                    }
+                }
+                if let Ok(cfg) = crate::snapshot_config(st) {
+                    save_config_file(&cfg);
+                }
+            }
+        }
+    }
+
+    let now = now_epoch_secs();
+    let mut g = call_detector_lock();
+    g.record_response(app, resp, now);
+    0
+}
+
+/// Write a JSON snapshot of the detector's runtime state to `out`.
+/// Surfaces enabled flag, excluded apps, active cooldowns (per app
+/// with seconds remaining), mic-active status, current_app, debounce
+/// position. Used by the Settings UI to render the "Auto-detect"
+/// section without polling individual fields.
+///
+/// # Safety
+/// `out` must point to a writable buffer of at least `out_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_call_detector_state(out: *mut c_char, out_len: c_int) -> c_int {
+    let now = now_epoch_secs();
+    let json = {
+        let g = call_detector_lock();
+        g.state_snapshot(now).to_string()
+    };
+    write_to_buf(&json, out, out_len)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6809,6 +7031,11 @@ mod tests {
                 local_model: Mutex::new("ggml-base-q8_0.bin".to_string()),
                 local_stt_backend: Mutex::new("whisper".to_string()),
                 live_captions_enabled: Mutex::new(true),
+                call_detect_enabled: Mutex::new(true),
+                call_detect_excluded_apps: Mutex::new(vec!["discord".to_string()]),
+                call_detect_cooldown_secs: Mutex::new(1800),
+                call_detect_min_active_secs: Mutex::new(5),
+                call_detect_timeout_cooldown_secs: Mutex::new(300),
                 save_audio_in_history: Mutex::new(false),
                 history_audio_keep_days: Mutex::new(30),
                 history_audio_max_mb: Mutex::new(5_000),

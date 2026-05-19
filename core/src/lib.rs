@@ -8,6 +8,7 @@ pub mod aec;
 pub mod app_rules;
 pub mod audio;
 pub mod autostart;
+pub mod call_detector;
 pub mod chunked_stt;
 pub mod claude_code;
 pub mod dfn;
@@ -455,6 +456,30 @@ pub struct AppConfig {
     /// the chunked engine on for faster final paste while keeping the
     /// caption window off if they find it visually distracting.
     pub live_captions_enabled: bool,
+    /// Auto-detect meetings via mic-in-use signal and offer to record.
+    /// Host (C#/Swift) polls audio every ~1 s and pushes observations
+    /// via `dimmy_call_signal`; the Rust state machine
+    /// (`call_detector.rs`) emits `call_detected` / `call_ended`
+    /// events to the host UI. Off → no popup, no detection thread.
+    pub call_detect_enabled: bool,
+    /// Apps for which the user clicked "Don't ask for X" — never
+    /// nudge again until removed from this list via Settings. Stored
+    /// as lowercase canonical ids (`teams`, `zoom`, `slack`,
+    /// `discord`, `webex`). Default: `["discord"]` — gaming/voice
+    /// channel use case where the prompt is more noise than signal.
+    pub call_detect_excluded_apps: Vec<String>,
+    /// After "Not now", suppress the prompt for this app (or globally
+    /// if no app could be inferred) for this many seconds. Default
+    /// 1800 (30 min). Used by `call_detector::record_response`.
+    pub call_detect_cooldown_secs: u32,
+    /// Mic must be continuously active for at least this many seconds
+    /// before we fire the popup — filters out brief blips (mic test
+    /// in audio settings, voice memo trigger, …). Default 5.
+    pub call_detect_min_active_secs: u32,
+    /// If the popup auto-dismisses (user didn't see it), apply this
+    /// shorter cooldown instead of the full `call_detect_cooldown_secs`
+    /// — they didn't decline, they missed it. Default 300 (5 min).
+    pub call_detect_timeout_cooldown_secs: u32,
     /// When true, save the recorded WAV alongside the history row so
     /// the user can replay + view a waveform later. Default false for
     /// privacy + storage reasons. Honored by the history-save path in
@@ -586,6 +611,11 @@ impl Default for AppConfig {
             local_model: "ggml-base-q8_0.bin".to_string(),
             local_stt_backend: "whisper".to_string(),
             live_captions_enabled: true,
+            call_detect_enabled: true,
+            call_detect_excluded_apps: vec!["discord".to_string()],
+            call_detect_cooldown_secs: 1800,
+            call_detect_min_active_secs: 5,
+            call_detect_timeout_cooldown_secs: 300,
             save_audio_in_history: false,
             history_audio_keep_days: 30,
             history_audio_max_mb: 5_000,
@@ -684,6 +714,11 @@ pub fn save_config_file(cfg: &AppConfig) {
             "local_model": cfg.local_model,
             "local_stt_backend": cfg.local_stt_backend,
             "live_captions_enabled": cfg.live_captions_enabled,
+            "call_detect_enabled": cfg.call_detect_enabled,
+            "call_detect_excluded_apps": cfg.call_detect_excluded_apps,
+            "call_detect_cooldown_secs": cfg.call_detect_cooldown_secs,
+            "call_detect_min_active_secs": cfg.call_detect_min_active_secs,
+            "call_detect_timeout_cooldown_secs": cfg.call_detect_timeout_cooldown_secs,
             "save_audio_in_history": cfg.save_audio_in_history,
             "history_audio_keep_days": cfg.history_audio_keep_days,
             "history_audio_max_mb": cfg.history_audio_max_mb,
@@ -836,6 +871,29 @@ pub fn load_config_file() -> AppConfig {
                     live_captions_enabled: v["live_captions_enabled"]
                         .as_bool()
                         .unwrap_or(defaults.live_captions_enabled),
+                    call_detect_enabled: v["call_detect_enabled"]
+                        .as_bool()
+                        .unwrap_or(defaults.call_detect_enabled),
+                    call_detect_excluded_apps: v["call_detect_excluded_apps"]
+                        .as_array()
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                                .collect()
+                        })
+                        .unwrap_or(defaults.call_detect_excluded_apps.clone()),
+                    call_detect_cooldown_secs: v["call_detect_cooldown_secs"]
+                        .as_u64()
+                        .map(|n| n as u32)
+                        .unwrap_or(defaults.call_detect_cooldown_secs),
+                    call_detect_min_active_secs: v["call_detect_min_active_secs"]
+                        .as_u64()
+                        .map(|n| n as u32)
+                        .unwrap_or(defaults.call_detect_min_active_secs),
+                    call_detect_timeout_cooldown_secs: v["call_detect_timeout_cooldown_secs"]
+                        .as_u64()
+                        .map(|n| n as u32)
+                        .unwrap_or(defaults.call_detect_timeout_cooldown_secs),
                     save_audio_in_history: v["save_audio_in_history"]
                         .as_bool()
                         .unwrap_or(defaults.save_audio_in_history),
@@ -1186,6 +1244,11 @@ pub struct AppState {
     pub local_model: Mutex<String>,
     pub local_stt_backend: Mutex<String>,
     pub live_captions_enabled: Mutex<bool>,
+    pub call_detect_enabled: Mutex<bool>,
+    pub call_detect_excluded_apps: Mutex<Vec<String>>,
+    pub call_detect_cooldown_secs: Mutex<u32>,
+    pub call_detect_min_active_secs: Mutex<u32>,
+    pub call_detect_timeout_cooldown_secs: Mutex<u32>,
     pub save_audio_in_history: Mutex<bool>,
     pub history_audio_keep_days: Mutex<u32>,
     pub history_audio_max_mb: Mutex<u32>,
@@ -1322,6 +1385,13 @@ impl AppState {
             local_model: Mutex::new(file_cfg.local_model),
             local_stt_backend: Mutex::new(file_cfg.local_stt_backend),
             live_captions_enabled: Mutex::new(file_cfg.live_captions_enabled),
+            call_detect_enabled: Mutex::new(file_cfg.call_detect_enabled),
+            call_detect_excluded_apps: Mutex::new(file_cfg.call_detect_excluded_apps),
+            call_detect_cooldown_secs: Mutex::new(file_cfg.call_detect_cooldown_secs),
+            call_detect_min_active_secs: Mutex::new(file_cfg.call_detect_min_active_secs),
+            call_detect_timeout_cooldown_secs: Mutex::new(
+                file_cfg.call_detect_timeout_cooldown_secs,
+            ),
             save_audio_in_history: Mutex::new(file_cfg.save_audio_in_history),
             history_audio_keep_days: Mutex::new(file_cfg.history_audio_keep_days),
             history_audio_max_mb: Mutex::new(file_cfg.history_audio_max_mb),
@@ -1455,6 +1525,27 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         .live_captions_enabled
         .lock()
         .map_err(|e| e.to_string())?;
+    let call_detect_enabled = *state
+        .call_detect_enabled
+        .lock()
+        .map_err(|e| e.to_string())?;
+    let call_detect_excluded_apps = state
+        .call_detect_excluded_apps
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
+    let call_detect_cooldown_secs = *state
+        .call_detect_cooldown_secs
+        .lock()
+        .map_err(|e| e.to_string())?;
+    let call_detect_min_active_secs = *state
+        .call_detect_min_active_secs
+        .lock()
+        .map_err(|e| e.to_string())?;
+    let call_detect_timeout_cooldown_secs = *state
+        .call_detect_timeout_cooldown_secs
+        .lock()
+        .map_err(|e| e.to_string())?;
     let save_audio_in_history = *state
         .save_audio_in_history
         .lock()
@@ -1508,6 +1599,11 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         local_model,
         local_stt_backend,
         live_captions_enabled,
+        call_detect_enabled,
+        call_detect_excluded_apps,
+        call_detect_cooldown_secs,
+        call_detect_min_active_secs,
+        call_detect_timeout_cooldown_secs,
         save_audio_in_history,
         history_audio_keep_days,
         history_audio_max_mb,

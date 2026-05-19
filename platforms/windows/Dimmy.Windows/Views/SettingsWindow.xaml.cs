@@ -4440,6 +4440,26 @@ public sealed partial class SettingsWindow : Window
         }
     }
 
+    private void RemoveExcludedApp_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement fe) return;
+        if (fe.Tag is not string appId || string.IsNullOrEmpty(appId)) return;
+        ViewModel.CallDetectExcludedApps.Remove(appId);
+        // Push the updated list so Rust deletes its exclusion + the
+        // detector picks up the change on the next signal. ToJson is
+        // the canonical save path (single-writer rule).
+        try
+        {
+            int rc = Interop.DimmyNative.dimmy_set_config_json(
+                System.Text.Json.JsonSerializer.Serialize(ViewModel.ToJson()));
+            App.Log($"[CallDetect] removed exclusion '{appId}' rc={rc}", "CallDetect");
+        }
+        catch (Exception ex)
+        {
+            App.Log($"[CallDetect] remove exclusion EXC: {ex.Message}", "CallDetect");
+        }
+    }
+
     private void DictRemove_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not FrameworkElement fe) return;

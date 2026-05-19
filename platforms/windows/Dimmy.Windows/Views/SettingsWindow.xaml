@@ -1102,6 +1102,56 @@
                      own integration card alongside Notion. -->
               </StackPanel>
 
+              <!-- ═══ Auto-detect meetings ═══ -->
+              <TextBlock Text="AUTO-DETECT MEETINGS"
+                         FontSize="12" FontWeight="SemiBold"
+                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                         CharacterSpacing="40" Margin="2,20,0,8" />
+              <TextBlock Text="When Dimmy notices your microphone has gone live (Teams, Zoom, Meet, …) it can offer to record the meeting via a small non-intrusive prompt. No mic data is recorded until you press Record."
+                         FontSize="12"
+                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                         TextWrapping="Wrap" Margin="2,0,0,8" />
+              <StackPanel Spacing="4">
+                <controls:SettingCard Glyph="&#xE717;"
+                                      Label="Detect calls and offer to record"
+                                      Description="Polls the default microphone once a second; suggests recording when a call lasts more than 5 s. Per-app cooldown (30 min) after 'Not now', permanent skip after 'Don't ask for this app'.">
+                  <ToggleSwitch IsOn="{Binding CallDetectEnabled, Mode=TwoWay}"
+                                OnContent="" OffContent="" />
+                </controls:SettingCard>
+                <controls:SettingCard Glyph="&#xE71F;"
+                                      Label="Excluded apps"
+                                      Description="Apps that will never trigger a record-meeting prompt. Adds here automatically when you pick 'Don't ask for this app'. Discord is excluded by default — usually gaming, not work.">
+                  <ItemsControl ItemsSource="{Binding CallDetectExcludedApps}" Margin="0,0,0,0">
+                    <ItemsControl.ItemsPanel>
+                      <ItemsPanelTemplate>
+                        <StackPanel Orientation="Horizontal" Spacing="6" />
+                      </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate>
+                        <Border Background="#22FFFFFF"
+                                BorderBrush="#33FFFFFF"
+                                BorderThickness="1"
+                                CornerRadius="10"
+                                Padding="10,3,4,3">
+                          <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                            <TextBlock Text="{Binding}" VerticalAlignment="Center" FontSize="12" />
+                            <Button Click="RemoveExcludedApp_Click"
+                                    Tag="{Binding}"
+                                    Padding="4,0,4,0"
+                                    Background="Transparent"
+                                    BorderBrush="Transparent"
+                                    ToolTipService.ToolTip="Remove">
+                              <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE894;" FontSize="10" />
+                            </Button>
+                          </StackPanel>
+                        </Border>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </controls:SettingCard>
+              </StackPanel>
+
               <!-- ═══ Recap section ═══
                    Standalone — NOT inside CloudLlmPanel. Recap must
                    stay visible regardless of LLM mode (local Gemma

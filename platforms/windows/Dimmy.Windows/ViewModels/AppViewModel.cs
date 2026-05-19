@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Text.Json;
 using CommunityToolkit.Mvvm.ComponentModel;
 
@@ -53,6 +54,45 @@ public partial class AppViewModel : ObservableObject
     /// Mirrors the user-facing toggle. When false, App.xaml.cs does
     /// not show the CaptionWindow even if the chunked engine is on.
     [ObservableProperty] private bool _liveCaptionsEnabled = true;
+
+    /// Mirrors the auto-detect toggle from Settings. When false,
+    /// App.xaml.cs swallows the `call_detected` event (the Rust state
+    /// machine still emits if a race happens; this guard catches the
+    /// in-flight tick after the user disables).
+    [ObservableProperty] private bool _callDetectEnabled = true;
+
+    /// Excluded apps for the call-detect nudge. Read from config on
+    /// load + after every "never" response so the Settings UI list
+    /// stays in sync without polling. Stored as lowercase canonical
+    /// ids matching the Rust state machine's keys.
+    public ObservableCollection<string> CallDetectExcludedApps { get; } = new();
+
+    /// Push a fresh exclusion list from disk into the observable
+    /// collection. Called from App.xaml.cs after a "never" response
+    /// (the Rust core just persisted to config.json — re-read so the
+    /// Settings UI list updates immediately).
+    public void RefreshCallDetectExclusions()
+    {
+        try
+        {
+            var buf = new byte[8192];
+            int n = Interop.DimmyNative.dimmy_get_config_json(buf, buf.Length);
+            if (n <= 0) return;
+            var json = System.Text.Encoding.UTF8.GetString(buf, 0, n);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("call_detect_excluded_apps", out var arr)
+                || arr.ValueKind != System.Text.Json.JsonValueKind.Array)
+                return;
+            CallDetectExcludedApps.Clear();
+            foreach (var item in arr.EnumerateArray())
+            {
+                var s = item.GetString();
+                if (!string.IsNullOrEmpty(s)) CallDetectExcludedApps.Add(s);
+            }
+        }
+        catch { /* defensive — settings list will catch up on next reload */ }
+    }
+
     [ObservableProperty] private int _chunkCurrent;
     [ObservableProperty] private int _chunkTotal;
 
@@ -162,6 +202,16 @@ public partial class AppViewModel : ObservableObject
     /// Pure observer — does NOT affect the paste flow in StopAndProcess.
     public event Action<string>? TranscriptReady;
 
+    /// Fires when the Rust call-detector decides the user is in a
+    /// meeting (mic-active past the debounce, not suppressed). Args:
+    /// (appIdOrNull, sinceSeconds). Host shows the CallNudgeWindow.
+    public event Action<string?, long>? CallDetected;
+
+    /// Fires when the previously-detected mic session ends (mic_active
+    /// went back to false). Host hides the CallNudgeWindow if it's
+    /// still up. Args: (appIdOrNull).
+    public event Action<string?>? CallEnded;
+
     public void HandleEvent(string? json)
     {
         if (string.IsNullOrEmpty(json)) return;
@@ -268,6 +318,26 @@ public partial class AppViewModel : ObservableObject
                         var elapsedMs = payload.GetProperty("elapsed_ms").GetInt64();
                         var chunkCount = payload.GetProperty("chunk_count").GetInt32();
                         MeetingChunkReceived?.Invoke(dir, speaker, line, elapsedMs, chunkCount);
+                    }
+                    break;
+                case "call_detected":
+                    {
+                        string? app = null;
+                        if (payload.TryGetProperty("app", out var appEl)
+                            && appEl.ValueKind == JsonValueKind.String)
+                            app = appEl.GetString();
+                        long since = payload.TryGetProperty("since_seconds", out var ssEl)
+                            ? ssEl.GetInt64() : 0;
+                        CallDetected?.Invoke(app, since);
+                    }
+                    break;
+                case "call_ended":
+                    {
+                        string? app = null;
+                        if (payload.TryGetProperty("app", out var appEl)
+                            && appEl.ValueKind == JsonValueKind.String)
+                            app = appEl.GetString();
+                        CallEnded?.Invoke(app);
                     }
                     break;
             }
