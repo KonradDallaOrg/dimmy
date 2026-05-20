@@ -104,9 +104,61 @@ internal sealed class CallDetectionService : IDisposable
         Stop();
     }
 
+    /// Amplitude floor for "audibly active" during a meeting. Live
+    /// mic + loopback peaks below this are treated as silence by the
+    /// stop-suggestion gate. ~5 % of full range → ≈ -26 dBFS; tuned to
+    /// reject AC hum and HVAC noise without missing soft conversation.
+    private const float MeetingAmpFloor = 0.02f;
+
     private void OnTick(DispatcherQueueTimer sender, object args)
     {
         if (!_isEnabled) return;
+        var app = App.Instance;
+        bool meetingActive = app?.AppViewModel.MeetingActive == true;
+        bool dictationActive = app?.AppViewModel.IsRecording == true && !meetingActive;
+
+        // Dictation: hard skip. The cpal mic session shows up as Active
+        // on the OS-level capture endpoint and would trigger a false
+        // detection 5 s in. signal(0) clears any pending countdown.
+        if (dictationActive)
+        {
+            try { DimmyNative.dimmy_call_signal(0, null); } catch { }
+            return;
+        }
+
+        // Meeting active: switch the call detector from OS-level audio
+        // session enumeration (Dimmy's own cpal stream keeps the mic
+        // session Active for the entire meeting; can't distinguish it
+        // from a Teams call) to live-amplitude-based silence detection.
+        // Both mic and sys are fed from the running meeting worker's
+        // peak meters; the Rust state machine AND-combines them to
+        // gate the stop-suggestion popup.
+        if (meetingActive)
+        {
+            try
+            {
+                float micAmp = DimmyNative.dimmy_get_amplitude();
+                float sysAmp = DimmyNative.dimmy_get_loopback_amplitude();
+                bool micActive = micAmp > MeetingAmpFloor;
+                bool sysActive = sysAmp > MeetingAmpFloor;
+                // Re-use the last inferred app id so cooldown keys stay
+                // stable across the meeting. _prevAppId was captured
+                // during the pre-meeting detection tick.
+                var appId = _prevAppId;
+                DimmyNative.dimmy_call_signal(micActive ? 1 : 0, appId);
+                DimmyNative.dimmy_call_signal_sys(sysActive ? 1 : 0, appId);
+                if (++_logSuppressCounter >= 15)
+                {
+                    _logSuppressCounter = 0;
+                    App.Log($"meeting-tick: mic_amp={micAmp:F3} sys_amp={sysAmp:F3} mic_active={micActive} sys_active={sysActive}", "CallDetect");
+                }
+            }
+            catch (Exception ex)
+            {
+                App.Log($"meeting-tick failed: {ex.Message}", "CallDetect");
+            }
+            return;
+        }
         try
         {
             var (active, appId, sessionCount, activeCount) = SampleMicStateDiag();

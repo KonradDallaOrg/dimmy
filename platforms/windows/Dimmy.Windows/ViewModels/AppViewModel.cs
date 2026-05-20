@@ -212,6 +212,14 @@ public partial class AppViewModel : ObservableObject
     /// still up. Args: (appIdOrNull).
     public event Action<string?>? CallEnded;
 
+    /// Fires when the call appears to have ended while WE were
+    /// actively recording (mic silent for `mic_inactive_for_stop_secs`
+    /// after the user accepted a `call_detected` nudge). Host shows
+    /// the CallNudgeWindow in stop-suggestion mode so the user can
+    /// either stop + recap or keep recording. Args:
+    /// (appIdOrNull, inactiveForSecs).
+    public event Action<string?, long>? CallStopSuggested;
+
     public void HandleEvent(string? json)
     {
         if (string.IsNullOrEmpty(json)) return;
@@ -352,6 +360,17 @@ public partial class AppViewModel : ObservableObject
                             && appEl.ValueKind == JsonValueKind.String)
                             app = appEl.GetString();
                         CallEnded?.Invoke(app);
+                    }
+                    break;
+                case "meeting.stop_suggested":
+                    {
+                        string? app = null;
+                        if (payload.TryGetProperty("app", out var appEl)
+                            && appEl.ValueKind == JsonValueKind.String)
+                            app = appEl.GetString();
+                        long inactive = payload.TryGetProperty("inactive_for_secs", out var ifEl)
+                            ? ifEl.GetInt64() : 0;
+                        CallStopSuggested?.Invoke(app, inactive);
                     }
                     break;
             }

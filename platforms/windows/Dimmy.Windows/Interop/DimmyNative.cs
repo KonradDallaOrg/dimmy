@@ -36,11 +36,24 @@ public static class DimmyNative
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? appId);
 
     /// Record the user's response to a call-detected nudge.
-    /// `response` ∈ {"record_now","not_now","never","timeout"}.
+    /// `response` ∈ {"record_now","not_now","never","timeout",
+    ///               "stop_and_recap","keep_recording","stop_timeout"}.
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_call_signal_response(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? appId,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string response);
+
+    /// Push one system-audio activity observation. `sysActive` = 1 iff
+    /// the loopback / render-side audio is currently emitting above
+    /// the floor. Calling this even once flips the stop-suggestion
+    /// gate to AND-with-sys mode for this process — both mic AND sys
+    /// must be silent past their thresholds (5 s each) before the
+    /// stop popup is offered. Return codes: 3 = meeting.stop_suggested
+    /// emitted, 0 = no transition, -1 = malformed app id.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_call_signal_sys(
+        int sysActive,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? appId);
 
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_call_detector_state(byte[] outBuf, int bufLen);
