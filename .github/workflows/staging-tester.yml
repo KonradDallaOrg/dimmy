@@ -174,7 +174,7 @@ jobs:
         run: |
           cargo clean --release 2>/dev/null
           cargo build --lib --release --target aarch64-apple-darwin \
-            --features local-stt-metal,local-llm-metal,local-stt-parakeet-coreml,local-stt-parakeet-fluid,license-client
+            --features local-stt-metal,local-llm-metal,local-stt-parakeet-coreml,local-stt-parakeet-fluid,local-dfn,license-client
 
       - name: Verify static library
         run: |
