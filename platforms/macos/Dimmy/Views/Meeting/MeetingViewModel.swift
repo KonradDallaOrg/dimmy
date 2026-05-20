@@ -131,6 +131,20 @@ final class MeetingViewModel: ObservableObject {
                 if paused != self.isPaused {
                     self.isPaused = paused
                     self.statusLabel = paused ? "Paused" : "Recording"
+                    // Freeze / resume the elapsed-time clock so the
+                    // timer label matches the recording the worker
+                    // actually keeps (meeting.rs gap-skips the paused
+                    // window — the WAV + transcript exclude it). On
+                    // pause: stamp the pause-start instant. On resume:
+                    // fold the paused span into pausedAccumulator so
+                    // pollTick subtracts it from the wall-clock delta.
+                    if paused {
+                        self.pauseStartedAt = Date()
+                    } else if let pausedAt = self.pauseStartedAt {
+                        self.pausedAccumulator += Date().timeIntervalSince(pausedAt)
+                        self.pauseStartedAt = nil
+                    }
+                    self.pollTick()
                 }
             }
             .store(in: &liveTranscriptBag)
@@ -181,6 +195,13 @@ final class MeetingViewModel: ObservableObject {
     }
 
     private var startedAt: Date?
+    /// Total time the meeting has spent paused, accumulated across
+    /// every pause/resume cycle. Subtracted from the wall-clock delta
+    /// in `pollTick` so the timer label tracks recorded duration.
+    private var pausedAccumulator: TimeInterval = 0
+    /// Instant the current pause began, or nil when not paused. While
+    /// non-nil, `pollTick` freezes the clock at this instant.
+    private var pauseStartedAt: Date?
     private var pollTimer: Timer?
     private var amplitudeTimer: Timer?
     private var sessionId: String = ""
@@ -278,6 +299,10 @@ final class MeetingViewModel: ObservableObject {
         doneSelectedTab = .recap
         browsingPastMeeting = false
         isPaused = false
+        // Fresh pause-clock state for the new meeting.
+        pausedAccumulator = 0
+        pauseStartedAt = nil
+        timerLabel = "00:00:00"
         // Reset the event-driven live-transcript mirror (filled by
         // DimmyCore.handleEvent on every `meeting_chunk` event).
         AppState.shared.meetingActiveDir = ""
@@ -684,7 +709,12 @@ final class MeetingViewModel: ObservableObject {
         //     event pipe.
         // Both removed — the timer label is the only thing left.
         guard let started = startedAt else { return }
-        let secs = Int(Date().timeIntervalSince(started))
+        // While paused, freeze the clock at the pause-start instant;
+        // otherwise use now. Subtract every paused span so the label
+        // reflects recorded duration, not wall-clock since start.
+        let mark = pauseStartedAt ?? Date()
+        let elapsed = mark.timeIntervalSince(started) - pausedAccumulator
+        let secs = Int(max(0, elapsed))
         let h = secs / 3600
         let m = (secs % 3600) / 60
         let s = secs % 60

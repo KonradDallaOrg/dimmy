@@ -923,6 +923,20 @@ private func handleEvent(event: String, payload: [String: Any], appState: AppSta
         appState.meetingLastChunkSpeaker = speaker
         appState.meetingChunkTick &+= 1
 
+    case "call_detected":
+        let app = payload["app"] as? String
+        let since = (payload["since_seconds"] as? Int) ?? 0
+        appState.onCallDetected(app: app, sinceSecs: since)
+
+    case "call_ended":
+        let app = payload["app"] as? String
+        appState.onCallEnded(app: app)
+
+    case "meeting.stop_suggested":
+        let app = payload["app"] as? String
+        let inactive = (payload["inactive_for_secs"] as? Int) ?? 0
+        appState.onCallStopSuggested(app: app, inactiveSecs: inactive)
+
     default:
         print("[DimmyCore] unhandled event: \(event)")
     }

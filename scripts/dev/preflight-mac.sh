@@ -44,7 +44,7 @@ echo
 # Feature flag set must match release.yml's Mac build job — see
 # .github/workflows/release.yml line ~189. If you change it here, change
 # it there (and update CLAUDE.md if the meaning of any feature shifts).
-MAC_FEATURES="local-stt-metal,local-llm-metal,local-stt-parakeet-coreml,local-stt-parakeet-fluid"
+MAC_FEATURES="local-stt-metal,local-llm-metal,local-stt-parakeet-coreml,local-stt-parakeet-fluid,local-dfn"
 CI_FEATURES="local-stt,local-llm"
 
 step() { echo; echo "── $* ──"; }

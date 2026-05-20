@@ -16,9 +16,7 @@ struct MacAdvancedPage: View {
             )
             .padding(.bottom, 8)
 
-            appearanceGroup
             performanceGroup
-            recapModelGroup
             autoRecapGroup
             #if DEBUG
             debugSeedGroup
@@ -83,71 +81,6 @@ struct MacAdvancedPage: View {
     }
     #endif
 
-    /// Curated model picker for the meeting recap + auto-recap. Empty
-    /// "Auto" entry preserves the existing URL-based heuristic
-    /// (Anthropic→Opus, Gemini→Pro, else user's configured model).
-    /// Mirror of Win SettingsWindow.xaml recap-model card.
-    ///
-    /// Footgun (same as Win): the recap shares the LLM API URL + key
-    /// with dictation. Picking a Gemini model with Anthropic configured
-    /// → 400 invalid_request_error. The note below warns the user.
-    /// Multi-provider keystore tracked separately.
-    private var recapModelGroup: some View {
-        Group {
-            MacGroupLabel(text: "Meeting recap model")
-            MacTile {
-                MacRow(
-                    "Recap model",
-                    description: "Used for the meeting recap pipeline and the long-dictation auto-recap. Auto matches your dictation provider (Anthropic→Opus, Gemini→Pro). Pick a specific model only if it matches your configured LLM URL/key.",
-                    showsDivider: false
-                ) {
-                    Picker("", selection: Binding<String>(
-                        get: { appState.recapModelOverride },
-                        set: { newValue in
-                            appState.recapModelOverride = newValue
-                            // includeRecap:true — this Picker writes
-                            // recap_model_override; without the flag
-                            // the field is omitted from the payload
-                            // and the save would be a no-op.
-                            DimmyCore.shared.setConfig(appState.toRustConfig(includeRecap: true))
-                        }
-                    )) {
-                        ForEach(RecapModelOption.curated) { opt in
-                            Label {
-                                Text(opt.label)
-                            } icon: {
-                                if opt.assetName.isEmpty {
-                                    Image(systemName: opt.iconName)
-                                } else {
-                                    Image(opt.assetName)
-                                        .renderingMode(.original)
-                                        .resizable()
-                                        .scaledToFit()
-                                        .frame(width: 18, height: 18)
-                                }
-                            }
-                            .tag(opt.id)
-                        }
-                        // Render any custom value users may have hand-
-                        // edited in config.json so it's selectable
-                        // without being lost on save.
-                        if !appState.recapModelOverride.isEmpty,
-                           !RecapModelOption.curated.contains(where: { $0.id == appState.recapModelOverride }) {
-                            Divider()
-                            Label("Custom — \(appState.recapModelOverride)",
-                                  systemImage: "wrench.adjustable")
-                                .tag(appState.recapModelOverride)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .frame(minWidth: 280)
-                }
-            }
-            MacGroupFooter(text: "The recap call uses your configured LLM API URL + key. Picking a model from a different provider will fail with HTTP 400. Multi-provider key storage is on the roadmap.")
-        }
-    }
-
     /// Phase 6.4 — fire-and-forget recap on long dictations. Independent
     /// of meeting mode (which always recaps) and from the dictation
     /// rewrite (which uses llm_style). 0 = disabled.
@@ -176,31 +109,6 @@ struct MacAdvancedPage: View {
                 }
             }
             MacGroupFooter(text: "The recap is appended to the History row's enhanced_text — visible in the History detail under the original transcript.")
-        }
-    }
-
-    private var appearanceGroup: some View {
-        Group {
-            MacGroupLabel(text: "Appearance")
-            MacTile {
-                MacRow(
-                    "Show in Dock",
-                    description: "When off, Dimmy is hidden from the Dock and Cmd-Tab"
-                ) {
-                    Toggle("", isOn: $appState.showInDock)
-                        .toggleStyle(.switch)
-                        .labelsHidden()
-                }
-                MacRow(
-                    "Show in menu bar",
-                    description: "When off, the icon at the top-right disappears. At least one of Dock or menu bar must stay on",
-                    showsDivider: false
-                ) {
-                    Toggle("", isOn: $appState.showInMenuBar)
-                        .toggleStyle(.switch)
-                        .labelsHidden()
-                }
-            }
         }
     }
 
