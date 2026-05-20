@@ -1,49 +1,88 @@
 //! Offline noise-suppression compare tool.
 //!
 //! Usage:
-//!   cargo run --release --bin denoise_offline -- <input.wav> [<output.wav>]
+//!   denoise_offline [--backend nnnoise|dfn3] <input.wav> [<output.wav>]
 //!
 //! Reads a mono WAV (or downmixes stereo via average — same recipe
 //! the runtime secondary callback uses), resamples to 48 kHz if
 //! needed (linear interpolator from audio.rs's own LinearResampler
-//! design — kept inline here to avoid the heavyweight `dimmy_lib`
-//! features), runs each 480-sample frame through `dfn::DfnProcessor`
-//! and writes the result back as a 48 kHz mono int16 WAV.
+//! design — kept inline here), runs the chosen backend, and writes
+//! the result back as a 48 kHz mono int16 WAV.
 //!
-//! Output filename defaults to `<input>_dfn.wav` next to the input.
+//! Backends:
+//!   - `nnnoise` (default if no flag): RNNoise port via the
+//!     `nnnoiseless` crate, model embedded ~85 KB, ~1 ms/frame.
+//!     Frame size 480 samples @ 48 kHz.
+//!   - `dfn3`: DeepFilterNet3 via the upstream `deep_filter`
+//!     crate (path dep — see Cargo.toml comment). Requires the
+//!     `local-dfn` cargo feature at compile time. SOTA quality,
+//!     ~5-10× RTF on a typical laptop CPU.
 //!
-//! Intended for A/B-ing a meeting recording. Pair with the original
-//! `audio_mic.wav` / `audio_system.wav` to compare side-by-side in
-//! whatever audio editor you trust (Audacity, Reaper, …).
-//!
-//! NOTE on DFN3: this MVP wires nnnoiseless only. DeepFilterNet3
-//! integration is tracked separately; the binary currently ships
-//! one backend so the user can hear the nnnoiseless result first
-//! and decide if it's enough.
+//! Output filename defaults to `<input>_<backend>.wav` (e.g.
+//! `audio_mic_nnnoise.wav` or `audio_mic_dfn3.wav`) so A/B side-by-
+//! side files don't overwrite each other.
 
 use dimmy_lib::dfn::DfnProcessor;
 use std::path::{Path, PathBuf};
+
+#[derive(Copy, Clone, Debug)]
+enum Backend {
+    Nnnoise,
+    #[cfg(feature = "local-dfn")]
+    Dfn3,
+}
+
+impl Backend {
+    fn name(self) -> &'static str {
+        match self {
+            Backend::Nnnoise => "nnnoise",
+            #[cfg(feature = "local-dfn")]
+            Backend::Dfn3 => "dfn3",
+        }
+    }
+}
 
 const TARGET_RATE: u32 = 48_000;
 const FRAME: usize = DfnProcessor::FRAME_SIZE;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() < 2 {
-        eprintln!(
-            "Usage: {} <input.wav> [<output.wav>]\n\nReads input, denoises via nnnoiseless,\nwrites a 48 kHz mono int16 WAV.",
-            args.first().map(|s| s.as_str()).unwrap_or("denoise_offline")
-        );
+    let mut raw_args: Vec<String> = std::env::args().skip(1).collect();
+    let mut backend = Backend::Nnnoise;
+    // Hand-rolled flag parser — we only need `--backend X` here.
+    if let Some(pos) = raw_args.iter().position(|a| a == "--backend") {
+        if pos + 1 >= raw_args.len() {
+            eprintln!("error: --backend requires a value (nnnoise|dfn3)");
+            std::process::exit(2);
+        }
+        backend = match raw_args[pos + 1].as_str() {
+            "nnnoise" => Backend::Nnnoise,
+            #[cfg(feature = "local-dfn")]
+            "dfn3" => Backend::Dfn3,
+            #[cfg(not(feature = "local-dfn"))]
+            "dfn3" => {
+                eprintln!("error: dfn3 backend requires --features local-dfn at build time");
+                std::process::exit(2);
+            }
+            other => {
+                eprintln!("error: unknown backend '{}' (expected nnnoise|dfn3)", other);
+                std::process::exit(2);
+            }
+        };
+        raw_args.drain(pos..=pos + 1);
+    }
+    if raw_args.is_empty() {
+        eprintln!("Usage: denoise_offline [--backend nnnoise|dfn3] <input.wav> [<output.wav>]");
         std::process::exit(2);
     }
-    let input_path = PathBuf::from(&args[1]);
-    let output_path = if args.len() >= 3 {
-        PathBuf::from(&args[2])
+    let input_path = PathBuf::from(&raw_args[0]);
+    let output_path = if raw_args.len() >= 2 {
+        PathBuf::from(&raw_args[1])
     } else {
-        default_output_path(&input_path)
+        default_output_path(&input_path, backend)
     };
     println!(
-        "denoise_offline: backend=nnnoiseless\n  in : {}\n  out: {}",
+        "denoise_offline: backend={}\n  in : {}\n  out: {}",
+        backend.name(),
         input_path.display(),
         output_path.display()
     );
@@ -106,34 +145,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         work.len() as f32 / TARGET_RATE as f32
     );
 
-    // --- Force the runtime toggle on so try_init returns Some -----------
-    dimmy_lib::dfn::DENOISE_ENABLED.store(true, std::sync::atomic::Ordering::Relaxed);
-    let mut proc = DfnProcessor::try_init().ok_or("DfnProcessor::try_init returned None")?;
-
-    // --- Process in 480-sample frames -----------------------------------
-    let mut out = Vec::with_capacity(work.len());
-    let mut frame_in = [0.0f32; FRAME];
-    let mut frame_out = [0.0f32; FRAME];
-    let n_frames = work.len() / FRAME;
-    let tail = work.len() % FRAME;
-    for i in 0..n_frames {
-        let start = i * FRAME;
-        frame_in.copy_from_slice(&work[start..start + FRAME]);
-        proc.process_frame(&frame_in, &mut frame_out);
-        out.extend_from_slice(&frame_out);
-    }
-    if tail > 0 {
-        // Pad the last partial frame with zeros so we don't lose it.
-        // The denoised tail is then truncated back to `tail` samples
-        // so the output duration matches the input.
-        let mut padded = [0.0f32; FRAME];
-        padded[..tail].copy_from_slice(&work[n_frames * FRAME..]);
-        proc.process_frame(&padded, &mut frame_out);
-        out.extend_from_slice(&frame_out[..tail]);
-    }
+    // --- Dispatch to the selected backend -------------------------------
+    let out: Vec<f32> = match backend {
+        Backend::Nnnoise => process_nnnoise(&work)?,
+        #[cfg(feature = "local-dfn")]
+        Backend::Dfn3 => process_dfn3(&work)?,
+    };
     println!(
-        "  processed: {} frames ({} samples → {:.2} s)",
-        n_frames,
+        "  processed: {} samples → {:.2} s",
         out.len(),
         out.len() as f32 / TARGET_RATE as f32
     );
@@ -155,13 +174,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn default_output_path(input: &Path) -> PathBuf {
+fn default_output_path(input: &Path, backend: Backend) -> PathBuf {
     let stem = input
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "denoised".to_string());
     let parent = input.parent().unwrap_or_else(|| Path::new("."));
-    parent.join(format!("{}_dfn.wav", stem))
+    parent.join(format!("{}_{}.wav", stem, backend.name()))
+}
+
+fn process_nnnoise(work: &[f32]) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+    dimmy_lib::dfn::DENOISE_ENABLED.store(true, std::sync::atomic::Ordering::Relaxed);
+    let mut proc = DfnProcessor::try_init().ok_or("DfnProcessor::try_init returned None")?;
+    let mut out = Vec::with_capacity(work.len());
+    let mut frame_in = [0.0f32; FRAME];
+    let mut frame_out = [0.0f32; FRAME];
+    let n_frames = work.len() / FRAME;
+    let tail = work.len() % FRAME;
+    for i in 0..n_frames {
+        let start = i * FRAME;
+        frame_in.copy_from_slice(&work[start..start + FRAME]);
+        proc.process_frame(&frame_in, &mut frame_out);
+        out.extend_from_slice(&frame_out);
+    }
+    if tail > 0 {
+        let mut padded = [0.0f32; FRAME];
+        padded[..tail].copy_from_slice(&work[n_frames * FRAME..]);
+        proc.process_frame(&padded, &mut frame_out);
+        out.extend_from_slice(&frame_out[..tail]);
+    }
+    Ok(out)
+}
+
+#[cfg(feature = "local-dfn")]
+fn process_dfn3(work: &[f32]) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+    use dimmy_lib::dfn3::Dfn3Processor;
+    let mut proc = Dfn3Processor::new()?;
+    let model_sr = proc.sample_rate();
+    if model_sr != TARGET_RATE {
+        return Err(format!(
+            "DFN3 model sample rate mismatch: model={} expected={}",
+            model_sr, TARGET_RATE
+        )
+        .into());
+    }
+    let hop = proc.hop_size();
+    let trimmed_len = (work.len() / hop) * hop;
+    let out = proc.process_mono(&work[..trimmed_len])?;
+    Ok(out)
 }
 
 /// Streaming linear resampler — single-shot variant of audio.rs's

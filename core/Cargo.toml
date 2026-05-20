@@ -115,7 +115,7 @@ local-stt-parakeet-fluid = ["dep:fluidaudio-rs"]
 # day the upstream blocker (see deep_filter dep comment above) is
 # unblocked. Currently a no-op: dfn3.rs is gated on this feature
 # and stays out of the build until `dep:deep_filter` is restored.
-local-dfn = []
+local-dfn = ["dep:deep_filter", "dep:ndarray", "dep:anyhow"]
 local-llm = ["dep:llama-cpp-4"]
 local-llm-metal = ["local-llm", "llama-cpp-4/metal", "llama-cpp-4/dynamic-link"]
 local-llm-cuda = ["local-llm", "llama-cpp-4/cuda"]
@@ -168,13 +168,7 @@ nnnoiseless = "0.5"
 # the `Dfn3Processor` wrapper in `core/src/dfn3.rs` is ready to
 # accept a working backend; only the dep line below needs to come
 # alive once one of the unblocking paths above is done.
-# deep_filter (DFN3) — see comment block above. The path-dep
-# experiment with a sed-patched local clone of the upstream repo
-# (C:\code\deepfilternet-patched) cleared the 3 `symbol_table` →
-# `symbols` rename errors but still hits 14 `mismatched types`
-# errors against current tract / ndarray. Type-level porting is
-# needed (1+ h focused work). Re-enable here once the port lands.
-# deep_filter = { path = "../../deepfilternet-patched/libDF", default-features = false, features = ["tract", "wav-utils", "default-model"], optional = true }
+deep_filter = { path = "../../deepfilternet-patched/libDF", default-features = false, features = ["tract", "wav-utils", "default-model"], optional = true }
 biquad = "0.4"
 dagc = "0.1"
 # Acoustic echo cancellation — pure Rust port of WebRTC AEC3.
@@ -201,6 +195,7 @@ whisper-rs = { version = "0.16", optional = true }
 # CUDA / CoreML are opt-in via cargo features.
 ort = { version = "=2.0.0-rc.10", optional = true, features = ["ndarray", "load-dynamic"] }
 ndarray = { version = "0.16", optional = true }
+anyhow = { version = "1", optional = true }
 llama-cpp-4 = { git = "https://github.com/KonradDallaOrg/llama-cpp-rs", optional = true, default-features = false }
 rusqlite = { version = "0.31", features = ["bundled"] }
 regex = "1"
