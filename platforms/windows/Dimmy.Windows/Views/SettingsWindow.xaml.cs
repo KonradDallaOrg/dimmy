@@ -1234,7 +1234,7 @@ public sealed partial class SettingsWindow : Window
             if (width <= 0) width = 600; // fallback before first layout pass
             int buckets = (int)Math.Max(60, Math.Min(400, width / 3));
             var peaks = await System.Threading.Tasks.Task.Run(()
-                => Helpers.WavPeaks.ReadPeaks(path, buckets));
+                => Helpers.WavPeaks.ReadPeaksAny(path, buckets));
             if (peaks.Length == 0) return;
             // Re-check selection: user may have switched to a different
             // row while we were reading the WAV.

@@ -1,5 +1,7 @@
 using System;
 using System.IO;
+using System.Text;
+using System.Text.Json;
 
 namespace Dimmy.Windows.Helpers;
 
@@ -14,6 +16,72 @@ namespace Dimmy.Windows.Helpers;
 /// renders this as filled rectangles in a Canvas.
 public static class WavPeaks
 {
+    /// Read peaks for ANY audio file the loader supports. WAV stays on
+    /// the in-process hand-rolled fast path (no FFI hop, no Rust
+    /// decoder spin-up cost); everything else (m4a / mp3 / aac / flac /
+    /// ogg) goes through the Rust `dimmy_compute_audio_peaks` FFI
+    /// which shares the Symphonia decoder used by `dimmy_transcribe_file`.
+    ///
+    /// Returns the same shape `ReadPeaks` always has (float[bucketCount]
+    /// in [0..1]), or an empty array if both paths fail. The caller
+    /// (History detail panel) treats "empty" as "no waveform" UI.
+    public static float[] ReadPeaksAny(string path, int bucketCount)
+    {
+        if (string.IsNullOrEmpty(path) || bucketCount <= 0)
+            return Array.Empty<float>();
+        var ext = Path.GetExtension(path);
+        if (!string.IsNullOrEmpty(ext)
+            && ext.Equals(".wav", StringComparison.OrdinalIgnoreCase))
+        {
+            var wavPeaks = ReadPeaks(path, bucketCount);
+            if (wavPeaks.Length > 0) return wavPeaks;
+            // Fall through if the WAV magic was missing — symphonia
+            // can recover from some odd containers (mp4 mis-named .wav)
+            // where hound would just fail silently.
+        }
+        return ReadPeaksViaFfi(path, bucketCount);
+    }
+
+    /// Pure-FFI path used for non-WAV formats (m4a / mp3 / aac / flac /
+    /// ogg). Allocates a JSON buffer sized for `bucketCount` 32-bit
+    /// floats + framing overhead (~16 bytes per number including
+    /// commas and brackets), with a small extra for the duration_secs
+    /// field. Empty array on any error — host falls back to "no
+    /// waveform".
+    private static float[] ReadPeaksViaFfi(string path, int bucketCount)
+    {
+        try
+        {
+            // Heuristic: each peak serialises to at most ~14 chars
+            // ("0.1234567,"), plus 64 bytes for the duration + brackets
+            // + keys + null terminator. Round up to the next 4 KB
+            // boundary for safety on very wide canvases.
+            int needed = bucketCount * 16 + 128;
+            int bufLen = ((needed + 4095) / 4096) * 4096;
+            var buf = new byte[bufLen];
+            int rc = Interop.DimmyNative.dimmy_compute_audio_peaks(
+                path, bucketCount, buf, bufLen);
+            if (rc <= 0) return Array.Empty<float>();
+            string json = Encoding.UTF8.GetString(buf, 0, rc);
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("peaks", out var arr)
+                || arr.ValueKind != JsonValueKind.Array)
+                return Array.Empty<float>();
+            int n = arr.GetArrayLength();
+            var peaks = new float[n];
+            int i = 0;
+            foreach (var el in arr.EnumerateArray())
+            {
+                peaks[i++] = (float)el.GetDouble();
+            }
+            return peaks;
+        }
+        catch
+        {
+            return Array.Empty<float>();
+        }
+    }
+
     public static float[] ReadPeaks(string path, int bucketCount)
     {
         try

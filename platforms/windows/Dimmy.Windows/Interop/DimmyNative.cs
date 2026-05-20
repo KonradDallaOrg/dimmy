@@ -43,6 +43,17 @@ public static class DimmyNative
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? appId,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string response);
 
+    /// Compute waveform peaks for any audio file the file-load path
+    /// decodes (WAV via hound, m4a/mp3/aac/flac/ogg via Symphonia).
+    /// Output JSON: `{"peaks":[f32; bucket_count], "duration_secs": f64}`.
+    /// Returns bytes written, or -1 / -2 / -3 per the Rust contract.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_compute_audio_peaks(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string path,
+        int bucketCount,
+        byte[] outBuf,
+        int bufLen);
+
     /// Push one system-audio activity observation. `sysActive` = 1 iff
     /// the loopback / render-side audio is currently emitting above
     /// the floor. Calling this even once flips the stop-suggestion

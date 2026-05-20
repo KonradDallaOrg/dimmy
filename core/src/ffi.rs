@@ -5050,6 +5050,93 @@ fn decode_via_symphonia(path: &str) -> Result<(Vec<f32>, u32), String> {
     Ok((mono, sample_rate))
 }
 
+/// Compute a waveform-peak summary from any audio file the loader
+/// can decode (WAV via hound, m4a / mp3 / aac / flac / ogg via
+/// Symphonia). Mirrors the role of the C#-side `WavPeaks.ReadPeaks`,
+/// but reuses the multi-format Rust decoder so the host UI gets
+/// peaks for every format `dimmy_transcribe_file` accepts.
+///
+/// Output JSON: `{"peaks":[f32; bucket_count], "duration_secs": f64}`
+/// where peaks are in [0..1] (absolute peak per bucket, mono after
+/// downmix).
+///
+/// Returns the number of bytes written (excluding null terminator),
+/// or:
+/// - -1 invalid args (null pointer / bad UTF-8 / `bucket_count <= 0`
+///   / `buf_len <= 0`)
+/// - -2 decode failure (unsupported codec, unreadable file, empty)
+/// - -3 output buffer too small for the JSON (caller should retry
+///   with a larger buffer; the host's "no waveform" fallback applies)
+///
+/// # Safety
+/// `path_ptr` must be a valid null-terminated UTF-8 C string and
+/// `out_buf` a valid writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_compute_audio_peaks(
+    path_ptr: *const c_char,
+    bucket_count: c_int,
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if path_ptr.is_null() || out_buf.is_null() || bucket_count <= 0 || buf_len <= 0 {
+        return -1;
+    }
+    let path = match CStr::from_ptr(path_ptr).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_default();
+    let (mono, sample_rate) = match if ext == "wav" {
+        decode_wav_via_hound(path)
+    } else {
+        decode_via_symphonia(path)
+    } {
+        Ok(v) => v,
+        Err(_) => return -2,
+    };
+    if mono.is_empty() || sample_rate == 0 {
+        return -2;
+    }
+    let buckets = bucket_count as usize;
+    let total = mono.len();
+    let frames_per_bucket = (total / buckets).max(1);
+    let mut peaks: Vec<f32> = Vec::with_capacity(buckets);
+    for b in 0..buckets {
+        let start = b * frames_per_bucket;
+        if start >= total {
+            peaks.push(0.0);
+            continue;
+        }
+        let end = ((b + 1) * frames_per_bucket).min(total);
+        let mut peak: f32 = 0.0;
+        for &s in &mono[start..end] {
+            let a = s.abs();
+            if a > peak {
+                peak = a;
+            }
+        }
+        peaks.push(peak.min(1.0));
+    }
+    let duration_secs = total as f64 / sample_rate as f64;
+    let payload = serde_json::json!({
+        "peaks": peaks,
+        "duration_secs": duration_secs,
+    })
+    .to_string();
+    let bytes = payload.as_bytes();
+    if bytes.len() + 1 > buf_len as usize {
+        return -3;
+    }
+    let dst = std::slice::from_raw_parts_mut(out_buf as *mut u8, buf_len as usize);
+    dst[..bytes.len()].copy_from_slice(bytes);
+    dst[bytes.len()] = 0;
+    bytes.len() as c_int
+}
+
 /// Synchronously transcribe an audio file using the active local STT
 /// backend (whisper.cpp or Parakeet, per `local_stt_backend`). Cloud
 /// transcription via this entry point is unimplemented for now —
