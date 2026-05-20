@@ -300,6 +300,11 @@ fn candidate_paths_for(binary: &str) -> Vec<PathBuf> {
 /// installs at `C:\Program Files\nodejs\`; the macOS .pkg lands in
 /// `/usr/local/bin/` which `candidate_paths_for` already enumerates.
 fn node_candidate_paths() -> Vec<PathBuf> {
+    // `mut` is only used on Windows where we append .msi-installer
+    // locations; on Mac/Linux the shared `candidate_paths_for` already
+    // covers everything. Suppress the clippy warning rather than
+    // duplicating the function body per-platform.
+    #[allow(unused_mut)]
     let mut paths = candidate_paths_for("node");
 
     #[cfg(target_os = "windows")]
