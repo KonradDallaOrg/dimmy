@@ -24,6 +24,9 @@ import SwiftUI
 
 struct MacClaudeCodeCard: View {
     @ObservedObject var appState: AppState
+    /// Called when the user clicks "Set up wizard" (shown only when
+    /// the CLI is missing). Parent owns the sheet state.
+    var onWizardRequested: (() -> Void)? = nil
 
     @State private var status: DimmyCore.ClaudeCodeStatus = .notInstalled
     @State private var binaryPath: String? = nil
@@ -44,11 +47,23 @@ struct MacClaudeCodeCard: View {
                     if signInRunning || testRunning {
                         ProgressView().controlSize(.small).scaleEffect(0.7)
                     }
-                    Button(action: signIn) {
-                        Label(signInLabel, systemImage: "person.badge.key.fill")
+                    if status == .notInstalled, onWizardRequested != nil {
+                        // Binary missing — direct Sign in would fail.
+                        // Replace it with the wizard CTA which walks
+                        // the user through Node.js + npm install +
+                        // login (mirror of Win Settings card).
+                        Button(action: { onWizardRequested?() }) {
+                            Label("Set up wizard", systemImage: "wand.and.stars")
+                        }
+                        .controlSize(.small)
+                        .buttonStyle(.borderedProminent)
+                    } else {
+                        Button(action: signIn) {
+                            Label(signInLabel, systemImage: "person.badge.key.fill")
+                        }
+                        .controlSize(.small)
+                        .disabled(signInDisabled)
                     }
-                    .controlSize(.small)
-                    .disabled(signInDisabled)
 
                     Button(action: testConnection) {
                         Label("Test", systemImage: "checkmark.circle.fill")

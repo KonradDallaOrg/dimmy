@@ -12,6 +12,7 @@ struct MacIntegrationsPage: View {
     @State private var statusMessage: String = ""
     @State private var statusIsError: Bool = false
     @State private var showDisconnectConfirm: Bool = false
+    @State private var showClaudeWizard: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -22,7 +23,12 @@ struct MacIntegrationsPage: View {
             // or (recent CLIs) macOS Keychain under service
             // "Claude Code-credentials". Dimmy never touches the
             // token directly; only probes existence.
-            MacTile { MacClaudeCodeCard(appState: appState) }
+            MacTile {
+                MacClaudeCodeCard(
+                    appState: appState,
+                    onWizardRequested: { showClaudeWizard = true }
+                )
+            }
             MacGroupFooter(text: "Sign-in opens Anthropic's OAuth in your browser via the local `claude` CLI. The OAuth token is stored by the CLI in macOS Keychain (or ~/.claude/credentials.json on older versions). Dimmy reads only the existence of the token — never its contents.")
 
             Spacer().frame(height: 24)
@@ -81,6 +87,27 @@ struct MacIntegrationsPage: View {
                     if appState.hasNotionToken && !appState.notionTargetTitle.isEmpty {
                         statusIsError = false
                         statusMessage = "Recaps will land in “\(appState.notionTargetTitle)”."
+                    }
+                }
+            )
+        }
+        .sheet(isPresented: $showClaudeWizard) {
+            ClaudeConnectSheet(
+                appState: appState,
+                onClose: {
+                    showClaudeWizard = false
+                    DimmyCore.shared.recheckClaudeCode()
+                    appState.refreshClaudeCodeStatus()
+                },
+                onComplete: { ok in
+                    if ok {
+                        // Flip llm_auth_method=subscription so the user
+                        // sees the integration go live without a
+                        // second click in Output → LLM. Mirror of the
+                        // Win wizard completion path.
+                        appState.llmAuthMethod = "subscription"
+                        DimmyCore.shared.setConfig(appState.toRustConfig())
+                        DimmyCore.shared.trackEvent("claude_code.wizard_completed")
                     }
                 }
             )

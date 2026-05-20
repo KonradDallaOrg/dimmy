@@ -487,6 +487,17 @@ int32_t dimmy_claude_code_ping(void);
 /// -2 (buf too small).
 int32_t dimmy_claude_code_diagnostics(char * _Nonnull out_buf, int32_t buf_len);
 
+/// JSON snapshot of Node.js detection:
+///   {found, path, version, major, meets_minimum}
+/// meets_minimum: major >= 18 (claude-code's minimum runtime).
+/// Used by the setup wizard's Step 1.
+int32_t dimmy_claude_code_node_status(char * _Nonnull out_buf, int32_t buf_len);
+
+/// Invalidate cached binary lookups (claude + node) and return the
+/// fresh claude status code (0/1/2). Used by the wizard's "I
+/// installed it, recheck" buttons.
+int32_t dimmy_claude_code_recheck(void);
+
 /// Track a host-side telemetry event by name with optional JSON
 /// properties. Used by the Mac UI to emit categorical events whose
 /// trigger is host-side (login outcome polling, file-load source,
