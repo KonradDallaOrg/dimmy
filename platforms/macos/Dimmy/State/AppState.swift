@@ -764,6 +764,22 @@ final class AppState: ObservableObject {
     @Published var liveCaptionTick: Int = 0
     @Published var liveCaptionIsFinal: Bool = false
 
+    // MARK: - Call detection
+
+    /// Toggle for the 1 Hz CoreAudio poll that detects VoIP calls and
+    /// offers a "Record now" nudge bottom-right. Default true — mirror
+    /// of Rust `Config::call_detect_enabled`. Round-trips via
+    /// `dimmy_set_config_json` → Rust `state.call_detect_enabled`.
+    @Published var callDetectEnabled: Bool = true
+
+    /// Lowercase canonical app ids the user has chosen never to be
+    /// nudged about (popup "Don't ask for X again"). Mirror of Rust
+    /// `Config::call_detect_excluded_apps` (default `["discord"]`).
+    /// Win surfaces this list in Settings → Auto-detect; Mac mirrors
+    /// the same in MacVoicePage so users can re-enable apps without
+    /// editing config.json.
+    @Published var callDetectExcludedApps: [String] = []
+
     // MARK: - LLM Mode (local vs cloud)
 
     @Published var llmMode: String = "cloud"  // "local" or "cloud"
@@ -1102,6 +1118,10 @@ final class AppState: ObservableObject {
         if let v = config["local_stt_backend"] as? String { localSttBackend = v }
         if let v = config["live_captions_enabled"] as? Bool { liveCaptionsEnabled = v }
         if let v = config["filler_removal_enabled"] as? Bool { fillerRemovalEnabled = v }
+        if let v = config["call_detect_enabled"] as? Bool { callDetectEnabled = v }
+        if let arr = config["call_detect_excluded_apps"] as? [String] {
+            callDetectExcludedApps = arr.map { $0.lowercased() }
+        }
 
         // Local LLM
         if let v = config["llm_mode"] as? String { llmMode = v }
@@ -1287,6 +1307,65 @@ final class AppState: ObservableObject {
         return "custom"
     }
 
+    // MARK: - Call-detect nudge handlers
+
+    /// Handle a `call_detected` event from the Rust core. Surfaces the
+    /// nudge popup unless the user has disabled the feature.
+    func onCallDetected(app: String?, sinceSecs: Int) {
+        guard callDetectEnabled else { return }
+        CallNudgeWindowController.shared.showDetected(app: app)
+    }
+
+    /// Handle a `call_ended` event. Hides any open nudge popup.
+    func onCallEnded(app _: String?) {
+        CallNudgeWindowController.shared.hide()
+    }
+
+    /// Handle a `meeting.stop_suggested` event. Pre-conditions are
+    /// enforced Rust-side; we just paint the stop-mode popup.
+    func onCallStopSuggested(app: String?, inactiveSecs _: Int) {
+        guard callDetectEnabled else { return }
+        CallNudgeWindowController.shared.showStopSuggestion(app: app)
+    }
+
+    /// Dispatch the user's response from the nudge popup. Beyond
+    /// telling the Rust state machine, this also kicks the
+    /// downstream side-effects: `record_now` opens the meeting
+    /// window + starts a session; `stop_and_recap` runs the same
+    /// stop+recap pipeline the pill uses.
+    func callNudgeRespond(app: String?, response: String) {
+        _ = DimmyCore.shared.callSignalResponse(appId: app, response: response)
+        switch response {
+        case "record_now":
+            AppDelegate.shared?.openMeetingWindow()
+            // openMeetingWindow shows + reattaches; the Meeting VM is
+            // owned by the controller so we drive .start() through it.
+            MeetingWindowController.shared.viewModel.start()
+        case "stop_and_recap":
+            PillWindowController.stopMeetingFromPill(appState: self)
+        case "never":
+            // Rust state machine already added the app to its in-memory
+            // exclusion set + persisted via save_config_file. Mirror in
+            // AppState so the Settings list refreshes without reloading
+            // config from disk.
+            if let app, !app.isEmpty,
+               !callDetectExcludedApps.contains(app.lowercased()) {
+                callDetectExcludedApps.append(app.lowercased())
+            }
+        default:
+            break
+        }
+    }
+
+    /// Remove an app from the exclusion list — Mac mirror of the
+    /// Win settings "remove" button. Pushes the updated list back to
+    /// Rust so the state machine stops suppressing nudges for it.
+    func removeCallDetectExclusion(_ app: String) {
+        let key = app.lowercased()
+        callDetectExcludedApps.removeAll { $0 == key }
+        DimmyCore.shared.setConfig(toRustConfig())
+    }
+
     /// Build a config dictionary for sending to Rust via FFI.
     ///
     /// `includeNotion = false` (default) **omits** the
@@ -1330,6 +1409,8 @@ final class AppState: ObservableObject {
             "local_stt_backend": localSttBackend,
             "live_captions_enabled": liveCaptionsEnabled,
             "filler_removal_enabled": fillerRemovalEnabled,
+            "call_detect_enabled": callDetectEnabled,
+            "call_detect_excluded_apps": callDetectExcludedApps,
             "preprocessing_enabled": preprocessingEnabled,
             "chunk_streaming_enabled": chunkStreamingEnabled,
             "audio_debug_enabled": audioDebugEnabled,

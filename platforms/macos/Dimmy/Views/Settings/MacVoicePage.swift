@@ -26,6 +26,20 @@ struct MacVoicePage: View {
     /// so the two UIs round-trip the same selection through the Rust core.
     private static let parakeetTag = "parakeet:fp32"
 
+    /// User-facing label for the call-detect exclusion list. Maps the
+    /// canonical lowercase id ("teams", "zoom", …) back to the brand
+    /// name. Mirror of CallNudgeWindowController.appDisplayNames.
+    private static func exclusionDisplayName(for app: String) -> String {
+        switch app.lowercased() {
+        case "teams": return "Microsoft Teams"
+        case "zoom": return "Zoom"
+        case "slack": return "Slack"
+        case "discord": return "Discord"
+        case "webex": return "Cisco Webex"
+        default: return app.capitalized
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             speechRecognitionGroup
@@ -567,7 +581,7 @@ struct MacVoicePage: View {
                         MacRow(
                             "Live captions",
                             description: "Floating subtitle window during recording",
-                            showsDivider: false
+                            showsDivider: true
                         ) {
                             Toggle("", isOn: Binding(
                                 get: { appState.liveCaptionsEnabled },
@@ -578,6 +592,45 @@ struct MacVoicePage: View {
                             ))
                             .toggleStyle(.switch)
                             .labelsHidden()
+                        }
+                    }
+
+                    // Call-detect nudge — 1 Hz CoreAudio poll surfaces
+                    // a bottom-right popup when a VoIP call is detected.
+                    // Off ⇒ no enumeration, no popup. Default on.
+                    MacRow(
+                        "Auto-detect meetings",
+                        description: "Show a bottom-right popup when a call is detected and offer to record",
+                        showsDivider: !appState.callDetectExcludedApps.isEmpty
+                    ) {
+                        Toggle("", isOn: Binding(
+                            get: { appState.callDetectEnabled },
+                            set: { newValue in
+                                appState.callDetectEnabled = newValue
+                                persistConfig()
+                            }
+                        ))
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                    }
+
+                    // Exclusion list — apps the user picked "Don't ask
+                    // again" for. Mirror of Win Settings exclusion card.
+                    // Hidden when empty so the section doesn't clutter
+                    // for users who never used the menu.
+                    if !appState.callDetectExcludedApps.isEmpty {
+                        let entries = appState.callDetectExcludedApps
+                        ForEach(Array(entries.enumerated()), id: \.element) { idx, app in
+                            MacRow(
+                                Self.exclusionDisplayName(for: app),
+                                description: "Won't show the auto-detect popup for this app",
+                                showsDivider: idx < entries.count - 1
+                            ) {
+                                Button("Remove") {
+                                    appState.removeCallDetectExclusion(app)
+                                }
+                                .controlSize(.small)
+                            }
                         }
                     }
                 }
