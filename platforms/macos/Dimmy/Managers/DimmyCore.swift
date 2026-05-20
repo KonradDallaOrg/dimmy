@@ -463,6 +463,56 @@ final class DimmyCore {
         }
     }
 
+    // ── Setup wizard support (Node.js detection + cache recheck) ──
+
+    /// Node.js detection snapshot for the setup wizard's Step 1.
+    /// Mirror of the Rust JSON envelope.
+    struct NodeStatus {
+        let found: Bool
+        let path: String?
+        let version: String?
+        let major: Int?
+        let meetsMinimum: Bool
+
+        static let missing = NodeStatus(
+            found: false, path: nil, version: nil,
+            major: nil, meetsMinimum: false)
+    }
+
+    /// Probe for a local Node.js install. Returns a structured snapshot
+    /// the setup wizard binds to. `meetsMinimum` is true iff
+    /// `major >= 18` (claude-code's minimum runtime).
+    func nodeStatus() -> NodeStatus {
+        let bufLen: Int32 = 2048
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+        let written = dimmy_claude_code_node_status(buffer, bufLen)
+        guard written > 0,
+              let data = String(cString: buffer).data(using: .utf8),
+              let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return .missing
+        }
+        let found = raw["found"] as? Bool ?? false
+        if !found { return .missing }
+        return NodeStatus(
+            found: true,
+            path: raw["path"] as? String,
+            version: raw["version"] as? String,
+            major: raw["major"] as? Int,
+            meetsMinimum: raw["meets_minimum"] as? Bool ?? false)
+    }
+
+    /// Invalidate cached binary lookups (claude + node) and return
+    /// the fresh Claude Code status. Used by the wizard's "I installed
+    /// it, recheck" buttons — without this, Dimmy keeps stale "not
+    /// found" answers until restart.
+    @discardableResult
+    func recheckClaudeCode() -> ClaudeCodeStatus {
+        let raw = dimmy_claude_code_recheck()
+        return ClaudeCodeStatus(rawValue: raw) ?? .notInstalled
+    }
+
     /// Emit a typed telemetry event. `props` is a Swift dict that
     /// will be JSON-encoded and passed to the Rust dispatcher.
     /// Non-categorical or unknown event names silently drop (-2).

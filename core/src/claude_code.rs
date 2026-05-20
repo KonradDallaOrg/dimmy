@@ -47,7 +47,7 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::OnceLock;
+use std::sync::RwLock;
 use std::time::Duration;
 
 /// Status of the local Claude Code install.
@@ -80,23 +80,39 @@ impl ClaudeCodeStatus {
 }
 
 /// Cache the binary location across calls so `status()` doesn't
-/// re-walk the filesystem on every invocation. The cache is
-/// invalidated by `clear_cache()` which the UI calls after a
-/// successful `claude login`.
-static BINARY_CACHE: OnceLock<Option<PathBuf>> = OnceLock::new();
+/// re-walk the filesystem on every invocation. The setup wizard
+/// invalidates this via `clear_cache()` after the user reports
+/// an install completed.
+///
+/// State encoding:
+///   - `None`             → never resolved (cold)
+///   - `Some(None)`       → resolved: binary not present
+///   - `Some(Some(path))` → resolved: binary at `path`
+///
+/// `RwLock` not `OnceLock` because the wizard MUST be able to
+/// re-detect after the user runs `npm install -g`: the previous
+/// `OnceLock` shape made `clear_cache()` a no-op + forced the user
+/// to restart Dimmy. See the wizard recheck flow in `dimmy_claude_code_recheck`.
+static BINARY_CACHE: RwLock<Option<Option<PathBuf>>> = RwLock::new(None);
+static NODE_CACHE: RwLock<Option<Option<PathBuf>>> = RwLock::new(None);
 
-/// Reset the cached binary location. Call after the user installs
-/// Claude Code mid-session or after a login subprocess completes
-/// (the login flow can re-write the binary too).
+/// Reset every cached lookup. Call after a successful install or
+/// login event so the next status check re-walks the filesystem.
+/// Cheap (just acquires the locks + writes `None`); safe to call
+/// from any thread.
 pub fn clear_cache() {
-    // OnceLock has no public reset — for now we rely on the user
-    // restarting Dimmy after install. Documented limitation.
-    // A future refactor can replace OnceLock with RwLock<Option<…>>.
+    if let Ok(mut g) = BINARY_CACHE.write() {
+        *g = None;
+    }
+    if let Ok(mut g) = NODE_CACHE.write() {
+        *g = None;
+    }
 }
 
 /// Common locations where Claude Code installs the binary,
-/// cross-platform. The list is walked in order until the first
-/// existing file is hit.
+/// cross-platform. Delegates to `candidate_paths_for("claude")`
+/// for the shared per-user Node-manager dirs, then adds the
+/// Anthropic-specific install paths on top.
 ///
 /// Mac coverage note (2026-05-13 incident): macOS GUI apps inherit
 /// the system base PATH (`/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin`),
@@ -107,9 +123,9 @@ pub fn clear_cache() {
 /// install patterns explicitly; the login-shell fallback in
 /// `detect_binary()` catches anything more exotic.
 fn candidate_paths() -> Vec<PathBuf> {
-    let mut paths = Vec::new();
+    let mut paths = candidate_paths_for("claude");
 
-    // 1. User-local install dirs.
+    // Claude-specific install dirs (NOT shared with node).
     if let Some(home) = dirs::home_dir() {
         #[cfg(target_os = "windows")]
         {
@@ -122,77 +138,7 @@ fn candidate_paths() -> Vec<PathBuf> {
             // CLI self-managed shim (only present if the user ran a
             // claude /install-shim or equivalent).
             paths.push(home.join(".claude").join("local").join("claude"));
-
-            // XDG user-bin — pipx, mise (Rust-based runtime manager),
-            // manual installs, and increasingly many distro-agnostic
-            // package managers default here. Suggested by user's Mac
-            // colleague's independent diagnosis (2026-05-13).
-            paths.push(home.join(".local").join("bin").join("claude"));
-
-            // npm with custom global prefix (very common — devs who
-            // ran `npm config set prefix ~/.npm-global` to avoid sudo).
-            paths.push(home.join(".npm-global").join("bin").join("claude"));
-
-            // Yarn global.
-            paths.push(home.join(".yarn").join("bin").join("claude"));
-
-            // Volta — atomic Node version manager (puts shims here).
-            paths.push(home.join(".volta").join("bin").join("claude"));
-
-            // nvm — walk all installed Node versions. nvm doesn't
-            // symlink into a stable path; each `node` version has
-            // its own bin/.
-            let nvm_root = home.join(".nvm").join("versions").join("node");
-            if let Ok(entries) = std::fs::read_dir(&nvm_root) {
-                for entry in entries.flatten() {
-                    paths.push(entry.path().join("bin").join("claude"));
-                }
-            }
-
-            // fnm — newer Node version manager (Rust-based).
-            let fnm_root = home.join(".fnm").join("node-versions");
-            if let Ok(entries) = std::fs::read_dir(&fnm_root) {
-                for entry in entries.flatten() {
-                    paths.push(entry.path().join("installation").join("bin").join("claude"));
-                }
-            }
-
-            // asdf — multi-runtime manager (popular in polyglot teams).
-            let asdf_node = home.join(".asdf").join("installs").join("nodejs");
-            if let Ok(entries) = std::fs::read_dir(&asdf_node) {
-                for entry in entries.flatten() {
-                    paths.push(entry.path().join("bin").join("claude"));
-                }
-            }
-
-            // pnpm — Mac/Linux paths differ slightly.
-            #[cfg(target_os = "macos")]
-            {
-                paths.push(home.join("Library").join("pnpm").join("claude"));
-            }
-            #[cfg(target_os = "linux")]
-            {
-                paths.push(
-                    home.join(".local")
-                        .join("share")
-                        .join("pnpm")
-                        .join("claude"),
-                );
-            }
         }
-    }
-
-    // 2. Platform-typical install dirs.
-    #[cfg(target_os = "macos")]
-    {
-        paths.push(PathBuf::from("/opt/homebrew/bin/claude"));
-        paths.push(PathBuf::from("/usr/local/bin/claude"));
-        paths.push(PathBuf::from("/usr/bin/claude"));
-    }
-    #[cfg(target_os = "linux")]
-    {
-        paths.push(PathBuf::from("/usr/local/bin/claude"));
-        paths.push(PathBuf::from("/usr/bin/claude"));
     }
     #[cfg(target_os = "windows")]
     {
@@ -208,12 +154,6 @@ fn candidate_paths() -> Vec<PathBuf> {
                     .join("AnthropicClaude")
                     .join("claude.exe"),
             );
-            // npm global install via `npm i -g @anthropic-ai/claude-code`
-            paths.push(
-                PathBuf::from(&local_app_data)
-                    .join("npm")
-                    .join("claude.cmd"),
-            );
         }
         if let Ok(program_files) = std::env::var("ProgramFiles") {
             paths.push(
@@ -224,30 +164,201 @@ fn candidate_paths() -> Vec<PathBuf> {
         }
     }
 
-    // 3. PATH walk — last resort because more expensive (each PATH
-    //    entry is stat'd). Stops at the first match.
+    paths
+}
+
+/// Generic per-binary candidate paths covering every Node-manager
+/// install pattern Dimmy users have been seen using. Both `claude`
+/// (Node CLI distributed via `@anthropic-ai/claude-code`) and `node`
+/// (the runtime claude needs) live in the same per-user dirs, so
+/// they share this enumeration.
+///
+/// Cross-platform conventions:
+///   - Windows: emits `<dir>/<binary>.cmd`, `.exe`, and bare
+///     (npm-shim, native exe, generic) so a single `is_file()` walk
+///     terminates at the first hit.
+///   - Mac/Linux: emits `<dir>/<binary>` only.
+///
+/// Order matters — explicit dirs come before PATH walk because
+/// `is_file()` against a known path is ~stat-fast while walking
+/// PATH entries pays the per-entry stat cost regardless of result.
+fn candidate_paths_for(binary: &str) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+
+    // Helper: produce platform-specific filename variants for `dir`.
+    let push_variants = |paths: &mut Vec<PathBuf>, dir: PathBuf| {
+        #[cfg(target_os = "windows")]
+        {
+            paths.push(dir.join(format!("{}.cmd", binary)));
+            paths.push(dir.join(format!("{}.exe", binary)));
+            paths.push(dir.join(binary));
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            paths.push(dir.join(binary));
+        }
+    };
+
+    if let Some(home) = dirs::home_dir() {
+        // XDG user-bin — pipx, mise (Rust-based runtime manager),
+        // manual installs, and increasingly many distro-agnostic
+        // package managers default here. Mac+Linux only (no Windows
+        // convention).
+        #[cfg(not(target_os = "windows"))]
+        push_variants(&mut paths, home.join(".local").join("bin"));
+
+        // npm with custom global prefix (very common — devs who
+        // ran `npm config set prefix ~/.npm-global` to avoid sudo).
+        push_variants(&mut paths, home.join(".npm-global").join("bin"));
+
+        // Yarn global.
+        push_variants(&mut paths, home.join(".yarn").join("bin"));
+
+        // Volta — atomic Node version manager (puts shims here).
+        push_variants(&mut paths, home.join(".volta").join("bin"));
+
+        // nvm — walk all installed Node versions. nvm doesn't
+        // symlink into a stable path; each `node` version has
+        // its own bin/. NOTE: nvm proper is Unix-only; nvm-windows
+        // is a totally different project that DOES install at a
+        // stable %APPDATA%\nvm\<version>\ path (handled below).
+        let nvm_root = home.join(".nvm").join("versions").join("node");
+        if let Ok(entries) = std::fs::read_dir(&nvm_root) {
+            for entry in entries.flatten() {
+                push_variants(&mut paths, entry.path().join("bin"));
+            }
+        }
+
+        // fnm — newer Node version manager (Rust-based).
+        let fnm_root = home.join(".fnm").join("node-versions");
+        if let Ok(entries) = std::fs::read_dir(&fnm_root) {
+            for entry in entries.flatten() {
+                #[cfg(target_os = "windows")]
+                push_variants(&mut paths, entry.path().join("installation"));
+                #[cfg(not(target_os = "windows"))]
+                push_variants(&mut paths, entry.path().join("installation").join("bin"));
+            }
+        }
+
+        // asdf — multi-runtime manager (Mac/Linux only).
+        #[cfg(not(target_os = "windows"))]
+        {
+            let asdf_node = home.join(".asdf").join("installs").join("nodejs");
+            if let Ok(entries) = std::fs::read_dir(&asdf_node) {
+                for entry in entries.flatten() {
+                    push_variants(&mut paths, entry.path().join("bin"));
+                }
+            }
+        }
+
+        // pnpm — per-platform install root.
+        #[cfg(target_os = "macos")]
+        push_variants(&mut paths, home.join("Library").join("pnpm"));
+        #[cfg(target_os = "linux")]
+        push_variants(&mut paths, home.join(".local").join("share").join("pnpm"));
+    }
+
+    // Platform-typical system install dirs.
+    #[cfg(target_os = "macos")]
+    {
+        push_variants(&mut paths, PathBuf::from("/opt/homebrew/bin"));
+        push_variants(&mut paths, PathBuf::from("/usr/local/bin"));
+        push_variants(&mut paths, PathBuf::from("/usr/bin"));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        push_variants(&mut paths, PathBuf::from("/usr/local/bin"));
+        push_variants(&mut paths, PathBuf::from("/usr/bin"));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // npm-global install on Win lives in two possible places
+        // depending on whether the user used machine-wide install
+        // or per-user `npm config set prefix`.
+        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+            push_variants(&mut paths, PathBuf::from(&local_app_data).join("npm"));
+        }
+        if let Ok(app_data) = std::env::var("APPDATA") {
+            push_variants(&mut paths, PathBuf::from(&app_data).join("npm"));
+        }
+    }
+
+    // PATH walk — last resort because each PATH entry is stat'd.
+    // Stops at the first match (caller does `.find(|c| c.is_file())`).
     if let Some(path) = std::env::var_os("PATH") {
         for dir in std::env::split_paths(&path) {
-            #[cfg(target_os = "windows")]
-            {
-                paths.push(dir.join("claude.exe"));
-                paths.push(dir.join("claude.cmd"));
-            }
-            paths.push(dir.join("claude"));
+            push_variants(&mut paths, dir);
         }
     }
 
     paths
 }
 
-/// Mac/Linux fallback: ask the user's LOGIN shell where `claude` is.
+/// Node.js install locations, cross-platform. Extends
+/// `candidate_paths_for("node")` (every Node-manager dir we know
+/// about) with the official-installer drops: the Windows .msi
+/// installs at `C:\Program Files\nodejs\`; the macOS .pkg lands in
+/// `/usr/local/bin/` which `candidate_paths_for` already enumerates.
+fn node_candidate_paths() -> Vec<PathBuf> {
+    // `mut` is only used on Windows where we append .msi-installer
+    // locations; on Mac/Linux the shared `candidate_paths_for` already
+    // covers everything. Suppress the clippy warning rather than
+    // duplicating the function body per-platform.
+    #[allow(unused_mut)]
+    let mut paths = candidate_paths_for("node");
+
+    #[cfg(target_os = "windows")]
+    {
+        // Official Node.js .msi installer — system-wide.
+        if let Ok(program_files) = std::env::var("ProgramFiles") {
+            paths.push(
+                PathBuf::from(&program_files)
+                    .join("nodejs")
+                    .join("node.exe"),
+            );
+        }
+        // Official Node.js .msi installer — per-user (less common).
+        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+            paths.push(
+                PathBuf::from(&local_app_data)
+                    .join("Programs")
+                    .join("nodejs")
+                    .join("node.exe"),
+            );
+        }
+        // 32-bit Node on 64-bit Windows.
+        if let Ok(program_files_x86) = std::env::var("ProgramFiles(x86)") {
+            paths.push(
+                PathBuf::from(&program_files_x86)
+                    .join("nodejs")
+                    .join("node.exe"),
+            );
+        }
+        // nvm-windows — separate project from Unix nvm. Walks
+        // %APPDATA%\nvm\<version>\ (the install dir; PATH normally
+        // symlinks one of them via a junction, but the symlink can
+        // lag behind a `nvm use` event).
+        if let Ok(app_data) = std::env::var("APPDATA") {
+            let nvm_win = PathBuf::from(&app_data).join("nvm");
+            if let Ok(entries) = std::fs::read_dir(&nvm_win) {
+                for entry in entries.flatten() {
+                    paths.push(entry.path().join("node.exe"));
+                }
+            }
+        }
+    }
+
+    paths
+}
+
+/// Mac/Linux fallback: ask the user's LOGIN shell where `<binary>` is.
 ///
 /// macOS GUI apps inherit the system base PATH (no `.zprofile`/
-/// `.zshrc`/`.bash_profile` sourcing). A user who installed claude
-/// via a Node-manager whose dir we don't enumerate above (or via a
+/// `.zshrc`/`.bash_profile` sourcing). A user who installed Node or
+/// Claude via a manager whose dir we don't enumerate above (or via a
 /// path that lives behind a custom shell config) will have a working
-/// CLI in Terminal that's invisible to Dimmy. The login shell knows
-/// the real PATH because it sources the user's rc files.
+/// binary in Terminal that's invisible to Dimmy. The login shell
+/// knows the real PATH because it sources the user's rc files.
 ///
 /// We use `command -v` which is the POSIX-portable equivalent of
 /// `which` and doesn't print spurious output. ~50 ms one-shot.
@@ -257,8 +368,23 @@ fn candidate_paths() -> Vec<PathBuf> {
 /// `.zshrc` that printed garbage to stdout (during sourcing) can't
 /// inject a fake path here because we re-verify with `is_file()`
 /// before trusting it.
+///
+/// SECURITY: `binary` is whitelisted by callers (`"claude"` and
+/// `"node"`). We still defensively reject anything containing shell
+/// metacharacters so a hypothetical caller passing user-controlled
+/// input can't escape into the shell command. `command -v` itself
+/// expands `$PATH` lookups only — but our caller is the only trust
+/// boundary, so belt-and-braces here.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-fn detect_via_login_shell() -> Option<PathBuf> {
+fn detect_via_login_shell(binary: &str) -> Option<PathBuf> {
+    // Belt-and-braces: caller passes a known-safe name, but never
+    // interpolate without checking.
+    if !binary
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return None;
+    }
     use std::process::Command;
     // Prefer zsh on Mac (default since Catalina), bash on Linux. If
     // either is absent, the spawn fails harmlessly and we return None.
@@ -267,10 +393,8 @@ fn detect_via_login_shell() -> Option<PathBuf> {
     #[cfg(target_os = "linux")]
     let shell = "/bin/bash";
 
-    let output = Command::new(shell)
-        .args(["-l", "-c", "command -v claude 2>/dev/null"])
-        .output()
-        .ok()?;
+    let cmd = format!("command -v {} 2>/dev/null", binary);
+    let output = Command::new(shell).args(["-l", "-c", &cmd]).output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -282,8 +406,8 @@ fn detect_via_login_shell() -> Option<PathBuf> {
     let p = PathBuf::from(first);
     if p.is_file() {
         crate::log(&format!(
-            "[ClaudeCode] login-shell fallback resolved binary at {:?}",
-            p
+            "[ClaudeCode] login-shell fallback resolved {} at {:?}",
+            binary, p
         ));
         Some(p)
     } else {
@@ -299,24 +423,116 @@ fn detect_via_login_shell() -> Option<PathBuf> {
 ///   2. Mac/Linux login-shell fallback when 1 fails (~50 ms once).
 ///
 /// Result is cached in `BINARY_CACHE` so the slow path runs at most
-/// once per app launch. The cache is invalidated by `clear_cache()`
-/// which should be called after an install/uninstall event.
+/// once per call sequence. The cache is invalidated by `clear_cache()`
+/// which the setup wizard calls after the user reports an install
+/// completed.
 pub fn detect_binary() -> Option<PathBuf> {
-    BINARY_CACHE
-        .get_or_init(|| {
-            if let Some(p) = candidate_paths().into_iter().find(|c| c.is_file()) {
-                return Some(p);
-            }
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
-            {
-                detect_via_login_shell()
-            }
-            #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-            {
-                None
-            }
-        })
-        .clone()
+    // Fast path: cached.
+    if let Ok(g) = BINARY_CACHE.read() {
+        if let Some(cached) = g.as_ref() {
+            return cached.clone();
+        }
+    }
+
+    // Slow path: walk + login-shell fallback. Compute outside the
+    // write lock so we don't block readers for the full walk.
+    let resolved = resolve_claude_binary();
+
+    if let Ok(mut g) = BINARY_CACHE.write() {
+        *g = Some(resolved.clone());
+    }
+    resolved
+}
+
+fn resolve_claude_binary() -> Option<PathBuf> {
+    if let Some(p) = candidate_paths().into_iter().find(|c| c.is_file()) {
+        return Some(p);
+    }
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        detect_via_login_shell("claude")
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        None
+    }
+}
+
+/// Locate the `node` binary using the same two-tier search as
+/// `detect_binary()`. Cached separately so a `clear_cache()` invalidates
+/// both lookups in one call.
+///
+/// Why we care: the setup wizard's Node step needs to detect Node
+/// independently of Claude, because the user installs Node FIRST
+/// (then Claude via `npm install -g`). Reusing `detect_binary()`
+/// would conflate the two states and break the wizard's smart-skip
+/// (e.g. "Node done, do Claude next").
+pub fn detect_node_binary() -> Option<PathBuf> {
+    if let Ok(g) = NODE_CACHE.read() {
+        if let Some(cached) = g.as_ref() {
+            return cached.clone();
+        }
+    }
+    let resolved = resolve_node_binary();
+    if let Ok(mut g) = NODE_CACHE.write() {
+        *g = Some(resolved.clone());
+    }
+    resolved
+}
+
+fn resolve_node_binary() -> Option<PathBuf> {
+    if let Some(p) = node_candidate_paths().into_iter().find(|c| c.is_file()) {
+        return Some(p);
+    }
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        detect_via_login_shell("node")
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        None
+    }
+}
+
+/// Returns the major.minor.patch reported by `<node> --version`, or
+/// None if Node isn't installed / fails to launch / returns garbage.
+/// Cheap (~50 ms one-shot). Used by the wizard to surface an
+/// "outdated Node, please update" diagnostic instead of letting
+/// `npm install -g @anthropic-ai/claude-code` fail with a cryptic
+/// EBADENGINE later.
+///
+/// Output format: `"22.5.1"` (drops the leading `v` Node prints).
+pub fn node_version() -> Option<String> {
+    let bin = detect_node_binary()?;
+    let mut cmd = Command::new(&bin);
+    cmd.arg("--version");
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    let output = cmd.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let s = String::from_utf8(output.stdout).ok()?;
+    let trimmed = s.trim();
+    // Node prints `v22.5.1` — strip the leading v.
+    let v = trimmed.strip_prefix('v').unwrap_or(trimmed);
+    if v.is_empty() {
+        return None;
+    }
+    Some(v.to_string())
+}
+
+/// Parse a semver-ish version string and return its major number.
+/// Returns None on malformed input. Used by the wizard to gate
+/// "Node >= 18" — claude-code's minimum supported runtime.
+pub fn parse_node_major(version: &str) -> Option<u32> {
+    version.split('.').next()?.parse::<u32>().ok()
 }
 
 /// True iff the Claude Code CLI has stored credentials somewhere
@@ -407,7 +623,7 @@ pub fn diagnostics_json() -> String {
     let resolved_via_explicit = candidate_paths().into_iter().find(|c| c.is_file());
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     let resolved_via_shell = if resolved_via_explicit.is_none() {
-        detect_via_login_shell()
+        detect_via_login_shell("claude")
     } else {
         None
     };
@@ -956,6 +1172,106 @@ mod tests {
             "NonZeroExit Display must not echo stderr: {}",
             with_stderr
         );
+    }
+
+    #[test]
+    fn parse_node_major_handles_typical_outputs() {
+        // `node --version` prints "v22.5.1"; node_version() strips the v.
+        assert_eq!(parse_node_major("22.5.1"), Some(22));
+        assert_eq!(parse_node_major("18.0.0"), Some(18));
+        assert_eq!(parse_node_major("20"), Some(20));
+        // Malformed inputs return None — wizard treats this as "couldn't
+        // detect version" rather than fabricating a major.
+        assert_eq!(parse_node_major(""), None);
+        assert_eq!(parse_node_major("not-a-version"), None);
+        assert_eq!(parse_node_major("v18.0.0"), None); // expects pre-stripped
+    }
+
+    /// Same enumeration discipline as the claude detection: every
+    /// Node-manager bin dir we know about must appear in
+    /// `node_candidate_paths()`. If a refactor drops one, users with
+    /// a Node-manager install pattern would be invisible to the
+    /// wizard's Step 1 detection.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn node_candidate_paths_includes_node_manager_install_dirs() {
+        let paths = node_candidate_paths();
+        let joined: String = paths
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("\n");
+        for needle in [
+            ".npm-global/bin/node",
+            ".yarn/bin/node",
+            ".volta/bin/node",
+            ".local/bin/node",
+        ] {
+            assert!(
+                joined.contains(needle),
+                "node_candidate_paths missing {} — Node-manager users would be invisible to the wizard",
+                needle
+            );
+        }
+    }
+
+    /// On Windows the official Node.js .msi installer lands in
+    /// `C:\Program Files\nodejs\`. Detecting Node ONLY via PATH would
+    /// miss the case where the installer's PATH update hasn't been
+    /// picked up by Dimmy yet (Dimmy inherited PATH at launch). The
+    /// explicit `%ProgramFiles%\nodejs\node.exe` candidate is the
+    /// safety net.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn node_candidate_paths_includes_program_files_nodejs() {
+        let paths = node_candidate_paths();
+        let joined: String = paths
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            joined.to_lowercase().contains("nodejs\\node.exe"),
+            "missing %ProgramFiles%\\nodejs\\node.exe — users who installed the official .msi would be invisible"
+        );
+    }
+
+    #[test]
+    fn clear_cache_invalidates_both_lookups() {
+        // Seed both caches with a known state (None means "not present"
+        // — we don't depend on the real machine having either binary).
+        *BINARY_CACHE.write().unwrap() = Some(None);
+        *NODE_CACHE.write().unwrap() = Some(None);
+        clear_cache();
+        assert!(
+            BINARY_CACHE.read().unwrap().is_none(),
+            "clear_cache must reset BINARY_CACHE to uncached"
+        );
+        assert!(
+            NODE_CACHE.read().unwrap().is_none(),
+            "clear_cache must reset NODE_CACHE to uncached"
+        );
+    }
+
+    /// SECURITY: the login-shell fallback embeds the binary name in
+    /// a `sh -c "command -v X"` string. If a future refactor lets
+    /// arbitrary input through, a malicious caller could escape into
+    /// the shell. Pin the whitelist.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn detect_via_login_shell_rejects_unsafe_binary_names() {
+        // Shell metacharacters → reject (returns None without spawning).
+        assert!(detect_via_login_shell("claude; rm -rf /").is_none());
+        assert!(detect_via_login_shell("claude && evil").is_none());
+        assert!(detect_via_login_shell("claude`evil`").is_none());
+        assert!(detect_via_login_shell("claude$(evil)").is_none());
+        assert!(detect_via_login_shell("../../../bin/sh").is_none());
+        assert!(detect_via_login_shell("").is_none());
+        // Allowed characters pass the guard (still returns None on
+        // most CI runners that don't have claude/node, but the spawn
+        // is allowed to proceed).
+        let _ = detect_via_login_shell("claude");
+        let _ = detect_via_login_shell("node");
     }
 
     #[test]

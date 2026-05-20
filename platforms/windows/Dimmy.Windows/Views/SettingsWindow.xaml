@@ -2244,15 +2244,28 @@
                               FontSize="20"
                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
                   </StackPanel>
-                  <!-- DISCONNECTED action row: Sign in button (or
-                       disabled "install first" hint when binary missing). -->
+                  <!-- DISCONNECTED action row. When the binary is
+                       missing, primary CTA is the setup wizard (which
+                       walks the user through Node.js + npm install +
+                       login). When the binary IS installed but the
+                       user hasn't signed in, the wizard is overkill —
+                       the same row offers a direct Sign in button.
+                       RefreshAuthIntegrationStatus swaps which one is
+                       primary per state. -->
                   <StackPanel x:Name="AnthropicIntegrationDisconnectedActions"
                               Grid.Column="1" Grid.ColumnSpan="2" Grid.Row="1"
                               Orientation="Horizontal" Spacing="8"
                               Visibility="Collapsed">
+                    <Button x:Name="AnthropicIntegrationWizardBtn"
+                            Click="AnthropicIntegrationWizard_Click"
+                            Visibility="Collapsed">
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xE9F5;" FontSize="14"/>
+                        <TextBlock Text="Set up wizard"/>
+                      </StackPanel>
+                    </Button>
                     <Button x:Name="AnthropicIntegrationSignInBtn"
-                            Click="AnthropicIntegrationSignIn_Click"
-                            Style="{ThemeResource AccentButtonStyle}">
+                            Click="AnthropicIntegrationSignIn_Click">
                       <StackPanel Orientation="Horizontal" Spacing="6">
                         <FontIcon Glyph="&#xE8A7;" FontSize="14"/>
                         <TextBlock x:Name="AnthropicIntegrationSignInLabel" Text="Sign in via browser"/>
@@ -2276,6 +2289,8 @@
                     </Button>
                     <Button Content="Re-sign in" Click="AnthropicIntegrationSignIn_Click"
                             ToolTipService.ToolTip="Re-run the OAuth flow if your subscription token expired"/>
+                    <Button Content="Re-run setup" Click="AnthropicIntegrationRerunWizard_Click"
+                            ToolTipService.ToolTip="Re-walk the 3-step wizard (Node.js → CLI → sign in) — useful to verify the install or update Node"/>
                     <Button Content="Refresh" Click="AnthropicIntegrationRefresh_Click"/>
                   </StackPanel>
                 </Grid>

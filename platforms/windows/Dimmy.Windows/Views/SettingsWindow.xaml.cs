@@ -1631,20 +1631,31 @@ public sealed partial class SettingsWindow : Window
                     Application.Current.Resources["TextFillColorTertiaryBrush"];
                 AnthropicIntegrationDisconnectedActions.Visibility = Visibility.Visible;
                 AnthropicIntegrationConnectedActions.Visibility = Visibility.Collapsed;
+                // Binary present, only login missing — direct Sign in
+                // is faster than the wizard. Hide the wizard CTA.
+                AnthropicIntegrationWizardBtn.Visibility = Visibility.Collapsed;
+                AnthropicIntegrationSignInBtn.Visibility = Visibility.Visible;
+                AnthropicIntegrationSignInBtn.Style =
+                    (Microsoft.UI.Xaml.Style)Application.Current.Resources["AccentButtonStyle"];
                 AnthropicIntegrationSignInLabel.Text = "Sign in via browser";
                 AnthropicIntegrationSignInBtn.IsEnabled = true;
                 break;
             case Interop.DimmyNative.ClaudeCodeStatus.NotInstalled:
             default:
                 AnthropicIntegrationStatusText.Text =
-                    "Claude Code CLI not detected. Install with `npm i -g @anthropic-ai/claude-code`, then click Refresh.";
+                    "Claude Code CLI not detected. Click Set up wizard for a guided Node.js + CLI + sign-in walkthrough.";
                 AnthropicIntegrationStatusGlyph.Glyph = ""; // Info
                 AnthropicIntegrationStatusGlyph.Foreground = (Microsoft.UI.Xaml.Media.Brush)
                     Application.Current.Resources["TextFillColorTertiaryBrush"];
                 AnthropicIntegrationDisconnectedActions.Visibility = Visibility.Visible;
                 AnthropicIntegrationConnectedActions.Visibility = Visibility.Collapsed;
-                AnthropicIntegrationSignInLabel.Text = "Install Claude Code first";
-                AnthropicIntegrationSignInBtn.IsEnabled = false;
+                // Binary missing — wizard is the right entry point.
+                // Hide the dead-end Sign in button (it would fail
+                // with NotInstalled anyway) and promote the wizard.
+                AnthropicIntegrationWizardBtn.Visibility = Visibility.Visible;
+                AnthropicIntegrationWizardBtn.Style =
+                    (Microsoft.UI.Xaml.Style)Application.Current.Resources["AccentButtonStyle"];
+                AnthropicIntegrationSignInBtn.Visibility = Visibility.Collapsed;
                 break;
         }
 
@@ -1898,6 +1909,60 @@ public sealed partial class SettingsWindow : Window
     private void RefreshClaudeCodeStatus() => RefreshAuthIntegrationStatus();
 
     // ── Integrations → Anthropic card handlers ──────────────────
+
+    /// <summary>
+    /// Open the multi-step setup wizard. Smart-skips to whichever step
+    /// matches the current install state (so users re-running the
+    /// wizard after a partial install land on the right step). On
+    /// successful completion the wizard reports <c>Completed=true</c>
+    /// — we then trigger a status refresh + flip
+    /// <c>llm_auth_method=subscription</c> on the user's behalf so the
+    /// integration is live without needing a second click in
+    /// Output → LLM.
+    /// </summary>
+    private async void AnthropicIntegrationWizard_Click(object sender, RoutedEventArgs e)
+    {
+        await ShowClaudeWizardAsync(forceStep1: false);
+    }
+
+    /// <summary>
+    /// "Re-run setup" — open the wizard with smart-skip disabled so
+    /// the user walks all 3 steps regardless of current state. Used
+    /// to verify an existing install, update Node, or just preview
+    /// the wizard's copy.
+    /// </summary>
+    private async void AnthropicIntegrationRerunWizard_Click(object sender, RoutedEventArgs e)
+    {
+        await ShowClaudeWizardAsync(forceStep1: true);
+    }
+
+    private async System.Threading.Tasks.Task ShowClaudeWizardAsync(bool forceStep1)
+    {
+        try
+        {
+            var dialog = new ClaudeConnectDialog
+            {
+                XamlRoot = this.Content.XamlRoot,
+                RequestedTheme = Helpers.ThemeHelper.ResolvedElementTheme(),
+                ForceStartAtStep1 = forceStep1,
+            };
+            await dialog.ShowAsync();
+            // Caches were cleared during the wizard; refresh the card.
+            Interop.DimmyNative.RecheckClaudeCode();
+            RefreshAuthIntegrationStatus();
+            if (dialog.Completed)
+            {
+                // Flip the LLM auth method to subscription so the user
+                // immediately sees the change in Output → LLM.
+                ViewModel.LlmAuthMethod = "subscription";
+                Interop.DimmyNative.TrackEvent("claude_code.wizard_completed");
+            }
+        }
+        catch (Exception ex)
+        {
+            App.Log($"Wizard launch exc: {ex}", "ClaudeCode");
+        }
+    }
 
     private async void AnthropicIntegrationSignIn_Click(object sender, RoutedEventArgs e)
     {
