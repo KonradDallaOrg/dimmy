@@ -77,4 +77,55 @@ impl Dfn3Processor {
         self.model.process(ns, enh)?;
         Ok(())
     }
+
+    /// Process exactly one `hop_size`-sample frame in `[-1.0, 1.0]`
+    /// float. Mirror of `dfn::DfnProcessor::process_frame` so the
+    /// AEC worker can swap the two implementations behind a
+    /// compile-time `cfg` switch.
+    pub fn process_frame(&mut self, src: &[f32], dest: &mut [f32]) -> Result<()> {
+        let hop = self.hop_size();
+        assert_eq!(src.len(), hop, "DFN3 frame must be {} samples", hop);
+        assert_eq!(dest.len(), hop, "DFN3 frame must be {} samples", hop);
+        let src_arr = Array2::from_shape_vec((1, hop), src.to_vec())
+            .map_err(|e| anyhow::anyhow!("DFN3 input reshape: {}", e))?;
+        let mut dest_arr: Array2<f32> = Array2::zeros((1, hop));
+        self.model.process(src_arr.view(), dest_arr.view_mut())?;
+        // Clamp + NaN-guard on copy-out (assert!() upstream in AEC).
+        for (i, &v) in dest_arr.row(0).iter().enumerate() {
+            dest[i] = if v.is_finite() {
+                v.clamp(-1.0, 1.0)
+            } else {
+                0.0
+            };
+        }
+        Ok(())
+    }
+
+    /// Honour the runtime `DENOISE_ENABLED` toggle (same gate as
+    /// `DfnProcessor::try_init`). Returns `None` when denoise is
+    /// disabled OR the DFN3 model fails to initialise — caller
+    /// falls through to the AEC-only path.
+    pub fn try_init_runtime() -> Option<Self> {
+        if !crate::dfn::current_denoise_enabled() {
+            crate::log("[Denoise] DFN3 disabled by runtime toggle");
+            return None;
+        }
+        match Self::new() {
+            Ok(p) => {
+                crate::log(&format!(
+                    "[Denoise] DeepFilterNet3 active on mic capture ({}-sample hops @ {} Hz)",
+                    p.hop_size(),
+                    p.sample_rate()
+                ));
+                Some(p)
+            }
+            Err(e) => {
+                crate::log(&format!(
+                    "[Denoise] DFN3 init failed: {} — AEC mic path runs DFN-bypass",
+                    e
+                ));
+                None
+            }
+        }
+    }
 }

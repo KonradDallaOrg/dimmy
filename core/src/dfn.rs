@@ -107,7 +107,7 @@ impl DfnProcessor {
     pub const FRAME_SIZE: usize = 480;
 }
 
-fn current_denoise_enabled() -> bool {
+pub(crate) fn current_denoise_enabled() -> bool {
     DENOISE_ENABLED.load(Ordering::Relaxed)
 }
 

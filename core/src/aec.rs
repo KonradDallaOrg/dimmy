@@ -97,13 +97,24 @@ fn run(
     };
     crate::log("[AEC] pipeline ready (10ms @ 48kHz mono, HPF+AEC3+NS+AGC2)");
 
-    // DeepFilterNet — optional ML noise suppressor stacked upstream of
-    // AEC. try_init returns None if the feature is off OR the model
-    // bundle isn't present, in which case the mic frame goes straight
-    // into AEC capture unchanged.
+    // Noise suppressor stacked upstream of AEC. The backend is
+    // chosen at compile time via the `local-dfn` cargo feature:
+    //   - ON (release default): DeepFilterNet3 via the upstream
+    //     `deep_filter` crate. SOTA on PESQ/STOI, ~3-5 ms / frame,
+    //     ~7 MB model embedded.
+    //   - OFF (fallback / dev / no-DFN3 builds): nnnoiseless
+    //     (RNNoise port). ~1 ms / frame, ~85 KB model embedded,
+    //     less aggressive on non-stationary noise but always
+    //     available without the patched libDF dep.
+    // Either way, `try_init_*` returns None when the runtime toggle
+    // is off, in which case the mic frame goes straight into AEC
+    // capture unchanged.
+    #[cfg(feature = "local-dfn")]
+    let mut dfn = crate::dfn3::Dfn3Processor::try_init_runtime();
+    #[cfg(not(feature = "local-dfn"))]
     let mut dfn = crate::dfn::DfnProcessor::try_init();
     if dfn.is_some() {
-        crate::log("[AEC] DeepFilterNet active on mic capture (DFN -> AEC3)");
+        crate::log("[AEC] noise suppressor active on mic capture (NN -> AEC3)");
     }
 
     let mut render_frame = vec![0.0f32; FRAME_SAMPLES];
@@ -176,11 +187,26 @@ fn run(
             continue;
         }
 
-        // Stage 1: DFN noise suppression on the mic capture (if loaded).
+        // Stage 1: NN noise suppression on the mic capture (if loaded).
         // Output overwrites capture_frame so the AEC sees the cleaned
-        // signal as its near-end.
+        // signal as its near-end. The two backends have slightly
+        // different return signatures (DFN3 → Result; nnnoiseless →
+        // ()), so we dispatch on the cargo feature.
         if let Some(ref mut p) = dfn {
-            p.process_frame(&capture_frame, &mut dfn_frame);
+            #[cfg(feature = "local-dfn")]
+            {
+                if let Err(e) = p.process_frame(&capture_frame, &mut dfn_frame) {
+                    crate::log(&format!(
+                        "[AEC] DFN3 process_frame failed: {} — bypassing this frame",
+                        e
+                    ));
+                    dfn_frame.copy_from_slice(&capture_frame);
+                }
+            }
+            #[cfg(not(feature = "local-dfn"))]
+            {
+                p.process_frame(&capture_frame, &mut dfn_frame);
+            }
             capture_frame.copy_from_slice(&dfn_frame);
         }
 
