@@ -3471,6 +3471,67 @@ pub extern "C" fn dimmy_claude_code_ping() -> c_int {
     }
 }
 
+/// Probe for a Node.js install. Returns a JSON envelope the setup
+/// wizard binds to:
+/// ```json
+/// {
+///   "found": true,
+///   "path": "/opt/homebrew/bin/node",
+///   "version": "22.5.1",
+///   "major": 22,
+///   "meets_minimum": true
+/// }
+/// ```
+/// `meets_minimum` checks `major >= 18` — the minimum runtime version
+/// claude-code requires; under it `npm install -g @anthropic-ai/claude-code`
+/// fails with EBADENGINE and the wizard surfaces "please upgrade".
+///
+/// When Node isn't found: `{"found": false}` (other fields omitted).
+///
+/// # Safety
+/// `out_buf` must be a valid writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_claude_code_node_status(
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    const MIN_NODE_MAJOR: u32 = 18;
+    let json = match crate::claude_code::detect_node_binary() {
+        Some(path) => {
+            let version = crate::claude_code::node_version();
+            let major = version
+                .as_deref()
+                .and_then(crate::claude_code::parse_node_major);
+            let meets = major.map(|m| m >= MIN_NODE_MAJOR).unwrap_or(false);
+            serde_json::json!({
+                "found": true,
+                "path": path.to_string_lossy(),
+                "version": version,
+                "major": major,
+                "meets_minimum": meets,
+            })
+        }
+        None => serde_json::json!({ "found": false }),
+    };
+    write_to_buf(&json.to_string(), out_buf, buf_len)
+}
+
+/// Invalidate every cached binary lookup (claude + node) and return
+/// the fresh `dimmy_claude_code_status()` code. Used by the setup
+/// wizard's "I installed it, recheck" buttons after the user reports
+/// an install completed — without this, Dimmy keeps the stale "not
+/// found" answer until restart because `detect_binary()` caches its
+/// first negative result for the process lifetime.
+#[no_mangle]
+pub extern "C" fn dimmy_claude_code_recheck() -> c_int {
+    crate::claude_code::clear_cache();
+    let s = crate::claude_code::status();
+    s.as_code()
+}
+
 // ── Notion integration ─────────────────────────────────────────────
 // Internal-integration-token model: user pastes a `ntn_...` token
 // from notion.so/my-integrations into the Settings UI; we store it

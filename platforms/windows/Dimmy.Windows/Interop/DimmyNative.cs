@@ -518,7 +518,24 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_claude_code_ping();
 
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_claude_code_node_status(byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_claude_code_recheck();
+
     public enum ClaudeCodeStatus { Ready = 0, NotLoggedIn = 1, NotInstalled = 2 }
+
+    /// <summary>
+    /// Node.js detection snapshot for the setup wizard's Step 1.
+    /// Mirror of the Rust `dimmy_claude_code_node_status` JSON envelope.
+    /// </summary>
+    public sealed record NodeStatus(
+        bool Found,
+        string? Path,
+        string? Version,
+        int? Major,
+        bool MeetsMinimum);
 
     /// <summary>
     /// Outcome of the Test Connection button. Maps directly to the
@@ -572,6 +589,49 @@ public static class DimmyNative
             -6 => (ClaudeCodePingResult.InvalidUtf8, 0),
             _ => (ClaudeCodePingResult.UnknownError, 0),
         };
+    }
+
+    /// <summary>
+    /// Probe for a local Node.js install. Returns a structured snapshot
+    /// the setup wizard binds to (Found/Path/Version/Major/MeetsMinimum).
+    /// MeetsMinimum is true iff the detected major version is &gt;= 18 — the
+    /// minimum runtime version claude-code requires.
+    /// </summary>
+    public static NodeStatus GetNodeStatus()
+    {
+        var json = ReadBuffer(dimmy_claude_code_node_status, 2048);
+        if (string.IsNullOrEmpty(json))
+            return new NodeStatus(false, null, null, null, false);
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            bool found = root.TryGetProperty("found", out var f) && f.GetBoolean();
+            if (!found) return new NodeStatus(false, null, null, null, false);
+            string? path = root.TryGetProperty("path", out var p) ? p.GetString() : null;
+            string? version = root.TryGetProperty("version", out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String
+                ? v.GetString() : null;
+            int? major = root.TryGetProperty("major", out var m) && m.ValueKind == System.Text.Json.JsonValueKind.Number
+                ? m.GetInt32() : null;
+            bool meets = root.TryGetProperty("meets_minimum", out var mm) && mm.GetBoolean();
+            return new NodeStatus(found, path, version, major, meets);
+        }
+        catch
+        {
+            return new NodeStatus(false, null, null, null, false);
+        }
+    }
+
+    /// <summary>
+    /// Invalidate cached binary lookups (claude + node) and return the
+    /// fresh Claude Code status. Called by the wizard's "I installed it,
+    /// recheck" buttons — without this, Dimmy keeps stale "not found"
+    /// answers until restart.
+    /// </summary>
+    public static ClaudeCodeStatus RecheckClaudeCode()
+    {
+        try { return (ClaudeCodeStatus)dimmy_claude_code_recheck(); }
+        catch { return ClaudeCodeStatus.NotInstalled; }
     }
 
     public static bool TelemetryEnabled
