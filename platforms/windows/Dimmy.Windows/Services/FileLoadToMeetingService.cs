@@ -65,22 +65,43 @@ public static class FileLoadToMeetingService
                 transcriptsPath,
                 $"[0 ms] [{label}] {transcript.Trim()}{Environment.NewLine}");
 
-            // audio.wav — copy the source. Best-effort: a 95-min
-            // recording is ~1.5 GB so copy can fail on a tight disk;
-            // recap still works without the audio sidecar.
+            // audio.wav — sidecar for the Done view (waveform + media
+            // player). WAV sources can be copied verbatim; everything
+            // else (m4a / mp3 / aac / flac / ogg) goes through the
+            // Rust `dimmy_decode_audio_to_wav` FFI so the resulting
+            // file is a real RIFF/WAVE container and the WAV-only
+            // consumers downstream (WavPeaks.ReadPeaks,
+            // MediaPlayerElement on some codec-poor systems) keep
+            // working without per-format branches.
             double durationSecs = 0;
             try
             {
                 if (File.Exists(sourceWavPath))
                 {
                     var audioDest = Path.Combine(dir, "audio.wav");
-                    File.Copy(sourceWavPath, audioDest, overwrite: true);
+                    var ext = Path.GetExtension(sourceWavPath);
+                    bool isWav = !string.IsNullOrEmpty(ext)
+                        && ext.Equals(".wav", StringComparison.OrdinalIgnoreCase);
+                    if (isWav)
+                    {
+                        File.Copy(sourceWavPath, audioDest, overwrite: true);
+                    }
+                    else
+                    {
+                        int rc = await Task.Run(() =>
+                            Dimmy.Windows.Interop.DimmyNative.dimmy_decode_audio_to_wav(
+                                sourceWavPath, audioDest));
+                        if (rc <= 0)
+                        {
+                            App.Log($"FileLoadToMeeting: decode-to-wav rc={rc} for {sourceWavPath}", "FileLoad");
+                        }
+                    }
                     durationSecs = Helpers.WavPeaks.ReadDurationSecs(audioDest);
                 }
             }
             catch (Exception ex)
             {
-                App.Log($"FileLoadToMeeting: audio copy failed: {ex.Message}", "FileLoad");
+                App.Log($"FileLoadToMeeting: audio copy/decode failed: {ex.Message}", "FileLoad");
             }
 
             // meta.json — the MeetingWindow history loader reads

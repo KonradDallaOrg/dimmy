@@ -54,6 +54,15 @@ public static class DimmyNative
         byte[] outBuf,
         int bufLen);
 
+    /// Decode any audio file the loader supports and rewrite it as a
+    /// real mono int16 WAV at the source's native sample rate.
+    /// Returns destination file size on success, or -1/-2/-3 per the
+    /// Rust contract (see core/src/ffi.rs::dimmy_decode_audio_to_wav).
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_decode_audio_to_wav(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string srcPath,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string dstPath);
+
     /// Push one system-audio activity observation. `sysActive` = 1 iff
     /// the loopback / render-side audio is currently emitting above
     /// the floor. Calling this even once flips the stop-suggestion

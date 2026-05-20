@@ -5050,6 +5050,83 @@ fn decode_via_symphonia(path: &str) -> Result<(Vec<f32>, u32), String> {
     Ok((mono, sample_rate))
 }
 
+/// Decode any audio file the loader supports (WAV via hound, m4a /
+/// mp3 / aac / flac / ogg via Symphonia) and write it as a real
+/// mono int16 WAV at the source's native sample rate. Used by the
+/// file-load → meeting bridge so downstream consumers that hardcode
+/// "audio.wav" (waveform reader, media player, duration probe) keep
+/// working without per-format branches.
+///
+/// Returns the destination file size on success, or:
+/// - -1 invalid args (null pointer / bad UTF-8)
+/// - -2 decode failure
+/// - -3 WAV write failure
+///
+/// # Safety
+/// Both pointers must be valid null-terminated UTF-8 C strings.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_decode_audio_to_wav(
+    src_ptr: *const c_char,
+    dst_ptr: *const c_char,
+) -> c_int {
+    if src_ptr.is_null() || dst_ptr.is_null() {
+        return -1;
+    }
+    let src = match CStr::from_ptr(src_ptr).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let dst = match CStr::from_ptr(dst_ptr).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let ext = std::path::Path::new(src)
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_default();
+    let (mono, sample_rate) = match if ext == "wav" {
+        decode_wav_via_hound(src)
+    } else {
+        decode_via_symphonia(src)
+    } {
+        Ok(v) => v,
+        Err(e) => {
+            log(&format!("[DecodeToWav] decode failed: {}", e));
+            return -2;
+        }
+    };
+    if mono.is_empty() || sample_rate == 0 {
+        return -2;
+    }
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = match hound::WavWriter::create(dst, spec) {
+        Ok(w) => w,
+        Err(e) => {
+            log(&format!("[DecodeToWav] hound create {}: {}", dst, e));
+            return -3;
+        }
+    };
+    for &s in &mono {
+        let clamped = s.clamp(-1.0, 1.0);
+        let i = (clamped * i16::MAX as f32) as i16;
+        if writer.write_sample(i).is_err() {
+            return -3;
+        }
+    }
+    if writer.finalize().is_err() {
+        return -3;
+    }
+    std::fs::metadata(dst)
+        .map(|m| m.len() as c_int)
+        .unwrap_or(0)
+}
+
 /// Compute a waveform-peak summary from any audio file the loader
 /// can decode (WAV via hound, m4a / mp3 / aac / flac / ogg via
 /// Symphonia). Mirrors the role of the C#-side `WavPeaks.ReadPeaks`,
