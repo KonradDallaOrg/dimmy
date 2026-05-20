@@ -1390,6 +1390,7 @@ public partial class App : Application
             _callDetection.Start();
             _appViewModel.CallDetected += OnCallDetected;
             _appViewModel.CallEnded += OnCallEnded;
+            _appViewModel.CallStopSuggested += OnCallStopSuggested;
             Log("Call detection initialised", "CallDetect");
         }
         catch (Exception ex)
@@ -1409,16 +1410,9 @@ public partial class App : Application
                 // round-trip and the in-flight tick), swallow silently.
                 if (!_appViewModel.CallDetectEnabled) return;
 
-                if (_callNudgeWindow == null)
-                {
-                    _callNudgeWindow = new CallNudgeWindow();
-                    _callNudgeWindow.RecordRequested += OnNudgeRecord;
-                    _callNudgeWindow.NotNowRequested += OnNudgeNotNow;
-                    _callNudgeWindow.NeverRequested += OnNudgeNever;
-                    _callNudgeWindow.TimedOut += OnNudgeTimeout;
-                }
+                EnsureCallNudgeWindow();
                 Log($"call_detected: app={appId ?? "<none>"} since={sinceSeconds}s", "CallDetect");
-                _callNudgeWindow.ShowFor(appId);
+                _callNudgeWindow!.ShowFor(appId);
             }
             catch (Exception ex)
             {
@@ -1480,6 +1474,83 @@ public partial class App : Application
     {
         try { DimmyNative.dimmy_call_signal_response(appId, "timeout"); }
         catch (Exception ex) { Log($"OnNudgeTimeout EXC: {ex.Message}", "CallDetect"); }
+    }
+
+    /// Lazily construct the CallNudgeWindow + wire ALL handlers (both
+    /// detection-mode and stop-suggestion-mode). Centralised so the
+    /// two entry points (`call_detected` event and `meeting.stop_suggested`
+    /// event) can't accidentally diverge in which subset of events they
+    /// hook up.
+    private void EnsureCallNudgeWindow()
+    {
+        if (_callNudgeWindow != null) return;
+        _callNudgeWindow = new CallNudgeWindow();
+        _callNudgeWindow.RecordRequested += OnNudgeRecord;
+        _callNudgeWindow.NotNowRequested += OnNudgeNotNow;
+        _callNudgeWindow.NeverRequested += OnNudgeNever;
+        _callNudgeWindow.TimedOut += OnNudgeTimeout;
+        _callNudgeWindow.StopAndRecapRequested += OnNudgeStopAndRecap;
+        _callNudgeWindow.KeepRecordingRequested += OnNudgeKeepRecording;
+        _callNudgeWindow.StopTimedOut += OnNudgeStopTimeout;
+    }
+
+    private void OnCallStopSuggested(string? appId, long inactiveForSecs)
+    {
+        _dispatcherQueue?.TryEnqueue(() =>
+        {
+            try
+            {
+                if (!_appViewModel.CallDetectEnabled) return;
+                // Conditions (recording is ours, meeting is active, mic
+                // has been silent past the threshold) are enforced by
+                // call_detector::handle_inactive — here we just paint.
+                EnsureCallNudgeWindow();
+                Log($"meeting.stop_suggested: app={appId ?? "<none>"} inactive_for={inactiveForSecs}s", "CallDetect");
+                _callNudgeWindow!.ShowStopSuggestion(appId);
+            }
+            catch (Exception ex)
+            {
+                Log($"OnCallStopSuggested EXC: {ex.Message}", "CallDetect");
+            }
+        });
+    }
+
+    private void OnNudgeStopAndRecap(string? appId)
+    {
+        try
+        {
+            DimmyNative.dimmy_call_signal_response(appId, "stop_and_recap");
+            // Reuse the pill's existing stop-meeting + recap pipeline
+            // (visual feedback + post-process + sidebar refresh). Pill
+            // must be up because the precondition for emitting
+            // StopSuggested is "we accepted a call_detected nudge",
+            // which always brings the pill into Transcribing-capable
+            // state.
+            if (_pillWindow is Views.PillWindow pill)
+            {
+                _ = pill.StopMeetingFromPillAsync();
+            }
+            else
+            {
+                Log("OnNudgeStopAndRecap: pill window unavailable — meeting stop skipped", "CallDetect");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"OnNudgeStopAndRecap EXC: {ex.Message}", "CallDetect");
+        }
+    }
+
+    private void OnNudgeKeepRecording(string? appId)
+    {
+        try { DimmyNative.dimmy_call_signal_response(appId, "keep_recording"); }
+        catch (Exception ex) { Log($"OnNudgeKeepRecording EXC: {ex.Message}", "CallDetect"); }
+    }
+
+    private void OnNudgeStopTimeout(string? appId)
+    {
+        try { DimmyNative.dimmy_call_signal_response(appId, "stop_timeout"); }
+        catch (Exception ex) { Log($"OnNudgeStopTimeout EXC: {ex.Message}", "CallDetect"); }
     }
 
     /// Kick off a meeting recording from the call-detect nudge.

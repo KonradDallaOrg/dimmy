@@ -5,10 +5,10 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <Border x:Name="RootBorder"
-            BorderThickness="1"
+            BorderThickness="0"
             CornerRadius="8"
-            Padding="16,14,16,14">
-        <Grid RowSpacing="10">
+            Padding="14,8,14,8">
+        <Grid RowSpacing="4">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
@@ -25,12 +25,12 @@
                           x:Name="HeaderIcon"
                           FontFamily="Segoe Fluent Icons"
                           Glyph="&#xE717;"
-                          FontSize="18"
+                          FontSize="15"
                           VerticalAlignment="Center" />
                 <TextBlock Grid.Column="1"
                            x:Name="TitleText"
                            Text="Meeting detected"
-                           FontSize="14"
+                           FontSize="13"
                            FontWeight="SemiBold"
                            VerticalAlignment="Center"
                            TextTrimming="CharacterEllipsis" />
@@ -58,22 +58,22 @@
                        Text="Dimmy can record + recap this call."
                        FontSize="12"
                        Opacity="0.8"
-                       TextWrapping="Wrap" />
+                       TextTrimming="CharacterEllipsis" />
 
             <StackPanel Grid.Row="2"
                         Orientation="Horizontal"
                         HorizontalAlignment="Right"
-                        Spacing="8">
+                        Spacing="6">
                 <Button x:Name="NotNowButton"
                         Content="Not now"
-                        MinWidth="84"
-                        Padding="14,5,14,5"
+                        MinWidth="78"
+                        Padding="10,3,10,3"
                         FontSize="12"
                         Click="OnNotNowClicked" />
                 <Button x:Name="RecordButton"
                         Content="Record now"
-                        MinWidth="110"
-                        Padding="14,5,14,5"
+                        MinWidth="100"
+                        Padding="10,3,10,3"
                         FontSize="12"
                         FontWeight="SemiBold"
                         Style="{ThemeResource AccentButtonStyle}"

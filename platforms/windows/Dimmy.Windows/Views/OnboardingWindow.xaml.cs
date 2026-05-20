@@ -76,6 +76,16 @@ public sealed partial class OnboardingWindow : Window
         _prefetch.StartBasePrefetch();
         _onboardingLoaded = true;
 
+        // Bootstrap the Parakeet download if it was set as the default
+        // selection in PopulateOnboardingModelCombo. The selection-changed
+        // handler returned early during init because `_onboardingLoaded`
+        // was still false, so without this nudge the bundle never starts
+        // downloading — meanwhile DetectPriorState may have set
+        // IsLocalReady=true from a stale whisper base bin, enabling
+        // Continue and letting the user finish onboarding with a
+        // missing Parakeet bundle. Burned 2026-05-20 (v0.6.47).
+        BootstrapDefaultLocalModelDownload();
+
         // Funnel anchor. Fires once per wizard launch — if the user
         // dismissed the window before, AppDelegate / startup logic
         // re-shows the window, that re-fires `.started` which is the
@@ -204,6 +214,49 @@ public sealed partial class OnboardingWindow : Window
         return 200L * 1024 * 1024;
     }
 
+    /// Kick off whatever the selected local-model default needs to
+    /// reach Ready state, and reset `IsLocalReady` to reflect the
+    /// ACTUAL state of THAT model rather than whatever DetectPriorState
+    /// found (which always looks at whisper base regardless of which
+    /// model is selected). Called once after `_onboardingLoaded` flips
+    /// true so the SelectionChanged guard doesn't suppress us anymore.
+    private void BootstrapDefaultLocalModelDownload()
+    {
+        try
+        {
+            if (ViewModel.SelectedLocalModelTag != ParakeetTag) return;
+
+            bool parakeetReady = false;
+            try { parakeetReady = DimmyNative.dimmy_parakeet_bundle_present() == 1; }
+            catch { }
+
+            if (parakeetReady)
+            {
+                ViewModel.IsLocalReady = true;
+                ViewModel.DownloadPercent = 100;
+                ViewModel.DownloadStatusText = "Ready";
+                ViewModel.DownloadBytesText = "Already downloaded";
+                return;
+            }
+
+            // Bundle missing — clear any stale "ready" state inherited
+            // from DetectPriorState (which probes whisper base, not
+            // Parakeet) and start the FFI download. Without this clear
+            // the Continue button stays enabled and the user can finish
+            // onboarding with the Parakeet bundle still half-downloaded.
+            ViewModel.IsLocalReady = false;
+            ViewModel.IsLocalFailed = false;
+            ViewModel.DownloadPercent = 0;
+            ViewModel.DownloadBytesText = "";
+            ViewModel.DownloadStatusText = "Starting Parakeet download...";
+            StartParakeetDownload();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[Onboarding] BootstrapDefaultLocalModelDownload: {ex.Message}");
+        }
+    }
+
     private void StartParakeetDownload()
     {
         var cts = new CancellationTokenSource();
@@ -238,6 +291,13 @@ public sealed partial class OnboardingWindow : Window
         // selected — otherwise a stale event from a cancelled download
         // would clobber the whisper prefetch progress.
         if (ViewModel.SelectedLocalModelTag != ParakeetTag) return;
+        // Always clear "ready" while the download is in flight,
+        // regardless of whether `total` is known yet. Before the HEAD
+        // requests resolve, total=0 and the previous code path was
+        // skipping the IsLocalReady reset — so a stale TRUE from
+        // DetectPriorState (whisper base bin present) could survive
+        // and enable Continue while Parakeet was still downloading.
+        ViewModel.IsLocalReady = false;
         if (total <= 0)
         {
             ViewModel.DownloadStatusText = "Downloading";
@@ -247,7 +307,6 @@ public sealed partial class OnboardingWindow : Window
         ViewModel.DownloadPercent = Math.Min(100, downloaded * 100.0 / total);
         ViewModel.DownloadStatusText = "Downloading";
         ViewModel.DownloadBytesText = $"{downloaded / 1024.0 / 1024.0:0} / {total / 1024.0 / 1024.0:0} MB";
-        ViewModel.IsLocalReady = false;
     }
 
     private void DetectPriorState()

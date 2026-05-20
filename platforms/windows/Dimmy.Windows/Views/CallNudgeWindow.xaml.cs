@@ -23,11 +23,26 @@ namespace Dimmy.Windows.Views;
 /// cooldown applies and the user gets another chance later).
 public sealed partial class CallNudgeWindow : Window
 {
-    private const int CardWidthDip = 380;
-    private const int CardHeightDip = 148;
-    private const int BottomMarginPx = 80;
-    private const int RightMarginPx = 20;
+    // Teams-style toast geometry — narrower + shorter than the previous
+    // 380x148 layout. Padding/spacing were tightened in CallNudgeWindow.xaml
+    // in the same pass so the three-row grid fits at 360x112.
+    private const int CardWidthDip = 360;
+    private const int CardHeightDip = 96;
+    private const int BottomMarginPx = 60;
+    private const int RightMarginPx = 16;
     private static readonly TimeSpan AutoDismiss = TimeSpan.FromSeconds(30);
+
+    /// Display mode of the popup. Same window is reused for both
+    /// "meeting detected — start recording?" and "no activity — stop
+    /// and recap?" prompts to avoid juggling two near-identical
+    /// windows + their show/hide ordering.
+    private enum NudgeMode
+    {
+        Detected,
+        StopSuggested,
+    }
+
+    private NudgeMode _mode = NudgeMode.Detected;
 
     private readonly DispatcherQueueTimer _dismissTimer;
 
@@ -54,20 +69,27 @@ public sealed partial class CallNudgeWindow : Window
     public event Action<string?>? NeverRequested;
     public event Action<string?>? TimedOut;
 
+    // Stop-suggestion mode (call ended while we were recording).
+    public event Action<string?>? StopAndRecapRequested;
+    public event Action<string?>? KeepRecordingRequested;
+    public event Action<string?>? StopTimedOut;
+
     public CallNudgeWindow()
     {
         this.InitializeComponent();
         Title = "Dimmy Call Detected";
 
         ExtendsContentIntoTitleBar = true;
-        // Solid theme-aware brushes instead of Acrylic + ThemeResource:
-        // WinUI 3 DesktopAcrylicBackdrop and ThemeResource lookups
-        // resolve against Application.RequestedTheme (frozen at
-        // process-start) and ignore Content.RequestedTheme — verified
-        // empirically in PillWindow's MenuFlyout patch (2026-05-10).
-        // Setting explicit Background/Foreground brushes here bypasses
-        // the lookup entirely so the popup honours the user's saved
-        // Settings → Appearance choice on every launch.
+        // Same transparency recipe as PillWindow: TransparentBackdrop +
+        // EnableTransparency strips the Win11 default chrome (rounded
+        // corners, 1 px border, shadow). The inner XAML `Border` is
+        // then the ONLY visible boundary, so the popup looks like a
+        // floating card without the "double edges" the user reported.
+        var backdrop = new Helpers.TransparentBackdrop
+        {
+            Hwnd = WindowHelper.GetHwnd(this),
+        };
+        this.SystemBackdrop = backdrop;
         ApplyTheme(ThemeHelper.ResolvedElementTheme());
 
         var appWindow = WindowHelper.GetAppWindow(this);
@@ -83,7 +105,7 @@ public sealed partial class CallNudgeWindow : Window
         {
             try { appWindow.IsShownInSwitchers = false; } catch { }
         }
-        WindowHelper.MarkNoActivate(this);
+        WindowHelper.EnableTransparency(this);
 
         _dismissTimer = DispatcherQueue.CreateTimer();
         _dismissTimer.Interval = AutoDismiss;
@@ -96,6 +118,7 @@ public sealed partial class CallNudgeWindow : Window
     /// the card adapts to "Microphone in use — record a meeting?".
     public void ShowFor(string? appId)
     {
+        _mode = NudgeMode.Detected;
         _currentAppId = appId;
         _currentAppName = ResolveDisplayName(appId);
 
@@ -114,12 +137,39 @@ public sealed partial class CallNudgeWindow : Window
             DontAskMenuItem.Visibility = Visibility.Visible;
             HeaderIcon.Glyph = ""; // phone / call
         }
+        NotNowButton.Content = "Not now";
+        RecordButton.Content = "Record now";
 
         PositionAtScreenBottomRight();
         WindowHelper.ShowWithoutActivating(this);
 
         // Reset the dismiss timer on each new detection so a quick
         // hide/re-show doesn't shrink the visible window.
+        _dismissTimer.Stop();
+        _dismissTimer.Start();
+    }
+
+    /// Render the card for a stop-suggestion (call appears to have
+    /// ended while we were recording). Conditions enforced Rust-side
+    /// in `call_detector::handle_inactive` — this method just paints.
+    public void ShowStopSuggestion(string? appId)
+    {
+        _mode = NudgeMode.StopSuggested;
+        _currentAppId = appId;
+        _currentAppName = ResolveDisplayName(appId);
+
+        TitleText.Text = string.IsNullOrEmpty(appId)
+            ? "Call ended?"
+            : $"{_currentAppName} call ended?";
+        BodyText.Text = "No activity for a while. Stop & recap?";
+        HeaderIcon.Glyph = "";
+        DontAskMenuItem.Visibility = Visibility.Collapsed;
+        NotNowButton.Content = "Keep recording";
+        RecordButton.Content = "Stop & recap";
+
+        PositionAtScreenBottomRight();
+        WindowHelper.ShowWithoutActivating(this);
+
         _dismissTimer.Stop();
         _dismissTimer.Start();
     }
@@ -160,43 +210,87 @@ public sealed partial class CallNudgeWindow : Window
     {
         _dismissTimer.Stop();
         var app = _currentAppId;
+        var mode = _mode;
         Hide();
-        RecordRequested?.Invoke(app);
+        if (mode == NudgeMode.StopSuggested)
+        {
+            StopAndRecapRequested?.Invoke(app);
+        }
+        else
+        {
+            RecordRequested?.Invoke(app);
+        }
     }
 
     private void OnNotNowClicked(object sender, RoutedEventArgs e)
     {
         _dismissTimer.Stop();
         var app = _currentAppId;
+        var mode = _mode;
         Hide();
-        NotNowRequested?.Invoke(app);
+        if (mode == NudgeMode.StopSuggested)
+        {
+            KeepRecordingRequested?.Invoke(app);
+        }
+        else
+        {
+            NotNowRequested?.Invoke(app);
+        }
     }
 
     private void OnNeverClicked(object sender, RoutedEventArgs e)
     {
+        // "Don't ask again" is meaningless in stop-suggestion mode —
+        // the menu item is collapsed there, so this can only fire in
+        // Detected mode. Fall back to the cooldown response just in
+        // case (idempotent on the Rust side).
         _dismissTimer.Stop();
         var app = _currentAppId;
+        var mode = _mode;
         Hide();
-        NeverRequested?.Invoke(app);
+        if (mode == NudgeMode.StopSuggested)
+        {
+            KeepRecordingRequested?.Invoke(app);
+        }
+        else
+        {
+            NeverRequested?.Invoke(app);
+        }
     }
 
     private void OnCloseClicked(object sender, RoutedEventArgs e)
     {
-        // X without picking a menu item behaves like Not now:
-        // the user explicitly dismissed it, but didn't ask to never
-        // see it again. Use the full cooldown so we don't re-pester.
+        // X without picking a menu item: treat as "keep doing what
+        // you were doing" — Not now in detect mode, Keep recording
+        // in stop mode. Cooldown applies in both cases.
         _dismissTimer.Stop();
         var app = _currentAppId;
+        var mode = _mode;
         Hide();
-        NotNowRequested?.Invoke(app);
+        if (mode == NudgeMode.StopSuggested)
+        {
+            KeepRecordingRequested?.Invoke(app);
+        }
+        else
+        {
+            NotNowRequested?.Invoke(app);
+        }
     }
 
     private void OnDismissTick(DispatcherQueueTimer sender, object args)
     {
         _dismissTimer.Stop();
         var app = _currentAppId;
+        var mode = _mode;
         Hide();
-        TimedOut?.Invoke(app);
+        if (mode == NudgeMode.StopSuggested)
+        {
+            StopTimedOut?.Invoke(app);
+        }
+        else
+        {
+            TimedOut?.Invoke(app);
+        }
     }
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]

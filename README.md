@@ -221,6 +221,43 @@ For depth: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** covers the layer map
 
 Keys are encrypted on device with AES-256-GCM and a machine-specific KDF — no keyring prompt, no admin permission, no OS popups.
 
+## Claude Code subscription — no API key needed
+
+If you already pay for a Claude **Pro**, **Team**, or **Max** plan, you can route Dimmy's LLM calls (style rewrite + meeting recap) through your subscription instead of an API key. Dimmy spawns Anthropic's official `claude` CLI as a subprocess — it never touches your token or login session, only the stdin/stdout of the binary.
+
+**Prerequisites**
+
+- **Node.js 18+** — install from [nodejs.org](https://nodejs.org/) (LTS works). `npm` is bundled with it.
+- A browser — the `claude login` flow opens one for the OAuth handshake.
+- Default Windows / macOS / Linux shell — no WSL, no Git Bash needed.
+
+**Setup (any OS)**
+
+```bash
+# 1. Install the CLI globally
+npm install -g @anthropic-ai/claude-code
+
+# 2. Verify it's on PATH (open a NEW terminal so PATH refreshes)
+claude --version
+
+# 3. Log in with your subscription
+claude login         # opens browser → sign in with your Pro / Team / Max account
+
+# 4. Quick sanity check
+echo "say pong" | claude --print
+```
+
+**In Dimmy**
+
+Open Settings → Output (Mac) / Integrations (Win). Under **LLM** or **Recap**, switch the **Provider** to *Claude Code (subscription)*. The status card goes green once Dimmy detects the logged-in CLI; pick a model (Opus 4.7 / Sonnet 5 etc.) and you're done. No API key needed.
+
+**Gotchas**
+
+- **Restart the terminal** after the npm install — Windows PATH only picks up `%APPDATA%\npm` in fresh sessions.
+- **Corporate proxies / Zscaler / Netskope** can break the OAuth callback. If `claude login` hangs or shows a TLS error, that's the proxy — try from a personal network to confirm.
+- **`nvm` users**: install the CLI with the same Node version you'll actually use day-to-day; switching versions loses global packages.
+- Full implementation notes (auth flow, error modes, telemetry): [docs/dev/claude-code-backend.md](docs/dev/claude-code-backend.md).
+
 ## Benchmarks
 
 <details>

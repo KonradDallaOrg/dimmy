@@ -1,6 +1,6 @@
 [package]
 name = "dimmy"
-version = "0.6.49"
+version = "0.6.50"
 edition = "2021"
 description = "Dimmy — Cross-platform voice transcription overlay"
 license = "AGPL-3.0-only"
@@ -146,6 +146,20 @@ reqwest = { version = "0.12", features = ["multipart", "json", "blocking"] }
 tokio = { version = "1", features = ["full"] }
 cpal = "0.15"
 hound = "3.5"
+# Multi-format audio decoder for `dimmy_transcribe_file` — m4a (MP4A
+# container, the format iPhone Voice Memos / macOS Music exports use),
+# mp3, aac, flac, opus, ogg/vorbis. Pure-Rust, no native deps.
+# WAV legacy path stays on `hound` because Symphonia is heavier per-call
+# and our existing test fixtures are WAV.
+symphonia = { version = "0.5", default-features = false, features = [
+    "isomp4",
+    "aac",
+    "alac",
+    "mp3",
+    "flac",
+    "ogg",
+    "vorbis",
+] }
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 dirs = "5"
 chrono = "0.4"

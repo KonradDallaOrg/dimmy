@@ -1200,7 +1200,7 @@ public sealed partial class PillWindow : Window
     ///   and flips to Done state independently — no UI sync needed
     ///   from here.
     /// - On error: surface a brief pill error tag.
-    private async System.Threading.Tasks.Task StopMeetingFromPillAsync()
+    internal async System.Threading.Tasks.Task StopMeetingFromPillAsync()
     {
         try
         {

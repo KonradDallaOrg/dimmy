@@ -36,11 +36,44 @@ public static class DimmyNative
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? appId);
 
     /// Record the user's response to a call-detected nudge.
-    /// `response` ∈ {"record_now","not_now","never","timeout"}.
+    /// `response` ∈ {"record_now","not_now","never","timeout",
+    ///               "stop_and_recap","keep_recording","stop_timeout"}.
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_call_signal_response(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? appId,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string response);
+
+    /// Compute waveform peaks for any audio file the file-load path
+    /// decodes (WAV via hound, m4a/mp3/aac/flac/ogg via Symphonia).
+    /// Output JSON: `{"peaks":[f32; bucket_count], "duration_secs": f64}`.
+    /// Returns bytes written, or -1 / -2 / -3 per the Rust contract.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_compute_audio_peaks(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string path,
+        int bucketCount,
+        byte[] outBuf,
+        int bufLen);
+
+    /// Decode any audio file the loader supports and rewrite it as a
+    /// real mono int16 WAV at the source's native sample rate.
+    /// Returns destination file size on success, or -1/-2/-3 per the
+    /// Rust contract (see core/src/ffi.rs::dimmy_decode_audio_to_wav).
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_decode_audio_to_wav(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string srcPath,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string dstPath);
+
+    /// Push one system-audio activity observation. `sysActive` = 1 iff
+    /// the loopback / render-side audio is currently emitting above
+    /// the floor. Calling this even once flips the stop-suggestion
+    /// gate to AND-with-sys mode for this process — both mic AND sys
+    /// must be silent past their thresholds (5 s each) before the
+    /// stop popup is offered. Return codes: 3 = meeting.stop_suggested
+    /// emitted, 0 = no transition, -1 = malformed app id.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_call_signal_sys(
+        int sysActive,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? appId);
 
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_call_detector_state(byte[] outBuf, int bufLen);

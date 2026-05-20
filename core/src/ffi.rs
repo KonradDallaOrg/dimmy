@@ -581,9 +581,16 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
     *recording = true;
 
     let selected_device = st.selected_device.lock().ok().and_then(|d| d.clone());
-    let device_sr = crate::audio::device_sample_rate(&selected_device);
+    // The mic cpal callback resamples to MEETING_CANONICAL_RATE (48 kHz)
+    // before pushing to audio_buffer, so the dictation preprocess +
+    // STT must use that rate, NOT the device-native rate. Previous code
+    // here stored the device rate (e.g. 16 kHz on BT-HFP) which made
+    // preprocess interpret a 48 kHz buffer at 16 kHz — 3× slowdown,
+    // Whisper hallucinated "Grazie per la visione" on every dictation.
+    // Reported 2026-05-20 right after the canonical-rate refactor.
+    let _device_sr_diag = crate::audio::device_sample_rate(&selected_device);
     if let Ok(mut sr) = st.audio_sample_rate.lock() {
-        *sr = device_sr;
+        *sr = crate::audio::MEETING_CANONICAL_RATE;
     }
 
     // Always-mix architecture (2026-05-08): the audio capture session
@@ -639,7 +646,8 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
                 emit_event("stt_chunk", &payload);
             });
         let transcriber = crate::chunked_stt::ChunkedTranscriber::start(
-            buffer_arc, device_sr,
+            buffer_arc,
+            crate::audio::MEETING_CANONICAL_RATE,
             // 3 s chunks + 500 ms overlap. Chunk size from the
             // chunked_smoke A/B 2026-05-06 benchmark (3 s wins cadence
             // over 5 s without quality regression). Overlap stays at
@@ -656,7 +664,9 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
             // — proper fix is fuzzy match / longest common substring,
             // tracked as future work. Scan window 12 tokens (was 8)
             // is kept since it has no downside on the failure cases.
-            3.0, 500, on_chunk,
+            3.0,
+            500,
+            on_chunk,
         );
         if let Ok(mut slot) = CHUNKED.lock() {
             *slot = Some(transcriber);
@@ -2543,15 +2553,23 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
         }
     }
 
-    // Final gate: enhance only if either the global toggle is on, or
-    // an app rule forced a non-off style for this specific app. If
-    // style is still Off (no rule fired and global is off, OR rule
-    // explicitly set style=off), pass the raw transcript through.
-    if !global_enabled && !rule_forced_enhance {
-        log("[LLM] global disabled and no rule forced enhance — pass-through");
+    // Final gate: enhance / translate only when SOMETHING wants the
+    // LLM to run. Three triggers can keep us alive past the gate:
+    //   1. Global LLM toggle on (user's default mode is "enhance").
+    //   2. An app rule fired with a non-off style for this app.
+    //   3. The user picked a translate-target (pill scroll-wheel or
+    //      pill menu → "Translate to: ..." — sets llm_translate_to
+    //      independently of style).
+    // The translate trigger was previously missing, so the dictation
+    // flow swallowed the LLM call when style=Off even with a
+    // translate target set — user-reported regression 2026-05-20.
+    let translate_active = !translate_to.is_empty();
+    if !global_enabled && !rule_forced_enhance && !translate_active {
+        log("[LLM] global disabled, no rule, no translate target — pass-through");
         return write_to_buf(text, out_buf, buf_len);
     }
-    if style == crate::llm::LlmStyle::Off {
+    if style == crate::llm::LlmStyle::Off && !translate_active {
+        log("[LLM] style=off and no translate target — pass-through");
         return write_to_buf(text, out_buf, buf_len);
     }
 
@@ -2992,6 +3010,12 @@ pub unsafe extern "C" fn dimmy_meeting_stop(out_buf: *mut c_char, buf_len: c_int
     // instant the user clicked Stop, not after the worker finishes
     // its last STT chunk.
     emit_meeting_state_event(false, false);
+    // Re-arm the call-detector stop-suggestion path so a NEXT meeting
+    // started from another detection isn't sitting on stale flags.
+    {
+        let mut g = call_detector_lock();
+        g.meeting_stopped();
+    }
 
     // Stop audio capture in parallel with the worker drain — the
     // worker's stop() blocks for up to one chunk's transcribe time
@@ -4886,18 +4910,326 @@ pub unsafe extern "C" fn dimmy_clear_app_context() {
     }
 }
 
-/// Synchronously transcribe a WAV file using the active local STT
+/// Decode a WAV file via `hound` to (mono f32, sample_rate). Kept on
+/// hound (not Symphonia) because the file-load tests + every recorded-
+/// from-Dimmy artefact are WAV — no need to pay Symphonia's per-call
+/// cost on the most common path.
+fn decode_wav_via_hound(path: &str) -> Result<(Vec<f32>, u32), String> {
+    let mut reader = hound::WavReader::open(path).map_err(|e| format!("open: {e}"))?;
+    let spec = reader.spec();
+    if spec.sample_rate == 0 || spec.channels == 0 {
+        return Err("invalid WAV header (sample_rate or channels = 0)".into());
+    }
+    let raw_samples: Vec<f32> = match spec.sample_format {
+        hound::SampleFormat::Int => {
+            let bits = spec.bits_per_sample as i32;
+            if bits <= 0 {
+                return Err(format!("invalid bits_per_sample {bits}"));
+            }
+            let scale = (1i64 << (bits - 1)) as f32;
+            reader
+                .samples::<i32>()
+                .filter_map(|s| s.ok())
+                .map(|s| s as f32 / scale)
+                .collect()
+        }
+        hound::SampleFormat::Float => reader.samples::<f32>().filter_map(|s| s.ok()).collect(),
+    };
+    if raw_samples.is_empty() {
+        return Err("WAV decoded to zero samples".into());
+    }
+    let mono: Vec<f32> = if spec.channels == 1 {
+        raw_samples
+    } else {
+        let ch = spec.channels as usize;
+        raw_samples
+            .chunks_exact(ch)
+            .map(|frame| frame.iter().sum::<f32>() / ch as f32)
+            .collect()
+    };
+    Ok((mono, spec.sample_rate))
+}
+
+/// Decode m4a / mp3 / aac / alac / flac / ogg / vorbis via Symphonia
+/// to (mono f32, sample_rate). Symphonia is pure Rust + no native deps;
+/// codec features picked in `core/Cargo.toml`. Multi-track files: pick
+/// the first decodable audio track; this matches what users expect
+/// from a Voice Memo / podcast export.
+fn decode_via_symphonia(path: &str) -> Result<(Vec<f32>, u32), String> {
+    use symphonia::core::audio::SampleBuffer;
+    use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
+    use symphonia::core::errors::Error as SymphoniaError;
+    use symphonia::core::formats::FormatOptions;
+    use symphonia::core::io::MediaSourceStream;
+    use symphonia::core::meta::MetadataOptions;
+    use symphonia::core::probe::Hint;
+
+    let file = std::fs::File::open(path).map_err(|e| format!("open: {e}"))?;
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let mut hint = Hint::new();
+    if let Some(ext) = std::path::Path::new(path)
+        .extension()
+        .and_then(|s| s.to_str())
+    {
+        hint.with_extension(ext);
+    }
+    let probed = symphonia::default::get_probe()
+        .format(
+            &hint,
+            mss,
+            &FormatOptions {
+                enable_gapless: true,
+                ..Default::default()
+            },
+            &MetadataOptions::default(),
+        )
+        .map_err(|e| format!("probe: {e}"))?;
+    let mut format = probed.format;
+    let track = format
+        .tracks()
+        .iter()
+        .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
+        .ok_or_else(|| "no decodable audio track".to_string())?;
+    let track_id = track.id;
+    let sample_rate = track
+        .codec_params
+        .sample_rate
+        .ok_or_else(|| "missing sample rate in codec params".to_string())?;
+    let channels = track
+        .codec_params
+        .channels
+        .map(|c| c.count())
+        .unwrap_or(1)
+        .max(1);
+    let mut decoder = symphonia::default::get_codecs()
+        .make(&track.codec_params, &DecoderOptions::default())
+        .map_err(|e| format!("decoder: {e}"))?;
+    let mut interleaved: Vec<f32> = Vec::new();
+    let mut sample_buf: Option<SampleBuffer<f32>> = None;
+    loop {
+        let packet = match format.next_packet() {
+            Ok(p) => p,
+            // End-of-stream surfaces as IoError(UnexpectedEof) in
+            // symphonia 0.5 — treat as normal termination.
+            Err(SymphoniaError::IoError(_)) => break,
+            Err(SymphoniaError::ResetRequired) => break,
+            Err(e) => return Err(format!("packet: {e}")),
+        };
+        if packet.track_id() != track_id {
+            continue;
+        }
+        match decoder.decode(&packet) {
+            Ok(audio_buf) => {
+                if sample_buf.is_none() {
+                    let spec = *audio_buf.spec();
+                    let duration = audio_buf.capacity() as u64;
+                    sample_buf = Some(SampleBuffer::<f32>::new(duration, spec));
+                }
+                if let Some(buf) = &mut sample_buf {
+                    buf.copy_interleaved_ref(audio_buf);
+                    interleaved.extend_from_slice(buf.samples());
+                }
+            }
+            // Single-packet decode errors are recoverable on most
+            // codecs; resync on the next packet rather than aborting.
+            Err(SymphoniaError::DecodeError(_)) => continue,
+            Err(e) => return Err(format!("decode: {e}")),
+        }
+    }
+    if interleaved.is_empty() {
+        return Err("symphonia produced 0 samples".into());
+    }
+    let mono: Vec<f32> = if channels == 1 {
+        interleaved
+    } else {
+        interleaved
+            .chunks_exact(channels)
+            .map(|frame| frame.iter().sum::<f32>() / channels as f32)
+            .collect()
+    };
+    Ok((mono, sample_rate))
+}
+
+/// Decode any audio file the loader supports (WAV via hound, m4a /
+/// mp3 / aac / flac / ogg via Symphonia) and write it as a real
+/// mono int16 WAV at the source's native sample rate. Used by the
+/// file-load → meeting bridge so downstream consumers that hardcode
+/// "audio.wav" (waveform reader, media player, duration probe) keep
+/// working without per-format branches.
+///
+/// Returns the destination file size on success, or:
+/// - -1 invalid args (null pointer / bad UTF-8)
+/// - -2 decode failure
+/// - -3 WAV write failure
+///
+/// # Safety
+/// Both pointers must be valid null-terminated UTF-8 C strings.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_decode_audio_to_wav(
+    src_ptr: *const c_char,
+    dst_ptr: *const c_char,
+) -> c_int {
+    if src_ptr.is_null() || dst_ptr.is_null() {
+        return -1;
+    }
+    let src = match CStr::from_ptr(src_ptr).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let dst = match CStr::from_ptr(dst_ptr).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let ext = std::path::Path::new(src)
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_default();
+    let (mono, sample_rate) = match if ext == "wav" {
+        decode_wav_via_hound(src)
+    } else {
+        decode_via_symphonia(src)
+    } {
+        Ok(v) => v,
+        Err(e) => {
+            log(&format!("[DecodeToWav] decode failed: {}", e));
+            return -2;
+        }
+    };
+    if mono.is_empty() || sample_rate == 0 {
+        return -2;
+    }
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = match hound::WavWriter::create(dst, spec) {
+        Ok(w) => w,
+        Err(e) => {
+            log(&format!("[DecodeToWav] hound create {}: {}", dst, e));
+            return -3;
+        }
+    };
+    for &s in &mono {
+        let clamped = s.clamp(-1.0, 1.0);
+        let i = (clamped * i16::MAX as f32) as i16;
+        if writer.write_sample(i).is_err() {
+            return -3;
+        }
+    }
+    if writer.finalize().is_err() {
+        return -3;
+    }
+    std::fs::metadata(dst)
+        .map(|m| m.len() as c_int)
+        .unwrap_or(0)
+}
+
+/// Compute a waveform-peak summary from any audio file the loader
+/// can decode (WAV via hound, m4a / mp3 / aac / flac / ogg via
+/// Symphonia). Mirrors the role of the C#-side `WavPeaks.ReadPeaks`,
+/// but reuses the multi-format Rust decoder so the host UI gets
+/// peaks for every format `dimmy_transcribe_file` accepts.
+///
+/// Output JSON: `{"peaks":[f32; bucket_count], "duration_secs": f64}`
+/// where peaks are in [0..1] (absolute peak per bucket, mono after
+/// downmix).
+///
+/// Returns the number of bytes written (excluding null terminator),
+/// or:
+/// - -1 invalid args (null pointer / bad UTF-8 / `bucket_count <= 0`
+///   / `buf_len <= 0`)
+/// - -2 decode failure (unsupported codec, unreadable file, empty)
+/// - -3 output buffer too small for the JSON (caller should retry
+///   with a larger buffer; the host's "no waveform" fallback applies)
+///
+/// # Safety
+/// `path_ptr` must be a valid null-terminated UTF-8 C string and
+/// `out_buf` a valid writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_compute_audio_peaks(
+    path_ptr: *const c_char,
+    bucket_count: c_int,
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if path_ptr.is_null() || out_buf.is_null() || bucket_count <= 0 || buf_len <= 0 {
+        return -1;
+    }
+    let path = match CStr::from_ptr(path_ptr).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_default();
+    let (mono, sample_rate) = match if ext == "wav" {
+        decode_wav_via_hound(path)
+    } else {
+        decode_via_symphonia(path)
+    } {
+        Ok(v) => v,
+        Err(_) => return -2,
+    };
+    if mono.is_empty() || sample_rate == 0 {
+        return -2;
+    }
+    let buckets = bucket_count as usize;
+    let total = mono.len();
+    let frames_per_bucket = (total / buckets).max(1);
+    let mut peaks: Vec<f32> = Vec::with_capacity(buckets);
+    for b in 0..buckets {
+        let start = b * frames_per_bucket;
+        if start >= total {
+            peaks.push(0.0);
+            continue;
+        }
+        let end = ((b + 1) * frames_per_bucket).min(total);
+        let mut peak: f32 = 0.0;
+        for &s in &mono[start..end] {
+            let a = s.abs();
+            if a > peak {
+                peak = a;
+            }
+        }
+        peaks.push(peak.min(1.0));
+    }
+    let duration_secs = total as f64 / sample_rate as f64;
+    let payload = serde_json::json!({
+        "peaks": peaks,
+        "duration_secs": duration_secs,
+    })
+    .to_string();
+    let bytes = payload.as_bytes();
+    if bytes.len() + 1 > buf_len as usize {
+        return -3;
+    }
+    let dst = std::slice::from_raw_parts_mut(out_buf as *mut u8, buf_len as usize);
+    dst[..bytes.len()].copy_from_slice(bytes);
+    dst[bytes.len()] = 0;
+    bytes.len() as c_int
+}
+
+/// Synchronously transcribe an audio file using the active local STT
 /// backend (whisper.cpp or Parakeet, per `local_stt_backend`). Cloud
 /// transcription via this entry point is unimplemented for now —
 /// callers that need cloud should use the recording flow.
 ///
-/// `path_ptr` must point to a UTF-8 file path (any 16/24/32-bit int
-/// or 32-bit float WAV). The file is decoded in-process via hound,
-/// downmixed to mono, run through the standard preprocess pipeline
-/// (highpass + VAD + AGC + downsample to 16 k), and routed to the
-/// configured local backend. The resulting transcript is also
-/// written to the history database with audio_path linking back to
-/// the source file (so the user can replay it from the History UI).
+/// Supported containers / codecs:
+/// - **WAV** (16/24/32-bit int, 32-bit float) — via hound, fast path.
+/// - **m4a / mp4 / aac** (ISO BMFF container with AAC or ALAC) — via Symphonia.
+/// - **mp3, flac, ogg/vorbis** — via Symphonia.
+///
+/// The file is decoded in-process, downmixed to mono, run through the
+/// file-load preprocess pipeline (highpass only — AGC would corrupt
+/// long files, see CLAUDE.md AUDIO-001), and routed to the configured
+/// local backend. The resulting transcript is also written to the
+/// history database with audio_path linking back to the source file
+/// (so the user can replay it from the History UI).
 ///
 /// Returns the transcript length on success (bytes written, excluding
 /// the null terminator), or one of:
@@ -4925,52 +5257,39 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
     };
     log(&format!("[FileLoad] decoding '{}'", path));
 
-    // ── Decode WAV → mono f32 at the file's native sample rate ──
-    let mut reader = match hound::WavReader::open(path) {
-        Ok(r) => r,
-        Err(e) => {
-            log(&format!("[FileLoad] open failed: {}", e));
-            return -2;
-        }
-    };
-    let spec = reader.spec();
-    if spec.sample_rate == 0 || spec.channels == 0 {
-        log("[FileLoad] invalid WAV header (sample_rate or channels = 0)");
-        return -2;
-    }
-    let raw_samples: Vec<f32> = match spec.sample_format {
-        hound::SampleFormat::Int => {
-            let bits = spec.bits_per_sample as i32;
-            if bits <= 0 {
+    // ── Decode: dispatch by extension. WAV → hound (fast path, well
+    // tested); everything else → Symphonia (pure-Rust multi-format).
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_default();
+    let (mono, sample_rate) = if ext == "wav" {
+        match decode_wav_via_hound(path) {
+            Ok(v) => v,
+            Err(e) => {
+                log(&format!("[FileLoad] WAV decode failed: {}", e));
                 return -2;
             }
-            let scale = (1i64 << (bits - 1)) as f32;
-            reader
-                .samples::<i32>()
-                .filter_map(|s| s.ok())
-                .map(|s| s as f32 / scale)
-                .collect()
         }
-        hound::SampleFormat::Float => reader.samples::<f32>().filter_map(|s| s.ok()).collect(),
-    };
-    if raw_samples.is_empty() {
-        log("[FileLoad] WAV decoded to zero samples");
-        return -2;
-    }
-    let mono: Vec<f32> = if spec.channels == 1 {
-        raw_samples
     } else {
-        let ch = spec.channels as usize;
-        raw_samples
-            .chunks_exact(ch)
-            .map(|frame| frame.iter().sum::<f32>() / ch as f32)
-            .collect()
+        match decode_via_symphonia(path) {
+            Ok(v) => v,
+            Err(e) => {
+                log(&format!(
+                    "[FileLoad] Symphonia decode failed (ext='{}'): {}",
+                    ext, e
+                ));
+                return -2;
+            }
+        }
     };
     log(&format!(
-        "[FileLoad] decoded: {} samples @ {} Hz mono ({:.1}s)",
+        "[FileLoad] decoded: {} samples @ {} Hz mono ({:.1}s) [ext={}]",
         mono.len(),
-        spec.sample_rate,
-        mono.len() as f64 / spec.sample_rate as f64,
+        sample_rate,
+        mono.len() as f64 / sample_rate as f64,
+        if ext.is_empty() { "(none)" } else { &ext },
     ));
 
     // ── Preprocess: file-load mode (highpass only, no VAD, no AGC) ──
@@ -4981,11 +5300,10 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
     // audio, leaving only the first ~150 s transcribable. File-load
     // audio is already at a recorded level — only de-rumble is needed.
     let raw_samples_for_history = mono.clone();
-    let processed_samples =
-        crate::preprocess::process_buffer_for_file_load(&mono, spec.sample_rate);
+    let processed_samples = crate::preprocess::process_buffer_for_file_load(&mono, sample_rate);
     let processed = crate::audio::ProcessedAudio {
         samples: processed_samples,
-        sample_rate: spec.sample_rate,
+        sample_rate,
     };
     if processed.samples.is_empty() {
         log("[FileLoad] preprocess produced 0 samples (silent input?)");
@@ -4999,7 +5317,7 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
         .lock()
         .map(|m| m.clone())
         .unwrap_or_else(|_| "local".to_string());
-    let total_secs_pre = raw_samples_for_history.len() as f64 / spec.sample_rate as f64;
+    let total_secs_pre = raw_samples_for_history.len() as f64 / sample_rate as f64;
 
     // ── Cloud branch: hand off to transcribe_chunked ──────────────
     // Cloud STT routing reuses the same chunking machinery the live
@@ -5118,7 +5436,7 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
     let composed_prompt = crate::compose_stt_prompt(&prompt_base, &user_dict_snapshot);
     // Emit a starting event so the UI can flip its progress bar
     // from indeterminate to 0 % the moment we begin work.
-    let total_secs = raw_samples_for_history.len() as f64 / spec.sample_rate as f64;
+    let total_secs = raw_samples_for_history.len() as f64 / sample_rate as f64;
     emit_event(
         "file_transcribe_progress",
         &serde_json::json!({
@@ -5231,7 +5549,7 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
     if !text.trim().is_empty() {
         if let Ok(guard) = st.history_store.lock() {
             if let Some(ref store) = *guard {
-                let duration = raw_samples_for_history.len() as f64 / spec.sample_rate as f64;
+                let duration = raw_samples_for_history.len() as f64 / sample_rate as f64;
                 let saved_id = store.save(&text, &language, duration).ok();
                 // Attach word timestamps when the parakeet path produced
                 // them. Whisper backend leaves word_ts_acc empty → no-op.
@@ -6587,7 +6905,70 @@ pub unsafe extern "C" fn dimmy_call_signal(mic_active: c_int, app_id: *const c_c
             emit_event("call_ended", &payload);
             2
         }
+        CallSignalOutcome::StopSuggested {
+            app,
+            inactive_for_secs,
+        } => {
+            let payload = serde_json::json!({
+                "app": app,
+                "inactive_for_secs": inactive_for_secs,
+                "reason": "call_ended",
+            })
+            .to_string();
+            emit_event("meeting.stop_suggested", &payload);
+            3
+        }
         CallSignalOutcome::Suppressed(_) | CallSignalOutcome::NoChange => 0,
+    }
+}
+
+/// Push one system-audio activity observation. `sys_active` = 1 iff
+/// the call's render-side audio is currently emitting (WASAPI render
+/// session for the whitelisted app peak-meter > floor). Calling this
+/// switches the stop-suggestion gate to AND-with-sys mode for this
+/// process — once enabled, BOTH mic and sys must be silent past their
+/// respective thresholds (5 s each by default) before the meeting
+/// stop popup is offered. Hosts that never call this stay in mic-only
+/// mode (Mac today).
+///
+/// Return: 0 / 3 (`meeting.stop_suggested` emitted) / -1 (bad app_id).
+///
+/// # Safety
+/// `app_id` must be NULL or a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_call_signal_sys(sys_active: c_int, app_id: *const c_char) -> c_int {
+    // app_id is accepted for parity with `dimmy_call_signal` (host can
+    // pass the same id it uses on the mic side); we don't use it on
+    // the sys path because the detection identity is owned by the
+    // mic-side state machine. Validate the encoding so callers can't
+    // smuggle invalid UTF-8 in.
+    if !app_id.is_null() {
+        if CStr::from_ptr(app_id).to_str().is_err() {
+            return -1;
+        }
+    }
+    let is_meeting_active = MEETING.lock().map(|g| g.is_some()).unwrap_or(false);
+    let now = now_epoch_secs();
+    let outcome = {
+        let mut g = call_detector_lock();
+        g.signal_sys(sys_active != 0, is_meeting_active, now)
+    };
+    use crate::call_detector::CallSignalOutcome;
+    match outcome {
+        CallSignalOutcome::StopSuggested {
+            app,
+            inactive_for_secs,
+        } => {
+            let payload = serde_json::json!({
+                "app": app,
+                "inactive_for_secs": inactive_for_secs,
+                "reason": "call_ended",
+            })
+            .to_string();
+            emit_event("meeting.stop_suggested", &payload);
+            3
+        }
+        _ => 0,
     }
 }
 
@@ -6619,6 +7000,9 @@ pub unsafe extern "C" fn dimmy_call_signal_response(
         "not_now" => NudgeResponse::NotNow,
         "never" => NudgeResponse::Never,
         "timeout" => NudgeResponse::Timeout,
+        "stop_and_recap" => NudgeResponse::StopAndRecap,
+        "keep_recording" => NudgeResponse::KeepRecording,
+        "stop_timeout" => NudgeResponse::StopTimeout,
         _ => return -2,
     };
     let app: Option<String> = if app_id.is_null() {
