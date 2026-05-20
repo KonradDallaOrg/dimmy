@@ -4910,18 +4910,162 @@ pub unsafe extern "C" fn dimmy_clear_app_context() {
     }
 }
 
-/// Synchronously transcribe a WAV file using the active local STT
+/// Decode a WAV file via `hound` to (mono f32, sample_rate). Kept on
+/// hound (not Symphonia) because the file-load tests + every recorded-
+/// from-Dimmy artefact are WAV — no need to pay Symphonia's per-call
+/// cost on the most common path.
+fn decode_wav_via_hound(path: &str) -> Result<(Vec<f32>, u32), String> {
+    let mut reader = hound::WavReader::open(path).map_err(|e| format!("open: {e}"))?;
+    let spec = reader.spec();
+    if spec.sample_rate == 0 || spec.channels == 0 {
+        return Err("invalid WAV header (sample_rate or channels = 0)".into());
+    }
+    let raw_samples: Vec<f32> = match spec.sample_format {
+        hound::SampleFormat::Int => {
+            let bits = spec.bits_per_sample as i32;
+            if bits <= 0 {
+                return Err(format!("invalid bits_per_sample {bits}"));
+            }
+            let scale = (1i64 << (bits - 1)) as f32;
+            reader
+                .samples::<i32>()
+                .filter_map(|s| s.ok())
+                .map(|s| s as f32 / scale)
+                .collect()
+        }
+        hound::SampleFormat::Float => reader.samples::<f32>().filter_map(|s| s.ok()).collect(),
+    };
+    if raw_samples.is_empty() {
+        return Err("WAV decoded to zero samples".into());
+    }
+    let mono: Vec<f32> = if spec.channels == 1 {
+        raw_samples
+    } else {
+        let ch = spec.channels as usize;
+        raw_samples
+            .chunks_exact(ch)
+            .map(|frame| frame.iter().sum::<f32>() / ch as f32)
+            .collect()
+    };
+    Ok((mono, spec.sample_rate))
+}
+
+/// Decode m4a / mp3 / aac / alac / flac / ogg / vorbis via Symphonia
+/// to (mono f32, sample_rate). Symphonia is pure Rust + no native deps;
+/// codec features picked in `core/Cargo.toml`. Multi-track files: pick
+/// the first decodable audio track; this matches what users expect
+/// from a Voice Memo / podcast export.
+fn decode_via_symphonia(path: &str) -> Result<(Vec<f32>, u32), String> {
+    use symphonia::core::audio::SampleBuffer;
+    use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
+    use symphonia::core::errors::Error as SymphoniaError;
+    use symphonia::core::formats::FormatOptions;
+    use symphonia::core::io::MediaSourceStream;
+    use symphonia::core::meta::MetadataOptions;
+    use symphonia::core::probe::Hint;
+
+    let file = std::fs::File::open(path).map_err(|e| format!("open: {e}"))?;
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let mut hint = Hint::new();
+    if let Some(ext) = std::path::Path::new(path)
+        .extension()
+        .and_then(|s| s.to_str())
+    {
+        hint.with_extension(ext);
+    }
+    let probed = symphonia::default::get_probe()
+        .format(
+            &hint,
+            mss,
+            &FormatOptions {
+                enable_gapless: true,
+                ..Default::default()
+            },
+            &MetadataOptions::default(),
+        )
+        .map_err(|e| format!("probe: {e}"))?;
+    let mut format = probed.format;
+    let track = format
+        .tracks()
+        .iter()
+        .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
+        .ok_or_else(|| "no decodable audio track".to_string())?;
+    let track_id = track.id;
+    let sample_rate = track
+        .codec_params
+        .sample_rate
+        .ok_or_else(|| "missing sample rate in codec params".to_string())?;
+    let channels = track
+        .codec_params
+        .channels
+        .map(|c| c.count())
+        .unwrap_or(1)
+        .max(1);
+    let mut decoder = symphonia::default::get_codecs()
+        .make(&track.codec_params, &DecoderOptions::default())
+        .map_err(|e| format!("decoder: {e}"))?;
+    let mut interleaved: Vec<f32> = Vec::new();
+    let mut sample_buf: Option<SampleBuffer<f32>> = None;
+    loop {
+        let packet = match format.next_packet() {
+            Ok(p) => p,
+            // End-of-stream surfaces as IoError(UnexpectedEof) in
+            // symphonia 0.5 — treat as normal termination.
+            Err(SymphoniaError::IoError(_)) => break,
+            Err(SymphoniaError::ResetRequired) => break,
+            Err(e) => return Err(format!("packet: {e}")),
+        };
+        if packet.track_id() != track_id {
+            continue;
+        }
+        match decoder.decode(&packet) {
+            Ok(audio_buf) => {
+                if sample_buf.is_none() {
+                    let spec = *audio_buf.spec();
+                    let duration = audio_buf.capacity() as u64;
+                    sample_buf = Some(SampleBuffer::<f32>::new(duration, spec));
+                }
+                if let Some(buf) = &mut sample_buf {
+                    buf.copy_interleaved_ref(audio_buf);
+                    interleaved.extend_from_slice(buf.samples());
+                }
+            }
+            // Single-packet decode errors are recoverable on most
+            // codecs; resync on the next packet rather than aborting.
+            Err(SymphoniaError::DecodeError(_)) => continue,
+            Err(e) => return Err(format!("decode: {e}")),
+        }
+    }
+    if interleaved.is_empty() {
+        return Err("symphonia produced 0 samples".into());
+    }
+    let mono: Vec<f32> = if channels == 1 {
+        interleaved
+    } else {
+        interleaved
+            .chunks_exact(channels)
+            .map(|frame| frame.iter().sum::<f32>() / channels as f32)
+            .collect()
+    };
+    Ok((mono, sample_rate))
+}
+
+/// Synchronously transcribe an audio file using the active local STT
 /// backend (whisper.cpp or Parakeet, per `local_stt_backend`). Cloud
 /// transcription via this entry point is unimplemented for now —
 /// callers that need cloud should use the recording flow.
 ///
-/// `path_ptr` must point to a UTF-8 file path (any 16/24/32-bit int
-/// or 32-bit float WAV). The file is decoded in-process via hound,
-/// downmixed to mono, run through the standard preprocess pipeline
-/// (highpass + VAD + AGC + downsample to 16 k), and routed to the
-/// configured local backend. The resulting transcript is also
-/// written to the history database with audio_path linking back to
-/// the source file (so the user can replay it from the History UI).
+/// Supported containers / codecs:
+/// - **WAV** (16/24/32-bit int, 32-bit float) — via hound, fast path.
+/// - **m4a / mp4 / aac** (ISO BMFF container with AAC or ALAC) — via Symphonia.
+/// - **mp3, flac, ogg/vorbis** — via Symphonia.
+///
+/// The file is decoded in-process, downmixed to mono, run through the
+/// file-load preprocess pipeline (highpass only — AGC would corrupt
+/// long files, see CLAUDE.md AUDIO-001), and routed to the configured
+/// local backend. The resulting transcript is also written to the
+/// history database with audio_path linking back to the source file
+/// (so the user can replay it from the History UI).
 ///
 /// Returns the transcript length on success (bytes written, excluding
 /// the null terminator), or one of:
@@ -4949,52 +5093,39 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
     };
     log(&format!("[FileLoad] decoding '{}'", path));
 
-    // ── Decode WAV → mono f32 at the file's native sample rate ──
-    let mut reader = match hound::WavReader::open(path) {
-        Ok(r) => r,
-        Err(e) => {
-            log(&format!("[FileLoad] open failed: {}", e));
-            return -2;
-        }
-    };
-    let spec = reader.spec();
-    if spec.sample_rate == 0 || spec.channels == 0 {
-        log("[FileLoad] invalid WAV header (sample_rate or channels = 0)");
-        return -2;
-    }
-    let raw_samples: Vec<f32> = match spec.sample_format {
-        hound::SampleFormat::Int => {
-            let bits = spec.bits_per_sample as i32;
-            if bits <= 0 {
+    // ── Decode: dispatch by extension. WAV → hound (fast path, well
+    // tested); everything else → Symphonia (pure-Rust multi-format).
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_default();
+    let (mono, sample_rate) = if ext == "wav" {
+        match decode_wav_via_hound(path) {
+            Ok(v) => v,
+            Err(e) => {
+                log(&format!("[FileLoad] WAV decode failed: {}", e));
                 return -2;
             }
-            let scale = (1i64 << (bits - 1)) as f32;
-            reader
-                .samples::<i32>()
-                .filter_map(|s| s.ok())
-                .map(|s| s as f32 / scale)
-                .collect()
         }
-        hound::SampleFormat::Float => reader.samples::<f32>().filter_map(|s| s.ok()).collect(),
-    };
-    if raw_samples.is_empty() {
-        log("[FileLoad] WAV decoded to zero samples");
-        return -2;
-    }
-    let mono: Vec<f32> = if spec.channels == 1 {
-        raw_samples
     } else {
-        let ch = spec.channels as usize;
-        raw_samples
-            .chunks_exact(ch)
-            .map(|frame| frame.iter().sum::<f32>() / ch as f32)
-            .collect()
+        match decode_via_symphonia(path) {
+            Ok(v) => v,
+            Err(e) => {
+                log(&format!(
+                    "[FileLoad] Symphonia decode failed (ext='{}'): {}",
+                    ext, e
+                ));
+                return -2;
+            }
+        }
     };
     log(&format!(
-        "[FileLoad] decoded: {} samples @ {} Hz mono ({:.1}s)",
+        "[FileLoad] decoded: {} samples @ {} Hz mono ({:.1}s) [ext={}]",
         mono.len(),
-        spec.sample_rate,
-        mono.len() as f64 / spec.sample_rate as f64,
+        sample_rate,
+        mono.len() as f64 / sample_rate as f64,
+        if ext.is_empty() { "(none)" } else { &ext },
     ));
 
     // ── Preprocess: file-load mode (highpass only, no VAD, no AGC) ──
@@ -5005,11 +5136,10 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
     // audio, leaving only the first ~150 s transcribable. File-load
     // audio is already at a recorded level — only de-rumble is needed.
     let raw_samples_for_history = mono.clone();
-    let processed_samples =
-        crate::preprocess::process_buffer_for_file_load(&mono, spec.sample_rate);
+    let processed_samples = crate::preprocess::process_buffer_for_file_load(&mono, sample_rate);
     let processed = crate::audio::ProcessedAudio {
         samples: processed_samples,
-        sample_rate: spec.sample_rate,
+        sample_rate,
     };
     if processed.samples.is_empty() {
         log("[FileLoad] preprocess produced 0 samples (silent input?)");
@@ -5023,7 +5153,7 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
         .lock()
         .map(|m| m.clone())
         .unwrap_or_else(|_| "local".to_string());
-    let total_secs_pre = raw_samples_for_history.len() as f64 / spec.sample_rate as f64;
+    let total_secs_pre = raw_samples_for_history.len() as f64 / sample_rate as f64;
 
     // ── Cloud branch: hand off to transcribe_chunked ──────────────
     // Cloud STT routing reuses the same chunking machinery the live
@@ -5142,7 +5272,7 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
     let composed_prompt = crate::compose_stt_prompt(&prompt_base, &user_dict_snapshot);
     // Emit a starting event so the UI can flip its progress bar
     // from indeterminate to 0 % the moment we begin work.
-    let total_secs = raw_samples_for_history.len() as f64 / spec.sample_rate as f64;
+    let total_secs = raw_samples_for_history.len() as f64 / sample_rate as f64;
     emit_event(
         "file_transcribe_progress",
         &serde_json::json!({
@@ -5255,7 +5385,7 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
     if !text.trim().is_empty() {
         if let Ok(guard) = st.history_store.lock() {
             if let Some(ref store) = *guard {
-                let duration = raw_samples_for_history.len() as f64 / spec.sample_rate as f64;
+                let duration = raw_samples_for_history.len() as f64 / sample_rate as f64;
                 let saved_id = store.save(&text, &language, duration).ok();
                 // Attach word timestamps when the parakeet path produced
                 // them. Whisper backend leaves word_ts_acc empty → no-op.

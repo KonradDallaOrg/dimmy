@@ -161,7 +161,7 @@ public sealed partial class SettingsWindow : Window
         // never showed up in ptt.log on a real drop). Bypass with Win32
         // OLE RegisterDragDrop bound to the Window's HWND. The drop
         // target accepts file drops anywhere on the Settings window;
-        // we filter to .wav at TranscribeFileAsync time.
+        // we filter to the supported audio formats at TranscribeFileAsync time.
         Activated += SettingsWindow_Activated;
         Closed += (_, _) =>
         {
@@ -233,6 +233,27 @@ public sealed partial class SettingsWindow : Window
         _loaded = true;
     }
 
+    /// File extensions accepted by `dimmy_transcribe_file`. WAV is the
+    /// fast path (hound decoder); everything else goes through
+    /// Symphonia on the Rust side. Keep in sync with the file dialog
+    /// filter on `FileLoadPick` (~line 670).
+    private static readonly string[] SupportedFileLoadExtensions =
+        new[] { ".wav", ".m4a", ".mp4", ".mp3", ".aac", ".flac", ".ogg" };
+
+    private const string FileLoadCaption =
+        "Drop an audio file to transcribe";
+    private const string FileLoadUnsupportedMessage =
+        "Unsupported file — accepted: .wav .m4a .mp3 .aac .flac .ogg";
+
+    private static bool IsSupportedAudioExtension(string ext)
+    {
+        foreach (var s in SupportedFileLoadExtensions)
+        {
+            if (ext.Equals(s, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
+    }
+
     private void RootGrid_DragOver(object sender, Microsoft.UI.Xaml.DragEventArgs e)
     {
         App.Log("XAML root DragOver", "FileLoad");
@@ -241,7 +262,7 @@ public sealed partial class SettingsWindow : Window
             e.AcceptedOperation = global::Windows.ApplicationModel.DataTransfer.DataPackageOperation.Copy;
             if (e.DragUIOverride != null)
             {
-                e.DragUIOverride.Caption = "Drop .wav to transcribe";
+                e.DragUIOverride.Caption = FileLoadCaption;
                 e.DragUIOverride.IsCaptionVisible = true;
             }
             e.Handled = true;
@@ -258,11 +279,11 @@ public sealed partial class SettingsWindow : Window
         {
             var items = await e.DataView.GetStorageItemsAsync();
             var first = items.FirstOrDefault(i => i is global::Windows.Storage.StorageFile sf
-                && sf.FileType.Equals(".wav", StringComparison.OrdinalIgnoreCase))
+                && IsSupportedAudioExtension(sf.FileType))
                 as global::Windows.Storage.StorageFile;
             if (first == null)
             {
-                FileLoadStatus.Text = "Only .wav supported in this build";
+                FileLoadStatus.Text = FileLoadUnsupportedMessage;
                 return;
             }
             await TranscribeFileAsync(first.Path);
@@ -666,7 +687,8 @@ public sealed partial class SettingsWindow : Window
             var hwnd = WindowHelper.GetHwnd(this);
             App.Log($"FileLoadPick: opening Win32 picker (hwnd=0x{hwnd:X})", "FileLoad");
             string? path = await System.Threading.Tasks.Task.Run(() =>
-                Helpers.Win32FileDialog.PickFile(hwnd, "Pick a WAV to transcribe",
+                Helpers.Win32FileDialog.PickFile(hwnd, "Pick an audio file to transcribe",
+                    ("Audio files", "*.wav;*.m4a;*.mp4;*.mp3;*.aac;*.flac;*.ogg"),
                     ("WAV audio", "*.wav"),
                     ("All files", "*.*")));
             App.Log($"FileLoadPick: picker returned {(path == null ? "null" : path)}", "FileLoad");
@@ -709,12 +731,15 @@ public sealed partial class SettingsWindow : Window
     {
         // Marshal back to UI thread — RegisterDragDrop callbacks run
         // on the OLE STA but XAML wants the dispatcher.
-        var first = Array.Find(paths,
-            p => p.EndsWith(".wav", StringComparison.OrdinalIgnoreCase));
+        var first = Array.Find(paths, p =>
+        {
+            var ext = System.IO.Path.GetExtension(p);
+            return !string.IsNullOrEmpty(ext) && IsSupportedAudioExtension(ext);
+        });
         if (first == null)
         {
             DispatcherQueue.TryEnqueue(() =>
-                FileLoadStatus.Text = "Only .wav supported in this build");
+                FileLoadStatus.Text = FileLoadUnsupportedMessage);
             return;
         }
         // Hop to UI dispatcher so TranscribeFileAsync can touch
@@ -731,16 +756,17 @@ public sealed partial class SettingsWindow : Window
     private void FileLoadDropTarget_DragOver(object sender, Microsoft.UI.Xaml.DragEventArgs e)
     {
         // Accept any drag that carries a file-system item — we filter
-        // to .wav at Drop time. Setting both AcceptedOperation AND
-        // marking Handled=true is required on WinUI 3 desktop;
-        // omitting Handled lets the parent ScrollViewer steal the
-        // event back and the cursor shows a "no-entry" sign.
+        // to the supported audio extensions at Drop time. Setting both
+        // AcceptedOperation AND marking Handled=true is required on
+        // WinUI 3 desktop; omitting Handled lets the parent
+        // ScrollViewer steal the event back and the cursor shows a
+        // "no-entry" sign.
         if (e.DataView.Contains(global::Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems))
         {
             e.AcceptedOperation = global::Windows.ApplicationModel.DataTransfer.DataPackageOperation.Copy;
             if (e.DragUIOverride != null)
             {
-                e.DragUIOverride.Caption = "Drop .wav to transcribe";
+                e.DragUIOverride.Caption = FileLoadCaption;
                 e.DragUIOverride.IsCaptionVisible = true;
                 e.DragUIOverride.IsContentVisible = true;
                 e.DragUIOverride.IsGlyphVisible = true;
@@ -763,11 +789,11 @@ public sealed partial class SettingsWindow : Window
             var items = await e.DataView.GetStorageItemsAsync();
             App.Log($"Drop: got {items.Count} items", "FileLoad");
             var first = items.FirstOrDefault(i => i is global::Windows.Storage.StorageFile sf
-                && sf.FileType.Equals(".wav", StringComparison.OrdinalIgnoreCase))
+                && IsSupportedAudioExtension(sf.FileType))
                 as global::Windows.Storage.StorageFile;
             if (first == null)
             {
-                FileLoadStatus.Text = "Only .wav supported in this build";
+                FileLoadStatus.Text = FileLoadUnsupportedMessage;
                 return;
             }
             await TranscribeFileAsync(first.Path);
