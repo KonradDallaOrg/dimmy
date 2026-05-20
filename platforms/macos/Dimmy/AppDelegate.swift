@@ -238,6 +238,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             .store(in: &cancellables)
     }
 
+    /// Reactive bridge between `AppState.callDetectEnabled` and the
+    /// 1 Hz CoreAudio poll in `CallDetectionManager`. Flipping the
+    /// toggle in Settings cleanly winds down the cooldown timers
+    /// (`signal(0)`) without restarting the timer.
+    private func wireCallDetectToggle() {
+        appState.$callDetectEnabled
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { enabled in
+                CallDetectionManager.shared.setEnabled(enabled)
+            }
+            .store(in: &cancellables)
+    }
+
     private func shouldShowLiveCaptions() -> Bool {
         appState.liveCaptionsEnabled
             && appState.chunkStreamingEnabled
@@ -308,6 +322,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 // when Parakeet is the active backend; flipping to it
                 // later in Settings re-fires below.
                 self.maybeWarmupParakeet()
+
+                // Boot the 1 Hz CoreAudio call-detect poll. Honours
+                // AppState.callDetectEnabled (loaded from config above)
+                // — the manager keeps ticking but emits 0/0 when the
+                // toggle is off, so Rust cooldowns wind down cleanly.
+                CallDetectionManager.shared.start(appState: self.appState)
+                CallDetectionManager.shared.setEnabled(self.appState.callDetectEnabled)
+                self.wireCallDetectToggle()
 
                 // Preload Parakeet during onboarding so by the time the
                 // user reaches the model-download step the bundle is

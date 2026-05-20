@@ -495,4 +495,33 @@ int32_t dimmy_claude_code_diagnostics(char * _Nonnull out_buf, int32_t buf_len);
 int32_t dimmy_telemetry_track_typed(const char * _Nonnull name_ptr,
                                     const char * _Nullable props_json_ptr);
 
+/// Push one mic-activity observation from the host's audio-session
+/// poll. `mic_active` = 1 iff some process is currently capturing
+/// the default microphone (CoreAudio
+/// kAudioDevicePropertyDeviceIsRunningSomewhere on Mac), 0 otherwise.
+/// `app_id` = lowercase canonical id ("teams"/"zoom"/"slack"/
+/// "discord"/"webex") if the host could infer it, NULL otherwise.
+/// Returns: 0 = no transition / suppressed, 1 = call_detected emitted,
+/// 2 = call_ended emitted, 3 = meeting.stop_suggested emitted,
+/// -1 = invalid UTF-8 in app_id.
+int32_t dimmy_call_signal(int32_t mic_active, const char * _Nullable app_id);
+
+/// Push one system-audio-activity observation (loopback render-side).
+/// AND-combined with mic for the stop-suggestion gate. Calling this
+/// once switches the gate to AND-with-sys mode for the lifetime of
+/// the state. Returns 0 / 3 / -1 (same semantics).
+int32_t dimmy_call_signal_sys(int32_t sys_active, const char * _Nullable app_id);
+
+/// Record the user's response to a call/stop nudge.
+/// `response` ∈ {"record_now","not_now","never","timeout",
+/// "stop_and_recap","keep_recording","stop_timeout"}.
+/// 0 ok, -1 null/invalid encoding, -2 unknown response string.
+int32_t dimmy_call_signal_response(const char * _Nullable app_id,
+                                   const char * _Nonnull response);
+
+/// JSON snapshot of the call-detector state (enabled, excluded apps,
+/// active cooldowns, current_app). Bytes written, -1 null buf,
+/// -2 buf too small.
+int32_t dimmy_call_detector_state(char * _Nonnull out_buf, int32_t buf_len);
+
 #endif /* DimmyFFI_h */

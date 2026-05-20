@@ -63,13 +63,79 @@ enum WavPeaks {
 
     /// Read `path` and produce `bucketCount` normalized peaks. Returns
     /// `[]` on any error (missing file, unknown format, truncated WAV).
+    ///
+    /// Checks a sidecar disk cache (`<path>.peaks.json`) first —
+    /// keyed on file size + bucket count. Re-rendering the same Done
+    /// view is then ~0 ms instead of the ~200-300 ms full scan a 1 h
+    /// 48 kHz WAV costs on M-class CPUs. Mirror of the Win cache in
+    /// `Helpers/WavPeaks.cs` (commit ba4961e3).
     static func readPeaks(path: String, bucketCount: Int) -> [Float] {
         guard bucketCount > 0,
-              FileManager.default.fileExists(atPath: path),
-              let data = try? Data(contentsOf: URL(fileURLWithPath: path),
+              FileManager.default.fileExists(atPath: path)
+        else { return [] }
+        if let cached = tryReadCachedPeaks(audioPath: path, bucketCount: bucketCount) {
+            return cached
+        }
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path),
                                     options: [.alwaysMapped])
         else { return [] }
-        return parse(data: data, bucketCount: bucketCount)
+        let peaks = parse(data: data, bucketCount: bucketCount)
+        if !peaks.isEmpty {
+            tryWriteCachedPeaks(audioPath: path, peaks: peaks)
+        }
+        return peaks
+    }
+
+    // MARK: - Sidecar cache (mtime-free; size + bucket count are
+    // sufficient because audio.wav is append-only within a meeting
+    // session and the bucket count is fixed by the UI).
+
+    private static func cachePath(audioPath: String) -> String {
+        audioPath + ".peaks.json"
+    }
+
+    private static func tryReadCachedPeaks(audioPath: String, bucketCount: Int) -> [Float]? {
+        let cache = cachePath(audioPath: audioPath)
+        guard FileManager.default.fileExists(atPath: cache),
+              let audioAttrs = try? FileManager.default.attributesOfItem(atPath: audioPath),
+              let audioSize = audioAttrs[.size] as? Int,
+              let bytes = try? Data(contentsOf: URL(fileURLWithPath: cache)),
+              let obj = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+              let cachedSize = obj["audioSize"] as? Int,
+              cachedSize == audioSize,
+              let cachedBuckets = obj["buckets"] as? Int,
+              cachedBuckets == bucketCount,
+              let raw = obj["peaks"] as? [Any]
+        else { return nil }
+        var out = [Float](repeating: 0, count: raw.count)
+        for (i, v) in raw.enumerated() {
+            if let d = v as? Double { out[i] = Float(d) }
+            else if let f = v as? NSNumber { out[i] = f.floatValue }
+        }
+        return out
+    }
+
+    private static func tryWriteCachedPeaks(audioPath: String, peaks: [Float]) {
+        guard let audioAttrs = try? FileManager.default.attributesOfItem(atPath: audioPath),
+              let audioSize = audioAttrs[.size] as? Int
+        else { return }
+        let dict: [String: Any] = [
+            "audioSize": audioSize,
+            "buckets": peaks.count,
+            "peaks": peaks.map { Double($0) },
+        ]
+        guard let json = try? JSONSerialization.data(withJSONObject: dict) else { return }
+        let cache = cachePath(audioPath: audioPath)
+        // Atomic write — tmp + replace — so a half-written file never
+        // surfaces to a concurrent reader.
+        let tmp = cache + ".tmp"
+        let tmpURL = URL(fileURLWithPath: tmp)
+        do {
+            try json.write(to: tmpURL, options: .atomic)
+            _ = try? FileManager.default.replaceItemAt(URL(fileURLWithPath: cache), withItemAt: tmpURL)
+        } catch {
+            // Best-effort: next render just recomputes.
+        }
     }
 
     static func parse(data: Data, bucketCount: Int) -> [Float] {
