@@ -37,7 +37,26 @@ public sealed partial class ClaudeConnectDialog : ContentDialog
     /// <summary>True iff Step 3's test ping returned a positive result.</summary>
     public bool Completed { get; private set; }
 
+    /// <summary>
+    /// When true, bypass the smart-skip and start at Step 1 regardless
+    /// of current detection state. Caller uses this for "Re-run setup"
+    /// (e.g. user wants to walk through the wizard again to inspect /
+    /// re-validate their install) — without it the smart-skip would
+    /// jump straight to Step 3 on an already-configured machine.
+    /// </summary>
+    public bool ForceStartAtStep1 { get; set; }
+
     private enum Step { Node = 1, ClaudeCli = 2, SignIn = 3 }
+
+    // Segoe Fluent Icons codepoints. Using compile-time consts so
+    // a source-encoding hiccup can't strip the literals (which would
+    // leave the FontIcon glyph blank, showing as a rendering box —
+    // the bug that shipped to the user on the first build).
+    private const string GlyphSuccess = "";   // Checkmark
+    private const string GlyphCaution = "";   // Warning triangle
+    private const string GlyphCritical = "";  // Important / X-on-circle
+    private const string GlyphPending = "";   // Globe / placeholder
+    private const string GlyphInfo = "";      // Info
 
     private Step _currentStep = Step.Node;
     private bool _nodeOk;
@@ -64,8 +83,11 @@ public sealed partial class ClaudeConnectDialog : ContentDialog
         // step probe so the state stays fresh as the user progresses.
         ProbeAllStates();
         var startAt = Step.Node;
-        if (_nodeOk) startAt = Step.ClaudeCli;
-        if (_nodeOk && _claudeOk) startAt = Step.SignIn;
+        if (!ForceStartAtStep1)
+        {
+            if (_nodeOk) startAt = Step.ClaudeCli;
+            if (_nodeOk && _claudeOk) startAt = Step.SignIn;
+        }
         EnterStep(startAt);
     }
 

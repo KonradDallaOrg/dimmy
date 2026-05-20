@@ -2289,6 +2289,8 @@
                     </Button>
                     <Button Content="Re-sign in" Click="AnthropicIntegrationSignIn_Click"
                             ToolTipService.ToolTip="Re-run the OAuth flow if your subscription token expired"/>
+                    <Button Content="Re-run setup" Click="AnthropicIntegrationRerunWizard_Click"
+                            ToolTipService.ToolTip="Re-walk the 3-step wizard (Node.js → CLI → sign in) — useful to verify the install or update Node"/>
                     <Button Content="Refresh" Click="AnthropicIntegrationRefresh_Click"/>
                   </StackPanel>
                 </Grid>

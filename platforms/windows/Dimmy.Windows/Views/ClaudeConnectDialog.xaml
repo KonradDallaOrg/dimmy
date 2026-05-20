@@ -70,6 +70,7 @@
                 BorderThickness="1" CornerRadius="6" Padding="14">
           <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
             <FontIcon x:Name="NodeStatusGlyph" FontSize="20"
+                      FontFamily="Segoe Fluent Icons"
                       Glyph="&#xE9F5;"
                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
             <TextBlock x:Name="NodeStatusText" VerticalAlignment="Center"
@@ -107,6 +108,7 @@
                 BorderThickness="1" CornerRadius="6" Padding="14">
           <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
             <FontIcon x:Name="ClaudeStatusGlyph" FontSize="20"
+                      FontFamily="Segoe Fluent Icons"
                       Glyph="&#xE9F5;"
                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
             <TextBlock x:Name="ClaudeStatusText" VerticalAlignment="Center"
@@ -156,6 +158,7 @@
           <StackPanel Spacing="8">
             <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
               <FontIcon x:Name="SignInGlyph" FontSize="20"
+                        FontFamily="Segoe Fluent Icons"
                         Glyph="&#xE9F5;"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
               <TextBlock x:Name="SignInText" VerticalAlignment="Center"
@@ -167,6 +170,7 @@
             <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center"
                         x:Name="TestStatusRow" Visibility="Collapsed">
               <FontIcon x:Name="TestGlyph" FontSize="20"
+                        FontFamily="Segoe Fluent Icons"
                         Glyph="&#xE9F5;"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
               <TextBlock x:Name="TestText" VerticalAlignment="Center"

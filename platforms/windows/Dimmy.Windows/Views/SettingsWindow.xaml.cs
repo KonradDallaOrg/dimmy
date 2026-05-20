@@ -1922,12 +1922,29 @@ public sealed partial class SettingsWindow : Window
     /// </summary>
     private async void AnthropicIntegrationWizard_Click(object sender, RoutedEventArgs e)
     {
+        await ShowClaudeWizardAsync(forceStep1: false);
+    }
+
+    /// <summary>
+    /// "Re-run setup" — open the wizard with smart-skip disabled so
+    /// the user walks all 3 steps regardless of current state. Used
+    /// to verify an existing install, update Node, or just preview
+    /// the wizard's copy.
+    /// </summary>
+    private async void AnthropicIntegrationRerunWizard_Click(object sender, RoutedEventArgs e)
+    {
+        await ShowClaudeWizardAsync(forceStep1: true);
+    }
+
+    private async System.Threading.Tasks.Task ShowClaudeWizardAsync(bool forceStep1)
+    {
         try
         {
             var dialog = new ClaudeConnectDialog
             {
                 XamlRoot = this.Content.XamlRoot,
                 RequestedTheme = Helpers.ThemeHelper.ResolvedElementTheme(),
+                ForceStartAtStep1 = forceStep1,
             };
             await dialog.ShowAsync();
             // Caches were cleared during the wizard; refresh the card.
