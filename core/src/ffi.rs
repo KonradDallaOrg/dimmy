@@ -6942,10 +6942,8 @@ pub unsafe extern "C" fn dimmy_call_signal_sys(sys_active: c_int, app_id: *const
     // the sys path because the detection identity is owned by the
     // mic-side state machine. Validate the encoding so callers can't
     // smuggle invalid UTF-8 in.
-    if !app_id.is_null() {
-        if CStr::from_ptr(app_id).to_str().is_err() {
-            return -1;
-        }
+    if !app_id.is_null() && CStr::from_ptr(app_id).to_str().is_err() {
+        return -1;
     }
     let is_meeting_active = MEETING.lock().map(|g| g.is_some()).unwrap_or(false);
     let now = now_epoch_secs();
