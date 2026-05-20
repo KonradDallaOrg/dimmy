@@ -834,6 +834,7 @@ dependencies = [
 [[package]]
 name = "deep_filter"
 version = "0.5.7-pre"
+source = "git+https://github.com/KonradDallaOrg/DeepFilterNet?branch=fix%2Ftract-ndarray-port#d010fa03f5a38e9f8a4c1861acfb2055e77b5e45"
 dependencies = [
  "anyhow",
  "crossbeam-channel",

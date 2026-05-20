@@ -168,7 +168,12 @@ nnnoiseless = "0.5"
 # the `Dfn3Processor` wrapper in `core/src/dfn3.rs` is ready to
 # accept a working backend; only the dep line below needs to come
 # alive once one of the unblocking paths above is done.
-deep_filter = { path = "../../deepfilternet-patched/libDF", default-features = false, features = ["tract", "wav-utils", "default-model"], optional = true }
+# Dimmy fork — branch `fix/tract-ndarray-port` patches the
+# upstream main against current `tract ≥0.21` + `ndarray = 0.16`.
+# When upstream Rikorose/DeepFilterNet lands equivalent fixes (or
+# accepts these as a PR), switch the URL back to the canonical
+# repo. Same pattern as KonradDallaOrg/llama-cpp-rs.
+deep_filter = { git = "https://github.com/KonradDallaOrg/DeepFilterNet", branch = "fix/tract-ndarray-port", default-features = false, features = ["tract", "wav-utils", "default-model"], optional = true }
 biquad = "0.4"
 dagc = "0.1"
 # Acoustic echo cancellation — pure Rust port of WebRTC AEC3.
