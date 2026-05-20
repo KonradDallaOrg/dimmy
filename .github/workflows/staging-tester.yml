@@ -327,16 +327,24 @@ jobs:
           REM     If a Win tester ever sees a broken signed DLL, FIRST
           REM     add `cargo clean --release` back and re-run.
           # Feature set FROZEN — must always include local-stt-vulkan +
-          # local-stt-parakeet + local-llm-vulkan. Dropping ANY of these
-          # = silent runtime trap: dictation/meeting paths that switch
-          # to parakeet at user-config time fail with "local model:
-          # parakeet inference requires the `local-stt-parakeet` cargo
-          # feature" once per chunk, while telemetry says
+          # local-stt-parakeet + local-llm-vulkan + local-dfn. Dropping
+          # ANY of these = silent runtime trap: dictation/meeting paths
+          # that switch to parakeet at user-config time fail with "local
+          # model: parakeet inference requires the `local-stt-parakeet`
+          # cargo feature" once per chunk, while telemetry says
           # transcription.failed. The flagged side-by-side staging
           # install (Dimmy-Staging package) was missing parakeet until
           # 2026-05-12. Mirrors the rule documented in CLAUDE.md §
           # "Windows local DLL build — feature flag set is FROZEN".
-          cargo build --lib --release --features local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,license-client
+          #
+          # `local-dfn` pulls the DeepFilterNet3 ML noise suppressor
+          # via the KonradDallaOrg/DeepFilterNet fork (branch
+          # fix/tract-ndarray-port — patches upstream against current
+          # tract / ndarray; same pattern as the llama-cpp-rs fork).
+          # Without it, AEC falls back to nnnoiseless. Frozen here so
+          # staging testers always exercise the production-default
+          # backend.
+          cargo build --lib --release --features local-stt-vulkan,local-stt-parakeet,local-llm-vulkan,local-dfn,license-client
 
       - name: Fetch onnxruntime win-x64 DLL (Parakeet ort path)
         # ort 2.0.0-rc.10 binds to onnxruntime 1.22.0; the .csproj
