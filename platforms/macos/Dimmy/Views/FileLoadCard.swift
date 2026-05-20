@@ -91,7 +91,7 @@ struct FileLoadCard: View {
 
     private var descriptionText: String {
         if isWorking { return "Working… leave the page open." }
-        return "Drag a .wav onto this card, or click Choose file. Routed through your active local STT backend."
+        return "Drag a .wav / .mp3 / .m4a / .aac / .flac / .ogg onto this card, or click Choose file. Routed through your active local STT backend."
     }
 
     private var isWorking: Bool {
@@ -224,7 +224,7 @@ struct FileLoadCard: View {
                     DispatchQueue.main.async {
                         guard let url = url else { return }
                         if !isAcceptableAudioPath(url.path) {
-                            status = .error("Drag a .wav file. mp3/m4a support is on the roadmap.")
+                            status = .error("Unsupported format. Use .wav / .mp3 / .m4a / .aac / .flac / .ogg.")
                             return
                         }
                         run(path: url.path)
@@ -243,19 +243,22 @@ struct FileLoadCard: View {
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
-        // Only the specific UTType we actually decode today. Previously
-        // this used `.audio` (the parent type) which made the OS panel
-        // expose the Music sidebar shortcut on macOS Sequoia 15.x and
-        // triggered the "Dimmy would like to access Apple Music, your
-        // music and video activity, and your media library" TCC prompt
-        // as soon as the user clicked it — even though Dimmy never
-        // reads the Music library. Narrow to .wav and we never trip
-        // that prompt path.
-        panel.allowedContentTypes = [.wav]
-        panel.message = "Pick a WAV file to transcribe"
+        // Narrow set of audio UTTypes the Rust core decodes (WAV native
+        // + Symphonia for the rest). Avoid the parent `.audio` type —
+        // it pulls the Music sidebar onto the panel on Sequoia 15.x and
+        // triggers the "Dimmy would like to access Apple Music…" TCC
+        // prompt even though we never read the Music library. The
+        // explicit list keeps that prompt off the table.
+        let mp3Type = UTType("public.mp3") ?? UTType.mp3
+        let m4aType = UTType("public.mpeg-4-audio") ?? UTType.mpeg4Audio
+        let aacType = UTType("public.aac-audio") ?? UTType.mpeg4Audio
+        let flacType = UTType(filenameExtension: "flac") ?? UTType.audio
+        let oggType = UTType(filenameExtension: "ogg") ?? UTType.audio
+        panel.allowedContentTypes = [.wav, mp3Type, m4aType, aacType, flacType, oggType]
+        panel.message = "Pick an audio file to transcribe"
         if panel.runModal() == .OK, let url = panel.url {
             if !isAcceptableAudioPath(url.path) {
-                status = .error("Only .wav is supported today.")
+                status = .error("Unsupported format. Use .wav / .mp3 / .m4a / .aac / .flac / .ogg.")
                 return
             }
             run(path: url.path)
@@ -263,7 +266,9 @@ struct FileLoadCard: View {
     }
 
     private func isAcceptableAudioPath(_ path: String) -> Bool {
-        path.lowercased().hasSuffix(".wav")
+        let lower = path.lowercased()
+        return [".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg"]
+            .contains(where: lower.hasSuffix)
     }
 
     // MARK: - Run recap as meeting
