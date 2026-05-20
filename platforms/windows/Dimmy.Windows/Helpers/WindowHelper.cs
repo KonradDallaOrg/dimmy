@@ -206,6 +206,23 @@ public static class WindowHelper
             SWP_NOMOVE | SWP_NOSIZE | 0x0020 /*SWP_FRAMECHANGED*/ | SWP_SHOWWINDOW);
     }
 
+    /// Mark a window as no-activate + no-taskbar without stripping its
+    /// backdrop. Use for overlays that should sit on top of the active
+    /// app without stealing focus, while keeping a real (Mica/Acrylic)
+    /// backdrop. Lighter than EnableTransparency — leaves the layered /
+    /// no-redirection-bitmap flags off so SystemBackdrop still renders.
+    public static void MarkNoActivate(Window window)
+    {
+        var hwnd = GetHwnd(window);
+        var exStyle = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
+        exStyle |= WS_EX_NOACTIVATE;
+        exStyle |= WS_EX_TOOLWINDOW;
+        exStyle &= ~WS_EX_APPWINDOW;
+        SetWindowLongPtr(hwnd, GWL_EXSTYLE, exStyle);
+        SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | 0x0020 /*SWP_FRAMECHANGED*/);
+    }
+
     [DllImport("user32.dll")]
     private static extern bool SystemParametersInfo(uint uiAction, uint uiParam, ref RECT pvParam, uint fWinIni);
     private const uint SPI_GETWORKAREA = 0x0030;
