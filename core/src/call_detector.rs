@@ -25,10 +25,21 @@ pub const GLOBAL_COOLDOWN_KEY: &str = "";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NudgeResponse {
+    /// Start-nudge: user accepted → meeting recording begins.
     RecordNow,
+    /// Start-nudge: postpone for the per-app cooldown.
     NotNow,
+    /// Start-nudge: never propose for this app.
     Never,
+    /// Start-nudge: auto-dismissed (short cooldown).
     Timeout,
+    /// Stop-nudge: user accepted → stop the recording + run recap.
+    StopAndRecap,
+    /// Stop-nudge: user wants to keep recording (e.g. call is paused,
+    /// not finished). Apply a short cooldown before re-asking.
+    KeepRecording,
+    /// Stop-nudge: auto-dismissed without action.
+    StopTimeout,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -50,6 +61,15 @@ pub enum CallSignalOutcome {
     Ended {
         app: Option<String>,
     },
+    /// Mic has been silent for `mic_inactive_for_stop_secs` while a
+    /// meeting started by us is still recording. UI should ask the
+    /// user if they want to stop and run the recap, or keep recording.
+    /// Emitted exactly once per meeting (re-armed only by an explicit
+    /// `meeting_stopped()` call).
+    StopSuggested {
+        app: Option<String>,
+        inactive_for_secs: i64,
+    },
     Suppressed(SuppressionReason),
 }
 
@@ -58,6 +78,21 @@ pub struct CallDetectorState {
     min_active_secs: u32,
     cooldown_secs: u32,
     timeout_cooldown_secs: u32,
+    /// How long the mic must stay inactive (after we started recording
+    /// from a detection) before we propose stopping. Avoids false
+    /// positives on short mutes (user took a sip of water, brief
+    /// silence between speakers). Default 5 s — paired AND with sys
+    /// silence so the false-positive surface is "both sides silent
+    /// for 5 s", not "user silent for 5 s".
+    mic_inactive_for_stop_secs: u32,
+    /// How long the system-audio loopback must stay inactive before
+    /// the stop-suggestion fires. AND-combined with mic — only fires
+    /// when BOTH have been silent for their respective thresholds.
+    /// Default 5 s.
+    sys_inactive_for_stop_secs: u32,
+    /// Cooldown after KeepRecording: don't re-ask for this long.
+    /// Default 300 s (5 min).
+    stop_keep_cooldown_secs: u32,
     excluded: HashSet<String>,
 
     last_mic_active: bool,
@@ -65,6 +100,32 @@ pub struct CallDetectorState {
     detection_emitted: bool,
     current_app: Option<String>,
     cooldown_until: HashMap<String, i64>,
+
+    /// True between RecordNow accept and meeting_stopped() call. Marks
+    /// "this meeting was started by the detector" — only meetings we
+    /// started get the auto-stop suggestion.
+    recording_active_from_us: bool,
+    /// Wall-clock secs since the mic went inactive while
+    /// recording_active_from_us is true. None outside that window.
+    mic_inactive_since: Option<i64>,
+    /// Wall-clock secs since system-audio loopback went inactive
+    /// while recording_active_from_us is true. None outside that
+    /// window. Hosts that don't poll the render side (Mac for now)
+    /// can leave `sys_signaling_enabled` false and the stop path
+    /// degrades cleanly to mic-only.
+    sys_inactive_since: Option<i64>,
+    /// Set to true the first time `signal_sys` is called. Until then
+    /// the AND-with-sys path is silently bypassed (mic-only fallback)
+    /// so Mac hosts without sys-audio polling still get stop-
+    /// suggestions when the user's own mic goes quiet.
+    sys_signaling_enabled: bool,
+    /// Idempotency guard: a single meeting gets at most one
+    /// stop-suggestion emission. Reset by meeting_stopped() AND by
+    /// KeepRecording (which also pushes out the cooldown).
+    stop_suggestion_emitted: bool,
+    /// Suppression deadline for stop suggestions after KeepRecording.
+    /// Set as `now + stop_keep_cooldown_secs` on KeepRecording.
+    stop_suggestion_until: Option<i64>,
 }
 
 impl CallDetectorState {
@@ -74,12 +135,21 @@ impl CallDetectorState {
             min_active_secs: 5,
             cooldown_secs: 1800,
             timeout_cooldown_secs: 300,
+            mic_inactive_for_stop_secs: 5,
+            sys_inactive_for_stop_secs: 5,
+            stop_keep_cooldown_secs: 300,
             excluded: HashSet::new(),
             last_mic_active: false,
             mic_active_since: None,
             detection_emitted: false,
             current_app: None,
             cooldown_until: HashMap::new(),
+            recording_active_from_us: false,
+            mic_inactive_since: None,
+            sys_inactive_since: None,
+            sys_signaling_enabled: false,
+            stop_suggestion_emitted: false,
+            stop_suggestion_until: None,
         }
     }
 
@@ -122,25 +192,152 @@ impl CallDetectorState {
         now: i64,
     ) -> CallSignalOutcome {
         if !self.enabled {
-            // A disabled detector must still observe transitions so
-            // re-enabling later starts clean — but always returns
-            // Suppressed.
             self.last_mic_active = mic_active;
             return CallSignalOutcome::Suppressed(SuppressionReason::Disabled);
         }
 
         if !mic_active {
-            return self.handle_inactive();
+            return self.handle_inactive(is_meeting_active, now);
         }
 
+        // Mic active again — clear any pending stop-suggestion timer so
+        // a brief mute followed by speech doesn't trip the threshold.
+        self.mic_inactive_since = None;
         self.handle_active(app, is_meeting_active, now)
     }
 
-    fn handle_inactive(&mut self) -> CallSignalOutcome {
-        let was_active_and_emitted = self.last_mic_active && self.detection_emitted;
+    /// Push one system-audio observation. `sys_active` = true iff the
+    /// whitelisted app's render-side audio session is currently
+    /// emitting sound (Win: WASAPI IAudioMeterInformation on the
+    /// session's render endpoint). Only the stop-suggestion path uses
+    /// this — `Detected` / `Ended` are mic-only signals.
+    ///
+    /// Calling this once flips `sys_signaling_enabled = true` for the
+    /// life of the state, so a host that calls it intermittently still
+    /// gets the AND-with-sys path (we don't want a single missed tick
+    /// to fall back to mic-only mid-meeting). Hosts that never call it
+    /// (Mac) keep the flag false and the stop-suggestion path uses
+    /// mic-only — matches today's behaviour.
+    pub fn signal_sys(
+        &mut self,
+        sys_active: bool,
+        is_meeting_active: bool,
+        now: i64,
+    ) -> CallSignalOutcome {
+        self.sys_signaling_enabled = true;
+        if sys_active {
+            self.sys_inactive_since = None;
+            return CallSignalOutcome::NoChange;
+        }
+        if self.sys_inactive_since.is_none() {
+            self.sys_inactive_since = Some(now);
+        }
+        // Re-check the stop-suggestion gate without touching the
+        // mic-side state — sys is an auxiliary input, not a mic
+        // transition. The AND-with-mic logic still lives in
+        // `check_stop_suggestion` so both code paths share it.
+        self.check_stop_suggestion(is_meeting_active, now)
+    }
+
+    /// Stop-suggestion gate, reused by both `signal()` (mic side) and
+    /// `signal_sys()` (sys side). Returns `StopSuggested` exactly once
+    /// per meeting iff: we started this meeting, the meeting is still
+    /// active, no KeepRecording cooldown, BOTH mic and sys (if sys
+    /// signaling is enabled) have been silent past their thresholds.
+    fn check_stop_suggestion(&mut self, is_meeting_active: bool, now: i64) -> CallSignalOutcome {
+        if !self.recording_active_from_us || !is_meeting_active || self.stop_suggestion_emitted {
+            return CallSignalOutcome::NoChange;
+        }
+        if let Some(until) = self.stop_suggestion_until {
+            if now < until {
+                return CallSignalOutcome::NoChange;
+            }
+        }
+        let mic_inactive_for = match self.mic_inactive_since {
+            Some(t) => now - t,
+            None => return CallSignalOutcome::NoChange,
+        };
+        if mic_inactive_for < self.mic_inactive_for_stop_secs as i64 {
+            return CallSignalOutcome::NoChange;
+        }
+        let sys_inactive_for = match self.sys_inactive_since {
+            Some(t) => now - t,
+            None => {
+                // No sys observation yet. If the host has been
+                // signalling sys at all, we wait for the next tick; if
+                // it hasn't (Mac), the mic-only fallback in
+                // handle_inactive already covers it and we never come
+                // here from signal_sys.
+                if self.sys_signaling_enabled {
+                    return CallSignalOutcome::NoChange;
+                }
+                0
+            }
+        };
+        if self.sys_signaling_enabled && sys_inactive_for < self.sys_inactive_for_stop_secs as i64 {
+            return CallSignalOutcome::NoChange;
+        }
+        self.stop_suggestion_emitted = true;
+        self.detection_emitted = false;
+        let inactive_for_secs = if self.sys_signaling_enabled {
+            mic_inactive_for.min(sys_inactive_for)
+        } else {
+            mic_inactive_for
+        };
+        CallSignalOutcome::StopSuggested {
+            app: self.current_app.clone(),
+            inactive_for_secs,
+        }
+    }
+
+    fn handle_inactive(&mut self, is_meeting_active: bool, now: i64) -> CallSignalOutcome {
+        let was_active = self.last_mic_active;
         let ended_app = self.current_app.clone();
         self.last_mic_active = false;
         self.mic_active_since = None;
+
+        // Stop-suggestion path: only if WE started this meeting and the
+        // user hasn't already deferred via KeepRecording. Mic-silence
+        // ≥ threshold while the meeting is still recording → propose
+        // to stop and run the recap. Emit exactly once per meeting;
+        // re-armed only by meeting_stopped() (new meeting).
+        let stop_suppressed = match self.stop_suggestion_until {
+            Some(until) => now < until,
+            None => false,
+        };
+        if self.recording_active_from_us && is_meeting_active && !self.stop_suggestion_emitted {
+            // Stamp the silence timestamp the moment mic goes quiet —
+            // independent of the KeepRecording cooldown. Without this
+            // a user who chose "Keep recording" early in a long silent
+            // stretch would never get re-prompted: mic_inactive_since
+            // stayed None until the cooldown expired, by which point
+            // the timestamp would restart at zero and the threshold
+            // could never elapse if the mic stayed quiet.
+            if self.mic_inactive_since.is_none() {
+                self.mic_inactive_since = Some(now);
+            }
+            if !stop_suppressed {
+                if let outcome @ CallSignalOutcome::StopSuggested { .. } =
+                    self.check_stop_suggestion(is_meeting_active, now)
+                {
+                    return match outcome {
+                        CallSignalOutcome::StopSuggested {
+                            inactive_for_secs, ..
+                        } => CallSignalOutcome::StopSuggested {
+                            app: ended_app,
+                            inactive_for_secs,
+                        },
+                        other => other,
+                    };
+                }
+            }
+            // Still under threshold (or inside the KeepRecording
+            // cooldown). Silent debounce.
+            self.detection_emitted = false;
+            return CallSignalOutcome::NoChange;
+        }
+
+        let was_active_and_emitted = was_active && self.detection_emitted;
         self.detection_emitted = false;
         self.current_app = None;
         if was_active_and_emitted {
@@ -215,6 +412,13 @@ impl CallDetectorState {
                 self.detection_emitted = false;
                 self.mic_active_since = None;
                 self.current_app = None;
+                // From this moment on, the meeting is "ours" → stop-
+                // suggestion path is armed. Cleared by meeting_stopped().
+                self.recording_active_from_us = true;
+                self.mic_inactive_since = None;
+                self.sys_inactive_since = None;
+                self.stop_suggestion_emitted = false;
+                self.stop_suggestion_until = None;
             }
             NudgeResponse::NotNow => {
                 self.cooldown_until
@@ -235,7 +439,42 @@ impl CallDetectorState {
                 self.detection_emitted = false;
                 self.mic_active_since = None;
             }
+            NudgeResponse::StopAndRecap => {
+                // Caller will invoke meeting_stopped() right after this
+                // (when dimmy_meeting_stop returns); we keep flags as-is
+                // here and let that hook do the reset.
+            }
+            NudgeResponse::KeepRecording => {
+                // Push out re-asking by `stop_keep_cooldown_secs` and
+                // re-arm the emitter — if both sides go inactive again
+                // AFTER the cooldown, we'll suggest stop again.
+                self.stop_suggestion_emitted = false;
+                self.mic_inactive_since = None;
+                self.sys_inactive_since = None;
+                self.stop_suggestion_until = Some(now + self.stop_keep_cooldown_secs as i64);
+            }
+            NudgeResponse::StopTimeout => {
+                // Auto-dismiss without action — re-arm after a short
+                // cooldown so we can still propose stop later in the
+                // same meeting.
+                self.stop_suggestion_emitted = false;
+                self.mic_inactive_since = None;
+                self.sys_inactive_since = None;
+                self.stop_suggestion_until = Some(now + self.timeout_cooldown_secs as i64);
+            }
         }
+    }
+
+    /// Hook called by the FFI bridge whenever a meeting ends (user
+    /// stopped from the pill / meeting window, or our stop-suggestion
+    /// path completed). Resets the recording-active flags so the next
+    /// detection starts clean.
+    pub fn meeting_stopped(&mut self) {
+        self.recording_active_from_us = false;
+        self.mic_inactive_since = None;
+        self.sys_inactive_since = None;
+        self.stop_suggestion_emitted = false;
+        self.stop_suggestion_until = None;
     }
 
     /// JSON snapshot for the Settings UI (exclusion list view +
@@ -454,6 +693,139 @@ mod tests {
         s.signal(true, Some("teams".into()), false, 1306);
         let out = s.signal(true, Some("teams".into()), false, 1311);
         assert!(matches!(out, CallSignalOutcome::Detected { .. }));
+    }
+
+    /// Helper: drive the state machine into "we accepted a detection,
+    /// meeting is now active, mic just went silent at `start`". Mirrors
+    /// what happens in production when the user clicks Record now.
+    fn arm_recording(s: &mut CallDetectorState, start: i64) {
+        // 6 s of mic-active → Detected.
+        s.signal(true, Some("teams".into()), false, start - 6);
+        s.signal(true, Some("teams".into()), false, start - 1);
+        // Accept the detection: from now on this is "our" meeting.
+        s.record_response(Some("teams".into()), NudgeResponse::RecordNow, start);
+        // Mic transitions to inactive at `start`.
+        let _ = s.signal(false, None, true, start);
+    }
+
+    #[test]
+    fn stop_suggested_mic_only_after_5s_when_sys_signaling_disabled() {
+        let mut s = fresh();
+        arm_recording(&mut s, 1000);
+        // 4 s of silence — under the 5 s threshold.
+        let out = s.signal(false, None, true, 1004);
+        assert_eq!(out, CallSignalOutcome::NoChange);
+        // 5 s of silence — threshold met, sys-signaling disabled so
+        // fall back to mic-only.
+        let out = s.signal(false, None, true, 1005);
+        assert!(
+            matches!(out, CallSignalOutcome::StopSuggested { inactive_for_secs, .. } if inactive_for_secs >= 5),
+            "expected StopSuggested, got {:?}",
+            out
+        );
+    }
+
+    #[test]
+    fn stop_suggested_requires_sys_silent_when_sys_signaling_enabled() {
+        let mut s = fresh();
+        arm_recording(&mut s, 1000);
+        // Host starts signalling sys-audio activity at t=1000, ACTIVE.
+        let _ = s.signal_sys(true, true, 1000);
+        // Mic silent for 10 s; sys still active → no stop.
+        let out = s.signal(false, None, true, 1010);
+        assert_eq!(out, CallSignalOutcome::NoChange);
+        // Sys goes silent at t=1010; AND threshold needs 5 more s.
+        let _ = s.signal_sys(false, true, 1010);
+        let out = s.signal(false, None, true, 1014);
+        assert_eq!(out, CallSignalOutcome::NoChange);
+        // Both sides silent ≥ 5 s now (mic since 1000, sys since 1010).
+        let out = s.signal_sys(false, true, 1015);
+        assert!(
+            matches!(out, CallSignalOutcome::StopSuggested { .. }),
+            "expected StopSuggested, got {:?}",
+            out
+        );
+    }
+
+    #[test]
+    fn stop_suggested_emitted_exactly_once_per_meeting() {
+        let mut s = fresh();
+        arm_recording(&mut s, 1000);
+        let _ = s.signal_sys(false, true, 1000);
+        let first = s.signal(false, None, true, 1006);
+        assert!(matches!(first, CallSignalOutcome::StopSuggested { .. }));
+        // Same conditions next tick — must NOT re-emit.
+        let second = s.signal(false, None, true, 1007);
+        assert_eq!(second, CallSignalOutcome::NoChange);
+        let third = s.signal_sys(false, true, 1008);
+        assert_eq!(third, CallSignalOutcome::NoChange);
+    }
+
+    #[test]
+    fn keep_recording_response_re_arms_after_cooldown() {
+        let mut s = fresh();
+        arm_recording(&mut s, 1000);
+        let _ = s.signal_sys(false, true, 1000);
+        let out = s.signal(false, None, true, 1006);
+        assert!(matches!(out, CallSignalOutcome::StopSuggested { .. }));
+        // User says "keep recording" — 300 s cooldown.
+        s.record_response(Some("teams".into()), NudgeResponse::KeepRecording, 1006);
+        // 200 s later, both silent again → still suppressed.
+        let _ = s.signal_sys(false, true, 1200);
+        let out = s.signal(false, None, true, 1206);
+        assert_eq!(out, CallSignalOutcome::NoChange);
+        // 301 s past the keep response → re-arms. signal_sys with the
+        // mic timestamp from t=1206 (silence has been continuous since
+        // then) and sys timestamp from t=1200 already meets both ≥5 s
+        // thresholds, so signal_sys is the call that re-emits.
+        let out = s.signal_sys(false, true, 1310);
+        assert!(
+            matches!(out, CallSignalOutcome::StopSuggested { .. }),
+            "expected StopSuggested after cooldown, got {:?}",
+            out
+        );
+    }
+
+    #[test]
+    fn meeting_stopped_resets_state_so_next_meeting_can_emit() {
+        let mut s = fresh();
+        arm_recording(&mut s, 1000);
+        let _ = s.signal_sys(false, true, 1000);
+        let first = s.signal(false, None, true, 1006);
+        assert!(matches!(first, CallSignalOutcome::StopSuggested { .. }));
+        // Meeting ends — state machine should re-arm clean.
+        s.meeting_stopped();
+        // New detection cycle.
+        arm_recording(&mut s, 2000);
+        let _ = s.signal_sys(false, true, 2000);
+        let out = s.signal(false, None, true, 2006);
+        assert!(
+            matches!(out, CallSignalOutcome::StopSuggested { .. }),
+            "second meeting must be able to emit, got {:?}",
+            out
+        );
+    }
+
+    #[test]
+    fn signal_sys_alone_does_not_emit_without_active_recording() {
+        let mut s = fresh();
+        // No RecordNow accepted → recording_active_from_us = false.
+        let out = s.signal_sys(false, true, 1000);
+        assert_eq!(out, CallSignalOutcome::NoChange);
+        let out = s.signal_sys(false, true, 1010);
+        assert_eq!(out, CallSignalOutcome::NoChange);
+    }
+
+    #[test]
+    fn sys_active_during_mic_silence_blocks_stop_until_sys_also_quiet() {
+        let mut s = fresh();
+        arm_recording(&mut s, 1000);
+        // Sys never goes silent — mic silence alone must not fire stop.
+        let _ = s.signal_sys(true, true, 1000);
+        let _ = s.signal_sys(true, true, 1010);
+        let _ = s.signal_sys(true, true, 1100);
+        let out = s.signal(false, None, true, 1100);
+        assert_eq!(out, CallSignalOutcome::NoChange);
     }
 
     #[test]

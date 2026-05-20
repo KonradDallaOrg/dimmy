@@ -581,9 +581,16 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
     *recording = true;
 
     let selected_device = st.selected_device.lock().ok().and_then(|d| d.clone());
-    let device_sr = crate::audio::device_sample_rate(&selected_device);
+    // The mic cpal callback resamples to MEETING_CANONICAL_RATE (48 kHz)
+    // before pushing to audio_buffer, so the dictation preprocess +
+    // STT must use that rate, NOT the device-native rate. Previous code
+    // here stored the device rate (e.g. 16 kHz on BT-HFP) which made
+    // preprocess interpret a 48 kHz buffer at 16 kHz — 3× slowdown,
+    // Whisper hallucinated "Grazie per la visione" on every dictation.
+    // Reported 2026-05-20 right after the canonical-rate refactor.
+    let _device_sr_diag = crate::audio::device_sample_rate(&selected_device);
     if let Ok(mut sr) = st.audio_sample_rate.lock() {
-        *sr = device_sr;
+        *sr = crate::audio::MEETING_CANONICAL_RATE;
     }
 
     // Always-mix architecture (2026-05-08): the audio capture session
@@ -639,7 +646,8 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
                 emit_event("stt_chunk", &payload);
             });
         let transcriber = crate::chunked_stt::ChunkedTranscriber::start(
-            buffer_arc, device_sr,
+            buffer_arc,
+            crate::audio::MEETING_CANONICAL_RATE,
             // 3 s chunks + 500 ms overlap. Chunk size from the
             // chunked_smoke A/B 2026-05-06 benchmark (3 s wins cadence
             // over 5 s without quality regression). Overlap stays at
@@ -656,7 +664,9 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
             // — proper fix is fuzzy match / longest common substring,
             // tracked as future work. Scan window 12 tokens (was 8)
             // is kept since it has no downside on the failure cases.
-            3.0, 500, on_chunk,
+            3.0,
+            500,
+            on_chunk,
         );
         if let Ok(mut slot) = CHUNKED.lock() {
             *slot = Some(transcriber);
@@ -2543,15 +2553,23 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
         }
     }
 
-    // Final gate: enhance only if either the global toggle is on, or
-    // an app rule forced a non-off style for this specific app. If
-    // style is still Off (no rule fired and global is off, OR rule
-    // explicitly set style=off), pass the raw transcript through.
-    if !global_enabled && !rule_forced_enhance {
-        log("[LLM] global disabled and no rule forced enhance — pass-through");
+    // Final gate: enhance / translate only when SOMETHING wants the
+    // LLM to run. Three triggers can keep us alive past the gate:
+    //   1. Global LLM toggle on (user's default mode is "enhance").
+    //   2. An app rule fired with a non-off style for this app.
+    //   3. The user picked a translate-target (pill scroll-wheel or
+    //      pill menu → "Translate to: ..." — sets llm_translate_to
+    //      independently of style).
+    // The translate trigger was previously missing, so the dictation
+    // flow swallowed the LLM call when style=Off even with a
+    // translate target set — user-reported regression 2026-05-20.
+    let translate_active = !translate_to.is_empty();
+    if !global_enabled && !rule_forced_enhance && !translate_active {
+        log("[LLM] global disabled, no rule, no translate target — pass-through");
         return write_to_buf(text, out_buf, buf_len);
     }
-    if style == crate::llm::LlmStyle::Off {
+    if style == crate::llm::LlmStyle::Off && !translate_active {
+        log("[LLM] style=off and no translate target — pass-through");
         return write_to_buf(text, out_buf, buf_len);
     }
 
@@ -2992,6 +3010,12 @@ pub unsafe extern "C" fn dimmy_meeting_stop(out_buf: *mut c_char, buf_len: c_int
     // instant the user clicked Stop, not after the worker finishes
     // its last STT chunk.
     emit_meeting_state_event(false, false);
+    // Re-arm the call-detector stop-suggestion path so a NEXT meeting
+    // started from another detection isn't sitting on stale flags.
+    {
+        let mut g = call_detector_lock();
+        g.meeting_stopped();
+    }
 
     // Stop audio capture in parallel with the worker drain — the
     // worker's stop() blocks for up to one chunk's transcribe time
@@ -6587,7 +6611,70 @@ pub unsafe extern "C" fn dimmy_call_signal(mic_active: c_int, app_id: *const c_c
             emit_event("call_ended", &payload);
             2
         }
+        CallSignalOutcome::StopSuggested {
+            app,
+            inactive_for_secs,
+        } => {
+            let payload = serde_json::json!({
+                "app": app,
+                "inactive_for_secs": inactive_for_secs,
+                "reason": "call_ended",
+            })
+            .to_string();
+            emit_event("meeting.stop_suggested", &payload);
+            3
+        }
         CallSignalOutcome::Suppressed(_) | CallSignalOutcome::NoChange => 0,
+    }
+}
+
+/// Push one system-audio activity observation. `sys_active` = 1 iff
+/// the call's render-side audio is currently emitting (WASAPI render
+/// session for the whitelisted app peak-meter > floor). Calling this
+/// switches the stop-suggestion gate to AND-with-sys mode for this
+/// process — once enabled, BOTH mic and sys must be silent past their
+/// respective thresholds (5 s each by default) before the meeting
+/// stop popup is offered. Hosts that never call this stay in mic-only
+/// mode (Mac today).
+///
+/// Return: 0 / 3 (`meeting.stop_suggested` emitted) / -1 (bad app_id).
+///
+/// # Safety
+/// `app_id` must be NULL or a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_call_signal_sys(sys_active: c_int, app_id: *const c_char) -> c_int {
+    // app_id is accepted for parity with `dimmy_call_signal` (host can
+    // pass the same id it uses on the mic side); we don't use it on
+    // the sys path because the detection identity is owned by the
+    // mic-side state machine. Validate the encoding so callers can't
+    // smuggle invalid UTF-8 in.
+    if !app_id.is_null() {
+        if CStr::from_ptr(app_id).to_str().is_err() {
+            return -1;
+        }
+    }
+    let is_meeting_active = MEETING.lock().map(|g| g.is_some()).unwrap_or(false);
+    let now = now_epoch_secs();
+    let outcome = {
+        let mut g = call_detector_lock();
+        g.signal_sys(sys_active != 0, is_meeting_active, now)
+    };
+    use crate::call_detector::CallSignalOutcome;
+    match outcome {
+        CallSignalOutcome::StopSuggested {
+            app,
+            inactive_for_secs,
+        } => {
+            let payload = serde_json::json!({
+                "app": app,
+                "inactive_for_secs": inactive_for_secs,
+                "reason": "call_ended",
+            })
+            .to_string();
+            emit_event("meeting.stop_suggested", &payload);
+            3
+        }
+        _ => 0,
     }
 }
 
@@ -6619,6 +6706,9 @@ pub unsafe extern "C" fn dimmy_call_signal_response(
         "not_now" => NudgeResponse::NotNow,
         "never" => NudgeResponse::Never,
         "timeout" => NudgeResponse::Timeout,
+        "stop_and_recap" => NudgeResponse::StopAndRecap,
+        "keep_recording" => NudgeResponse::KeepRecording,
+        "stop_timeout" => NudgeResponse::StopTimeout,
         _ => return -2,
     };
     let app: Option<String> = if app_id.is_null() {
