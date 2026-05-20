@@ -134,6 +134,39 @@ final class MeetingViewModel: ObservableObject {
                 }
             }
             .store(in: &liveTranscriptBag)
+        // Mirror Win: when an EXTERNAL surface (pill stop, call-detect
+        // popup "Stop & recap", future tray menu…) stops the meeting,
+        // Rust emits `meeting_state` with `active=false` which lands
+        // in AppState.meetingActive via DimmyCore.handleEvent. Without
+        // this subscription the meeting window stayed pinned in
+        // `.recording` for the entire recap LLM duration (~10–30 s),
+        // the user assumed nothing was happening and pressed Stop a
+        // second time, racing the pill-side stop. Flip to `.processing`
+        // here; `loadDoneFromDisk` (called by `meetingRecapSaved`)
+        // lands us in `.done` once the recap is on disk.
+        AppState.shared.$meetingActive
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] active in
+                guard let self else { return }
+                if !active, self.phase == .recording {
+                    self.stopPollingForExternalStop()
+                    self.phase = .processing
+                    self.processingStep = .generatingRecap
+                    self.statusLabel = "Wrapping up…"
+                    self.subStatusLabel = ""
+                }
+            }
+            .store(in: &liveTranscriptBag)
+    }
+
+    /// Cancel the recording-mode timers when an external stop fires.
+    /// Pulled out so the meeting_state subscription can reuse the same
+    /// teardown the local Stop button does, without duplicating logic.
+    private func stopPollingForExternalStop() {
+        pollTimer?.invalidate()
+        pollTimer = nil
+        amplitudeTimer?.invalidate()
+        amplitudeTimer = nil
     }
 
     // ── Errors ─────────────────────────────────────────────────────

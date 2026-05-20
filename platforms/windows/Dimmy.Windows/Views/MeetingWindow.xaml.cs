@@ -166,6 +166,17 @@ public sealed partial class MeetingWindow : Window
         if (App.Instance?.AppViewModel is { } vm)
         {
             vm.MeetingChunkReceived += OnMeetingChunkReceived;
+            // React to externally-driven stop (pill stop button, call-detect
+            // popup "Stop & recap"). Without this hook, the MeetingWindow
+            // stays painted in Recording state for the entire recap LLM
+            // duration (~10–30 s), the user assumes "nothing happened" and
+            // hits Stop again — which racing the pill-side stop yields the
+            // confusing `meeting stop failed rc=-1` log + the second click
+            // pings a now-stopped meeting. Mirrors the visible Stop_Click
+            // flow (flip to Processing, stop polls) and lets the existing
+            // `NotifyMeetingRecapSaved` ⇒ `RefreshAndSelectDir` path land
+            // the user on the Done view once the recap finishes.
+            vm.PropertyChanged += OnAppVmPropertyChanged;
         }
 
         Closed += (_, __) =>
@@ -175,6 +186,7 @@ public sealed partial class MeetingWindow : Window
             if (App.Instance?.AppViewModel is { } vmClose)
             {
                 vmClose.MeetingChunkReceived -= OnMeetingChunkReceived;
+                vmClose.PropertyChanged -= OnAppVmPropertyChanged;
             }
 
             // Stop any audio.wav playback (MediaPlayerElement). Without
@@ -613,6 +625,43 @@ public sealed partial class MeetingWindow : Window
         RecChunks.Text = $"{chunkCount} chunks";
         TranscriptMeta.Text = $"{chunkCount} chunks";
         TranscriptScroll?.ChangeView(null, double.MaxValue, null, true);
+    }
+
+    /// Mirror an external meeting-stop (pill, call-detect popup,
+    /// future tray menu…) into MeetingWindow's visible state. The
+    /// `meeting_state` event is the single source of truth — when
+    /// `active` flips false while we still think we're recording,
+    /// flip to Processing so the user sees the wrap-up animation
+    /// instead of a stuck Recording panel. `NotifyMeetingRecapSaved`
+    /// (called by the same external stop path after the recap LLM
+    /// returns) will then route us to Done via `RefreshAndSelectDir`.
+    private void OnAppVmPropertyChanged(
+        object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(ViewModels.AppViewModel.MeetingActive)) return;
+        var vm = App.Instance?.AppViewModel;
+        if (vm == null) return;
+        if (vm.MeetingActive) return;        // start transition — handled elsewhere
+        if (!_recordingActive) return;        // already wrapped up locally
+        DispatcherQueue?.TryEnqueue(() =>
+        {
+            try
+            {
+                App.Log("meeting_state=false from external stop — flipping MeetingWindow to Processing", "Meeting");
+                StopPolling();
+                StopAmplitudePoll();
+                _recordingActive = false;
+                StopBtn.IsEnabled = false;
+                SetState(MeetingState.Processing);
+                ResetProcSteps();
+                SetProcStep(1, true);
+                // ProcStep 2 (recap) is in flight on the pill side;
+                // NotifyMeetingRecapSaved will land us on Done with
+                // the final artefacts once the LLM returns.
+                SetProcStep(2, false);
+            }
+            catch (Exception ex) { App.Log($"on-meeting-active-false exc: {ex.Message}", "Meeting"); }
+        });
     }
 
     private void StartAmplitudePoll()
@@ -1374,6 +1423,19 @@ public sealed partial class MeetingWindow : Window
     public void RefreshAndSelectDir(string dir)
     {
         if (string.IsNullOrEmpty(dir)) return;
+        // External stop path leaves us pinned in Processing via
+        // OnAppVmPropertyChanged; HistoryList_SelectionChanged would
+        // refuse the selection and toast the user. Flip to Done first
+        // so the selection-changed handler loads recap.md / audio.wav
+        // into the Done view.
+        if (_state == MeetingState.Processing)
+        {
+            ResetProcSteps();
+            SetProcStep(1, true);
+            SetProcStep(2, true);
+            SetProcStep(3, true);
+            SetState(MeetingState.Done);
+        }
         LoadHistory();
         foreach (var row in HistoryItems)
         {
