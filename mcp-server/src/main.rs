@@ -64,9 +64,31 @@ async fn main() -> std::io::Result<()> {
 
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin).lines();
-    let mut stdout = tokio::io::stdout();
+    // Stdout is shared between the request handler and the keepalive
+    // task, so wrap it in a Mutex. Single-writer-at-a-time on the
+    // newline-delimited JSON-RPC pipe is mandatory — overlapping
+    // writes corrupt the frame boundary.
+    let stdout = std::sync::Arc::new(tokio::sync::Mutex::new(tokio::io::stdout()));
 
     let server_state = std::sync::Arc::new(tokio::sync::Mutex::new(ServerState::default()));
+
+    // Keepalive — send a `notifications/message` to Claude every 30 s
+    // so the stdio pipe stays "active" and Claude's idle-kill timer
+    // doesn't fire. Without this Claude kills the server after ~5 min
+    // of no tool calls AND DOESN'T respawn it for subsequent tool
+    // requests — the next call sits there until the 4-minute MCP
+    // client timeout. Burned 2026-05-22 (every recap attempt after
+    // the first failed for the next 12 minutes because Claude refused
+    // to spawn a fresh server). `notifications/message` is the
+    // standard MCP server-initiated log notification; Claude either
+    // logs it or ignores it but counts it as server activity.
+    {
+        let stdout_clone = stdout.clone();
+        let state_clone = server_state.clone();
+        tokio::spawn(async move {
+            keepalive_loop(stdout_clone, state_clone).await;
+        });
+    }
 
     while let Some(line) = reader.next_line().await? {
         if line.trim().is_empty() {
@@ -91,9 +113,10 @@ async fn main() -> std::io::Result<()> {
                 String::new()
             });
             if !serialized.is_empty() {
-                stdout.write_all(serialized.as_bytes()).await?;
-                stdout.write_all(b"\n").await?;
-                stdout.flush().await?;
+                let mut out = stdout.lock().await;
+                out.write_all(serialized.as_bytes()).await?;
+                out.write_all(b"\n").await?;
+                out.flush().await?;
             }
         }
     }
@@ -122,12 +145,25 @@ async fn handle_request(
         "initialize" => {
             let mut s = state.lock().await;
             s.initialized = true;
+            // Keep this response SMALL. We used to embed a 35-KB
+            // base64 PNG in `iconUrl` + `_meta.icon` as a
+            // speculative attempt to feed Claude Desktop an icon
+            // through serverInfo. It blew up the initialize
+            // response to ~70 KB JSON and Claude Desktop choked
+            // when parsing it — `dimmy_get_recap_template` timed
+            // out after 4 minutes because Claude never finished
+            // the connection handshake. Icon now ships only via
+            // `Claude Extensions/dimmy/icon.png` (the canonical
+            // DXT-manifest path Anthropic's own extensions use),
+            // which Claude reads from disk on demand. Keep
+            // serverInfo minimal.
             Ok(serde_json::json!({
                 "protocolVersion": "2024-11-05",
                 "capabilities": { "tools": {} },
                 "serverInfo": {
                     "name": "dimmy",
-                    "version": env!("CARGO_PKG_VERSION")
+                    "title": "Dimmy",
+                    "version": env!("CARGO_PKG_VERSION"),
                 }
             }))
         }
@@ -171,6 +207,37 @@ async fn handle_request(
     })
 }
 
+/// Push `notifications/message` frames to Claude every 30 s so the
+/// stdio pipe never goes "idle" from Claude's perspective. Without
+/// this Claude Desktop kills the server after ~5 min idle AND
+/// doesn't respawn for subsequent tool calls — they just sit there
+/// until the 4-minute client timeout fires. Notification only fires
+/// after `initialize` succeeded; before that, Claude isn't ready
+/// to receive server-initiated messages.
+async fn keepalive_loop(
+    stdout: std::sync::Arc<tokio::sync::Mutex<tokio::io::Stdout>>,
+    state: std::sync::Arc<tokio::sync::Mutex<ServerState>>,
+) {
+    let mut tick = tokio::time::interval(Duration::from_secs(30));
+    // First tick fires immediately — skip it so we don't race with
+    // initialize.
+    tick.tick().await;
+    loop {
+        tick.tick().await;
+        {
+            let s = state.lock().await;
+            if !s.initialized {
+                continue;
+            }
+        }
+        let frame = r#"{"jsonrpc":"2.0","method":"notifications/message","params":{"level":"debug","logger":"dimmy","data":"keepalive"}}"#;
+        let mut out = stdout.lock().await;
+        let _ = out.write_all(frame.as_bytes()).await;
+        let _ = out.write_all(b"\n").await;
+        let _ = out.flush().await;
+    }
+}
+
 async fn heartbeat_loop(path: PathBuf) {
     // Ensure the parent dir exists. The config dir is normally
     // created by Dimmy on first launch; on a Claude-Desktop-first
@@ -203,3 +270,14 @@ struct HeartbeatPayload {
     timestamp: u64,
     version: String,
 }
+
+// `dimmy_icon_data_uri` was removed 2026-05-22 — it embedded a
+// 35-KB base64 PNG in the `initialize` serverInfo response and that
+// inflated the JSON-RPC frame to ~70 KB, which is enough to make
+// Claude Desktop's parser stall on the first connect (next tool call
+// times out after 4 minutes with no useful diagnostic). The
+// extension's icon now ships only via `Claude Extensions/dimmy/
+// icon.png` referenced from the DXT manifest, which is the same
+// path Anthropic's own extensions use and is read from disk on
+// demand. Don't reintroduce the data-URI inline — keep the
+// initialize response under ~1 KB.

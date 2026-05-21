@@ -3568,8 +3568,10 @@ pub unsafe extern "C" fn dimmy_claude_desktop_status(
     let namespace = std::env::var("DIMMY_CONFIG_NAMESPACE").unwrap_or_else(|_| "dimmy".to_string());
 
     let install = crate::claude_desktop::detect_claude_desktop();
-    let cfg_path = crate::claude_desktop::config_path();
-    let entry = crate::claude_desktop::read_current_entry(&namespace);
+    let ext_dir = crate::claude_desktop::extensions_root()
+        .map(|r| r.join(crate::claude_desktop::extension_id(&namespace)));
+    let manifest = crate::claude_desktop::read_installed_manifest(&namespace);
+    let enabled = crate::claude_desktop::is_extension_enabled(&namespace);
 
     let mut obj = serde_json::Map::new();
     obj.insert("installed".into(), install.is_some().into());
@@ -3579,15 +3581,30 @@ pub unsafe extern "C" fn dimmy_claude_desktop_status(
             p.to_string_lossy().into_owned().into(),
         );
     }
-    if let Some(p) = &cfg_path {
+    if let Some(p) = &ext_dir {
         obj.insert(
-            "config_path".into(),
+            "extension_path".into(),
             p.to_string_lossy().into_owned().into(),
         );
     }
-    obj.insert("config_patched".into(), entry.is_some().into());
-    if let Some(e) = &entry {
-        obj.insert("entry_command".into(), e.command.clone().into());
+    // `config_patched` is the legacy field name from the previous
+    // wizard era; we keep it as a host-side compat alias meaning
+    // "Dimmy is registered with Claude" so the C#/Swift bindings
+    // don't have to coordinate-rename. `extension_installed` is the
+    // new canonical field.
+    obj.insert("config_patched".into(), manifest.is_some().into());
+    obj.insert("extension_installed".into(), manifest.is_some().into());
+    obj.insert("extension_enabled".into(), enabled.into());
+    if let Some(m) = &manifest {
+        if let Some(v) = m.get("version").and_then(|v| v.as_str()) {
+            obj.insert("extension_version".into(), v.to_string().into());
+        }
+        if let Some(cmd) = m
+            .pointer("/server/mcp_config/command")
+            .and_then(|v| v.as_str())
+        {
+            obj.insert("entry_command".into(), cmd.to_string().into());
+        }
     }
 
     // Heartbeat + last-call live in our own config dir (where the
@@ -3625,52 +3642,78 @@ pub unsafe extern "C" fn dimmy_claude_desktop_status(
     write_to_buf(&json, out_buf, buf_len)
 }
 
-/// Patch the user's claude_desktop_config.json to register our
-/// MCP server. `binary_path` must be a NUL-terminated UTF-8 C string
-/// pointing at the `dimmy-mcp` binary on disk; on Win this is
-/// `<install>\dimmy-mcp.exe`, on Mac `<app>/Contents/Resources/dimmy-mcp`.
+/// Install Dimmy as a Claude Desktop extension. `binary_path` must
+/// be a NUL-terminated UTF-8 C string pointing at the dimmy-mcp
+/// binary on disk; we copy it into the extension dir alongside the
+/// manifest + icon. `version_ptr` is the host's version string
+/// (env!("CARGO_PKG_VERSION") from the host's own build) — embedded
+/// in the manifest so the Claude Connectors UI shows the version
+/// next to the entry.
 ///
-/// Returns 0 on success, -1 on null arg / invalid UTF-8 / no config dir,
-/// -2 on read failure, -3 on write failure, -4 on backup failure,
-/// -5 on parse failure.
+/// Returns 0 on success, negative on error:
+///   -1 = null arg / invalid UTF-8 / extension root unresolved
+///   -2 = binary missing at source path
+///   -3 = copy failed (target locked? disk full? permissions?)
+///   -4 = manifest/settings write failed
+///   -5 = manifest serialization failed
+///
+/// Side-effect: also wipes any legacy `mcpServers.dimmy` entry
+/// inside `claude_desktop_config.json` left over from the
+/// patch_config era (in-development period only) so the user ends
+/// up with a single source of truth.
 ///
 /// # Safety
-/// `binary_path` must be a valid null-terminated UTF-8 C string.
+/// Both pointers must be valid null-terminated UTF-8 C strings.
 #[no_mangle]
-pub unsafe extern "C" fn dimmy_claude_desktop_patch_config(binary_path: *const c_char) -> c_int {
-    if binary_path.is_null() {
+pub unsafe extern "C" fn dimmy_claude_desktop_install(
+    binary_path: *const c_char,
+    version_ptr: *const c_char,
+) -> c_int {
+    if binary_path.is_null() || version_ptr.is_null() {
         return -1;
     }
     let path_str = match CStr::from_ptr(binary_path).to_str() {
         Ok(s) if !s.is_empty() => s,
         _ => return -1,
     };
+    let version_str = match CStr::from_ptr(version_ptr).to_str() {
+        Ok(s) if !s.is_empty() => s,
+        _ => return -1,
+    };
     let namespace = std::env::var("DIMMY_CONFIG_NAMESPACE").unwrap_or_else(|_| "dimmy".to_string());
-    match crate::claude_desktop::patch_config(std::path::Path::new(path_str), &namespace) {
+    match crate::claude_desktop::install_extension(
+        std::path::Path::new(path_str),
+        version_str,
+        &namespace,
+    ) {
         Ok(_) => 0,
-        Err(crate::claude_desktop::PatchError::NoConfigDir) => -1,
-        Err(crate::claude_desktop::PatchError::ReadFailed(_)) => -2,
-        Err(crate::claude_desktop::PatchError::WriteFailed(_)) => -3,
-        Err(crate::claude_desktop::PatchError::BackupFailed(_)) => -4,
-        Err(crate::claude_desktop::PatchError::ParseFailed(_)) => -5,
+        Err(crate::claude_desktop::InstallError::NoExtensionsRoot) => -1,
+        Err(crate::claude_desktop::InstallError::BinaryMissing) => -2,
+        Err(crate::claude_desktop::InstallError::CopyFailed(_)) => -3,
+        Err(crate::claude_desktop::InstallError::WriteFailed(_)) => -4,
+        Err(crate::claude_desktop::InstallError::ParseFailed(_)) => -5,
     }
 }
 
-/// Remove our `mcpServers` entry. Idempotent — returns 1 if an entry
-/// was actually removed, 0 if there was nothing to remove (no config
-/// file, or our key wasn't present), negative on error. Same error
-/// codes as `_patch_config`.
+/// Remove the Dimmy Claude Desktop extension (the dir + its
+/// per-extension settings file). Idempotent — returns 1 if a real
+/// directory was removed, 0 if there was nothing to remove (no
+/// install), negative on error. Same error codes as `_install`.
+///
+/// Side-effect: also wipes any leftover legacy `mcpServers.dimmy`
+/// entry in `claude_desktop_config.json` so the user ends up with
+/// a clean state regardless of which wizard era they installed in.
 #[no_mangle]
-pub extern "C" fn dimmy_claude_desktop_unpatch_config() -> c_int {
+pub extern "C" fn dimmy_claude_desktop_uninstall() -> c_int {
     let namespace = std::env::var("DIMMY_CONFIG_NAMESPACE").unwrap_or_else(|_| "dimmy".to_string());
-    match crate::claude_desktop::unpatch_config(&namespace) {
+    match crate::claude_desktop::uninstall_extension(&namespace) {
         Ok(true) => 1,
         Ok(false) => 0,
-        Err(crate::claude_desktop::PatchError::NoConfigDir) => -1,
-        Err(crate::claude_desktop::PatchError::ReadFailed(_)) => -2,
-        Err(crate::claude_desktop::PatchError::WriteFailed(_)) => -3,
-        Err(crate::claude_desktop::PatchError::BackupFailed(_)) => -4,
-        Err(crate::claude_desktop::PatchError::ParseFailed(_)) => -5,
+        Err(crate::claude_desktop::InstallError::NoExtensionsRoot) => -1,
+        Err(crate::claude_desktop::InstallError::BinaryMissing) => -2,
+        Err(crate::claude_desktop::InstallError::CopyFailed(_)) => -3,
+        Err(crate::claude_desktop::InstallError::WriteFailed(_)) => -4,
+        Err(crate::claude_desktop::InstallError::ParseFailed(_)) => -5,
     }
 }
 

@@ -83,6 +83,11 @@ pub fn list() -> Vec<serde_json::Value> {
                 }
             }
         }),
+        json!({
+            "name": "dimmy_get_recap_template",
+            "description": "Return the meeting-recap Markdown template Dimmy expects. Call this BEFORE producing a recap so your output uses Dimmy's house format (first line is a short H1 title, then TLDR / Decisions / Action items / Key notes sections in the transcript's language). The user can customize the template by editing `<config_dir>/recap-template.md`; this tool returns that file when present, else the shipped default.",
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
     ]
 }
 
@@ -106,6 +111,7 @@ pub async fn dispatch(params: serde_json::Value, cfg: &Config) -> Result<serde_j
         "dimmy_get_meeting" => get_meeting(args, cfg).await,
         "dimmy_save_recap" => save_recap(args, cfg).await,
         "dimmy_get_recent_dictations" => get_recent_dictations(args, cfg).await,
+        "dimmy_get_recap_template" => get_recap_template(cfg).await,
         other => Err(Error::invalid_params(&format!("unknown tool: {}", other))),
     };
     let elapsed_ms = started.elapsed().as_millis() as u64;
@@ -263,11 +269,69 @@ async fn save_recap(args: serde_json::Value, cfg: &Config) -> Result<serde_json:
         .await
         .map_err(|e| Error::internal(&format!("write recap.md: {}", e)))?;
 
+    // Parse the first H1 from the recap and patch meta.json so the
+    // Dimmy UI shows the LLM-chosen title instead of the meeting id.
+    // Mirrors the FFI path in core::meeting::save_post_process —
+    // same rules, intentionally duplicated here so mcp-server stays
+    // dependency-free from the core crate.
+    if let Some(title) = parse_first_h1(markdown) {
+        let meta_path = dir.join("meta.json");
+        let mut obj: serde_json::Map<String, serde_json::Value> =
+            tokio::fs::read_to_string(&meta_path)
+                .await
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default();
+        obj.insert("title".into(), serde_json::Value::String(title.clone()));
+        if let Ok(serialized) = serde_json::to_string_pretty(&obj) {
+            let _ = tokio::fs::write(&meta_path, serialized).await;
+        }
+        tracing::info!("[save_recap] meeting={} title='{}'", id, title);
+    }
+
     Ok(text_result(&format!(
         "Recap saved to {:?} ({} chars). Dimmy will pick it up in the meeting Done view.",
         path,
         markdown.len()
     )))
+}
+
+async fn get_recap_template(cfg: &Config) -> Result<serde_json::Value, Error> {
+    // User override lives next to the calls log so power users can
+    // tweak the prompt without rebuilding the binary. Falls back to
+    // the shipped default embedded at compile time.
+    const DEFAULT_TEMPLATE: &str = include_str!("../templates/recap.md");
+    let override_path = cfg.config_dir.join("recap-template.md");
+    let body = match tokio::fs::read_to_string(&override_path).await {
+        Ok(s) if !s.trim().is_empty() => s,
+        _ => DEFAULT_TEMPLATE.to_string(),
+    };
+    Ok(text_result(&body))
+}
+
+/// Mirror of `core::meeting::parse_recap_title`. Duplicated to avoid
+/// depending on the core crate (mcp-server is intentionally light:
+/// no whisper, no llama, no audio runtimes). The two implementations
+/// MUST stay in sync — if you change the rule here, change it in
+/// core/src/meeting.rs too. Tested below.
+fn parse_first_h1(md: &str) -> Option<String> {
+    for line in md.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("# ") {
+            let title = rest
+                .trim()
+                .trim_matches(|c: char| c == '.' || c == ':' || c == ',' || c.is_whitespace());
+            if title.is_empty() || title.len() > 200 {
+                return None;
+            }
+            return Some(title.to_string());
+        }
+        return None;
+    }
+    None
 }
 
 async fn get_recent_dictations(
@@ -372,9 +436,9 @@ mod tests {
     }
 
     #[test]
-    fn list_returns_four_tools_with_required_fields() {
+    fn list_returns_five_tools_with_required_fields() {
         let tools = list();
-        assert_eq!(tools.len(), 4);
+        assert_eq!(tools.len(), 5);
         for t in &tools {
             assert!(t.get("name").and_then(|v| v.as_str()).is_some());
             assert!(t.get("description").and_then(|v| v.as_str()).is_some());
@@ -388,5 +452,53 @@ mod tests {
         assert!(names.contains(&"dimmy_get_meeting"));
         assert!(names.contains(&"dimmy_save_recap"));
         assert!(names.contains(&"dimmy_get_recent_dictations"));
+        assert!(names.contains(&"dimmy_get_recap_template"));
+    }
+
+    #[test]
+    fn parse_first_h1_happy_path() {
+        let md = "# Sprint planning kick-off\n\n## TLDR\nWe agreed on the goals.";
+        assert_eq!(
+            parse_first_h1(md).as_deref(),
+            Some("Sprint planning kick-off")
+        );
+    }
+
+    #[test]
+    fn parse_first_h1_strips_trailing_punctuation() {
+        // LLMs sometimes emit "# Title." or "# Title :" — strip.
+        assert_eq!(parse_first_h1("# Demo call.").as_deref(), Some("Demo call"));
+        assert_eq!(
+            parse_first_h1("# Q3 review :").as_deref(),
+            Some("Q3 review")
+        );
+    }
+
+    #[test]
+    fn parse_first_h1_skips_leading_blank_lines() {
+        // Some providers prepend newlines — tolerate.
+        assert_eq!(
+            parse_first_h1("\n\n# Title\nbody").as_deref(),
+            Some("Title")
+        );
+    }
+
+    #[test]
+    fn parse_first_h1_rejects_non_h1_first_line() {
+        // If the first non-empty line isn't an H1, we don't scan
+        // further — the convention is "title is first or nothing".
+        assert!(parse_first_h1("## TLDR\n# Title").is_none());
+        assert!(parse_first_h1("Some preamble\n# Title").is_none());
+    }
+
+    #[test]
+    fn parse_first_h1_rejects_pathological_lengths() {
+        // Guard against the LLM dumping the whole recap on a single
+        // H1 line (would otherwise become the "title").
+        let long_title = "a".repeat(300);
+        let md = format!("# {}", long_title);
+        assert!(parse_first_h1(&md).is_none());
+        // Empty after the `# ` also rejected.
+        assert!(parse_first_h1("# ").is_none());
     }
 }

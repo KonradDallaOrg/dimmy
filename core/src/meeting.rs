@@ -1019,6 +1019,13 @@ fn uuid_v4_simple() -> String {
 /// LLM execution from persistence keeps Rust free of HTTP-runtime
 /// concerns specific to the meeting flow — the existing LLM client
 /// is already wired through dimmy_process_with_llm.
+///
+/// Also extracts the meeting title from the first Markdown H1 of the
+/// recap and writes it into `meta.json`. All recap templates across
+/// providers (cloud, local, CLI subscription, Claude Desktop MCP)
+/// follow the same convention — first line is `# Short title`. The
+/// extracted title is what the UI shows in the meeting list; if no
+/// title is parseable the UI falls back to the meeting id.
 pub fn save_post_process(
     meeting_dir: &std::path::Path,
     recap_md: &str,
@@ -1028,6 +1035,10 @@ pub fn save_post_process(
     if !recap_md.trim().is_empty() {
         std::fs::write(meeting_dir.join("recap.md"), recap_md)
             .map_err(|e| format!("write recap.md: {}", e))?;
+        // Title sync: best-effort, never fail the save.
+        if let Some(title) = parse_recap_title(recap_md) {
+            update_meeting_meta_title(meeting_dir, &title);
+        }
     }
     if !actions_json.trim().is_empty() {
         std::fs::write(meeting_dir.join("actions.json"), actions_json)
@@ -1040,6 +1051,84 @@ pub fn save_post_process(
         }
     }
     Ok(())
+}
+
+/// Extract a meeting title from a recap Markdown blob. Rule: the
+/// first non-empty line must be a Markdown H1 (`# Title`). Returns
+/// None if the first non-empty line is not a heading, or the title
+/// is empty / unreasonably long (>200 chars guards against the LLM
+/// emitting the entire recap on a single H1 line).
+///
+/// This is the single source of truth used everywhere a recap lands
+/// — the FFI `save_post_process` path and the standalone mcp-server
+/// `save_recap` tool both call `parse_recap_title` to keep the title
+/// in meta.json in sync regardless of which provider produced the
+/// recap.
+pub fn parse_recap_title(recap_md: &str) -> Option<String> {
+    for line in recap_md.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("# ") {
+            let title = rest.trim().trim_matches(|c: char| {
+                // Strip trailing punctuation noise the LLM sometimes
+                // leaks (`# Title.` or `# Title :`).
+                c == '.' || c == ':' || c == ',' || c.is_whitespace()
+            });
+            if title.is_empty() || title.len() > 200 {
+                return None;
+            }
+            return Some(title.to_string());
+        }
+        // First non-empty line wasn't a heading — abort. Don't scan
+        // further lines; the convention is "title is first or
+        // nothing".
+        return None;
+    }
+    None
+}
+
+/// Update `<meeting_dir>/meta.json` with the given `title` field,
+/// preserving every other field already in the file. Best-effort —
+/// silent on errors because the title is metadata polish, not load-
+/// bearing data.
+pub fn update_meeting_meta_title(meeting_dir: &std::path::Path, title: &str) {
+    let path = meeting_dir.join("meta.json");
+    let mut obj: serde_json::Map<String, serde_json::Value> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    obj.insert("title".into(), serde_json::Value::String(title.to_string()));
+    if let Ok(serialized) = serde_json::to_string_pretty(&obj) {
+        let _ = std::fs::write(&path, serialized);
+    }
+}
+
+/// Lazy backfill: if `meta.json` has no `title` but `recap.md` exists
+/// and contains a parseable first-line H1, write it. Called by the
+/// UI on meeting open so old meetings recorded before this schema
+/// land bring their titles forward without a batch migration.
+/// Returns the title if one was written or already present.
+pub fn backfill_meeting_title(meeting_dir: &std::path::Path) -> Option<String> {
+    let meta_path = meeting_dir.join("meta.json");
+    let existing: Option<String> = std::fs::read_to_string(&meta_path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| {
+            v.get("title")
+                .and_then(|t| t.as_str())
+                .map(|s| s.to_string())
+        });
+    if let Some(t) = existing {
+        if !t.is_empty() {
+            return Some(t);
+        }
+    }
+    let recap = std::fs::read_to_string(meeting_dir.join("recap.md")).ok()?;
+    let title = parse_recap_title(&recap)?;
+    update_meeting_meta_title(meeting_dir, &title);
+    Some(title)
 }
 
 /// Scan the meetings dir for sessions with a leftover `.recording`
