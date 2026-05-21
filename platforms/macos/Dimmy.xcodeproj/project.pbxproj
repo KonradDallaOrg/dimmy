@@ -97,6 +97,7 @@
 		AA000211 /* MacPermissionsPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000211 /* MacPermissionsPage.swift */; };
 		AA000302 /* MacIntegrationsPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000302 /* MacIntegrationsPage.swift */; };
 		AA000303 /* NotionConnectSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000303 /* NotionConnectSheet.swift */; };
+		AA000304 /* ClaudeConnectSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000304 /* ClaudeConnectSheet.swift */; };
 		AA000800 /* DictHotkeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000800 /* DictHotkeyManager.swift */; };
 		AA000801 /* DictToastWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000801 /* DictToastWindow.swift */; };
 		AA000900 /* UpdateService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000900 /* UpdateService.swift */; };
@@ -214,6 +215,7 @@
 		AB000211 /* MacPermissionsPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPermissionsPage.swift; sourceTree = "<group>"; };
 		AB000302 /* MacIntegrationsPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacIntegrationsPage.swift; sourceTree = "<group>"; };
 		AB000303 /* NotionConnectSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotionConnectSheet.swift; sourceTree = "<group>"; };
+		AB000304 /* ClaudeConnectSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeConnectSheet.swift; sourceTree = "<group>"; };
 		AB000800 /* DictHotkeyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictHotkeyManager.swift; sourceTree = "<group>"; };
 		AB000801 /* DictToastWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictToastWindow.swift; sourceTree = "<group>"; };
 		AB000099 /* Dimmy.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Dimmy.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -433,6 +435,7 @@
 				AB000301 /* MacLicensePage.swift */,
 				AB000302 /* MacIntegrationsPage.swift */,
 				AB000303 /* NotionConnectSheet.swift */,
+				AB000304 /* ClaudeConnectSheet.swift */,
 				AB000903 /* MacClaudeCodeCard.swift */,
 			);
 			path = Settings;
@@ -686,6 +689,7 @@
 				AA000301 /* MacLicensePage.swift in Sources */,
 				AA000302 /* MacIntegrationsPage.swift in Sources */,
 				AA000303 /* NotionConnectSheet.swift in Sources */,
+				AA000304 /* ClaudeConnectSheet.swift in Sources */,
 				AA000800 /* DictHotkeyManager.swift in Sources */,
 				AA000801 /* DictToastWindow.swift in Sources */,
 				AA000041 /* SelfTests.swift in Sources */,
