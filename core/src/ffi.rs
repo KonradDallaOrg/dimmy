@@ -3532,6 +3532,148 @@ pub extern "C" fn dimmy_claude_code_recheck() -> c_int {
     s.as_code()
 }
 
+// ── Claude Desktop MCP bridge ──────────────────────────────────────
+// Counterpart to the standalone `dimmy-mcp` binary (mcp-server/). The
+// wizard flow needs to detect the Claude Desktop install, patch the
+// user's `claude_desktop_config.json` to register our binary, and
+// expose heartbeat + recent-call telemetry so the Settings card can
+// render a live status. See `core/src/claude_desktop.rs` for the
+// detection + patch logic, and `mcp-server/` for the binary itself.
+
+/// One-shot status snapshot for the Settings card + wizard. JSON:
+/// ```json
+/// {
+///   "installed": true,
+///   "install_path": "/Applications/Claude.app",
+///   "config_path": "/Users/k/Library/Application Support/Claude/claude_desktop_config.json",
+///   "config_patched": true,
+///   "entry_command": "/Applications/Dimmy.app/.../dimmy-mcp",
+///   "heartbeat_age_secs": 12,
+///   "last_call": { "tool": "dimmy_get_recent_meetings", "ago_secs": 47, "ok": true }
+/// }
+/// ```
+/// Missing pieces are omitted, never null — keeps the UI binding
+/// simple ("field present" ⇔ "fact known").
+///
+/// # Safety
+/// `out_buf` must be a valid writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_claude_desktop_status(
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let namespace = std::env::var("DIMMY_CONFIG_NAMESPACE").unwrap_or_else(|_| "dimmy".to_string());
+
+    let install = crate::claude_desktop::detect_claude_desktop();
+    let cfg_path = crate::claude_desktop::config_path();
+    let entry = crate::claude_desktop::read_current_entry(&namespace);
+
+    let mut obj = serde_json::Map::new();
+    obj.insert("installed".into(), install.is_some().into());
+    if let Some(p) = &install {
+        obj.insert(
+            "install_path".into(),
+            p.to_string_lossy().into_owned().into(),
+        );
+    }
+    if let Some(p) = &cfg_path {
+        obj.insert(
+            "config_path".into(),
+            p.to_string_lossy().into_owned().into(),
+        );
+    }
+    obj.insert("config_patched".into(), entry.is_some().into());
+    if let Some(e) = &entry {
+        obj.insert("entry_command".into(), e.command.clone().into());
+    }
+
+    // Heartbeat + last-call live in our own config dir (where the
+    // dimmy-mcp binary writes them), not Claude's. Resolve via the
+    // same helper the rest of FFI uses.
+    if let Some(dir) = crate::config_dir_path() {
+        if let Some(hb) = crate::claude_desktop::read_heartbeat(&dir) {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let age = now.saturating_sub(hb.timestamp);
+            obj.insert("heartbeat_age_secs".into(), age.into());
+        }
+        let recent = crate::claude_desktop::read_recent_calls(&dir, 1);
+        if let Some(c) = recent.first() {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let ago = now.saturating_sub(c.ts);
+            obj.insert(
+                "last_call".into(),
+                serde_json::json!({
+                    "tool": c.tool,
+                    "ago_secs": ago,
+                    "ok": c.ok,
+                    "elapsed_ms": c.elapsed_ms,
+                }),
+            );
+        }
+    }
+
+    let json = serde_json::Value::Object(obj).to_string();
+    write_to_buf(&json, out_buf, buf_len)
+}
+
+/// Patch the user's claude_desktop_config.json to register our
+/// MCP server. `binary_path` must be a NUL-terminated UTF-8 C string
+/// pointing at the `dimmy-mcp` binary on disk; on Win this is
+/// `<install>\dimmy-mcp.exe`, on Mac `<app>/Contents/Resources/dimmy-mcp`.
+///
+/// Returns 0 on success, -1 on null arg / invalid UTF-8 / no config dir,
+/// -2 on read failure, -3 on write failure, -4 on backup failure,
+/// -5 on parse failure.
+///
+/// # Safety
+/// `binary_path` must be a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_claude_desktop_patch_config(binary_path: *const c_char) -> c_int {
+    if binary_path.is_null() {
+        return -1;
+    }
+    let path_str = match CStr::from_ptr(binary_path).to_str() {
+        Ok(s) if !s.is_empty() => s,
+        _ => return -1,
+    };
+    let namespace = std::env::var("DIMMY_CONFIG_NAMESPACE").unwrap_or_else(|_| "dimmy".to_string());
+    match crate::claude_desktop::patch_config(std::path::Path::new(path_str), &namespace) {
+        Ok(_) => 0,
+        Err(crate::claude_desktop::PatchError::NoConfigDir) => -1,
+        Err(crate::claude_desktop::PatchError::ReadFailed(_)) => -2,
+        Err(crate::claude_desktop::PatchError::WriteFailed(_)) => -3,
+        Err(crate::claude_desktop::PatchError::BackupFailed(_)) => -4,
+        Err(crate::claude_desktop::PatchError::ParseFailed(_)) => -5,
+    }
+}
+
+/// Remove our `mcpServers` entry. Idempotent — returns 1 if an entry
+/// was actually removed, 0 if there was nothing to remove (no config
+/// file, or our key wasn't present), negative on error. Same error
+/// codes as `_patch_config`.
+#[no_mangle]
+pub extern "C" fn dimmy_claude_desktop_unpatch_config() -> c_int {
+    let namespace = std::env::var("DIMMY_CONFIG_NAMESPACE").unwrap_or_else(|_| "dimmy".to_string());
+    match crate::claude_desktop::unpatch_config(&namespace) {
+        Ok(true) => 1,
+        Ok(false) => 0,
+        Err(crate::claude_desktop::PatchError::NoConfigDir) => -1,
+        Err(crate::claude_desktop::PatchError::ReadFailed(_)) => -2,
+        Err(crate::claude_desktop::PatchError::WriteFailed(_)) => -3,
+        Err(crate::claude_desktop::PatchError::BackupFailed(_)) => -4,
+        Err(crate::claude_desktop::PatchError::ParseFailed(_)) => -5,
+    }
+}
+
 // ── Notion integration ─────────────────────────────────────────────
 // Internal-integration-token model: user pastes a `ntn_...` token
 // from notion.so/my-integrations into the Settings UI; we store it
