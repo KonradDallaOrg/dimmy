@@ -213,6 +213,27 @@ jobs:
           done
           codesign --force --sign - "$FRAMEWORKS_DIR"/*.dylib
 
+      # MCP bridge binary — the wizard installs it into the user's
+      # Claude Extensions dir, but the binary itself ships inside the
+      # .app bundle so the install step has a source to copy from.
+      # Without this step the wizard fails with rc -2 ("binary not
+      # found in app bundle"). The mcp-server crate is small (~1.2 MB)
+      # and has no llama/whisper deps, so it builds in seconds.
+      - name: Build dimmy-mcp for aarch64-apple-darwin
+        working-directory: mcp-server
+        run: cargo build --release --target aarch64-apple-darwin
+
+      - name: Copy dimmy-mcp into .app Resources
+        run: |
+          APP_PATH="platforms/macos/build/derived/Build/Products/Release/Dimmy Staging.app"
+          if [ ! -d "$APP_PATH" ]; then
+            APP_PATH="platforms/macos/build/derived/Build/Products/Release/Dimmy.app"
+          fi
+          RESOURCES_DIR="$APP_PATH/Contents/Resources"
+          cp "mcp-server/target/aarch64-apple-darwin/release/dimmy-mcp" "$RESOURCES_DIR/dimmy-mcp"
+          chmod +x "$RESOURCES_DIR/dimmy-mcp"
+          codesign --force --sign - "$RESOURCES_DIR/dimmy-mcp"
+
       - name: Create DMG
         working-directory: platforms/macos
         run: |

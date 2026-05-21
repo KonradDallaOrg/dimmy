@@ -274,6 +274,23 @@ jobs:
           echo "=== Verifying no broken symlinks ==="
           find "$FRAMEWORKS_DIR" -type l ! -exec test -e {} \; -print | grep . && echo "BROKEN SYMLINKS FOUND — BUILD WILL FAIL" && exit 1 || echo "All OK"
 
+      # MCP bridge binary — the Settings wizard installs it into the
+      # user's Claude Extensions dir, but the binary itself must ship
+      # inside the .app bundle so the install step has a source to
+      # copy from. Without this the wizard fails with rc -2 ("binary
+      # not found in app bundle").
+      - name: Build dimmy-mcp for aarch64-apple-darwin
+        working-directory: mcp-server
+        run: cargo build --release --target aarch64-apple-darwin
+
+      - name: Copy dimmy-mcp into .app Resources
+        run: |
+          APP_PATH="platforms/macos/build/derived/Build/Products/Release/Dimmy.app"
+          RESOURCES_DIR="$APP_PATH/Contents/Resources"
+          cp "mcp-server/target/aarch64-apple-darwin/release/dimmy-mcp" "$RESOURCES_DIR/dimmy-mcp"
+          chmod +x "$RESOURCES_DIR/dimmy-mcp"
+          codesign --force --sign - "$RESOURCES_DIR/dimmy-mcp"
+
       - name: Generate DMG background (SVG → PNG)
         run: |
           brew install librsvg
