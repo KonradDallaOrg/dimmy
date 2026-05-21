@@ -93,11 +93,11 @@
                 BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
                 BorderThickness="1" CornerRadius="6" Padding="14">
           <StackPanel Spacing="6">
-            <TextBlock Text="Config file" FontSize="11"
+            <TextBlock Text="Extension folder" FontSize="11"
                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
             <TextBlock x:Name="ConfigPathText" FontSize="12" FontFamily="Consolas"
                        TextWrapping="Wrap"/>
-            <TextBlock Text="MCP binary" FontSize="11" Margin="0,8,0,0"
+            <TextBlock Text="MCP binary (will be copied into the extension folder)" FontSize="11" Margin="0,8,0,0"
                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
             <TextBlock x:Name="BinaryPathText" FontSize="12" FontFamily="Consolas"
                        TextWrapping="Wrap"/>

@@ -637,50 +637,67 @@ public static class DimmyNative
     // ── Claude Desktop MCP bridge ─────────────────────────────────
     //
     // Counterpart to the standalone `dimmy-mcp` binary shipped in the
-    // installer alongside `Dimmy.exe`. The wizard registers our binary
-    // in the user's `claude_desktop_config.json` so Claude Desktop
-    // spawns it on startup as an MCP server. See `core/src/claude_desktop.rs`.
+    // installer alongside `Dimmy.exe`. The wizard installs Dimmy as a
+    // Claude Desktop *extension* — a folder under
+    // `<roaming>\Claude\Claude Extensions\dimmy\` containing
+    // manifest.json + icon.png + dimmy-mcp.exe. Claude Desktop
+    // auto-discovers it on startup; this is the same shape Anthropic
+    // ships built-in connectors (PowerPoint by Anthropic etc.) in.
 
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_claude_desktop_status(byte[] outBuf, int bufLen);
 
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
-    public static extern int dimmy_claude_desktop_patch_config(string binaryPath);
+    public static extern int dimmy_claude_desktop_install(string binaryPath, string versionPtr);
 
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
-    public static extern int dimmy_claude_desktop_unpatch_config();
+    public static extern int dimmy_claude_desktop_uninstall();
 
     /// <summary>
     /// One-shot snapshot of MCP bridge state. Every field is optional —
     /// "present" means "fact known". The wizard binds to Installed +
-    /// ConfigPatched to decide which step to land on; the Settings
-    /// status card uses HeartbeatAgeSecs to render "alive" vs "stale".
+    /// ExtensionInstalled to decide which step to land on; the Settings
+    /// status card uses HeartbeatAgeSecs to render "alive" vs "idle".
+    ///
+    /// ConfigPatched is kept as a legacy alias of ExtensionInstalled —
+    /// it predates the DXT-extension wizard and means "Dimmy is
+    /// registered with Claude in any form".
     /// </summary>
     public sealed record ClaudeDesktopStatus(
         bool Installed,
         string? InstallPath,
-        string? ConfigPath,
-        bool ConfigPatched,
+        string? ExtensionPath,
+        bool ExtensionInstalled,
+        bool ExtensionEnabled,
+        string? ExtensionVersion,
         string? EntryCommand,
         long? HeartbeatAgeSecs,
         string? LastCallTool,
         long? LastCallAgoSecs,
         bool? LastCallOk,
-        long? LastCallElapsedMs);
+        long? LastCallElapsedMs)
+    {
+        // Legacy alias for code paths that still bind to "is Dimmy
+        // registered?" — same value, different name. New code should
+        // read ExtensionInstalled.
+        public bool ConfigPatched => ExtensionInstalled;
+    }
 
     public static ClaudeDesktopStatus GetClaudeDesktopStatus()
     {
+        var empty = new ClaudeDesktopStatus(false, null, null, false, false, null, null, null, null, null, null, null);
         var json = ReadBuffer(dimmy_claude_desktop_status, 2048);
-        if (string.IsNullOrEmpty(json))
-            return new ClaudeDesktopStatus(false, null, null, false, null, null, null, null, null, null);
+        if (string.IsNullOrEmpty(json)) return empty;
         try
         {
             using var doc = System.Text.Json.JsonDocument.Parse(json);
             var r = doc.RootElement;
             bool installed = r.TryGetProperty("installed", out var i) && i.GetBoolean();
             string? installPath = r.TryGetProperty("install_path", out var ip) ? ip.GetString() : null;
-            string? cfgPath = r.TryGetProperty("config_path", out var cp) ? cp.GetString() : null;
-            bool patched = r.TryGetProperty("config_patched", out var p) && p.GetBoolean();
+            string? extPath = r.TryGetProperty("extension_path", out var xp) ? xp.GetString() : null;
+            bool extInstalled = r.TryGetProperty("extension_installed", out var ei) && ei.GetBoolean();
+            bool extEnabled = r.TryGetProperty("extension_enabled", out var ee) && ee.GetBoolean();
+            string? extVersion = r.TryGetProperty("extension_version", out var ev) ? ev.GetString() : null;
             string? entryCmd = r.TryGetProperty("entry_command", out var ec) ? ec.GetString() : null;
             long? hbAge = r.TryGetProperty("heartbeat_age_secs", out var h) ? h.GetInt64() : null;
             string? lcTool = null; long? lcAgo = null; bool? lcOk = null; long? lcMs = null;
@@ -691,32 +708,38 @@ public static class DimmyNative
                 lcOk = lc.TryGetProperty("ok", out var ok) ? ok.GetBoolean() : null;
                 lcMs = lc.TryGetProperty("elapsed_ms", out var em) ? em.GetInt64() : null;
             }
-            return new ClaudeDesktopStatus(installed, installPath, cfgPath, patched, entryCmd, hbAge, lcTool, lcAgo, lcOk, lcMs);
+            return new ClaudeDesktopStatus(installed, installPath, extPath, extInstalled, extEnabled, extVersion, entryCmd, hbAge, lcTool, lcAgo, lcOk, lcMs);
         }
         catch
         {
-            return new ClaudeDesktopStatus(false, null, null, false, null, null, null, null, null, null);
+            return empty;
         }
     }
 
     /// <summary>
-    /// Add Dimmy's entry to claude_desktop_config.json. Idempotent —
-    /// re-running just overwrites the entry. Returns true on success.
+    /// Install Dimmy as a Claude Desktop extension. Returns (success,
+    /// rc) — rc is the raw Rust return code so the caller can log
+    /// which categorical error fired (binary missing, copy locked,
+    /// manifest write failed, …). 0 = ok, negative = error.
     /// </summary>
-    public static bool PatchClaudeDesktopConfig(string binaryPath)
+    public static (bool ok, int rc) InstallClaudeDesktopExtension(string binaryPath, string version)
     {
-        try { return dimmy_claude_desktop_patch_config(binaryPath) == 0; }
-        catch { return false; }
+        try
+        {
+            int rc = dimmy_claude_desktop_install(binaryPath, version);
+            return (rc == 0, rc);
+        }
+        catch { return (false, int.MinValue); }
     }
 
-    /// <summary>
-    /// Remove Dimmy's entry. Returns true if an entry was removed, false
-    /// if nothing was there (idempotent) or on error.
-    /// </summary>
-    public static bool UnpatchClaudeDesktopConfig()
+    public static (bool removed, int rc) UninstallClaudeDesktopExtension()
     {
-        try { return dimmy_claude_desktop_unpatch_config() == 1; }
-        catch { return false; }
+        try
+        {
+            int rc = dimmy_claude_desktop_uninstall();
+            return (rc == 1, rc);
+        }
+        catch { return (false, int.MinValue); }
     }
 
     public static bool TelemetryEnabled

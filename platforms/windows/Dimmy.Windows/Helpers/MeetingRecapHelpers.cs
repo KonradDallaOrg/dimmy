@@ -87,6 +87,12 @@ public static class MeetingRecapHelpers
             "summary of an audio recording. Output ONLY markdown with the EXACT " +
             "marker headings shown — a downstream parser splits on them.\n\n" +
 
+            "## Title (the very first thing you output)\n" +
+            "The VERY FIRST line of your output MUST be a Markdown H1 (`# Title`) — " +
+            "a 3-to-7-word short title for the meeting, in the transcript's language, " +
+            "no quotes, no emoji, no date. Dimmy parses this line and stores it in the " +
+            "meeting's metadata so the UI shows your title instead of the meeting id.\n\n" +
+
             "## Transcript format\n" +
             "Each line: `[ELAPSED_MS ms] [SPEAKER_LABEL] text`.\n" +
             "Speaker labels: `[mic]` = the user recording (treat as \"you\" / first person " +
@@ -175,6 +181,9 @@ public static class MeetingRecapHelpers
             "Use `—` if none.\n\n" +
 
             "## Hard rules\n" +
+            "- The very first line MUST be `# <Short title>` (3-7 words, transcript's language, " +
+            "no quotes, no emoji, no date). Without this Dimmy's UI falls back to showing the " +
+            "raw meeting id.\n" +
             "- Output the sections in the exact order above. ALL section markers must " +
             "appear, even if the section content is just `—`.\n" +
             "- Output language follows the transcript dominant language.\n" +

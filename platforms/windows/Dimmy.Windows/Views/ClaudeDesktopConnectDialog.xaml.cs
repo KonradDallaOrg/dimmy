@@ -29,7 +29,7 @@ public sealed partial class ClaudeDesktopConnectDialog : ContentDialog
 
     private int _currentStep = 1;
     private bool _installed;
-    private bool _patched;
+    private bool _extensionInstalled;
     private DispatcherTimer? _heartbeatTimer;
 
     public ClaudeDesktopConnectDialog()
@@ -77,7 +77,7 @@ public sealed partial class ClaudeDesktopConnectDialog : ContentDialog
                 break;
             case 2:
                 PrimaryButtonText = "Next";
-                IsPrimaryButtonEnabled = _patched;
+                IsPrimaryButtonEnabled = _extensionInstalled;
                 break;
             case 3:
                 PrimaryButtonText = "Done";
@@ -132,7 +132,7 @@ public sealed partial class ClaudeDesktopConnectDialog : ContentDialog
     {
         var status = await Task.Run(() => DimmyNative.GetClaudeDesktopStatus());
         _installed = status.Installed;
-        _patched = status.ConfigPatched;
+        _extensionInstalled = status.ExtensionInstalled;
         DispatcherQueue.TryEnqueue(() => ApplyStatus(status));
     }
 
@@ -162,13 +162,15 @@ public sealed partial class ClaudeDesktopConnectDialog : ContentDialog
 
         // Step 2 — populate paths even before we land here, so the
         // user can scan the change preview while moving from step 1.
-        ConfigPathText.Text = string.IsNullOrEmpty(status.ConfigPath)
-            ? "(will be created on first launch)" : status.ConfigPath;
+        ConfigPathText.Text = string.IsNullOrEmpty(status.ExtensionPath)
+            ? "(will be created on install)" : status.ExtensionPath;
         BinaryPathText.Text = ResolveMcpBinaryPath() ?? "(not found in installation folder)";
-        if (status.ConfigPatched)
+        if (status.ExtensionInstalled)
         {
             PatchOkGlyph.Visibility = Visibility.Visible;
-            PatchStatus.Text = "Already registered.";
+            PatchStatus.Text = status.ExtensionVersion != null
+                ? $"Already installed (v{status.ExtensionVersion})."
+                : "Already installed.";
         }
 
         ApplyStep(); // refresh button-enabled state from new flags
@@ -196,7 +198,9 @@ public sealed partial class ClaudeDesktopConnectDialog : ContentDialog
 
     private async void Patch_Click(object sender, RoutedEventArgs e)
     {
+        App.Log("MCP wizard: Patch_Click entered", "ClaudeDesktop");
         var binary = ResolveMcpBinaryPath();
+        App.Log($"MCP wizard: ResolveMcpBinaryPath -> '{binary ?? "<null>"}'", "ClaudeDesktop");
         if (string.IsNullOrEmpty(binary))
         {
             PatchStatus.Text = "Couldn't locate dimmy-mcp.exe next to Dimmy.exe.";
@@ -206,21 +210,54 @@ public sealed partial class ClaudeDesktopConnectDialog : ContentDialog
         PatchRing.IsActive = true;
         PatchRing.Visibility = Visibility.Visible;
         PatchOkGlyph.Visibility = Visibility.Collapsed;
-        PatchStatus.Text = "Writing config…";
-        bool ok = await Task.Run(() => DimmyNative.PatchClaudeDesktopConfig(binary));
+        PatchStatus.Text = "Installing extension…";
+        // The version stamp in the manifest is purely cosmetic for
+        // the Claude Connectors UI ("Dimmy x.y.z"). Source from the
+        // host's actual assembly version so a contributor bumping
+        // Cargo.toml doesn't drift visibly here.
+        var version = typeof(App).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
+        App.Log($"MCP wizard: calling install binary='{binary}' version='{version}'", "ClaudeDesktop");
+        (bool ok, int rc) result;
+        try
+        {
+            result = await Task.Run(() => DimmyNative.InstallClaudeDesktopExtension(binary, version));
+        }
+        catch (Exception ex)
+        {
+            App.Log($"MCP wizard: install threw {ex.GetType().Name}: {ex.Message}", "ClaudeDesktop");
+            PatchRing.IsActive = false;
+            PatchRing.Visibility = Visibility.Collapsed;
+            PatchBtn.IsEnabled = true;
+            PatchStatus.Text = $"Install crashed: {ex.GetType().Name} — see log.";
+            return;
+        }
+        var (ok, rc) = result;
+        App.Log($"MCP install binary='{binary}' version='{version}' rc={rc} ok={ok}", "ClaudeDesktop");
         PatchRing.IsActive = false;
         PatchRing.Visibility = Visibility.Collapsed;
         PatchBtn.IsEnabled = true;
         if (ok)
         {
-            _patched = true;
+            _extensionInstalled = true;
             PatchOkGlyph.Visibility = Visibility.Visible;
-            PatchStatus.Text = "Registered. Next, restart Claude Desktop.";
+            PatchStatus.Text = "Installed. Next, restart Claude Desktop.";
             IsPrimaryButtonEnabled = true;
         }
         else
         {
-            PatchStatus.Text = "Failed — Dimmy log has the details.";
+            // rc table: -1 unresolved root / bad args, -2 binary missing,
+            // -3 copy locked or permission, -4 manifest/settings write,
+            // -5 serialization.
+            string hint = rc switch
+            {
+                -1 => "Couldn't locate Claude Desktop's extensions folder.",
+                -2 => $"dimmy-mcp.exe not found at {binary}.",
+                -3 => "Couldn't copy the binary — is Claude Desktop running? Quit it first.",
+                -4 => "Couldn't write the manifest — folder permissions?",
+                -5 => "Manifest serialization failed (internal bug).",
+                _ => $"Install failed (rc={rc}).",
+            };
+            PatchStatus.Text = hint;
         }
     }
 
@@ -271,11 +308,31 @@ public sealed partial class ClaudeDesktopConnectDialog : ContentDialog
         try
         {
             var status = await Task.Run(() => DimmyNative.GetClaudeDesktopStatus());
-            if (!string.IsNullOrEmpty(status.InstallPath))
+            if (string.IsNullOrEmpty(status.InstallPath)) return;
+            // MSIX install: install_path is the per-user Packages dir
+            // (data root), NOT an executable. Process.Start on it
+            // just opens the folder. Launch via shell:AppsFolder with
+            // the resolved AUMID — guessing `App` falls back to
+            // Documents when wrong.
+            if (status.InstallPath.IndexOf("Packages\\Claude_", StringComparison.OrdinalIgnoreCase) >= 0)
             {
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
-                    status.InstallPath) { UseShellExecute = true });
+                var aumid = await Helpers.ClaudeIconExtractor.ResolveAumidAsync();
+                if (!string.IsNullOrEmpty(aumid))
+                {
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+                        "explorer.exe", $"shell:AppsFolder\\{aumid}")
+                    { UseShellExecute = false });
+                }
+                else
+                {
+                    App.Log("ClaudeDesktopWizard: AUMID unresolved — can't launch MSIX Claude", "ClaudeDesktop");
+                }
+                return;
             }
+            // Squirrel / direct-download install: install_path points
+            // at Claude.exe — launch directly.
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+                status.InstallPath) { UseShellExecute = true });
         }
         catch (Exception ex)
         {

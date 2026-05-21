@@ -2332,13 +2332,14 @@
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                   </Grid.RowDefinitions>
-                  <Image Grid.Column="0" Grid.Row="0" Grid.RowSpan="2"
+                  <!-- Icon source is set in code-behind by
+                       RefreshMcpCard via ClaudeIconExtractor (extracts
+                       the real MSIX brand mark from the installed
+                       Claude package). NO fallback SVG — better empty
+                       than hand-drawn approximation. -->
+                  <Image x:Name="McpProviderIcon" Grid.Column="0" Grid.Row="0" Grid.RowSpan="2"
                          Width="40" Height="40"
-                         VerticalAlignment="Top">
-                    <Image.Source>
-                      <SvgImageSource UriSource="ms-appx:///Assets/Providers/anthropic.svg"/>
-                    </Image.Source>
-                  </Image>
+                         VerticalAlignment="Top"/>
                   <StackPanel Grid.Column="1" Grid.Row="0" VerticalAlignment="Center" Spacing="2">
                     <TextBlock Text="Claude Desktop" FontSize="16" FontWeight="SemiBold" />
                     <TextBlock x:Name="McpStatusText"

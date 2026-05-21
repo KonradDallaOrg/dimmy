@@ -388,8 +388,12 @@ public sealed partial class MeetingWindow : Window
             var chunks = root.GetProperty("chunk_count").GetInt32();
             _activeMeetingDir = dir;
             _viewingMeetingDir = dir;
+            RefreshRecapWithClaudeButton();
 
-            DoneTitle.Text = string.IsNullOrEmpty(dir) ? "Meeting" : Path.GetFileName(dir);
+            // Prefer the LLM-chosen title from meta.json (the recap's
+            // first H1 H1 gets parsed + stored there by save_post_process).
+            // Falls back to the meeting id directory name.
+            DoneTitle.Text = ResolveDoneTitle(dir);
             DoneMeta.Text = $"{FormatDuration(dur)} · {chunks} chunks · {DateTime.Now:yyyy-MM-dd HH:mm}";
             Helpers.TranscriptRenderer.Render(RawTranscriptText,
                 string.IsNullOrEmpty(transcript)
@@ -541,22 +545,30 @@ public sealed partial class MeetingWindow : Window
 
     private void ClearDoneCards()
     {
+        ContextCard.Visibility = Visibility.Collapsed;
         TldrCard.Visibility = Visibility.Collapsed;
+        HighlightsCard.Visibility = Visibility.Collapsed;
+        NarrativeCard.Visibility = Visibility.Collapsed;
         DecisionsCard.Visibility = Visibility.Collapsed;
         TopicsCard.Visibility = Visibility.Collapsed;
         ActionsCard.Visibility = Visibility.Collapsed;
         OpenQuestionsCard.Visibility = Visibility.Collapsed;
         RisksCard.Visibility = Visibility.Collapsed;
         NextStepsCard.Visibility = Visibility.Collapsed;
+        FollowupsCard.Visibility = Visibility.Collapsed;
         DoneWaveCard.Visibility = Visibility.Collapsed;
         _lastDoneSections = new();
+        ContextText.Blocks.Clear();
         TldrText.Blocks.Clear();
+        HighlightsText.Blocks.Clear();
+        NarrativeText.Blocks.Clear();
         DecisionsText.Blocks.Clear();
         TopicsText.Blocks.Clear();
         ActionsText.Blocks.Clear();
         OpenQuestionsText.Blocks.Clear();
         RisksText.Blocks.Clear();
         NextStepsText.Blocks.Clear();
+        FollowupsText.Blocks.Clear();
     }
 
     // ── Recording-time tick + amplitude ──────────────────────────
@@ -1192,13 +1204,21 @@ public sealed partial class MeetingWindow : Window
     private void ApplyDoneSections(Dictionary<string, string> sections)
     {
         _lastDoneSections = sections;
+        // CONTEXT + HIGHLIGHTS + NARRATIVE + FOLLOWUPS were defined
+        // in the prompt but silently dropped by the UI before — the
+        // four cards below were missing. Without them the LLM's
+        // best paragraphs (Narrative) never reached the user.
+        ApplyDoneSection(sections, "CONTEXT", ContextText, ContextCard);
         ApplyDoneSection(sections, "TLDR", TldrText, TldrCard);
+        ApplyDoneSection(sections, "HIGHLIGHTS", HighlightsText, HighlightsCard);
+        ApplyDoneSection(sections, "NARRATIVE", NarrativeText, NarrativeCard);
         ApplyDoneSection(sections, "KEY_DECISIONS", DecisionsText, DecisionsCard);
         ApplyDoneSection(sections, "TOPICS", TopicsText, TopicsCard);
         ApplyDoneSection(sections, "ACTIONS", ActionsText, ActionsCard);
         ApplyDoneSection(sections, "OPEN_QUESTIONS", OpenQuestionsText, OpenQuestionsCard);
         ApplyDoneSection(sections, "RISKS", RisksText, RisksCard);
         ApplyDoneSection(sections, "NEXT_STEPS", NextStepsText, NextStepsCard);
+        ApplyDoneSection(sections, "FOLLOWUPS", FollowupsText, FollowupsCard);
     }
 
     private static void ApplyDoneSection(
@@ -1463,6 +1483,10 @@ public sealed partial class MeetingWindow : Window
             foreach (var d in dirs)
             {
                 var meta = Path.Combine(d.FullName, "meta.json");
+                // Default title is "Meeting <first-8-chars-of-uuid>" —
+                // gets overridden below when meta.json carries a real
+                // title set by the recap LLM (via save_post_process or
+                // the MCP save_recap path).
                 string title = $"Meeting {d.Name[..Math.Min(8, d.Name.Length)]}";
                 string subtitle = d.LastWriteTime.ToString("yyyy-MM-dd HH:mm");
                 if (File.Exists(meta))
@@ -1470,6 +1494,12 @@ public sealed partial class MeetingWindow : Window
                     try
                     {
                         using var doc = JsonDocument.Parse(File.ReadAllText(meta));
+                        if (doc.RootElement.TryGetProperty("title", out var t)
+                            && t.ValueKind == JsonValueKind.String)
+                        {
+                            var metaTitle = t.GetString();
+                            if (!string.IsNullOrEmpty(metaTitle)) title = metaTitle;
+                        }
                         if (doc.RootElement.TryGetProperty("started_at", out var sa))
                         {
                             var parsed = sa.GetString() ?? "";
@@ -1482,9 +1512,40 @@ public sealed partial class MeetingWindow : Window
                     }
                     catch { }
                 }
+                // Lazy backfill: if meta has no title but recap.md
+                // exists, parse the first H1 from the recap and
+                // write it back. Mirrors the Rust
+                // `meeting::backfill_meeting_title` logic (kept
+                // client-side here too so the sidebar gets the title
+                // even before the user opens the meeting Done view).
+                if (title.StartsWith("Meeting ", StringComparison.Ordinal))
+                {
+                    var recapPath = Path.Combine(d.FullName, "recap.md");
+                    if (File.Exists(recapPath))
+                    {
+                        try
+                        {
+                            var firstH1 = ParseFirstH1(File.ReadAllText(recapPath));
+                            if (!string.IsNullOrEmpty(firstH1))
+                            {
+                                title = firstH1;
+                                WriteMetaTitle(meta, firstH1);
+                            }
+                        }
+                        catch { }
+                    }
+                }
                 if (!string.IsNullOrEmpty(query) &&
                     !title.Contains(query, StringComparison.OrdinalIgnoreCase) &&
-                    !subtitle.Contains(query, StringComparison.OrdinalIgnoreCase))
+                    !subtitle.Contains(query, StringComparison.OrdinalIgnoreCase) &&
+                    // Include the dir name (full UUID) so users who
+                    // search by partial UUID still get matches —
+                    // before the LLM-chosen title landed in meta.json,
+                    // the title field IS the prefixed UUID and search
+                    // hit it naturally; after the schema change the
+                    // title is human-friendly and UUID search would
+                    // otherwise return nothing.
+                    !d.Name.Contains(query, StringComparison.OrdinalIgnoreCase))
                     continue;
                 HistoryItems.Add(new HistoryRow
                 {
@@ -1533,7 +1594,12 @@ public sealed partial class MeetingWindow : Window
             // can be a couple of seconds.
             StopDoneMediaPlayback();
             _viewingMeetingDir = row.Dir;
-            DoneTitle.Text = row.Title;
+            RefreshRecapWithClaudeButton();
+            // Prefer meta.json title (set by save_post_process / MCP
+            // save_recap from the first H1 of the recap). Falls back
+            // to the sidebar row's pre-computed title which itself
+            // already falls back to the meeting id.
+            DoneTitle.Text = ResolveDoneTitle(row.Dir, fallback: row.Title);
             DoneMeta.Text = row.Subtitle;
             ClearDoneCards();
 
@@ -1541,11 +1607,29 @@ public sealed partial class MeetingWindow : Window
             if (File.Exists(recapPath))
             {
                 var text = await File.ReadAllTextAsync(recapPath);
-                // Parse the persisted markdown back into the same section
-                // shape the LLM produces, so each heading lights up its
-                // own card. Falls back to a single TLDR-card dump if the
-                // file isn't heading-structured.
-                var parsed = SplitMarkdownIntoSections(text);
+                // Try the canonical `===NAME===` marker parser FIRST —
+                // that's the format the SDK + MCP path produce. Fall
+                // back to the heading-name parser (`## TL;DR` /
+                // `## Decisions`) only if no canonical markers were
+                // found (covers very old recaps from before the
+                // marker-based prompt landed). Without this order the
+                // sidebar-load path silently dropped every section of
+                // marker-based recaps because the legacy heading
+                // parser doesn't recognise `## ===CONTEXT===` etc.
+                var parsed = Helpers.MeetingRecapHelpers.ParseStructuredRecap(text);
+                // ParseStructuredRecap returns at minimum a single
+                // "TLDR" entry with the whole raw body when no markers
+                // matched — so we count as "really parsed" only when
+                // it found 2+ sections or the single TLDR section
+                // is shorter than the raw body (markers were stripped).
+                bool markerParsed = parsed.Count > 1
+                    || (parsed.Count == 1
+                        && parsed.TryGetValue("TLDR", out var tldrOnly)
+                        && tldrOnly.Length < text.Length - 4);
+                if (!markerParsed)
+                {
+                    parsed = SplitMarkdownIntoSections(text);
+                }
                 if (parsed.Count > 0)
                 {
                     ApplyDoneSections(parsed);
@@ -1656,6 +1740,252 @@ public sealed partial class MeetingWindow : Window
         finally
         {
             if (sender is Microsoft.UI.Xaml.Controls.Button btn2) { btn2.IsEnabled = true; }
+        }
+    }
+
+    /// Read `meta.json` from a meeting dir and return the `title`
+    /// field. Falls back to `fallback` (default: meeting id from the
+    /// dir name). Called whenever DoneTitle is set so the LLM-chosen
+    /// title (parsed from the recap's first H1 by save_post_process)
+    /// is preferred over the raw uuid the dir is named after. The
+    /// title also lazy-backfills from recap.md if meta.json is
+    /// missing it but recap.md has a parseable H1 — handled in Rust.
+    // ── Title rename (click-to-edit) ──────────────────────────────
+
+    private void DoneTitle_Tapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)
+    {
+        if (string.IsNullOrEmpty(_viewingMeetingDir)) return;
+        DoneTitleEdit.Text = DoneTitle.Text;
+        DoneTitle.Visibility = Visibility.Collapsed;
+        DoneTitleEdit.Visibility = Visibility.Visible;
+        DoneTitleEdit.SelectAll();
+        DoneTitleEdit.Focus(FocusState.Programmatic);
+    }
+
+    private void DoneTitleEdit_KeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
+    {
+        if (e.Key == global::Windows.System.VirtualKey.Enter)
+        {
+            CommitDoneTitleEdit(cancel: false);
+            e.Handled = true;
+        }
+        else if (e.Key == global::Windows.System.VirtualKey.Escape)
+        {
+            CommitDoneTitleEdit(cancel: true);
+            e.Handled = true;
+        }
+    }
+
+    private void DoneTitleEdit_LostFocus(object sender, RoutedEventArgs e)
+    {
+        CommitDoneTitleEdit(cancel: false);
+    }
+
+    private void CommitDoneTitleEdit(bool cancel)
+    {
+        var dir = _viewingMeetingDir;
+        DoneTitleEdit.Visibility = Visibility.Collapsed;
+        DoneTitle.Visibility = Visibility.Visible;
+        if (cancel || string.IsNullOrEmpty(dir)) return;
+        var newTitle = (DoneTitleEdit.Text ?? "").Trim();
+        if (newTitle.Length == 0 || newTitle.Length > 200) return;
+        if (newTitle == DoneTitle.Text) return;
+        try
+        {
+            WriteMetaTitle(Path.Combine(dir, "meta.json"), newTitle);
+            DoneTitle.Text = newTitle;
+            // Sidebar row carries its own Title snapshot AND has no
+            // INotifyPropertyChanged, so a plain `row.Title = newTitle`
+            // would mutate the model but not redraw the list. We do
+            // the canonical fix: REPLACE the HistoryRow instance at
+            // its current index — ObservableCollection's Replace
+            // notification triggers a ListView re-render for that
+            // single row. LoadHistory() as a fallback (covers the
+            // case where the rename moved the row in sort order).
+            var idx = -1;
+            for (int i = 0; i < HistoryItems.Count; i++)
+            {
+                if (HistoryItems[i].Dir == dir) { idx = i; break; }
+            }
+            if (idx >= 0)
+            {
+                var old = HistoryItems[idx];
+                HistoryItems[idx] = new HistoryRow
+                {
+                    Dir = old.Dir,
+                    Title = newTitle,
+                    Subtitle = old.Subtitle,
+                    RightLabel = old.RightLabel,
+                };
+                HistoryList.SelectedItem = HistoryItems[idx];
+            }
+            else
+            {
+                LoadHistory();
+            }
+        }
+        catch (Exception ex)
+        {
+            App.Log($"DoneTitle rename failed: {ex.Message}", "Meeting");
+        }
+    }
+
+    /// Best-effort H1 extraction from a Markdown blob. Mirror of the
+    /// Rust `meeting::parse_recap_title` rule: first non-empty line
+    /// must start with `# `, title 1-200 chars, trailing
+    /// punctuation/whitespace stripped.
+    private static string? ParseFirstH1(string md)
+    {
+        if (string.IsNullOrEmpty(md)) return null;
+        foreach (var raw in md.Split('\n'))
+        {
+            var line = raw.Trim();
+            if (line.Length == 0) continue;
+            if (line.StartsWith("# "))
+            {
+                var t = line.Substring(2).Trim().TrimEnd('.', ':', ',', ' ', '\t');
+                if (t.Length == 0 || t.Length > 200) return null;
+                return t;
+            }
+            return null;
+        }
+        return null;
+    }
+
+    /// Patch (or create) meta.json with a `title` field. Preserves
+    /// every other key. Best-effort — title is metadata polish.
+    private static void WriteMetaTitle(string metaPath, string title)
+    {
+        try
+        {
+            var dict = File.Exists(metaPath)
+                ? (System.Text.Json.Nodes.JsonObject?)System.Text.Json.Nodes.JsonNode.Parse(
+                    File.ReadAllText(metaPath))
+                : null;
+            dict ??= new System.Text.Json.Nodes.JsonObject();
+            dict["title"] = title;
+            File.WriteAllText(metaPath, dict.ToJsonString(
+                new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch { }
+    }
+
+    private static string ResolveDoneTitle(string? dir, string? fallback = null)
+    {
+        if (string.IsNullOrEmpty(dir))
+            return string.IsNullOrEmpty(fallback) ? "Meeting" : fallback;
+        var idFallback = Path.GetFileName(dir.TrimEnd('\\', '/'));
+        try
+        {
+            var metaPath = Path.Combine(dir, "meta.json");
+            if (File.Exists(metaPath))
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(metaPath));
+                if (doc.RootElement.TryGetProperty("title", out var t)
+                    && t.ValueKind == System.Text.Json.JsonValueKind.String)
+                {
+                    var s = t.GetString();
+                    if (!string.IsNullOrEmpty(s)) return s;
+                }
+            }
+        }
+        catch
+        {
+            // Best-effort — meta.json is metadata polish.
+        }
+        if (!string.IsNullOrEmpty(fallback)) return fallback;
+        return string.IsNullOrEmpty(idFallback) ? "Meeting" : idFallback;
+    }
+
+    /// Open Claude Desktop with a deeplink that instructs Claude to
+    /// use the dimmy MCP tools to fetch the meeting's transcript +
+    /// recap template and write a recap back. Visible only when the
+    /// MCP extension is installed (set by RefreshRecapWithClaudeButton).
+    private async void RecapWithClaudeDesktop_Click(object sender, RoutedEventArgs e)
+    {
+        var dir = _viewingMeetingDir ?? _activeMeetingDir;
+        if (string.IsNullOrEmpty(dir)) return;
+        var meetingId = System.IO.Path.GetFileName(dir.TrimEnd('\\', '/'));
+        if (string.IsNullOrEmpty(meetingId)) return;
+
+        // Tight prompt — Claude consults `dimmy_get_recap_template`
+        // for the structure, so we don't have to inline the entire
+        // format here. Saves the URL length and keeps the template
+        // editable without re-shipping Dimmy.
+        var prompt =
+            $"Recap Dimmy meeting `{meetingId}`.\n\n" +
+            "1. Call `dimmy_get_recap_template` to fetch Dimmy's house format.\n" +
+            $"2. Call `dimmy_get_meeting` with id `{meetingId}` to read the transcript.\n" +
+            "3. Produce a recap that follows the template's rules exactly (first line is a Markdown H1 title in the transcript's language).\n" +
+            $"4. Call `dimmy_save_recap` with id `{meetingId}` and your recap markdown to persist it back into Dimmy.\n" +
+            "5. Confirm to me once saved.";
+        var deeplink = $"claude://claude.ai/new?q={System.Uri.EscapeDataString(prompt)}";
+        try
+        {
+            App.Log($"RecapWithClaude: opening deeplink for meeting={meetingId}", "ClaudeDesktop");
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(deeplink)
+            {
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            App.Log($"RecapWithClaude exc: {ex.Message}", "ClaudeDesktop");
+            // Fallback: copy the prompt to the clipboard and tell
+            // the user — the deeplink can fail if Claude Desktop is
+            // not installed or its URI handler is misregistered.
+            try
+            {
+                var pkg = new global::Windows.ApplicationModel.DataTransfer.DataPackage();
+                pkg.SetText(prompt);
+                global::Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(pkg);
+            }
+            catch { }
+        }
+        await System.Threading.Tasks.Task.CompletedTask;
+    }
+
+    /// Refresh the visibility + icon of the "Recap with Claude Desktop"
+    /// button on the meeting Done view. Called from the same code
+    /// paths that swap the viewing meeting (LoadMeetingRow + the
+    /// active-meeting attach in the stop handler).
+    ///
+    /// Visibility: only when the MCP extension is installed (status
+    /// queried fresh from Rust; cheap, no FFI loop).
+    /// Icon: the real Claude Desktop brand mark extracted from the
+    /// installed MSIX package by `ClaudeIconExtractor`. NEVER use a
+    /// hand-drawn placeholder — see memory note on this.
+    private void RefreshRecapWithClaudeButton()
+    {
+        if (RecapWithClaudeBtn == null) return;
+        try
+        {
+            var status = Interop.DimmyNative.GetClaudeDesktopStatus();
+            RecapWithClaudeBtn.Visibility = status.ExtensionInstalled
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+            if (status.ExtensionInstalled)
+            {
+                _ = System.Threading.Tasks.Task.Run(async () =>
+                {
+                    var iconPath = await Helpers.ClaudeIconExtractor.TryExtractAsync();
+                    if (!string.IsNullOrEmpty(iconPath))
+                    {
+                        DispatcherQueue.TryEnqueue(() =>
+                        {
+                            if (RecapWithClaudeIcon != null)
+                            {
+                                RecapWithClaudeIcon.Source =
+                                    new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(iconPath));
+                            }
+                        });
+                    }
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            App.Log($"RefreshRecapWithClaudeButton exc: {ex.Message}", "ClaudeDesktop");
         }
     }
 
