@@ -518,12 +518,16 @@ final class DimmyCore {
     /// One-shot snapshot of the MCP bridge state. Mirror of the Rust
     /// `dimmy_claude_desktop_status` JSON envelope. Every field is
     /// optional — "present" means "fact known", "absent" means the
-    /// host should render a neutral / probing state.
+    /// host should render a neutral / probing state. `configPatched`
+    /// is a legacy alias of `extensionInstalled` kept for code paths
+    /// that haven't migrated yet; new code reads extensionInstalled.
     struct ClaudeDesktopStatus {
         let installed: Bool
         let installPath: String?
-        let configPath: String?
-        let configPatched: Bool
+        let extensionPath: String?
+        let extensionInstalled: Bool
+        let extensionEnabled: Bool
+        let extensionVersion: String?
         let entryCommand: String?
         let heartbeatAgeSecs: Int64?
         let lastCallTool: String?
@@ -531,9 +535,12 @@ final class DimmyCore {
         let lastCallOk: Bool?
         let lastCallElapsedMs: Int64?
 
+        var configPatched: Bool { extensionInstalled }
+
         static let empty = ClaudeDesktopStatus(
-            installed: false, installPath: nil, configPath: nil,
-            configPatched: false, entryCommand: nil,
+            installed: false, installPath: nil, extensionPath: nil,
+            extensionInstalled: false, extensionEnabled: false,
+            extensionVersion: nil, entryCommand: nil,
             heartbeatAgeSecs: nil, lastCallTool: nil,
             lastCallAgoSecs: nil, lastCallOk: nil, lastCallElapsedMs: nil)
     }
@@ -550,8 +557,10 @@ final class DimmyCore {
 
         let installed = obj["installed"] as? Bool ?? false
         let installPath = obj["install_path"] as? String
-        let configPath = obj["config_path"] as? String
-        let patched = obj["config_patched"] as? Bool ?? false
+        let extPath = obj["extension_path"] as? String
+        let extInstalled = obj["extension_installed"] as? Bool ?? false
+        let extEnabled = obj["extension_enabled"] as? Bool ?? false
+        let extVersion = obj["extension_version"] as? String
         let entryCmd = obj["entry_command"] as? String
         let hbAge = (obj["heartbeat_age_secs"] as? NSNumber)?.int64Value
 
@@ -568,24 +577,29 @@ final class DimmyCore {
 
         return ClaudeDesktopStatus(
             installed: installed, installPath: installPath,
-            configPath: configPath, configPatched: patched,
+            extensionPath: extPath, extensionInstalled: extInstalled,
+            extensionEnabled: extEnabled, extensionVersion: extVersion,
             entryCommand: entryCmd, heartbeatAgeSecs: hbAge,
             lastCallTool: lcTool, lastCallAgoSecs: lcAgo,
             lastCallOk: lcOk, lastCallElapsedMs: lcMs)
     }
 
-    /// Register Dimmy's MCP binary in Claude Desktop's config.
-    /// Atomic — backs up `.bak` before writing. Returns true on success.
-    func patchClaudeDesktopConfig(binaryPath: String) -> Bool {
-        return binaryPath.withCString { ptr in
-            dimmy_claude_desktop_patch_config(ptr) == 0
+    /// Install Dimmy as a Claude Desktop extension. Copies the
+    /// dimmy-mcp binary into the user's Claude Extensions dir, drops
+    /// a manifest.json + icon.png next to it, flips the per-extension
+    /// enable flag. Idempotent. Returns true on success.
+    func installClaudeDesktopExtension(binaryPath: String, version: String) -> Bool {
+        return binaryPath.withCString { binPtr in
+            version.withCString { verPtr in
+                dimmy_claude_desktop_install(binPtr, verPtr) == 0
+            }
         }
     }
 
-    /// Remove Dimmy's entry. Returns true if an entry was actually
-    /// removed (false if nothing to remove or on error — idempotent).
-    func unpatchClaudeDesktopConfig() -> Bool {
-        return dimmy_claude_desktop_unpatch_config() == 1
+    /// Remove the Dimmy Claude Desktop extension dir + its settings
+    /// file. Returns true iff something was actually removed.
+    func uninstallClaudeDesktopExtension() -> Bool {
+        return dimmy_claude_desktop_uninstall() == 1
     }
 
     /// Emit a typed telemetry event. `props` is a Swift dict that

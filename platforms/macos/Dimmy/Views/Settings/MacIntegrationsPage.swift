@@ -147,7 +147,7 @@ struct MacIntegrationsPage: View {
             titleVisibility: .visible
         ) {
             Button("Disconnect", role: .destructive) {
-                _ = DimmyCore.shared.unpatchClaudeDesktopConfig()
+                _ = DimmyCore.shared.uninstallClaudeDesktopExtension()
                 refreshMcpStatus()
             }
             Button("Cancel", role: .cancel) { }
@@ -255,10 +255,18 @@ struct MacIntegrationsPage: View {
     @ViewBuilder
     private var mcpCard: some View {
         HStack(alignment: .top, spacing: 14) {
-            Image("anthropic")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 40, height: 40)
+            // Custom "Claude Desktop app icon" — rounded orange square
+            // with the Anthropic burst inside in white. Visually distinct
+            // from the bare anthropic.svg used by the subscription card
+            // above; reads instantly as "the desktop app".
+            ZStack {
+                RoundedRectangle(cornerRadius: 9)
+                    .fill(Color(red: 0.85, green: 0.47, blue: 0.34))
+                Image(systemName: "rectangle.connected.to.line.below")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundColor(.white)
+            }
+            .frame(width: 40, height: 40)
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("Claude Desktop").font(.system(size: 16, weight: .semibold))
@@ -268,7 +276,7 @@ struct MacIntegrationsPage: View {
                     .fixedSize(horizontal: false, vertical: true)
 
                 HStack(spacing: 8) {
-                    if mcpStatus.configPatched {
+                    if mcpStatus.extensionInstalled {
                         Button("Re-run wizard") { showMcpWizard = true }
                         Button("Disconnect") { showMcpDisconnectConfirm = true }
                         Button("Refresh") { refreshMcpStatus() }
@@ -296,8 +304,13 @@ struct MacIntegrationsPage: View {
             }
             return "Connected · heartbeat \(mcpStatus.heartbeatAgeSecs ?? 0)s ago"
         }
-        if mcpStatus.configPatched {
-            return "Registered · restart Claude Desktop to activate"
+        if mcpStatus.extensionInstalled {
+            // Heartbeat ages out fast (Claude kills idle MCP servers
+            // by design). Keep the wording neutral — not an error.
+            if let v = mcpStatus.extensionVersion {
+                return "Installed (v\(v)) · Claude spawns on demand"
+            }
+            return "Installed · Claude spawns on demand"
         }
         return mcpStatus.installed
             ? "Not connected to Claude Desktop yet"
@@ -306,13 +319,13 @@ struct MacIntegrationsPage: View {
 
     private var mcpStatusIcon: String {
         if mcpIsAlive { return "checkmark.circle.fill" }
-        if mcpStatus.configPatched { return "clock.fill" }
+        if mcpStatus.extensionInstalled { return "checkmark.circle.fill" }
         return "circle"
     }
 
     private var mcpStatusColor: Color {
         if mcpIsAlive { return .green }
-        if mcpStatus.configPatched { return .orange }
+        if mcpStatus.extensionInstalled { return .green }
         return .secondary
     }
 

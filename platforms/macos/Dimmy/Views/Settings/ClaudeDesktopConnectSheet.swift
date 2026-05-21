@@ -274,14 +274,20 @@ struct ClaudeDesktopConnectSheet: View {
         }
         patching = true
         patchError = nil
+        // Version stamp embedded in the manifest is cosmetic — the
+        // Claude Connectors UI shows "Dimmy x.y.z" next to the icon.
+        // Bundle CFBundleShortVersionString is the canonical Mac
+        // source.
+        let version = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0.0.0"
         DispatchQueue.global(qos: .userInitiated).async {
-            let ok = DimmyCore.shared.patchClaudeDesktopConfig(binaryPath: binary)
+            let ok = DimmyCore.shared.installClaudeDesktopExtension(
+                binaryPath: binary, version: version)
             DispatchQueue.main.async {
                 patching = false
                 if ok {
                     status = DimmyCore.shared.claudeDesktopStatus()
                 } else {
-                    patchError = "Patch failed — see logs."
+                    patchError = "Install failed — see logs."
                 }
             }
         }
