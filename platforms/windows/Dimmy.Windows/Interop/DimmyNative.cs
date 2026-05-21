@@ -634,6 +634,91 @@ public static class DimmyNative
         catch { return ClaudeCodeStatus.NotInstalled; }
     }
 
+    // ── Claude Desktop MCP bridge ─────────────────────────────────
+    //
+    // Counterpart to the standalone `dimmy-mcp` binary shipped in the
+    // installer alongside `Dimmy.exe`. The wizard registers our binary
+    // in the user's `claude_desktop_config.json` so Claude Desktop
+    // spawns it on startup as an MCP server. See `core/src/claude_desktop.rs`.
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_claude_desktop_status(byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+    public static extern int dimmy_claude_desktop_patch_config(string binaryPath);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_claude_desktop_unpatch_config();
+
+    /// <summary>
+    /// One-shot snapshot of MCP bridge state. Every field is optional —
+    /// "present" means "fact known". The wizard binds to Installed +
+    /// ConfigPatched to decide which step to land on; the Settings
+    /// status card uses HeartbeatAgeSecs to render "alive" vs "stale".
+    /// </summary>
+    public sealed record ClaudeDesktopStatus(
+        bool Installed,
+        string? InstallPath,
+        string? ConfigPath,
+        bool ConfigPatched,
+        string? EntryCommand,
+        long? HeartbeatAgeSecs,
+        string? LastCallTool,
+        long? LastCallAgoSecs,
+        bool? LastCallOk,
+        long? LastCallElapsedMs);
+
+    public static ClaudeDesktopStatus GetClaudeDesktopStatus()
+    {
+        var json = ReadBuffer(dimmy_claude_desktop_status, 2048);
+        if (string.IsNullOrEmpty(json))
+            return new ClaudeDesktopStatus(false, null, null, false, null, null, null, null, null, null);
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var r = doc.RootElement;
+            bool installed = r.TryGetProperty("installed", out var i) && i.GetBoolean();
+            string? installPath = r.TryGetProperty("install_path", out var ip) ? ip.GetString() : null;
+            string? cfgPath = r.TryGetProperty("config_path", out var cp) ? cp.GetString() : null;
+            bool patched = r.TryGetProperty("config_patched", out var p) && p.GetBoolean();
+            string? entryCmd = r.TryGetProperty("entry_command", out var ec) ? ec.GetString() : null;
+            long? hbAge = r.TryGetProperty("heartbeat_age_secs", out var h) ? h.GetInt64() : null;
+            string? lcTool = null; long? lcAgo = null; bool? lcOk = null; long? lcMs = null;
+            if (r.TryGetProperty("last_call", out var lc) && lc.ValueKind == System.Text.Json.JsonValueKind.Object)
+            {
+                lcTool = lc.TryGetProperty("tool", out var t) ? t.GetString() : null;
+                lcAgo = lc.TryGetProperty("ago_secs", out var ago) ? ago.GetInt64() : null;
+                lcOk = lc.TryGetProperty("ok", out var ok) ? ok.GetBoolean() : null;
+                lcMs = lc.TryGetProperty("elapsed_ms", out var em) ? em.GetInt64() : null;
+            }
+            return new ClaudeDesktopStatus(installed, installPath, cfgPath, patched, entryCmd, hbAge, lcTool, lcAgo, lcOk, lcMs);
+        }
+        catch
+        {
+            return new ClaudeDesktopStatus(false, null, null, false, null, null, null, null, null, null);
+        }
+    }
+
+    /// <summary>
+    /// Add Dimmy's entry to claude_desktop_config.json. Idempotent —
+    /// re-running just overwrites the entry. Returns true on success.
+    /// </summary>
+    public static bool PatchClaudeDesktopConfig(string binaryPath)
+    {
+        try { return dimmy_claude_desktop_patch_config(binaryPath) == 0; }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// Remove Dimmy's entry. Returns true if an entry was removed, false
+    /// if nothing was there (idempotent) or on error.
+    /// </summary>
+    public static bool UnpatchClaudeDesktopConfig()
+    {
+        try { return dimmy_claude_desktop_unpatch_config() == 1; }
+        catch { return false; }
+    }
+
     public static bool TelemetryEnabled
     {
         get => dimmy_telemetry_is_enabled() == 1;

@@ -195,6 +195,7 @@ public sealed partial class SettingsWindow : Window
         // shows the XAML default ("Not connected" / Connect button)
         // even when a token was already saved.
         NotionRefreshSummary();
+        RefreshMcpCard();
 
         // Custom-dict ListView source-of-truth lives in the Rust
         // AppState; pull it now so the UI matches reality, AND
@@ -4792,6 +4793,89 @@ public sealed partial class SettingsWindow : Window
         catch (Exception ex)
         {
             App.Log($"NotionAutoSend save exc: {ex.Message}", "Notion");
+        }
+    }
+
+    // ── Claude Desktop MCP bridge ─────────────────────────────────
+
+    private async void McpConnect_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new ClaudeDesktopConnectDialog
+        {
+            XamlRoot = (this.Content as FrameworkElement)?.XamlRoot,
+            // Jump past detect/patch if already done — saves clicks on re-runs.
+            InitialStep = DecideMcpInitialStep(),
+        };
+        await dialog.ShowAsync();
+        RefreshMcpCard();
+    }
+
+    private async void McpDisconnect_Click(object sender, RoutedEventArgs e)
+    {
+        var confirm = new ContentDialog
+        {
+            Title = "Disconnect Claude Desktop?",
+            Content = "Dimmy will remove its entry from Claude Desktop's MCP config. Your other MCP servers stay in place. Restart Claude Desktop afterwards so it forgets the connection.",
+            PrimaryButtonText = "Disconnect",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = (this.Content as FrameworkElement)?.XamlRoot,
+        };
+        if ((await confirm.ShowAsync()) != ContentDialogResult.Primary) return;
+        bool removed = await System.Threading.Tasks.Task.Run(() => DimmyNative.UnpatchClaudeDesktopConfig());
+        App.Log($"MCP disconnect removed={removed}", "ClaudeDesktop");
+        RefreshMcpCard();
+    }
+
+    private void McpRefresh_Click(object sender, RoutedEventArgs e)
+    {
+        RefreshMcpCard();
+    }
+
+    private static int DecideMcpInitialStep()
+    {
+        var status = DimmyNative.GetClaudeDesktopStatus();
+        if (status.ConfigPatched) return 3; // jump to heartbeat verify
+        if (status.Installed) return 2;     // skip detect, go straight to patch
+        return 1;
+    }
+
+    private async void RefreshMcpCard()
+    {
+        var status = await System.Threading.Tasks.Task.Run(() => DimmyNative.GetClaudeDesktopStatus());
+        if (McpStatusText == null) return; // page not yet realized
+
+        // Three rendering states: missing → patched-but-cold → alive.
+        // "alive" requires a heartbeat fresher than 90 s (the binary
+        // writes every 30 s; we leave headroom for the polling slack).
+        bool alive = status.HeartbeatAgeSecs.HasValue && status.HeartbeatAgeSecs.Value < 90;
+        if (alive)
+        {
+            McpStatusText.Text = status.LastCallTool != null
+                ? $"Connected — last call {status.LastCallAgoSecs ?? 0}s ago ({status.LastCallTool})."
+                : $"Connected — heartbeat {status.HeartbeatAgeSecs!.Value}s ago.";
+            McpStatusGlyph.Glyph = "";
+            McpStatusGlyph.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["SystemFillColorSuccessBrush"];
+            McpDisconnectedActions.Visibility = Visibility.Collapsed;
+            McpConnectedActions.Visibility = Visibility.Visible;
+        }
+        else if (status.ConfigPatched)
+        {
+            McpStatusText.Text = "Registered. Restart Claude Desktop to activate the bridge.";
+            McpStatusGlyph.Glyph = "";
+            McpStatusGlyph.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["SystemFillColorCautionBrush"];
+            McpDisconnectedActions.Visibility = Visibility.Collapsed;
+            McpConnectedActions.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            McpStatusText.Text = status.Installed
+                ? "Not connected to Claude Desktop yet."
+                : "Claude Desktop isn't installed on this machine.";
+            McpStatusGlyph.Glyph = "";
+            McpStatusGlyph.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorTertiaryBrush"];
+            McpDisconnectedActions.Visibility = Visibility.Visible;
+            McpConnectedActions.Visibility = Visibility.Collapsed;
         }
     }
 }
