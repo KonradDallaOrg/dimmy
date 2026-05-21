@@ -11,6 +11,7 @@ pub mod autostart;
 pub mod call_detector;
 pub mod chunked_stt;
 pub mod claude_code;
+pub mod claude_desktop;
 pub mod dfn;
 #[cfg(feature = "local-dfn")]
 pub mod dfn3;
