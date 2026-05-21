@@ -513,6 +513,81 @@ final class DimmyCore {
         return ClaudeCodeStatus(rawValue: raw) ?? .notInstalled
     }
 
+    // MARK: - Claude Desktop MCP bridge
+
+    /// One-shot snapshot of the MCP bridge state. Mirror of the Rust
+    /// `dimmy_claude_desktop_status` JSON envelope. Every field is
+    /// optional — "present" means "fact known", "absent" means the
+    /// host should render a neutral / probing state.
+    struct ClaudeDesktopStatus {
+        let installed: Bool
+        let installPath: String?
+        let configPath: String?
+        let configPatched: Bool
+        let entryCommand: String?
+        let heartbeatAgeSecs: Int64?
+        let lastCallTool: String?
+        let lastCallAgoSecs: Int64?
+        let lastCallOk: Bool?
+        let lastCallElapsedMs: Int64?
+
+        static let empty = ClaudeDesktopStatus(
+            installed: false, installPath: nil, configPath: nil,
+            configPatched: false, entryCommand: nil,
+            heartbeatAgeSecs: nil, lastCallTool: nil,
+            lastCallAgoSecs: nil, lastCallOk: nil, lastCallElapsedMs: nil)
+    }
+
+    func claudeDesktopStatus() -> ClaudeDesktopStatus {
+        let bufSize = 2048
+        var buf = [CChar](repeating: 0, count: bufSize)
+        let n = dimmy_claude_desktop_status(&buf, Int32(bufSize))
+        guard n > 0 else { return .empty }
+        let json = String(cString: buf)
+        guard let data = json.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return .empty }
+
+        let installed = obj["installed"] as? Bool ?? false
+        let installPath = obj["install_path"] as? String
+        let configPath = obj["config_path"] as? String
+        let patched = obj["config_patched"] as? Bool ?? false
+        let entryCmd = obj["entry_command"] as? String
+        let hbAge = (obj["heartbeat_age_secs"] as? NSNumber)?.int64Value
+
+        var lcTool: String? = nil
+        var lcAgo: Int64? = nil
+        var lcOk: Bool? = nil
+        var lcMs: Int64? = nil
+        if let lc = obj["last_call"] as? [String: Any] {
+            lcTool = lc["tool"] as? String
+            lcAgo = (lc["ago_secs"] as? NSNumber)?.int64Value
+            lcOk = lc["ok"] as? Bool
+            lcMs = (lc["elapsed_ms"] as? NSNumber)?.int64Value
+        }
+
+        return ClaudeDesktopStatus(
+            installed: installed, installPath: installPath,
+            configPath: configPath, configPatched: patched,
+            entryCommand: entryCmd, heartbeatAgeSecs: hbAge,
+            lastCallTool: lcTool, lastCallAgoSecs: lcAgo,
+            lastCallOk: lcOk, lastCallElapsedMs: lcMs)
+    }
+
+    /// Register Dimmy's MCP binary in Claude Desktop's config.
+    /// Atomic — backs up `.bak` before writing. Returns true on success.
+    func patchClaudeDesktopConfig(binaryPath: String) -> Bool {
+        return binaryPath.withCString { ptr in
+            dimmy_claude_desktop_patch_config(ptr) == 0
+        }
+    }
+
+    /// Remove Dimmy's entry. Returns true if an entry was actually
+    /// removed (false if nothing to remove or on error — idempotent).
+    func unpatchClaudeDesktopConfig() -> Bool {
+        return dimmy_claude_desktop_unpatch_config() == 1
+    }
+
     /// Emit a typed telemetry event. `props` is a Swift dict that
     /// will be JSON-encoded and passed to the Rust dispatcher.
     /// Non-categorical or unknown event names silently drop (-2).

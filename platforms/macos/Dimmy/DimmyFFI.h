@@ -498,6 +498,21 @@ int32_t dimmy_claude_code_node_status(char * _Nonnull out_buf, int32_t buf_len);
 /// installed it, recheck" buttons.
 int32_t dimmy_claude_code_recheck(void);
 
+/// Claude Desktop MCP bridge — JSON snapshot:
+///   {installed, install_path?, config_path?, config_patched,
+///    entry_command?, heartbeat_age_secs?, last_call?{tool,ago_secs,ok,elapsed_ms}}
+/// Missing fields are omitted, never null — "present" means "known".
+int32_t dimmy_claude_desktop_status(char * _Nonnull out_buf, int32_t buf_len);
+
+/// Patch user's claude_desktop_config.json to register Dimmy's MCP
+/// binary. Atomic (backs up existing file as .bak first). Returns 0
+/// on success, -1..-5 categorical errors.
+int32_t dimmy_claude_desktop_patch_config(const char * _Nonnull binary_path);
+
+/// Remove Dimmy's entry. rc 1 = removed, 0 = nothing to remove
+/// (idempotent), negative on error.
+int32_t dimmy_claude_desktop_unpatch_config(void);
+
 /// Track a host-side telemetry event by name with optional JSON
 /// properties. Used by the Mac UI to emit categorical events whose
 /// trigger is host-side (login outcome polling, file-load source,
