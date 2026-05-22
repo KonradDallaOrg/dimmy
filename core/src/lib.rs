@@ -615,9 +615,18 @@ impl Default for AppConfig {
             local_stt_backend: "whisper".to_string(),
             live_captions_enabled: true,
             call_detect_enabled: true,
-            call_detect_excluded_apps: vec!["discord".to_string()],
+            // No default exclusions — the user's "Never" click is
+            // what populates this list. Pre-seeding it was a hangover
+            // from when the C# side maintained a hardcoded canonical
+            // app whitelist; with event-driven discovery we let the
+            // user decide which exes deserve a permanent skip.
+            call_detect_excluded_apps: vec![],
             call_detect_cooldown_secs: 1800,
-            call_detect_min_active_secs: 5,
+            // Lowered from 5 s — the new event-driven callback IS
+            // the proof of a real session; the C# side already
+            // filters out 50 ms system-sound chirps via the
+            // OnSessionCreated → state-check path.
+            call_detect_min_active_secs: 1,
             call_detect_timeout_cooldown_secs: 300,
             save_audio_in_history: false,
             history_audio_keep_days: 30,

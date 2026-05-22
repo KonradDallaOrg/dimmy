@@ -7216,6 +7216,42 @@ pub unsafe extern "C" fn dimmy_call_signal_sys(sys_active: c_int, app_id: *const
     }
 }
 
+/// Authoritative "call ended" signal — host has positive evidence
+/// the originating WASAPI session disappeared from the active
+/// capture-session set. Bypasses the amplitude-based silence
+/// thresholds entirely and fires `meeting.stop_suggested` (rc=3)
+/// immediately, gated only by the same one-shot + KeepRecording
+/// cooldown guards the silence path enforces.
+///
+/// Returns 3 / 0 (no state change — meeting wasn't ours / already
+/// fired / cooldown active).
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_call_signal_session_ended() -> c_int {
+    let is_meeting_active = MEETING.lock().map(|g| g.is_some()).unwrap_or(false);
+    let now = now_epoch_secs();
+    let outcome = {
+        let mut g = call_detector_lock();
+        g.signal_call_session_ended(is_meeting_active, now)
+    };
+    use crate::call_detector::CallSignalOutcome;
+    match outcome {
+        CallSignalOutcome::StopSuggested {
+            app,
+            inactive_for_secs,
+        } => {
+            let payload = serde_json::json!({
+                "app": app,
+                "inactive_for_secs": inactive_for_secs,
+                "reason": "session_ended",
+            })
+            .to_string();
+            emit_event("meeting.stop_suggested", &payload);
+            3
+        }
+        _ => 0,
+    }
+}
+
 /// Record the user's response to a call-detected nudge.
 /// `response` ∈ {"record_now","not_now","never","timeout"}.
 /// On "never" with a non-empty app_id the exclusion list is persisted

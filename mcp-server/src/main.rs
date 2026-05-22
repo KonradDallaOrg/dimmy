@@ -218,7 +218,14 @@ async fn keepalive_loop(
     stdout: std::sync::Arc<tokio::sync::Mutex<tokio::io::Stdout>>,
     state: std::sync::Arc<tokio::sync::Mutex<ServerState>>,
 ) {
-    let mut tick = tokio::time::interval(Duration::from_secs(30));
+    // 5 s instead of 30 s: Claude Desktop kills connections that go
+    // silent for >~10 s after the initialize handshake — even if the
+    // server is technically alive. Burned 2026-05-22 (server killed
+    // 11 s after spawn because the first keepalive at +30 s never
+    // got a chance to fire). 5 s gives us a healthy margin under
+    // Claude's tolerance AND stays well under the cache TTL that
+    // Anthropic-side servers use for stale-connection detection.
+    let mut tick = tokio::time::interval(Duration::from_secs(5));
     // First tick fires immediately — skip it so we don't race with
     // initialize.
     tick.tick().await;
