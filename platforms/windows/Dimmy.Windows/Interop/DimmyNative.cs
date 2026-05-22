@@ -75,6 +75,18 @@ public static class DimmyNative
         int sysActive,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string? appId);
 
+    /// Authoritative "the call ended" signal — host has positive
+    /// evidence the originating WASAPI capture session disappeared.
+    /// Bypasses the amplitude-silence thresholds and fires
+    /// `meeting.stop_suggested` immediately, gated only by the
+    /// one-shot + KeepRecording cooldown guards. Used by the
+    /// session-id-driven stop path; mutually exclusive with the
+    /// amplitude heuristic — CallDetectionService picks one based
+    /// on whether the meeting was started via call-detect.
+    /// Returns 3 / 0.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_call_signal_session_ended();
+
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_call_detector_state(byte[] outBuf, int bufLen);
 

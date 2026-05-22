@@ -9,61 +9,103 @@ using Dimmy.Windows.Interop;
 
 namespace Dimmy.Windows.Services;
 
-/// Sample the default capture device once per second and push a
-/// mic-active observation to the Rust call-detector state machine.
+/// Fast-poll capture-session watcher with session-instance-id
+/// one-shot semantics. Mirrors the approach Notion + most other
+/// "detect a meeting started" apps take on Windows — because
+/// `IAudioSessionNotification` (the event-driven alternative) only
+/// fires for sessions created via the legacy `IAudioSessionManager
+/// ::GetAudioSessionControl` path. ALL modern apps (Teams, Zoom,
+/// browser meetings) open their streams via `IAudioClient::Initialize`,
+/// which bypasses the notification source. Confirmed empirically
+/// 2026-05-22: registering OnSessionCreated and joining 3 Teams
+/// calls produced zero callbacks.
 ///
-/// Detection signal: audio is primary, app is reinforcement.
-/// - `mic_active` = true iff at least one audio session on the default
-///   capture endpoint is in `AudioSessionState.Active`. Picks up Teams,
-///   Zoom, Discord, browser-based calls (Meet, Whereby) — any process
-///   that opened a capture stream.
-/// - `app_id` = a lowercase canonical id ("teams" / "zoom" / "slack" /
-///   "discord" / "webex") iff a process from the whitelist is currently
-///   running. NULL otherwise — the Rust state machine handles the
-///   "generic mic in use" case via a single global cooldown slot.
+/// Polling at 4 Hz (250 ms) keeps perceived latency low enough that
+/// the nudge appears within a beat of joining a call, while still
+/// costing ~50 µs per tick (WASAPI enumeration is cheap). The
+/// session-instance-id tracking is what makes it FEEL event-driven
+/// to the user: emit once per new GUID, never again for the same
+/// GUID, re-emit when the GUID disappears from the active set
+/// (== call ended) and a new one appears (== next call).
 ///
-/// Polling-vs-events: Windows exposes `IAudioSessionNotification` as
-/// the push-based alternative, but registering it from C# requires
-/// implementing a COM callback object (CCW) which is fiddly and
-/// brittle across COM apartments. Polling at 1 Hz costs ~50 µs per
-/// tick and matches the documented exception in CLAUDE.md
-/// "Continuous sampling on OS APIs without notifications" — the same
-/// precedent Mac uses for TCC trust-state polling.
+/// Generic app discovery — there is NO hardcoded list of "VoIP apps".
+/// Whatever exe owns a new session becomes the cooldown / exclusion
+/// key. The `SystemExesToIgnore` filter keeps Windows itself out
+/// (audiodg, dwm, ourselves). The user's "Not now" / "Never"
+/// interactions populate per-app behaviour from there.
 internal sealed class CallDetectionService : IDisposable
 {
     private readonly DispatcherQueue _dispatcher;
     private DispatcherQueueTimer? _timer;
     private bool _disposed;
     private bool _isEnabled;
-    private bool _prevMicActive;
-    private string? _prevAppId;
-    private int _logSuppressCounter;
-    private int _bootDiagTicks = 5;
-    private int _lastSessionCount = -1;
-    private int _lastActiveCount = -1;
 
-    // Win process name → canonical app id. Names are matched
-    // case-insensitively (ProcessName comparator). Multiple variants
-    // collapse to one id so cooldown / exclusion keys stay stable
-    // across Teams' / Zoom's installer flavors.
-    private static readonly Dictionary<string, string> ProcessToAppId =
+    /// Active session-instance-ids we've already emitted a
+    /// `call_signal(1, exe)` for. Cleared on disappearance from the
+    /// enumeration → next call by the same app gets a new GUID and
+    /// re-emits.
+    private readonly Dictionary<string, string> _emittedSessions =
+        new(StringComparer.Ordinal); // sessionId -> exe
+
+    /// Sessions seen for the first time, awaiting one confirm tick
+    /// before we promote them. Filters out ~50 ms Windows
+    /// notification chirps that briefly grab the mic.
+    private readonly Dictionary<string, int> _pendingSessions =
+        new(StringComparer.Ordinal); // sessionId -> tick-count seen
+    private const int PromoteAfterTicks = 1; // 250 ms × 1 = 250 ms confirm
+
+    /// Last exe we emitted a positive call_signal for. The
+    /// meeting-active branch reuses it so cooldown keys stay stable
+    /// across the recording.
+    private string? _lastEmittedExe;
+
+    /// Session-instance-id of the originating call when the user
+    /// accepted the "Record now" nudge. Set by
+    /// `MarkMeetingOriginFromCurrentSession()` and consumed in the
+    /// meeting-active tick branch: as long as this session is still
+    /// alive in the enumeration, the call is on-going; the moment
+    /// it disappears we know the call ended (deterministic, no
+    /// silence-heuristic). Cleared on meeting-stop transition.
+    private string? _meetingOriginSessionId;
+    /// True iff the active meeting was started in response to a
+    /// call-detect nudge (vs the user opening the meeting window
+    /// manually). When true, the OnTick meeting branch trusts the
+    /// session-id signal exclusively; when false it falls back to
+    /// the amplitude heuristic. Mutually exclusive — no overlap.
+    private bool _meetingDrivenByCallDetect;
+    /// Previous-tick value of `meetingActive` so we can detect the
+    /// active→inactive edge and clear the origin tracker once a
+    /// recording ends (regardless of whether stop was suggested by
+    /// us or initiated manually).
+    private bool _prevMeetingActive;
+
+    /// Exe names (lowercase, no `.exe`) that own audio capture without
+    /// representing a real call. Filter, not whitelist — anything not
+    /// in here is treated as a candidate. Dimmy itself MUST be here
+    /// or the pill's own cpal mic stream would self-nudge.
+    private static readonly HashSet<string> SystemExesToIgnore =
         new(StringComparer.OrdinalIgnoreCase)
         {
-            ["Teams"] = "teams",
-            ["ms-teams"] = "teams",
-            ["MSTeams"] = "teams",
-            ["Microsoft.Teams"] = "teams",
-            ["Zoom"] = "zoom",
-            ["Zoomus"] = "zoom",
-            ["slack"] = "slack",
-            ["Discord"] = "discord",
-            ["DiscordCanary"] = "discord",
-            ["DiscordPTB"] = "discord",
-            ["WebexHost"] = "webex",
-            ["Webex"] = "webex",
-            ["CiscoSpark"] = "webex",
-            ["atmgr"] = "webex",
+            "audiodg",
+            "svchost",
+            "dwm",
+            "csrss",
+            "winlogon",
+            "smss",
+            "runtimebroker",
+            "applicationframehost",
+            "shellexperiencehost",
+            "searchhost",
+            "searchindexer",
+            "searchapp",
+            "systemsettings",
+            "ctfmon",
+            "explorer",
+            "dimmy",
+            "dimmy.windows",
         };
+
+    private int _logSuppressCounter;
 
     public CallDetectionService(DispatcherQueue dispatcher)
     {
@@ -73,12 +115,12 @@ internal sealed class CallDetectionService : IDisposable
     public void Start()
     {
         if (_timer != null) return;
+        _isEnabled = true;
         _timer = _dispatcher.CreateTimer();
-        _timer.Interval = TimeSpan.FromSeconds(1);
+        _timer.Interval = TimeSpan.FromMilliseconds(250);
         _timer.Tick += OnTick;
         _timer.Start();
-        _isEnabled = true;
-        App.Log("CallDetectionService started (1 Hz capture-session poll)", "CallDetect");
+        App.Log("CallDetectionService started (4 Hz session-id poll, generic discovery)", "CallDetect");
     }
 
     public void Stop()
@@ -90,11 +132,35 @@ internal sealed class CallDetectionService : IDisposable
             _timer.Tick -= OnTick;
             _timer = null;
         }
+        _emittedSessions.Clear();
+        _pendingSessions.Clear();
     }
 
     public void SetEnabled(bool enabled)
     {
         _isEnabled = enabled;
+    }
+
+    /// Called by the host right after the user accepted a "Record
+    /// now" nudge and the meeting actually started. Picks the
+    /// currently-emitted session-id (matching `_lastEmittedExe`)
+    /// and stamps it as the meeting origin so the meeting-active
+    /// tick branch can detect call termination by watching for that
+    /// id's disappearance.
+    ///
+    /// Returns true iff an origin was bound. If false (no live
+    /// emitted session matched), the meeting falls back to the
+    /// amplitude-silence heuristic.
+    public bool MarkMeetingOriginFromCurrentSession()
+    {
+        if (string.IsNullOrEmpty(_lastEmittedExe)) return false;
+        var origin = _emittedSessions
+            .FirstOrDefault(kv => kv.Value == _lastEmittedExe);
+        if (string.IsNullOrEmpty(origin.Key)) return false;
+        _meetingOriginSessionId = origin.Key;
+        _meetingDrivenByCallDetect = true;
+        App.Log($"meeting origin bound: exe={_lastEmittedExe} id=…{TailOf(origin.Key)}", "CallDetect");
+        return true;
     }
 
     public void Dispose()
@@ -106,8 +172,7 @@ internal sealed class CallDetectionService : IDisposable
 
     /// Amplitude floor for "audibly active" during a meeting. Live
     /// mic + loopback peaks below this are treated as silence by the
-    /// stop-suggestion gate. ~5 % of full range → ≈ -26 dBFS; tuned to
-    /// reject AC hum and HVAC noise without missing soft conversation.
+    /// stop-suggestion gate.
     private const float MeetingAmpFloor = 0.02f;
 
     private void OnTick(DispatcherQueueTimer sender, object args)
@@ -117,40 +182,67 @@ internal sealed class CallDetectionService : IDisposable
         bool meetingActive = app?.AppViewModel.MeetingActive == true;
         bool dictationActive = app?.AppViewModel.IsRecording == true && !meetingActive;
 
-        // Dictation: hard skip. The cpal mic session shows up as Active
-        // on the OS-level capture endpoint and would trigger a false
-        // detection 5 s in. signal(0) clears any pending countdown.
         if (dictationActive)
         {
             try { DimmyNative.dimmy_call_signal(0, null); } catch { }
             return;
         }
 
-        // Meeting active: switch the call detector from OS-level audio
-        // session enumeration (Dimmy's own cpal stream keeps the mic
-        // session Active for the entire meeting; can't distinguish it
-        // from a Teams call) to live-amplitude-based silence detection.
-        // Both mic and sys are fed from the running meeting worker's
-        // peak meters; the Rust state machine AND-combines them to
-        // gate the stop-suggestion popup.
+        // Detect meeting active→inactive transition and reset
+        // origin tracking. Belt-and-braces: meeting-stop can be
+        // triggered by the stop-suggestion popup, the pill, the
+        // meeting window close button, or the jump-list, and we
+        // want exactly one well-defined edge to clear the state.
+        if (_prevMeetingActive && !meetingActive)
+        {
+            _meetingOriginSessionId = null;
+            _meetingDrivenByCallDetect = false;
+        }
+        _prevMeetingActive = meetingActive;
+
         if (meetingActive)
         {
             try
             {
-                float micAmp = DimmyNative.dimmy_get_amplitude();
-                float sysAmp = DimmyNative.dimmy_get_loopback_amplitude();
-                bool micActive = micAmp > MeetingAmpFloor;
-                bool sysActive = sysAmp > MeetingAmpFloor;
-                // Re-use the last inferred app id so cooldown keys stay
-                // stable across the meeting. _prevAppId was captured
-                // during the pre-meeting detection tick.
-                var appId = _prevAppId;
-                DimmyNative.dimmy_call_signal(micActive ? 1 : 0, appId);
-                DimmyNative.dimmy_call_signal_sys(sysActive ? 1 : 0, appId);
-                if (++_logSuppressCounter >= 15)
+                if (_meetingDrivenByCallDetect && _meetingOriginSessionId != null)
                 {
-                    _logSuppressCounter = 0;
-                    App.Log($"meeting-tick: mic_amp={micAmp:F3} sys_amp={sysAmp:F3} mic_active={micActive} sys_active={sysActive}", "CallDetect");
+                    // Session-id-driven stop. Re-enumerate, look for
+                    // the origin id; the moment it disappears, fire
+                    // the authoritative stop signal once. No
+                    // amplitude check — silence-during-call is NOT
+                    // a stop signal in this branch (a user might be
+                    // listening intently for minutes).
+                    var live = SampleActiveCaptureSessions();
+                    bool originAlive = live.Any(s => s.sessionId == _meetingOriginSessionId);
+                    if (!originAlive)
+                    {
+                        try
+                        {
+                            int rc = DimmyNative.dimmy_call_signal_session_ended();
+                            App.Log($"origin session gone (id=…{TailOf(_meetingOriginSessionId)}) → signal_session_ended rc={rc}", "CallDetect");
+                        }
+                        catch (Exception ex)
+                        {
+                            App.Log($"signal_session_ended failed: {ex.Message}", "CallDetect");
+                        }
+                        // One-shot — clear so we don't keep yelling
+                        // at the Rust state machine. The active→
+                        // inactive edge above will reset _meetingDrivenByCallDetect
+                        // when the user actually stops the meeting.
+                        _meetingOriginSessionId = null;
+                    }
+                }
+                else
+                {
+                    // Fallback amplitude path: meeting was started
+                    // manually (no origin session-id), use mic+sys
+                    // silence heuristic as before.
+                    float micAmp = DimmyNative.dimmy_get_amplitude();
+                    float sysAmp = DimmyNative.dimmy_get_loopback_amplitude();
+                    bool micOk = micAmp > MeetingAmpFloor;
+                    bool sysOk = sysAmp > MeetingAmpFloor;
+                    DimmyNative.dimmy_call_signal(micOk ? 1 : 0, _lastEmittedExe);
+                    DimmyNative.dimmy_call_signal_sys(sysOk ? 1 : 0, _lastEmittedExe);
                 }
             }
             catch (Exception ex)
@@ -159,26 +251,102 @@ internal sealed class CallDetectionService : IDisposable
             }
             return;
         }
+
+        // Pre-meeting: poll all active capture endpoints, collect
+        // (session-instance-id, pid) pairs for active sessions,
+        // then apply one-shot logic.
         try
         {
-            var (active, appId, sessionCount, activeCount) = SampleMicStateDiag();
-            DimmyNative.dimmy_call_signal(active ? 1 : 0, appId);
-            bool boot = _bootDiagTicks > 0;
-            if (boot) _bootDiagTicks--;
-            bool sessionShapeChanged = sessionCount != _lastSessionCount || activeCount != _lastActiveCount;
-            _lastSessionCount = sessionCount;
-            _lastActiveCount = activeCount;
-            if (boot || active != _prevMicActive || appId != _prevAppId || sessionShapeChanged)
+            var live = SampleActiveCaptureSessions();
+            var liveIds = new HashSet<string>(live.Select(s => s.sessionId), StringComparer.Ordinal);
+
+            // 1. Cleanup: any emitted session that's no longer alive
+            // = call ended. Drop from set so the next session by the
+            // same exe re-emits.
+            var disappeared = _emittedSessions.Where(kv => !liveIds.Contains(kv.Key))
+                .Select(kv => kv).ToList();
+            foreach (var kv in disappeared)
             {
-                App.Log($"tick: mic_active={active} app={appId ?? "<none>"} sessions={sessionCount} active_sessions={activeCount}", "CallDetect");
-                _prevMicActive = active;
-                _prevAppId = appId;
-                _logSuppressCounter = 0;
+                _emittedSessions.Remove(kv.Key);
+                App.Log($"session ended: exe={kv.Value} id=…{TailOf(kv.Key)}", "CallDetect");
+                if (_lastEmittedExe == kv.Value) _lastEmittedExe = null;
             }
-            else if (++_logSuppressCounter >= 30)
+            if (disappeared.Count > 0)
+            {
+                try { DimmyNative.dimmy_call_signal(0, null); } catch { }
+            }
+            // Pending list cleanup too — drop disappeared.
+            var pendingGone = _pendingSessions.Keys.Where(k => !liveIds.Contains(k)).ToList();
+            foreach (var k in pendingGone) _pendingSessions.Remove(k);
+
+            // 2a. Already-emitted sessions: keep re-signalling
+            // signal(1, exe) on every tick. The Rust state machine
+            // is level-triggered — it uses `mic_active_since` to
+            // gate the `min_active_secs` threshold AND it needs
+            // continuous signal(1) calls to honour stop-suggestion
+            // semantics during meeting mode. Edge-triggered
+            // (one-and-done) would make detection_emitted fire only
+            // through luck and leave the meeting branch starved.
+            foreach (var (sessionId, _) in live)
+            {
+                if (_emittedSessions.TryGetValue(sessionId, out var emittedExe)
+                    && !string.IsNullOrEmpty(emittedExe)
+                    && !SystemExesToIgnore.Contains(emittedExe))
+                {
+                    try { DimmyNative.dimmy_call_signal(1, emittedExe); } catch { }
+                    break; // single live session is the canonical case
+                }
+            }
+
+            // 2b. Look for first non-system non-emitted candidate.
+            // Emit ONE per tick (Rust state machine + nudge UI are
+            // single-session — multiple parallel calls aren't a
+            // supported scenario yet).
+            foreach (var (sessionId, pid) in live)
+            {
+                if (_emittedSessions.ContainsKey(sessionId)) continue;
+                if (!_pendingSessions.TryGetValue(sessionId, out var ticksSeen))
+                {
+                    _pendingSessions[sessionId] = 1;
+                    continue;
+                }
+                if (ticksSeen < PromoteAfterTicks)
+                {
+                    _pendingSessions[sessionId] = ticksSeen + 1;
+                    continue;
+                }
+                // Confirmed — resolve exe, filter, emit.
+                var exe = ResolveProcessExeName(pid);
+                if (string.IsNullOrEmpty(exe)) continue;
+                if (SystemExesToIgnore.Contains(exe))
+                {
+                    // Don't keep re-promoting on every tick. Mark as
+                    // emitted with an empty-exe sentinel so we ignore
+                    // it for the rest of its lifetime.
+                    _emittedSessions[sessionId] = exe;
+                    _pendingSessions.Remove(sessionId);
+                    continue;
+                }
+                _emittedSessions[sessionId] = exe;
+                _pendingSessions.Remove(sessionId);
+                _lastEmittedExe = exe;
+                try
+                {
+                    DimmyNative.dimmy_call_signal(1, exe);
+                    App.Log($"new session: exe={exe} pid={pid} id=…{TailOf(sessionId)}", "CallDetect");
+                }
+                catch (Exception ex)
+                {
+                    App.Log($"signal(1, {exe}) failed: {ex.Message}", "CallDetect");
+                }
+                break; // one emit per tick
+            }
+
+            // Heartbeat every ~30 s (120 ticks @ 250 ms).
+            if (++_logSuppressCounter >= 120)
             {
                 _logSuppressCounter = 0;
-                App.Log($"heartbeat: mic_active={active} app={appId ?? "<none>"} sessions={sessionCount}", "CallDetect");
+                App.Log($"heartbeat: live={live.Count} emitted={_emittedSessions.Count} pending={_pendingSessions.Count}", "CallDetect");
             }
         }
         catch (Exception ex)
@@ -187,46 +355,27 @@ internal sealed class CallDetectionService : IDisposable
         }
     }
 
-    private static (bool active, string? appId, int sessionCount, int activeCount) SampleMicStateDiag()
+    /// Enumerate every active capture endpoint and collect
+    /// `(session-instance-id, pid)` for every session currently in
+    /// AudioSessionState.Active. Multi-endpoint coverage is critical
+    /// for BT-HFP rigs: when the user switches to a Bluetooth
+    /// headset, Teams moves its session to that endpoint and the
+    /// previous default goes quiet.
+    private static List<(string sessionId, uint pid)> SampleActiveCaptureSessions()
     {
-        var sniffer = SampleMicStateInternal();
-        return sniffer;
-    }
-
-    private static (bool active, string? appId) SampleMicState()
-    {
-        var (a, b, _, _) = SampleMicStateInternal();
-        return (a, b);
-    }
-
-    /// Enumerate every active capture endpoint (not just the default
-    /// eMultimedia one) and aggregate their session counts. This is the
-    /// critical fix for BT-HFP / headset / Logitech-meeting-room rigs:
-    /// when the user switches input to a Bluetooth headset, Teams moves
-    /// its capture session to that endpoint and the previous default
-    /// goes quiet. A single `GetDefaultAudioEndpoint` call would miss
-    /// it. Enumerating all active endpoints catches the call regardless
-    /// of which device currently owns the stream.
-    private static (bool active, string? appId, int sessionCount, int activeCount) SampleMicStateInternal()
-    {
-        bool anyActive = false;
-        int totalSessions = 0;
-        int activeSessions = 0;
-        var capturingPids = new HashSet<uint>();
-
+        var result = new List<(string, uint)>();
         IMMDeviceEnumerator? enumerator = null;
         IMMDeviceCollection? devices = null;
         try
         {
             var enumType = Type.GetTypeFromCLSID(CLSID_MMDeviceEnumerator);
-            if (enumType == null) return (false, null, totalSessions, activeSessions);
+            if (enumType == null) return result;
             enumerator = (IMMDeviceEnumerator?)Activator.CreateInstance(enumType);
-            if (enumerator == null) return (false, null, totalSessions, activeSessions);
+            if (enumerator == null) return result;
 
-            int hr = enumerator.EnumAudioEndpoints(EDataFlow.eCapture, DEVICE_STATE_ACTIVE, out devices);
-            if (hr != 0 || devices == null) return (false, null, totalSessions, activeSessions);
-            hr = devices.GetCount(out uint deviceCount);
-            if (hr != 0) return (false, null, totalSessions, activeSessions);
+            if (enumerator.EnumAudioEndpoints(EDataFlow.eCapture, DEVICE_STATE_ACTIVE, out devices) != 0
+                || devices == null) return result;
+            if (devices.GetCount(out uint deviceCount) != 0) return result;
 
             for (uint d = 0; d < deviceCount; d++)
             {
@@ -236,14 +385,12 @@ internal sealed class CallDetectionService : IDisposable
                 try
                 {
                     if (devices.Item(d, out device) != 0 || device == null) continue;
-
                     var iid = IID_IAudioSessionManager2;
-                    if (device.Activate(ref iid, CLSCTX_ALL, IntPtr.Zero, out object pManager) != 0 || pManager == null) continue;
+                    if (device.Activate(ref iid, CLSCTX_ALL, IntPtr.Zero, out object pManager) != 0
+                        || pManager == null) continue;
                     manager = (IAudioSessionManager2)pManager;
-
                     if (manager.GetSessionEnumerator(out sessionEnum) != 0 || sessionEnum == null) continue;
                     if (sessionEnum.GetCount(out int count) != 0) continue;
-                    totalSessions += count;
 
                     for (int i = 0; i < count; i++)
                     {
@@ -254,15 +401,11 @@ internal sealed class CallDetectionService : IDisposable
                             if (sessionEnum.GetSession(i, out control) != 0 || control == null) continue;
                             if (control.GetState(out int stateRaw) != 0) continue;
                             if (stateRaw != (int)AudioSessionState.Active) continue;
-                            activeSessions++;
-                            anyActive = true;
-                            try
-                            {
-                                control2 = (IAudioSessionControl2)control;
-                                if (control2.GetProcessId(out int pid) == 0 && pid > 0)
-                                    capturingPids.Add((uint)pid);
-                            }
-                            catch { }
+                            try { control2 = (IAudioSessionControl2)control; } catch { continue; }
+                            if (control2.GetSessionInstanceIdentifier(out string? sessionId) != 0
+                                || string.IsNullOrEmpty(sessionId)) continue;
+                            if (control2.GetProcessId(out int pid) != 0 || pid <= 0) continue;
+                            result.Add((sessionId!, (uint)pid));
                         }
                         finally
                         {
@@ -281,64 +424,36 @@ internal sealed class CallDetectionService : IDisposable
         }
         catch
         {
-            anyActive = false;
+            // Transient COM failure under contention — silently skip
+            // this tick; the next one will retry.
         }
         finally
         {
             if (devices != null) Marshal.ReleaseComObject(devices);
             if (enumerator != null) Marshal.ReleaseComObject(enumerator);
         }
-
-        if (!anyActive) return (false, null, totalSessions, activeSessions);
-        var appId = InferAppIdFromProcesses(capturingPids);
-        return (true, appId, totalSessions, activeSessions);
+        return result;
     }
 
-    private static string? InferAppIdFromProcesses(HashSet<uint> capturingPids)
+    private static string TailOf(string s) => s.Length <= 8 ? s : s.Substring(s.Length - 8);
+
+    /// Resolve a PID to a lowercase exe name (no `.exe` suffix).
+    /// Returns empty string on process-exited / access-denied.
+    private static string ResolveProcessExeName(uint pid)
     {
-        Process[]? procs = null;
+        if (pid == 0) return string.Empty;
         try
         {
-            procs = Process.GetProcesses();
-            // First pass: any capturing PID matches the whitelist?
-            foreach (var p in procs)
-            {
-                try
-                {
-                    if (capturingPids.Count > 0 && !capturingPids.Contains((uint)p.Id)) continue;
-                    if (ProcessToAppId.TryGetValue(p.ProcessName, out var hit)) return hit;
-                }
-                catch
-                {
-                    // ProcessName can throw "process has exited" — skip.
-                }
-            }
-            // Second pass: any whitelist process running (PID-agnostic
-            // fallback). Useful when QI to IAudioSessionControl2 failed.
-            if (capturingPids.Count == 0)
-            {
-                foreach (var p in procs)
-                {
-                    try
-                    {
-                        if (ProcessToAppId.TryGetValue(p.ProcessName, out var hit)) return hit;
-                    }
-                    catch { }
-                }
-            }
+            using var p = Process.GetProcessById((int)pid);
+            return p.ProcessName.ToLowerInvariant();
         }
         catch
         {
-            // GetProcesses can momentarily fail under heavy contention.
+            return string.Empty;
         }
-        finally
-        {
-            if (procs != null) foreach (var p in procs) p.Dispose();
-        }
-        return null;
     }
 
-    // ── COM interop: IMMDeviceEnumerator + IAudioSessionManager2 ────────
+    // ── COM interop declarations ────────────────────────────────────────
 
     private static readonly Guid CLSID_MMDeviceEnumerator =
         new("BCDE0395-E52F-467C-8E3D-C4579291692E");
@@ -348,7 +463,6 @@ internal sealed class CallDetectionService : IDisposable
     private const int DEVICE_STATE_ACTIVE = 0x00000001;
 
     private enum EDataFlow { eRender = 0, eCapture = 1, eAll = 2 }
-    private enum ERole { eConsole = 0, eMultimedia = 1, eCommunications = 2 }
     private enum AudioSessionState { Inactive = 0, Active = 1, Expired = 2 }
 
     [ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"),
@@ -356,7 +470,7 @@ internal sealed class CallDetectionService : IDisposable
     private interface IMMDeviceEnumerator
     {
         [PreserveSig] int EnumAudioEndpoints(EDataFlow dataFlow, int dwStateMask, out IMMDeviceCollection? ppDevices);
-        [PreserveSig] int GetDefaultAudioEndpoint(EDataFlow dataFlow, ERole role, out IMMDevice? ppEndpoint);
+        [PreserveSig] int GetDefaultAudioEndpoint(EDataFlow dataFlow, int role, out IMMDevice? ppEndpoint);
         [PreserveSig] int GetDevice([MarshalAs(UnmanagedType.LPWStr)] string pwstrId, out IMMDevice? ppDevice);
         [PreserveSig] int RegisterEndpointNotificationCallback(IntPtr pClient);
         [PreserveSig] int UnregisterEndpointNotificationCallback(IntPtr pClient);
@@ -385,10 +499,8 @@ internal sealed class CallDetectionService : IDisposable
      InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     private interface IAudioSessionManager2
     {
-        [PreserveSig] int GetAudioSessionControl(IntPtr audioSessionGuid, int streamFlags,
-            out IntPtr sessionControl);
-        [PreserveSig] int GetSimpleAudioVolume(IntPtr audioSessionGuid, int streamFlags,
-            out IntPtr audioVolume);
+        [PreserveSig] int GetAudioSessionControl(IntPtr audioSessionGuid, int streamFlags, out IntPtr sessionControl);
+        [PreserveSig] int GetSimpleAudioVolume(IntPtr audioSessionGuid, int streamFlags, out IntPtr audioVolume);
         [PreserveSig] int GetSessionEnumerator(out IAudioSessionEnumerator? sessionEnum);
         [PreserveSig] int RegisterSessionNotification(IntPtr sessionNotification);
         [PreserveSig] int UnregisterSessionNotification(IntPtr sessionNotification);
@@ -417,8 +529,6 @@ internal sealed class CallDetectionService : IDisposable
         [PreserveSig] int UnregisterAudioSessionNotification(IntPtr newNotifications);
     }
 
-    // IAudioSessionControl2 inherits IAudioSessionControl — must list
-    // base methods first in vtable order, then the 5 new methods.
     [ComImport, Guid("BFB7FF88-7239-4FC9-8FA2-07C950BE9C6D"),
      InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     private interface IAudioSessionControl2

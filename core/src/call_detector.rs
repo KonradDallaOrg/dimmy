@@ -132,7 +132,14 @@ impl CallDetectorState {
     pub fn new() -> Self {
         Self {
             enabled: true,
-            min_active_secs: 5,
+            // Was 5 s when the C# side polled at 1 Hz and a single
+            // tick of "mic_active = true" was ambiguous between a
+            // real call and a momentary system-sound chirp. The
+            // C# side now uses `IAudioSessionNotification` —
+            // event-driven, the OS callback IS the proof of a real
+            // session, so we don't need a timeout-based debounce.
+            // Keep 1 s as a cheap sanity guard.
+            min_active_secs: 1,
             cooldown_secs: 1800,
             timeout_cooldown_secs: 300,
             mic_inactive_for_stop_secs: 5,
@@ -237,6 +244,35 @@ impl CallDetectorState {
         // transition. The AND-with-mic logic still lives in
         // `check_stop_suggestion` so both code paths share it.
         self.check_stop_suggestion(is_meeting_active, now)
+    }
+
+    /// Authoritative stop signal — the host has positive evidence
+    /// that the call ended (WASAPI capture session belonging to the
+    /// originating exe disappeared). Bypasses the amplitude-based
+    /// silence thresholds entirely and fires `StopSuggested`
+    /// immediately, gated only by the same one-shot + cooldown
+    /// guards `check_stop_suggestion` enforces. Use this for the
+    /// session-id-driven stop path; for the silence-heuristic path
+    /// keep going through `signal()` / `signal_sys()`.
+    pub fn signal_call_session_ended(
+        &mut self,
+        is_meeting_active: bool,
+        now: i64,
+    ) -> CallSignalOutcome {
+        if !self.recording_active_from_us || !is_meeting_active || self.stop_suggestion_emitted {
+            return CallSignalOutcome::NoChange;
+        }
+        if let Some(until) = self.stop_suggestion_until {
+            if now < until {
+                return CallSignalOutcome::NoChange;
+            }
+        }
+        self.stop_suggestion_emitted = true;
+        self.detection_emitted = false;
+        CallSignalOutcome::StopSuggested {
+            app: self.current_app.clone(),
+            inactive_for_secs: 0,
+        }
     }
 
     /// Stop-suggestion gate, reused by both `signal()` (mic side) and

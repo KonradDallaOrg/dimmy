@@ -1578,6 +1578,15 @@ public partial class App : Application
                 return;
             }
             Log("StartMeetingFromCallDetect: meeting started, opening window", "CallDetect");
+            // Bind the originating WASAPI session id so the
+            // CallDetectionService meeting-tick can stop the meeting
+            // the moment the call ends — no amplitude-based silence
+            // heuristic, no false positives during quiet stretches.
+            // Best-effort: if no live emitted session matches
+            // (race with session ending instantly), the service
+            // falls back to the amplitude path.
+            var bound = _callDetection?.MarkMeetingOriginFromCurrentSession() ?? false;
+            Log($"StartMeetingFromCallDetect: origin_bound={bound}", "CallDetect");
             OpenMeetingWindow();
         }
         catch (Exception ex)
