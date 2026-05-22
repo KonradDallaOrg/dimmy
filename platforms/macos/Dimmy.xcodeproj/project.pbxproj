@@ -110,6 +110,7 @@
 		AA001100 /* DimmyCore+CallDetect.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB001100 /* DimmyCore+CallDetect.swift */; };
 		AA001101 /* CallDetectionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB001101 /* CallDetectionManager.swift */; };
 		AA001102 /* CallNudgeWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB001102 /* CallNudgeWindowController.swift */; };
+		AA001200 /* ClaudeIconExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB001200 /* ClaudeIconExtractor.swift */; };
 		AA000901 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = XP000001 /* Sparkle */; };
 /* End PBXBuildFile section */
 
@@ -141,6 +142,7 @@
 		AB001100 /* DimmyCore+CallDetect.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DimmyCore+CallDetect.swift"; sourceTree = "<group>"; };
 		AB001101 /* CallDetectionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallDetectionManager.swift; sourceTree = "<group>"; };
 		AB001102 /* CallNudgeWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallNudgeWindowController.swift; sourceTree = "<group>"; };
+		AB001200 /* ClaudeIconExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeIconExtractor.swift; sourceTree = "<group>"; };
 		AB000602 /* MeetingViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingViewModel.swift; sourceTree = "<group>"; };
 		AB000603 /* MeetingSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSidebar.swift; sourceTree = "<group>"; };
 		AB000604 /* MeetingIdleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingIdleView.swift; sourceTree = "<group>"; };
@@ -337,6 +339,7 @@
 			isa = PBXGroup;
 			children = (
 				AB000502 /* AppContextCapture.swift */,
+				AB001200 /* ClaudeIconExtractor.swift */,
 			);
 			path = Helpers;
 			sourceTree = "<group>";
@@ -727,6 +730,7 @@
 				AA001100 /* DimmyCore+CallDetect.swift in Sources */,
 				AA001101 /* CallDetectionManager.swift in Sources */,
 				AA001102 /* CallNudgeWindowController.swift in Sources */,
+				AA001200 /* ClaudeIconExtractor.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

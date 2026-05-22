@@ -27,6 +27,8 @@ import AVFoundation
 struct MeetingDoneView: View {
     @ObservedObject var vm: MeetingViewModel
     @State private var copiedFlash: Bool = false
+    @State private var claudeMcpInstalled: Bool = false
+    @State private var claudeIconPath: String? = nil
     @FocusState private var notesFocused: Bool
 
     var body: some View {
@@ -40,6 +42,15 @@ struct MeetingDoneView: View {
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 4)
+        .onAppear {
+            // Surface the Claude Desktop deeplink button only when the
+            // MCP extension is installed. Status query is a single FFI
+            // call (cheap, no event-callback wiring needed).
+            claudeMcpInstalled = DimmyCore.shared.claudeDesktopStatus().extensionInstalled
+            if claudeMcpInstalled {
+                Task { claudeIconPath = await ClaudeIconExtractor.tryExtract() }
+            }
+        }
         .onDisappear { vm.saveNotes() }
     }
 
@@ -96,6 +107,9 @@ struct MeetingDoneView: View {
                 toolbarButton(assetImage: "notion",
                               help: "Send recap to Notion") {
                     Task { await sendToNotion() }
+                }
+                if claudeMcpInstalled {
+                    recapWithClaudeButton
                 }
                 toolbarButton(systemImage: "folder", help: "Open meeting folder") {
                     let dir = vm.selectedDir ?? activeDirFromAudio
@@ -227,6 +241,62 @@ struct MeetingDoneView: View {
             Image(systemName: systemImage)
                 .font(.system(size: 16, weight: .medium))
                 .symbolRenderingMode(.hierarchical)
+        }
+    }
+
+    /// "Recap with Claude Desktop" — opens `claude://claude.ai/new?q=...`
+    /// with the structured-recap prompt. Mirror of the Win
+    /// `RecapWithClaude_Click` handler in MeetingWindow.xaml.cs. Visible
+    /// only when the MCP extension is installed. Falls back to copying
+    /// the prompt to the pasteboard if the deeplink fails (e.g. Claude
+    /// Desktop's URI handler not yet registered after a fresh install).
+    private var recapWithClaudeButton: some View {
+        ToolbarIconButton(help: "Recap with Claude Desktop (uses MCP)") {
+            recapWithClaude()
+        } label: {
+            if let p = claudeIconPath, let img = NSImage(contentsOfFile: p) {
+                Image(nsImage: img)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 16, height: 16)
+            } else {
+                Image(systemName: "sparkles.rectangle.stack")
+                    .font(.system(size: 16, weight: .medium))
+                    .symbolRenderingMode(.hierarchical)
+            }
+        }
+    }
+
+    private func recapWithClaude() {
+        let dir = vm.selectedDir ?? activeDirFromAudio ?? ""
+        let meetingId = (dir as NSString).lastPathComponent
+        guard !meetingId.isEmpty else { return }
+
+        // Tight prompt — Claude consults `dimmy_get_recap_template` for
+        // the structure, so we don't have to inline the entire format
+        // here. Keep VERBATIM in sync with the Win counterpart in
+        // `MeetingWindow.xaml.cs::RecapWithClaudeDesktop_Click`.
+        let prompt =
+            "Recap Dimmy meeting `\(meetingId)`.\n\n" +
+            "1. Call `dimmy_get_recap_template` to fetch Dimmy's house format.\n" +
+            "2. Call `dimmy_get_meeting` with id `\(meetingId)` to read the transcript.\n" +
+            "3. Produce a recap that follows the template's rules exactly (first line is a Markdown H1 title in the transcript's language).\n" +
+            "4. Call `dimmy_save_recap` with id `\(meetingId)` and your recap markdown to persist it back into Dimmy.\n" +
+            "5. Confirm to me once saved."
+
+        var comps = URLComponents()
+        comps.scheme = "claude"
+        comps.host = "claude.ai"
+        comps.path = "/new"
+        comps.queryItems = [URLQueryItem(name: "q", value: prompt)]
+        guard let url = comps.url else { return }
+        if !NSWorkspace.shared.open(url) {
+            // Fallback: copy the prompt so the user can paste it
+            // manually into a fresh Claude chat. The URI handler may
+            // not be registered yet on a brand-new install.
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setString(prompt, forType: .string)
         }
     }
 

@@ -177,8 +177,8 @@ struct ClaudeDesktopConnectSheet: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Config file").font(.system(size: 11)).foregroundColor(.secondary)
-                Text(status.configPath ?? "(will be created on first launch)")
+                Text("Extension folder").font(.system(size: 11)).foregroundColor(.secondary)
+                Text(status.extensionPath ?? "(will be created on install)")
                     .font(.system(size: 12, design: .monospaced))
                 Text("MCP binary").font(.system(size: 11)).foregroundColor(.secondary).padding(.top, 6)
                 Text(resolveMcpBinaryPath() ?? "(not found in app bundle)")

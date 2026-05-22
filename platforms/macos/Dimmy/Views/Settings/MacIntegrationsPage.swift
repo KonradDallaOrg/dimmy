@@ -17,6 +17,7 @@ struct MacIntegrationsPage: View {
     @State private var mcpStatus: DimmyCore.ClaudeDesktopStatus = .empty
     @State private var mcpRefreshTimer: Timer? = nil
     @State private var showMcpDisconnectConfirm: Bool = false
+    @State private var claudeIconPath: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -157,6 +158,7 @@ struct MacIntegrationsPage: View {
         .onAppear {
             appState.refreshClaudeCodeStatus()
             refreshMcpStatus()
+            Task { claudeIconPath = await ClaudeIconExtractor.tryExtract() }
         }
         .onDisappear {
             mcpRefreshTimer?.invalidate()
@@ -255,18 +257,25 @@ struct MacIntegrationsPage: View {
     @ViewBuilder
     private var mcpCard: some View {
         HStack(alignment: .top, spacing: 14) {
-            // Custom "Claude Desktop app icon" — rounded orange square
-            // with the Anthropic burst inside in white. Visually distinct
-            // from the bare anthropic.svg used by the subscription card
-            // above; reads instantly as "the desktop app".
-            ZStack {
-                RoundedRectangle(cornerRadius: 9)
-                    .fill(Color(red: 0.85, green: 0.47, blue: 0.34))
-                Image(systemName: "rectangle.connected.to.line.below")
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundColor(.white)
+            // Real Claude.app icon when extractable from /Applications;
+            // fall back to a stylised orange burst tile if Claude
+            // Desktop isn't installed or the icns convert failed.
+            // Cached under <configDir>/cache/claude-desktop-icon.png.
+            if let p = claudeIconPath, let img = NSImage(contentsOfFile: p) {
+                Image(nsImage: img)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 40, height: 40)
+            } else {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 9)
+                        .fill(Color(red: 0.85, green: 0.47, blue: 0.34))
+                    Image(systemName: "rectangle.connected.to.line.below")
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundColor(.white)
+                }
+                .frame(width: 40, height: 40)
             }
-            .frame(width: 40, height: 40)
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("Claude Desktop").font(.system(size: 16, weight: .semibold))
