@@ -350,10 +350,22 @@
                  and look "snagged" on the window edge. -->
             <StackPanel Spacing="14" Padding="0,0,14,20">
 
-              <!-- Title + meta line, no card, sits on the page surface. -->
+              <!-- Title + meta line, no card, sits on the page surface.
+                   Title is click-to-edit: tapping it swaps the TextBlock
+                   for the TextBox; Enter or focus-loss commits the new
+                   title to meta.json via FFI. -->
               <StackPanel Spacing="6" Padding="0,4,0,2">
-                <TextBlock x:Name="DoneTitle" Text="Meeting"
-                           FontSize="22" FontWeight="SemiBold"/>
+                <Grid>
+                  <TextBlock x:Name="DoneTitle" Text="Meeting"
+                             FontSize="22" FontWeight="SemiBold"
+                             Tapped="DoneTitle_Tapped"
+                             ToolTipService.ToolTip="Click to rename"/>
+                  <TextBox x:Name="DoneTitleEdit"
+                           FontSize="22" FontWeight="SemiBold"
+                           Visibility="Collapsed"
+                           KeyDown="DoneTitleEdit_KeyDown"
+                           LostFocus="DoneTitleEdit_LostFocus"/>
+                </Grid>
                 <TextBlock x:Name="DoneMeta" FontSize="12"
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                            Text=""/>
@@ -466,6 +478,18 @@
                     <Image Width="16" Height="16"
                            Source="ms-appx:///Assets/notion-mark.svg"/>
                   </Button>
+                  <!-- "Recap with Claude Desktop": open Claude with a
+                       deeplink prompt that uses our MCP tools to read
+                       the meeting + save the recap back. Visible only
+                       when the MCP extension is installed; icon swapped
+                       at runtime to the real Claude.exe MSIX brand mark
+                       via ClaudeIconExtractor (NEVER a hand-drawn one). -->
+                  <Button x:Name="RecapWithClaudeBtn" Click="RecapWithClaudeDesktop_Click"
+                          ToolTipService.ToolTip="Recap with Claude Desktop (uses MCP)"
+                          Visibility="Collapsed"
+                          Background="Transparent" BorderThickness="0" Padding="8">
+                    <Image x:Name="RecapWithClaudeIcon" Width="16" Height="16"/>
+                  </Button>
                   <Button x:Name="OpenFolderBtn" Click="OpenFolder_Click"
                           ToolTipService.ToolTip="Open meeting folder"
                           Background="Transparent" BorderThickness="0" Padding="8">
@@ -478,6 +502,25 @@
                    Code-behind DoneTab_PointerPressed swaps Visibility. -->
 
               <StackPanel x:Name="RecapTabPanel" Spacing="14">
+
+              <!-- Setting / context — the LLM's read on the meeting's
+                   shape (kickoff? status sync? brainstorm?). Skipped
+                   in the prompt before but reintroduced as a small
+                   pre-TLDR card so the user sees the LLM's framing
+                   before the bullets. -->
+              <Border x:Name="ContextCard" Visibility="Collapsed"
+                      Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="14">
+                <StackPanel Spacing="6">
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <FontIcon Glyph="&#xE946;" FontSize="14"/>
+                    <TextBlock Text="Context" FontSize="14" FontWeight="SemiBold"/>
+                  </StackPanel>
+                  <RichTextBlock x:Name="ContextText" TextWrapping="Wrap" FontSize="13"
+                                 IsTextSelectionEnabled="True"/>
+                </StackPanel>
+              </Border>
 
               <Border x:Name="TldrCard" Visibility="Collapsed"
                       Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
@@ -494,6 +537,41 @@
                           Margin="0,6,0,0"
                           Content="Open Recap settings"
                           Click="OpenRecapSettings_Click"/>
+                </StackPanel>
+              </Border>
+
+              <!-- Pivotal moments timeline, MM:SS-anchored. Reintroduced
+                   alongside TLDR so the user can jump to the inflection
+                   points in the audio. -->
+              <Border x:Name="HighlightsCard" Visibility="Collapsed"
+                      Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="14">
+                <StackPanel Spacing="8">
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <FontIcon Glyph="&#xE735;" FontSize="14"/>
+                    <TextBlock Text="Highlights" FontSize="14" FontWeight="SemiBold"/>
+                  </StackPanel>
+                  <RichTextBlock x:Name="HighlightsText" TextWrapping="Wrap" FontSize="13"
+                                 IsTextSelectionEnabled="True"/>
+                </StackPanel>
+              </Border>
+
+              <!-- Long-form narrative (2-4 paragraphs of prose). This is
+                   THE section senior stakeholders read instead of the
+                   recording. Lives near the top because it's the
+                   highest-density artefact in the recap. -->
+              <Border x:Name="NarrativeCard" Visibility="Collapsed"
+                      Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="14">
+                <StackPanel Spacing="8">
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <FontIcon Glyph="&#xE8A5;" FontSize="14"/>
+                    <TextBlock Text="Narrative" FontSize="14" FontWeight="SemiBold"/>
+                  </StackPanel>
+                  <RichTextBlock x:Name="NarrativeText" TextWrapping="Wrap" FontSize="13"
+                                 IsTextSelectionEnabled="True"/>
                 </StackPanel>
               </Border>
 
@@ -578,6 +656,22 @@
                     <TextBlock Text="Next steps" FontSize="14" FontWeight="SemiBold"/>
                   </StackPanel>
                   <RichTextBlock x:Name="NextStepsText" TextWrapping="Wrap" FontSize="13"
+                                 IsTextSelectionEnabled="True"/>
+                </StackPanel>
+              </Border>
+
+              <!-- Things to ASK / CLARIFY offline. Lives at the bottom
+                   because it's the "after this meeting" section. -->
+              <Border x:Name="FollowupsCard" Visibility="Collapsed"
+                      Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="14">
+                <StackPanel Spacing="8">
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <FontIcon Glyph="&#xE715;" FontSize="14"/>
+                    <TextBlock Text="Follow-ups" FontSize="14" FontWeight="SemiBold"/>
+                  </StackPanel>
+                  <RichTextBlock x:Name="FollowupsText" TextWrapping="Wrap" FontSize="13"
                                  IsTextSelectionEnabled="True"/>
                 </StackPanel>
               </Border>

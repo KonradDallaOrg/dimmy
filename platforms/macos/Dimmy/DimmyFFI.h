@@ -498,6 +498,28 @@ int32_t dimmy_claude_code_node_status(char * _Nonnull out_buf, int32_t buf_len);
 /// installed it, recheck" buttons.
 int32_t dimmy_claude_code_recheck(void);
 
+/// Claude Desktop MCP bridge — JSON snapshot:
+///   {installed, install_path?, extension_path?, config_patched,
+///    extension_installed, extension_enabled, extension_version?,
+///    entry_command?, heartbeat_age_secs?,
+///    last_call?{tool,ago_secs,ok,elapsed_ms}}
+/// `config_patched` is kept as a legacy alias of `extension_installed`
+/// so the host bindings don't need a coordinated rename. Missing
+/// fields are omitted, never null — "present" means "known".
+int32_t dimmy_claude_desktop_status(char * _Nonnull out_buf, int32_t buf_len);
+
+/// Install Dimmy as a Claude Desktop extension (DXT v0.3 unpacked).
+/// Copies the dimmy-mcp binary into the user's Claude Extensions
+/// dir, drops a manifest.json + icon.png next to it, flips the
+/// per-extension enable flag. Idempotent. Returns 0 on success,
+/// negative on categorical errors (-1..-5).
+int32_t dimmy_claude_desktop_install(const char * _Nonnull binary_path,
+                                     const char * _Nonnull version);
+
+/// Remove the Dimmy Claude Desktop extension. rc 1 = removed, 0 =
+/// nothing to remove (idempotent), negative on error.
+int32_t dimmy_claude_desktop_uninstall(void);
+
 /// Track a host-side telemetry event by name with optional JSON
 /// properties. Used by the Mac UI to emit categorical events whose
 /// trigger is host-side (login outcome polling, file-load source,

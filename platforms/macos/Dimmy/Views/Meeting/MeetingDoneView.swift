@@ -26,8 +26,14 @@ import AVFoundation
 
 struct MeetingDoneView: View {
     @ObservedObject var vm: MeetingViewModel
+    @Environment(\.colorScheme) private var colorScheme
     @State private var copiedFlash: Bool = false
+    @State private var claudeMcpInstalled: Bool = false
+    @State private var claudeIconPath: String? = nil
+    @State private var editingTitle: Bool = false
+    @State private var titleDraft: String = ""
     @FocusState private var notesFocused: Bool
+    @FocusState private var titleFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -40,6 +46,15 @@ struct MeetingDoneView: View {
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 4)
+        .onAppear {
+            // Surface the Claude Desktop deeplink button only when the
+            // MCP extension is installed. Status query is a single FFI
+            // call (cheap, no event-callback wiring needed).
+            claudeMcpInstalled = DimmyCore.shared.claudeDesktopStatus().extensionInstalled
+            if claudeMcpInstalled {
+                Task { claudeIconPath = await ClaudeIconExtractor.tryExtract() }
+            }
+        }
         .onDisappear { vm.saveNotes() }
     }
 
@@ -47,10 +62,32 @@ struct MeetingDoneView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(vm.doneTitle)
-                .font(.system(size: 18, weight: .semibold))
-                .lineLimit(1)
-                .truncationMode(.tail)
+            // Click-to-edit title — mirror of Win's
+            // DoneTitle_Tapped + DoneTitleEdit (Enter commits, Esc
+            // cancels, focus-out commits). Persisted to meta.json
+            // via MeetingViewModel.renameSelectedMeeting.
+            if editingTitle {
+                TextField("Meeting title", text: $titleDraft, onCommit: commitTitleEdit)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 18, weight: .semibold))
+                    .focused($titleFocused)
+                    .onAppear { titleFocused = true }
+                    .onChange(of: titleFocused) { _, focused in
+                        if !focused { commitTitleEdit() }
+                    }
+                    .onExitCommand { editingTitle = false }
+            } else {
+                Text(vm.doneTitle)
+                    .font(.system(size: 18, weight: .semibold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        titleDraft = vm.doneTitle
+                        editingTitle = true
+                    }
+                    .help("Click to rename the meeting")
+            }
             Text(vm.doneMeta)
                 .font(.system(size: 11))
                 .foregroundStyle(Color.macTextSecondary)
@@ -58,6 +95,12 @@ struct MeetingDoneView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
         .background(cardBackground)
+    }
+
+    private func commitTitleEdit() {
+        guard editingTitle else { return }
+        editingTitle = false
+        vm.renameSelectedMeeting(to: titleDraft)
     }
 
     private var activeDirFromAudio: String? {
@@ -93,9 +136,16 @@ struct MeetingDoneView: View {
                               help: "Copy recap to clipboard") {
                     copyRecap()
                 }
-                toolbarButton(assetImage: "notion",
-                              help: "Send recap to Notion") {
+                // Notion brand mark is rendered as black-on-transparent;
+                // invert in dark mode so it stays legible on the dark
+                // toolbar instead of disappearing into the background.
+                ToolbarIconButton(help: "Send recap to Notion") {
                     Task { await sendToNotion() }
+                } label: {
+                    notionToolbarIcon
+                }
+                if claudeMcpInstalled {
+                    recapWithClaudeButton
                 }
                 toolbarButton(systemImage: "folder", help: "Open meeting folder") {
                     let dir = vm.selectedDir ?? activeDirFromAudio
@@ -222,11 +272,78 @@ struct MeetingDoneView: View {
         }
     }
 
+    @ViewBuilder
+    private var notionToolbarIcon: some View {
+        let img = Image("notion").resizable().scaledToFit().frame(width: 16, height: 16)
+        if colorScheme == .dark {
+            img.colorInvert()
+        } else {
+            img
+        }
+    }
+
     private func toolbarButton(systemImage: String, help: String, action: @escaping () -> Void) -> some View {
         ToolbarIconButton(help: help, action: action) {
             Image(systemName: systemImage)
                 .font(.system(size: 16, weight: .medium))
                 .symbolRenderingMode(.hierarchical)
+        }
+    }
+
+    /// "Recap with Claude Desktop" — opens `claude://claude.ai/new?q=...`
+    /// with the structured-recap prompt. Mirror of the Win
+    /// `RecapWithClaude_Click` handler in MeetingWindow.xaml.cs. Visible
+    /// only when the MCP extension is installed. Falls back to copying
+    /// the prompt to the pasteboard if the deeplink fails (e.g. Claude
+    /// Desktop's URI handler not yet registered after a fresh install).
+    ///
+    /// Icon: bundled `ClaudeMark.imageset` — the canonical orange
+    /// Anthropic burst (#D97757), pulled from the official Anthropic
+    /// brand mark. At 16-px toolbar size the bare burst reads cleaner
+    /// than the full Mac AppIcon (which is the burst on a rounded
+    /// squircle background). No SF-Symbol fallback — the brand mark
+    /// is committed to the app bundle, always available.
+    private var recapWithClaudeButton: some View {
+        ToolbarIconButton(help: "Recap with Claude Desktop (uses MCP)") {
+            recapWithClaude()
+        } label: {
+            Image("ClaudeMark")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 16, height: 16)
+        }
+    }
+
+    private func recapWithClaude() {
+        let dir = vm.selectedDir ?? activeDirFromAudio ?? ""
+        let meetingId = (dir as NSString).lastPathComponent
+        guard !meetingId.isEmpty else { return }
+
+        // Tight prompt — Claude consults `dimmy_get_recap_template` for
+        // the structure, so we don't have to inline the entire format
+        // here. Keep VERBATIM in sync with the Win counterpart in
+        // `MeetingWindow.xaml.cs::RecapWithClaudeDesktop_Click`.
+        let prompt =
+            "Recap Dimmy meeting `\(meetingId)`.\n\n" +
+            "1. Call `dimmy_get_recap_template` to fetch Dimmy's house format.\n" +
+            "2. Call `dimmy_get_meeting` with id `\(meetingId)` to read the transcript.\n" +
+            "3. Produce a recap that follows the template's rules exactly (first line is a Markdown H1 title in the transcript's language).\n" +
+            "4. Call `dimmy_save_recap` with id `\(meetingId)` and your recap markdown to persist it back into Dimmy.\n" +
+            "5. Confirm to me once saved."
+
+        var comps = URLComponents()
+        comps.scheme = "claude"
+        comps.host = "claude.ai"
+        comps.path = "/new"
+        comps.queryItems = [URLQueryItem(name: "q", value: prompt)]
+        guard let url = comps.url else { return }
+        if !NSWorkspace.shared.open(url) {
+            // Fallback: copy the prompt so the user can paste it
+            // manually into a fresh Claude chat. The URI handler may
+            // not be registered yet on a brand-new install.
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setString(prompt, forType: .string)
         }
     }
 

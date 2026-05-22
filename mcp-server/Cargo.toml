@@ -1,0 +1,40 @@
+[package]
+name = "dimmy-mcp"
+version = "0.6.50"
+edition = "2021"
+description = "Dimmy ↔ Claude Desktop bridge via Model Context Protocol"
+license = "AGPL-3.0-only"
+repository = "https://github.com/KonradDallaOrg/dimmy"
+
+# Standalone binary loaded by Claude Desktop via stdio. Stays
+# OUTSIDE the `core` lib crate so it doesn't drag whisper.cpp /
+# llama.cpp / vulkan into a binary that only reads JSON files.
+# Result on Win/Mac: ~5 MB binary, ~10 MB RAM idle.
+[[bin]]
+name = "dimmy-mcp"
+path = "src/main.rs"
+
+[dependencies]
+# JSON-RPC over stdio + serialization. Newline-delimited frames,
+# no Content-Length headers (the simpler MCP variant — Claude
+# Desktop supports both).
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# Async runtime for non-blocking stdin reads + the heartbeat tick.
+# Single-threaded scheduler (current_thread) — we don't need more.
+tokio = { version = "1", features = ["rt", "macros", "io-std", "io-util", "time", "fs", "signal", "sync"] }
+# Cross-platform config-dir resolution (mirror of core/src/lib.rs).
+dirs = "5"
+# Defensive logging to stderr — Claude Desktop captures it into
+# `~/Library/Logs/Claude/mcp-server-dimmy.log` (Mac) / equivalent
+# on Win. Filtered via RUST_LOG env var.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+# Small binary: strip symbols + LTO. Result drops from ~12 MB
+# unoptimized to ~3.5 MB.
+strip = true
+lto = "thin"
+codegen-units = 1
+opt-level = "z"

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
@@ -20,7 +20,7 @@ public sealed partial class SettingsWindow : Window
     private string _currentTag = "home";
     private bool _loaded; // suppress SelectionChanged during init
 
-    // File-load → meeting bridge. Captured at successful file-load
+    // File-load â†’ meeting bridge. Captured at successful file-load
     // completion so the "Run recap as meeting" button can mint a
     // meeting dir off the same WAV + transcript. Cleared when the
     // user picks another file so we never recap a stale pair.
@@ -62,7 +62,7 @@ public sealed partial class SettingsWindow : Window
         this.Closed += (_, __) => LicenseService.LicenseChanged -= OnLicenseChangedExternal;
 
         // Auto-save on window close. The "Saved" InfoBar pulse already
-        // promises Win11-native auto-save UX — make it real, so closing
+        // promises Win11-native auto-save UX â€” make it real, so closing
         // the window via the X (or ESC) doesn't silently drop the user's
         // edits. Save_Click stays for the explicit "Save & close" path.
         this.Closed += (_, __) => AutoSaveOnClose();
@@ -115,7 +115,7 @@ public sealed partial class SettingsWindow : Window
         // Render waveform + load audio whenever the History selection
         // changes. Hooked here (not in XAML) because rendering needs
         // the Canvas's actual ActualWidth which isn't known until
-        // layout — ViewModel can't reach it from a binding.
+        // layout â€” ViewModel can't reach it from a binding.
         ViewModel.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(ViewModel.SelectedHistoryItem))
@@ -146,7 +146,7 @@ public sealed partial class SettingsWindow : Window
         {
             // Only hook PropertyChanged on NEWLY-added rules. A Move
             // event also sets NewItems but the moved instance is the
-            // same one we hooked at Add time — re-hooking would leak
+            // same one we hooked at Add time â€” re-hooking would leak
             // duplicate subscriptions on every drag-reorder.
             if (e.Action != System.Collections.Specialized.NotifyCollectionChangedAction.Add)
                 return;
@@ -157,7 +157,7 @@ public sealed partial class SettingsWindow : Window
         UpdateAppRulesEmptyHint();
 
         // WinUI 3 desktop's DragOver/Drop events never fire even with
-        // handledEventsToo=true (verified empirically — DragEnter logger
+        // handledEventsToo=true (verified empirically â€” DragEnter logger
         // never showed up in ptt.log on a real drop). Bypass with Win32
         // OLE RegisterDragDrop bound to the Window's HWND. The drop
         // target accepts file drops anywhere on the Settings window;
@@ -190,11 +190,12 @@ public sealed partial class SettingsWindow : Window
         // each row's IconAssetUri on the UI thread when done.
         _ = WarmUpAppIconsAsync();
 
-        // Initial Notion summary card state — reflect HasNotionToken +
+        // Initial Notion summary card state â€” reflect HasNotionToken +
         // NotionTargetTitle from LoadConfig. Without this the card
         // shows the XAML default ("Not connected" / Connect button)
         // even when a token was already saved.
         NotionRefreshSummary();
+        RefreshMcpCard();
 
         // Custom-dict ListView source-of-truth lives in the Rust
         // AppState; pull it now so the UI matches reality, AND
@@ -243,7 +244,7 @@ public sealed partial class SettingsWindow : Window
     private const string FileLoadCaption =
         "Drop an audio file to transcribe";
     private const string FileLoadUnsupportedMessage =
-        "Unsupported file — accepted: .wav .m4a .mp3 .aac .flac .ogg";
+        "Unsupported file â€” accepted: .wav .m4a .mp3 .aac .flac .ogg";
 
     private static bool IsSupportedAudioExtension(string ext)
     {
@@ -339,7 +340,7 @@ public sealed partial class SettingsWindow : Window
         App.Instance?.OpenMeetingWindow();
     }
 
-    // ── App rules ─────────────────────────────────────────────────
+    // â”€â”€ App rules â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     private void UpdateAppRulesEmptyHint()
     {
@@ -370,22 +371,22 @@ public sealed partial class SettingsWindow : Window
             ViewModel.AppRules.Remove(rule);
     }
 
-    // ── App-rule reorder (raw pointer events) ──────────────────────
+    // â”€â”€ App-rule reorder (raw pointer events) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // WinUI 3 v3.1.7's drag pipeline crashes (Microsoft.UI.Xaml.dll
-    // +0x39ce55 → combase.dll +0x37fc4 → E_UNEXPECTED) regardless of
-    // entry point — CanReorderItems, CanDrag/DragStarting on a child,
+    // +0x39ce55 â†’ combase.dll +0x37fc4 â†’ E_UNEXPECTED) regardless of
+    // entry point â€” CanReorderItems, CanDrag/DragStarting on a child,
     // ListView-level Drop handler all reproduce it. The unifying
     // factor is the IDataObject / IDropTarget code path inside
     // Microsoft.UI.Xaml.dll. Workaround: drive reorder from raw
-    // PointerPressed / Released / CaptureLost only — that pipeline
+    // PointerPressed / Released / CaptureLost only â€” that pipeline
     // never touches drag-drop. See microsoft-ui-xaml issues #5607,
-    // #7690 — no fix in WindowsAppSDK through 2.0.1.
+    // #7690 â€” no fix in WindowsAppSDK through 2.0.1.
 
     private AppRuleViewModel? _appRuleDragSource;
     private ListViewItem? _appRuleDragSourceContainer;
     // Cached source-row bitmap (rendered once at PointerPressed) for
     // the floating ghost preview. RenderTargetBitmap.RenderAsync is
-    // ~5–30 ms on a typical row — fast enough to be perceived as
+    // ~5â€“30 ms on a typical row â€” fast enough to be perceived as
     // synchronous when fired off as fire-and-forget from Pressed.
     private Microsoft.UI.Xaml.Media.Imaging.RenderTargetBitmap? _appRuleDragGhostBmp;
     // Auto-scroll while dragging near the top / bottom edge of the
@@ -394,7 +395,7 @@ public sealed partial class SettingsWindow : Window
     private Microsoft.UI.Xaml.DispatcherTimer? _appRuleDragScrollTimer;
     private double _appRuleDragScrollDelta;
     private ScrollViewer? _appRulesScrollViewer;
-    // Last pointer position in ListView coordinates — needed by the
+    // Last pointer position in ListView coordinates â€” needed by the
     // scroll timer tick so the drop indicator can refresh after each
     // auto-scroll step (PointerMoved alone wouldn't fire when the
     // cursor is stationary at the edge).
@@ -404,7 +405,7 @@ public sealed partial class SettingsWindow : Window
     {
         if (sender is not FrameworkElement fe) return;
         if (fe.DataContext is not AppRuleViewModel rule) return;
-        // Left click only. Touch / pen / right click ignored — keeps
+        // Left click only. Touch / pen / right click ignored â€” keeps
         // context menus and other gestures unaffected.
         var pt = e.GetCurrentPoint(fe);
         if (pt.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Mouse
@@ -429,7 +430,7 @@ public sealed partial class SettingsWindow : Window
         }
         else
         {
-            // Capture refused — bail rather than enter a half-tracked state.
+            // Capture refused â€” bail rather than enter a half-tracked state.
             _appRuleDragSource = null;
             if (_appRuleDragSourceContainer != null)
                 _appRuleDragSourceContainer.Opacity = 1.0;
@@ -447,7 +448,7 @@ public sealed partial class SettingsWindow : Window
         {
             var rtb = new Microsoft.UI.Xaml.Media.Imaging.RenderTargetBitmap();
             await rtb.RenderAsync(container);
-            // Released before the snapshot finished — bail without
+            // Released before the snapshot finished â€” bail without
             // opening the popup; FinishAppRuleDrag has already cleaned up.
             if (_appRuleDragSource == null) return;
             _appRuleDragGhostBmp = rtb;
@@ -478,7 +479,7 @@ public sealed partial class SettingsWindow : Window
     {
         if (_appRuleDragSource == null) return;
         // Move the ghost popup with the cursor (works even outside the
-        // ListView bounds — Popup.ShouldConstrainToRootBounds=False).
+        // ListView bounds â€” Popup.ShouldConstrainToRootBounds=False).
         if (AppRuleDragGhostPopup.IsOpen)
             UpdateAppRuleDragGhostPosition(e);
         var lv = AppRulesListView;
@@ -520,7 +521,7 @@ public sealed partial class SettingsWindow : Window
         // Edge-zone test must happen against the VIEWPORT, not the
         // ListView. AppRulesListView is nested inside the page-level
         // ScrollViewer (xaml.cs:1223 inside xaml:103), so the ListView's
-        // own ScrollViewer is disabled and its content grows freely —
+        // own ScrollViewer is disabled and its content grows freely â€”
         // pt.Y in ListView coords reaches lv.ActualHeight only when the
         // cursor is near the LAST item, not when it's at the bottom of
         // the visible area. We compute pointer Y relative to the outer
@@ -572,7 +573,7 @@ public sealed partial class SettingsWindow : Window
         double newOffset = sv.VerticalOffset + _appRuleDragScrollDelta;
         sv.ChangeView(null, newOffset, null, disableAnimation: true);
         // The cursor stayed in the same screen position but the ListView
-        // translated within its parent ScrollViewer by SCROLL_PER_TICK —
+        // translated within its parent ScrollViewer by SCROLL_PER_TICK â€”
         // so in LV-relative coords the cursor effectively moved by the
         // same amount. Update the cached pointer so the drop indicator
         // refresh below picks the correct slot for the now-shifted layout.
@@ -597,7 +598,7 @@ public sealed partial class SettingsWindow : Window
     {
         if (_appRulesScrollViewer != null) return _appRulesScrollViewer;
         // Walk UP the visual tree, not down. AppRulesListView lives
-        // inside the page-level ScrollViewer (xaml line 103) — its own
+        // inside the page-level ScrollViewer (xaml line 103) â€” its own
         // inner ScrollViewer (templated child) is disabled when the
         // host has no fixed height, so descending finds a no-op
         // scroller. The first ScrollViewer ancestor is the one that
@@ -635,7 +636,7 @@ public sealed partial class SettingsWindow : Window
         _appRuleDragSourceContainer = null;
 
         // Always hide the indicator + ghost + restore opacity, even
-        // if we bail early — the visual feedback should not stick
+        // if we bail early â€” the visual feedback should not stick
         // around after the pointer is released.
         StopAppRuleDragScrollTimer();
         AppRuleDropIndicator.Visibility = Visibility.Collapsed;
@@ -652,7 +653,7 @@ public sealed partial class SettingsWindow : Window
         {
             handle?.ReleasePointerCapture(e.Pointer);
         }
-        catch { /* ignore — capture may already be gone */ }
+        catch { /* ignore â€” capture may already be gone */ }
 
         int srcIdx = ViewModel.AppRules.IndexOf(rule);
         if (srcIdx < 0) return;
@@ -671,7 +672,7 @@ public sealed partial class SettingsWindow : Window
         ViewModel.AppRules.Move(srcIdx, dstIdx);
     }
 
-    // ── File-load (offline transcribe) ────────────────────────────
+    // â”€â”€ File-load (offline transcribe) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     private async void FileLoadPick_Click(object sender, RoutedEventArgs e)
     {
@@ -679,7 +680,7 @@ public sealed partial class SettingsWindow : Window
         // WinRT FileOpenPicker.PickSingleFileAsync silently returns
         // null on some unpackaged WinUI 3 desktop builds. Win32
         // IFileOpenDialog (the same dialog Explorer uses) is
-        // bulletproof — no async, no manifest capabilities, no STA
+        // bulletproof â€” no async, no manifest capabilities, no STA
         // gymnastics. Pump it on a background thread so Show() can
         // run its modal loop without freezing the UI thread.
         try
@@ -729,7 +730,7 @@ public sealed partial class SettingsWindow : Window
 
     private async void OnFilesDroppedFromWin32(string[] paths)
     {
-        // Marshal back to UI thread — RegisterDragDrop callbacks run
+        // Marshal back to UI thread â€” RegisterDragDrop callbacks run
         // on the OLE STA but XAML wants the dispatcher.
         var first = Array.Find(paths, p =>
         {
@@ -755,7 +756,7 @@ public sealed partial class SettingsWindow : Window
 
     private void FileLoadDropTarget_DragOver(object sender, Microsoft.UI.Xaml.DragEventArgs e)
     {
-        // Accept any drag that carries a file-system item — we filter
+        // Accept any drag that carries a file-system item â€” we filter
         // to the supported audio extensions at Drop time. Setting both
         // AcceptedOperation AND marking Handled=true is required on
         // WinUI 3 desktop; omitting Handled lets the parent
@@ -806,7 +807,7 @@ public sealed partial class SettingsWindow : Window
     }
 
     /// Returns approximate file metrics (duration in seconds, size in
-    /// bytes) by reading just the WAV RIFF/fmt header — no full decode.
+    /// bytes) by reading just the WAV RIFF/fmt header â€” no full decode.
     /// Used by the "this file is large, continue?" confirmation gate.
     private static (double durationSecs, long sizeBytes) PeekWavMetrics(string path)
     {
@@ -852,7 +853,7 @@ public sealed partial class SettingsWindow : Window
 
     /// Decides whether the user should be warned before running an
     /// expensive transcription. Threshold: 5 minutes of audio OR 50 MB
-    /// on disk. For cloud mode we warn at any duration ≥ 5 min so the
+    /// on disk. For cloud mode we warn at any duration â‰¥ 5 min so the
     /// user is aware of API cost before submitting.
     private async System.Threading.Tasks.Task<bool> ConfirmLargeFileAsync(string path)
     {
@@ -871,7 +872,7 @@ public sealed partial class SettingsWindow : Window
         {
             Title = "Long file",
             Content = $"{System.IO.Path.GetFileName(path)}\n" +
-                      $"≈ {mins} min · {sizeMb:F1} MB{costHint}\n\nProceed?",
+                      $"â‰ˆ {mins} min Â· {sizeMb:F1} MB{costHint}\n\nProceed?",
             PrimaryButtonText = "Transcribe",
             CloseButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Primary,
@@ -891,14 +892,14 @@ public sealed partial class SettingsWindow : Window
         FileLoadProgress.IsActive = true;
         FileLoadProgress.Visibility = Visibility.Visible;
         FileLoadResult.Visibility = Visibility.Collapsed;
-        // Determinate bar starts at 0 — the first
+        // Determinate bar starts at 0 â€” the first
         // file_transcribe_progress event from Rust will land within ~30 s
         // (one chunk window) and tick the bar forward.
         FileLoadBar.Value = 0;
         FileLoadBar.Visibility = Visibility.Visible;
         FileLoadStatus.Text = $"Transcribing {System.IO.Path.GetFileName(path)}...";
         FileLoadPickBtn.IsEnabled = false;
-        // Telemetry: file load started. `source` is "picker" — drag-
+        // Telemetry: file load started. `source` is "picker" â€” drag-
         // drop fires a different code path that hits this same
         // function only AFTER the dropped file has been validated, so
         // we conservatively tag everything reaching here as picker.
@@ -988,14 +989,14 @@ public sealed partial class SettingsWindow : Window
         if (FileLoadBar.Visibility != Visibility.Visible) return;
         FileLoadBar.Value = percent;
         FileLoadStatus.Text =
-            $"Transcribing… {processedSecs:F0} / {totalSecs:F0} s ({percent:F0}%)";
+            $"Transcribingâ€¦ {processedSecs:F0} / {totalSecs:F0} s ({percent:F0}%)";
     }
 
-    /// "Run recap as meeting" — promotes the last successful file-load
+    /// "Run recap as meeting" â€” promotes the last successful file-load
     /// transcript into a synthetic meeting dir, runs the same LLM
     /// recap pipeline that live meetings use, and surfaces the
     /// resulting Meeting in History so the user can open it from
-    /// Meeting → History the way they would any recorded meeting.
+    /// Meeting â†’ History the way they would any recorded meeting.
     /// The button is only visible when a transcript is sitting in
     /// the result box (fields stashed in the success branch above);
     /// re-disabled mid-call so the user can't double-fire.
@@ -1009,7 +1010,7 @@ public sealed partial class SettingsWindow : Window
         FileLoadRunRecapBtn.IsEnabled = false;
         FileLoadRecapProgress.IsActive = true;
         FileLoadRecapProgress.Visibility = Visibility.Visible;
-        FileLoadRecapStatus.Text = "Building meeting + running recap…";
+        FileLoadRecapStatus.Text = "Building meeting + running recapâ€¦";
         try
         {
             var result = await Services.FileLoadToMeetingService.RunAsync(
@@ -1017,7 +1018,7 @@ public sealed partial class SettingsWindow : Window
                 _lastFileLoadTranscript);
             if (result.Success)
             {
-                FileLoadRecapStatus.Text = "✓ Recap saved. Open Meeting → History.";
+                FileLoadRecapStatus.Text = "âœ“ Recap saved. Open Meeting â†’ History.";
                 App.Log($"file-load recap success at {result.Dir}", "FileLoad");
             }
             else
@@ -1039,7 +1040,7 @@ public sealed partial class SettingsWindow : Window
         }
     }
 
-    // ── History ──────────────────────────────────────────────────────
+    // â”€â”€ History â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// Refresh the History list. Called on tab activation, on Refresh
     /// click, on search submit, after delete. The FFI returns up to 200
@@ -1052,11 +1053,11 @@ public sealed partial class SettingsWindow : Window
             var query = ViewModel.HistorySearchQuery?.Trim() ?? "";
             const int Limit = 200;
             // 4 MB. The previous 256 KB ceiling was overflowed by a single
-            // long file-load row: 95-min meeting → 50 KB transcript +
+            // long file-load row: 95-min meeting â†’ 50 KB transcript +
             // 13 KB word_timestamps in one row, so 200 such rows easily
             // top 256 KB and the FFI returns a TRUNCATED JSON blob that
             // System.Text.Json then fails to parse with "Expected end of
-            // string … BytePositionInLine: 262143" → empty list.
+            // string â€¦ BytePositionInLine: 262143" â†’ empty list.
             const int BufLen = 4 << 20;
             var buf = new byte[BufLen];
             int len;
@@ -1167,7 +1168,7 @@ public sealed partial class SettingsWindow : Window
     /// Why not bind directly to .Text like the v1 layout did: a single
     /// TextBlock with TextWrapping=Wrap and a 50 KB string of paragraph
     /// text (e.g. a 95-min meeting transcript) chokes WinUI's text
-    /// engine — the layout pass either takes minutes or shows blank.
+    /// engine â€” the layout pass either takes minutes or shows blank.
     /// TranscriptRenderer breaks the text into paragraphs at line
     /// breaks and styles [mic]/[system] markers + timestamps, which
     /// WinUI handles smoothly even at hundreds of kilobytes.
@@ -1204,7 +1205,7 @@ public sealed partial class SettingsWindow : Window
             var path = item.AudioPath;
             if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path)) return;
 
-            // Audio source — let WinUI's MediaPlayer handle decoding/seek.
+            // Audio source â€” let WinUI's MediaPlayer handle decoding/seek.
             try
             {
                 var uri = new Uri(path);
@@ -1212,7 +1213,7 @@ public sealed partial class SettingsWindow : Window
                 {
                     HistoryAudioPlayer.Source =
                         global::Windows.Media.Core.MediaSource.CreateFromUri(uri);
-                    // Hook PositionChanged once per source — drives the
+                    // Hook PositionChanged once per source â€” drives the
                     // orange playhead overlay on top of the waveform.
                     var mp = HistoryAudioPlayer.MediaPlayer;
                     if (mp != null)
@@ -1227,7 +1228,7 @@ public sealed partial class SettingsWindow : Window
                 App.Log($"MediaPlayer setSource exc: {ex.Message}", "History");
             }
 
-            // Waveform — read peaks on a background thread, then draw.
+            // Waveform â€” read peaks on a background thread, then draw.
             // Bucket count tracks the canvas width so bars are ~3px wide.
             if (HistoryWaveformCanvas == null) return;
             double width = HistoryWaveformCanvas.ActualWidth;
@@ -1296,7 +1297,7 @@ public sealed partial class SettingsWindow : Window
         HistoryWaveformCanvas.Children.Add(_waveformPlayhead);
     }
 
-    /// Tap on the waveform → seek the MediaPlayer to that fractional
+    /// Tap on the waveform â†’ seek the MediaPlayer to that fractional
     /// position. Bound in XAML via Canvas.PointerPressed so the
     /// affordance is "click anywhere on the bars to jump there".
     private void HistoryWaveformCanvas_PointerPressed(object sender,
@@ -1331,7 +1332,7 @@ public sealed partial class SettingsWindow : Window
             Math.Max(0, Math.Min(w - 2, w * frac)));
     }
 
-    /// MediaPlayer fires PositionChanged off the UI thread — hop back
+    /// MediaPlayer fires PositionChanged off the UI thread â€” hop back
     /// to the dispatcher before touching the Canvas. Computes the
     /// fractional position from the session's NaturalDuration and
     /// drives the orange playhead overlay.
@@ -1350,13 +1351,13 @@ public sealed partial class SettingsWindow : Window
 
     private void LoadConfig()
     {
-        // Read from config.json file first — it has all fields including UI-only ones.
-        // Cartella DEVE matchare quella che il Rust core usa: prod →
-        // `dimmy/`, staging-flavor → `dimmy-staging/`. Hardcoding
-        // "dimmy" qui faceva sì che un binario con
+        // Read from config.json file first â€” it has all fields including UI-only ones.
+        // Cartella DEVE matchare quella che il Rust core usa: prod â†’
+        // `dimmy/`, staging-flavor â†’ `dimmy-staging/`. Hardcoding
+        // "dimmy" qui faceva sÃ¬ che un binario con
         // DIMMY_BUILD_FLAVOR=staging leggesse dalla cartella prod, poi
         // sovrascrivesse la cartella staging con UI state vuoto via
-        // dimmy_set_config_json — silently distruggendo `app_rules`,
+        // dimmy_set_config_json â€” silently distruggendo `app_rules`,
         // `user_dict`, ecc. salvati dal Rust. Burned 2026-05-12.
         string? fileJson = null;
         try
@@ -1376,7 +1377,7 @@ public sealed partial class SettingsWindow : Window
         var uiPrefs = Services.UiPreferences.Load();
         ViewModel.PillShowOnStartup = uiPrefs.PillShowOnStartup;
         ViewModel.PillShowOnHotkey = uiPrefs.PillShowOnHotkey;
-        // Theme lives in UiPreferences, not config.json — see
+        // Theme lives in UiPreferences, not config.json â€” see
         // UiPreferences.Theme docstring for the bug history. Override
         // any value LoadFromJson may have produced (which would always
         // be the "Default" fallback because Rust strips unknown keys).
@@ -1401,7 +1402,7 @@ public sealed partial class SettingsWindow : Window
                 // Notion token presence is a runtime-only flag derived
                 // from the keystore (same as has_key / has_llm_key).
                 // Rust strips it on config.json save, so LoadFromJson
-                // never sees it — we MUST pull it from the FFI snapshot
+                // never sees it â€” we MUST pull it from the FFI snapshot
                 // here, otherwise the Integrations summary card stays
                 // "Not connected" on every relaunch even though the
                 // token sits in keys.enc. Burned 2026-05-10.
@@ -1452,7 +1453,7 @@ public sealed partial class SettingsWindow : Window
             }
         }
 
-        // No match — select "Custom endpoint" (last item)
+        // No match â€” select "Custom endpoint" (last item)
         ProviderComboBox.SelectedIndex = ProviderComboBox.Items.Count - 1;
         CustomUrlBox.Visibility = Visibility.Visible;
         CustomModelBox.Visibility = Visibility.Visible;
@@ -1479,7 +1480,7 @@ public sealed partial class SettingsWindow : Window
             }
         }
 
-        // No match — select "Custom endpoint" (last item)
+        // No match â€” select "Custom endpoint" (last item)
         LlmProviderComboBox.SelectedIndex = LlmProviderComboBox.Items.Count - 1;
         LlmCustomUrlBox.Visibility = Visibility.Visible;
         LlmCustomModelBox.Visibility = Visibility.Visible;
@@ -1496,7 +1497,7 @@ public sealed partial class SettingsWindow : Window
             {
                 ViewModel.LlmApiUrl = preset.Url;
                 ViewModel.LlmApiModel = preset.DefaultModel;
-                // Refresh the green ✓ for the newly-picked provider — without
+                // Refresh the green âœ“ for the newly-picked provider â€” without
                 // this the badge shows the previous provider's state until the
                 // user clicks Save (and Rust echoes back a fresh config).
                 ViewModel.HasLlmKey = ViewModel.HasLlmKeyForUrl(preset.Url);
@@ -1521,29 +1522,29 @@ public sealed partial class SettingsWindow : Window
         }
     }
 
-    // ── Claude Code subscription card ─────────────────────────────
+    // â”€â”€ Claude Code subscription card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// Re-read the Claude Code install state + credentials and
     /// reflect into the SettingsCard. Called on tab activation, on
     /// provider switch, and after the Sign-in button completes (or
-    /// the user clicks the manual refresh ↻).
+    /// the user clicks the manual refresh â†»).
     /// <summary>
     /// Refresh the Settings auth-related UI surfaces in one pass.
     /// Called on every Settings open + after any state change that
     /// affects auth (provider switch, integration status flip,
     /// toggle flip). Owns:
     ///
-    ///   - INTEGRATIONS → Anthropic card: status text, glyph,
+    ///   - INTEGRATIONS â†’ Anthropic card: status text, glyph,
     ///     Connect/Re-sign in/Test/Refresh button rows.
-    ///   - OUTPUT → LLM section: visibility of
+    ///   - OUTPUT â†’ LLM section: visibility of
     ///     LlmUseSubscriptionCard, LlmUseSameKeyCard, LlmApiKeyCard.
-    ///   - OUTPUT → Recap section: visibility of
+    ///   - OUTPUT â†’ Recap section: visibility of
     ///     RecapUseSubscriptionCard.
     ///
     /// Driven by three booleans:
-    ///   - integrationReady — claude CLI installed + logged in
-    ///   - isAnthropic      — current LLM provider is Anthropic
-    ///   - providerParity   — STT provider == LLM provider
+    ///   - integrationReady â€” claude CLI installed + logged in
+    ///   - isAnthropic      â€” current LLM provider is Anthropic
+    ///   - providerParity   â€” STT provider == LLM provider
     ///
     /// The LLM-section subscription toggle is visible only when
     /// (isAnthropic AND integrationReady). The same-key toggle is
@@ -1552,7 +1553,7 @@ public sealed partial class SettingsWindow : Window
     /// integrationReady.
     private void RefreshAuthIntegrationStatus()
     {
-        // ── INPUT STATE ──────────────────────────────────────────
+        // â”€â”€ INPUT STATE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         var llmUrl = ViewModel.LlmApiUrl ?? "";
         var sttUrl = ViewModel.ApiUrl ?? "";
         var isAnthropic = IsAnthropicUrl(llmUrl);
@@ -1562,12 +1563,12 @@ public sealed partial class SettingsWindow : Window
         var binaryPath = Interop.DimmyNative.GetClaudeCodeBinaryPath() ?? "";
         var integrationReady = status == Interop.DimmyNative.ClaudeCodeStatus.Ready;
 
-        // Coerce LLM subscription off when the provider is not Anthropic —
+        // Coerce LLM subscription off when the provider is not Anthropic â€”
         // subscription is Claude Code CLI only (Anthropic-only). Without this
         // a leftover llm_auth_method="subscription" from a previous Anthropic
         // session keeps `llmUseSub=true` even after switching to Groq/OpenAI/
         // etc., which collapses `llmKeyPathLive=false` and hides BOTH the
-        // "Use saved api key" toggle AND the api-key input — stuck state, no
+        // "Use saved api key" toggle AND the api-key input â€” stuck state, no
         // way to save a key. Burned 2026-05-18 on the first-time Groq pick
         // from a fresh Anthropic+subscription baseline. Mirror of the recap
         // auth-method coercion below.
@@ -1576,14 +1577,14 @@ public sealed partial class SettingsWindow : Window
         {
             ViewModel.LlmAuthMethod = "api_key";
             App.Log(
-                $"[Auth] coerced llm_auth_method='subscription' → 'api_key' (provider not Anthropic: '{llmUrl}')",
+                $"[Auth] coerced llm_auth_method='subscription' â†’ 'api_key' (provider not Anthropic: '{llmUrl}')",
                 "Auth");
         }
         var llmUseSub = string.Equals(ViewModel.LlmAuthMethod, "subscription",
             StringComparison.Ordinal);
         // Recap auth is INDEPENDENT of the dictation knob. Empty =
         // api_key (the dedicated toggle below decides subscription).
-        // The previous inherit semantics (empty → copy llm_auth_method)
+        // The previous inherit semantics (empty â†’ copy llm_auth_method)
         // produced the 2026-05-16 "HTTP 1" bug: a Gemini recap inherited
         // `subscription` from an Anthropic dictation config and was
         // routed to the `claude` CLI which doesn't know Gemini models.
@@ -1594,7 +1595,7 @@ public sealed partial class SettingsWindow : Window
         // OR'd LLM and Recap together, which leaked one tier's subscription
         // choice into the other's UI: switching LLM to Anthropic subscription
         // would NOT hide the LLM key input if Recap was still on api-key.
-        // The user-reported bug 2026-05-18 — when LLM = Anthropic +
+        // The user-reported bug 2026-05-18 â€” when LLM = Anthropic +
         // subscription ON, the "Use saved api key" toggle + key input should
         // disappear, regardless of Recap state. Same logic mirrors for Recap.
         var llmKeyPathLive = !llmUseSub;
@@ -1603,7 +1604,7 @@ public sealed partial class SettingsWindow : Window
         // block is refactored to use `recapKeyPathLive` directly.
         var keyPathLive = llmKeyPathLive || recapKeyPathLive;
 
-        // ── INTEGRATIONS → Anthropic card ────────────────────────
+        // â”€â”€ INTEGRATIONS â†’ Anthropic card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         // Always rendered when the user navigates to Integrations;
         // we only update its content here.
         switch (status)
@@ -1615,8 +1616,12 @@ public sealed partial class SettingsWindow : Window
                     ? "~" + binaryPath[home.Length..]
                     : binaryPath;
                 AnthropicIntegrationStatusText.Text =
-                    $"Connected — using `{shownPath}`. Available for LLM rewrite and meeting recap.";
-                AnthropicIntegrationStatusGlyph.Glyph = ""; // CheckMark
+                    $"Connected â€” using `{shownPath}`. Available for LLM rewrite and meeting recap.";
+                // \u escape: literal high-codepoint Segoe Fluent
+                // glyphs get stripped by some editor / git CRLF
+                // round-trips â†’ empty string â†’ no icon. Use the
+                // escape so the source is robust to any encoding.
+                AnthropicIntegrationStatusGlyph.Glyph = ""; // CheckMark
                 AnthropicIntegrationStatusGlyph.Foreground = (Microsoft.UI.Xaml.Media.Brush)
                     Application.Current.Resources["SystemFillColorSuccessBrush"];
                 AnthropicIntegrationDisconnectedActions.Visibility = Visibility.Collapsed;
@@ -1626,12 +1631,12 @@ public sealed partial class SettingsWindow : Window
             case Interop.DimmyNative.ClaudeCodeStatus.NotLoggedIn:
                 AnthropicIntegrationStatusText.Text =
                     "Claude Code CLI installed but not signed in. Click Sign in to authenticate via browser.";
-                AnthropicIntegrationStatusGlyph.Glyph = ""; // Info
+                AnthropicIntegrationStatusGlyph.Glyph = ""; // Info
                 AnthropicIntegrationStatusGlyph.Foreground = (Microsoft.UI.Xaml.Media.Brush)
                     Application.Current.Resources["TextFillColorTertiaryBrush"];
                 AnthropicIntegrationDisconnectedActions.Visibility = Visibility.Visible;
                 AnthropicIntegrationConnectedActions.Visibility = Visibility.Collapsed;
-                // Binary present, only login missing — direct Sign in
+                // Binary present, only login missing â€” direct Sign in
                 // is faster than the wizard. Hide the wizard CTA.
                 AnthropicIntegrationWizardBtn.Visibility = Visibility.Collapsed;
                 AnthropicIntegrationSignInBtn.Visibility = Visibility.Visible;
@@ -1644,12 +1649,12 @@ public sealed partial class SettingsWindow : Window
             default:
                 AnthropicIntegrationStatusText.Text =
                     "Claude Code CLI not detected. Click Set up wizard for a guided Node.js + CLI + sign-in walkthrough.";
-                AnthropicIntegrationStatusGlyph.Glyph = ""; // Info
+                AnthropicIntegrationStatusGlyph.Glyph = ""; // Info
                 AnthropicIntegrationStatusGlyph.Foreground = (Microsoft.UI.Xaml.Media.Brush)
                     Application.Current.Resources["TextFillColorTertiaryBrush"];
                 AnthropicIntegrationDisconnectedActions.Visibility = Visibility.Visible;
                 AnthropicIntegrationConnectedActions.Visibility = Visibility.Collapsed;
-                // Binary missing — wizard is the right entry point.
+                // Binary missing â€” wizard is the right entry point.
                 // Hide the dead-end Sign in button (it would fail
                 // with NotInstalled anyway) and promote the wizard.
                 AnthropicIntegrationWizardBtn.Visibility = Visibility.Visible;
@@ -1659,7 +1664,7 @@ public sealed partial class SettingsWindow : Window
                 break;
         }
 
-        // ── OUTPUT → LLM section ─────────────────────────────────
+        // â”€â”€ OUTPUT â†’ LLM section â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         // The "Use Anthropic subscription" toggle only makes sense
         // when (a) the LLM provider is Anthropic and (b) the
         // integration is connected. Otherwise hide entirely.
@@ -1667,13 +1672,13 @@ public sealed partial class SettingsWindow : Window
             ? Visibility.Visible : Visibility.Collapsed;
         LlmUseSubscriptionToggle.IsOn = llmUseSub;
 
-        // Same-key toggle visibility — VENDOR-KEYED design (mirror of
+        // Same-key toggle visibility â€” VENDOR-KEYED design (mirror of
         // the recap section):
         //   1. Derive the LLM vendor from llm_url.
         //   2. Check if ANY upstream scope has a key for that vendor
         //      (Stt-scope OR Llm-scope, see `_sttKeyByProvider` +
         //      `_llmKeyByProvider`). This decouples "reuse saved key"
-        //      from "STT and LLM must share the vendor" — a user
+        //      from "STT and LLM must share the vendor" â€” a user
         //      with a Gemini STT key and Anthropic LLM gets NO
         //      toggle (no Anthropic key exists), but with a Gemini
         //      STT key and Gemini LLM they DO get the toggle even
@@ -1710,26 +1715,26 @@ public sealed partial class SettingsWindow : Window
         // LLM API key input: visible when the key path is live AND the
         // toggle is OFF (the dispatcher needs an LLM-scope key). When the
         // toggle is hidden (no upstream key OR subscription on), the
-        // coercion above flips LlmUseSameKey=false → input appears so the
+        // coercion above flips LlmUseSameKey=false â†’ input appears so the
         // user can type a key. Under subscription the entire block hides.
         LlmApiKeyCard.Visibility = (llmKeyPathLive && !ViewModel.LlmUseSameKey)
             ? Visibility.Visible : Visibility.Collapsed;
-        // Surface the green ✓ when a key for the LLM vendor already
+        // Surface the green âœ“ when a key for the LLM vendor already
         // exists in Llm-scope (drives `HasLlmKey` binding on the
         // PasswordBox placeholder + check icon).
         ViewModel.HasLlmKey = hasLlmScopeKey;
 
-        // ── OUTPUT → Recap section ───────────────────────────────
+        // â”€â”€ OUTPUT â†’ Recap section â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         // The recap subscription toggle is INDEPENDENT of the LLM
         // provider choice. Recap dispatch reads its own
-        // `recap_auth_method` from config: "subscription" → claude
-        // CLI, otherwise → same HTTP path as the LLM rewrite. So
+        // `recap_auth_method` from config: "subscription" â†’ claude
+        // CLI, otherwise â†’ same HTTP path as the LLM rewrite. So
         // valid combinations include:
         //   - LLM=Groq Llama (key) + Recap=Anthropic subscription
         //   - LLM=local Gemma + Recap=Anthropic subscription
         //   - LLM=Anthropic (key) + Recap=Anthropic subscription
         //
-        // The only gate is `integrationReady` — without the `claude`
+        // The only gate is `integrationReady` â€” without the `claude`
         // CLI signed in, there's nothing to dispatch through. Coerce
         // RecapAuthMethod to "" when the integration goes away so a
         // saved "subscription" can't silently keep routing.
@@ -1740,7 +1745,7 @@ public sealed partial class SettingsWindow : Window
         //     to Gemini / OpenAI, so the toggle would be inactionable)
         //
         // Coerce a saved `subscription` value to `""` when the toggle
-        // becomes invisible — otherwise the dispatcher would keep
+        // becomes invisible â€” otherwise the dispatcher would keep
         // routing through the CLI even when the user picked a
         // non-Anthropic recap model.
         var recapVendorForSubGate = RecapVendorFromModel(ViewModel.RecapModelOverride, llmUrl);
@@ -1750,11 +1755,11 @@ public sealed partial class SettingsWindow : Window
         if (!canShowRecapSub && recapForceSub)
         {
             App.Log(
-                $"[Auth] coerced recap_auth_method='subscription' → '' (integration={integrationReady}, model_is_anthropic={recapModelIsAnthropic})",
+                $"[Auth] coerced recap_auth_method='subscription' â†’ '' (integration={integrationReady}, model_is_anthropic={recapModelIsAnthropic})",
                 "Auth");
             ViewModel.RecapAuthMethod = "";
             recapForceSub = false;
-            // Push the coerced value into the Rust core immediately —
+            // Push the coerced value into the Rust core immediately â€”
             // otherwise the next meeting recap reads the stale
             // `subscription` value from `st.recap_auth_method` and
             // dispatches a Gemini model through the `claude` CLI
@@ -1766,7 +1771,7 @@ public sealed partial class SettingsWindow : Window
         RecapUseSubscriptionToggle.IsOn = recapForceSub;
 
         // The recap model picker shows ALL curated entries (any
-        // vendor) — the user can pick a Gemini model with an
+        // vendor) â€” the user can pick a Gemini model with an
         // Anthropic dictation provider; the dispatcher derives the
         // recap vendor from the model and looks up its keystore key.
         // No vendor filter needed anymore.
@@ -1790,7 +1795,7 @@ public sealed partial class SettingsWindow : Window
         // collects the key if the vendor differs from dictation.
         //
         // The subscription toggle gate above already pinned
-        // recapVendor → "anthropic" when subscription is forced, so
+        // recapVendor â†’ "anthropic" when subscription is forced, so
         // the toggle visibility math doesn't need any cross-vendor
         // coercion either.
         _ = recapVendor; // retained for future use if we re-introduce
@@ -1801,7 +1806,7 @@ public sealed partial class SettingsWindow : Window
     /// recap model picker. Mirrors the Rust-side `Provider::from_url`
     /// logic + extends with the recap-specific labels (anthropic /
     /// openai / gemini / other). For unknown URLs returns "anthropic"
-    /// as a safe default — most users start with the Anthropic preset
+    /// as a safe default â€” most users start with the Anthropic preset
     /// and the Anthropic-only models are the most universally tested
     /// recap targets.</summary>
     private static string RecapVendorFromUrl(string url)
@@ -1813,7 +1818,7 @@ public sealed partial class SettingsWindow : Window
         if (lower.Contains("openai.com")) return "openai";
         if (lower.Contains("googleapis.com")) return "gemini";
         // Unknown vendors (custom URLs, Groq, OpenRouter, etc.) get
-        // "anthropic" as a default for the picker — but the user can
+        // "anthropic" as a default for the picker â€” but the user can
         // always pick Auto or type a Custom model id, so this is a
         // soft fallback, not a hard restriction.
         return "anthropic";
@@ -1827,7 +1832,7 @@ public sealed partial class SettingsWindow : Window
     {
         if (string.IsNullOrEmpty(modelId)) return false;
         var lower = modelId.ToLowerInvariant();
-        // Custom values are not curated — leave alone.
+        // Custom values are not curated â€” leave alone.
         bool isCurated = false;
         foreach (var tag in _recapModelKnownTags)
         {
@@ -1908,17 +1913,17 @@ public sealed partial class SettingsWindow : Window
     // dropdown change). Forwards to the new unified method.
     private void RefreshClaudeCodeStatus() => RefreshAuthIntegrationStatus();
 
-    // ── Integrations → Anthropic card handlers ──────────────────
+    // â”€â”€ Integrations â†’ Anthropic card handlers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     /// <summary>
     /// Open the multi-step setup wizard. Smart-skips to whichever step
     /// matches the current install state (so users re-running the
     /// wizard after a partial install land on the right step). On
     /// successful completion the wizard reports <c>Completed=true</c>
-    /// — we then trigger a status refresh + flip
+    /// â€” we then trigger a status refresh + flip
     /// <c>llm_auth_method=subscription</c> on the user's behalf so the
     /// integration is live without needing a second click in
-    /// Output → LLM.
+    /// Output â†’ LLM.
     /// </summary>
     private async void AnthropicIntegrationWizard_Click(object sender, RoutedEventArgs e)
     {
@@ -1926,7 +1931,7 @@ public sealed partial class SettingsWindow : Window
     }
 
     /// <summary>
-    /// "Re-run setup" — open the wizard with smart-skip disabled so
+    /// "Re-run setup" â€” open the wizard with smart-skip disabled so
     /// the user walks all 3 steps regardless of current state. Used
     /// to verify an existing install, update Node, or just preview
     /// the wizard's copy.
@@ -1953,7 +1958,7 @@ public sealed partial class SettingsWindow : Window
             if (dialog.Completed)
             {
                 // Flip the LLM auth method to subscription so the user
-                // immediately sees the change in Output → LLM.
+                // immediately sees the change in Output â†’ LLM.
                 ViewModel.LlmAuthMethod = "subscription";
                 Interop.DimmyNative.TrackEvent("claude_code.wizard_completed");
             }
@@ -1968,7 +1973,7 @@ public sealed partial class SettingsWindow : Window
     {
         AnthropicIntegrationSignInBtn.IsEnabled = false;
         AnthropicIntegrationStatusText.Text =
-            "Launching `claude /login` — complete the OAuth flow in the new terminal window.";
+            "Launching `claude /login` â€” complete the OAuth flow in the new terminal window.";
         try
         {
             var ok = Interop.DimmyNative.SpawnClaudeCodeLogin();
@@ -1980,7 +1985,7 @@ public sealed partial class SettingsWindow : Window
                     new { outcome = "spawn_failed" });
                 return;
             }
-            // Poll status every 2 s for 3 min — long enough for the
+            // Poll status every 2 s for 3 min â€” long enough for the
             // user to complete the OAuth dance even on a slow link.
             for (int i = 0; i < 90; i++)
             {
@@ -2016,7 +2021,7 @@ public sealed partial class SettingsWindow : Window
     {
         AnthropicIntegrationTestBtn.IsEnabled = false;
         var prevText = AnthropicIntegrationStatusText.Text;
-        AnthropicIntegrationStatusText.Text = "Sending ping…";
+        AnthropicIntegrationStatusText.Text = "Sending pingâ€¦";
         try
         {
             var (result, elapsedMs) = await System.Threading.Tasks.Task.Run(
@@ -2024,20 +2029,20 @@ public sealed partial class SettingsWindow : Window
             AnthropicIntegrationStatusText.Text = result switch
             {
                 Interop.DimmyNative.ClaudeCodePingResult.Ok =>
-                    $"✓ Connection OK — {elapsedMs} ms round-trip via the local `claude` CLI.",
+                    $"âœ“ Connection OK â€” {elapsedMs} ms round-trip via the local `claude` CLI.",
                 Interop.DimmyNative.ClaudeCodePingResult.NotInstalled =>
-                    "✗ `claude` binary not found. Install Claude Code first.",
+                    "âœ— `claude` binary not found. Install Claude Code first.",
                 Interop.DimmyNative.ClaudeCodePingResult.NotLoggedIn =>
-                    "✗ Not logged in. Click Sign in to authenticate.",
+                    "âœ— Not logged in. Click Sign in to authenticate.",
                 Interop.DimmyNative.ClaudeCodePingResult.SpawnFailed =>
-                    "✗ Could not spawn the CLI. See dimmy.log.",
+                    "âœ— Could not spawn the CLI. See dimmy.log.",
                 Interop.DimmyNative.ClaudeCodePingResult.Timeout =>
-                    "✗ Timed out after 15 s — network or rate-limit issue.",
+                    "âœ— Timed out after 15 s â€” network or rate-limit issue.",
                 Interop.DimmyNative.ClaudeCodePingResult.NonZeroExit =>
-                    "✗ `claude` returned a non-zero exit code. See dimmy.log.",
+                    "âœ— `claude` returned a non-zero exit code. See dimmy.log.",
                 Interop.DimmyNative.ClaudeCodePingResult.InvalidUtf8 =>
-                    "✗ Unexpected output from `claude`. See dimmy.log.",
-                _ => "✗ Unknown error. See dimmy.log.",
+                    "âœ— Unexpected output from `claude`. See dimmy.log.",
+                _ => "âœ— Unknown error. See dimmy.log.",
             };
             _ = prevText;
         }
@@ -2057,7 +2062,7 @@ public sealed partial class SettingsWindow : Window
         RefreshAuthIntegrationStatus();
     }
 
-    // ── Output → LLM section: subscription toggle ───────────────
+    // â”€â”€ Output â†’ LLM section: subscription toggle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     private void LlmUseSubscription_Toggled(object sender, RoutedEventArgs e)
     {
@@ -2068,7 +2073,7 @@ public sealed partial class SettingsWindow : Window
         RefreshAuthIntegrationStatus();
     }
 
-    // "Use my saved API key" toggle — flip immediately so the LLM
+    // "Use my saved API key" toggle â€” flip immediately so the LLM
     // API key input appears/disappears without waiting for the next
     // RefreshAuthIntegrationStatus tick. Mirror of the recap toggle.
     private void LlmUseSameKey_Toggled(object sender, RoutedEventArgs e)
@@ -2078,13 +2083,13 @@ public sealed partial class SettingsWindow : Window
         App.Instance?.ApplySettings(ViewModel);
     }
 
-    // ── Output → Recap section: subscription toggle ─────────────
+    // â”€â”€ Output â†’ Recap section: subscription toggle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     private void RecapUseSubscription_Toggled(object sender, RoutedEventArgs e)
     {
         if (!_loaded) return;
-        // ON  → "subscription" (force, regardless of LLM toggle)
-        // OFF → ""             (inherit from LLM toggle)
+        // ON  â†’ "subscription" (force, regardless of LLM toggle)
+        // OFF â†’ ""             (inherit from LLM toggle)
         var newAuth = RecapUseSubscriptionToggle.IsOn ? "subscription" : "";
         if (ViewModel.RecapAuthMethod == newAuth) return;
         ViewModel.RecapAuthMethod = newAuth;
@@ -2099,9 +2104,9 @@ public sealed partial class SettingsWindow : Window
 
     private void CacheProviderKeyFlags(System.Text.Json.JsonElement r)
     {
-        // STT — `has_<provider>_key` flag set per Provider variant.
+        // STT â€” `has_<provider>_key` flag set per Provider variant.
         // The dropdown tag is the lowercase provider name; the ProviderPreset
-        // table holds the exact Tag→Name mapping. We hash both forms so a
+        // table holds the exact Tagâ†’Name mapping. We hash both forms so a
         // tag like "groq-v3" still resolves to has_groq_key.
         foreach (var (key, prov) in new[] {
             ("has_groq_key", "groq"),
@@ -2185,7 +2190,7 @@ public sealed partial class SettingsWindow : Window
     private System.Collections.Generic.List<LocalModelInfo> _localModels = new();
 
     /// Sentinel ComboBox tag identifying the Parakeet entry. Not a real
-    /// whisper-model filename — distinguished from `*.bin` by prefix.
+    /// whisper-model filename â€” distinguished from `*.bin` by prefix.
     private const string ParakeetTag = "parakeet:fp32";
 
     private void PopulateLocalModels()
@@ -2228,7 +2233,7 @@ public sealed partial class SettingsWindow : Window
             }
 
             // Append Parakeet as a virtual entry. The backend it picks
-            // is implicit — selecting this item flips ViewModel.LocalSttBackend
+            // is implicit â€” selecting this item flips ViewModel.LocalSttBackend
             // to "parakeet"; selecting any whisper item flips it to "whisper".
             bool parakeetDownloaded = false;
             try { parakeetDownloaded = DimmyNative.dimmy_parakeet_bundle_present() == 1; }
@@ -2267,7 +2272,7 @@ public sealed partial class SettingsWindow : Window
             if (tag == ParakeetTag)
             {
                 ViewModel.LocalSttBackend = "parakeet";
-                // Auto-enable chunk streaming on the Parakeet switch — chunk
+                // Auto-enable chunk streaming on the Parakeet switch â€” chunk
                 // streaming is Parakeet-only at runtime (ffi.rs gates it on
                 // `chunk_streaming_enabled && backend == parakeet`), and the
                 // low-latency live-caption experience it unlocks is the whole
@@ -2276,7 +2281,7 @@ public sealed partial class SettingsWindow : Window
                 // for debugging we respect that until the next time they
                 // re-select Parakeet from the combo.
                 ViewModel.ChunkStreamingEnabled = true;
-                App.Log("→ set LocalSttBackend=parakeet, ChunkStreamingEnabled=true", "Settings");
+                App.Log("â†’ set LocalSttBackend=parakeet, ChunkStreamingEnabled=true", "Settings");
                 // Keep LocalModel pointing at the previous whisper choice
                 // so flipping back to a whisper entry restores it.
             }
@@ -2284,7 +2289,7 @@ public sealed partial class SettingsWindow : Window
             {
                 ViewModel.LocalSttBackend = "whisper";
                 ViewModel.LocalModel = tag;
-                App.Log($"→ set LocalSttBackend=whisper, LocalModel={tag}", "Settings");
+                App.Log($"â†’ set LocalSttBackend=whisper, LocalModel={tag}", "Settings");
             }
             CheckModelStatus();
         }
@@ -2317,7 +2322,7 @@ public sealed partial class SettingsWindow : Window
     {
         LocalSttPanel.Visibility = isLocal ? Visibility.Visible : Visibility.Collapsed;
         // Cloud STT panel now bundles Provider + API key + Custom
-        // URL/Model together (mirror of Output → LLM layout). Toggled
+        // URL/Model together (mirror of Output â†’ LLM layout). Toggled
         // off in Local mode. Vocabulary panel has the same gating.
         CloudSttPanel.Visibility = isLocal ? Visibility.Collapsed : Visibility.Visible;
         CloudVocabularyPanel.Visibility = isLocal ? Visibility.Collapsed : Visibility.Visible;
@@ -2326,7 +2331,7 @@ public sealed partial class SettingsWindow : Window
     /// Convenience: progress callback from Rust during a Parakeet
     /// bundle download. Updates the same DownloadProgress bar used by
     /// the whisper-model download path. Total is 0 when one of the
-    /// HEAD calls didn't return a Content-Length — fall back to
+    /// HEAD calls didn't return a Content-Length â€” fall back to
     /// indeterminate in that case.
     private void OnParakeetProgress(long downloaded, long total)
     {
@@ -2429,7 +2434,7 @@ public sealed partial class SettingsWindow : Window
         }
     }
 
-    // ── Local LLM mode ────────────────────────────────────────────
+    // â”€â”€ Local LLM mode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     private System.Collections.Generic.List<LocalModelInfo> _localLlmModels = new();
 
@@ -2591,7 +2596,7 @@ public sealed partial class SettingsWindow : Window
             }
             else
             {
-                // "Custom" selected — show URL/model TextBoxes
+                // "Custom" selected â€” show URL/model TextBoxes
                 CustomUrlBox.Visibility = Visibility.Visible;
                 CustomModelBox.Visibility = Visibility.Visible;
             }
@@ -2599,7 +2604,7 @@ public sealed partial class SettingsWindow : Window
             // Without this, switching to a provider with a saved key still
             // showed "no key" until the user closed + reopened Settings.
             ViewModel.HasApiKey = LookupSttKeyForTag(tag);
-            // ALSO refresh the LLM section visibility — the
+            // ALSO refresh the LLM section visibility â€” the
             // "Use my saved API key" toggle and the LLM key input
             // depend on STT's HasApiKey + provider parity. Without
             // this call, switching STT to Gemini (while LLM was
@@ -2616,7 +2621,7 @@ public sealed partial class SettingsWindow : Window
             _currentTag = tag;
             // V2 IA: home / voice / output / pill / rules / shortcut / privacy / about / advanced.
             // Legacy tags (general / overlay / debug / stats) accepted for back-compat with any
-            // saved nav-state path elsewhere — they map to the v2 panels behind the scenes.
+            // saved nav-state path elsewhere â€” they map to the v2 panels behind the scenes.
             HomePanel.Visibility = Visibility.Collapsed;
             GeneralPanel.Visibility = Visibility.Collapsed;
             ShortcutPanel.Visibility = Visibility.Collapsed;
@@ -2662,7 +2667,7 @@ public sealed partial class SettingsWindow : Window
         }
     }
 
-    // ── License ────────────────────────────────────────────────────────
+    // â”€â”€ License â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     private void RefreshLicenseStatus()
     {
@@ -2694,15 +2699,15 @@ public sealed partial class SettingsWindow : Window
             LicenseStatusHeadline.Text = head;
             LicenseStatusDetail.Text = detail;
 
-            // Tier pill + trailing days + tinted border — mirrors the
+            // Tier pill + trailing days + tinted border â€” mirrors the
             // statusHero design from macOS MacLicensePage.swift. Drives
             // four signals at a glance: state (color), tier (badge text),
             // remaining time (trailing number), category (border tint).
             ApplyLicenseHero(s);
 
-            // Stripe Customer Portal button — only meaningful for paid
+            // Stripe Customer Portal button â€” only meaningful for paid
             // licenses. Trials and source-build have no Stripe billing
-            // attached. Lifetime DOES — the portal still surfaces
+            // attached. Lifetime DOES â€” the portal still surfaces
             // invoices and lets the user update their payment method
             // for future purchases on the same Stripe customer.
             LicenseManageSubButton.Visibility =
@@ -2711,7 +2716,7 @@ public sealed partial class SettingsWindow : Window
                     : Visibility.Collapsed;
             ApplyBuyCardForStatus(s);
             PopulateScopeGrid(s);
-            // Devices are server-side data — refresh asynchronously, only when
+            // Devices are server-side data â€” refresh asynchronously, only when
             // we actually have a license to query against.
             if (s.Kind is "TrialActive" or "Active" or "Suspended")
                 _ = RefreshDevicesAsync();
@@ -2736,11 +2741,11 @@ public sealed partial class SettingsWindow : Window
     /// </summary>
     private void ApplyLicenseHero(LicenseService.Status s)
     {
-        // ── Tint per state ─────────────────────────────────────────────
+        // â”€â”€ Tint per state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         // Color is reserved for *positive* state. TrialActive=orange
         // ("act soon"), Active=green ("you're paid"), Unrestricted=purple
         // ("dev"). Everything else (NotFound, TrialExpired, Expired,
-        // Invalid, Suspended) collapses to neutral gray — a license
+        // Invalid, Suspended) collapses to neutral gray â€” a license
         // problem isn't an error to alarm about, it's just a state.
         // Red was reading as "something is broken", wrong vibe for a
         // user who simply hasn't activated yet.
@@ -2752,7 +2757,7 @@ public sealed partial class SettingsWindow : Window
             _              => global::Windows.UI.Color.FromArgb(0xFF, 0x90, 0x90, 0x99),
         };
 
-        // ── Badge text ─────────────────────────────────────────────────
+        // â”€â”€ Badge text â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         // Active branches by tier so a paying user sees the SKU, not just
         // a generic "PRO". Trial / Suspended / Expired collapse to the
         // state name.
@@ -2762,9 +2767,9 @@ public sealed partial class SettingsWindow : Window
             "TrialActive" or "TrialExpired" => "TRIAL",
             "Active" => s.Tier switch
             {
-                "monthly"  => "PRO • MONTHLY",
-                "annual"   => "PRO • ANNUAL",
-                "lifetime" => "PRO • LIFETIME",
+                "monthly"  => "PRO â€¢ MONTHLY",
+                "annual"   => "PRO â€¢ ANNUAL",
+                "lifetime" => "PRO â€¢ LIFETIME",
                 _          => "PRO",
             },
             "Expired"   => "EXPIRED",
@@ -2785,19 +2790,19 @@ public sealed partial class SettingsWindow : Window
         LicenseTierBadge.Foreground        = new Microsoft.UI.Xaml.Media.SolidColorBrush(tint);
         LicenseTierBadgeBorder.Visibility = Visibility.Visible;
 
-        // ── Hero card ─────────────────────────────────────────────────
+        // â”€â”€ Hero card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         // Fluent prefers theme-aware surfaces over saturated colored
         // borders. We use a faint 5% tint background and the standard
-        // ControlStrokeColorDefaultBrush for the border — the colored
+        // ControlStrokeColorDefaultBrush for the border â€” the colored
         // accent stays in the badge + trailing days counter.
         var heroFill = tint; heroFill.A = 0x0D; // ~5%
         LicenseStatusBorder.Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(heroFill);
         LicenseStatusBorder.BorderBrush =
             (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["ControlStrokeColorDefaultBrush"];
 
-        // ── Trailing big-number ───────────────────────────────────────
-        // TrialActive / Active → days remaining. Suspended → days offline.
-        // Everything else → no trailing column.
+        // â”€â”€ Trailing big-number â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // TrialActive / Active â†’ days remaining. Suspended â†’ days offline.
+        // Everything else â†’ no trailing column.
         if (s.Kind is "TrialActive" or "Active" && s.DaysRemaining is long d)
         {
             LicenseTrailingValue.Text = d.ToString();
@@ -2833,7 +2838,7 @@ public sealed partial class SettingsWindow : Window
 
             var glyph = new FontIcon
             {
-                Glyph = granted ? "" : "", // CheckMark vs Cancel
+                Glyph = granted ? "îœ¾" : "îœ‘", // CheckMark vs Cancel
                 FontSize = 16,
                 // System accent brushes are theme-aware AND high-contrast in
                 // both modes. Secondary at FontSize 16 was still rendering
@@ -2900,7 +2905,7 @@ public sealed partial class SettingsWindow : Window
         LicenseTrialButton.IsEnabled = false;
         try
         {
-            ShowInfoBar(LicenseTrialInfoBar, InfoBarSeverity.Informational, "Requesting magic link…");
+            ShowInfoBar(LicenseTrialInfoBar, InfoBarSeverity.Informational, "Requesting magic linkâ€¦");
             var r = await LicenseService.RequestTrialAsync(email);
             if (!r.Ok)
             {
@@ -2909,7 +2914,7 @@ public sealed partial class SettingsWindow : Window
             }
 
             // Production: server emails the magic link, UI shows "check your inbox".
-            // Dev (local server): server returns the link directly — we open it via the
+            // Dev (local server): server returns the link directly â€” we open it via the
             // OS to exercise the same dimmy:// path the email click would trigger.
             var link = r.MagicLink;
             if (string.IsNullOrEmpty(link))
@@ -2922,13 +2927,13 @@ public sealed partial class SettingsWindow : Window
             if (link.StartsWith("dimmy://", StringComparison.OrdinalIgnoreCase))
             {
                 ShowInfoBar(LicenseTrialInfoBar, InfoBarSeverity.Informational,
-                    "Activating via magic link…");
+                    "Activating via magic linkâ€¦");
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(link)
                 {
                     UseShellExecute = true,
                 });
 
-                // Poll status — the URL-scheme dispatch hands the code to the
+                // Poll status â€” the URL-scheme dispatch hands the code to the
                 // running Dimmy via named pipe; redeem completes asynchronously.
                 if (await WaitForActivationAsync(TimeSpan.FromSeconds(8)))
                 {
@@ -2944,7 +2949,7 @@ public sealed partial class SettingsWindow : Window
             }
             else
             {
-                // Production case — server returned an HTTPS link (e.g. license.dimmy.app/m/...).
+                // Production case â€” server returned an HTTPS link (e.g. license.dimmy.app/m/...).
                 // Email is the canonical delivery; just confirm.
                 ShowInfoBar(LicenseTrialInfoBar, InfoBarSeverity.Success,
                     "Magic link sent to " + email + ". Click it from this device to activate.");
@@ -2963,11 +2968,11 @@ public sealed partial class SettingsWindow : Window
     private void OnLicenseChangedExternal()
     {
         // Always refresh, regardless of which tab is currently visible.
-        // Pre-fix the check was `_currentTag == "license"` — that
+        // Pre-fix the check was `_currentTag == "license"` â€” that
         // skipped the refresh whenever the dimmy:// activate flow fired
         // NotifyChanged BEFORE NavigateToTag had set the tag to
         // "license" (the order in App.xaml.cs HandleForwardedCommand:
-        // NotifyChanged → OpenSettingsWindowAt → NavigateToTag). The
+        // NotifyChanged â†’ OpenSettingsWindowAt â†’ NavigateToTag). The
         // user landed on the License page with stale "NotFound" data
         // and concluded activation hadn't worked.
         // RefreshLicenseStatus is cheap (one FFI call + a few bindings)
@@ -2981,7 +2986,7 @@ public sealed partial class SettingsWindow : Window
     /// the user lands on the License page with the post-redeem status.
     /// When navigating to "license" we also force-refresh the status
     /// view so the badge reflects whatever the most recent activate /
-    /// refresh wrote to disk — even if the LicenseChanged event raced
+    /// refresh wrote to disk â€” even if the LicenseChanged event raced
     /// past the page before this navigation completed.
     public void NavigateToTag(string tag)
     {
@@ -3031,7 +3036,7 @@ public sealed partial class SettingsWindow : Window
         if (string.IsNullOrEmpty(label)) label = Environment.MachineName;
         try
         {
-            ShowInfoBar(LicenseActivateInfoBar, InfoBarSeverity.Informational, "Activating…");
+            ShowInfoBar(LicenseActivateInfoBar, InfoBarSeverity.Informational, "Activatingâ€¦");
             var r = await LicenseService.RedeemAsync(code, label);
             if (r.Ok)
             {
@@ -3054,7 +3059,7 @@ public sealed partial class SettingsWindow : Window
         try
         {
             var r = await LicenseService.RefreshAsync();
-            // Status either way — the user wants to see the result.
+            // Status either way â€” the user wants to see the result.
             RefreshLicenseStatus();
             if (!r.Ok)
                 ShowInfoBar(LicenseActivateInfoBar, InfoBarSeverity.Warning, r.Error ?? "Refresh failed.");
@@ -3068,7 +3073,7 @@ public sealed partial class SettingsWindow : Window
     private async void License_Clear_Click(object sender, RoutedEventArgs e)
     {
         // Confirm dialog with the message users keep missing: signing out
-        // removes the license from THIS device only — the Stripe sub
+        // removes the license from THIS device only â€” the Stripe sub
         // stays alive and keeps billing. To stop billing, use Manage
         // subscription. Without this dialog, users sign out then click
         // Buy expecting to "start over" and end up with a duplicate
@@ -3092,7 +3097,7 @@ public sealed partial class SettingsWindow : Window
     }
 
     /// <summary>
-    /// "Manage subscription" — POST /api/billing-portal with the on-disk
+    /// "Manage subscription" â€” POST /api/billing-portal with the on-disk
     /// token, open the returned Stripe Customer Portal URL in the
     /// system browser. Read the token directly from the license file
     /// rather than going through FFI: this is a one-shot operation
@@ -3103,8 +3108,8 @@ public sealed partial class SettingsWindow : Window
     {
         // Goes through the licensing FFI so the call hits whichever
         // server URL was embedded at build time via
-        // DIMMY_LICENSE_SERVER_URL (staging → license-staging.dimmy.app,
-        // prod → license.dimmy.app, debug → localhost mock). The
+        // DIMMY_LICENSE_SERVER_URL (staging â†’ license-staging.dimmy.app,
+        // prod â†’ license.dimmy.app, debug â†’ localhost mock). The
         // runtime override that used to live behind a Settings text
         // box has been removed for safety.
         LicenseManageSubButton.IsEnabled = false;
@@ -3140,13 +3145,13 @@ public sealed partial class SettingsWindow : Window
     /// the active tier so an Active{Monthly} user only sees Annual +
     /// Lifetime as upgrade options, an Active{Annual} user only sees
     /// Lifetime, and an Active{Lifetime} user sees no Buy at all
-    /// (lifetime is the ceiling). Trial → all three (legitimate
-    /// trial→paid). NotFound / TrialExpired / Expired / Suspended → all
-    /// three (first purchase or repurchase). Unrestricted / Invalid →
+    /// (lifetime is the ceiling). Trial â†’ all three (legitimate
+    /// trialâ†’paid). NotFound / TrialExpired / Expired / Suspended â†’ all
+    /// three (first purchase or repurchase). Unrestricted / Invalid â†’
     /// the whole card stays hidden.
     ///
     /// Plan-change for active users (downgrade, cancel) goes through
-    /// the Stripe Customer Portal, NOT through these Buy buttons —
+    /// the Stripe Customer Portal, NOT through these Buy buttons â€”
     /// the portal hint TextBlock surfaces this when relevant so the
     /// user doesn't accidentally start a duplicate subscription.
     private void ApplyBuyCardForStatus(LicenseService.Status s)
@@ -3203,14 +3208,14 @@ public sealed partial class SettingsWindow : Window
                         headline = "Change your plan";
                         detail = "Drop to Monthly (you'll get a credit on the next invoice) or jump to Lifetime for one final payment.";
                         show = true;
-                        showMonthly = true;          // ← reveal Switch to Monthly
+                        showMonthly = true;          // â† reveal Switch to Monthly
                         showAnnual = false;
                         monthlyLabel = "Switch to Monthly";
                         lifetimeLabel = "Upgrade to Lifetime";
                         showPortalHint = true;
                         break;
                     case "lifetime":
-                        // Ceiling tier — nothing above it.
+                        // Ceiling tier â€” nothing above it.
                         show = false;
                         break;
                     default:
@@ -3220,7 +3225,7 @@ public sealed partial class SettingsWindow : Window
                         break;
                 }
                 break;
-            // Unrestricted, Invalid, anything else → hidden.
+            // Unrestricted, Invalid, anything else â†’ hidden.
         }
 
         LicenseBuyCard.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
@@ -3255,7 +3260,7 @@ public sealed partial class SettingsWindow : Window
     /// <summary>
     /// Modal asking the user for the email tied to their Stripe purchase.
     /// Used by the pre-checkout gate to look up an existing license server-side
-    /// before spinning up a Checkout session — closes the post-sign-out
+    /// before spinning up a Checkout session â€” closes the post-sign-out
     /// double-charge edge case. Returns the trimmed lowercase email on
     /// confirm, or null on cancel.
     /// </summary>
@@ -3311,12 +3316,12 @@ public sealed partial class SettingsWindow : Window
 
     private async Task BuyTierAsync(string tier)
     {
-        // Distinguish "plan change" (Active monthly⇄annual) from "first
+        // Distinguish "plan change" (Active monthlyâ‡„annual) from "first
         // purchase / lifetime upgrade". Plan change goes through
         // /api/plan-change (subscription update + proration) so the user
         // is NOT charged a fresh full-price invoice on top of their
-        // existing sub. Anything else (first purchase, trial→paid,
-        // sub→lifetime, expired/suspended renew) goes through Stripe
+        // existing sub. Anything else (first purchase, trialâ†’paid,
+        // subâ†’lifetime, expired/suspended renew) goes through Stripe
         // Checkout as before.
         try
         {
@@ -3340,10 +3345,10 @@ public sealed partial class SettingsWindow : Window
                     Content =
                         $"You're already subscribed (current: {ToTitleCase(status.Tier ?? "")}). " +
                         $"Switching to {tier} mutates your existing subscription:\n\n" +
-                        "• No new payment now. Stripe reuses your saved card.\n" +
-                        "• Stripe issues a prorated invoice on the next billing date " +
+                        "â€¢ No new payment now. Stripe reuses your saved card.\n" +
+                        "â€¢ Stripe issues a prorated invoice on the next billing date " +
                         "(credit for unused days of the old plan, debit for the new one).\n" +
-                        "• No magic-link email; your license stays active, just the tier changes.",
+                        "â€¢ No magic-link email; your license stays active, just the tier changes.",
                     PrimaryButtonText = $"Switch to {ToTitleCase(tier)}",
                     SecondaryButtonText = "Cancel",
                     DefaultButton = ContentDialogButton.Primary,
@@ -3357,7 +3362,7 @@ public sealed partial class SettingsWindow : Window
                     return;
                 }
                 ShowInfoBar(LicenseBuyInfoBar, InfoBarSeverity.Informational,
-                    $"Switching plan to {tier}…");
+                    $"Switching plan to {tier}â€¦");
                 var r = await LicenseService.PlanChangeAsync(tier);
                 if (!r.Ok)
                 {
@@ -3388,7 +3393,7 @@ public sealed partial class SettingsWindow : Window
             // before minting the Stripe Checkout URL. The server uses
             // the email to look up an existing license and 409 BEFORE
             // Stripe charges the card. Pre-fill with whatever we have
-            // saved in UiPreferences (survives Sign out — no auth, just
+            // saved in UiPreferences (survives Sign out â€” no auth, just
             // UX convenience).
             var prefs = Services.UiPreferences.Load();
             var promptedEmail = await PromptBuyerEmailAsync(
@@ -3404,11 +3409,11 @@ public sealed partial class SettingsWindow : Window
             prefs.BuyerEmail = promptedEmail;
             prefs.Save();
 
-            ShowInfoBar(LicenseBuyInfoBar, InfoBarSeverity.Informational, $"Opening Stripe checkout for {tier}…");
+            ShowInfoBar(LicenseBuyInfoBar, InfoBarSeverity.Informational, $"Opening Stripe checkout for {tier}â€¦");
             var c = await LicenseService.CreateCheckoutAsync(tier, promptedEmail);
             if (!c.Ok || string.IsNullOrEmpty(c.Url))
             {
-                // 409 path → license already exists for this email. Offer
+                // 409 path â†’ license already exists for this email. Offer
                 // 'Send magic link instead' fallback (re-issues activation
                 // email for the existing license via /api/trial/start).
                 if (c.StatusCode == 409 && !string.IsNullOrEmpty(c.CurrentTier))
@@ -3469,7 +3474,7 @@ public sealed partial class SettingsWindow : Window
     {
         try
         {
-            LicenseDeviceCountLabel.Text = "Loading…";
+            LicenseDeviceCountLabel.Text = "Loadingâ€¦";
             var list = await LicenseService.ListDevicesAsync();
             if (!list.Ok)
             {
@@ -3517,7 +3522,7 @@ public sealed partial class SettingsWindow : Window
         {
             nameRun.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run
             {
-                Text = "  · this device",
+                Text = "  Â· this device",
                 FontWeight = Microsoft.UI.Text.FontWeights.Normal,
                 Foreground = (Microsoft.UI.Xaml.Media.Brush)
                     Application.Current.Resources["TextFillColorTertiaryBrush"],
@@ -3638,18 +3643,18 @@ public sealed partial class SettingsWindow : Window
             ViewModel.ApiKey = CloudApiKeyBox.Password;
         if (!string.IsNullOrEmpty(LlmApiKeyBox.Password))
             ViewModel.LlmApiKey = LlmApiKeyBox.Password;
-        // Recap key drain — saves to KeyringScope::Recap(<vendor>)
+        // Recap key drain â€” saves to KeyringScope::Recap(<vendor>)
         // via the dedicated FFI. Empty PasswordBox = no-op, so a
         // user closing Settings without touching this field can't
         // wipe an existing Recap-scope key.
         DrainRecapKeyToKeystore();
 
-        // includeLlm + includeRecap: this is the Settings → Save
-        // path — the user has been editing everything (incl. LLM
+        // includeLlm + includeRecap: this is the Settings â†’ Save
+        // path â€” the user has been editing everything (incl. LLM
         // provider + Recap section) and explicitly clicks Save, so
         // we MUST persist those fields. Other save sites (per-field
-        // LostFocus, theme toggle, …) call ToJson() default and so
-        // omit the gated blocks → no accidental wipe on transient VM.
+        // LostFocus, theme toggle, â€¦) call ToJson() default and so
+        // omit the gated blocks â†’ no accidental wipe on transient VM.
         var json = ViewModel.ToJson(includeLlm: true, includeRecap: true);
 
         // Tell Rust to update in-memory state and save config.json
@@ -3659,7 +3664,7 @@ public sealed partial class SettingsWindow : Window
         App.Instance?.ReloadConfig();
         App.Instance?.ApplySettings(ViewModel);
         // Skip the Closed-handler save since we already wrote the
-        // current state — flag prevents a redundant FFI round-trip.
+        // current state â€” flag prevents a redundant FFI round-trip.
         _autoSaveDone = true;
         this.Close();
     }
@@ -3678,9 +3683,9 @@ public sealed partial class SettingsWindow : Window
                 ViewModel.ApiKey = CloudApiKeyBox.Password;
             if (!string.IsNullOrEmpty(LlmApiKeyBox?.Password))
                 ViewModel.LlmApiKey = LlmApiKeyBox.Password;
-            // Recap key drain — same as Save_Click. Empty box = no-op.
+            // Recap key drain â€” same as Save_Click. Empty box = no-op.
             DrainRecapKeyToKeystore();
-            // Same rationale as Save_Click — closing Settings with X/ESC
+            // Same rationale as Save_Click â€” closing Settings with X/ESC
             // is the user's "save what I touched" intent; include LLM
             // + Recap so a user who edited those blocks doesn't lose
             // their work, and a user who DIDN'T also doesn't get wipe-d
@@ -3700,15 +3705,15 @@ public sealed partial class SettingsWindow : Window
     /// <summary>Apply the pill-visibility prefs immediately on toggle
     /// so the user sees the effect (next hotkey press / next launch)
     /// without having to click Save. Persistence to ui_prefs.json is
-    /// triggered indirectly through App.Instance.ApplySettings →
-    /// AppViewModel.PropertyChanged → OnUiPrefsRelevantPropertyChanged.</summary>
+    /// triggered indirectly through App.Instance.ApplySettings â†’
+    /// AppViewModel.PropertyChanged â†’ OnUiPrefsRelevantPropertyChanged.</summary>
     private void PillVisibilityToggle_Toggled(object sender, RoutedEventArgs e)
     {
         if (!_loaded) return;
         App.Instance?.ApplySettings(ViewModel);
     }
 
-    /// 2026-05-08: AudioSource radio buttons removed from Settings —
+    /// 2026-05-08: AudioSource radio buttons removed from Settings â€”
     /// always-mix architecture means the user no longer picks between
     /// Mic / System / Mix. Stub kept (and called from the loader) so a
     /// stale binding doesn't NRE; sets a sensible default on the
@@ -3721,8 +3726,8 @@ public sealed partial class SettingsWindow : Window
     }
 
     /// Source-of-truth array of curated recap-model ids. Order MUST
-    /// match the ComboBoxItem order in SettingsWindow.xaml — the
-    /// SyncRecapModelPicker logic uses array index → SelectedIndex
+    /// match the ComboBoxItem order in SettingsWindow.xaml â€” the
+    /// SyncRecapModelPicker logic uses array index â†’ SelectedIndex
     /// 1:1. The trailing `__custom__` item is implicit (index =
     /// _recapModelKnownTags.Length). If you add a curated entry,
     /// update both this array AND the XAML.
@@ -3770,7 +3775,7 @@ public sealed partial class SettingsWindow : Window
         }
         else
         {
-            // Custom model — pick the placeholder Custom entry (last
+            // Custom model â€” pick the placeholder Custom entry (last
             // ComboBoxItem) and show the textbox so the user can edit.
             RecapModelComboBox.SelectedIndex = _recapModelKnownTags.Length;
             RecapModelCustomCard.Visibility = Visibility.Visible;
@@ -3779,10 +3784,10 @@ public sealed partial class SettingsWindow : Window
 
     /// Derive the recap vendor from the chosen recap_model_override.
     /// Mirrors Rust's `Provider::from_model_id`:
-    ///   claude-*                → "anthropic"
-    ///   gpt-*, o1, o3, o4(-...) → "openai"
-    ///   gemini-*                → "gemini"
-    ///   "" (Auto) or unknown    → fall back to the dictation vendor
+    ///   claude-*                â†’ "anthropic"
+    ///   gpt-*, o1, o3, o4(-...) â†’ "openai"
+    ///   gemini-*                â†’ "gemini"
+    ///   "" (Auto) or unknown    â†’ fall back to the dictation vendor
     ///
     /// The fallback for empty / unknown is what makes "Auto" mean
     /// "inherit dictation provider" without needing a separate enum
@@ -3808,15 +3813,15 @@ public sealed partial class SettingsWindow : Window
     ///
     /// Visibility matrix:
     ///   recap_vendor empty / unknown
-    ///     → toggle hidden, key card hidden (inherits LLM dispatch)
+    ///     â†’ toggle hidden, key card hidden (inherits LLM dispatch)
     ///   recap_vendor == anthropic AND subscription active
-    ///     → toggle hidden, key card hidden (CLI handles auth)
+    ///     â†’ toggle hidden, key card hidden (CLI handles auth)
     ///   upstream key exists (LLM scope OR STT scope for recap_vendor)
-    ///     → toggle visible (default ON)
-    ///         toggle ON  → key card hidden, dispatcher reuses upstream
-    ///         toggle OFF → key card visible, write to Recap(vendor) scope
+    ///     â†’ toggle visible (default ON)
+    ///         toggle ON  â†’ key card hidden, dispatcher reuses upstream
+    ///         toggle OFF â†’ key card visible, write to Recap(vendor) scope
     ///   no upstream key
-    ///     → toggle hidden + coerced false, key card visible (need a key)
+    ///     â†’ toggle hidden + coerced false, key card visible (need a key)
     ///
     /// Snapshot reads: `has_<vendor>_llm_key` (LLM scope) +
     /// `has_<vendor>_key` (STT scope) + `has_<vendor>_recap_key`
@@ -3833,7 +3838,7 @@ public sealed partial class SettingsWindow : Window
         var subscriptionActive =
             string.Equals(ViewModel.RecapAuthMethod, "subscription", StringComparison.OrdinalIgnoreCase);
 
-        // Read the full snapshot once — we need three has_* fields.
+        // Read the full snapshot once â€” we need three has_* fields.
         bool hasLlmScopeKey = false;
         bool hasSttScopeKey = false;
         bool hasRecapScopeKey = false;
@@ -3860,7 +3865,7 @@ public sealed partial class SettingsWindow : Window
 
         var hasUpstreamKey = hasLlmScopeKey || hasSttScopeKey;
 
-        // ─── Subscription branch — hides all key UI ─────────────
+        // â”€â”€â”€ Subscription branch â€” hides all key UI â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if (subscriptionActive)
         {
             RecapUseSameKeyCard.Visibility = Visibility.Collapsed;
@@ -3868,8 +3873,8 @@ public sealed partial class SettingsWindow : Window
             return;
         }
 
-        // ─── Recap vendor unknown (Auto / Local / Custom) ───────
-        // No way to derive a URL or a key — inherits the entire LLM
+        // â”€â”€â”€ Recap vendor unknown (Auto / Local / Custom) â”€â”€â”€â”€â”€â”€â”€
+        // No way to derive a URL or a key â€” inherits the entire LLM
         // dispatch path. Hide all recap-specific key UI.
         if (string.IsNullOrEmpty(recapVendor))
         {
@@ -3878,9 +3883,9 @@ public sealed partial class SettingsWindow : Window
             return;
         }
 
-        // ─── Recap vendor known (same OR different from dictation)
+        // â”€â”€â”€ Recap vendor known (same OR different from dictation)
         // ALWAYS show the toggle when an upstream key exists for this
-        // vendor, including the same-vendor case — the user might
+        // vendor, including the same-vendor case â€” the user might
         // want a separate Recap-scope key (e.g. different billing
         // account on the same vendor). Toggle ON = reuse upstream,
         // OFF = type a dedicated Recap key. When no upstream key
@@ -3895,7 +3900,7 @@ public sealed partial class SettingsWindow : Window
         }
         else
         {
-            // No upstream key for this vendor — toggle is meaningless,
+            // No upstream key for this vendor â€” toggle is meaningless,
             // hide it AND coerce the underlying value to false so a
             // stale `true` from a previous config doesn't keep the
             // key card hidden (would lock the user out).
@@ -3909,13 +3914,13 @@ public sealed partial class SettingsWindow : Window
         }
 
         // Update the bound `HasRecapKey` so the PasswordBox shows the
-        // ✓ badge + "Already saved · paste to replace" placeholder
+        // âœ“ badge + "Already saved Â· paste to replace" placeholder
         // when a Recap-scope key for the derived vendor exists.
         // Mirror of the LLM's `HasLlmKey` binding.
         ViewModel.HasRecapKey = hasRecapScopeKey;
     }
 
-    /// Toggled handler for the Recap UseSameKey switch — flips the
+    /// Toggled handler for the Recap UseSameKey switch â€” flips the
     /// PasswordBox visibility immediately without waiting for the
     /// next auth refresh, and persists via the auto-save pipeline.
     private void RecapUseSameKey_Toggled(object sender, RoutedEventArgs e)
@@ -3931,7 +3936,7 @@ public sealed partial class SettingsWindow : Window
     /// Drain the Recap PasswordBox into the Rust keystore under the
     /// `Recap(<vendor>)` scope. Called from Save_Click + AutoSaveOnClose
     /// to mirror the inline LLM key drain pattern (no per-card Save
-    /// button — the global Settings save persists everything).
+    /// button â€” the global Settings save persists everything).
     ///
     /// Vendor is DERIVED from the currently-selected recap model.
     /// Empty Password = no-op (don't clear an existing entry just
@@ -3946,7 +3951,7 @@ public sealed partial class SettingsWindow : Window
         int rc;
         try
         {
-            // scope="recap" → dedicated Recap(<vendor>) keystore entry
+            // scope="recap" â†’ dedicated Recap(<vendor>) keystore entry
             // distinct from the LLM-scope key for the same vendor.
             rc = Interop.DimmyNative.dimmy_save_llm_provider_key("recap", vendor, key);
         }
@@ -3975,7 +3980,7 @@ public sealed partial class SettingsWindow : Window
         if (tag == "__custom__")
         {
             RecapModelCustomCard.Visibility = Visibility.Visible;
-            // Don't overwrite the existing custom value — let the user
+            // Don't overwrite the existing custom value â€” let the user
             // pick up where they left off in the textbox.
             return;
         }
@@ -4009,11 +4014,11 @@ public sealed partial class SettingsWindow : Window
                 "Dark" => ElementTheme.Dark,
                 _ => ElementTheme.Default,
             };
-            // Save theme choice and apply to pill (Light → glass, Dark/Default → dark)
+            // Save theme choice and apply to pill (Light â†’ glass, Dark/Default â†’ dark)
             ViewModel.Theme = tag;
             if (_loaded)
             {
-                // Persist to UiPreferences (NOT config.json — Rust core
+                // Persist to UiPreferences (NOT config.json â€” Rust core
                 // has no Theme field and would silently drop it). The
                 // pill-prefs save path is already wired separately so
                 // we just touch the Theme key here.
@@ -4059,7 +4064,7 @@ public sealed partial class SettingsWindow : Window
     private void OverlayPositionCell_Checked(object sender, RoutedEventArgs e)
     {
         // Position grid cells: each RadioButton's Tag is the canonical
-        // position string. The Tag→ViewModel write happens via the TwoWay
+        // position string. The Tagâ†’ViewModel write happens via the TwoWay
         // binding on IsChecked + StringEqualityConverter; this handler
         // just notifies the live overlay so the pill jumps immediately.
         if (_loaded) App.Instance?.ApplySettings(ViewModel);
@@ -4208,7 +4213,7 @@ public sealed partial class SettingsWindow : Window
             PreviewGlyph.Visibility = Visibility.Visible;
         }
 
-        PreviewCaption.Text = $"Preview · {state}";
+        PreviewCaption.Text = $"Preview Â· {state}";
     }
 
     private void PreviewState_Checked(object sender, RoutedEventArgs e)
@@ -4229,15 +4234,15 @@ public sealed partial class SettingsWindow : Window
         switch (state)
         {
             case "idle":
-                PreviewGlyph.Glyph = "";
+                PreviewGlyph.Glyph = "îœ ";
                 PreviewGlyph.Foreground = PreviewSolid(0x94, 0xA3, 0xB8);
                 break;
             case "done":
-                PreviewGlyph.Glyph = "";
+                PreviewGlyph.Glyph = "îœ¾";
                 PreviewGlyph.Foreground = PreviewSolid(0x4A, 0xDE, 0x80);
                 break;
             case "error":
-                PreviewGlyph.Glyph = "";
+                PreviewGlyph.Glyph = "îžƒ";
                 PreviewGlyph.Foreground = PreviewSolid(0xF4, 0x72, 0x6E);
                 break;
         }
@@ -4288,13 +4293,13 @@ public sealed partial class SettingsWindow : Window
     {
         _currentVersion = DimmyNative.ReadBuffer(DimmyNative.dimmy_get_version, 64) ?? "0.0.0";
         VersionText.Text = $"v{_currentVersion}";
-        // Append " · STAGING" suffix on staging builds. The sidebar banner
+        // Append " Â· STAGING" suffix on staging builds. The sidebar banner
         // already announces the flavor loudly; this just makes sure About
         // page screenshots can never be mistaken for prod ones.
-        var flavorSuffix = BuildInfo.IsStaging ? " · STAGING" : string.Empty;
+        var flavorSuffix = BuildInfo.IsStaging ? " Â· STAGING" : string.Empty;
         HeroTitleText.Text = $"Dimmy {_currentVersion}{flavorSuffix}";
         HeroSubText.Text = $"Version {_currentVersion}{flavorSuffix}";
-        // Sidebar staging banner — flip on once we know the flavor. Done
+        // Sidebar staging banner â€” flip on once we know the flavor. Done
         // here (rather than in the constructor) because XAML elements
         // are initialised lazily.
         if (StagingBanner is not null)
@@ -4302,7 +4307,7 @@ public sealed partial class SettingsWindow : Window
                 ? Microsoft.UI.Xaml.Visibility.Visible
                 : Microsoft.UI.Xaml.Visibility.Collapsed;
 
-        // Update UI gate — auto-update is a paid feature
+        // Update UI gate â€” auto-update is a paid feature
         // (LicenseService.ScopeNames.AutoUpdate). Free users see
         // neither the channel selector nor the "Update ready" card;
         // the UpdateService background loop also skips the poll.
@@ -4330,7 +4335,7 @@ public sealed partial class SettingsWindow : Window
             try { Services.LicenseService.LicenseChanged -= onLicenseChanged; } catch { }
         };
 
-        // Channel selector — restore last pick.
+        // Channel selector â€” restore last pick.
         try
         {
             var prefs = Services.UiPreferences.Load();
@@ -4349,7 +4354,7 @@ public sealed partial class SettingsWindow : Window
 
         // Subscribe + reflect current state. UpdateService background
         // loop may have already downloaded an update before Settings
-        // opened — handle both "already ready" and "ready while
+        // opened â€” handle both "already ready" and "ready while
         // Settings is open" without leaking subscriptions: detach on
         // Closed below.
         if (Services.UpdateService.Instance is { } upd)
@@ -4381,7 +4386,7 @@ public sealed partial class SettingsWindow : Window
     {
         // ApplyAndRestart never returns: Velopack spawns its updater,
         // tears down the current EXE, and re-launches the new build.
-        // No need to dispose anything here — the OS reclaims it.
+        // No need to dispose anything here â€” the OS reclaims it.
         Services.UpdateService.Instance?.ApplyAndRestart();
     }
 
@@ -4405,7 +4410,7 @@ public sealed partial class SettingsWindow : Window
                     to = tag,
                 });
             }
-            // Channel change must re-check immediately — the user
+            // Channel change must re-check immediately â€” the user
             // expects toggling "Pre-release" to surface a staging
             // build right away if one exists, not at the next 6h tick.
             _ = Services.UpdateService.Instance?.CheckAndDownloadAsync();
@@ -4425,7 +4430,7 @@ public sealed partial class SettingsWindow : Window
         // to be discovered as soon as it's published.
         //
         // Falls back to opening the download page in the browser when
-        // the UpdateService isn't enabled — that's the auto_update
+        // the UpdateService isn't enabled â€” that's the auto_update
         // license scope being absent (free user) OR a dev source
         // build where Velopack metadata isn't present. Either way the
         // user still gets a way to get the latest version.
@@ -4462,7 +4467,7 @@ public sealed partial class SettingsWindow : Window
         catch { }
     }
 
-    // CheckForUpdateAsync + IsNewerVersion removed 2026-05-11 — the
+    // CheckForUpdateAsync + IsNewerVersion removed 2026-05-11 â€” the
     // GitHub-Releases poll has been replaced by UpdateService (Velopack
     // wrapper). The new path silently downloads the delta + surfaces
     // UpdateReady, so this Settings window only needs to reflect state
@@ -4473,7 +4478,7 @@ public sealed partial class SettingsWindow : Window
         this.Close();
     }
 
-    // ── Custom dictionary handlers ──────────────────────────────
+    // â”€â”€ Custom dictionary handlers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // The dict lives in the Rust AppState (round-tripped through
     // config.json). We refresh the ObservableCollection on Settings
     // open + after every add / remove so the ListView reflects
@@ -4509,11 +4514,11 @@ public sealed partial class SettingsWindow : Window
         switch (rc)
         {
             case 0:
-                DictStatusText.Text = $"Added “{word}”.";
+                DictStatusText.Text = $"Added â€œ{word}â€.";
                 DictAddTextBox!.Text = "";
                 break;
             case 1:
-                DictStatusText.Text = $"“{word}” is already in the dictionary.";
+                DictStatusText.Text = $"â€œ{word}â€ is already in the dictionary.";
                 break;
             default:
                 DictStatusText.Text = $"Couldn't add (rc={rc}).";
@@ -4558,16 +4563,16 @@ public sealed partial class SettingsWindow : Window
         int removed = Services.DictionaryService.Remove(word);
         if (removed > 0)
         {
-            DictStatusText.Text = $"Removed “{word}”.";
+            DictStatusText.Text = $"Removed â€œ{word}â€.";
         }
         else
         {
-            DictStatusText.Text = $"“{word}” was not in the dictionary.";
+            DictStatusText.Text = $"â€œ{word}â€ was not in the dictionary.";
         }
         ReloadUserDict();
     }
 
-    // ── Privacy panel handlers ──────────────────────────────────
+    // â”€â”€ Privacy panel handlers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     private void RefreshAnonymousIdText()
     {
@@ -4576,7 +4581,7 @@ public sealed partial class SettingsWindow : Window
             var id = DimmyNative.TelemetryAnonymousId() ?? "(unavailable)";
             // Display only the first 8 chars + ellipsis to avoid overwhelming
             // the UI with the full UUID. The full ID never needs to be shown.
-            var preview = id.Length >= 8 ? $"{id[..8]}…" : id;
+            var preview = id.Length >= 8 ? $"{id[..8]}â€¦" : id;
             AnonymousIdText.Text = preview;
         }
         catch
@@ -4620,7 +4625,7 @@ public sealed partial class SettingsWindow : Window
         }
     }
 
-    // ── Notion integration ────────────────────────────────────────
+    // â”€â”€ Notion integration â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Setup is delegated to NotionConnectDialog (3-step wizard). This
     // surface only owns the summary card + auto-send toggle + the
     // launchers that open the wizard at the right step.
@@ -4635,7 +4640,7 @@ public sealed partial class SettingsWindow : Window
     }
 
     /// <summary>Refresh the Integrations summary card from the current
-    /// ViewModel state. Idempotent — safe to call from initial load
+    /// ViewModel state. Idempotent â€” safe to call from initial load
     /// and after every wizard close.</summary>
     private void NotionRefreshSummary()
     {
@@ -4644,8 +4649,8 @@ public sealed partial class SettingsWindow : Window
         {
             var dest = string.IsNullOrEmpty(ViewModel.NotionTargetTitle)
                 ? "no destination yet"
-                : $"recaps land in “{ViewModel.NotionTargetTitle}”";
-            NotionStatusText.Text = $"Connected — {dest}";
+                : $"recaps land in â€œ{ViewModel.NotionTargetTitle}â€";
+            NotionStatusText.Text = $"Connected â€” {dest}";
             NotionStatusGlyph.Glyph = ""; // CheckMark
             NotionStatusGlyph.Foreground = (Microsoft.UI.Xaml.Media.Brush)
                 Application.Current.Resources["SystemFillColorSuccessBrush"];
@@ -4695,7 +4700,7 @@ public sealed partial class SettingsWindow : Window
             ViewModel.NotionTargetTitle = dlg.PickedTargetTitle;
             try
             {
-                // includeNotion: true — this is the only "explicit
+                // includeNotion: true â€” this is the only "explicit
                 // Notion intent" save site. Generic Settings saves
                 // skip these fields so a transient empty VM never
                 // wipes a valid destination from disk.
@@ -4706,7 +4711,7 @@ public sealed partial class SettingsWindow : Window
                 {
                     App.Instance?.ApplySettings(ViewModel);
                     NotionShowMessage(
-                        $"Recaps will land in “{dlg.PickedTargetTitle}” ({dlg.PickedTargetKind}). All set.",
+                        $"Recaps will land in â€œ{dlg.PickedTargetTitle}â€ ({dlg.PickedTargetKind}). All set.",
                         isError: false);
                 }
                 else
@@ -4761,7 +4766,7 @@ public sealed partial class SettingsWindow : Window
             ViewModel.NotionTargetKind = "";
             ViewModel.NotionTargetTitle = "";
             ViewModel.NotionAutoSend = false;
-            // Explicit Disconnect — caller intends to clear the
+            // Explicit Disconnect â€” caller intends to clear the
             // destination; pass includeNotion: true so the empty
             // strings reach Rust and wipe the state.
             var json = ViewModel.ToJson(includeNotion: true);
@@ -4792,6 +4797,123 @@ public sealed partial class SettingsWindow : Window
         catch (Exception ex)
         {
             App.Log($"NotionAutoSend save exc: {ex.Message}", "Notion");
+        }
+    }
+
+    // â”€â”€ Claude Desktop MCP bridge â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    private async void McpConnect_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new ClaudeDesktopConnectDialog
+        {
+            XamlRoot = (this.Content as FrameworkElement)?.XamlRoot,
+            // Jump past detect/patch if already done â€” saves clicks on re-runs.
+            InitialStep = DecideMcpInitialStep(),
+        };
+        await dialog.ShowAsync();
+        RefreshMcpCard();
+    }
+
+    private async void McpDisconnect_Click(object sender, RoutedEventArgs e)
+    {
+        var confirm = new ContentDialog
+        {
+            Title = "Disconnect Claude Desktop?",
+            Content = "Dimmy will remove its extension from Claude Desktop. Other extensions stay in place. Restart Claude Desktop afterwards so it forgets the connection.",
+            PrimaryButtonText = "Disconnect",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = (this.Content as FrameworkElement)?.XamlRoot,
+        };
+        if ((await confirm.ShowAsync()) != ContentDialogResult.Primary) return;
+        var (removed, rc) = await System.Threading.Tasks.Task.Run(() => DimmyNative.UninstallClaudeDesktopExtension());
+        App.Log($"MCP disconnect removed={removed} rc={rc}", "ClaudeDesktop");
+        RefreshMcpCard();
+    }
+
+    private void McpRefresh_Click(object sender, RoutedEventArgs e)
+    {
+        RefreshMcpCard();
+    }
+
+    private static int DecideMcpInitialStep()
+    {
+        var status = DimmyNative.GetClaudeDesktopStatus();
+        if (status.ExtensionInstalled) return 3; // jump to heartbeat verify
+        if (status.Installed) return 2;          // skip detect, go straight to install
+        return 1;
+    }
+
+    private async void RefreshMcpCard()
+    {
+        var status = await System.Threading.Tasks.Task.Run(() => DimmyNative.GetClaudeDesktopStatus());
+        if (McpStatusText == null) return; // page not yet realized
+
+        // Real Claude icon if we can extract it from the MSIX install;
+        // otherwise the bundled SVG (already set as XAML default) stays.
+        // Background-task style â€” UI thread re-binds via DispatcherQueue
+        // when the file path lands.
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            var path = await Helpers.ClaudeIconExtractor.TryExtractAsync();
+            if (!string.IsNullOrEmpty(path))
+            {
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    if (McpProviderIcon != null)
+                    {
+                        McpProviderIcon.Source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(
+                            new System.Uri(path));
+                    }
+                });
+            }
+        });
+
+        // Three rendering states: missing â†’ patched-but-cold â†’ alive.
+        // "alive" requires a heartbeat fresher than 90 s (the binary
+        // writes every 30 s; we leave headroom for the polling slack).
+        // Segoe Fluent Icon code points (use \u escapes â€” literal
+        // chars get stripped by some editors and end up as empty
+        // strings, leaving the card with no glyph at all).
+        const string GlyphCheck = "";   // CheckMark
+        const string GlyphCircle = "";  // StatusCircleBlock outline
+
+        bool alive = status.HeartbeatAgeSecs.HasValue && status.HeartbeatAgeSecs.Value < 90;
+        if (alive)
+        {
+            McpStatusText.Text = status.LastCallTool != null
+                ? $"Connected â€” last call {status.LastCallAgoSecs ?? 0}s ago ({status.LastCallTool})."
+                : $"Connected â€” heartbeat {status.HeartbeatAgeSecs!.Value}s ago.";
+            McpStatusGlyph.Glyph = GlyphCheck;
+            McpStatusGlyph.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["SystemFillColorSuccessBrush"];
+            McpDisconnectedActions.Visibility = Visibility.Collapsed;
+            McpConnectedActions.Visibility = Visibility.Visible;
+        }
+        else if (status.ExtensionInstalled)
+        {
+            // Heartbeat ages out fast (90 s) because Claude Desktop
+            // kills idle MCP servers on its own schedule. That's not
+            // an error state â€” it means "registered, Claude will
+            // respawn on demand". Keep the phrasing neutral but use
+            // the green check so the card reads as "âœ“ connected" at
+            // a glance.
+            McpStatusText.Text = status.ExtensionVersion != null
+                ? $"Installed (v{status.ExtensionVersion}) â€” Claude spawns on demand."
+                : "Installed â€” Claude spawns on demand.";
+            McpStatusGlyph.Glyph = GlyphCheck;
+            McpStatusGlyph.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["SystemFillColorSuccessBrush"];
+            McpDisconnectedActions.Visibility = Visibility.Collapsed;
+            McpConnectedActions.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            McpStatusText.Text = status.Installed
+                ? "Not connected to Claude Desktop yet."
+                : "Claude Desktop isn't installed on this machine.";
+            McpStatusGlyph.Glyph = GlyphCircle;
+            McpStatusGlyph.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorTertiaryBrush"];
+            McpDisconnectedActions.Visibility = Visibility.Visible;
+            McpConnectedActions.Visibility = Visibility.Collapsed;
         }
     }
 }

@@ -13,6 +13,11 @@ struct MacIntegrationsPage: View {
     @State private var statusIsError: Bool = false
     @State private var showDisconnectConfirm: Bool = false
     @State private var showClaudeWizard: Bool = false
+    @State private var showMcpWizard: Bool = false
+    @State private var mcpStatus: DimmyCore.ClaudeDesktopStatus = .empty
+    @State private var mcpRefreshTimer: Timer? = nil
+    @State private var showMcpDisconnectConfirm: Bool = false
+    @State private var claudeIconPath: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -23,12 +28,10 @@ struct MacIntegrationsPage: View {
             // or (recent CLIs) macOS Keychain under service
             // "Claude Code-credentials". Dimmy never touches the
             // token directly; only probes existence.
-            MacTile {
-                MacClaudeCodeCard(
-                    appState: appState,
-                    onWizardRequested: { showClaudeWizard = true }
-                )
-            }
+            MacClaudeCodeCard(
+                appState: appState,
+                onWizardRequested: { showClaudeWizard = true }
+            )
             MacGroupFooter(text: "Sign-in opens Anthropic's OAuth in your browser via the local `claude` CLI. The OAuth token is stored by the CLI in macOS Keychain (or ~/.claude/credentials.json on older versions). Dimmy reads only the existence of the token — never its contents.")
 
             Spacer().frame(height: 24)
@@ -77,6 +80,11 @@ struct MacIntegrationsPage: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            Spacer().frame(height: 24)
+            MacGroupLabel(text: "Claude Desktop (MCP)")
+            mcpCard
+            MacGroupFooter(text: "Lets Claude Desktop see your recent meetings and save recaps back. Runs entirely on this device — Claude Desktop spawns Dimmy's MCP binary at startup; no network round-trip. Disconnect anytime; we just remove our entry from claude_desktop_config.json.")
         }
         .sheet(isPresented: $showWizard) {
             NotionConnectSheet(
@@ -122,11 +130,37 @@ struct MacIntegrationsPage: View {
         } message: {
             Text("Dimmy will forget your token and destination. Your Notion content stays untouched.")
         }
+        .sheet(isPresented: $showMcpWizard) {
+            ClaudeDesktopConnectSheet(
+                appState: appState,
+                onClose: {
+                    showMcpWizard = false
+                    refreshMcpStatus()
+                },
+                onComplete: { _ in refreshMcpStatus() }
+            )
+        }
+        .confirmationDialog(
+            "Disconnect Claude Desktop?",
+            isPresented: $showMcpDisconnectConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Disconnect", role: .destructive) {
+                _ = DimmyCore.shared.uninstallClaudeDesktopExtension()
+                refreshMcpStatus()
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Dimmy will remove its entry from Claude Desktop's MCP config. Your other MCP servers stay in place. Restart Claude Desktop afterwards so it forgets the connection.")
+        }
         .onAppear {
-            // Re-probe Claude Code status so the Anthropic card above
-            // reflects the live install + Keychain state. Cheap call
-            // (file stat + a `security find-generic-password` shell-out).
             appState.refreshClaudeCodeStatus()
+            refreshMcpStatus()
+            Task { claudeIconPath = await ClaudeIconExtractor.tryExtract() }
+        }
+        .onDisappear {
+            mcpRefreshTimer?.invalidate()
+            mcpRefreshTimer = nil
         }
     }
 
@@ -209,5 +243,100 @@ struct MacIntegrationsPage: View {
         DimmyCore.shared.setConfig(appState.toRustConfig(includeNotion: true))
         statusIsError = false
         statusMessage = "Disconnected. Token and destination removed from this device."
+    }
+
+    // MARK: - Claude Desktop MCP card
+
+    private var mcpIsAlive: Bool {
+        guard let age = mcpStatus.heartbeatAgeSecs else { return false }
+        return age < 90
+    }
+
+    @ViewBuilder
+    private var mcpCard: some View {
+        HStack(alignment: .top, spacing: 14) {
+            // Real Claude.app icon when extractable from /Applications;
+            // fall back to a stylised orange burst tile if Claude
+            // Desktop isn't installed or the icns convert failed.
+            // Cached under <configDir>/cache/claude-desktop-icon.png.
+            if let p = claudeIconPath, let img = NSImage(contentsOfFile: p) {
+                Image(nsImage: img)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 40, height: 40)
+            } else {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 9)
+                        .fill(Color(red: 0.85, green: 0.47, blue: 0.34))
+                    Image(systemName: "rectangle.connected.to.line.below")
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundColor(.white)
+                }
+                .frame(width: 40, height: 40)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Claude Desktop").font(.system(size: 16, weight: .semibold))
+                Text(mcpHeaderText)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                HStack(spacing: 8) {
+                    if mcpStatus.extensionInstalled {
+                        Button("Re-run wizard") { showMcpWizard = true }
+                        Button("Disconnect") { showMcpDisconnectConfirm = true }
+                        Button("Refresh") { refreshMcpStatus() }
+                    } else {
+                        Button("Connect Claude Desktop") { showMcpWizard = true }
+                            .buttonStyle(.borderedProminent)
+                    }
+                }
+                .padding(.top, 4)
+            }
+            Spacer()
+            Image(systemName: mcpStatusIcon)
+                .font(.system(size: 22))
+                .foregroundStyle(mcpStatusColor)
+        }
+        .padding(16)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color(NSColor.controlBackgroundColor)))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.25), lineWidth: 1))
+    }
+
+    private var mcpHeaderText: String {
+        if mcpIsAlive {
+            if let tool = mcpStatus.lastCallTool {
+                return "Connected · last call \(mcpStatus.lastCallAgoSecs ?? 0)s ago (\(tool))"
+            }
+            return "Connected · heartbeat \(mcpStatus.heartbeatAgeSecs ?? 0)s ago"
+        }
+        if mcpStatus.extensionInstalled {
+            // Heartbeat ages out fast (Claude kills idle MCP servers
+            // by design). Keep the wording neutral — not an error.
+            if let v = mcpStatus.extensionVersion {
+                return "Installed (v\(v)) · Claude spawns on demand"
+            }
+            return "Installed · Claude spawns on demand"
+        }
+        return mcpStatus.installed
+            ? "Not connected to Claude Desktop yet"
+            : "Claude Desktop isn't installed on this Mac"
+    }
+
+    private var mcpStatusIcon: String {
+        if mcpIsAlive { return "checkmark.circle.fill" }
+        if mcpStatus.extensionInstalled { return "checkmark.circle.fill" }
+        return "circle"
+    }
+
+    private var mcpStatusColor: Color {
+        if mcpIsAlive { return .green }
+        if mcpStatus.extensionInstalled { return .green }
+        return .secondary
+    }
+
+    private func refreshMcpStatus() {
+        mcpStatus = DimmyCore.shared.claudeDesktopStatus()
     }
 }

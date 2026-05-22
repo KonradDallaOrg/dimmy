@@ -35,23 +35,34 @@ struct MacClaudeCodeCard: View {
     @State private var statusMessage: String = ""
 
     var body: some View {
-        MacTile {
-            MacRow(
-                "Claude Code subscription",
-                description: descriptionText,
-                icon: "person.crop.circle.badge.checkmark",
-                iconBackground: Color(red: 0.84, green: 0.47, blue: 0.21),
-                showsDivider: false
-            ) {
+        // Hand-rolled HStack so the card matches the Notion + MCP
+        // cards lower on this page (icon left, content + buttons
+        // middle, status badge top-right, all with the same padding
+        // + spacing). Using MacRow + an overlay produced a check
+        // that collided with the action buttons — see git history.
+        HStack(alignment: .top, spacing: 14) {
+            // Brand icon — orange Anthropic-style squircle.
+            ZStack {
+                RoundedRectangle(cornerRadius: 9)
+                    .fill(Color(red: 0.84, green: 0.47, blue: 0.21))
+                Image(systemName: "person.crop.circle.badge.checkmark")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundColor(.white)
+            }
+            .frame(width: 40, height: 40)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Claude Code subscription").font(.system(size: 16, weight: .semibold))
+                Text(descriptionText)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
                 HStack(spacing: 8) {
                     if signInRunning || testRunning {
                         ProgressView().controlSize(.small).scaleEffect(0.7)
                     }
                     if status == .notInstalled, onWizardRequested != nil {
-                        // Binary missing — direct Sign in would fail.
-                        // Replace it with the wizard CTA which walks
-                        // the user through Node.js + npm install +
-                        // login (mirror of Win Settings card).
                         Button(action: { onWizardRequested?() }) {
                             Label("Set up wizard", systemImage: "wand.and.stars")
                         }
@@ -64,22 +75,33 @@ struct MacClaudeCodeCard: View {
                         .controlSize(.small)
                         .disabled(signInDisabled)
                     }
-
                     Button(action: testConnection) {
                         Label("Test", systemImage: "checkmark.circle.fill")
                     }
                     .controlSize(.small)
                     .disabled(testDisabled)
                     .help("Send a small ping prompt to verify end-to-end (binary + login + network)")
-
                     Button(action: refresh) {
                         Image(systemName: "arrow.clockwise")
                     }
                     .controlSize(.small)
                     .help("Re-probe Claude Code status")
                 }
+                .padding(.top, 4)
             }
+            Spacer()
+            Image(systemName: statusIconName)
+                .font(.system(size: 22))
+                .foregroundStyle(statusIconColor)
+                .help(statusIconHelp)
         }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 8).fill(Color(NSColor.controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.25), lineWidth: 1)
+        )
         .onAppear { refresh() }
     }
 
@@ -108,6 +130,30 @@ struct MacClaudeCodeCard: View {
 
     private var signInDisabled: Bool {
         signInRunning || testRunning || status == .notInstalled
+    }
+
+    private var statusIconName: String {
+        switch status {
+        case .ready: return "checkmark.circle.fill"
+        case .notLoggedIn: return "exclamationmark.triangle.fill"
+        case .notInstalled: return "circle"
+        }
+    }
+
+    private var statusIconColor: Color {
+        switch status {
+        case .ready: return .green
+        case .notLoggedIn: return .orange
+        case .notInstalled: return .secondary
+        }
+    }
+
+    private var statusIconHelp: String {
+        switch status {
+        case .ready: return "Connected"
+        case .notLoggedIn: return "Installed but not signed in"
+        case .notInstalled: return "Not installed"
+        }
     }
 
     private var testDisabled: Bool {

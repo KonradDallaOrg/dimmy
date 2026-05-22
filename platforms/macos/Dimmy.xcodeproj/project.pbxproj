@@ -98,6 +98,7 @@
 		AA000302 /* MacIntegrationsPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000302 /* MacIntegrationsPage.swift */; };
 		AA000303 /* NotionConnectSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000303 /* NotionConnectSheet.swift */; };
 		AA000304 /* ClaudeConnectSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000304 /* ClaudeConnectSheet.swift */; };
+		AA000305 /* ClaudeDesktopConnectSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000305 /* ClaudeDesktopConnectSheet.swift */; };
 		AA000800 /* DictHotkeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000800 /* DictHotkeyManager.swift */; };
 		AA000801 /* DictToastWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000801 /* DictToastWindow.swift */; };
 		AA000900 /* UpdateService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000900 /* UpdateService.swift */; };
@@ -109,6 +110,7 @@
 		AA001100 /* DimmyCore+CallDetect.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB001100 /* DimmyCore+CallDetect.swift */; };
 		AA001101 /* CallDetectionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB001101 /* CallDetectionManager.swift */; };
 		AA001102 /* CallNudgeWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB001102 /* CallNudgeWindowController.swift */; };
+		AA001200 /* ClaudeIconExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB001200 /* ClaudeIconExtractor.swift */; };
 		AA000901 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = XP000001 /* Sparkle */; };
 /* End PBXBuildFile section */
 
@@ -140,6 +142,7 @@
 		AB001100 /* DimmyCore+CallDetect.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DimmyCore+CallDetect.swift"; sourceTree = "<group>"; };
 		AB001101 /* CallDetectionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallDetectionManager.swift; sourceTree = "<group>"; };
 		AB001102 /* CallNudgeWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallNudgeWindowController.swift; sourceTree = "<group>"; };
+		AB001200 /* ClaudeIconExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeIconExtractor.swift; sourceTree = "<group>"; };
 		AB000602 /* MeetingViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingViewModel.swift; sourceTree = "<group>"; };
 		AB000603 /* MeetingSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSidebar.swift; sourceTree = "<group>"; };
 		AB000604 /* MeetingIdleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingIdleView.swift; sourceTree = "<group>"; };
@@ -216,6 +219,7 @@
 		AB000302 /* MacIntegrationsPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacIntegrationsPage.swift; sourceTree = "<group>"; };
 		AB000303 /* NotionConnectSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotionConnectSheet.swift; sourceTree = "<group>"; };
 		AB000304 /* ClaudeConnectSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeConnectSheet.swift; sourceTree = "<group>"; };
+		AB000305 /* ClaudeDesktopConnectSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeDesktopConnectSheet.swift; sourceTree = "<group>"; };
 		AB000800 /* DictHotkeyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictHotkeyManager.swift; sourceTree = "<group>"; };
 		AB000801 /* DictToastWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictToastWindow.swift; sourceTree = "<group>"; };
 		AB000099 /* Dimmy.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Dimmy.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -335,6 +339,7 @@
 			isa = PBXGroup;
 			children = (
 				AB000502 /* AppContextCapture.swift */,
+				AB001200 /* ClaudeIconExtractor.swift */,
 			);
 			path = Helpers;
 			sourceTree = "<group>";
@@ -436,6 +441,7 @@
 				AB000302 /* MacIntegrationsPage.swift */,
 				AB000303 /* NotionConnectSheet.swift */,
 				AB000304 /* ClaudeConnectSheet.swift */,
+				AB000305 /* ClaudeDesktopConnectSheet.swift */,
 				AB000903 /* MacClaudeCodeCard.swift */,
 			);
 			path = Settings;
@@ -690,6 +696,7 @@
 				AA000302 /* MacIntegrationsPage.swift in Sources */,
 				AA000303 /* NotionConnectSheet.swift in Sources */,
 				AA000304 /* ClaudeConnectSheet.swift in Sources */,
+				AA000305 /* ClaudeDesktopConnectSheet.swift in Sources */,
 				AA000800 /* DictHotkeyManager.swift in Sources */,
 				AA000801 /* DictToastWindow.swift in Sources */,
 				AA000041 /* SelfTests.swift in Sources */,
@@ -723,6 +730,7 @@
 				AA001100 /* DimmyCore+CallDetect.swift in Sources */,
 				AA001101 /* CallDetectionManager.swift in Sources */,
 				AA001102 /* CallNudgeWindowController.swift in Sources */,
+				AA001200 /* ClaudeIconExtractor.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

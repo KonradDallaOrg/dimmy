@@ -102,12 +102,27 @@ public static class TranscriptRenderer
         var label = track.Trim().ToLowerInvariant();
         // mic = green-mint, system = violet — same palette as the
         // dual-band live waveform colors so the user has a visual
-        // continuum from recording to playback.
-        var (bg, fg) = label == "system"
-            ? (Microsoft.UI.ColorHelper.FromArgb(0x33, 0xA8, 0x7C, 0xFF),
-               Microsoft.UI.ColorHelper.FromArgb(0xFF, 0xC9, 0xB0, 0xFF))
-            : (Microsoft.UI.ColorHelper.FromArgb(0x33, 0x4A, 0xD9, 0x9D),
-               Microsoft.UI.ColorHelper.FromArgb(0xFF, 0x7E, 0xE8, 0xC0));
+        // continuum from recording to playback. Two foreground
+        // tints per track: a LIGHT one for Dark theme (pops on
+        // dark surface) and a SATURATED-DARK one for Light theme
+        // (pops on white surface). The earlier code only had the
+        // dark-theme tint which made the badges invisible on Light.
+        bool darkTheme = IsAppDarkTheme();
+        global::Windows.UI.Color bg, fg;
+        if (label == "system")
+        {
+            bg = Microsoft.UI.ColorHelper.FromArgb(0x33, 0xA8, 0x7C, 0xFF);
+            fg = darkTheme
+                ? Microsoft.UI.ColorHelper.FromArgb(0xFF, 0xC9, 0xB0, 0xFF)  // pale violet on dark
+                : Microsoft.UI.ColorHelper.FromArgb(0xFF, 0x55, 0x35, 0x9C); // deep violet on light
+        }
+        else
+        {
+            bg = Microsoft.UI.ColorHelper.FromArgb(0x33, 0x4A, 0xD9, 0x9D);
+            fg = darkTheme
+                ? Microsoft.UI.ColorHelper.FromArgb(0xFF, 0x7E, 0xE8, 0xC0)  // pale mint on dark
+                : Microsoft.UI.ColorHelper.FromArgb(0xFF, 0x1B, 0x6D, 0x4F); // deep teal on light
+        }
 
         // Render as a single Run with subtle background tint via
         // Foreground color + bold weight. WinUI Run has no Background,
@@ -146,12 +161,22 @@ public static class TranscriptRenderer
             {
                 p.Inlines.Add(new Run { Text = line.Substring(last, m.Index - last) });
             }
+            // Timestamp tint — go explicit (not via theme resource)
+            // because the Application.Resources brushes can pick up
+            // the wrong palette when ThemeHelper overrides at the
+            // root-element level (the override is per-FrameworkElement,
+            // not global, so Application.Resources still resolves to
+            // the system theme). Same reason BuildSpeakerHeader picks
+            // its colors explicitly above.
+            var tsFg = IsAppDarkTheme()
+                ? Microsoft.UI.ColorHelper.FromArgb(0xCC, 0xFF, 0xFF, 0xFF) // soft white
+                : Microsoft.UI.ColorHelper.FromArgb(0xCC, 0x30, 0x30, 0x30); // soft dark grey
             p.Inlines.Add(new Run
             {
                 Text = m.Value,
                 FontSize = 10,
                 FontFamily = new FontFamily("Consolas"),
-                Foreground = ThemeBrush("TextFillColorTertiaryBrush"),
+                Foreground = new SolidColorBrush(tsFg),
             });
             last = m.Index + m.Length;
         }
@@ -166,5 +191,25 @@ public static class TranscriptRenderer
         if (Application.Current.Resources.TryGetValue(key, out var v) && v is Brush b)
             return b;
         return new SolidColorBrush(Microsoft.UI.Colors.Gray);
+    }
+
+    /// True iff the app is currently rendering with the Dark theme.
+    /// Goes through `ThemeHelper.ResolvedIsDark()` because Dimmy's
+    /// theme override stack reads UiPreferences first and the
+    /// Windows registry as fallback — Application.Current.RequestedTheme
+    /// only captures the system theme at process-start and does NOT
+    /// honour the in-app override (Settings → Appearance). Every
+    /// other theme-aware brush in the app routes through ThemeHelper;
+    /// the transcript renderer must too.
+    private static bool IsAppDarkTheme()
+    {
+        try
+        {
+            return ThemeHelper.ResolvedIsDark();
+        }
+        catch
+        {
+            return true; // Default to dark — was the only supported theme before this fix.
+        }
     }
 }

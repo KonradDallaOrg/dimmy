@@ -121,6 +121,19 @@ is the safety net; the rule is the actual fix.
 
 **RULE (user-explicit, 2026-05-07): If the user has not EXPLICITLY asked for a feature to be removed, KEEP IT. Always rebuild with the full set above. The user wants all features always — "le voglio tutte. sempre."** Removing a feature on your own initiative is a regression, not an optimization.
 
+### Windows C# host build — output path depends on `-p:Platform=x64`
+
+**`dotnet build platforms/windows/Dimmy.Windows/Dimmy.Windows.csproj -c Debug -p:Platform=x64`** is the canonical local C# build. **`-p:Platform=x64` is not optional.**
+
+- Without it: output lands in `bin/Debug/net8.0-windows10.0.19041.0/win-x64/Dimmy.Windows.dll`
+- With it (correct): output lands in `bin/x64/Debug/net8.0-windows10.0.19041.0/win-x64/Dimmy.Windows.dll`
+
+The .exe Velopack installs / that you `Start-Process` on a dev box always lives under `bin/x64/Debug/...`. If you build to the default path you'll get green compile output but the .exe keeps loading the **previous** Dimmy.Windows.dll forever. Symptom is non-obvious: new code changes appear to do nothing at runtime, log lines you just added never appear, and you waste hours chasing a phantom regression. Burned 2026-05-21 during the Claude MCP wizard debugging — three rebuilds in a row went to the wrong path before catching the discrepancy via `ls` timestamp diff.
+
+When the user reports "the code change didn't take effect", FIRST diagnostic is to `ls -la bin/x64/Debug/.../Dimmy.Windows.dll` and compare LastWriteTime to your source edits. If the DLL is older than your edits, the build is going to the wrong directory.
+
+Also: `--no-incremental` is cheap insurance when chasing "did my change really get into the binary?" — it forces MSBuild to recompile rather than trust its caching layer.
+
 ## v2 surfaces — what shipped on `feat/v2-unified` + `feat/system-audio-capture` (2026-05)
 
 Current `staging` is **v0.6.31** carrying the cumulative v2 feature set.

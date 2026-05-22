@@ -323,6 +323,19 @@ jobs:
           echo "=== Verifying no broken symlinks ==="
           find "$FRAMEWORKS_DIR" -type l ! -exec test -e {} \; -print | grep . && echo "BROKEN SYMLINKS FOUND" && exit 1 || echo "All OK"
 
+      # See release.yml for context.
+      - name: Build dimmy-mcp for aarch64-apple-darwin
+        working-directory: mcp-server
+        run: cargo build --release --target aarch64-apple-darwin
+
+      - name: Copy dimmy-mcp into .app Resources
+        run: |
+          APP_PATH="platforms/macos/build/derived/Build/Products/Release/Dimmy.app"
+          RESOURCES_DIR="$APP_PATH/Contents/Resources"
+          cp "mcp-server/target/aarch64-apple-darwin/release/dimmy-mcp" "$RESOURCES_DIR/dimmy-mcp"
+          chmod +x "$RESOURCES_DIR/dimmy-mcp"
+          codesign --force --sign - "$RESOURCES_DIR/dimmy-mcp"
+
       - name: Generate DMG background (SVG → PNG)
         run: |
           brew install librsvg
@@ -331,8 +344,21 @@ jobs:
       - name: Create DMG
         working-directory: platforms/macos
         run: |
+          # create-dmg's `--app-drop-link` only positions a visual
+          # icon — it does NOT create the underlying `Applications`
+          # symlink when invoked with a single .app as source. We
+          # stage the .app + an explicit `ln -s /Applications` into
+          # `build/dmg-contents/`, then point create-dmg at the
+          # directory. Regression introduced 2026-04-16 (commit
+          # c75b5b5) when the build migrated from `hdiutil + ln -s`
+          # to create-dmg without preserving the symlink step;
+          # confirmed missing in v*-staging.5.
           brew install create-dmg
           APP_PATH="build/derived/Build/Products/Release/Dimmy.app"
+          mkdir -p build/dmg-contents
+          rm -rf build/dmg-contents/Dimmy.app
+          cp -R "$APP_PATH" build/dmg-contents/
+          ln -sf /Applications build/dmg-contents/Applications
           create-dmg \
             --volname "Dimmy" \
             --background "dmg-assets/dmg-background.png" \
@@ -343,7 +369,7 @@ jobs:
             --app-drop-link 495 200 \
             --no-internet-enable \
             "build/Dimmy-native-macos-arm64.dmg" \
-            "$APP_PATH"
+            "build/dmg-contents"
 
       - name: Upload DMG to release
         uses: softprops/action-gh-release@v3

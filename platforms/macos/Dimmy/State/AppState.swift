@@ -1337,6 +1337,16 @@ final class AppState: ObservableObject {
         _ = DimmyCore.shared.callSignalResponse(appId: app, response: response)
         switch response {
         case "record_now":
+            // Idempotency guard — mirror of Win's
+            // `StartMeetingFromCallDetect`. If a meeting is already
+            // active (e.g. a re-emit of the same nudge, or the user
+            // had a meeting going from the home tile and tapped
+            // Record on the call popup), don't try to start a second
+            // one — just surface the existing window.
+            if DimmyCore.shared.meetingIsActive {
+                AppDelegate.shared?.openMeetingWindow()
+                break
+            }
             AppDelegate.shared?.openMeetingWindow()
             // openMeetingWindow shows + reattaches; the Meeting VM is
             // owned by the controller so we drive .start() through it.

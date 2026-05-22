@@ -3532,6 +3532,191 @@ pub extern "C" fn dimmy_claude_code_recheck() -> c_int {
     s.as_code()
 }
 
+// ── Claude Desktop MCP bridge ──────────────────────────────────────
+// Counterpart to the standalone `dimmy-mcp` binary (mcp-server/). The
+// wizard flow needs to detect the Claude Desktop install, patch the
+// user's `claude_desktop_config.json` to register our binary, and
+// expose heartbeat + recent-call telemetry so the Settings card can
+// render a live status. See `core/src/claude_desktop.rs` for the
+// detection + patch logic, and `mcp-server/` for the binary itself.
+
+/// One-shot status snapshot for the Settings card + wizard. JSON:
+/// ```json
+/// {
+///   "installed": true,
+///   "install_path": "/Applications/Claude.app",
+///   "config_path": "/Users/k/Library/Application Support/Claude/claude_desktop_config.json",
+///   "config_patched": true,
+///   "entry_command": "/Applications/Dimmy.app/.../dimmy-mcp",
+///   "heartbeat_age_secs": 12,
+///   "last_call": { "tool": "dimmy_get_recent_meetings", "ago_secs": 47, "ok": true }
+/// }
+/// ```
+/// Missing pieces are omitted, never null — keeps the UI binding
+/// simple ("field present" ⇔ "fact known").
+///
+/// # Safety
+/// `out_buf` must be a valid writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_claude_desktop_status(
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let namespace = std::env::var("DIMMY_CONFIG_NAMESPACE").unwrap_or_else(|_| "dimmy".to_string());
+
+    let install = crate::claude_desktop::detect_claude_desktop();
+    let ext_dir = crate::claude_desktop::extensions_root()
+        .map(|r| r.join(crate::claude_desktop::extension_id(&namespace)));
+    let manifest = crate::claude_desktop::read_installed_manifest(&namespace);
+    let enabled = crate::claude_desktop::is_extension_enabled(&namespace);
+
+    let mut obj = serde_json::Map::new();
+    obj.insert("installed".into(), install.is_some().into());
+    if let Some(p) = &install {
+        obj.insert(
+            "install_path".into(),
+            p.to_string_lossy().into_owned().into(),
+        );
+    }
+    if let Some(p) = &ext_dir {
+        obj.insert(
+            "extension_path".into(),
+            p.to_string_lossy().into_owned().into(),
+        );
+    }
+    // `config_patched` is the legacy field name from the previous
+    // wizard era; we keep it as a host-side compat alias meaning
+    // "Dimmy is registered with Claude" so the C#/Swift bindings
+    // don't have to coordinate-rename. `extension_installed` is the
+    // new canonical field.
+    obj.insert("config_patched".into(), manifest.is_some().into());
+    obj.insert("extension_installed".into(), manifest.is_some().into());
+    obj.insert("extension_enabled".into(), enabled.into());
+    if let Some(m) = &manifest {
+        if let Some(v) = m.get("version").and_then(|v| v.as_str()) {
+            obj.insert("extension_version".into(), v.to_string().into());
+        }
+        if let Some(cmd) = m
+            .pointer("/server/mcp_config/command")
+            .and_then(|v| v.as_str())
+        {
+            obj.insert("entry_command".into(), cmd.to_string().into());
+        }
+    }
+
+    // Heartbeat + last-call live in our own config dir (where the
+    // dimmy-mcp binary writes them), not Claude's. Resolve via the
+    // same helper the rest of FFI uses.
+    if let Some(dir) = crate::config_dir_path() {
+        if let Some(hb) = crate::claude_desktop::read_heartbeat(&dir) {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let age = now.saturating_sub(hb.timestamp);
+            obj.insert("heartbeat_age_secs".into(), age.into());
+        }
+        let recent = crate::claude_desktop::read_recent_calls(&dir, 1);
+        if let Some(c) = recent.first() {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let ago = now.saturating_sub(c.ts);
+            obj.insert(
+                "last_call".into(),
+                serde_json::json!({
+                    "tool": c.tool,
+                    "ago_secs": ago,
+                    "ok": c.ok,
+                    "elapsed_ms": c.elapsed_ms,
+                }),
+            );
+        }
+    }
+
+    let json = serde_json::Value::Object(obj).to_string();
+    write_to_buf(&json, out_buf, buf_len)
+}
+
+/// Install Dimmy as a Claude Desktop extension. `binary_path` must
+/// be a NUL-terminated UTF-8 C string pointing at the dimmy-mcp
+/// binary on disk; we copy it into the extension dir alongside the
+/// manifest + icon. `version_ptr` is the host's version string
+/// (env!("CARGO_PKG_VERSION") from the host's own build) — embedded
+/// in the manifest so the Claude Connectors UI shows the version
+/// next to the entry.
+///
+/// Returns 0 on success, negative on error:
+///   -1 = null arg / invalid UTF-8 / extension root unresolved
+///   -2 = binary missing at source path
+///   -3 = copy failed (target locked? disk full? permissions?)
+///   -4 = manifest/settings write failed
+///   -5 = manifest serialization failed
+///
+/// Side-effect: also wipes any legacy `mcpServers.dimmy` entry
+/// inside `claude_desktop_config.json` left over from the
+/// patch_config era (in-development period only) so the user ends
+/// up with a single source of truth.
+///
+/// # Safety
+/// Both pointers must be valid null-terminated UTF-8 C strings.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_claude_desktop_install(
+    binary_path: *const c_char,
+    version_ptr: *const c_char,
+) -> c_int {
+    if binary_path.is_null() || version_ptr.is_null() {
+        return -1;
+    }
+    let path_str = match CStr::from_ptr(binary_path).to_str() {
+        Ok(s) if !s.is_empty() => s,
+        _ => return -1,
+    };
+    let version_str = match CStr::from_ptr(version_ptr).to_str() {
+        Ok(s) if !s.is_empty() => s,
+        _ => return -1,
+    };
+    let namespace = std::env::var("DIMMY_CONFIG_NAMESPACE").unwrap_or_else(|_| "dimmy".to_string());
+    match crate::claude_desktop::install_extension(
+        std::path::Path::new(path_str),
+        version_str,
+        &namespace,
+    ) {
+        Ok(_) => 0,
+        Err(crate::claude_desktop::InstallError::NoExtensionsRoot) => -1,
+        Err(crate::claude_desktop::InstallError::BinaryMissing) => -2,
+        Err(crate::claude_desktop::InstallError::CopyFailed(_)) => -3,
+        Err(crate::claude_desktop::InstallError::WriteFailed(_)) => -4,
+        Err(crate::claude_desktop::InstallError::ParseFailed(_)) => -5,
+    }
+}
+
+/// Remove the Dimmy Claude Desktop extension (the dir + its
+/// per-extension settings file). Idempotent — returns 1 if a real
+/// directory was removed, 0 if there was nothing to remove (no
+/// install), negative on error. Same error codes as `_install`.
+///
+/// Side-effect: also wipes any leftover legacy `mcpServers.dimmy`
+/// entry in `claude_desktop_config.json` so the user ends up with
+/// a clean state regardless of which wizard era they installed in.
+#[no_mangle]
+pub extern "C" fn dimmy_claude_desktop_uninstall() -> c_int {
+    let namespace = std::env::var("DIMMY_CONFIG_NAMESPACE").unwrap_or_else(|_| "dimmy".to_string());
+    match crate::claude_desktop::uninstall_extension(&namespace) {
+        Ok(true) => 1,
+        Ok(false) => 0,
+        Err(crate::claude_desktop::InstallError::NoExtensionsRoot) => -1,
+        Err(crate::claude_desktop::InstallError::BinaryMissing) => -2,
+        Err(crate::claude_desktop::InstallError::CopyFailed(_)) => -3,
+        Err(crate::claude_desktop::InstallError::WriteFailed(_)) => -4,
+        Err(crate::claude_desktop::InstallError::ParseFailed(_)) => -5,
+    }
+}
+
 // ── Notion integration ─────────────────────────────────────────────
 // Internal-integration-token model: user pastes a `ntn_...` token
 // from notion.so/my-integrations into the Settings UI; we store it
