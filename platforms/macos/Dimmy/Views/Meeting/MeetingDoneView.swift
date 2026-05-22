@@ -26,10 +26,14 @@ import AVFoundation
 
 struct MeetingDoneView: View {
     @ObservedObject var vm: MeetingViewModel
+    @Environment(\.colorScheme) private var colorScheme
     @State private var copiedFlash: Bool = false
     @State private var claudeMcpInstalled: Bool = false
     @State private var claudeIconPath: String? = nil
+    @State private var editingTitle: Bool = false
+    @State private var titleDraft: String = ""
     @FocusState private var notesFocused: Bool
+    @FocusState private var titleFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -58,10 +62,32 @@ struct MeetingDoneView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(vm.doneTitle)
-                .font(.system(size: 18, weight: .semibold))
-                .lineLimit(1)
-                .truncationMode(.tail)
+            // Click-to-edit title — mirror of Win's
+            // DoneTitle_Tapped + DoneTitleEdit (Enter commits, Esc
+            // cancels, focus-out commits). Persisted to meta.json
+            // via MeetingViewModel.renameSelectedMeeting.
+            if editingTitle {
+                TextField("Meeting title", text: $titleDraft, onCommit: commitTitleEdit)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 18, weight: .semibold))
+                    .focused($titleFocused)
+                    .onAppear { titleFocused = true }
+                    .onChange(of: titleFocused) { _, focused in
+                        if !focused { commitTitleEdit() }
+                    }
+                    .onExitCommand { editingTitle = false }
+            } else {
+                Text(vm.doneTitle)
+                    .font(.system(size: 18, weight: .semibold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        titleDraft = vm.doneTitle
+                        editingTitle = true
+                    }
+                    .help("Click to rename the meeting")
+            }
             Text(vm.doneMeta)
                 .font(.system(size: 11))
                 .foregroundStyle(Color.macTextSecondary)
@@ -69,6 +95,12 @@ struct MeetingDoneView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
         .background(cardBackground)
+    }
+
+    private func commitTitleEdit() {
+        guard editingTitle else { return }
+        editingTitle = false
+        vm.renameSelectedMeeting(to: titleDraft)
     }
 
     private var activeDirFromAudio: String? {
@@ -104,9 +136,13 @@ struct MeetingDoneView: View {
                               help: "Copy recap to clipboard") {
                     copyRecap()
                 }
-                toolbarButton(assetImage: "notion",
-                              help: "Send recap to Notion") {
+                // Notion brand mark is rendered as black-on-transparent;
+                // invert in dark mode so it stays legible on the dark
+                // toolbar instead of disappearing into the background.
+                ToolbarIconButton(help: "Send recap to Notion") {
                     Task { await sendToNotion() }
+                } label: {
+                    notionToolbarIcon
                 }
                 if claudeMcpInstalled {
                     recapWithClaudeButton
@@ -236,6 +272,16 @@ struct MeetingDoneView: View {
         }
     }
 
+    @ViewBuilder
+    private var notionToolbarIcon: some View {
+        let img = Image("notion").resizable().scaledToFit().frame(width: 16, height: 16)
+        if colorScheme == .dark {
+            img.colorInvert()
+        } else {
+            img
+        }
+    }
+
     private func toolbarButton(systemImage: String, help: String, action: @escaping () -> Void) -> some View {
         ToolbarIconButton(help: help, action: action) {
             Image(systemName: systemImage)
@@ -250,20 +296,21 @@ struct MeetingDoneView: View {
     /// only when the MCP extension is installed. Falls back to copying
     /// the prompt to the pasteboard if the deeplink fails (e.g. Claude
     /// Desktop's URI handler not yet registered after a fresh install).
+    ///
+    /// Icon: bundled `ClaudeMark.imageset` — the canonical orange
+    /// Anthropic burst (#D97757), pulled from the official Anthropic
+    /// brand mark. At 16-px toolbar size the bare burst reads cleaner
+    /// than the full Mac AppIcon (which is the burst on a rounded
+    /// squircle background). No SF-Symbol fallback — the brand mark
+    /// is committed to the app bundle, always available.
     private var recapWithClaudeButton: some View {
         ToolbarIconButton(help: "Recap with Claude Desktop (uses MCP)") {
             recapWithClaude()
         } label: {
-            if let p = claudeIconPath, let img = NSImage(contentsOfFile: p) {
-                Image(nsImage: img)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 16, height: 16)
-            } else {
-                Image(systemName: "sparkles.rectangle.stack")
-                    .font(.system(size: 16, weight: .medium))
-                    .symbolRenderingMode(.hierarchical)
-            }
+            Image("ClaudeMark")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 16, height: 16)
         }
     }
 

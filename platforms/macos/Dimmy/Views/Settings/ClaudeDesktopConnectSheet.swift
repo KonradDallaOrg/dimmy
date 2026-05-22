@@ -176,18 +176,22 @@ struct ClaudeDesktopConnectSheet: View {
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Extension folder").font(.system(size: 11)).foregroundColor(.secondary)
-                Text(status.extensionPath ?? "(will be created on install)")
-                    .font(.system(size: 12, design: .monospaced))
-                Text("MCP binary").font(.system(size: 11)).foregroundColor(.secondary).padding(.top, 6)
-                Text(resolveMcpBinaryPath() ?? "(not found in app bundle)")
-                    .font(.system(size: 12, design: .monospaced))
+            VStack(alignment: .leading, spacing: 10) {
+                pathChip(
+                    icon: "folder.fill",
+                    iconColor: .blue,
+                    label: "Extension folder",
+                    path: status.extensionPath ?? "(will be created on install)",
+                    revealable: status.extensionPath != nil
+                )
+                pathChip(
+                    icon: "terminal.fill",
+                    iconColor: Color(red: 0.84, green: 0.47, blue: 0.21),
+                    label: "MCP binary",
+                    path: resolveMcpBinaryPath() ?? "(not found in app bundle)",
+                    revealable: resolveMcpBinaryPath() != nil
+                )
             }
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 6).fill(Color(NSColor.controlBackgroundColor)))
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(NSColor.separatorColor)))
 
             HStack(spacing: 10) {
                 Button(status.configPatched ? "Re-register" : "Connect") {
@@ -319,5 +323,65 @@ struct ClaudeDesktopConnectSheet: View {
     private func resolveMcpBinaryPath() -> String? {
         let resources = Bundle.main.bundlePath + "/Contents/Resources/dimmy-mcp"
         return FileManager.default.fileExists(atPath: resources) ? resources : nil
+    }
+
+    /// One row inside the wizard's "what we are touching" panel:
+    /// coloured square icon + label + truncated monospace path + a
+    /// copy button + an optional Finder-reveal button. Replaces the
+    /// previous all-white wall of raw text.
+    @ViewBuilder
+    private func pathChip(icon: String, iconColor: Color, label: String, path: String, revealable: Bool) -> some View {
+        HStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 6).fill(iconColor.opacity(0.18))
+                Image(systemName: icon)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(iconColor)
+            }
+            .frame(width: 28, height: 28)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(label)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Text(path)
+                    .font(.system(size: 12, design: .monospaced))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(path)
+                    .textSelection(.enabled)
+            }
+            Spacer(minLength: 8)
+
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(path, forType: .string)
+            } label: {
+                Image(systemName: "doc.on.doc")
+            }
+            .buttonStyle(.borderless)
+            .help("Copy path")
+            .disabled(!revealable)
+
+            if revealable {
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+                } label: {
+                    Image(systemName: "arrow.up.right.square")
+                }
+                .buttonStyle(.borderless)
+                .help("Reveal in Finder")
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color(NSColor.controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
+        )
     }
 }

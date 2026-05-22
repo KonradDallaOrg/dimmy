@@ -555,7 +555,12 @@ final class MeetingViewModel: ObservableObject {
             let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
             let recapPath = url.appendingPathComponent("recap.md").path
             let hasRecap = fm.fileExists(atPath: recapPath)
-            let title = MeetingHistoryRow.titleFor(dirName: name, recapPath: hasRecap ? recapPath : nil)
+            let metaPath = url.appendingPathComponent("meta.json").path
+            let title = MeetingHistoryRow.titleFor(
+                dirName: name,
+                recapPath: hasRecap ? recapPath : nil,
+                metaPath: fm.fileExists(atPath: metaPath) ? metaPath : nil
+            )
             let subtitle = MeetingHistoryRow.subtitleFor(date: mtime)
             return MeetingHistoryRow(
                 dir: url.path,
@@ -798,8 +803,50 @@ final class MeetingViewModel: ObservableObject {
         // Convention: dir is named `2026-05-09T14-32-08` or similar;
         // turn the leading date into a friendly label. If the user
         // ever renames it we just fall back to the raw name.
-        let name = URL(fileURLWithPath: dir).lastPathComponent
-        return MeetingHistoryRow.titleFor(dirName: name, recapPath: nil)
+        let url = URL(fileURLWithPath: dir)
+        let name = url.lastPathComponent
+        let metaPath = url.appendingPathComponent("meta.json").path
+        let recapPath = url.appendingPathComponent("recap.md").path
+        let fm = FileManager.default
+        return MeetingHistoryRow.titleFor(
+            dirName: name,
+            recapPath: fm.fileExists(atPath: recapPath) ? recapPath : nil,
+            metaPath: fm.fileExists(atPath: metaPath) ? metaPath : nil
+        )
+    }
+
+    /// Persist a user-edited meeting title to `meta.json`. Mac mirror
+    /// of Win's `WriteMetaTitle` in MeetingWindow.xaml.cs. Trims,
+    /// rejects empty / >200-char titles. After the write the caller
+    /// should refresh the active row + the sidebar so the new label
+    /// shows up everywhere.
+    func renameSelectedMeeting(to newTitle: String) {
+        let activeDir = activeMeetingDir.isEmpty ? nil : activeMeetingDir
+        guard let dir = selectedDir ?? activeDir, !dir.isEmpty else { return }
+        let trimmed = newTitle.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, trimmed.count <= 200, trimmed != doneTitle else { return }
+        let metaPath = (dir as NSString).appendingPathComponent("meta.json")
+        var obj: [String: Any] = [:]
+        if let data = try? Data(contentsOf: URL(fileURLWithPath: metaPath)),
+           let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            obj = existing
+        }
+        obj["title"] = trimmed
+        if let data = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: URL(fileURLWithPath: metaPath), options: .atomic)
+        }
+        doneTitle = trimmed
+        titlebarTitle = trimmed
+        if let idx = historyRows.firstIndex(where: { $0.dir == dir }) {
+            let old = historyRows[idx]
+            historyRows[idx] = MeetingHistoryRow(
+                dir: old.dir,
+                title: trimmed,
+                subtitle: old.subtitle,
+                rightLabel: old.rightLabel,
+                modifiedAt: old.modifiedAt
+            )
+        }
     }
 
     func loadDoneFromDisk(dir: String) {
@@ -910,7 +957,18 @@ struct MeetingHistoryRow: Identifiable, Equatable {
     ///      mirrors `MeetingWindow.LoadHistory` on Win so the user
     ///      always gets a stable short label even when the recap
     ///      didn't generate.
-    static func titleFor(dirName: String, recapPath: String?) -> String {
+    static func titleFor(dirName: String, recapPath: String?, metaPath: String? = nil) -> String {
+        // Highest priority: meta.json["title"] — written by the Rust
+        // core's save_post_process (parse_recap_title) AND by the
+        // Done view click-to-edit handler. Mirror of Win's metaTitle
+        // lookup in MeetingWindow.xaml.cs LoadHistory.
+        if let mp = metaPath,
+           let data = try? Data(contentsOf: URL(fileURLWithPath: mp)),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let t = obj["title"] as? String,
+           !t.trimmingCharacters(in: .whitespaces).isEmpty {
+            return String(t.prefix(120))
+        }
         if let path = recapPath,
            let body = try? String(contentsOfFile: path, encoding: .utf8) {
             for line in body.split(separator: "\n", omittingEmptySubsequences: true) {

@@ -268,6 +268,21 @@ struct MacOutputPage: View {
         }
     }
 
+    /// Resolve what "Auto" actually means right now — the dictation
+    /// LLM's model id. Lets the picker show the inherited target
+    /// instead of the opaque "match LLM provider" label.
+    private var autoResolutionLabel: String {
+        let m = appState.llmApiModel.trimmingCharacters(in: .whitespaces)
+        return m.isEmpty ? "your dictation LLM (not yet configured)" : m
+    }
+
+    /// Annotate the "Auto" row in the dropdown with the actual model id
+    /// it will dispatch to right now, so the user sees what's going to
+    /// run without having to read the description below.
+    private func displayLabel(for opt: RecapModelOption) -> String {
+        opt.id.isEmpty ? "Auto — \(autoResolutionLabel)" : opt.label
+    }
+
     /// Meeting / long-dictation recap model picker. Always visible so a
     /// fresh user can pick their preferred recap model without flipping
     /// the Advanced toggle. Mirrors the picker in Settings → Advanced;
@@ -279,7 +294,7 @@ struct MacOutputPage: View {
             MacTile {
                 MacRow(
                     "Recap model",
-                    description: "Used for the meeting recap pipeline and the long-dictation auto-recap. Auto matches your dictation provider. Pick a local Gemma to run the recap offline.",
+                    description: "Used for the meeting recap pipeline and the long-dictation auto-recap. Auto inherits your dictation LLM (currently \(autoResolutionLabel)). Pick a flagship Anthropic / Gemini / OpenAI for best recap quality, or a local Gemma to keep the transcript offline.",
                     showsDivider: false
                 ) {
                     Picker("", selection: Binding<String>(
@@ -291,7 +306,7 @@ struct MacOutputPage: View {
                     )) {
                         ForEach(RecapModelOption.curated) { opt in
                             Label {
-                                Text(opt.label)
+                                Text(displayLabel(for: opt))
                             } icon: {
                                 // Real vendor logo when we have one, SF
                                 // Symbol fallback for Auto / Local /

@@ -28,12 +28,10 @@ struct MacIntegrationsPage: View {
             // or (recent CLIs) macOS Keychain under service
             // "Claude Code-credentials". Dimmy never touches the
             // token directly; only probes existence.
-            MacTile {
-                MacClaudeCodeCard(
-                    appState: appState,
-                    onWizardRequested: { showClaudeWizard = true }
-                )
-            }
+            MacClaudeCodeCard(
+                appState: appState,
+                onWizardRequested: { showClaudeWizard = true }
+            )
             MacGroupFooter(text: "Sign-in opens Anthropic's OAuth in your browser via the local `claude` CLI. The OAuth token is stored by the CLI in macOS Keychain (or ~/.claude/credentials.json on older versions). Dimmy reads only the existence of the token — never its contents.")
 
             Spacer().frame(height: 24)
