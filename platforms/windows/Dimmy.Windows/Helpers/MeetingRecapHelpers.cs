@@ -202,6 +202,12 @@ public static class MeetingRecapHelpers
             "- Be SHARP and CONCISE. Senior leaders read these summaries — every sentence " +
             "must earn its place.\n\n" +
 
+            "═══════════════════════════════════════════════════════════════════\n" +
+            "FINAL REMINDER before you start: the very first line of your\n" +
+            "response must be `# ` followed by a 3-7 word title. NOT `## ===CONTEXT===`,\n" +
+            "NOT a blank line, NOT an apology. JUST `# <title>` on line one.\n" +
+            "═══════════════════════════════════════════════════════════════════\n\n" +
+
             "## Transcript\n" + transcript;
     }
 
@@ -223,6 +229,25 @@ public static class MeetingRecapHelpers
     public static Dictionary<string, string> ParseStructuredRecap(string raw)
     {
         var result = new Dictionary<string, string>();
+        // Capture the `# Title` H1 (if the LLM honoured the prompt rule)
+        // BEFORE we split on ===NAME=== markers. Without this the
+        // title gets lost in the parse→build round-trip because no
+        // canonical section key matches it. We stash it under a
+        // sentinel key `__TITLE__` which `BuildMarkdownFromSections`
+        // re-emits on line 1. The Rust `save_post_process` then
+        // parses the resulting recap.md's first H1 and persists it
+        // into `meta.json::title`.
+        var titleMatch = System.Text.RegularExpressions.Regex.Match(
+            raw, @"^\s*#\s+(?<t>[^\r\n]+?)\s*$",
+            System.Text.RegularExpressions.RegexOptions.Multiline);
+        if (titleMatch.Success)
+        {
+            var t = titleMatch.Groups["t"].Value.Trim();
+            if (t.Length > 0 && t.Length <= 200)
+            {
+                result["__TITLE__"] = t;
+            }
+        }
         var indices = new SortedDictionary<int, string>();
         foreach (var k in CanonicalSectionKeys)
         {
@@ -265,6 +290,15 @@ public static class MeetingRecapHelpers
     public static string BuildMarkdownFromSections(Dictionary<string, string> s)
     {
         var sb = new System.Text.StringBuilder();
+        // Re-emit the LLM-chosen title as the first line so the Rust
+        // `save_post_process` path can parse it back into meta.json.
+        // Without this, the title round-trips to /dev/null because no
+        // ===NAME=== marker matches it. See ParseStructuredRecap.
+        if (s.TryGetValue("__TITLE__", out var title)
+            && !string.IsNullOrWhiteSpace(title))
+        {
+            sb.AppendLine($"# {title.Trim()}").AppendLine();
+        }
         void AppendSection(string key, string heading)
         {
             if (s.TryGetValue(key, out var v) && !string.IsNullOrWhiteSpace(v) && v.Trim() != "—")
