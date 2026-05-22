@@ -7225,6 +7225,13 @@ pub unsafe extern "C" fn dimmy_call_signal_sys(sys_active: c_int, app_id: *const
 ///
 /// Returns 3 / 0 (no state change — meeting wasn't ours / already
 /// fired / cooldown active).
+///
+/// # Safety
+///
+/// Takes no pointer arguments and reads / writes only globally-owned
+/// `Mutex`-guarded state (`MEETING`, `call_detector_lock()`). Safe to
+/// call from any thread once `dimmy_init` has run; callers must NOT
+/// invoke it concurrently with `dimmy_shutdown`.
 #[no_mangle]
 pub unsafe extern "C" fn dimmy_call_signal_session_ended() -> c_int {
     let is_meeting_active = MEETING.lock().map(|g| g.is_some()).unwrap_or(false);
