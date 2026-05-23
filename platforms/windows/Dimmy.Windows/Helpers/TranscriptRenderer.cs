@@ -15,9 +15,17 @@ namespace Dimmy.Windows.Helpers;
 public static class TranscriptRenderer
 {
     // [mic] / [system] / [mic 0:01] / [system 1:23] section markers.
-    // Always at the start of a line.
+    // Always at the start of a line. Legacy format; new transcripts use TurnRe.
     private static readonly Regex SectionRe =
         new(@"^\s*\[(mic|system)(?:\s+([^\]]+))?\]\s*$",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    // Per-turn line format written by core/src/meeting.rs:
+    //   `[  1234 ms] [mic] hello world`
+    // One line per chunk; the [ms] is the elapsed timestamp from the
+    // meeting start, [mic|system] is the speaker track, then the text.
+    private static readonly Regex TurnRe =
+        new(@"^\s*\[(?<ts>\s*\d+\s*ms\s*)\]\s+\[(?<spk>mic|system)\]\s+(?<body>.*)$",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     // Inline timestamp markers: [0:01], [00:01], [1:23:45], [125 ms], [125ms].
@@ -48,6 +56,7 @@ public static class TranscriptRenderer
         var lines = transcript.Replace("\r\n", "\n").Split('\n');
         Paragraph? current = null;
         bool lastWasSection = false;
+        string? lastTrack = null;
 
         foreach (var rawLine in lines)
         {
@@ -64,12 +73,40 @@ public static class TranscriptRenderer
                 continue;
             }
 
+            // Per-turn format (current Rust meeting.rs writer):
+            //   `[  1234 ms] [mic|system] body…`
+            // Each line is a self-contained speaker turn — render as a
+            // paragraph with a coloured timestamp + speaker label inline,
+            // and emit a thin divider whenever the speaker changes.
+            var turn = TurnRe.Match(line);
+            if (turn.Success)
+            {
+                if (current != null) { target.Blocks.Add(current); current = null; }
+                var spk = turn.Groups["spk"].Value.Trim().ToLowerInvariant();
+                if (lastTrack != null && lastTrack != spk)
+                    target.Blocks.Add(BuildSpeakerSeparator());
+                target.Blocks.Add(BuildSpeakerTurn(
+                    turn.Groups["ts"].Value.Trim(),
+                    spk,
+                    turn.Groups["body"].Value));
+                lastWasSection = true;
+                lastTrack = spk;
+                continue;
+            }
+
+            // Legacy bare-section format: `[mic]` / `[system]` on its
+            // own line, with the body on subsequent lines. Old transcripts
+            // and some imported sources still use this; keep handling it.
             var m = SectionRe.Match(line);
             if (m.Success)
             {
                 if (current != null) { target.Blocks.Add(current); current = null; }
+                var track = m.Groups[1].Value.Trim().ToLowerInvariant();
+                if (lastTrack != null && lastTrack != track)
+                    target.Blocks.Add(BuildSpeakerSeparator());
                 target.Blocks.Add(BuildSectionBadge(m.Groups[1].Value, m.Groups[2].Value));
                 lastWasSection = true;
+                lastTrack = track;
                 continue;
             }
 
@@ -91,6 +128,78 @@ public static class TranscriptRenderer
         }
 
         if (current != null) target.Blocks.Add(current);
+    }
+
+    /// Mic = mint, system = violet. Two shades per track: a LIGHT one for
+    /// Dark theme (high contrast on dark surfaces) and a SATURATED-DARK
+    /// one for Light theme. Mirrors the palette in BuildSectionBadge so
+    /// timestamps + speaker labels stay visually coherent.
+    private static global::Windows.UI.Color SpeakerColor(string speaker, bool darkTheme)
+    {
+        if (speaker == "system")
+            return darkTheme
+                ? Microsoft.UI.ColorHelper.FromArgb(0xFF, 0xC9, 0xB0, 0xFF)  // pale violet
+                : Microsoft.UI.ColorHelper.FromArgb(0xFF, 0x55, 0x35, 0x9C); // deep violet
+        // default = mic
+        return darkTheme
+            ? Microsoft.UI.ColorHelper.FromArgb(0xFF, 0x7E, 0xE8, 0xC0)  // pale mint
+            : Microsoft.UI.ColorHelper.FromArgb(0xFF, 0x1B, 0x6D, 0x4F); // deep teal
+    }
+
+    /// Per-turn paragraph: `[123 ms]  MIC  body…` rendered with the
+    /// timestamp + speaker name tinted with the track's colour (mint /
+    /// violet, theme-aware), the body in default Foreground. One paragraph
+    /// per turn so consecutive same-speaker turns stack tightly; cross-
+    /// speaker turns get a thin divider above via BuildSpeakerSeparator.
+    private static Paragraph BuildSpeakerTurn(string ts, string speaker, string body)
+    {
+        var p = new Paragraph
+        {
+            Margin = new Thickness(0, 4, 0, 4),
+            LineHeight = 22,
+        };
+        var tint = new SolidColorBrush(SpeakerColor(speaker, IsAppDarkTheme()));
+        p.Inlines.Add(new Run
+        {
+            Text = $"[{ts}]  ",
+            FontSize = 10,
+            FontFamily = new FontFamily("Consolas"),
+            Foreground = tint,
+        });
+        p.Inlines.Add(new Run
+        {
+            Text = $"{speaker.ToUpperInvariant()}  ",
+            FontSize = 10,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Foreground = tint,
+        });
+        AppendLineWithTimestamps(p, body);
+        return p;
+    }
+
+    /// Thin horizontal rule between speaker changes. Rendered as a Run
+    /// of U+2500 (BOX DRAWINGS LIGHT HORIZONTAL) chars — the InlineUIContainer +
+    /// Rectangle approach refused to render visibly in RichTextBlock
+    /// (likely a line-layout interaction); a tinted Run always renders.
+    /// 120 chars at FontSize 8 spans ~600 px, fits most transcript columns
+    /// without wrapping (U+2500 is line-break class AL → glues to itself).
+    /// </summary>
+    private static Paragraph BuildSpeakerSeparator()
+    {
+        var p = new Paragraph
+        {
+            Margin = new Thickness(0, 12, 0, 6),
+            LineHeight = 6,
+        };
+        p.Inlines.Add(new Run
+        {
+            Text = new string('─', 120),
+            FontSize = 8,
+            Foreground = new SolidColorBrush(IsAppDarkTheme()
+                ? Microsoft.UI.ColorHelper.FromArgb(0x80, 0xFF, 0xFF, 0xFF)  // ~50% white
+                : Microsoft.UI.ColorHelper.FromArgb(0x80, 0x00, 0x00, 0x00)), // ~50% black
+        });
+        return p;
     }
 
     private static Paragraph BuildSectionBadge(string track, string? extra)

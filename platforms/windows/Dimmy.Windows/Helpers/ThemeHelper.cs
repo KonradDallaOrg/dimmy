@@ -1,4 +1,5 @@
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Media;
 using Microsoft.Win32;
 
 namespace Dimmy.Windows.Helpers;
@@ -46,6 +47,36 @@ public static class ThemeHelper
             // the user still gets a sensible default rather than a crash.
         }
         return SystemIsDark();
+    }
+
+    /// <summary>
+    /// The Windows accent colour as a SolidColorBrush, picked for the
+    /// user's resolved theme (UiPreferences override → system fallback).
+    ///
+    /// Mirrors what `AccentFillColorDefaultBrush` does internally:
+    /// SystemAccentColorDark2 on Light theme (saturated, readable on
+    /// light surface), SystemAccentColorLight2 on Dark theme (lighter,
+    /// readable on dark surface). Use this from C# code-behind anywhere
+    /// you'd otherwise fetch `Application.Current.Resources["AccentFill…"]` —
+    /// that lookup ignores per-window RequestedTheme overrides and gives
+    /// the wrong shade when the user has flipped Dimmy's theme away from
+    /// the system default.
+    ///
+    /// Returns a fresh SolidColorBrush instance; callers may share it
+    /// across multiple visual elements. NOT live-tracking — if you need
+    /// the brush to update on theme change, re-call this and re-assign.
+    /// </summary>
+    public static SolidColorBrush ResolvedAccentBrush()
+    {
+        try
+        {
+            var key = ResolvedIsDark() ? "SystemAccentColorLight2" : "SystemAccentColorDark2";
+            if (Application.Current.Resources.TryGetValue(key, out var v) && v is global::Windows.UI.Color c)
+                return new SolidColorBrush(c);
+        }
+        catch { }
+        // Last-resort fallback — same hex as Win11 default user accent.
+        return new SolidColorBrush(global::Windows.UI.Color.FromArgb(0xFF, 0x00, 0x78, 0xD4));
     }
 
     /// <summary>Read the current Windows app theme from the registry.

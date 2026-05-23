@@ -744,14 +744,20 @@ public sealed partial class MeetingWindow : Window
         if (w <= 0 || h <= 0) return;
 
         // Two stacked bands so mic and system are clearly readable
-        // at a glance. Mic on top half (DodgerBlue), system on bottom
-        // half (LimeGreen). Each band centered on its own midline so
-        // bars grow up + down equally within their half.
+        // at a glance. Mic on top half (system accent — tracks the
+        // user's Windows accent colour), system on bottom half
+        // (LimeGreen — kept as a contrast track since accent might
+        // itself be blue/teal). Each band centered on its own midline
+        // so bars grow up + down equally within their half.
         double pitch = AMP_BAR_PX + AMP_GAP_PX;
         double bandHeight = h / 2.0;
         double midTop = bandHeight / 2.0;
         double midBottom = bandHeight + bandHeight / 2.0;
-        var brushMic = new SolidColorBrush(Microsoft.UI.Colors.DodgerBlue);
+        // Mic uses the resolved-theme accent brush (Dark2 on light,
+        // Light2 on dark — matches what AccentFillColorDefaultBrush
+        // does in XAML ThemeResource lookups but respects the window's
+        // RequestedTheme override, which Application.Resources doesn't).
+        var brushMic = Helpers.ThemeHelper.ResolvedAccentBrush();
         var brushSys = new SolidColorBrush(Microsoft.UI.Colors.LimeGreen);
 
         DrawBand(_ampHistory.ToArray(), brushMic, midTop, bandHeight - 4, w, pitch);
@@ -914,11 +920,14 @@ public sealed partial class MeetingWindow : Window
         {
             // Mirrored-stereo audiogram (Phase 3+ recordings with both
             // per-track files). Both waveforms share the canvas's
-            // midline: mic (blue) grows UP, system (green) grows DOWN.
-            // Each band gets the FULL half-canvas height so a loud
-            // moment is readable even on short cards.
-            DrawDoneBandAnchored(_cachedMicPeaks!,
-                new SolidColorBrush(Microsoft.UI.Colors.DodgerBlue),
+            // midline: mic (accent) grows UP, system (green) grows
+            // DOWN. Mic tracks the user's Windows accent colour;
+            // system stays LimeGreen for contrast even if the user's
+            // accent is itself blue/teal. Each band gets the FULL
+            // half-canvas height so a loud moment is readable even on
+            // short cards.
+            var micBrush = Helpers.ThemeHelper.ResolvedAccentBrush();
+            DrawDoneBandAnchored(_cachedMicPeaks!, micBrush,
                 midline, midline - 2, w, anchorTop: true);
             DrawDoneBandAnchored(_cachedSystemPeaks!,
                 new SolidColorBrush(Microsoft.UI.Colors.LimeGreen),
@@ -928,12 +937,12 @@ public sealed partial class MeetingWindow : Window
         {
             // Pre-Phase-3 recording (or Mic-only / System-only mode where
             // one track file is absent). Single mirrored band so the
-            // layout matches the dual case visually.
-            DrawDoneBandAnchored(_cachedDonePeaks,
-                new SolidColorBrush(Microsoft.UI.Colors.DodgerBlue),
+            // layout matches the dual case visually. Both halves use
+            // the accent brush since only one channel is being represented.
+            var micBrush = Helpers.ThemeHelper.ResolvedAccentBrush();
+            DrawDoneBandAnchored(_cachedDonePeaks, micBrush,
                 midline, midline - 2, w, anchorTop: true);
-            DrawDoneBandAnchored(_cachedDonePeaks,
-                new SolidColorBrush(Microsoft.UI.Colors.DodgerBlue),
+            DrawDoneBandAnchored(_cachedDonePeaks, micBrush,
                 midline, midline - 2, w, anchorTop: false);
         }
 
@@ -1366,12 +1375,29 @@ public sealed partial class MeetingWindow : Window
 
     // ── History sidebar ────────────────────────────────────────────
 
-    public sealed class HistoryRow
+    public sealed class HistoryRow : System.ComponentModel.INotifyPropertyChanged
     {
         public string Dir { get; set; } = "";
         public string Title { get; set; } = "";
         public string Subtitle { get; set; } = "";
         public string RightLabel { get; set; } = "";
+
+        // IsActive drives the left-edge accent stripe in the row's
+        // DataTemplate — flipped from HistoryList_SelectionChanged because
+        // WinUI 3 doesn't support RelativeSource AncestorType bindings
+        // (which would otherwise let us bind directly to ListViewItem.IsSelected).
+        private bool _isActive;
+        public bool IsActive
+        {
+            get => _isActive;
+            set
+            {
+                if (_isActive == value) return;
+                _isActive = value;
+                PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(IsActive)));
+            }
+        }
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
     }
 
     private void HistorySearch_Changed(object sender, Microsoft.UI.Xaml.Controls.TextChangedEventArgs e)
@@ -1570,6 +1596,12 @@ public sealed partial class MeetingWindow : Window
     private async void HistoryList_SelectionChanged(object sender,
         Microsoft.UI.Xaml.Controls.SelectionChangedEventArgs e)
     {
+        // Drive the left-edge accent stripe via row.IsActive — sync first
+        // (cheap O(n) for n ≤ ~100 rows), then proceed with the heavy
+        // work (audio load, transcript open, etc.).
+        foreach (var item in HistoryItems)
+            item.IsActive = ReferenceEquals(item, HistoryList.SelectedItem);
+
         if (HistoryList.SelectedItem is not HistoryRow row) return;
 
         // While a recording is in flight, browsing a past meeting is

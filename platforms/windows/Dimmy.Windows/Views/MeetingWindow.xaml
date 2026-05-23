@@ -96,7 +96,11 @@
             <ListView.ItemContainerStyle>
               <Style TargetType="ListViewItem">
                 <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
-                <Setter Property="Padding" Value="0,4"/>
+                <!-- Left pad 12px so the WinUI-default left-edge selection
+                     indicator (4px accent stripe) has room to render, AND
+                     so item text doesn't kiss the sidebar edge on hover /
+                     selection. Vertical pad kept at 4px to preserve density. -->
+                <Setter Property="Padding" Value="12,4"/>
               </Style>
             </ListView.ItemContainerStyle>
             <ListView.ItemTemplate>
@@ -107,6 +111,21 @@
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                   </Grid.ColumnDefinitions>
+                  <!-- Win11-style left-edge accent stripe. WinUI 3's
+                       default ListViewItem doesn't ship one (only
+                       NavigationView does); we synthesise it with an
+                       absolutely-positioned Border. Negative left margin
+                       bleeds into the ListViewItem's 12 px padding so
+                       the bar sits flush with the sidebar edge.
+                       Visibility tracks `IsActive` on the bound HistoryRow
+                       — set from code-behind HistoryList_SelectionChanged
+                       (WinUI 3 doesn't support RelativeSource AncestorType
+                       so we can't bind ListViewItem.IsSelected directly). -->
+                  <Border Grid.Column="0" Width="3" CornerRadius="1.5"
+                          HorizontalAlignment="Left" VerticalAlignment="Stretch"
+                          Margin="-16,4,0,4"
+                          Background="{ThemeResource AccentFillColorDefaultBrush}"
+                          Visibility="{Binding IsActive, Converter={StaticResource BoolToVisibilityConverter}}"/>
                   <StackPanel Grid.Column="0" Spacing="2">
                     <TextBlock Text="{Binding Title}" FontSize="13"
                                FontWeight="SemiBold"

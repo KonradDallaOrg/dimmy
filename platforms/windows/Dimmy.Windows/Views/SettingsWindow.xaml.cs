@@ -105,6 +105,9 @@ public sealed partial class SettingsWindow : Window
         if (NavView.MenuItems.Count > 0 && NavView.MenuItems[0] is NavigationViewItem first)
         {
             NavView.SelectedItem = first;
+            // Explicit tint in case Nav_SelectionChanged didn't fire — XAML
+            // template not always loaded at this point so we belt-and-brace.
+            TintSelectedNavIcon(first);
         }
 
         // Pulse "Saved" InfoBar on any ViewModel field change (Win11 auto-save
@@ -2663,6 +2666,41 @@ public sealed partial class SettingsWindow : Window
             else if (tag == "license")
             {
                 RefreshLicenseStatus();
+            }
+        }
+
+        TintSelectedNavIcon(args.SelectedItem);
+    }
+
+    /// <summary>
+    /// Win11 Settings pattern: only the *icon* of the selected nav-pane
+    /// entry takes the system accent colour — the label keeps the default
+    /// TextFillColorPrimary. Walks every NavigationViewItem on each
+    /// selection change, sets `Foreground` on the FontIcon child when
+    /// selected, clears it (back to inherit) otherwise. Cheap: 12 items.
+    ///
+    /// Uses ClearValue rather than `Foreground = null` for the reset: in
+    /// WinUI a null assignment locks the DP at null instead of releasing
+    /// it to the style / inherited fallback, so the icon would render
+    /// invisible (or black on dark theme) once you ever navigated away
+    /// from it.
+    /// </summary>
+    private void TintSelectedNavIcon(object? selected)
+    {
+        // ResolvedAccentBrush picks the right accent shade for the
+        // Window's RESOLVED theme (UiPreferences override → system
+        // fallback). Fetching `AccentFillColorDefaultBrush` from
+        // Application.Resources gives the SYSTEM-theme variant only,
+        // which is wrong when the user has flipped Dimmy's theme.
+        var accent = Helpers.ThemeHelper.ResolvedAccentBrush();
+        foreach (var entry in NavView.MenuItems)
+        {
+            if (entry is NavigationViewItem nvi && nvi.Icon is FontIcon icon)
+            {
+                if (ReferenceEquals(entry, selected))
+                    icon.Foreground = accent;
+                else
+                    icon.ClearValue(IconElement.ForegroundProperty);
             }
         }
     }
