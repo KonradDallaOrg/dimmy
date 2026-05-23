@@ -971,25 +971,22 @@
                     </ComboBoxItem>
                     <ComboBoxItem Tag="anthropic">
                       <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Image Width="16" Height="16">
-                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/anthropic.svg"/></Image.Source>
-                        </Image>
+                        <Image Width="16" Height="16"
+                               Source="{ThemeResource AnthropicMarkSource}" />
                         <TextBlock Text="Anthropic · claude-haiku-4.5" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
                     <ComboBoxItem Tag="anthropic-sonnet">
                       <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Image Width="16" Height="16">
-                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/anthropic.svg"/></Image.Source>
-                        </Image>
+                        <Image Width="16" Height="16"
+                               Source="{ThemeResource AnthropicMarkSource}" />
                         <TextBlock Text="Anthropic · claude-sonnet-4.6" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
                     <ComboBoxItem Tag="anthropic-opus">
                       <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Image Width="16" Height="16">
-                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/anthropic.svg"/></Image.Source>
-                        </Image>
+                        <Image Width="16" Height="16"
+                               Source="{ThemeResource AnthropicMarkSource}" />
                         <TextBlock Text="Anthropic · claude-opus-4.7 (top)" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
@@ -1177,25 +1174,22 @@
                     </ComboBoxItem>
                     <ComboBoxItem Tag="claude-opus-4-7">
                       <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Image Width="16" Height="16">
-                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/anthropic.svg"/></Image.Source>
-                        </Image>
+                        <Image Width="16" Height="16"
+                               Source="{ThemeResource AnthropicMarkSource}" />
                         <TextBlock Text="Anthropic · Opus 4.7 (best, slow)" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
                     <ComboBoxItem Tag="claude-sonnet-4-6">
                       <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Image Width="16" Height="16">
-                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/anthropic.svg"/></Image.Source>
-                        </Image>
+                        <Image Width="16" Height="16"
+                               Source="{ThemeResource AnthropicMarkSource}" />
                         <TextBlock Text="Anthropic · Sonnet 4.6 (balanced)" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
                     <ComboBoxItem Tag="claude-haiku-4-5-20251001">
                       <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Image Width="16" Height="16">
-                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/anthropic.svg"/></Image.Source>
-                        </Image>
+                        <Image Width="16" Height="16"
+                               Source="{ThemeResource AnthropicMarkSource}" />
                         <TextBlock Text="Anthropic · Haiku 4.5 (fast)" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
@@ -2131,10 +2125,11 @@
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                   </Grid.RowDefinitions>
-                  <!-- Real Notion logo — bundled SVG asset. -->
+                  <!-- Real Notion logo — bundled SVG asset (light/dark
+                       picked via ThemeDictionary in App.xaml). -->
                   <Image Grid.Column="0" Grid.Row="0" Grid.RowSpan="2"
                          Width="40" Height="40"
-                         Source="ms-appx:///Assets/notion-mark.svg"
+                         Source="{ThemeResource NotionMarkSource}"
                          VerticalAlignment="Top"/>
                   <StackPanel Grid.Column="1" Grid.Row="0" VerticalAlignment="Center" Spacing="2">
                     <TextBlock Text="Notion" FontSize="16" FontWeight="SemiBold" />
@@ -2225,11 +2220,8 @@
                   </Grid.RowDefinitions>
                   <Image Grid.Column="0" Grid.Row="0" Grid.RowSpan="2"
                          Width="40" Height="40"
-                         VerticalAlignment="Top">
-                    <Image.Source>
-                      <SvgImageSource UriSource="ms-appx:///Assets/Providers/anthropic.svg"/>
-                    </Image.Source>
-                  </Image>
+                         VerticalAlignment="Top"
+                         Source="{ThemeResource AnthropicMarkSource}" />
                   <StackPanel Grid.Column="1" Grid.Row="0" VerticalAlignment="Center" Spacing="2">
                     <TextBlock Text="Anthropic" FontSize="16" FontWeight="SemiBold" />
                     <TextBlock x:Name="AnthropicIntegrationStatusText"

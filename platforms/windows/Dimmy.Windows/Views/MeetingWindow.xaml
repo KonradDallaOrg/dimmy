@@ -476,7 +476,7 @@
                           ToolTipService.ToolTip="Send recap to Notion"
                           Background="Transparent" BorderThickness="0" Padding="8">
                     <Image Width="16" Height="16"
-                           Source="ms-appx:///Assets/notion-mark.svg"/>
+                           Source="{ThemeResource NotionMarkSource}"/>
                   </Button>
                   <!-- "Recap with Claude Desktop": open Claude with a
                        deeplink prompt that uses our MCP tools to read

@@ -64,7 +64,7 @@
     <Content Include="Assets\Providers\*.svg">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Include="Assets\notion-mark.svg">
+    <Content Include="Assets\notion-mark*.svg">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>

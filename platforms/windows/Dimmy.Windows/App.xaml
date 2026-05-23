@@ -9,6 +9,33 @@
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
             </ResourceDictionary.MergedDictionaries>
+
+            <!-- Brand-mark SVGs (Notion, Anthropic) need to invert
+                 fill colour between Light + Dark themes — the marks
+                 are pure-monochrome and would otherwise vanish on the
+                 opposite surface. SvgImageSource doesn't honour SVG's
+                 `currentColor`, so we ship two physical assets per
+                 mark and pick via ThemeDictionary. Consumers reference
+                 `{ThemeResource NotionMarkSource}` / `AnthropicMarkSource`;
+                 a re-resolve happens automatically whenever the
+                 containing element's RequestedTheme/ActualTheme changes
+                 (which is exactly when our windows flip via
+                 ThemeHelper.ResolvedElementTheme). -->
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Light">
+                    <SvgImageSource x:Key="NotionMarkSource"
+                                    UriSource="ms-appx:///Assets/notion-mark.svg" />
+                    <SvgImageSource x:Key="AnthropicMarkSource"
+                                    UriSource="ms-appx:///Assets/Providers/anthropic.svg" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Dark">
+                    <SvgImageSource x:Key="NotionMarkSource"
+                                    UriSource="ms-appx:///Assets/notion-mark-dark.svg" />
+                    <SvgImageSource x:Key="AnthropicMarkSource"
+                                    UriSource="ms-appx:///Assets/Providers/anthropic-dark.svg" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
+
             <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter" />
             <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityInverter" />
             <converters:NotNullToVisibilityConverter x:Key="NotNullToVisibilityConverter" />
