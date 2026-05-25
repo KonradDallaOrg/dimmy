@@ -3594,7 +3594,10 @@ pub unsafe extern "C" fn dimmy_claude_desktop_status(
     if out_buf.is_null() || buf_len <= 0 {
         return -1;
     }
-    let namespace = std::env::var("DIMMY_CONFIG_NAMESPACE").unwrap_or_else(|_| "dimmy".to_string());
+    // Compile-time namespace (see `_install`) — must match the dir the
+    // extension was installed under, else status reports "not installed"
+    // on staging even when it is.
+    let namespace = crate::config_dir_name().to_string();
 
     let install = crate::claude_desktop::detect_claude_desktop();
     let ext_dir = crate::claude_desktop::extensions_root()
@@ -3709,11 +3712,19 @@ pub unsafe extern "C" fn dimmy_claude_desktop_install(
         Ok(s) if !s.is_empty() => s,
         _ => return -1,
     };
-    let namespace = std::env::var("DIMMY_CONFIG_NAMESPACE").unwrap_or_else(|_| "dimmy".to_string());
+    // MUST be the compile-time `config_dir_name()`, NOT a runtime
+    // `std::env::var` read. The .app process has no `DIMMY_CONFIG_NAMESPACE`
+    // in its environment at runtime (it's baked at build via `option_env!`),
+    // so reading the env here always defaulted to "dimmy" — even on a
+    // staging-tester build that writes meetings under `dimmy-staging`. That
+    // baked the wrong namespace into the Claude Desktop manifest, so the MCP
+    // looked in `dimmy/meetings`, found nothing, and recaps written by Claude
+    // (incl. the meeting title) landed in a phantom dir the app never reads.
+    let namespace = crate::config_dir_name();
     match crate::claude_desktop::install_extension(
         std::path::Path::new(path_str),
         version_str,
-        &namespace,
+        namespace,
     ) {
         Ok(_) => 0,
         Err(crate::claude_desktop::InstallError::NoExtensionsRoot) => -1,
@@ -3734,8 +3745,9 @@ pub unsafe extern "C" fn dimmy_claude_desktop_install(
 /// a clean state regardless of which wizard era they installed in.
 #[no_mangle]
 pub extern "C" fn dimmy_claude_desktop_uninstall() -> c_int {
-    let namespace = std::env::var("DIMMY_CONFIG_NAMESPACE").unwrap_or_else(|_| "dimmy".to_string());
-    match crate::claude_desktop::uninstall_extension(&namespace) {
+    // Same compile-time namespace as `_install` — see the note there.
+    let namespace = crate::config_dir_name();
+    match crate::claude_desktop::uninstall_extension(namespace) {
         Ok(true) => 1,
         Ok(false) => 0,
         Err(crate::claude_desktop::InstallError::NoExtensionsRoot) => -1,
