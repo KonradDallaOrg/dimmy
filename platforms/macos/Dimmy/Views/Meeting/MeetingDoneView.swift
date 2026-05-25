@@ -748,7 +748,7 @@ private struct ToolbarIconButton<Label: View>: View {
                 .frame(width: 30, height: 28)
                 .background(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Color.primary.opacity(hovering ? 0.08 : 0))
+                        .fill(Color.primary.opacity(hovering ? 0.14 : 0))
                 )
                 .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
