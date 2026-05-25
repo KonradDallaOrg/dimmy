@@ -214,6 +214,12 @@ int32_t dimmy_build_flavor(char * _Nonnull out_buf, int32_t buf_len);
 /// onboarding-restart bug. Returns bytes written, or -1.
 int32_t dimmy_config_dir_name(char * _Nonnull out_buf, int32_t buf_len);
 
+/// Effective meetings directory — honours the user's `meeting_storage_path`
+/// override (with a writability fallback to the default
+/// `<configdir>/meetings`). Resolve fresh on each call; the user can change
+/// it at runtime. Returns bytes written, or -1.
+int32_t dimmy_meetings_dir(char * _Nonnull out_buf, int32_t buf_len);
+
 /// GPU known-bad marker status as JSON. Returns bytes written, or -1.
 int32_t dimmy_gpu_get_status(char * _Nonnull out_buf, int32_t buf_len);
 

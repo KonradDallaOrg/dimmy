@@ -411,6 +411,22 @@ final class DimmyCore {
         ).first?.appendingPathComponent(configDirName, isDirectory: true)
     }
 
+    /// Effective meetings directory, honouring the user's
+    /// `meeting_storage_path` override (the Rust core applies the
+    /// writability fallback to the default `<configdir>/meetings`).
+    /// Resolved FRESH on each access — the user can change it at runtime,
+    /// so callers MUST NOT cache it. Mirrors Win `BuildInfo.MeetingsDirPath`.
+    var meetingsDirURL: URL? {
+        let bufLen: Int32 = 1024
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+        let written = dimmy_meetings_dir(buffer, bufLen)
+        guard written > 0 else { return nil }
+        let path = String(cString: buffer)
+        return path.isEmpty ? nil : URL(fileURLWithPath: path, isDirectory: true)
+    }
+
     // ── Claude Code subscription login ───────────────────────────
     //
     // Use the user's Anthropic Pro/Team/Max plan via the local

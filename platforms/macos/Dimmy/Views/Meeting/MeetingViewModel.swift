@@ -753,15 +753,12 @@ final class MeetingViewModel: ObservableObject {
     // MARK: - Disk helpers
 
     private func meetingsDir() -> URL? {
-        // Honour the build flavor via `DimmyCore.configDirURL` —
-        // staging writes meetings under `dimmy-staging/meetings/`,
-        // prod under `dimmy/meetings/`. Hardcoding "dimmy" here made
-        // the sidebar read the prod dir while staging-flavor recording
-        // wrote to dimmy-staging/ — meetings showed up on disk but
-        // were invisible in the Meeting window history (the user's
-        // "I exited and lost everything" report, 2026-05-15). Same
-        // root-cause class as the Win app_rules-wipe bug.
-        DimmyCore.shared.configDirURL?.appendingPathComponent("meetings", isDirectory: true)
+        // Effective meetings dir from the Rust core — honours the user's
+        // `meeting_storage_path` override AND the flavor-aware default
+        // (`dimmy`/`dimmy-staging`). Resolved fresh each call so a
+        // runtime change of the storage dir is picked up. Never re-derive
+        // `configDirURL/meetings` here — that bypasses the override.
+        DimmyCore.shared.meetingsDirURL
     }
 
     private func freshestMeetingDir() -> URL? {

@@ -50,10 +50,11 @@ enum FileLoadToMeetingService {
             return Outcome(dir: "", recapMarkdown: nil, error: "empty transcript")
         }
 
-        guard let configDir = DimmyCore.shared.configDirURL else {
-            return Outcome(dir: "", recapMarkdown: nil, error: "config dir unavailable")
+        // Effective meetings dir (honours the user's meeting_storage_path
+        // override) — never re-derive configDir/meetings here.
+        guard let meetingsRoot = DimmyCore.shared.meetingsDirURL else {
+            return Outcome(dir: "", recapMarkdown: nil, error: "meetings dir unavailable")
         }
-        let meetingsRoot = configDir.appendingPathComponent("meetings", isDirectory: true)
         do {
             try FileManager.default.createDirectory(at: meetingsRoot, withIntermediateDirectories: true)
         } catch {
