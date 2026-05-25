@@ -26,7 +26,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/pill-states.png" alt="Dimmy pill — all states, waveform styles, border colours, LLM style indicators" width="720">
+  <img src="docs/screenshots/pill-states.svg" alt="Dimmy pill — all states, waveform styles, border colours, LLM style indicators" width="720">
 </p>
 
 ---
@@ -127,7 +127,7 @@ Optional: integrate with your desktop via [AppImageLauncher](https://github.com/
 Dimmy lives as a tiny always-on overlay — the **pill**. It changes shape, colour, and contents to reflect what's happening.
 
 <p align="center">
-  <img src="docs/screenshots/pill-states.png" alt="Pill states reference" width="720">
+  <img src="docs/screenshots/pill-states.svg" alt="Pill states reference" width="720">
 </p>
 
 | State | Visual | Meaning |

@@ -1,0 +1,215 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Dimmy pill states. Six visual states the floating overlay cycles through
+  during one full dictation. Mirrors components/DimmyPill.jsx from the
+  website. Rendered inline by GitHub (SMIL + CSS animations).
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 360" width="720" height="360"
+     font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <!-- Rainbow ring used in the recording state. SVG linear gradient stands in
+         for the conic gradient used in the live overlay; same palette and
+         anchor angle so it reads the same to a casual viewer. -->
+    <linearGradient id="rainbow" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0"    stop-color="#FF5C5C"/>
+      <stop offset="0.14" stop-color="#F59E0B"/>
+      <stop offset="0.28" stop-color="#FBBF24"/>
+      <stop offset="0.42" stop-color="#4ADE80"/>
+      <stop offset="0.56" stop-color="#22D3EE"/>
+      <stop offset="0.70" stop-color="#38BDF8"/>
+      <stop offset="0.84" stop-color="#A78BFA"/>
+      <stop offset="1"    stop-color="#E879F9"/>
+    </linearGradient>
+
+    <!-- Soft outer glow per state. stdDeviation tuned to match the pill's
+         CSS box-shadow at the same scale. -->
+    <filter id="glow-rainbow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="3.5"/>
+    </filter>
+    <filter id="glow-blue" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="3"/>
+    </filter>
+    <filter id="glow-purple" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="3"/>
+    </filter>
+    <filter id="glow-green" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="3"/>
+    </filter>
+    <filter id="glow-red" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="3"/>
+    </filter>
+
+    <!-- Reusable pill body. A capsule with the dark glass background. -->
+    <symbol id="pill-body" overflow="visible">
+      <rect x="0" y="0" rx="18" ry="18" width="100%" height="36" fill="rgba(16,16,18,0.92)"/>
+    </symbol>
+  </defs>
+
+  <!-- =================================================================
+       CELL 1 · Idle. Small pill, lavender LLM-style dot. Dot pulses
+       gently to signal "alive but waiting".
+  ================================================================= -->
+  <g transform="translate(0,0)">
+    <g transform="translate(108,40)">
+      <!-- subtle outline only -->
+      <rect x="0" y="0" rx="18" ry="18" width="28" height="36" fill="rgba(16,16,18,0.92)"
+            stroke="rgba(255,255,255,0.14)" stroke-width="0.6"/>
+      <circle cx="14" cy="18" r="3" fill="#A78BFA">
+        <animate attributeName="opacity" values="0.55;1;0.55" dur="2.4s" repeatCount="indefinite"/>
+        <animate attributeName="r"       values="3;3.6;3"     dur="2.4s" repeatCount="indefinite"/>
+      </circle>
+    </g>
+    <text x="120" y="120" text-anchor="middle"
+          font-family="ui-monospace, SFMono-Regular, 'JetBrains Mono', Menlo, Consolas, monospace"
+          font-size="11" fill="#71717A" letter-spacing="0.12em">IDLE</text>
+    <text x="120" y="145" text-anchor="middle" font-size="12.5" fill="#A1A1AA">Waiting for the hotkey</text>
+  </g>
+
+  <!-- =================================================================
+       CELL 2 · Recording. Expanded pill, rainbow ring, live waveform,
+       timer. Seven VU bars at different periods so the cluster reads
+       as a real mic meter, not a synced wave.
+  ================================================================= -->
+  <g transform="translate(240,0)">
+    <!-- soft rainbow glow under the ring -->
+    <rect x="59" y="38" rx="19" ry="19" width="122" height="40" fill="url(#rainbow)" opacity="0.32" filter="url(#glow-rainbow)"/>
+    <!-- rainbow ring (border-only via a stroked rect with no fill) -->
+    <rect x="60" y="39" rx="18" ry="18" width="120" height="38" fill="none"
+          stroke="url(#rainbow)" stroke-width="2"/>
+    <!-- dark glass body inset by ring width -->
+    <rect x="62" y="41" rx="16" ry="16" width="116" height="34" fill="rgba(16,16,18,0.94)"/>
+
+    <!-- 7 VU bars centered at x=98..134, y middle =58 -->
+    <g fill="#FFFFFF">
+      <rect x="78"  y="50" width="4" height="14" rx="2">
+        <animate attributeName="height" values="6;18;8;14;6" dur="0.55s" begin="0s"      repeatCount="indefinite"/>
+        <animate attributeName="y"      values="58;49;54;51;58" dur="0.55s" begin="0s"      repeatCount="indefinite"/>
+      </rect>
+      <rect x="86"  y="50" width="4" height="18" rx="2">
+        <animate attributeName="height" values="10;22;12;20;10" dur="0.72s" begin="-0.13s" repeatCount="indefinite"/>
+        <animate attributeName="y"      values="53;47;52;48;53"  dur="0.72s" begin="-0.13s" repeatCount="indefinite"/>
+      </rect>
+      <rect x="94"  y="48" width="4" height="22" rx="2">
+        <animate attributeName="height" values="14;26;10;24;14" dur="0.62s" begin="-0.28s" repeatCount="indefinite"/>
+        <animate attributeName="y"      values="51;45;53;46;51"  dur="0.62s" begin="-0.28s" repeatCount="indefinite"/>
+      </rect>
+      <rect x="102" y="46" width="4" height="26" rx="2">
+        <animate attributeName="height" values="16;30;12;26;16" dur="0.80s" begin="-0.42s" repeatCount="indefinite"/>
+        <animate attributeName="y"      values="50;43;52;45;50"  dur="0.80s" begin="-0.42s" repeatCount="indefinite"/>
+      </rect>
+      <rect x="110" y="48" width="4" height="22" rx="2">
+        <animate attributeName="height" values="12;24;14;26;12" dur="0.58s" begin="-0.55s" repeatCount="indefinite"/>
+        <animate attributeName="y"      values="52;46;51;45;52"  dur="0.58s" begin="-0.55s" repeatCount="indefinite"/>
+      </rect>
+      <rect x="118" y="50" width="4" height="18" rx="2">
+        <animate attributeName="height" values="10;20;8;18;10"  dur="0.74s" begin="-0.68s" repeatCount="indefinite"/>
+        <animate attributeName="y"      values="53;48;54;49;53"  dur="0.74s" begin="-0.68s" repeatCount="indefinite"/>
+      </rect>
+      <rect x="126" y="50" width="4" height="14" rx="2">
+        <animate attributeName="height" values="6;16;10;14;6"  dur="0.65s" begin="-0.85s" repeatCount="indefinite"/>
+        <animate attributeName="y"      values="58;50;53;51;58" dur="0.65s" begin="-0.85s" repeatCount="indefinite"/>
+      </rect>
+    </g>
+
+    <!-- timer -->
+    <text x="156" y="62" font-family="ui-monospace, SFMono-Regular, 'JetBrains Mono', Menlo, Consolas, monospace"
+          font-size="11" fill="rgba(255,255,255,0.85)" text-anchor="middle">00:04</text>
+
+    <text x="120" y="120" text-anchor="middle"
+          font-family="ui-monospace, SFMono-Regular, 'JetBrains Mono', Menlo, Consolas, monospace"
+          font-size="11" fill="#FB923C" letter-spacing="0.12em">RECORDING</text>
+    <text x="120" y="145" text-anchor="middle" font-size="12.5" fill="#A1A1AA">Capturing audio</text>
+  </g>
+
+  <!-- =================================================================
+       CELL 3 · Transcribing. Blue ring + glow, spinning ring icon,
+       label.
+  ================================================================= -->
+  <g transform="translate(480,0)">
+    <rect x="68" y="38" rx="19" ry="19" width="136" height="40" fill="rgba(56,189,248,0.28)" filter="url(#glow-blue)"/>
+    <rect x="68" y="38" rx="19" ry="19" width="136" height="40" fill="none" stroke="rgba(56,189,248,0.55)" stroke-width="1.5"/>
+    <rect x="69" y="39" rx="18" ry="18" width="134" height="38" fill="rgba(16,16,18,0.94)"/>
+    <!-- spinner: dashed circle rotating -->
+    <g transform="translate(86,58)">
+      <circle r="7" fill="none" stroke="rgba(56,189,248,0.20)" stroke-width="1.5"/>
+      <circle r="7" fill="none" stroke="#38BDF8" stroke-width="1.5" stroke-linecap="round"
+              stroke-dasharray="14 30" transform="rotate(-90)">
+        <animateTransform attributeName="transform" type="rotate" from="-90" to="270" dur="0.9s" repeatCount="indefinite"/>
+      </circle>
+    </g>
+    <text x="103" y="62" font-size="12.5" fill="#7DD3FC">Transcribing</text>
+    <text x="161" y="62" font-size="12.5" fill="#7DD3FC" letter-spacing="2">
+      …
+      <animate attributeName="opacity" values="0.3;1;0.3" dur="1.2s" repeatCount="indefinite"/>
+    </text>
+    <text x="135" y="120" text-anchor="middle"
+          font-family="ui-monospace, SFMono-Regular, 'JetBrains Mono', Menlo, Consolas, monospace"
+          font-size="11" fill="#38BDF8" letter-spacing="0.12em">TRANSCRIBING</text>
+    <text x="135" y="145" text-anchor="middle" font-size="12.5" fill="#A1A1AA">Speech → text</text>
+  </g>
+
+  <!-- =================================================================
+       CELL 4 · Processing (LLM). Purple ring + glow, spinner, label.
+  ================================================================= -->
+  <g transform="translate(0,180)">
+    <rect x="60" y="38" rx="19" ry="19" width="120" height="40" fill="rgba(167,139,250,0.28)" filter="url(#glow-purple)"/>
+    <rect x="60" y="38" rx="19" ry="19" width="120" height="40" fill="none" stroke="rgba(167,139,250,0.55)" stroke-width="1.5"/>
+    <rect x="61" y="39" rx="18" ry="18" width="118" height="38" fill="rgba(16,16,18,0.94)"/>
+    <g transform="translate(78,58)">
+      <circle r="7" fill="none" stroke="rgba(167,139,250,0.20)" stroke-width="1.5"/>
+      <circle r="7" fill="none" stroke="#A78BFA" stroke-width="1.5" stroke-linecap="round"
+              stroke-dasharray="14 30" transform="rotate(-90)">
+        <animateTransform attributeName="transform" type="rotate" from="-90" to="270" dur="1.1s" repeatCount="indefinite"/>
+      </circle>
+    </g>
+    <text x="95" y="62" font-size="12.5" fill="#C4B5FD">Processing</text>
+    <text x="146" y="62" font-size="12.5" fill="#C4B5FD" letter-spacing="2">
+      …
+      <animate attributeName="opacity" values="0.3;1;0.3" dur="1.2s" repeatCount="indefinite"/>
+    </text>
+    <text x="120" y="120" text-anchor="middle"
+          font-family="ui-monospace, SFMono-Regular, 'JetBrains Mono', Menlo, Consolas, monospace"
+          font-size="11" fill="#A78BFA" letter-spacing="0.12em">LLM</text>
+    <text x="120" y="145" text-anchor="middle" font-size="12.5" fill="#A1A1AA">Polishing with AI</text>
+  </g>
+
+  <!-- =================================================================
+       CELL 5 · Done. Green ring, check, "Pasted". Subtle pulse on glow.
+  ================================================================= -->
+  <g transform="translate(240,180)">
+    <rect x="74" y="38" rx="19" ry="19" width="92" height="40" fill="rgba(74,222,128,0.28)" filter="url(#glow-green)">
+      <animate attributeName="opacity" values="0.7;1;0.7" dur="1.8s" repeatCount="indefinite"/>
+    </rect>
+    <rect x="74" y="38" rx="19" ry="19" width="92" height="40" fill="none" stroke="rgba(74,222,128,0.65)" stroke-width="1.5"/>
+    <rect x="75" y="39" rx="18" ry="18" width="90" height="38" fill="rgba(16,16,18,0.94)"/>
+    <!-- check mark -->
+    <path d="M 90,58 l 4,5 l 8,-10" fill="none" stroke="#4ADE80" stroke-width="2.2"
+          stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="115" y="62" font-size="12.5" fill="#86EFAC" font-weight="500">Pasted</text>
+    <text x="120" y="120" text-anchor="middle"
+          font-family="ui-monospace, SFMono-Regular, 'JetBrains Mono', Menlo, Consolas, monospace"
+          font-size="11" fill="#4ADE80" letter-spacing="0.12em">DONE</text>
+    <text x="120" y="145" text-anchor="middle" font-size="12.5" fill="#A1A1AA">Text landed in the focused app</text>
+  </g>
+
+  <!-- =================================================================
+       CELL 6 · Error. Red ring, ×, "Couldn't transcribe". Glow pulses.
+  ================================================================= -->
+  <g transform="translate(480,180)">
+    <rect x="50" y="38" rx="19" ry="19" width="140" height="40" fill="rgba(239,68,68,0.28)" filter="url(#glow-red)">
+      <animate attributeName="opacity" values="0.6;1;0.6" dur="1.6s" repeatCount="indefinite"/>
+    </rect>
+    <rect x="50" y="38" rx="19" ry="19" width="140" height="40" fill="none" stroke="rgba(239,68,68,0.65)" stroke-width="1.5"/>
+    <rect x="51" y="39" rx="18" ry="18" width="138" height="38" fill="rgba(16,16,18,0.94)"/>
+    <!-- × icon -->
+    <g transform="translate(67,52)" stroke="#EF4444" stroke-width="2.2" stroke-linecap="round">
+      <line x1="0" y1="0" x2="10" y2="10"/>
+      <line x1="10" y1="0" x2="0" y2="10"/>
+    </g>
+    <text x="86" y="62" font-size="12.5" fill="#FCA5A5" font-weight="500">Couldn't transcribe</text>
+    <text x="120" y="120" text-anchor="middle"
+          font-family="ui-monospace, SFMono-Regular, 'JetBrains Mono', Menlo, Consolas, monospace"
+          font-size="11" fill="#EF4444" letter-spacing="0.12em">ERROR</text>
+    <text x="120" y="145" text-anchor="middle" font-size="12.5" fill="#A1A1AA">Hover the pill for the reason</text>
+  </g>
+</svg>
