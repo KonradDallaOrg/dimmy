@@ -379,13 +379,27 @@ final class DimmyCore {
     var isStagingBuild: Bool { buildFlavor == "staging" }
 
     /// Folder under Application Support that holds config.json,
-    /// history.db, license.json, meetings/, dimmy.log. MUST match
-    /// the Rust core's `config_dir_name()`: `dimmy` for prod,
-    /// `dimmy-staging` for staging. Hardcoding "dimmy" anywhere
-    /// silently breaks staging-flavor builds — same class of bug
-    /// caught on Win 2026-05-12 (app_rules wipe). Always use this
-    /// helper from Swift, never `appendingPathComponent("dimmy")`.
-    var configDirName: String { isStagingBuild ? "dimmy-staging" : "dimmy" }
+    /// history.db, license.json, meetings/, dimmy.log. Reads the Rust
+    /// core's compile-time `config_dir_name()` (DIMMY_CONFIG_NAMESPACE,
+    /// default "dimmy") via FFI — NEVER derive it from the build flavor.
+    ///
+    /// Flavor and config-dir are decoupled (2026-05-16): a flavor=staging
+    /// build that ships under the prod packId keeps the prod `dimmy` dir,
+    /// while only the side-by-side tester build sets `dimmy-staging`.
+    /// Deriving from `isStagingBuild` made the app read/write under
+    /// `dimmy-staging` while the core wrote under `dimmy` — meetings
+    /// "vanished" and the bundled MCP looked in the wrong dir. Always use
+    /// this helper from Swift, never `appendingPathComponent("dimmy")`.
+    var configDirName: String {
+        let bufLen: Int32 = 128
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+        let written = dimmy_config_dir_name(buffer, bufLen)
+        guard written > 0 else { return "dimmy" }
+        let name = String(cString: buffer)
+        return name.isEmpty ? "dimmy" : name
+    }
 
     /// Full URL of the config directory under Application Support.
     /// Convenience wrapper; nil only on bizarre systems where the

@@ -206,6 +206,14 @@ int32_t dimmy_get_version(char * _Nonnull out_buf, int32_t buf_len);
 /// non-prod flavors. Returns bytes written, or -1 on null buffer.
 int32_t dimmy_build_flavor(char * _Nonnull out_buf, int32_t buf_len);
 
+/// Config-dir name as embedded at build time via DIMMY_CONFIG_NAMESPACE
+/// (default "dimmy"). DECOUPLED from build flavor since 2026-05-16 — a
+/// flavor=staging build that ships under the prod packId keeps the prod
+/// config dir. Native UIs MUST use this to locate config.json / meetings
+/// / history; deriving the dir from the flavor is the 2026-05-16
+/// onboarding-restart bug. Returns bytes written, or -1.
+int32_t dimmy_config_dir_name(char * _Nonnull out_buf, int32_t buf_len);
+
 /// GPU known-bad marker status as JSON. Returns bytes written, or -1.
 int32_t dimmy_gpu_get_status(char * _Nonnull out_buf, int32_t buf_len);
 
