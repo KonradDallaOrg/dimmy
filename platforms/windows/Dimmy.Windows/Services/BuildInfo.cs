@@ -87,4 +87,32 @@ public static class BuildInfo
         System.IO.Path.Combine(
             System.Environment.GetFolderPath(System.Environment.SpecialFolder.ApplicationData),
             ConfigDirName);
+
+    /// <summary>
+    /// Effective meeting storage directory. Resolved fresh on every
+    /// access from the Rust core via <c>dimmy_meetings_dir()</c>, which
+    /// honours the user's <c>meeting_storage_path</c> override (with a
+    /// writability fallback to the default). NOT cached: the user can
+    /// change the folder at runtime in Settings and we must reflect it
+    /// immediately. Use this everywhere instead of re-deriving
+    /// <see cref="ConfigDirPath"/> + "meetings" — re-derivation ignores
+    /// the override and silently writes meetings to the wrong place.
+    /// Falls back to the default path if the FFI is unavailable.
+    /// </summary>
+    public static string MeetingsDirPath
+    {
+        get
+        {
+            try
+            {
+                var p = DimmyNative.ReadBuffer(DimmyNative.dimmy_meetings_dir, 8192);
+                if (!string.IsNullOrEmpty(p)) return p!;
+            }
+            catch
+            {
+                // FFI not available (unit-test host) — fall through.
+            }
+            return System.IO.Path.Combine(ConfigDirPath, "meetings");
+        }
+    }
 }

@@ -416,6 +416,14 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_config_dir_name(byte[] outBuf, int bufLen);
 
+    /// Returns the *effective* meeting storage directory — the user's
+    /// `meeting_storage_path` override if set + writable, else the
+    /// default `&lt;config_dir&gt;/meetings`. This is the single source the
+    /// UI must use to read/write meeting artefacts; never re-derive the
+    /// path locally (it ignores the override and the writability fallback).
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_meetings_dir(byte[] outBuf, int bufLen);
+
     // ── Managed helpers ──────────────────────────────────────────────
 
     /// <summary>Read a buffer-returning FFI call into a C# string.</summary>

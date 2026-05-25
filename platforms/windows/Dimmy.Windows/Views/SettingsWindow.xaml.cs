@@ -234,6 +234,8 @@ public sealed partial class SettingsWindow : Window
             }
         };
 
+        RefreshMeetingFolderDisplay();
+
         _loaded = true;
     }
 
@@ -4040,6 +4042,121 @@ public sealed partial class SettingsWindow : Window
         // The TextBox is Two-Way bound, so RecapModelOverride is already
         // up to date by the time we get here. Just push the config.
         if (_loaded) App.Instance?.ApplySettings(ViewModel);
+    }
+
+    // ── Meetings storage folder ──────────────────────────────────────
+
+    /// Refresh the path label from the *effective* meeting dir (resolved
+    /// by the Rust core, honouring the override). Appends "(default)"
+    /// when no custom override is set so the user knows which state
+    /// they're in. Called on load + after pick / reset.
+    private void RefreshMeetingFolderDisplay()
+    {
+        try
+        {
+            var effective = Services.BuildInfo.MeetingsDirPath;
+            bool isDefault = string.IsNullOrEmpty(ViewModel.MeetingStoragePath);
+            MeetingFolderPathText.Text = isDefault ? $"{effective}  (default)" : effective;
+            ToolTipService.SetToolTip(MeetingFolderPathText, effective);
+            MeetingFolderResetBtn.IsEnabled = !isDefault;
+        }
+        catch (Exception ex)
+        {
+            App.Log($"RefreshMeetingFolderDisplay: {ex.Message}", "Settings");
+        }
+    }
+
+    private void MeetingFolderBrowse_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var hwnd = WindowHelper.GetHwnd(this);
+            var current = Services.BuildInfo.MeetingsDirPath;
+            var picked = Helpers.Win32FileDialog.PickFolder(
+                hwnd, "Choose where to store meeting recordings", current);
+            if (string.IsNullOrEmpty(picked)) return; // cancelled
+
+            // Validate writability before committing — a read-only or
+            // disappeared share would otherwise silently route meetings
+            // to a dir the core later rejects + falls back from.
+            if (!IsDirectoryWritable(picked!))
+            {
+                _ = ShowMeetingFolderErrorAsync(picked!);
+                return;
+            }
+
+            PersistMeetingStoragePath(picked!);
+        }
+        catch (Exception ex)
+        {
+            App.Log($"MeetingFolderBrowse: {ex.Message}", "Settings");
+        }
+    }
+
+    private void MeetingFolderReset_Click(object sender, RoutedEventArgs e)
+    {
+        PersistMeetingStoragePath(string.Empty);
+    }
+
+    /// Single-writer rule: send a targeted {"meeting_storage_path": "..."}
+    /// straight to the Rust core (NOT a full ToJson save — that omits the
+    /// field when empty, which would defeat a reset). Empty string = reset
+    /// to default. Updates the VM + display after the round-trip.
+    private void PersistMeetingStoragePath(string path)
+    {
+        try
+        {
+            var payload = System.Text.Json.JsonSerializer.Serialize(
+                new Dictionary<string, object?> { ["meeting_storage_path"] = path });
+            int rc = DimmyNative.dimmy_set_config_json(payload);
+            if (rc != 0)
+            {
+                App.Log($"meeting_storage_path set returned rc={rc}", "Settings");
+                return;
+            }
+            ViewModel.MeetingStoragePath = path;
+            RefreshMeetingFolderDisplay();
+            App.Log($"meeting_storage_path {(string.IsNullOrEmpty(path) ? "reset to default" : "= " + path)}", "Settings");
+        }
+        catch (Exception ex)
+        {
+            App.Log($"PersistMeetingStoragePath: {ex.Message}", "Settings");
+        }
+    }
+
+    private static bool IsDirectoryWritable(string dir)
+    {
+        try
+        {
+            System.IO.Directory.CreateDirectory(dir);
+            var probe = System.IO.Path.Combine(dir, ".dimmy_write_probe");
+            System.IO.File.WriteAllText(probe, "");
+            System.IO.File.Delete(probe);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private async System.Threading.Tasks.Task ShowMeetingFolderErrorAsync(string dir)
+    {
+        try
+        {
+            var dlg = new ContentDialog
+            {
+                Title = "Folder not writable",
+                Content = $"Dimmy can't write to:\n{dir}\n\nPick a different folder.",
+                CloseButtonText = "OK",
+                XamlRoot = this.Content.XamlRoot,
+            };
+            await dlg.ShowAsync();
+        }
+        catch (Exception ex)
+        {
+            App.Log($"ShowMeetingFolderError: {ex.Message}", "Settings");
+        }
     }
 
     private void Theme_Checked(object sender, RoutedEventArgs e)
