@@ -91,10 +91,14 @@ public sealed partial class SettingsWindow : Window
         SyncLanguageComboBox();
         SyncThemeRadioButtons();
         SyncAudioSourceRadio();
-        SyncRecapModelPicker();
         PopulateLocalModels();
         SyncSttMode();
         PopulateLocalLlmModels();
+        // Recap picker sync runs AFTER the local-LLM catalogue loads so
+        // the dynamically-injected "Local · …" recap options already
+        // exist when we snap the selection to a persisted `local:` id.
+        PopulateRecapLocalModels();
+        SyncRecapModelPicker();
         SyncLlmMode();
         PopulateStats();
         PopulateVersion();
@@ -2488,10 +2492,12 @@ public sealed partial class SettingsWindow : Window
 
                 _localLlmModels.Add(new LocalModelInfo(name, filename, sizeMb, desc, downloaded));
 
-                var status = downloaded ? "Ready" : $"{sizeMb}MB";
+                var status = downloaded ? "Ready" : $"{sizeMb} MB";
                 var item = new ComboBoxItem
                 {
-                    Content = $"{name}: {desc} ({status})",
+                    // Concise: name + state only. The long catalogue
+                    // description is not shown in the picker.
+                    Content = $"{name} ({status})",
                     Tag = filename
                 };
                 LocalLlmModelComboBox.Items.Add(item);
@@ -3799,26 +3805,82 @@ public sealed partial class SettingsWindow : Window
     {
         if (RecapModelComboBox == null) return;
         var current = ViewModel.RecapModelOverride ?? "";
-        int idx = -1;
-        for (int i = 0; i < _recapModelKnownTags.Length; i++)
+        // Match by Tag across the ACTUAL items — the curated cloud
+        // entries, the dynamically-injected "Local · …" entries, and the
+        // "Auto" ("") / "Custom" ("__custom__") sentinels all live here.
+        // Tag-based (not index-based) so injecting local items before
+        // Custom can't desync the selection.
+        ComboBoxItem? customItem = null;
+        foreach (var obj in RecapModelComboBox.Items)
         {
-            if (string.Equals(_recapModelKnownTags[i], current, StringComparison.OrdinalIgnoreCase))
+            if (obj is not ComboBoxItem item) continue;
+            var tag = item.Tag as string ?? "";
+            if (tag == "__custom__") customItem = item;
+            if (string.Equals(tag, current, StringComparison.OrdinalIgnoreCase))
             {
-                idx = i;
-                break;
+                RecapModelComboBox.SelectedItem = item;
+                RecapModelCustomCard.Visibility = Visibility.Collapsed;
+                return;
             }
         }
-        if (idx >= 0)
+        // No match → free-form custom id: select the Custom sentinel and
+        // reveal the textbox so the user can edit it.
+        if (customItem != null) RecapModelComboBox.SelectedItem = customItem;
+        RecapModelCustomCard.Visibility = Visibility.Visible;
+    }
+
+    /// Append the local-LLM models to the recap-model picker as
+    /// "Local · &lt;name&gt;" entries with Tag `local:&lt;filename&gt;`, inserted
+    /// just before the "Custom…" sentinel. The recap dispatch
+    /// (`parse_recap_override`) already understands the `local:` prefix
+    /// and routes to llama.cpp (Vulkan on Win — any GPU with enough
+    /// VRAM), so a cloud-dictation user can pick a private/offline
+    /// recap. ALL catalogue models are listed (not just downloaded) so
+    /// the option is discoverable; the label carries the state and
+    /// selecting a not-yet-downloaded one nudges the user to fetch it
+    /// in Settings → LLM. Idempotent: clears previously-injected rows.
+    private void PopulateRecapLocalModels()
+    {
+        if (RecapModelComboBox == null) return;
+        try
         {
-            RecapModelComboBox.SelectedIndex = idx;
-            RecapModelCustomCard.Visibility = Visibility.Collapsed;
+            for (int i = RecapModelComboBox.Items.Count - 1; i >= 0; i--)
+            {
+                if (RecapModelComboBox.Items[i] is ComboBoxItem ci
+                    && ci.Tag is string t
+                    && t.StartsWith("local:", StringComparison.Ordinal))
+                {
+                    RecapModelComboBox.Items.RemoveAt(i);
+                }
+            }
+
+            int customIdx = -1;
+            for (int i = 0; i < RecapModelComboBox.Items.Count; i++)
+            {
+                if (RecapModelComboBox.Items[i] is ComboBoxItem ci
+                    && (ci.Tag as string) == "__custom__")
+                {
+                    customIdx = i;
+                    break;
+                }
+            }
+            int insertAt = customIdx >= 0 ? customIdx : RecapModelComboBox.Items.Count;
+
+            foreach (var m in _localLlmModels)
+            {
+                var state = m.Downloaded ? "Ready" : $"{m.SizeMb} MB — download in LLM";
+                var item = new ComboBoxItem
+                {
+                    Content = $"Local · {m.Name} ({state})",
+                    Tag = $"local:{m.Filename}",
+                };
+                RecapModelComboBox.Items.Insert(insertAt, item);
+                insertAt++;
+            }
         }
-        else
+        catch (Exception ex)
         {
-            // Custom model — pick the placeholder Custom entry (last
-            // ComboBoxItem) and show the textbox so the user can edit.
-            RecapModelComboBox.SelectedIndex = _recapModelKnownTags.Length;
-            RecapModelCustomCard.Visibility = Visibility.Visible;
+            App.Log($"PopulateRecapLocalModels: {ex.Message}", "Settings");
         }
     }
 
@@ -3836,6 +3898,10 @@ public sealed partial class SettingsWindow : Window
     {
         if (string.IsNullOrEmpty(model)) return RecapVendorFromUrl(llmUrl);
         var m = model.ToLowerInvariant();
+        // Local recap (llama.cpp Vulkan) — no cloud vendor, no key /
+        // subscription. Empty vendor → UpdateRecapKeyCardVisibility
+        // hides both the key card and the subscription toggle.
+        if (m.StartsWith("local:", StringComparison.Ordinal)) return "";
         if (m.StartsWith("claude-", StringComparison.Ordinal)) return "anthropic";
         if (m.StartsWith("gpt-", StringComparison.Ordinal)) return "openai";
         if (m == "o1" || m == "o3" || m == "o4"
@@ -4034,6 +4100,35 @@ public sealed partial class SettingsWindow : Window
             // Anthropic; key card visibility depends on the derived
             // vendor and upstream key state).
             RefreshAuthIntegrationStatus();
+
+            // Local recap picked but the .gguf isn't on disk → the recap
+            // would fail with rc -4. Nudge the user to download it.
+            if (tag.StartsWith("local:", StringComparison.Ordinal))
+            {
+                var filename = tag.Substring("local:".Length);
+                var m = _localLlmModels.FirstOrDefault(x => x.Filename == filename);
+                if (m != null && !m.Downloaded)
+                    _ = NudgeDownloadLocalRecapModelAsync(m.Name);
+            }
+        }
+    }
+
+    private async System.Threading.Tasks.Task NudgeDownloadLocalRecapModelAsync(string modelName)
+    {
+        try
+        {
+            var dlg = new ContentDialog
+            {
+                Title = "Model not downloaded yet",
+                Content = $"\"{modelName}\" runs the recap locally (offline, private) but isn't on disk yet.\n\nGo to Settings → LLM, switch to Local, and download it. Until then the recap will fall back / fail.",
+                CloseButtonText = "Got it",
+                XamlRoot = this.Content.XamlRoot,
+            };
+            await dlg.ShowAsync();
+        }
+        catch (Exception ex)
+        {
+            App.Log($"NudgeDownloadLocalRecapModel: {ex.Message}", "Settings");
         }
     }
 
