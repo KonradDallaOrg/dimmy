@@ -4,6 +4,17 @@ All notable changes to Dimmy are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Meetings: choose your own storage folder.** You can now set a custom
+  destination directory for meeting recordings in Settings → Meetings.
+  Every part of the app (the meeting list, playback, recap, Notion send,
+  file-load-to-meeting, and the Claude Desktop MCP bridge) reads from the
+  folder you pick. Existing meetings stay where they are — only new ones
+  go to the new location. _Thanks to Ricca for the request._
+
 ## [0.6.37] - 2026-05-12
 
 Mac side of the auto-update feature. The Win build has shipped

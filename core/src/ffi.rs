@@ -325,6 +325,7 @@ fn dimmy_init_inner() -> c_int {
         input_gain: input_gain_atomic,
         loopback_gain: loopback_gain_atomic,
         meeting_chunk_secs: Mutex::new(file_cfg.meeting_chunk_secs),
+        meeting_storage_path: Mutex::new(file_cfg.meeting_storage_path),
         notion_target_id: Mutex::new(file_cfg.notion_target_id),
         notion_target_kind: Mutex::new(file_cfg.notion_target_kind),
         notion_target_title: Mutex::new(file_cfg.notion_target_title),
@@ -1464,6 +1465,16 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         .map(|b| *b)
         .unwrap_or(false)
         .into();
+    // Configured meeting storage override (raw value, empty = default).
+    // The host UI reads the *effective* resolved dir via
+    // `dimmy_meetings_dir`; this round-trips the user's setting so the
+    // VM knows whether a custom dir is set.
+    json["meeting_storage_path"] = st
+        .meeting_storage_path
+        .lock()
+        .map(|s| s.clone())
+        .unwrap_or_default()
+        .into();
 
     let s = serde_json::to_string(&json).unwrap_or_else(|_| "{}".to_string());
     write_to_buf(&s, out_buf, buf_len)
@@ -1869,6 +1880,24 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
             *slot = secs;
         }
         log(&format!("[Config] meeting_chunk_secs set to {:.1}", secs));
+    }
+    // Meeting storage override. Identity-class field: the host UI omits
+    // it from a normal full-config save when empty (else a transient
+    // empty VM wipes the saved dir). An explicit "" here is the
+    // "reset to default" signal. Stored verbatim; `meetings_dir()`
+    // validates writability + falls back at resolve time.
+    if let Some(s) = v["meeting_storage_path"].as_str() {
+        if let Ok(mut slot) = st.meeting_storage_path.lock() {
+            *slot = s.trim().to_string();
+        }
+        log(&format!(
+            "[Config] meeting_storage_path set ({})",
+            if s.trim().is_empty() {
+                "cleared → default"
+            } else {
+                "custom dir"
+            }
+        ));
     }
     // Notion target / auto-send. UI writes here on the picker
     // confirmation + auto-send toggle. Token is NEVER round-tripped
@@ -4567,6 +4596,20 @@ pub extern "C" fn dimmy_build_flavor(out_buf: *mut c_char, buf_len: c_int) -> c_
 #[no_mangle]
 pub extern "C" fn dimmy_config_dir_name(out_buf: *mut c_char, buf_len: c_int) -> c_int {
     write_to_buf(crate::config_dir_name(), out_buf, buf_len)
+}
+
+/// Get the *effective* meeting storage directory as a UTF-8 path. This is
+/// the single source every host UI must use to read/write meeting
+/// artefacts — never re-derive `<config_dir>/meetings` locally. Resolves
+/// the user's `meeting_storage_path` override (with writability fallback
+/// to the default) via [`crate::meetings_dir`]. Returns bytes written, or
+/// -1 on buffer error / unresolvable config dir.
+#[no_mangle]
+pub extern "C" fn dimmy_meetings_dir(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    match crate::meetings_dir() {
+        Some(p) => write_to_buf(&p.to_string_lossy(), out_buf, buf_len),
+        None => -1,
+    }
 }
 
 /// Check if recording is active. Returns 1=yes, 0=no.
@@ -7732,6 +7775,7 @@ mod tests {
                 loopback_gain: Arc::new(std::sync::atomic::AtomicU32::new(1.0f32.to_bits())),
                 audio_source: Mutex::new("mic".to_string()),
                 meeting_chunk_secs: Mutex::new(15.0f32),
+                meeting_storage_path: Mutex::new(String::new()),
                 notion_target_id: Mutex::new(String::new()),
                 notion_target_kind: Mutex::new(String::new()),
                 notion_target_title: Mutex::new(String::new()),

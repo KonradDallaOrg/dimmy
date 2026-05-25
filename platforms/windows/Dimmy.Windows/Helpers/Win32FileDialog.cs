@@ -78,11 +78,70 @@ public static class Win32FileDialog
         }
     }
 
+    /// Shows a modal folder-picker dialog parented to ownerHwnd. Returns
+    /// the picked directory path, or null on cancel / failure. Same COM
+    /// API as <see cref="PickFile"/> with FOS_PICKFOLDERS set. Optionally
+    /// seeds the initial folder when <paramref name="initialDir"/> exists.
+    public static string? PickFolder(IntPtr ownerHwnd, string title, string? initialDir = null)
+    {
+        IFileOpenDialog? dialog = null;
+        try
+        {
+            dialog = (IFileOpenDialog)Activator.CreateInstance(
+                Type.GetTypeFromCLSID(CLSID_FileOpenDialog)!)!;
+
+            dialog.GetOptions(out uint opts);
+            dialog.SetOptions(opts | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST | FOS_PICKFOLDERS);
+
+            if (!string.IsNullOrEmpty(title)) dialog.SetTitle(title);
+
+            if (!string.IsNullOrEmpty(initialDir) && System.IO.Directory.Exists(initialDir))
+            {
+                int sh = SHCreateItemFromParsingName(initialDir!, IntPtr.Zero,
+                    typeof(IShellItem).GUID, out var startItem);
+                if (sh == 0 && startItem != null)
+                {
+                    try { dialog.SetFolder(startItem); }
+                    finally { Marshal.ReleaseComObject(startItem); }
+                }
+            }
+
+            int hr = dialog.Show(ownerHwnd);
+            if (hr != 0) return null;
+
+            dialog.GetResult(out IShellItem item);
+            try
+            {
+                item.GetDisplayName(SIGDN.FILESYSPATH, out IntPtr pszPath);
+                try { return Marshal.PtrToStringUni(pszPath); }
+                finally { Marshal.FreeCoTaskMem(pszPath); }
+            }
+            finally
+            {
+                Marshal.ReleaseComObject(item);
+            }
+        }
+        catch (Exception ex)
+        {
+            App.Log($"Win32FileDialog.PickFolder: {ex.Message}", "Settings");
+            return null;
+        }
+        finally
+        {
+            if (dialog != null) Marshal.ReleaseComObject(dialog);
+        }
+    }
+
     // --- COM definitions ---
 
     private static readonly Guid CLSID_FileOpenDialog
         = new("DC1C5A9C-E88A-4DDE-A5A1-60F82A20AEF7");
 
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, PreserveSig = true)]
+    private static extern int SHCreateItemFromParsingName(
+        string pszPath, IntPtr pbc, [In] Guid riid, out IShellItem ppv);
+
+    private const uint FOS_PICKFOLDERS     = 0x00000020;
     private const uint FOS_FORCEFILESYSTEM = 0x00000040;
     private const uint FOS_PATHMUSTEXIST   = 0x00000800;
     private const uint FOS_FILEMUSTEXIST   = 0x00001000;

@@ -269,6 +269,12 @@ public partial class SettingsViewModel : ObservableObject
     /// reasoning model (Opus 4.7 / Gemini 3.1 Pro / GPT-5).
     [ObservableProperty] private string _recapModelOverride = "";
 
+    /// User-chosen meeting storage directory. Empty = default
+    /// (&lt;config&gt;/meetings). Identity-class field: omitted from ToJson
+    /// when empty so a transient VM can't wipe it; the folder picker /
+    /// reset send explicit targeted updates.
+    [ObservableProperty] private string _meetingStoragePath = "";
+
     // ── Notion integration ──────────────────────────────────────────
     /// UUID of the Notion page or database where meeting recaps land.
     /// Empty = no target picked yet (UI shows the onboarding panel).
@@ -637,6 +643,8 @@ public partial class SettingsViewModel : ObservableObject
                 || rusk.ValueKind != System.Text.Json.JsonValueKind.False;
             RecapModelOverride = r.TryGetProperty("recap_model_override", out var rmo)
                 ? rmo.GetString() ?? "" : "";
+            MeetingStoragePath = r.TryGetProperty("meeting_storage_path", out var msp)
+                ? msp.GetString() ?? "" : "";
             // Notion target + auto-send flag round-trip through config.
             // The token itself never appears in the config snapshot —
             // we read its presence via has_notion_token (set by the
@@ -813,6 +821,11 @@ public partial class SettingsViewModel : ObservableObject
         if (!string.IsNullOrEmpty(LocalModel)) dict["local_model"] = LocalModel;
         if (!string.IsNullOrEmpty(ApiKey)) dict["api_key"] = ApiKey;
         if (!string.IsNullOrEmpty(LlmApiKey)) dict["llm_api_key"] = LlmApiKey;
+        // Meeting storage override — identity-class path. Omit when empty
+        // so a transient VM never wipes the saved dir. An explicit clear
+        // (Reset to default) is sent as a targeted {"meeting_storage_path":""}
+        // by the folder-picker code-behind, not through this path.
+        if (!string.IsNullOrEmpty(MeetingStoragePath)) dict["meeting_storage_path"] = MeetingStoragePath;
         if (includeLlm)
         {
             // Caller is the LLM-provider page Save / AutoSave — they own

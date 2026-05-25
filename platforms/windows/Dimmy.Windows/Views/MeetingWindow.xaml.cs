@@ -1500,7 +1500,7 @@ public sealed partial class MeetingWindow : Window
         HistoryItems.Clear();
         try
         {
-            var meetings = Path.Combine(Services.BuildInfo.ConfigDirPath, "meetings");
+            var meetings = Services.BuildInfo.MeetingsDirPath;
             if (!Directory.Exists(meetings)) return;
             var query = (HistorySearchBox.Text ?? "").Trim();
             var dirs = new DirectoryInfo(meetings).GetDirectories()
