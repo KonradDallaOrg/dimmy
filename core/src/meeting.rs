@@ -938,19 +938,7 @@ fn worker_loop(
         }
     }
     let duration_secs = started.elapsed().as_secs_f64();
-    let meta = serde_json::json!({
-        "id": id,
-        "duration_secs": duration_secs,
-        "chunk_count": chunk_count,
-        "ended_at": SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs_f64())
-            .unwrap_or(0.0),
-    });
-    let _ = std::fs::write(
-        dir.join("meta.json"),
-        serde_json::to_string_pretty(&meta).unwrap_or_default(),
-    );
+    finalize_meeting_meta(&dir, &id, duration_secs, chunk_count);
 
     // Build the final transcript: time-ordered labeled stream read
     // back from transcripts.txt (one line per chunk, format
@@ -1105,6 +1093,39 @@ pub fn update_meeting_meta_title(meeting_dir: &std::path::Path, title: &str) {
     }
 }
 
+/// Merge the end-of-meeting fields into the existing `meta.json` instead
+/// of replacing the file. The start-time write (`started_at`, `id`,
+/// `device_sample_rate`, …) MUST survive: the UI orders the meeting list
+/// by `started_at` (falling back to file mtime), so a wholesale rewrite
+/// here — which dropped `started_at` — meant a later title edit (which
+/// also rewrites meta.json and bumps the dir mtime) made the meeting jump
+/// to the top of the list. Preserving `started_at` keeps the date stable.
+fn finalize_meeting_meta(
+    meeting_dir: &std::path::Path,
+    id: &str,
+    duration_secs: f64,
+    chunk_count: u32,
+) {
+    let path = meeting_dir.join("meta.json");
+    let mut obj: serde_json::Map<String, serde_json::Value> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    obj.insert("id".into(), serde_json::Value::String(id.to_string()));
+    obj.insert("duration_secs".into(), serde_json::json!(duration_secs));
+    obj.insert("chunk_count".into(), serde_json::json!(chunk_count));
+    obj.insert(
+        "ended_at".into(),
+        serde_json::json!(SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0)),
+    );
+    if let Ok(serialized) = serde_json::to_string_pretty(&obj) {
+        let _ = std::fs::write(&path, serialized);
+    }
+}
+
 /// Lazy backfill: if `meta.json` has no `title` but `recap.md` exists
 /// and contains a parseable first-line H1, write it. Called by the
 /// UI on meeting open so old meetings recorded before this schema
@@ -1194,5 +1215,45 @@ mod tests {
             seen.insert(uuid_v4_simple());
         }
         assert_eq!(seen.len(), 1000);
+    }
+
+    #[test]
+    fn finalize_meta_preserves_started_at() {
+        // Reproduces the date-jump bug: the stop-time meta write used to
+        // replace the file, dropping `started_at`; the UI then ordered by
+        // file mtime, so editing a title reordered the meeting.
+        let tmp = std::env::temp_dir().join(format!("dimmy_meta_{}", uuid_v4_simple()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let initial = serde_json::json!({
+            "id": "abc",
+            "started_at": 1234.5_f64,
+            "device_sample_rate": 48000,
+        });
+        std::fs::write(
+            tmp.join("meta.json"),
+            serde_json::to_string(&initial).unwrap(),
+        )
+        .unwrap();
+
+        finalize_meeting_meta(&tmp, "abc", 42.0, 7);
+
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(tmp.join("meta.json")).unwrap()).unwrap();
+        // Start-time fields survive the merge…
+        assert_eq!(v["started_at"].as_f64(), Some(1234.5));
+        assert_eq!(v["device_sample_rate"].as_i64(), Some(48000));
+        // …and the end-of-meeting fields are written.
+        assert_eq!(v["duration_secs"].as_f64(), Some(42.0));
+        assert_eq!(v["chunk_count"].as_u64(), Some(7));
+        assert!(v["ended_at"].as_f64().unwrap() > 0.0);
+
+        // A subsequent title edit must not clobber started_at either.
+        update_meeting_meta_title(&tmp, "My Meeting");
+        let v2: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(tmp.join("meta.json")).unwrap()).unwrap();
+        assert_eq!(v2["started_at"].as_f64(), Some(1234.5));
+        assert_eq!(v2["title"].as_str(), Some("My Meeting"));
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

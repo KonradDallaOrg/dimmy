@@ -552,7 +552,11 @@ final class MeetingViewModel: ObservableObject {
         }
         let rows: [MeetingHistoryRow] = dirs.compactMap { url in
             let name = url.lastPathComponent
-            let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            // Date comes from meta.json `started_at`, NOT the dir mtime —
+            // editing a title rewrites meta.json + bumps the dir mtime, so
+            // an mtime sort reordered the meeting and showed "now" as its
+            // date. See MeetingHistoryRow.dateFor.
+            let date = MeetingHistoryRow.dateFor(dirURL: url)
             let recapPath = url.appendingPathComponent("recap.md").path
             let hasRecap = fm.fileExists(atPath: recapPath)
             let metaPath = url.appendingPathComponent("meta.json").path
@@ -561,13 +565,13 @@ final class MeetingViewModel: ObservableObject {
                 recapPath: hasRecap ? recapPath : nil,
                 metaPath: fm.fileExists(atPath: metaPath) ? metaPath : nil
             )
-            let subtitle = MeetingHistoryRow.subtitleFor(date: mtime)
+            let subtitle = MeetingHistoryRow.subtitleFor(date: date)
             return MeetingHistoryRow(
                 dir: url.path,
                 title: title,
                 subtitle: subtitle,
                 rightLabel: hasRecap ? "✓" : "",
-                modifiedAt: mtime
+                modifiedAt: date
             )
         }.sorted { $0.modifiedAt > $1.modifiedAt }
         let q = historySearch.lowercased()
@@ -858,9 +862,9 @@ final class MeetingViewModel: ObservableObject {
         // the canonical order.
         let url = URL(fileURLWithPath: dir)
         doneTitle = titleFromDir(dir)
-        let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
-            ?? Date()
-        doneMeta = MeetingHistoryRow.subtitleFor(date: mtime)
+        // Meeting date from meta.json `started_at` (stable across title
+        // edits), not the dir mtime — see MeetingHistoryRow.dateFor.
+        doneMeta = MeetingHistoryRow.subtitleFor(date: MeetingHistoryRow.dateFor(dirURL: url))
 
         let recapURL = url.appendingPathComponent("recap.md")
         if let recapMd = try? String(contentsOf: recapURL, encoding: .utf8), !recapMd.isEmpty {
@@ -1021,6 +1025,38 @@ struct MeetingHistoryRow: Identifiable, Equatable {
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
         return formatter.string(from: date)
+    }
+
+    /// Canonical meeting timestamp for BOTH list ordering and the
+    /// displayed date. Precedence: meta.json `started_at` (epoch secs,
+    /// written at record start) → meta.json `ended_at` → `audio.wav`
+    /// mtime → directory mtime → distantPast.
+    ///
+    /// Reading the epoch from meta.json — instead of the directory mtime —
+    /// is what keeps a meeting's date STABLE when the user edits its
+    /// title: a rename rewrites meta.json and bumps the dir mtime, which
+    /// (under the old mtime-sort) made the meeting jump to the top of the
+    /// list and show "now" as its date. The Rust core preserves
+    /// `started_at` across the stop-time finalize + title edits.
+    static func dateFor(dirURL: URL) -> Date {
+        let metaURL = dirURL.appendingPathComponent("meta.json")
+        if let data = try? Data(contentsOf: metaURL),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let started = obj["started_at"] as? Double, started > 0 {
+                return Date(timeIntervalSince1970: started)
+            }
+            if let ended = obj["ended_at"] as? Double, ended > 0 {
+                return Date(timeIntervalSince1970: ended)
+            }
+        }
+        let wavURL = dirURL.appendingPathComponent("audio.wav")
+        if let m = try? wavURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate {
+            return m
+        }
+        if let m = try? dirURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate {
+            return m
+        }
+        return .distantPast
     }
 
     private static func prettifyDirName(_ name: String) -> String {
