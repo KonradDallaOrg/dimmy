@@ -263,11 +263,21 @@ fn main() -> ExitCode {
         r.checks,
         r.failures.len()
     );
-    if r.failures.is_empty() {
+    let code = if r.failures.is_empty() {
         println!("PASS");
-        ExitCode::SUCCESS
+        0
     } else {
         println!("FAIL — first failure: {}", r.failures[0]);
-        ExitCode::FAILURE
-    }
+        1
+    };
+    // Hard-exit instead of returning, to skip Rust teardown. `dimmy_lib`
+    // is loaded via `libloading`; letting its `Library` handle Drop run
+    // (→ FreeLibrary) while the lib's background threads (telemetry tokio
+    // runtime, etc.) are still alive intermittently faults at process
+    // exit (0xC0000005 *after* every check passes — reproduced ~1/5 on
+    // Windows locally and on CI). Every check has already run and the
+    // result is computed; report it without unloading the dll.
+    use std::io::Write as _;
+    std::io::stdout().flush().ok();
+    std::process::exit(code);
 }
