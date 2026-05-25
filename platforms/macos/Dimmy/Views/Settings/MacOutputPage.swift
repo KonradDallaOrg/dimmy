@@ -294,7 +294,7 @@ struct MacOutputPage: View {
             MacTile {
                 MacRow(
                     "Recap model",
-                    description: "Used for the meeting recap pipeline and the long-dictation auto-recap. Auto inherits your dictation LLM (currently \(autoResolutionLabel)). Pick a flagship Anthropic / Gemini / OpenAI for best recap quality, or a local Gemma to keep the transcript offline.",
+                    description: "Used for the meeting recap pipeline and the long-dictation auto-recap. Auto inherits your dictation LLM (currently \(autoResolutionLabel)). Pick a flagship Anthropic / Gemini / OpenAI for best recap quality, or run it locally on a Gemma/Phi model — download one under Voice → Local model, then set this app's LLM to local (recap Auto will use it) to keep the transcript offline.",
                     showsDivider: false
                 ) {
                     Picker("", selection: Binding<String>(

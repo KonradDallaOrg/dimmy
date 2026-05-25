@@ -14,6 +14,13 @@ struct MacVoicePage: View {
     @State private var downloadInFlight: Bool = false
     @State private var downloadFailed: String? = nil
 
+    /// Whisper model catalog, loaded from the Rust core's single source
+    /// of truth (`dimmy_list_local_models`) so the Mac picker offers the
+    /// SAME set as Windows — incl. the turbo / large-v3 / distil-EN
+    /// variants. Previously this Picker hardcoded only 4 entries, so Mac
+    /// users never saw the larger/faster models the core already supports.
+    @State private var localModels: [[String: Any]] = []
+
     /// Text-field state for the "add a word" row in the custom-dictionary
     /// section. Kept inline to avoid a parallel view-model class — the
     /// list itself lives on AppState and `addDictWord` calls the FFI so
@@ -25,6 +32,24 @@ struct MacVoicePage: View {
     /// Picker. Mirrors `ParakeetTag` in the Windows OnboardingWindow.xaml.cs
     /// so the two UIs round-trip the same selection through the Rust core.
     private static let parakeetTag = "parakeet:fp32"
+
+    /// Picker label for one whisper model dict from `listLocalModels()`:
+    /// "Large-v3-Turbo Q8 · 874 MB" (+ " · downloaded" once on disk).
+    private static func modelLabel(_ m: [String: Any]) -> String {
+        let name = (m["name"] as? String) ?? (m["filename"] as? String) ?? "Model"
+        let mb = m["size_mb"] as? Int ?? 0
+        let size: String
+        if mb >= 1024 {
+            size = String(format: "%.1f GB", Double(mb) / 1024.0)
+        } else if mb > 0 {
+            size = "\(mb) MB"
+        } else {
+            size = ""
+        }
+        var label = size.isEmpty ? name : "\(name) · \(size)"
+        if (m["downloaded"] as? Bool) == true { label += " · downloaded" }
+        return label
+    }
 
     /// User-facing label for the call-detect exclusion list. Maps the
     /// canonical lowercase id ("teams", "zoom", …) back to the brand
@@ -248,10 +273,10 @@ struct MacVoicePage: View {
                         showsDivider: !localModelReady || downloadInFlight
                     ) {
                         Picker("", selection: localModelPickerBinding) {
-                            Text("Tiny · 78 MB").tag("ggml-tiny-q8_0.bin")
-                            Text("Base · 142 MB").tag("ggml-base-q8_0.bin")
-                            Text("Small · 466 MB").tag("ggml-small-q8_0.bin")
-                            Text("Medium · 1.5 GB").tag("ggml-medium-q8_0.bin")
+                            ForEach(localModels.indices, id: \.self) { i in
+                                Text(Self.modelLabel(localModels[i]))
+                                    .tag(localModels[i]["filename"] as? String ?? "")
+                            }
                             Text("Parakeet TDT v3 · 466 MB · Apple Neural Engine")
                                 .tag(Self.parakeetTag)
                         }
@@ -304,7 +329,10 @@ struct MacVoicePage: View {
             }
             MacGroupFooter(text: "Helps the model with rare words and names. Auto-detect identifies the language from your first sentence — but tends to misfire on clips shorter than two seconds.")
         }
-        .onAppear { refreshLocalModelStatus() }
+        .onAppear {
+            localModels = DimmyCore.shared.listLocalModels() ?? []
+            refreshLocalModelStatus()
+        }
     }
 
     private var localBackendIsParakeet: Bool {
@@ -368,10 +396,12 @@ struct MacVoicePage: View {
         DispatchQueue.global(qos: .userInitiated).async {
             let exists = DimmyCore.shared.modelExists(modelName)
             let parakeet = DimmyCore.shared.parakeetBundlePresent()
+            let models = DimmyCore.shared.listLocalModels() ?? []
             DispatchQueue.main.async {
                 self.localModelExists = exists
                 self.appState.parakeetBundlePresent = parakeet
                 self.downloadFailed = nil
+                if !models.isEmpty { self.localModels = models }
             }
         }
     }

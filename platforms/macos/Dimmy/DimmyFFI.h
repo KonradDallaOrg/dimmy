@@ -206,6 +206,20 @@ int32_t dimmy_get_version(char * _Nonnull out_buf, int32_t buf_len);
 /// non-prod flavors. Returns bytes written, or -1 on null buffer.
 int32_t dimmy_build_flavor(char * _Nonnull out_buf, int32_t buf_len);
 
+/// Config-dir name as embedded at build time via DIMMY_CONFIG_NAMESPACE
+/// (default "dimmy"). DECOUPLED from build flavor since 2026-05-16 — a
+/// flavor=staging build that ships under the prod packId keeps the prod
+/// config dir. Native UIs MUST use this to locate config.json / meetings
+/// / history; deriving the dir from the flavor is the 2026-05-16
+/// onboarding-restart bug. Returns bytes written, or -1.
+int32_t dimmy_config_dir_name(char * _Nonnull out_buf, int32_t buf_len);
+
+/// Effective meetings directory — honours the user's `meeting_storage_path`
+/// override (with a writability fallback to the default
+/// `<configdir>/meetings`). Resolve fresh on each call; the user can change
+/// it at runtime. Returns bytes written, or -1.
+int32_t dimmy_meetings_dir(char * _Nonnull out_buf, int32_t buf_len);
+
 /// GPU known-bad marker status as JSON. Returns bytes written, or -1.
 int32_t dimmy_gpu_get_status(char * _Nonnull out_buf, int32_t buf_len);
 
@@ -544,6 +558,14 @@ int32_t dimmy_call_signal(int32_t mic_active, const char * _Nullable app_id);
 /// once switches the gate to AND-with-sys mode for the lifetime of
 /// the state. Returns 0 / 3 / -1 (same semantics).
 int32_t dimmy_call_signal_sys(int32_t sys_active, const char * _Nullable app_id);
+
+/// Authoritative "call ended" signal — the host has positive evidence
+/// the process that originated the meeting stopped capturing the mic
+/// (its audio-input claim disappeared). Bypasses the amplitude-silence
+/// heuristic and fires `meeting.stop_suggested` immediately, gated only
+/// by the same one-shot + keep-recording cooldown guards. No args
+/// (state is global). Returns 3 (stop_suggested emitted) or 0 (no-op).
+int32_t dimmy_call_signal_session_ended(void);
 
 /// Record the user's response to a call/stop nudge.
 /// `response` ∈ {"record_now","not_now","never","timeout",

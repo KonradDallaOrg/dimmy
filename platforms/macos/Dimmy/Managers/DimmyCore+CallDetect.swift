@@ -38,6 +38,17 @@ extension DimmyCore {
         return dimmy_call_signal_sys(sys, nil)
     }
 
+    /// Authoritative "the call's process let go of the mic" signal.
+    /// Fires `meeting.stop_suggested` immediately (no 5 s silence wait)
+    /// when the meeting-origin process disappears from the input set.
+    /// Returns the rc (3 = stop_suggested emitted, 0 = no-op). Only
+    /// meaningful while a call-detect-driven meeting is active.
+    @discardableResult
+    func callSignalSessionEnded() -> Int32 {
+        guard isInitialized else { return 0 }
+        return dimmy_call_signal_session_ended()
+    }
+
     /// Record the user's response. `response` ∈ {"record_now","not_now",
     /// "never","timeout","stop_and_recap","keep_recording","stop_timeout"}.
     /// True iff Rust accepted the response (rc=0).

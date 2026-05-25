@@ -49,9 +49,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         guard let button = statusItem?.button else { return }
-        button.image = Self.menuBarImage(symbolName: "waveform.circle",
-                                         accessibility: "Dimmy",
-                                         isTemplate: true)
+        button.image = Self.brandMenuBarImage(accessibility: "Dimmy")
 
         // Assigning .menu (instead of .action) makes the status item
         // open the menu on click — and the menuNeedsUpdate delegate
@@ -149,9 +147,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
         switch state {
         case .idle:
-            button.image = Self.menuBarImage(symbolName: "waveform.circle",
-                                             accessibility: "Dimmy - Ready",
-                                             isTemplate: true)
+            button.image = Self.brandMenuBarImage(accessibility: "Dimmy - Ready")
         case .recording:
             button.image = Self.menuBarImage(symbolName: "waveform.circle.fill",
                                              accessibility: "Dimmy - Recording",
@@ -192,6 +188,13 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     /// dragging the laptop between built-in display and 4K external.
     private static let menuBarIconSize = NSSize(width: 18, height: 18)
     private static let menuBarSymbolPointSize: CGFloat = 16
+    /// Brand mark renders a touch larger than the SF Symbols because the
+    /// logo PNG carries ~12% transparent padding, so at 18pt its visible
+    /// glyph looked smaller than the symbol glyphs. 20pt equalises the
+    /// visual weight; still well within the menubar's safe height so it
+    /// can't clip (the 2026-05-13 clip was unbounded intrinsic size, not
+    /// a fixed 20pt box).
+    private static let menuBarBrandSize = NSSize(width: 20, height: 20)
 
     private static func menuBarImage(symbolName: String,
                                      accessibility: String,
@@ -211,21 +214,63 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         return image
     }
 
+    /// Idle / ready menu-bar icon: the new Dimmy brand mark (cloud +
+    /// waveform) from the brand kit, rendered as a TEMPLATE so macOS
+    /// tints it for the current menu-bar appearance (black in light,
+    /// white in dark) — same adaptive behaviour as the SF Symbols used
+    /// for the active states. Active states (recording / transcribing /
+    /// processing) keep the colored SF Symbols so the menu bar still
+    /// signals what Dimmy is doing at a glance.
+    ///
+    /// Falls back to the `waveform.circle` SF Symbol if the asset is ever
+    /// missing, so the status item is never blank.
+    private static func brandMenuBarImage(accessibility: String) -> NSImage? {
+        guard let asset = NSImage(named: "MenuBarIcon") else {
+            return menuBarImage(symbolName: "waveform.circle",
+                                accessibility: accessibility,
+                                isTemplate: true)
+        }
+        let image = (asset.copy() as? NSImage) ?? asset
+        image.size = menuBarBrandSize
+        image.isTemplate = true
+        image.accessibilityDescription = accessibility
+        return image
+    }
+
     /// Compose the steady Dimmy waveform icon with a small yellow
     /// exclamation badge at the bottom-right. The base symbol is tinted
     /// with `NSColor.labelColor` so it reads in both light and dark
     /// menubars; the badge keeps its yellow palette colour.
     /// Returned as non-template (it's deliberately multi-colour).
     private static func makeWarningBadgedIcon() -> NSImage? {
-        let basePalette = NSImage.SymbolConfiguration(pointSize: menuBarSymbolPointSize, weight: .regular)
-            .applying(NSImage.SymbolConfiguration(paletteColors: [NSColor.labelColor]))
-        guard let base = NSImage(systemSymbolName: "waveform.circle",
-                                 accessibilityDescription: "Dimmy - Hotkey disabled")?
-                .withSymbolConfiguration(basePalette) else { return nil }
-        // Pin the base symbol's logical size to the same 18×18 box the
-        // composite uses so its intrinsic vector bounds can never push
-        // the drawing outside the canvas when the backing scale changes.
-        base.size = menuBarIconSize
+        // Base = the Dimmy brand mark (same glyph as the idle icon) tinted
+        // to labelColor so it reads in both light + dark menubars. We bake
+        // the tint in manually (.sourceAtop) because the composite carries
+        // the yellow badge and therefore can't be a plain template image.
+        // Falls back to the `waveform.circle` SF Symbol if the asset is
+        // missing. NOTE: without this the hotkey-disabled state (common on
+        // ad-hoc-signed debug builds whose Accessibility grant is voided)
+        // showed the OLD waveform.circle even after the brand swap.
+        let base: NSImage
+        let canvas: NSSize
+        if let brand = NSImage(named: "MenuBarIcon") {
+            canvas = menuBarBrandSize
+            base = NSImage(size: canvas, flipped: false) { rect in
+                brand.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1.0)
+                NSColor.labelColor.set()
+                rect.fill(using: .sourceAtop)
+                return true
+            }
+        } else {
+            canvas = menuBarIconSize
+            let basePalette = NSImage.SymbolConfiguration(pointSize: menuBarSymbolPointSize, weight: .regular)
+                .applying(NSImage.SymbolConfiguration(paletteColors: [NSColor.labelColor]))
+            guard let symbol = NSImage(systemSymbolName: "waveform.circle",
+                                       accessibilityDescription: "Dimmy - Hotkey disabled")?
+                    .withSymbolConfiguration(basePalette) else { return nil }
+            symbol.size = canvas
+            base = symbol
+        }
 
         let badgePalette = NSImage.SymbolConfiguration(pointSize: 9, weight: .bold)
             .applying(NSImage.SymbolConfiguration(paletteColors: [NSColor.systemYellow]))
@@ -234,13 +279,13 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             .withSymbolConfiguration(badgePalette)
         badge?.size = NSSize(width: 10, height: 10)
 
-        let composed = NSImage(size: menuBarIconSize, flipped: false) { _ in
-            base.draw(in: NSRect(origin: .zero, size: menuBarIconSize),
+        let composed = NSImage(size: canvas, flipped: false) { _ in
+            base.draw(in: NSRect(origin: .zero, size: canvas),
                       from: .zero, operation: .sourceOver, fraction: 1.0)
 
             if let badge {
                 let badgeSize = badge.size
-                let origin = NSPoint(x: menuBarIconSize.width - badgeSize.width,
+                let origin = NSPoint(x: canvas.width - badgeSize.width,
                                      y: 0)
                 badge.draw(in: NSRect(origin: origin, size: badgeSize),
                            from: .zero, operation: .sourceOver, fraction: 1.0)
@@ -250,6 +295,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         // Marked non-template because the yellow badge palette is
         // intentional — letting macOS auto-tint would erase it.
         composed.isTemplate = false
+        composed.accessibilityDescription = "Dimmy - Hotkey disabled"
         return composed
     }
 
