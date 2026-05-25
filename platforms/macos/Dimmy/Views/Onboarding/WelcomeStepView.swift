@@ -5,20 +5,14 @@ struct WelcomeStepView: View {
         VStack(spacing: 20) {
             Spacer()
 
-            // The real app icon (brand squircle) rather than a generic SF
-            // symbol — onboarding is the user's first impression. Mirrors
-            // how MacHomePage / MacAboutPage source the icon from the asset
-            // catalogue via applicationIconName.
-            if let appIcon = NSImage(named: NSImage.applicationIconName) {
-                Image(nsImage: appIcon)
-                    .resizable()
-                    .interpolation(.high)
-                    .frame(width: 96, height: 96)
-            } else {
-                Image(systemName: "waveform.circle.fill")
-                    .font(.system(size: 64))
-                    .foregroundStyle(.tint)
-            }
+            // The real brand squircle (theme-aware: white in light, gradient
+            // in dark) rather than a generic SF symbol — onboarding is the
+            // user's first impression.
+            Image("DimmyAppIcon")
+                .resizable()
+                .interpolation(.high)
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 96, height: 96)
 
             Text("Dimmy")
                 .font(.system(size: 32, weight: .bold, design: .rounded))

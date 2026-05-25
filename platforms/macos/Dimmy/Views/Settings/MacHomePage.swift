@@ -141,18 +141,12 @@ struct MacHomePage: View {
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
                     .fill(Color.black.opacity(0.06))
                     .frame(width: 200, height: 96)
-                if let nsImage = NSImage(named: NSImage.applicationIconName) {
-                    Image(nsImage: nsImage)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: 80, height: 80)
-                        .shadow(color: Color.accentColor.opacity(0.35),
-                                radius: 12, x: 0, y: 6)
-                } else {
-                    Image(systemName: "waveform.circle.fill")
-                        .font(.system(size: 64))
-                        .foregroundStyle(Color.accentColor)
-                }
+                Image("DimmyAppIcon")
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 80, height: 80)
+                    .shadow(color: Color.accentColor.opacity(0.35),
+                            radius: 12, x: 0, y: 6)
             }
         }
     }
