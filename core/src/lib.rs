@@ -229,8 +229,59 @@ fn audio_debug_dir() -> Option<std::path::PathBuf> {
 /// Where meeting-mode sessions persist their on-disk artefacts
 /// (`audio.wav` + `transcripts.txt` + `meta.json` + post-process
 /// outputs). One sub-directory per meeting, named with a v4 UUID.
+///
+/// If the user set a custom `meeting_storage_path` (see [`AppConfig`])
+/// and it's usable, that wins; otherwise the default
+/// `<config_dir>/meetings`. Resolved here so nobody re-derives — every
+/// caller (Rust worker, FFI `dimmy_meetings_dir`, the host UIs) asks
+/// this one source. Reads the persisted config on each call; meeting
+/// dir resolution is infrequent (start / list), so the file read is a
+/// non-issue and always reflects the latest saved value.
 pub fn meetings_dir() -> Option<std::path::PathBuf> {
-    config_dir_path().map(|p| p.join("meetings"))
+    let default = config_dir_path().map(|p| p.join("meetings"));
+    let override_path = load_config_file().meeting_storage_path;
+    resolve_meetings_dir(&override_path, default)
+}
+
+/// Pure resolution: pick the override when set + usable, else the
+/// default. Split out from [`meetings_dir`] so it's unit-testable
+/// without touching the real on-disk config.
+fn resolve_meetings_dir(
+    override_path: &str,
+    default: Option<std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    if override_path.trim().is_empty() {
+        return default;
+    }
+    let candidate = std::path::PathBuf::from(override_path.trim());
+    if meeting_storage_path_usable(&candidate) {
+        Some(candidate)
+    } else {
+        log(&format!(
+            "meeting_storage_path {:?} is not usable (missing/unwritable) — falling back to default meetings dir",
+            candidate
+        ));
+        default
+    }
+}
+
+/// A custom meeting dir is "usable" if it exists (or can be created) and
+/// we can write into it. Guards against a stale path to a removed USB /
+/// unmounted network share silently swallowing recordings. Never panics.
+fn meeting_storage_path_usable(p: &std::path::Path) -> bool {
+    if std::fs::create_dir_all(p).is_err() {
+        return false;
+    }
+    // Probe write access with a throwaway file; some network shares
+    // allow create_dir but deny file writes.
+    let probe = p.join(".dimmy_write_probe");
+    match std::fs::write(&probe, b"") {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 /// Where opt-in history-audio WAVs live: one file per transcript row
@@ -533,6 +584,14 @@ pub struct AppConfig {
     /// accept up to ~25 MB so 60 s @ 16k mono int16 (~1.9 MB) is
     /// well within limits.
     pub meeting_chunk_secs: f32,
+    /// User-chosen destination directory for meeting recordings. Empty =
+    /// default `<config_dir>/meetings`. When set + writable, all meeting
+    /// artefacts (audio.wav, transcripts.txt, meta.json, recap.md, …) read
+    /// and write here instead. Resolved centrally by `meetings_dir()`;
+    /// nobody re-derives. Changing it only affects NEW meetings — existing
+    /// ones stay in the old dir (no move logic). Falls back to default if
+    /// the path is missing/unwritable (removable / network drive).
+    pub meeting_storage_path: String,
     /// Notion integration target — UUID of the parent page or database
     /// where each meeting recap lands. Empty string = no target
     /// configured (Settings UI shows the onboarding flow).
@@ -652,6 +711,7 @@ impl Default for AppConfig {
             // identity for in-range samples.
             loopback_gain: 1.0,
             meeting_chunk_secs: 15.0,
+            meeting_storage_path: String::new(),
             notion_target_id: String::new(),
             notion_target_kind: String::new(),
             notion_target_title: String::new(),
@@ -745,6 +805,7 @@ pub fn save_config_file(cfg: &AppConfig) {
             "input_gain": cfg.input_gain,
             "loopback_gain": cfg.loopback_gain,
             "meeting_chunk_secs": cfg.meeting_chunk_secs,
+            "meeting_storage_path": cfg.meeting_storage_path,
             "notion_target_id": cfg.notion_target_id,
             "notion_target_kind": cfg.notion_target_kind,
             "notion_target_title": cfg.notion_target_title,
@@ -951,6 +1012,10 @@ pub fn load_config_file() -> AppConfig {
                         .as_f64()
                         .unwrap_or(defaults.meeting_chunk_secs as f64)
                         as f32,
+                    meeting_storage_path: v["meeting_storage_path"]
+                        .as_str()
+                        .unwrap_or(&defaults.meeting_storage_path)
+                        .to_string(),
                     notion_target_id: v["notion_target_id"]
                         .as_str()
                         .unwrap_or(&defaults.notion_target_id)
@@ -1278,6 +1343,8 @@ pub struct AppState {
     pub input_gain: Arc<std::sync::atomic::AtomicU32>,
     pub loopback_gain: Arc<std::sync::atomic::AtomicU32>,
     pub meeting_chunk_secs: Mutex<f32>,
+    /// User-chosen meeting storage dir — see [`AppConfig::meeting_storage_path`].
+    pub meeting_storage_path: Mutex<String>,
     /// Notion integration target — see [`AppConfig::notion_target_id`].
     pub notion_target_id: Mutex<String>,
     pub notion_target_kind: Mutex<String>,
@@ -1418,6 +1485,7 @@ impl AppState {
             input_gain: input_gain_atomic,
             loopback_gain: loopback_gain_atomic,
             meeting_chunk_secs: Mutex::new(file_cfg.meeting_chunk_secs),
+            meeting_storage_path: Mutex::new(file_cfg.meeting_storage_path.clone()),
             notion_target_id: Mutex::new(file_cfg.notion_target_id.clone()),
             notion_target_kind: Mutex::new(file_cfg.notion_target_kind.clone()),
             notion_target_title: Mutex::new(file_cfg.notion_target_title.clone()),
@@ -1646,6 +1714,11 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         input_gain: f32::from_bits(state.input_gain.load(Ordering::Relaxed)),
         loopback_gain: f32::from_bits(state.loopback_gain.load(Ordering::Relaxed)),
         meeting_chunk_secs: *state.meeting_chunk_secs.lock().map_err(|e| e.to_string())?,
+        meeting_storage_path: state
+            .meeting_storage_path
+            .lock()
+            .map_err(|e| e.to_string())?
+            .clone(),
         notion_target_id: state
             .notion_target_id
             .lock()
@@ -1681,6 +1754,50 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_meetings_dir_empty_override_uses_default() {
+        let default = Some(std::path::PathBuf::from("/tmp/dimmy/meetings"));
+        assert_eq!(resolve_meetings_dir("", default.clone()), default);
+        assert_eq!(resolve_meetings_dir("   ", default.clone()), default);
+    }
+
+    #[test]
+    fn resolve_meetings_dir_usable_override_wins() {
+        let tmp = std::env::temp_dir().join(format!("dimmy_meet_ovr_{}", std::process::id()));
+        let default = Some(std::path::PathBuf::from("/nonexistent/default/meetings"));
+        let resolved = resolve_meetings_dir(tmp.to_str().unwrap(), default);
+        assert_eq!(resolved, Some(tmp.clone()));
+        assert!(tmp.exists(), "override dir must be created when usable");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn resolve_meetings_dir_override_trimmed() {
+        let tmp = std::env::temp_dir().join(format!("dimmy_meet_trim_{}", std::process::id()));
+        let padded = format!("  {}  ", tmp.to_str().unwrap());
+        let resolved = resolve_meetings_dir(&padded, None);
+        assert_eq!(resolved, Some(tmp.clone()));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn resolve_meetings_dir_unusable_override_falls_back() {
+        // A path under a drive letter that cannot exist on the runner.
+        let default = Some(std::path::PathBuf::from(r"C:\dimmy\default\meetings"));
+        let resolved = resolve_meetings_dir(r"Z:\does\not\exist\dimmy", default.clone());
+        assert_eq!(resolved, default);
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn resolve_meetings_dir_unusable_override_falls_back() {
+        // /proc is read-only on Linux — create_dir_all under it fails.
+        let default = Some(std::path::PathBuf::from("/tmp/dimmy/default/meetings"));
+        let resolved = resolve_meetings_dir("/proc/cannot/create/dimmy", default.clone());
+        assert_eq!(resolved, default);
+    }
 
     #[test]
     fn compose_stt_prompt_empty_both() {

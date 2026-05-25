@@ -50,7 +50,7 @@ public static class FileLoadToMeetingService
 
         try
         {
-            var meetingsRoot = Path.Combine(BuildInfo.ConfigDirPath, "meetings");
+            var meetingsRoot = BuildInfo.MeetingsDirPath;
             Directory.CreateDirectory(meetingsRoot);
 
             var dirName = $"{DateTime.UtcNow:yyyyMMddTHHmmss}-{Guid.NewGuid():N}";
