@@ -553,6 +553,14 @@ int32_t dimmy_call_signal(int32_t mic_active, const char * _Nullable app_id);
 /// the state. Returns 0 / 3 / -1 (same semantics).
 int32_t dimmy_call_signal_sys(int32_t sys_active, const char * _Nullable app_id);
 
+/// Authoritative "call ended" signal — the host has positive evidence
+/// the process that originated the meeting stopped capturing the mic
+/// (its audio-input claim disappeared). Bypasses the amplitude-silence
+/// heuristic and fires `meeting.stop_suggested` immediately, gated only
+/// by the same one-shot + keep-recording cooldown guards. No args
+/// (state is global). Returns 3 (stop_suggested emitted) or 0 (no-op).
+int32_t dimmy_call_signal_session_ended(void);
+
 /// Record the user's response to a call/stop nudge.
 /// `response` ∈ {"record_now","not_now","never","timeout",
 /// "stop_and_recap","keep_recording","stop_timeout"}.

@@ -1351,6 +1351,11 @@ final class AppState: ObservableObject {
             // openMeetingWindow shows + reattaches; the Meeting VM is
             // owned by the controller so we drive .start() through it.
             MeetingWindowController.shared.viewModel.start()
+            // Bind the detected call as this meeting's origin so the
+            // deterministic "call ended" path can watch it (Mac mirror of
+            // Win MarkMeetingOriginFromCurrentSession). Falls back to the
+            // silence heuristic if no origin pid was resolvable.
+            CallDetectionManager.shared.markMeetingOrigin()
         case "stop_and_recap":
             PillWindowController.stopMeetingFromPill(appState: self)
         case "never":
