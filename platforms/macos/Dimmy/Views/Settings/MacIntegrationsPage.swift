@@ -169,10 +169,15 @@ struct MacIntegrationsPage: View {
     @ViewBuilder
     private var summaryCard: some View {
         HStack(alignment: .top, spacing: 14) {
-            // Real Notion logo — bundled SVG asset (Providers/notion.imageset).
+            // Real Notion logo — bundled SVG (Providers/notion.imageset).
+            // Rendered as a template so the monochrome mark tints to the
+            // label colour: black in light, white in dark (the asset itself
+            // is the black "original" mark, invisible on a dark surface).
             Image("notion")
+                .renderingMode(.template)
                 .resizable()
                 .scaledToFit()
+                .foregroundStyle(.primary)
                 .frame(width: 40, height: 40)
 
             VStack(alignment: .leading, spacing: 6) {
