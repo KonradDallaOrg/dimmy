@@ -965,6 +965,13 @@ final class AppState: ObservableObject {
     /// `recap_model_override` in config.json.
     @Published var recapModelOverride: String = ""
 
+    /// User-chosen meeting storage directory (absolute path). Empty = the
+    /// default `<configdir>/meetings`. Mirror of Win `MeetingStoragePath`.
+    /// The effective dir (override + writability fallback) is resolved by
+    /// the Rust core via `DimmyCore.shared.meetingsDirURL`; this field is
+    /// just the raw override for display + persistence.
+    @Published var meetingStoragePath: String = ""
+
     // MARK: - Notion integration
 
     /// True if a Notion integration token is currently stored. Driven
@@ -1210,6 +1217,7 @@ final class AppState: ObservableObject {
         // Phase 6.4 auto-recap
         if let v = config["auto_recap_threshold_secs"] as? Int { autoRecapThresholdSecs = UInt32(max(0, v)) }
         if let v = config["recap_model_override"] as? String { recapModelOverride = v }
+        if let v = config["meeting_storage_path"] as? String { meetingStoragePath = v }
 
         // Notion integration — see top of file.
         if let v = config["has_notion_token"] as? Bool { hasNotionToken = v }
@@ -1351,6 +1359,11 @@ final class AppState: ObservableObject {
             // openMeetingWindow shows + reattaches; the Meeting VM is
             // owned by the controller so we drive .start() through it.
             MeetingWindowController.shared.viewModel.start()
+            // Bind the detected call as this meeting's origin so the
+            // deterministic "call ended" path can watch it (Mac mirror of
+            // Win MarkMeetingOriginFromCurrentSession). Falls back to the
+            // silence heuristic if no origin pid was resolvable.
+            CallDetectionManager.shared.markMeetingOrigin()
         case "stop_and_recap":
             PillWindowController.stopMeetingFromPill(appState: self)
         case "never":
@@ -1470,6 +1483,12 @@ final class AppState: ObservableObject {
         }
         if let dev = selectedDevice {
             config["selected_device"] = dev
+        }
+        // Identity-class: emit ONLY when non-empty so a transient/full save
+        // never wipes the user's custom dir. The explicit Reset button
+        // sends a targeted {"meeting_storage_path":""} to reset to default.
+        if !meetingStoragePath.isEmpty {
+            config["meeting_storage_path"] = meetingStoragePath
         }
         return config
     }

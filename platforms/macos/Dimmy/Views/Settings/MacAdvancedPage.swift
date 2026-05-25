@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // Advanced — diagnostics + GPU acceleration. Visible only when the
@@ -6,6 +7,9 @@ import SwiftUI
 
 struct MacAdvancedPage: View {
     @ObservedObject var appState: AppState
+
+    /// Inline error when a picked meeting-storage folder isn't writable.
+    @State private var meetingStorageError: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -18,11 +22,97 @@ struct MacAdvancedPage: View {
 
             performanceGroup
             autoRecapGroup
+            meetingStorageGroup
             #if DEBUG
             debugSeedGroup
             #endif
             diagnosticsGroup
             resetGroup
+        }
+    }
+
+    // MARK: - Meeting storage directory
+
+    /// User-configurable meeting storage folder. Mirror of the Win
+    /// Settings → Meetings card. The effective path comes from the Rust
+    /// core (`meetingsDirURL`, which applies the override + a writability
+    /// fallback); `appState.meetingStoragePath` is the raw override
+    /// (empty = default).
+    private var meetingStorageGroup: some View {
+        Group {
+            MacGroupLabel(text: "Meetings · storage")
+            MacTile {
+                MacRow(
+                    "Storage folder",
+                    description: meetingStorageDescription,
+                    showsDivider: meetingStorageError != nil
+                ) {
+                    HStack(spacing: 8) {
+                        Button("Browse…") { pickMeetingFolder() }
+                            .controlSize(.small)
+                            .buttonStyle(.borderedProminent)
+                        Button("Reset") { persistMeetingStoragePath("") }
+                            .controlSize(.small)
+                            .disabled(appState.meetingStoragePath.isEmpty)
+                            .help("Reset to the default location")
+                    }
+                }
+                if let err = meetingStorageError {
+                    MacRow("", description: err, showsDivider: false) { EmptyView() }
+                }
+            }
+            MacGroupFooter(text: "Where meeting recordings, transcripts and recaps are saved. New meetings use the new folder; existing ones stay where they are.")
+        }
+    }
+
+    private var meetingStorageDescription: String {
+        let effective = DimmyCore.shared.meetingsDirURL?.path ?? "—"
+        return appState.meetingStoragePath.isEmpty
+            ? "\(effective)  ·  default"
+            : effective
+    }
+
+    private func pickMeetingFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Choose"
+        panel.message = "Choose where to store meeting recordings"
+        if let current = DimmyCore.shared.meetingsDirURL { panel.directoryURL = current }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if !isDirectoryWritable(url.path) {
+            meetingStorageError = "Can't write to “\(url.lastPathComponent)”. Pick a folder you have write access to."
+            return
+        }
+        meetingStorageError = nil
+        persistMeetingStoragePath(url.path)
+    }
+
+    /// Single-writer rule: a targeted partial config update through the
+    /// core (never write config.json from Swift). Empty = reset to default;
+    /// the core re-resolves `meetings_dir()` on next read. The if-empty-omit
+    /// guard in `toRustConfig` means only this explicit path can reset it.
+    private func persistMeetingStoragePath(_ path: String) {
+        meetingStorageError = nil
+        if DimmyCore.shared.setConfig(["meeting_storage_path": path]) {
+            appState.meetingStoragePath = path
+        }
+    }
+
+    /// Mirror of Win `IsDirectoryWritable`: create the dir, write + delete a
+    /// probe file. Catches read-only / vanished shares before committing.
+    private func isDirectoryWritable(_ dir: String) -> Bool {
+        let fm = FileManager.default
+        do {
+            try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            let probe = (dir as NSString).appendingPathComponent(".dimmy_write_probe")
+            try "".write(toFile: probe, atomically: true, encoding: .utf8)
+            try? fm.removeItem(atPath: probe)
+            return true
+        } catch {
+            return false
         }
     }
 

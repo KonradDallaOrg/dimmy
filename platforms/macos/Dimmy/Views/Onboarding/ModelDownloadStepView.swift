@@ -10,6 +10,12 @@ struct ModelDownloadStepView: View {
     private static let parakeetTag = "parakeet:fp32"
     private static let defaultWhisper = "ggml-base-q8_0.bin"
 
+    /// Whisper catalog from the Rust core (`dimmy_list_local_models`) so
+    /// onboarding offers the same models as Settings + Windows, not a
+    /// hardcoded subset of three. Parakeet is prepended separately (it's
+    /// the recommended default, not part of the whisper catalog).
+    @State private var whisperModels: [[String: Any]] = []
+
     /// What the user picks here lands in appState.localSttBackend +
     /// appState.localModel. Default is Parakeet on Apple Silicon — fastest
     /// local STT via Apple Neural Engine. `applyAutoPick` downgrades to
@@ -44,9 +50,10 @@ struct ModelDownloadStepView: View {
             VStack(spacing: 10) {
                 Picker("", selection: $selection) {
                     Text("Parakeet TDT v3 · 466 MB · Apple Neural Engine (recommended)").tag(Self.parakeetTag)
-                    Text("Whisper Base · 78 MB").tag(Self.defaultWhisper)
-                    Text("Whisper Small · 466 MB").tag("ggml-small-q8_0.bin")
-                    Text("Whisper Medium · 1.5 GB").tag("ggml-medium-q8_0.bin")
+                    ForEach(whisperModels.indices, id: \.self) { i in
+                        Text(Self.whisperLabel(whisperModels[i]))
+                            .tag(whisperModels[i]["filename"] as? String ?? "")
+                    }
                 }
                 .labelsHidden()
                 .pickerStyle(.menu)
@@ -95,6 +102,7 @@ struct ModelDownloadStepView: View {
         }
         .padding(.horizontal, 40)
         .onAppear {
+            whisperModels = DimmyCore.shared.listLocalModels() ?? []
             persistSelectionToAppState()
             refreshFromCore()
             applyAutoPick()
@@ -161,13 +169,27 @@ struct ModelDownloadStepView: View {
         if isParakeet {
             return "NVIDIA Parakeet on Apple Neural Engine — fastest local STT on Apple Silicon (~50× realtime). Italian quality matches cloud Groq."
         }
-        switch selection {
-        case "ggml-tiny-q8_0.bin": return "Whisper Tiny — fastest, lower accuracy."
-        case "ggml-base-q8_0.bin": return "Whisper Base — good balance of speed and accuracy."
-        case "ggml-small-q8_0.bin": return "Whisper Small — high accuracy, slower."
-        case "ggml-medium-q8_0.bin": return "Whisper Medium — very high accuracy, needs 2 GB+ RAM."
-        default: return ""
+        guard let m = whisperModels.first(where: { ($0["filename"] as? String) == selection }) else {
+            return ""
         }
+        let name = m["name"] as? String ?? "Whisper"
+        let desc = m["description"] as? String ?? ""
+        return desc.isEmpty ? "Whisper \(name)" : "Whisper \(name) — \(desc)."
+    }
+
+    /// Picker label for a whisper model dict: "Whisper Large-v3-Turbo Q8 · 874 MB".
+    private static func whisperLabel(_ m: [String: Any]) -> String {
+        let name = (m["name"] as? String) ?? (m["filename"] as? String) ?? "Model"
+        let mb = m["size_mb"] as? Int ?? 0
+        let size: String
+        if mb >= 1024 {
+            size = String(format: "%.1f GB", Double(mb) / 1024.0)
+        } else if mb > 0 {
+            size = "\(mb) MB"
+        } else {
+            size = ""
+        }
+        return size.isEmpty ? "Whisper \(name)" : "Whisper \(name) · \(size)"
     }
 
     private var downloadButtonLabel: String {

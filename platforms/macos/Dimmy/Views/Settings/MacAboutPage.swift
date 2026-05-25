@@ -45,21 +45,17 @@ struct MacAboutPage: View {
             )
         ) {
             ZStack {
-                // Use the macOS app icon (the same dimmy-logo source as
-                // Windows, but rendered with the system squircle so it
-                // matches the Dock representation users already see).
-                if let icon = NSImage(named: NSImage.applicationIconName) {
-                    Image(nsImage: icon)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: 96, height: 96)
-                        .shadow(color: Color.accentColor.opacity(0.30),
-                                radius: 12, x: 0, y: 6)
-                } else {
-                    Image(systemName: "waveform.circle.fill")
-                        .font(.system(size: 88))
-                        .foregroundStyle(Color.accentColor)
-                }
+                // Theme-aware brand squircle: white squircle + gradient
+                // glyph in light, gradient squircle + white glyph in dark
+                // (DimmyAppIcon imageset has both appearances). The Dock's
+                // AppIcon is the light variant; this in-app copy follows
+                // the system appearance so it reads on either surface.
+                Image("DimmyAppIcon")
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 96, height: 96)
+                    .shadow(color: Color.accentColor.opacity(0.30),
+                            radius: 12, x: 0, y: 6)
             }
             .frame(width: 200, height: 110)
         }

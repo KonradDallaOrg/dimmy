@@ -76,6 +76,12 @@ final class MeetingWindowController {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.isReleasedWhenClosed = false
+        // Without this, SwiftUI `.onHover` inside the hosted view never
+        // fires — the action-toolbar buttons (regen transcript/recap,
+        // Notion, Claude, open-folder) showed no hover highlight and felt
+        // dead. AppKit only delivers mouse-moved events when the window
+        // opts in; NSHostingView's hover tracking depends on them.
+        window.acceptsMouseMovedEvents = true
         window.center()
         window.contentView = NSHostingView(rootView: view)
         window.minSize = NSSize(width: 880, height: 560)
