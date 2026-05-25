@@ -256,8 +256,8 @@ struct MacIntegrationsPage: View {
     private var mcpCard: some View {
         HStack(alignment: .top, spacing: 14) {
             // Real Claude.app icon when extractable from /Applications;
-            // fall back to a stylised orange burst tile if Claude
-            // Desktop isn't installed or the icns convert failed.
+            // otherwise the real Claude asterisk mark (ClaudeMark.imageset,
+            // #D97757 burst) — never an invented placeholder.
             // Cached under <configDir>/cache/claude-desktop-icon.png.
             if let p = claudeIconPath, let img = NSImage(contentsOfFile: p) {
                 Image(nsImage: img)
@@ -265,14 +265,11 @@ struct MacIntegrationsPage: View {
                     .scaledToFit()
                     .frame(width: 40, height: 40)
             } else {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 9)
-                        .fill(Color(red: 0.85, green: 0.47, blue: 0.34))
-                    Image(systemName: "rectangle.connected.to.line.below")
-                        .font(.system(size: 22, weight: .semibold))
-                        .foregroundColor(.white)
-                }
-                .frame(width: 40, height: 40)
+                Image("ClaudeMark")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 36, height: 36)
+                    .frame(width: 40, height: 40)
             }
 
             VStack(alignment: .leading, spacing: 6) {

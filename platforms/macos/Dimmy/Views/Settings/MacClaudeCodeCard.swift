@@ -41,15 +41,19 @@ struct MacClaudeCodeCard: View {
         // + spacing). Using MacRow + an overlay produced a check
         // that collided with the action buttons — see git history.
         HStack(alignment: .top, spacing: 14) {
-            // Brand icon — orange Anthropic-style squircle.
-            ZStack {
-                RoundedRectangle(cornerRadius: 9)
-                    .fill(Color(red: 0.84, green: 0.47, blue: 0.21))
-                Image(systemName: "person.crop.circle.badge.checkmark")
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundColor(.white)
-            }
-            .frame(width: 40, height: 40)
+            // Real Anthropic wordmark (Assets/Providers/anthropic.svg from
+            // the Win brand assets), rendered as a template so it tints to
+            // the label colour (black in light, white in dark) — no
+            // invented orange tile. Claude Code subscriptions are an
+            // Anthropic Pro/Max account, hence the Anthropic mark here vs
+            // the Claude asterisk on the Claude Desktop card.
+            Image("Anthropic")
+                .resizable()
+                .renderingMode(.template)
+                .scaledToFit()
+                .foregroundStyle(.primary)
+                .frame(width: 30, height: 30)
+                .frame(width: 40, height: 40)
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("Claude Code subscription").font(.system(size: 16, weight: .semibold))
