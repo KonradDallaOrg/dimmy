@@ -56,6 +56,14 @@ public class TrayService : IDisposable
         int cx, int cy, uint fuLoad);
 
     [DllImport("user32.dll")]
+    private static extern int GetSystemMetrics(int nIndex);
+
+    // Small-icon metrics — DPI-scaled by the OS for the process's DPI
+    // awareness. SM_CXSMICON returns 16 at 100%, 24 at 150%, 32 at 200%.
+    private const int SM_CXSMICON = 49;
+    private const int SM_CYSMICON = 50;
+
+    [DllImport("user32.dll")]
     private static extern bool DestroyIcon(IntPtr hIcon);
 
     [DllImport("user32.dll")]
@@ -366,12 +374,22 @@ public class TrayService : IDisposable
             Path.Combine(exeDir, "dimmy.ico"),
         };
 
+        // Request the DPI-correct small-icon size (16 @100%, 24 @150%,
+        // 32 @200%) so LoadImage picks the matching frame out of the
+        // multi-size .ico instead of forcing 16 and letting the shell
+        // upscale a tiny bitmap. The brand dimmy.ico ships 16·24·32·48
+        // frames, so the right one is always present.
+        int sx = GetSystemMetrics(SM_CXSMICON);
+        int sy = GetSystemMetrics(SM_CYSMICON);
+        if (sx <= 0) sx = 16;
+        if (sy <= 0) sy = 16;
+
         foreach (var path in paths)
         {
             if (File.Exists(path))
             {
-                var h = LoadImage(IntPtr.Zero, path, IMAGE_ICON, 16, 16,
-                    LR_LOADFROMFILE | LR_DEFAULTSIZE);
+                var h = LoadImage(IntPtr.Zero, path, IMAGE_ICON, sx, sy,
+                    LR_LOADFROMFILE);
                 if (h != IntPtr.Zero) return h;
             }
         }
