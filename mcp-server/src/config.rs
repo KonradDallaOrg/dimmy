@@ -79,3 +79,95 @@ impl Config {
         self.config_dir.join("mcp.calls.log")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg_in(dir: &std::path::Path) -> Config {
+        Config {
+            namespace: "dimmy".to_string(),
+            config_dir: dir.to_path_buf(),
+        }
+    }
+
+    fn write_config(dir: &std::path::Path, json: &str) {
+        std::fs::write(dir.join("config.json"), json).unwrap();
+    }
+
+    fn tmp() -> PathBuf {
+        let p = std::env::temp_dir().join(format!(
+            "dimmy_mcp_cfg_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn no_config_json_uses_default() {
+        let dir = tmp();
+        assert_eq!(cfg_in(&dir).meetings_dir(), dir.join("meetings"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn empty_override_uses_default() {
+        let dir = tmp();
+        write_config(&dir, r#"{"meeting_storage_path": ""}"#);
+        assert_eq!(cfg_in(&dir).meetings_dir(), dir.join("meetings"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_field_uses_default() {
+        let dir = tmp();
+        write_config(&dir, r#"{"language": "en"}"#);
+        assert_eq!(cfg_in(&dir).meetings_dir(), dir.join("meetings"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn existing_override_dir_wins() {
+        let dir = tmp();
+        let custom = tmp(); // a real, existing dir
+        write_config(
+            &dir,
+            &format!(
+                r#"{{"meeting_storage_path": {}}}"#,
+                serde_json::to_string(&custom.to_string_lossy()).unwrap()
+            ),
+        );
+        assert_eq!(cfg_in(&dir).meetings_dir(), custom);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&custom);
+    }
+
+    #[test]
+    fn nonexistent_override_falls_back_to_default() {
+        let dir = tmp();
+        // Points at a dir that does not exist → guard rejects it.
+        let bogus = dir.join("does-not-exist-xyz");
+        write_config(
+            &dir,
+            &format!(
+                r#"{{"meeting_storage_path": {}}}"#,
+                serde_json::to_string(&bogus.to_string_lossy()).unwrap()
+            ),
+        );
+        assert_eq!(cfg_in(&dir).meetings_dir(), dir.join("meetings"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn malformed_config_json_uses_default() {
+        let dir = tmp();
+        write_config(&dir, "not json {{{");
+        assert_eq!(cfg_in(&dir).meetings_dir(), dir.join("meetings"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
