@@ -65,6 +65,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         SelfTests.runAll()
 
+        // Diagnostic only (DIMMY_TAP_PROBE=1): exercise the Core Audio
+        // system-audio tap once at launch and log sample/peak counts. Off
+        // by default — never touches a normal launch.
+        if #available(macOS 14.4, *),
+           ProcessInfo.processInfo.environment["DIMMY_TAP_PROBE"] == "1" {
+            SystemAudioProcessTap.runDiagnosticProbe()
+        }
+
         // UI-only setup. No audio, no keychain, no permission-triggering calls yet.
         statusBarController = StatusBarController(appState: appState)
         pillWindowController = PillWindowController(appState: appState)

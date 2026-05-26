@@ -330,7 +330,18 @@ final class MeetingViewModel: ObservableObject {
                 Task {
                     let ok = await SystemAudioCaptureService.shared.start()
                     if !ok {
-                        self.showToast("System audio unavailable — mic only. Grant Screen Recording in System Settings → Privacy.")
+                        self.showToast("System audio unavailable — mic only. Grant Dimmy “Audio Recording” in System Settings → Privacy & Security.")
+                        return
+                    }
+                    // The Core Audio tap is created even when the audio-
+                    // recording grant is missing; it just never delivers
+                    // frames. If none arrive shortly, guide the user instead
+                    // of silently recording mic-only. Guard on sessionId so a
+                    // stopped/replaced meeting can't fire a stale toast.
+                    try? await Task.sleep(nanoseconds: 1_800_000_000)
+                    guard self.sessionId == id else { return }
+                    if !SystemAudioCaptureService.shared.isCapturingSystemAudio {
+                        self.showToast("System audio not captured — grant Dimmy “Audio Recording” in System Settings → Privacy & Security, then restart the meeting.")
                     }
                 }
             }
