@@ -2,18 +2,43 @@ import Foundation
 import ScreenCaptureKit
 import AVFoundation
 
-/// Captures system audio on macOS 14+ via ScreenCaptureKit and forwards
-/// f32 PCM samples to Rust via dimmy_push_loopback_audio.
+/// Captures system audio for meeting mode and forwards f32 PCM samples to
+/// Rust via `dimmy_push_loopback_audio`.
+///
+/// Two backends, picked at `start()`:
+///   • **Core Audio process tap** (macOS 14.4+, preferred) — records other
+///     processes' audio output with only the audio-recording TCC grant (the
+///     discreet purple dot). No Screen Recording prompt, no Sequoia media-
+///     library prompt. See `SystemAudioProcessTap`.
+///   • **ScreenCaptureKit** (macOS 14.0–14.3, or if the tap fails) — the
+///     legacy `SCStream` loopback path, kept as a safety net so the older
+///     OSes don't regress. This is the only path that needs Screen
+///     Recording, and it only runs when the tap is unavailable.
 ///
 /// Lifecycle: call start() after dimmy_meeting_start; stop() before/after
-/// dimmy_meeting_stop. If Screen Recording permission is denied, start()
-/// returns false and the meeting continues mic-only.
+/// dimmy_meeting_stop. If neither backend can start (permission denied),
+/// start() returns false and the meeting continues mic-only.
 @MainActor
 final class SystemAudioCaptureService: NSObject {
     static let shared = SystemAudioCaptureService()
     private var stream: SCStream?
     private var isRunning = false
+    /// Active Core Audio tap (macOS 14.4+). Stored as AnyObject because the
+    /// concrete type is gated above the 14.0 deployment target.
+    private var processTap: AnyObject?
     private override init() {}
+
+    /// Whether system audio is actually flowing. For the tap path this is
+    /// false until its IO proc fires — which never happens without the
+    /// audio-recording grant, so the meeting can warn instead of silently
+    /// recording mic-only. The SCStream path reports true once started
+    /// (its own start() already fails closed on denial).
+    var isCapturingSystemAudio: Bool {
+        if #available(macOS 14.4, *), let tap = processTap as? SystemAudioProcessTap {
+            return tap.hasReceivedAudio
+        }
+        return stream != nil
+    }
 
     /// Sample rate SCStream will be (or is currently) configured at.
     /// Mirrors the cpal mic rate when one is live; falls back through
@@ -39,6 +64,30 @@ final class SystemAudioCaptureService: NSObject {
     func start() async -> Bool {
         guard !isRunning else { return true }
 
+        // Prefer the Core Audio process tap — audio-only permission, no
+        // screen-recording / media-library prompts. Falls through to
+        // ScreenCaptureKit only when the tap can't start (older OS, denied
+        // grant, or no default output device).
+        if #available(macOS 14.4, *) {
+            let tap = SystemAudioProcessTap()
+            tap.onSamples = { ptr, count, rate in
+                _ = dimmy_push_loopback_audio(ptr, Int32(count), rate)
+            }
+            if tap.start() {
+                processTap = tap
+                isRunning = true
+                NSLog("[SystemAudio] capture via Core Audio process tap")
+                return true
+            }
+            NSLog("[SystemAudio] process tap unavailable → ScreenCaptureKit fallback")
+        }
+
+        return await startWithScreenCapture()
+    }
+
+    /// ScreenCaptureKit fallback (macOS 14.0–14.3 / tap failure). Triggers
+    /// the Screen Recording grant — only reached when the tap can't run.
+    private func startWithScreenCapture() async -> Bool {
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(
                 false, onScreenWindowsOnly: false
@@ -126,6 +175,12 @@ final class SystemAudioCaptureService: NSObject {
     }
 
     func stop() {
+        if #available(macOS 14.4, *), let tap = processTap as? SystemAudioProcessTap {
+            tap.stop()
+            processTap = nil
+            isRunning = false
+            return
+        }
         guard isRunning, let s = stream else { return }
         s.stopCapture { _ in }
         stream = nil

@@ -168,6 +168,7 @@ final class MeetingViewModel: ObservableObject {
                     self.processingStep = .generatingRecap
                     self.statusLabel = "Wrapping up…"
                     self.subStatusLabel = ""
+                    self.armWrapUpWatchdog()
                 }
             }
             .store(in: &liveTranscriptBag)
@@ -181,6 +182,35 @@ final class MeetingViewModel: ObservableObject {
         pollTimer = nil
         amplitudeTimer?.invalidate()
         amplitudeTimer = nil
+    }
+
+    /// Safety net for the external-stop → "Wrapping up…" transition. The
+    /// happy path resolves via `meetingRecapSaved` → `loadDoneFromDisk`,
+    /// but an empty meeting (no recap), a recap crash, or a dropped
+    /// notification would otherwise pin the window in `.processing`
+    /// forever — that's the "can't terminate the meeting" trap. If we're
+    /// still processing after a generous window (a real recap is 10–60 s),
+    /// force-resolve from disk so the user is never stranded.
+    private func armWrapUpWatchdog() {
+        wrapUpWatchdog?.invalidate()
+        wrapUpWatchdog = Timer.scheduledTimer(withTimeInterval: 90, repeats: false) {
+            [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.phase == .processing else { return }
+                let dir = self.activeMeetingDir.isEmpty
+                    ? (self.freshestMeetingDir()?.path ?? "")
+                    : self.activeMeetingDir
+                if dir.isEmpty {
+                    self.phase = .done
+                    self.statusLabel = "Done"
+                    self.subStatusLabel = "Meeting finished"
+                } else {
+                    self.loadDoneFromDisk(dir: dir)
+                }
+                self.isWorking = false
+                self.loadHistory()
+            }
+        }
     }
 
     // ── Errors ─────────────────────────────────────────────────────
@@ -204,6 +234,10 @@ final class MeetingViewModel: ObservableObject {
     private var pauseStartedAt: Date?
     private var pollTimer: Timer?
     private var amplitudeTimer: Timer?
+    /// One-shot safety net for the external-stop "Wrapping up…" state.
+    /// If no recap lands us in `.done`, this force-resolves from disk so
+    /// the window can never strand the user in processing limbo.
+    private var wrapUpWatchdog: Timer?
     private var sessionId: String = ""
     private var isWorking: Bool = false
     private var activeMeetingDir: String = ""
@@ -330,7 +364,18 @@ final class MeetingViewModel: ObservableObject {
                 Task {
                     let ok = await SystemAudioCaptureService.shared.start()
                     if !ok {
-                        self.showToast("System audio unavailable — mic only. Grant Screen Recording in System Settings → Privacy.")
+                        self.showToast("System audio unavailable — mic only. Grant Dimmy “Audio Recording” in System Settings → Privacy & Security.")
+                        return
+                    }
+                    // The Core Audio tap is created even when the audio-
+                    // recording grant is missing; it just never delivers
+                    // frames. If none arrive shortly, guide the user instead
+                    // of silently recording mic-only. Guard on sessionId so a
+                    // stopped/replaced meeting can't fire a stale toast.
+                    try? await Task.sleep(nanoseconds: 1_800_000_000)
+                    guard self.sessionId == id else { return }
+                    if !SystemAudioCaptureService.shared.isCapturingSystemAudio {
+                        self.showToast("System audio not captured — grant Dimmy “Audio Recording” in System Settings → Privacy & Security, then restart the meeting.")
                     }
                 }
             }
@@ -851,6 +896,9 @@ final class MeetingViewModel: ObservableObject {
     }
 
     func loadDoneFromDisk(dir: String) {
+        // We reached a terminal state — cancel the wrap-up safety net.
+        wrapUpWatchdog?.invalidate()
+        wrapUpWatchdog = nil
         // Callers are responsible for flushing pending notes BEFORE
         // they call us (via `saveNotes()` while `selectedDir` still
         // points at the previous target). Doing the save here would

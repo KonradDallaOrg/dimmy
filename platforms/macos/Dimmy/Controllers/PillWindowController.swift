@@ -241,16 +241,31 @@ final class PillWindowController {
             let notionAutoSend = appState.notionAutoSend
             await Task.detached(priority: .userInitiated) {
                 let stopResult = DimmyCore.shared.meetingStop()
-                guard let stopResult, !stopResult.transcript.isEmpty else {
+                let transcript = stopResult?.transcript
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                guard let stopResult, !transcript.isEmpty else {
+                    // Empty / failed stop → no recap will run. Still post
+                    // meetingRecapSaved so a meeting window pinned in
+                    // "Wrapping up…" (the $meetingActive→processing path)
+                    // resolves to the empty done state instead of hanging
+                    // forever waiting for a recap that never comes.
                     await MainActor.run {
                         appState.recordingState = .idle
                         appState.meetingActive = DimmyCore.shared.meetingIsActive
+                        NotificationCenter.default.post(
+                            name: .meetingRecapSaved,
+                            object: nil,
+                            userInfo: [
+                                "dir": stopResult?.dir ?? "",
+                                "success": false,
+                            ]
+                        )
                     }
                     return
                 }
                 let recap = MeetingPostProcessService.runRecap(
                     dir: stopResult.dir,
-                    transcript: stopResult.transcript,
+                    transcript: transcript,
                     notionAutoSend: notionAutoSend
                 )
                 await MainActor.run {

@@ -188,6 +188,9 @@ enum MeetingPostProcessService {
         return """
         You are a senior meeting analyst writing a polished, Notion-style summary of an audio recording. Output ONLY markdown with the EXACT marker headings shown — a downstream parser splits on them.
 
+        ## Title (the very first thing you output)
+        The VERY FIRST line of your output MUST be a Markdown H1 (`# Title`) — a 3-to-7-word short title for the meeting, in the transcript's language, no quotes, no emoji, no date. Dimmy parses this line and stores it in the meeting's metadata so the UI shows your title instead of the meeting id.
+
         ## Transcript format
         Each line: `[ELAPSED_MS ms] [SPEAKER_LABEL] text`.
         Speaker labels: `[mic]` = the user recording (treat as "you" / first person when the language allows), `[system]` = remote participant(s) coming through speakers/loopback (treat as "the remote party" / "interlocutor" / specific name only if explicitly mentioned in the transcript). When only `[mic]` is present, the recording is monologue / dictation; when only `[system]` is present, the user was a silent listener.
@@ -245,6 +248,7 @@ enum MeetingPostProcessService {
         Use `—` if none.
 
         ## Hard rules
+        - The very first line MUST be `# <Short title>` (3-7 words, transcript's language, no quotes, no emoji, no date). Without this Dimmy's UI falls back to showing the raw meeting id.
         - Output the sections in the exact order above. ALL section markers must appear, even if the section content is just `—`.
         - Output language follows the transcript dominant language.
         - NEVER invent: participants, dates, amounts, project names, technical terms, deadlines, organizational affiliations, or anything not directly evidenced in the transcript. If unsure, omit rather than fabricate.
@@ -253,6 +257,12 @@ enum MeetingPostProcessService {
         - No filler phrases ("the meeting discussed", "various topics were covered", "in conclusion", "overall").
         - No em-dashes (`—`) in prose outside the markers and bullet separators. Use periods, commas, or colons instead.
         - Be SHARP and CONCISE. Senior leaders read these summaries — every sentence must earn its place.
+
+        ═══════════════════════════════════════════════════════════════════
+        FINAL REMINDER before you start: the very first line of your
+        response must be `# ` followed by a 3-7 word title. NOT `## ===CONTEXT===`,
+        NOT a blank line, NOT an apology. JUST `# <title>` on line one.
+        ═══════════════════════════════════════════════════════════════════
 
         ## Transcript
         \(transcript)
@@ -265,6 +275,23 @@ enum MeetingPostProcessService {
     /// Falls back to `{TLDR: <whole response>}` if no markers were
     /// emitted (older models, off-prompt outputs).
     static func parseStructuredRecap(_ raw: String) -> [String: String] {
+        // Capture the `# Title` H1 (prompt rule) BEFORE splitting on
+        // markers, so it survives the parse→build round-trip — no
+        // canonical section key matches it otherwise. Stashed under the
+        // sentinel `__TITLE__`, which buildMarkdownFromSections re-emits
+        // on line 1 so Rust save_post_process parses it into
+        // meta.json::title. Mirror of Win ParseStructuredRecap.
+        var capturedTitle: String?
+        for line in raw.split(separator: "\n", omittingEmptySubsequences: false) {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            // single-`#` H1 only; "## " section headings must not match.
+            if t.hasPrefix("# ") {
+                let title = String(t.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                if !title.isEmpty, title.count <= 200 { capturedTitle = title }
+                break
+            }
+        }
+
         // ===KEY=== markers are ASCII, so character-distance is safe
         // (no multi-byte ambiguity inside the marker itself).
         var hits: [(Range<String.Index>, String)] = []
@@ -275,10 +302,13 @@ enum MeetingPostProcessService {
             }
         }
         if hits.isEmpty {
-            return ["TLDR": raw.trimmingCharacters(in: .whitespacesAndNewlines)]
+            var fallback = ["TLDR": raw.trimmingCharacters(in: .whitespacesAndNewlines)]
+            if let capturedTitle { fallback["__TITLE__"] = capturedTitle }
+            return fallback
         }
         hits.sort { $0.0.lowerBound < $1.0.lowerBound }
         var result: [String: String] = [:]
+        if let capturedTitle { result["__TITLE__"] = capturedTitle }
         for i in 0..<hits.count {
             let contentStart = hits[i].0.upperBound
             let contentEnd = i + 1 < hits.count ? hits[i + 1].0.lowerBound : raw.endIndex
@@ -310,6 +340,13 @@ enum MeetingPostProcessService {
             ("FOLLOWUPS", "Follow-ups"),
         ]
         var out = ""
+        // Re-emit the LLM-chosen title as the first line so Rust
+        // save_post_process can parse it back into meta.json::title.
+        // Without this the title round-trips to nothing (no ===NAME===
+        // marker matches it). See parseStructuredRecap.
+        if let title = s["__TITLE__"]?.trimmingCharacters(in: .whitespaces), !title.isEmpty {
+            out += "# \(title)\n\n"
+        }
         for (key, title) in titles {
             guard let body = s[key], !body.isEmpty else { continue }
             out += "## \(title)\n\n\(body)\n\n"

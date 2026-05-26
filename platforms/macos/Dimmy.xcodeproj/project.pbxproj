@@ -106,6 +106,7 @@
 		AA000903 /* MacClaudeCodeCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000903 /* MacClaudeCodeCard.swift */; };
 		AA000904 /* TelemetryBuckets.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000904 /* TelemetryBuckets.swift */; };
 		AA000905 /* SystemAudioCaptureService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000905 /* SystemAudioCaptureService.swift */; };
+		AA001110 /* SystemAudioProcessTap.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB001110 /* SystemAudioProcessTap.swift */; };
 		AA001000 /* ScreenCaptureKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AB001000 /* ScreenCaptureKit.framework */; };
 		AA001100 /* DimmyCore+CallDetect.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB001100 /* DimmyCore+CallDetect.swift */; };
 		AA001101 /* CallDetectionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB001101 /* CallDetectionManager.swift */; };
@@ -138,6 +139,7 @@
 		AB000903 /* MacClaudeCodeCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacClaudeCodeCard.swift; sourceTree = "<group>"; };
 		AB000904 /* TelemetryBuckets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryBuckets.swift; sourceTree = "<group>"; };
 		AB000905 /* SystemAudioCaptureService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemAudioCaptureService.swift; sourceTree = "<group>"; };
+		AB001110 /* SystemAudioProcessTap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemAudioProcessTap.swift; sourceTree = "<group>"; };
 		AB001000 /* ScreenCaptureKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ScreenCaptureKit.framework; path = System/Library/Frameworks/ScreenCaptureKit.framework; sourceTree = SDKROOT; };
 		AB001100 /* DimmyCore+CallDetect.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DimmyCore+CallDetect.swift"; sourceTree = "<group>"; };
 		AB001101 /* CallDetectionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallDetectionManager.swift; sourceTree = "<group>"; };
@@ -306,6 +308,7 @@
 				AB000902 /* FileLoadToMeetingService.swift */,
 				AB000904 /* TelemetryBuckets.swift */,
 				AB000905 /* SystemAudioCaptureService.swift */,
+				AB001110 /* SystemAudioProcessTap.swift */,
 				AB001101 /* CallDetectionManager.swift */,
 			);
 			path = Services;
@@ -727,6 +730,7 @@
 				AA000609 /* WavPeaks.swift in Sources */,
 				AA000610 /* MeetingAmplitudeAGC.swift in Sources */,
 				AA000905 /* SystemAudioCaptureService.swift in Sources */,
+				AA001110 /* SystemAudioProcessTap.swift in Sources */,
 				AA001100 /* DimmyCore+CallDetect.swift in Sources */,
 				AA001101 /* CallDetectionManager.swift in Sources */,
 				AA001102 /* CallNudgeWindowController.swift in Sources */,

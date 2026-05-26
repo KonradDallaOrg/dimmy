@@ -6,6 +6,8 @@
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Dimmy needs microphone access to transcribe your voice.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Dimmy captures system audio to transcribe other participants in your meetings.</string>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Dimmy uses Apple Events to paste transcribed text into the active application.</string>
 	<!--
