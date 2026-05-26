@@ -214,6 +214,82 @@ final class MeetingPostProcessServiceTests: XCTestCase {
         XCTAssertEqual(sections["TLDR"], md)
     }
 
+    // MARK: - Title (H1) round-trip — meta.json::title fix (Win parity)
+    //
+    // Regression coverage for the Mac bug where meeting recaps never set
+    // a title: the prompt didn't ask for a `# Title` H1, and the parser/
+    // builder dropped it, so recap.md started with `## Context` →
+    // Rust parse_recap_title found no H1 → meta.json had no title →
+    // the UI showed the raw meeting id. Fixed by porting Win's
+    // __TITLE__ sentinel handling.
+
+    func testPromptInstructsLeadingTitleH1() {
+        let prompt = MeetingPostProcessService.buildStructuredRecapPrompt(transcript: "x")
+        XCTAssertTrue(prompt.contains("# Title"),
+                      "Prompt must instruct the LLM to emit a `# Title` H1 first")
+        XCTAssertTrue(prompt.lowercased().contains("very first line"),
+                      "Prompt must stress the H1 is the very first line")
+    }
+
+    func testParseCapturesLeadingTitleH1() {
+        let raw = """
+        # Pricing Strategy Sync
+
+        ===TLDR===
+        Agreed on three tiers.
+        """
+        let sections = MeetingPostProcessService.parseStructuredRecap(raw)
+        XCTAssertEqual(sections["__TITLE__"], "Pricing Strategy Sync")
+        XCTAssertEqual(sections["TLDR"], "Agreed on three tiers.")
+    }
+
+    func testParseDoesNotMistakeH2HeadingForTitle() {
+        // A `## Context` heading must NOT be captured as the title.
+        let raw = """
+        ## Context
+        Some preamble the model leaked.
+
+        ===TLDR===
+        Body.
+        """
+        let sections = MeetingPostProcessService.parseStructuredRecap(raw)
+        XCTAssertNil(sections["__TITLE__"],
+                     "## H2 headings must not be captured as the title")
+    }
+
+    func testBuildReEmitsTitleAsFirstLine() {
+        let sections = ["__TITLE__": "Q3 Roadmap Review", "TLDR": "body"]
+        let md = MeetingPostProcessService.buildMarkdownFromSections(sections)
+        XCTAssertTrue(md.hasPrefix("# Q3 Roadmap Review"),
+                      "recap.md must start with the `# Title` H1 so Rust parse_recap_title finds it: \(md.prefix(40))")
+    }
+
+    func testTitleSurvivesParseThenBuild() {
+        // End-to-end: a well-formed LLM response → recap.md whose first
+        // line is the `# Title` H1 (what Rust persists to meta.json).
+        let raw = """
+        # Kickoff: Mobile App
+
+        ===CONTEXT===
+        Two-person kickoff.
+
+        ===TLDR===
+        Scope agreed.
+        """
+        let sections = MeetingPostProcessService.parseStructuredRecap(raw)
+        let md = MeetingPostProcessService.buildMarkdownFromSections(sections)
+        let firstLine = md.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? ""
+        XCTAssertEqual(firstLine, "# Kickoff: Mobile App")
+    }
+
+    func testBuildOmitsTitleLineWhenNoTitleCaptured() {
+        // No __TITLE__ → no leading H1 (don't emit a bare "# ").
+        let md = MeetingPostProcessService.buildMarkdownFromSections(["TLDR": "body"])
+        XCTAssertFalse(md.hasPrefix("# "),
+                       "Without a captured title there must be no leading H1: \(md.prefix(20))")
+        XCTAssertTrue(md.hasPrefix("## TL;DR"))
+    }
+
     // MARK: - Section key set integrity
 
     func testSectionKeysAreUnique() {
