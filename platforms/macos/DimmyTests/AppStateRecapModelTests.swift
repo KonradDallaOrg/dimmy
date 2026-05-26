@@ -89,38 +89,12 @@ final class AppStateRecapModelTests: XCTestCase {
         XCTAssertEqual(state.recapModelOverride, "gpt-4o")
     }
 
-    // MARK: - recap_provider (vendor enum override)
-
-    func testApplyConfigPicksUpRecapProvider() {
-        let state = AppState.shared
-        let saved = state.recapProvider
-        defer { state.recapProvider = saved }
-
-        state.recapProvider = ""
-        state.loadFromRustConfig(["recap_provider": "gemini"])
-        XCTAssertEqual(state.recapProvider, "gemini")
-    }
-
-    func testToRustConfigEmitsRecapProvider() {
-        let state = AppState.shared
-        let saved = state.recapProvider
-        defer { state.recapProvider = saved }
-
-        state.recapProvider = "anthropic"
-        let cfg = state.toRustConfig(includeRecap: true)
-        XCTAssertEqual(cfg["recap_provider"] as? String, "anthropic")
-    }
-
-    func testToRustConfigDefaultOmitsRecapProvider() {
-        let state = AppState.shared
-        let saved = state.recapProvider
-        defer { state.recapProvider = saved }
-
-        state.recapProvider = "openai"
-        let cfg = state.toRustConfig()
-        XCTAssertNil(cfg["recap_provider"],
-                     "recap_provider must be omitted from default toRustConfig — wipe protection")
-    }
+    // NOTE: the former `recap_provider` round-trip tests were removed —
+    // since 192c5d7c the recap vendor is DERIVED from the chosen model
+    // (`MacOutputPage.recapProviderTag`), not a stored `AppState`
+    // property, so there's nothing to round-trip. They referenced the
+    // deleted `AppState.recapProvider` and broke the whole suite's
+    // compilation. `recap_model_override` (above) is the persisted field.
 
     // MARK: - LLM identity wipe protection
 
