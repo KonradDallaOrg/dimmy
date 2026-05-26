@@ -599,8 +599,14 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Cache NuGet packages
-        uses: actions/cache@v5
+      # Restore-only + explicit best-effort save (see release.yml for the
+      # rationale): the combined actions/cache post-save tars
+      # ~/.nuget/packages at teardown while build-server processes still
+      # hold Windows file locks → tar fails → job red after the binary is
+      # already built. Save right after restore instead, continue-on-error.
+      - name: Restore NuGet cache
+        id: nuget-cache
+        uses: actions/cache/restore@v5
         with:
           path: ~/.nuget/packages
           key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
@@ -609,6 +615,14 @@ jobs:
       - name: Restore NuGet packages
         working-directory: platforms/windows/Dimmy.Windows
         run: dotnet restore
+
+      - name: Save NuGet cache
+        if: steps.nuget-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
 
       - name: Locate VS AppxPackage tools (for MrtCore PRI generation)
         shell: pwsh
