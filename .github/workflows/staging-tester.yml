@@ -372,7 +372,7 @@ jobs:
           /usr/bin/ditto -c -k --keepParent "$APP_PATH" "$ZIP"
           xcrun notarytool submit "$ZIP" \
             --key "$KEY_FILE" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" \
-            --wait --timeout 30m
+            --wait --timeout 2h
           # Staple the ticket onto the .app so post-update launches and
           # offline Gatekeeper checks succeed without a network round-trip.
           xcrun stapler staple "$APP_PATH"
@@ -427,7 +427,7 @@ jobs:
           DMG="build/Dimmy-Staging-macos-arm64.dmg"
           xcrun notarytool submit "$DMG" \
             --key "$KEY_FILE" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" \
-            --wait --timeout 30m
+            --wait --timeout 2h
           xcrun stapler staple "$DMG"
           xcrun stapler validate "$DMG"
 
