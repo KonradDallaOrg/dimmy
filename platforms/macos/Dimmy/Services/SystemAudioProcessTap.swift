@@ -100,6 +100,8 @@ final class SystemAudioProcessTap {
         // untouched) and drift-compensate the tap against that clock; this
         // is the configuration Apple's own tap sample uses.
         let outputUID = Self.defaultOutputDeviceUID()
+        NSLog("[SystemAudio/tap] tap format rate=%d ch=%d; clock anchor outputUID=%@",
+              sampleRate, channelCount, outputUID ?? "<none>")
         let aggregateUID = UUID().uuidString
         var aggregateDescription: [String: Any] = [
             kAudioAggregateDeviceNameKey: "Dimmy System Audio Tap",
@@ -139,7 +141,19 @@ final class SystemAudioProcessTap {
         var newProcID: AudioDeviceIOProcID?
         err = AudioDeviceCreateIOProcIDWithBlock(&newProcID, aggregateID, ioQueue) {
             _, inInputData, _, _, _ in
-            receivedFlag.withLock { $0 = true }
+            // Latch + detect the first fire so we can log "capture is live"
+            // exactly once. A tap that's denied the audio-capture grant
+            // never reaches this block, so the absence of this log line in
+            // dimmy.log is the signature of a missing permission.
+            let firstFire = receivedFlag.withLock { (state: inout Bool) -> Bool in
+                let wasSet = state
+                state = true
+                return !wasSet
+            }
+            if firstFire {
+                NSLog("[SystemAudio/tap] IO proc fired (first frame, %d samples) — capture is live",
+                      Self.firstBufferSampleCount(inInputData))
+            }
             Self.forward(inInputData, channels: channels, rate: rate, to: handler)
         }
         guard err == noErr, let procID = newProcID else {
@@ -166,6 +180,17 @@ final class SystemAudioProcessTap {
         teardown()
         running = false
         NSLog("[SystemAudio/tap] stopped")
+    }
+
+    /// Sample count in the first buffer of an IO proc's input list.
+    /// Used only by the one-time "capture is live" diagnostic log.
+    private static func firstBufferSampleCount(
+        _ inInputData: UnsafePointer<AudioBufferList>
+    ) -> Int {
+        let abl = UnsafeMutableAudioBufferListPointer(
+            UnsafeMutablePointer(mutating: inInputData))
+        guard let buffer = abl.first else { return 0 }
+        return Int(buffer.mDataByteSize) / MemoryLayout<Float>.size
     }
 
     // MARK: - Realtime forwarding
