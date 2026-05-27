@@ -91,6 +91,14 @@ final class MeetingViewModel: ObservableObject {
     // ── Toast (blocked-during-recording warning) ───────────────────
     @Published var toastMessage: String?
 
+    /// Persistent (non-auto-dismissing) banner shown when the meeting is
+    /// recording but the Core Audio tap never delivered a frame — i.e. the
+    /// system-audio-recording TCC grant is missing. Unlike `toastMessage`
+    /// this stays up with an "Open System Settings" CTA so the user can
+    /// actually act on it (the 2.5 s toast vanished before they could).
+    /// Cleared on stop / next start / once system audio starts flowing.
+    @Published var systemAudioPermissionNeeded: Bool = false
+
     /// Combine bag for the live-transcript pipe from AppState.
     /// DimmyCore.handleEvent writes every `meeting_chunk` event's
     /// `line` into `AppState.meetingLiveTranscript`; we mirror that
@@ -332,6 +340,7 @@ final class MeetingViewModel: ObservableObject {
         doneNotes = ""
         doneSelectedTab = .recap
         browsingPastMeeting = false
+        systemAudioPermissionNeeded = false
         isPaused = false
         // Fresh pause-clock state for the new meeting.
         pausedAccumulator = 0
@@ -364,18 +373,21 @@ final class MeetingViewModel: ObservableObject {
                 Task {
                     let ok = await SystemAudioCaptureService.shared.start()
                     if !ok {
-                        self.showToast("System audio unavailable — mic only. Grant Dimmy “Audio Recording” in System Settings → Privacy & Security.")
+                        self.systemAudioPermissionNeeded = true
                         return
                     }
                     // The Core Audio tap is created even when the audio-
                     // recording grant is missing; it just never delivers
-                    // frames. If none arrive shortly, guide the user instead
-                    // of silently recording mic-only. Guard on sessionId so a
-                    // stopped/replaced meeting can't fire a stale toast.
+                    // frames. If none arrive shortly, raise a persistent
+                    // banner (with an Open-Settings CTA) instead of silently
+                    // recording mic-only. Guard on sessionId so a
+                    // stopped/replaced meeting can't fire a stale banner.
                     try? await Task.sleep(nanoseconds: 1_800_000_000)
                     guard self.sessionId == id else { return }
-                    if !SystemAudioCaptureService.shared.isCapturingSystemAudio {
-                        self.showToast("System audio not captured — grant Dimmy “Audio Recording” in System Settings → Privacy & Security, then restart the meeting.")
+                    if SystemAudioCaptureService.shared.isCapturingSystemAudio {
+                        self.systemAudioPermissionNeeded = false
+                    } else {
+                        self.systemAudioPermissionNeeded = true
                     }
                 }
             }
@@ -416,6 +428,7 @@ final class MeetingViewModel: ObservableObject {
         statusLabel = "Stopping & finalising…"
         subStatusLabel = ""
         stopRecordingPolling()
+        systemAudioPermissionNeeded = false
         // Snapshot the live transcript into the Done buffer so the
         // chunks the user just saw stay visible while the recap
         // pipeline runs. AppState.meetingLiveTranscript will be
@@ -963,6 +976,26 @@ final class MeetingViewModel: ObservableObject {
             return
         }
         try? doneNotes.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    // MARK: - System-audio permission banner
+
+    /// Deep-link to System Settings → Privacy & Security so the user can
+    /// grant Dimmy the system-audio-recording permission the Core Audio
+    /// tap needs. We open the Privacy & Security root rather than a
+    /// specific anchor because the audio-capture (process-tap) toggle's
+    /// pane name is not stable across macOS 14/15; the banner copy tells
+    /// the user what to look for.
+    func openSystemAudioSettings() {
+        guard let url = URL(
+            string: "x-apple.systempreferences:com.apple.preference.security?Privacy"
+        ) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    /// User-dismiss for the persistent permission banner.
+    func dismissSystemAudioBanner() {
+        systemAudioPermissionNeeded = false
     }
 
     // MARK: - Toast

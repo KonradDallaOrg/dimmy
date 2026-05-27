@@ -30,6 +30,9 @@ struct MeetingView: View {
             if vm.phase == .recording && vm.browsingPastMeeting {
                 liveRecordingBanner
             }
+            if vm.systemAudioPermissionNeeded {
+                systemAudioPermissionBanner
+            }
             HStack(spacing: 0) {
                 MeetingSidebar(vm: vm)
                 mainPanel
@@ -131,6 +134,58 @@ struct MeetingView: View {
     // Back-to-live button (also bound to ⌘L). The banner spans the
     // full window width so the user can't miss it even with the
     // sidebar collapsed.
+    /// Persistent banner shown while recording when the Core Audio tap
+    /// delivered no frames — i.e. Dimmy lacks the system-audio-recording
+    /// permission. Stays up (no auto-dismiss) with an Open-Settings CTA so
+    /// the user can actually grant it, then restart the meeting. Replaces
+    /// the old 2.5 s toast that vanished before the user could react.
+    private var systemAudioPermissionBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "speaker.slash.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("System audio isn’t being captured")
+                    .font(.system(size: 12, weight: .semibold))
+                Text("Allow Dimmy to record this computer’s audio in System Settings → Privacy & Security, then restart the meeting. (Only mic is being recorded.)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.macTextSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            Button(action: { vm.openSystemAudioSettings() }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "gearshape.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text("Open System Settings")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .padding(.horizontal, 4)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.orange)
+            .help("Open Privacy & Security so you can grant audio recording")
+            Button(action: { vm.dismissSystemAudioBanner() }) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .buttonStyle(.borderless)
+            .help("Dismiss")
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 10)
+        .background(
+            Color.orange
+                .opacity(0.08)
+                .overlay(
+                    Rectangle()
+                        .fill(Color.orange.opacity(0.35))
+                        .frame(height: 0.5),
+                    alignment: .bottom
+                )
+        )
+    }
+
     private var liveRecordingBanner: some View {
         HStack(spacing: 10) {
             Circle()
