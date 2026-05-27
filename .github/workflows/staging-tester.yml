@@ -332,9 +332,27 @@ jobs:
           # 1. Nested dylibs (libllama/libggml*, libonnxruntime).
           while IFS= read -r -d '' f; do sign "$f"; done \
             < <(find "$APP_PATH/Contents/Frameworks" -type f -name '*.dylib' -print0 2>/dev/null)
-          # 2. Helper binary.
+          # 2. Sparkle ships nested helpers (Updater.app, Autoupdate, and the
+          #    Downloader/Installer XPC services) that xcodebuild does NOT
+          #    re-sign with our identity + secure timestamp — notarization
+          #    rejects exactly those four. Sign them inside-out, then re-seal
+          #    the framework. Glob the version dir (currently "B", skip the
+          #    "Current" symlink) so a Sparkle bump doesn't break this. This is
+          #    the official Sparkle recipe for non-sandboxed apps (no
+          #    per-helper entitlements needed). Burned on v0.6.53-staging.5.
+          SPK="$APP_PATH/Contents/Frameworks/Sparkle.framework"
+          if [ -d "$SPK" ]; then
+            for vd in "$SPK"/Versions/*/; do
+              case "$vd" in */Current/) continue;; esac
+              for item in "$vd"XPCServices/*.xpc "$vd"Autoupdate "$vd"Updater.app; do
+                [ -e "$item" ] && sign "$item"
+              done
+            done
+            sign "$SPK"
+          fi
+          # 3. Helper binary.
           [ -f "$APP_PATH/Contents/Resources/dimmy-mcp" ] && sign "$APP_PATH/Contents/Resources/dimmy-mcp"
-          # 3. Re-seal the app bundle last, with entitlements.
+          # 4. Re-seal the app bundle last, with entitlements.
           sign --entitlements "$ENTITLEMENTS" "$APP_PATH"
           codesign --verify --deep --strict --verbose=2 "$APP_PATH"
           echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
