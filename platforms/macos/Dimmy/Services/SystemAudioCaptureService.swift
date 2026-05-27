@@ -66,20 +66,35 @@ final class SystemAudioCaptureService: NSObject {
 
         // Prefer the Core Audio process tap — audio-only permission, no
         // screen-recording / media-library prompts. Falls through to
-        // ScreenCaptureKit only when the tap can't start (older OS, denied
-        // grant, or no default output device).
+        // ScreenCaptureKit on:
+        //   1. older OS / no default output / HAL refusal — `tap.start()` returns false
+        //   2. macOS 26 (Tahoe) on ad-hoc signed bundles — `tap.start()` returns true
+        //      (HAL accepts every call) but the IO proc never fires because tccd
+        //      silently denies `kTCCServiceAudioCapture` to non-Developer-ID apps.
+        //      Detect this by waiting briefly for the first frame and falling back
+        //      when nothing arrives.
         if #available(macOS 14.4, *) {
             let tap = SystemAudioProcessTap()
             tap.onSamples = { ptr, count, rate in
                 _ = dimmy_push_loopback_audio(ptr, Int32(count), rate)
             }
             if tap.start() {
-                processTap = tap
-                isRunning = true
-                NSLog("[SystemAudio] capture via Core Audio process tap")
-                return true
+                // Wait up to 1.5 s for the IO proc to deliver any frame. If
+                // it does, the tap is live; if not, tear it down and let
+                // SCKit (Screen Recording TCC, still works ad-hoc on Tahoe)
+                // take over.
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                if tap.hasReceivedAudio {
+                    processTap = tap
+                    isRunning = true
+                    NSLog("[SystemAudio] capture via Core Audio process tap")
+                    return true
+                }
+                tap.stop()
+                NSLog("[SystemAudio] tap created but IO proc never fired (likely Tahoe ad-hoc + missing AudioCapture grant) → ScreenCaptureKit fallback")
+            } else {
+                NSLog("[SystemAudio] process tap unavailable → ScreenCaptureKit fallback")
             }
-            NSLog("[SystemAudio] process tap unavailable → ScreenCaptureKit fallback")
         }
 
         return await startWithScreenCapture()
