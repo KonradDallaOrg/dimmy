@@ -324,6 +324,58 @@ impl MeetingSession {
     }
 }
 
+/// Read `buf[start..end]`, zero-filling any portion past `buf.len()`.
+/// Always returns exactly `end - start` samples so the meeting's three WAV
+/// writers stay in lockstep even when one source has no samples for this
+/// window (e.g. the mic track on a microphone-less machine).
+fn slice_or_zeros(buf: &[f32], start: usize, end: usize) -> Vec<f32> {
+    assert!(
+        start <= end,
+        "slice_or_zeros: start {} > end {}",
+        start,
+        end
+    );
+    let win = end - start;
+    let mut out = Vec::with_capacity(win);
+    let avail_end = end.min(buf.len());
+    if start < avail_end {
+        out.extend_from_slice(&buf[start..avail_end]);
+    }
+    out.resize(win, 0.0);
+    assert_eq!(
+        out.len(),
+        win,
+        "slice_or_zeros postcondition: window length"
+    );
+    out
+}
+
+/// One-time decision: should the meeting clock off the SECONDARY (system)
+/// track instead of the primary (mic)? True only when the mic has produced
+/// NOTHING yet AND the system track has already accumulated `mic_grace`
+/// samples — i.e. there is definitively no microphone (a present mic always
+/// fills the primary buffer within a fraction of a second of capture start).
+/// The caller latches the result so a mic that starts a beat late still
+/// clocks on the mic (no samples lost) and the clock never flip-flops.
+fn no_mic_detected(primary_len: usize, secondary_len: usize, mic_grace: usize) -> bool {
+    primary_len == 0 && secondary_len >= mic_grace
+}
+
+/// Mix two equal-length per-track windows into the meeting's `audio.wav`
+/// stream: `mic[i] + system[i]` clamped to [-1, 1]. Both inputs come from
+/// `slice_or_zeros`, so they're guaranteed equal length.
+fn mix_windows(mic: &[f32], system: &[f32]) -> Vec<f32> {
+    assert_eq!(
+        mic.len(),
+        system.len(),
+        "mix_windows: mic/system window length mismatch"
+    );
+    mic.iter()
+        .zip(system.iter())
+        .map(|(&m, &s)| (m + s).clamp(-1.0, 1.0))
+        .collect()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn worker_loop(
     audio_buffer: Arc<Mutex<Vec<f32>>>,
@@ -506,50 +558,34 @@ fn worker_loop(
             }
         };
 
-    let read_synth = |start: usize,
-                      end: usize,
-                      audio_buffer: &Arc<Mutex<Vec<f32>>>,
-                      audio_buffer_secondary: &Arc<Mutex<Vec<f32>>>|
-     -> Vec<f32> {
-        let primary = match audio_buffer.lock() {
-            Ok(b) if end <= b.len() => b[start..end].to_vec(),
-            _ => Vec::new(),
-        };
-        if !mix_active {
-            return primary;
+    // Mic-presence latch. The meeting clock is normally driven by the
+    // PRIMARY (mic) buffer length — every WAV + STT cursor advances against
+    // it. But a machine with NO microphone (no input device: the cpal
+    // worker opens no stream, so `audio_buffer` never grows) would then
+    // record NOTHING, silently discarding the system audio the tap IS
+    // capturing into `audio_buffer_secondary`. So if the mic has produced
+    // nothing after ~2 s of system-only audio, latch the clock onto the
+    // secondary track (mic track becomes pure silence). Decided exactly
+    // once: a mic that starts a beat late still clocks on the mic (the
+    // grace window is generous), and the clock never flip-flops. On
+    // Windows the loopback IS the primary device when there's no mic, so
+    // `audio_buffer` always grows and this never triggers — no regression.
+    let mic_grace_samples = (device_sample_rate as usize) * 2;
+    let mut clock_decided = false;
+    let mut clock_on_secondary = false;
+    // Effective synth-stream length up to which we can drain this tick:
+    // the secondary (system) buffer once the no-mic latch flipped, the
+    // primary (mic) buffer otherwise.
+    let effective_len = |clock_on_secondary: bool,
+                         audio_buffer: &Arc<Mutex<Vec<f32>>>,
+                         audio_buffer_secondary: &Arc<Mutex<Vec<f32>>>|
+     -> Option<usize> {
+        if clock_on_secondary {
+            audio_buffer_secondary.lock().ok().map(|b| b.len())
+        } else {
+            audio_buffer.lock().ok().map(|b| b.len())
         }
-        // Both buffers are aligned: secondary[i] = same wall-time
-        // instant as primary[i] (zero-padded where loopback was
-        // dormant). Read the same window from secondary; if for
-        // some reason it's shorter (race with align_secondary that
-        // hasn't run yet), missing tail = zeros.
-        let secondary = match audio_buffer_secondary.lock() {
-            Ok(b) => {
-                let take_end = end.min(b.len());
-                if start < take_end {
-                    b[start..take_end].to_vec()
-                } else {
-                    Vec::new()
-                }
-            }
-            _ => Vec::new(),
-        };
-        let n = primary.len();
-        let mut out = Vec::with_capacity(n);
-        for (i, &p) in primary.iter().enumerate() {
-            let s = secondary.get(i).copied().unwrap_or(0.0);
-            out.push((p + s).clamp(-1.0, 1.0));
-        }
-        out
     };
-
-    // Snapshot the primary buffer length we can safely write up to.
-    // No coupling with secondary because the alignment invariant
-    // (secondary.len() >= primary.len() after align_secondary) is
-    // guaranteed by every worker tick.
-    let synth_len = |audio_buffer: &Arc<Mutex<Vec<f32>>>,
-                     _audio_buffer_secondary: &Arc<Mutex<Vec<f32>>>|
-     -> Option<usize> { audio_buffer.lock().ok().map(|b| b.len()) };
 
     // Track pause transitions so we can both (a) skip the paused
     // window when writing/transcribing and (b) emit a [paused N s]
@@ -565,6 +601,23 @@ fn worker_loop(
         // the loopback buffer up to the mic buffer's length, so
         // every WAV cursor we maintain sees a time-coherent pair.
         align_secondary(&audio_buffer, &audio_buffer_secondary);
+
+        // Decide the clock source once (see mic-presence latch above).
+        if mix_active && !clock_decided {
+            let p_len = audio_buffer.lock().map(|b| b.len()).unwrap_or(0);
+            if p_len > 0 {
+                clock_decided = true; // mic present → primary clock (default path)
+            } else {
+                let s_len = audio_buffer_secondary.lock().map(|b| b.len()).unwrap_or(0);
+                if no_mic_detected(p_len, s_len, mic_grace_samples) {
+                    clock_on_secondary = true;
+                    clock_decided = true;
+                    crate::log(
+                        "[Meeting] no microphone detected — clocking off system audio (mic track will be silent)",
+                    );
+                }
+            }
+        }
 
         // Pause gate. While paused: cpal is still filling the audio
         // buffers (we don't bounce the streams — that would race with
@@ -594,7 +647,8 @@ fn worker_loop(
                 .map(|t| t.elapsed().as_millis())
                 .unwrap_or(0);
             pause_started_at = None;
-            let snap = synth_len(&audio_buffer, &audio_buffer_secondary).unwrap_or_default();
+            let snap = effective_len(clock_on_secondary, &audio_buffer, &audio_buffer_secondary)
+                .unwrap_or_default();
             crate::log(&format!(
                 "[Meeting] {}{} ms — skipping {} mic-rate samples",
                 if cancelled {
@@ -619,11 +673,13 @@ fn worker_loop(
         }
 
         // Take a snapshot of the SYNCED stream length up to which we'll
-        // process this iteration.
-        let buf_len_now = match synth_len(&audio_buffer, &audio_buffer_secondary) {
-            Some(n) => n,
-            None => continue,
-        };
+        // process this iteration (mic clock by default, system clock once
+        // the no-mic latch flipped).
+        let buf_len_now =
+            match effective_len(clock_on_secondary, &audio_buffer, &audio_buffer_secondary) {
+                Some(n) => n,
+                None => continue,
+            };
 
         // Stream new samples into the WAV files at NATIVE sample rate
         // (no downsample). Three writers fan out:
@@ -631,30 +687,31 @@ fn worker_loop(
         //   audio_mic.wav     = primary buffer (cleaned mic post-AEC)
         //   audio_system.wav  = secondary buffer (raw loopback) — Mix only
         if buf_len_now > samples_written {
-            let new_synth = read_synth(
-                samples_written,
-                buf_len_now,
-                &audio_buffer,
-                &audio_buffer_secondary,
-            );
-            // Per-track slices read straight from each buffer (no mixing).
-            // mic indices are at primary's rate (= device_sample_rate).
-            // system indices are at secondary's rate (= system_sample_rate)
-            // and may differ by `rate_ratio` from mic indices when devices
-            // run at different native rates.
+            // Per-track windows for this tick. `slice_or_zeros` copies ONLY
+            // the [samples_written, buf_len_now] window (not the whole
+            // buffer) and zero-fills any short tail, so all three vecs are
+            // EXACTLY that window long and the WAV writers stay in lockstep.
+            // With a mic present this is byte-identical to the old read
+            // (primary[w], secondary[w], their clamped sum); with no mic the
+            // mic window is silence and the mix IS the system audio. Each
+            // buffer is locked once, briefly.
+            let win = buf_len_now - samples_written;
             let new_mic: Vec<f32> = match audio_buffer.lock() {
-                Ok(b) if buf_len_now <= b.len() => b[samples_written..buf_len_now].to_vec(),
-                _ => Vec::new(),
+                Ok(b) => slice_or_zeros(&b, samples_written, buf_len_now),
+                Err(_) => vec![0.0; win],
             };
             let new_system: Vec<f32> = if mix_active {
-                // Both buffers are aligned 1:1. Read the same window
-                // from the secondary as we did from the primary.
                 match audio_buffer_secondary.lock() {
-                    Ok(b) if buf_len_now <= b.len() => b[samples_written..buf_len_now].to_vec(),
-                    _ => Vec::new(),
+                    Ok(b) => slice_or_zeros(&b, samples_written, buf_len_now),
+                    Err(_) => vec![0.0; win],
                 }
             } else {
                 Vec::new()
+            };
+            let new_synth: Vec<f32> = if mix_active {
+                mix_windows(&new_mic, &new_system)
+            } else {
+                new_mic.clone()
             };
 
             // Helper: write an f32 buffer to a hound int16 WAV writer.
@@ -1194,6 +1251,108 @@ pub fn list_orphans() -> Vec<serde_json::Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── No-mic system-audio recording (mic-clock-driven worker fix) ──
+
+    #[test]
+    fn slice_or_zeros_exact_window_when_in_bounds() {
+        let buf = [1.0_f32, 2.0, 3.0, 4.0];
+        assert_eq!(slice_or_zeros(&buf, 1, 3), vec![2.0, 3.0]);
+        assert_eq!(slice_or_zeros(&buf, 0, 4), vec![1.0, 2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn slice_or_zeros_zero_fills_short_tail() {
+        let buf = [1.0_f32, 2.0, 3.0];
+        // Window extends past the buffer → real samples then zeros.
+        assert_eq!(slice_or_zeros(&buf, 1, 5), vec![2.0, 3.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn slice_or_zeros_all_zeros_when_buffer_empty() {
+        // The mic-less case: primary buffer is empty, the window must still
+        // come back full-length (all silence) so the WAV writers stay in
+        // lockstep with the system track.
+        let empty: [f32; 0] = [];
+        assert_eq!(slice_or_zeros(&empty, 0, 3), vec![0.0, 0.0, 0.0]);
+        // Start beyond a non-empty buffer → all zeros too.
+        let buf = [1.0_f32, 2.0];
+        assert_eq!(slice_or_zeros(&buf, 5, 8), vec![0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn slice_or_zeros_empty_window() {
+        let buf = [1.0_f32, 2.0, 3.0];
+        assert_eq!(slice_or_zeros(&buf, 2, 2), Vec::<f32>::new());
+    }
+
+    #[test]
+    fn no_mic_detected_only_when_primary_empty_and_grace_met() {
+        // Mic present (primary grew) → never switch to the secondary clock.
+        assert!(!no_mic_detected(1, 1_000_000, 96_000));
+        // Mic empty but not enough system audio yet → wait (mic may be late).
+        assert!(!no_mic_detected(0, 95_999, 96_000));
+        // Mic empty AND system has crossed the grace window → no mic.
+        assert!(no_mic_detected(0, 96_000, 96_000));
+        assert!(no_mic_detected(0, 200_000, 96_000));
+    }
+
+    #[test]
+    fn mix_windows_sums_and_clamps() {
+        let mic = [0.5_f32, -0.5, 0.8, -0.8];
+        let sys = [0.25_f32, -0.25, 0.8, -0.8];
+        // 0.8+0.8=1.6 → clamps to 1.0; -1.6 → -1.0.
+        assert_eq!(mix_windows(&mic, &sys), vec![0.75, -0.75, 1.0, -1.0]);
+    }
+
+    #[test]
+    fn mix_windows_no_mic_equals_system() {
+        // The fix's core promise: with the mic track all-silence, the mix
+        // IS the system audio (so a mic-less meeting records the call).
+        let mic = [0.0_f32, 0.0, 0.0];
+        let sys = [0.3_f32, -0.4, 0.5];
+        assert_eq!(mix_windows(&mic, &sys), vec![0.3, -0.4, 0.5]);
+    }
+
+    #[test]
+    fn no_mic_windows_stay_in_lockstep() {
+        // End-to-end of the per-tick windowing for a mic-less machine:
+        // empty primary, growing secondary. All three WAV windows must be
+        // the SAME length (else the .wav files desync), mic = silence,
+        // mix = system.
+        let primary: [f32; 0] = [];
+        let secondary = [0.1_f32, 0.2, 0.3, 0.4, 0.5];
+        let (start, end) = (1usize, 4usize);
+        let new_mic = slice_or_zeros(&primary, start, end);
+        let new_system = slice_or_zeros(&secondary, start, end);
+        let new_synth = mix_windows(&new_mic, &new_system);
+        assert_eq!(new_mic.len(), end - start);
+        assert_eq!(new_system.len(), end - start);
+        assert_eq!(new_synth.len(), end - start);
+        assert_eq!(new_mic, vec![0.0, 0.0, 0.0]);
+        assert_eq!(new_system, vec![0.2, 0.3, 0.4]);
+        assert_eq!(new_synth, vec![0.2, 0.3, 0.4]);
+    }
+
+    #[test]
+    fn mic_present_windows_match_legacy_read() {
+        // Regression guard: when a mic IS present (primary == secondary
+        // length after align), the windows equal the pre-fix behaviour —
+        // exact primary slice, exact secondary slice, clamped sum.
+        let primary = [0.1_f32, 0.2, 0.3, 0.4];
+        let secondary = [0.05_f32, 0.05, 0.05, 0.05];
+        let (start, end) = (1usize, 4usize);
+        let new_mic = slice_or_zeros(&primary, start, end);
+        let new_system = slice_or_zeros(&secondary, start, end);
+        let new_synth = mix_windows(&new_mic, &new_system);
+        assert_eq!(new_mic, vec![0.2, 0.3, 0.4]);
+        assert_eq!(new_system, vec![0.05, 0.05, 0.05]);
+        let expected = [0.25_f32, 0.35, 0.45];
+        assert_eq!(new_synth.len(), expected.len());
+        for (got, want) in new_synth.iter().zip(expected.iter()) {
+            assert!((got - want).abs() < 1e-6, "got {got} want {want}");
+        }
+    }
 
     #[test]
     fn uuid_v4_format() {
