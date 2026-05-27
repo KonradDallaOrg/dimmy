@@ -4851,6 +4851,23 @@ public sealed partial class SettingsWindow : Window
     }
 
     private void SendFeedback_Click(object sender, RoutedEventArgs e)
+        => TrySendFeedback();
+
+    /// One-click "Enable & send": the previous attempt returned -2
+    /// (telemetry disabled). Turn sending on, then retry the same
+    /// message. The explicit click is the user's consent.
+    private void EnableAndSendFeedback_Click(object sender, RoutedEventArgs e)
+    {
+        try { DimmyNative.TelemetryEnabled = true; }
+        catch { }
+        EnableAndSendFeedbackBtn.Visibility = Visibility.Collapsed;
+        TrySendFeedback();
+    }
+
+    /// Send the feedback form and surface the REAL rc — no blanket
+    /// "Sent!". rc: 1 sent · 0 empty · -1 bad input · -2 disabled
+    /// (offer Enable &amp; send) · -3 not configured (dev build).
+    private void TrySendFeedback()
     {
         var message = FeedbackText.Text?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(message))
@@ -4862,16 +4879,36 @@ public sealed partial class SettingsWindow : Window
         var email = FeedbackEmail.Text?.Trim();
         if (string.IsNullOrWhiteSpace(email)) email = null;
 
+        int rc;
         try
         {
-            DimmyNative.CaptureFeedback(kind, message, email);
-            FeedbackStatus.Text = "Thanks! Feedback sent.";
-            FeedbackText.Text = string.Empty;
-            FeedbackEmail.Text = string.Empty;
+            rc = DimmyNative.CaptureFeedback(kind, message, email);
         }
         catch
         {
             FeedbackStatus.Text = "Couldn't send right now. Try again later.";
+            return;
+        }
+
+        switch (rc)
+        {
+            case 1:
+                FeedbackStatus.Text = "Thanks! Sent.";
+                FeedbackText.Text = string.Empty;
+                FeedbackEmail.Text = string.Empty;
+                EnableAndSendFeedbackBtn.Visibility = Visibility.Collapsed;
+                break;
+            case -2:
+                // Telemetry disabled — offer one-click enable + send.
+                FeedbackStatus.Text = "Feedback sending is off.";
+                EnableAndSendFeedbackBtn.Visibility = Visibility.Visible;
+                break;
+            case -3:
+                FeedbackStatus.Text = "Feedback isn't available in this build.";
+                break;
+            default:
+                FeedbackStatus.Text = "Couldn't send right now. Try again later.";
+                break;
         }
     }
 

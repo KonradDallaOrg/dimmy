@@ -2510,6 +2510,13 @@
                             Content="Send"
                             Click="SendFeedback_Click"
                             Style="{ThemeResource AccentButtonStyle}" />
+                    <!-- Shown only when a send returns "disabled" (rc -2):
+                         one click enables feedback sending + retries. -->
+                    <Button x:Name="EnableAndSendFeedbackBtn"
+                            Content="Enable &amp; send"
+                            Click="EnableAndSendFeedback_Click"
+                            Visibility="Collapsed"
+                            Style="{ThemeResource AccentButtonStyle}" />
                     <TextBlock x:Name="FeedbackStatus" FontSize="11"
                                VerticalAlignment="Center"
                                Foreground="{ThemeResource TextFillColorTertiaryBrush}" />

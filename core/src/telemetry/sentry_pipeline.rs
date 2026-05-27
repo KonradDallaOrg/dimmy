@@ -213,10 +213,16 @@ pub fn capture_error(_category: &str, _message: &str) {}
 /// 0.47, so we build the envelope by hand to avoid waiting on SDK
 /// support; once the SDK gains `capture_feedback`, this can be
 /// simplified.
+/// Returns a status the UI surfaces truthfully (no more blanket
+/// "Sent!"): `1` enqueued · `-2` user disabled telemetry · `-3` no DSN
+/// compiled in (dev/source build — feedback simply isn't configured).
 #[cfg(feature = "telemetry-sentry")]
-pub fn capture_feedback(kind: &str, message: &str, email: Option<&str>) {
-    if !is_enabled() || !has_compiled_dsn() {
-        return;
+pub fn capture_feedback(kind: &str, message: &str, email: Option<&str>) -> i32 {
+    if !has_compiled_dsn() {
+        return -3;
+    }
+    if !is_enabled() {
+        return -2;
     }
     let scrubbed = scrub_message(message);
 
@@ -224,7 +230,7 @@ pub fn capture_feedback(kind: &str, message: &str, email: Option<&str>) {
         Ok(d) => d,
         Err(e) => {
             crate::log(&format!("[sentry-feedback] DSN parse failed: {}", e));
-            return;
+            return -3;
         }
     };
 
@@ -240,10 +246,13 @@ pub fn capture_feedback(kind: &str, message: &str, email: Option<&str>) {
         env!("CARGO_PKG_VERSION"),
     );
     spawn_envelope_send(url, auth, envelope);
+    1
 }
 
 #[cfg(not(feature = "telemetry-sentry"))]
-pub fn capture_feedback(_kind: &str, _message: &str, _email: Option<&str>) {}
+pub fn capture_feedback(_kind: &str, _message: &str, _email: Option<&str>) -> i32 {
+    -3
+}
 
 /// Build a Sentry envelope (3 newline-separated JSON lines) carrying a
 /// single User Feedback v2 item. Mirrors what the JS browser SDK's
@@ -545,6 +554,17 @@ mod tests {
         init();
         init();
         // Without DSN this should be a clean no-op.
+    }
+
+    #[test]
+    fn capture_feedback_returns_status_not_blanket_ok() {
+        // Test builds compile with telemetry-sentry (default) but no
+        // DIMMY_SENTRY_DSN, so has_compiled_dsn() is false → the
+        // pipeline reports -3 ("not configured"), never a fake success.
+        // This is the contract the host UIs surface truthfully.
+        assert!(!has_compiled_dsn());
+        assert_eq!(capture_feedback("bug", "hello", None), -3);
+        assert_eq!(capture_feedback("general", "x", Some("a@b.c")), -3);
     }
 
     #[test]

@@ -11,6 +11,9 @@ struct MacPrivacyPage: View {
     @State private var feedbackText: String = ""
     @State private var feedbackEmail: String = ""
     @State private var feedbackStatus: String = ""
+    /// True after a send returned -2 (telemetry disabled) → show the
+    /// one-click "Enable & send" button.
+    @State private var feedbackNeedsEnable: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -205,6 +208,20 @@ struct MacPrivacyPage: View {
                         .buttonStyle(.borderedProminent)
                         .disabled(feedbackText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
+                        // Shown only after a send returned -2 (disabled):
+                        // one click enables sending + retries. Explicit
+                        // click = consent.
+                        if feedbackNeedsEnable {
+                            Button {
+                                DimmyCore.shared.telemetryEnabled = true
+                                feedbackNeedsEnable = false
+                                sendFeedback()
+                            } label: {
+                                Label("Enable & send", systemImage: "paperplane.fill")
+                            }
+                            .buttonStyle(.borderedProminent)
+                        }
+
                         if !feedbackStatus.isEmpty {
                             Text(feedbackStatus)
                                 .font(.system(size: 11))
@@ -221,17 +238,27 @@ struct MacPrivacyPage: View {
         let trimmed = feedbackText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let trimmedEmail = feedbackEmail.trimmingCharacters(in: .whitespacesAndNewlines)
-        let ok = DimmyCore.shared.captureFeedback(
+        let rc = DimmyCore.shared.captureFeedback(
             kind: feedbackKind,
             message: trimmed,
             email: trimmedEmail.isEmpty ? nil : trimmedEmail
         )
-        if ok {
-            feedbackStatus = "Thanks! Feedback sent."
+        switch rc {
+        case 1:
+            feedbackStatus = "Thanks! Sent."
             feedbackText = ""
             feedbackEmail = ""
-        } else {
+            feedbackNeedsEnable = false
+        case -2:
+            // Telemetry disabled — offer one-click enable + send.
+            feedbackStatus = "Feedback sending is off."
+            feedbackNeedsEnable = true
+        case -3:
+            feedbackStatus = "Feedback isn't available in this build."
+            feedbackNeedsEnable = false
+        default:
             feedbackStatus = "Couldn't send right now. Try again later."
+            feedbackNeedsEnable = false
         }
     }
 
