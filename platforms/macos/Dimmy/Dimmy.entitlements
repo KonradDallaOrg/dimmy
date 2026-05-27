@@ -6,5 +6,12 @@
 	<true/>
 	<key>com.apple.security.screencapture</key>
 	<true/>
+	<!-- Hardened runtime (required for Apple notarization) refuses to load
+	     dylibs not signed by the same Team ID. Dimmy dlopens bundled ML
+	     dylibs (libllama/libggml*, libonnxruntime) at runtime; this lets the
+	     notarized app load them. Inert on ad-hoc / non-hardened-runtime
+	     builds (entitlement only enforced under hardened runtime). -->
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
 </dict>
 </plist>
