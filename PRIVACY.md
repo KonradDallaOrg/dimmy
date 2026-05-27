@@ -97,6 +97,8 @@ We do **not** send: server name, hostname, username, environment variables (`PAT
 ### Feedback
 The **Settings → Send feedback** form goes to Sentry as a tagged message. The text you type is included verbatim. Email is optional and only included if you explicitly type it — we never auto-fill from anywhere.
 
+Sending feedback requires telemetry to be enabled (it shares the same Sentry channel). If you have telemetry turned off, the form tells you so and offers an **Enable & send** button — one click turns sending on and submits your message. Nothing is transmitted until you click. The app never shows a fake "sent" confirmation: if a build can't send (e.g. a dev build with no Sentry endpoint compiled in), it says so explicitly.
+
 ---
 
 ## What we never collect

@@ -6015,8 +6015,13 @@ pub extern "C" fn dimmy_telemetry_is_crash_enabled() -> c_int {
 ///   sanitisation. Null or empty → no-op (returns 0).
 /// `email_ptr`: optional. May be null. Empty/whitespace → not included.
 ///
-/// Returns 0 on success (best-effort: queued for send, no confirmation
-/// of delivery), or -1 on a precondition failure (e.g. invalid UTF-8).
+/// Returns a status the host UI surfaces truthfully (no blanket
+/// "Sent!"):
+///   `1`  enqueued for delivery (best-effort, no delivery confirmation)
+///   `0`  empty message — no-op
+///   `-1` precondition failure (invalid UTF-8)
+///   `-2` telemetry disabled by the user → host shows "enable & send"
+///   `-3` no Sentry DSN compiled in (dev / source build) — not available
 ///
 /// # Safety
 /// All non-null string pointers must be valid null-terminated UTF-8.
@@ -6031,7 +6036,8 @@ pub unsafe extern "C" fn dimmy_telemetry_capture_feedback(
     }
     let message = match CStr::from_ptr(message_ptr).to_str() {
         Ok(s) if !s.trim().is_empty() => s,
-        _ => return 0,
+        Ok(_) => return 0,   // empty → no-op
+        Err(_) => return -1, // invalid UTF-8 → precondition failure
     };
     let kind = if kind_ptr.is_null() {
         "general"
@@ -6050,8 +6056,7 @@ pub unsafe extern "C" fn dimmy_telemetry_capture_feedback(
             _ => None,
         }
     };
-    crate::telemetry::capture_feedback(kind, message, email);
-    0
+    crate::telemetry::capture_feedback(kind, message, email) as c_int
 }
 
 // ── Typed telemetry dispatcher (host-driven events) ──────────────

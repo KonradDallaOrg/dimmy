@@ -104,6 +104,8 @@ pub fn capture_error(category: &str, message: &str) {
 
 /// Capture user-submitted feedback. `kind` is `bug` / `feature` /
 /// `general`. `email` is optional, only included if the user typed it.
-pub fn capture_feedback(kind: &str, message: &str, email: Option<&str>) {
-    sentry_pipeline::capture_feedback(kind, message, email);
+/// Returns a status the UI surfaces truthfully: `1` enqueued · `-2`
+/// telemetry disabled by user · `-3` no DSN compiled in (dev build).
+pub fn capture_feedback(kind: &str, message: &str, email: Option<&str>) -> i32 {
+    sentry_pipeline::capture_feedback(kind, message, email)
 }

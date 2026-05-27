@@ -321,14 +321,16 @@ final class DimmyCore {
     }
 
     /// Send a user feedback message through the Rust telemetry pipeline.
-    /// Best-effort: returns true if the FFI accepted the call (queued for
-    /// send), false on a precondition error. Empty messages are no-ops.
+    /// Returns the raw FFI status so the UI can be truthful (no blanket
+    /// "Sent!"): `1` enqueued · `0` empty · `-1` bad input · `-2`
+    /// telemetry disabled (offer Enable & send) · `-3` no DSN compiled
+    /// in (dev build — not available).
     @discardableResult
-    func captureFeedback(kind: String, message: String, email: String?) -> Bool {
+    func captureFeedback(kind: String, message: String, email: String?) -> Int32 {
         guard !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return true  // matches Rust: empty feedback = silent no-op
+            return 0  // empty feedback = no-op
         }
-        let result = kind.withCString { kindPtr in
+        return kind.withCString { kindPtr in
             message.withCString { msgPtr in
                 if let email, !email.isEmpty {
                     return email.withCString { emailPtr in
@@ -338,7 +340,6 @@ final class DimmyCore {
                 return dimmy_telemetry_capture_feedback(kindPtr, msgPtr, nil)
             }
         }
-        return result == 0
     }
 
     // MARK: - Autostart
