@@ -211,9 +211,15 @@ struct MacPrivacyPage: View {
                         // Shown only after a send returned -2 (disabled):
                         // one click enables sending + retries. Explicit
                         // click = consent.
+                        //
+                        // Feedback rides the Sentry pipeline, gated by the
+                        // CRASH-reporting flag — NOT the analytics flag.
+                        // Flipping telemetryEnabled left the gate closed →
+                        // capture_feedback kept returning -2. Flip
+                        // crashReportingEnabled instead.
                         if feedbackNeedsEnable {
                             Button {
-                                DimmyCore.shared.telemetryEnabled = true
+                                DimmyCore.shared.crashReportingEnabled = true
                                 feedbackNeedsEnable = false
                                 sendFeedback()
                             } label: {
