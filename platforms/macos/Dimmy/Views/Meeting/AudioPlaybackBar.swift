@@ -314,13 +314,39 @@ final class AudioPlaybackModel: ObservableObject {
     private var player: AVAudioPlayer?
     private var timer: Timer?
     private var lastUrl: URL?
+    /// Tmp WAV produced by `dimmy_decode_audio_to_wav` when the mix
+    /// track on disk is Ogg/Vorbis (AVAudioPlayer doesn't decode Ogg
+    /// natively on macOS). Cleared in `stop()` so the tmp directory
+    /// doesn't accumulate one-shot decodes meeting after meeting.
+    private var tempDecodedWavURL: URL?
 
     func load(url: URL, micURL: URL? = nil, systemURL: URL? = nil, bucketCount: Int) {
         guard url != lastUrl else { return }
         stop()
         lastUrl = url
+        // Pick the URL we'll hand to AVAudioPlayer. For .ogg meetings
+        // (Mac after the gate flip) decode to a tmp WAV first; for .wav
+        // (older meetings + file-load) use the URL directly. The peaks
+        // path keeps the ORIGINAL URL — `WavPeaks.readPeaks` already
+        // routes .ogg through the FFI Symphonia decoder, so the waveform
+        // is correct independent of the playback codec.
+        let playbackURL: URL
+        if url.pathExtension.lowercased() == "ogg" {
+            let tmp = FileManager.default.temporaryDirectory
+                .appendingPathComponent("dimmy_ogg_play_\(UUID().uuidString).wav")
+            if DimmyCore.shared.decodeAudioToWav(source: url.path, destination: tmp.path) {
+                tempDecodedWavURL = tmp
+                playbackURL = tmp
+            } else {
+                // Decode failed → no playback, but waveform + transcript
+                // still work (the doc handover accepts this fallback).
+                playbackURL = url
+            }
+        } else {
+            playbackURL = url
+        }
         do {
-            let p = try AVAudioPlayer(contentsOf: url)
+            let p = try AVAudioPlayer(contentsOf: playbackURL)
             p.prepareToPlay()
             self.player = p
             self.duration = p.duration
@@ -380,6 +406,10 @@ final class AudioPlaybackModel: ObservableObject {
         peaksMic = []
         peaksSystem = []
         lastUrl = nil
+        if let tmp = tempDecodedWavURL {
+            try? FileManager.default.removeItem(at: tmp)
+            tempDecodedWavURL = nil
+        }
     }
 
     private func startTimer() {

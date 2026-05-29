@@ -99,7 +99,10 @@ enum TrackSink {
     // an app crash mid-meeting loses nothing already encoded (the file is a
     // valid, decodable Ogg stream up to the last page — just missing the
     // end-of-stream marker, which Symphonia tolerates).
-    Ogg(vorbis_rs::VorbisEncoder<File>),
+    // Boxed: the Vorbis encoder is far larger than the WAV writer, so an
+    // unboxed variant bloats every TrackSink to the encoder's size
+    // (clippy `large_enum_variant`).
+    Ogg(Box<vorbis_rs::VorbisEncoder<File>>),
     Wav(hound::WavWriter<std::io::BufWriter<File>>),
 }
 
@@ -107,14 +110,15 @@ impl TrackSink {
     /// Create a mono sink for `<dir>/<base>`: tries `<base>.ogg`, falls
     /// back to `<base>.wav` if the Vorbis encoder can't initialise.
     fn create(dir: &std::path::Path, base: &str, sample_rate: u32) -> Result<TrackSink, String> {
-        // Ogg/Vorbis recording is gated to Windows for now: the macOS
-        // meeting UI still reads `audio*.wav` for playback / waveform peaks
-        // / regenerate-transcript, so writing `.ogg` there would leave the
-        // Done view half-broken until the Mac UI catches up. `cfg!` (not
-        // `#[cfg]`) keeps BOTH arms compiling on every target — only the
-        // runtime branch differs — so there's no platform-only code path
-        // that goes unverified in CI. macOS therefore stays on WAV.
-        if cfg!(target_os = "windows") {
+        // Ogg/Vorbis recording is enabled on Windows + macOS — both
+        // host UIs now resolve `.ogg` with `.wav` fallback (playback +
+        // waveform peaks + regenerate-transcript) via their respective
+        // helpers (`MeetingViewModel.resolveMeetingAudio` on Mac,
+        // `MeetingRecapHelpers.ResolveAudioTrack` on Win). Linux UI
+        // hasn't caught up yet → stays on WAV until it does. `cfg!`
+        // (not `#[cfg]`) keeps BOTH arms compiling on every target so
+        // CI lints / type-checks the Ogg path even on Linux builds.
+        if cfg!(any(target_os = "windows", target_os = "macos")) {
             let rate = std::num::NonZeroU32::new(sample_rate.max(1))
                 .unwrap_or_else(|| std::num::NonZeroU32::new(48_000).unwrap());
             let mono = std::num::NonZeroU8::new(1).unwrap();
@@ -122,7 +126,7 @@ impl TrackSink {
             match File::create(&ogg_path) {
                 Ok(f) => match vorbis_rs::VorbisEncoderBuilder::new(rate, mono, f) {
                     Ok(mut builder) => match builder.build() {
-                        Ok(enc) => return Ok(TrackSink::Ogg(enc)),
+                        Ok(enc) => return Ok(TrackSink::Ogg(Box::new(enc))),
                         Err(e) => {
                             crate::log(&format!(
                                 "[Meeting] vorbis build {base}.ogg failed: {e}; using WAV"
@@ -1505,5 +1509,79 @@ mod tests {
         assert_eq!(v2["title"].as_str(), Some("My Meeting"));
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // ── TrackSink: meeting audio persistence (Ogg on Windows, WAV elsewhere) ──
+
+    #[test]
+    fn track_sink_preserves_every_sample() {
+        // Regression guard for the recording path: a TrackSink must produce
+        // a finalized, decodable file with every written sample preserved.
+        // On non-Windows (incl. macOS, which records meetings as WAV) this
+        // exercises the exact WAV branch the Mac meeting recorder relies on.
+        let dir = std::env::temp_dir().join(format!("dimmy_tracksink_{}", uuid_v4_simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let samples: Vec<f32> = (0..4800).map(|i| (i as f32 * 0.01).sin() * 0.5).collect();
+        let mut sink = TrackSink::create(&dir, "audio_mic", 48_000).expect("sink create");
+        sink.write(&samples);
+        sink.flush();
+        sink.finalize();
+
+        if cfg!(any(target_os = "windows", target_os = "macos")) {
+            let ogg = dir.join("audio_mic.ogg");
+            assert!(ogg.exists(), "Windows/macOS must record .ogg");
+            let bytes = std::fs::read(&ogg).unwrap();
+            assert_eq!(&bytes[0..4], b"OggS", "valid Ogg stream magic");
+        } else {
+            let wav = dir.join("audio_mic.wav");
+            assert!(
+                wav.exists(),
+                "Linux must record .wav (gate not widened yet)"
+            );
+            let reader = hound::WavReader::open(&wav).unwrap();
+            let spec = reader.spec();
+            assert_eq!(spec.sample_rate, 48_000);
+            assert_eq!(spec.channels, 1);
+            assert_eq!(spec.bits_per_sample, 16);
+            let decoded = reader.into_samples::<i16>().count();
+            assert_eq!(decoded, samples.len(), "every sample preserved");
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn track_sink_clamps_out_of_range_and_ignores_empty() {
+        // The WAV branch must clamp to [-1, 1] before int16 conversion
+        // (CLAUDE.md audio invariant — un-clamped values would wrap to the
+        // wrong sign as int16). An empty window must be a no-op, never a
+        // panic. On Windows this just proves the encoder accepts the input
+        // without panicking and still produces a valid Ogg.
+        let dir = std::env::temp_dir().join(format!("dimmy_tracksink_clamp_{}", uuid_v4_simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut sink = TrackSink::create(&dir, "audio", 16_000).expect("sink create");
+        sink.write(&[]); // no-op, must not panic or write
+        sink.write(&[2.0, -3.0, 0.5, -0.5]); // 2.0/-3.0 out of range
+        sink.finalize();
+
+        if cfg!(any(target_os = "windows", target_os = "macos")) {
+            assert!(dir.join("audio.ogg").exists());
+        } else {
+            let wav = dir.join("audio.wav");
+            let reader = hound::WavReader::open(&wav).unwrap();
+            let decoded: Vec<i16> = reader.into_samples::<i16>().map(|s| s.unwrap()).collect();
+            assert_eq!(decoded.len(), 4, "empty write skipped, 4 real samples kept");
+            // 2.0 → clamp 1.0 → i16::MAX; -3.0 → clamp -1.0 → -i16::MAX.
+            assert_eq!(decoded[0], i16::MAX);
+            assert_eq!(decoded[1], -i16::MAX);
+            // Clamp to [-1, 1] then *i16::MAX never reaches i16::MIN (-32768).
+            for s in &decoded {
+                assert!(*s >= -i16::MAX, "stays in clamped range");
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -635,6 +635,14 @@ final class AppState: ObservableObject {
     /// any surface (meeting window, future tray menu) and can render
     /// the Stop button + recording feedback even with no dictation.
     @Published var meetingActive: Bool = false
+    /// Captured at meeting START from `MeetingViewModel.generateRecap`
+    /// (true for call-detect-started meetings). Every stop path —
+    /// meeting window button, pill, call-detect "Stop" popup — reads
+    /// THIS flag, NOT the live checkbox, so a reopened-window stale
+    /// toggle can't override the user's choice at start, and the pill
+    /// / popup paths stop running the recap unconditionally. Mac
+    /// mirror of Win `AppViewModel.MeetingGenerateRecap`.
+    @Published var meetingGenerateRecap: Bool = true
     /// Mirror of `dimmy_meeting_is_paused()`. Also polled from the pill
     /// state poll so the bar / status reflects pause state regardless
     /// of which surface flipped it.
@@ -1358,6 +1366,11 @@ final class AppState: ObservableObject {
             AppDelegate.shared?.openMeetingWindow()
             // openMeetingWindow shows + reattaches; the Meeting VM is
             // owned by the controller so we drive .start() through it.
+            // Call-detect-started meetings default the recap flag to
+            // true — the popup choice was "record this call", which
+            // implies the user wants the recap too. Win parity:
+            // MeetingGenerateRecap = true for call-detect-started.
+            MeetingWindowController.shared.viewModel.generateRecap = true
             MeetingWindowController.shared.viewModel.start()
             // Bind the detected call as this meeting's origin so the
             // deterministic "call ended" path can watch it (Mac mirror of

@@ -57,6 +57,7 @@ final class CallDetectionManager {
         label: "dimmy.calldetect.scan", qos: .utility)
     private var scanInFlight: Bool = false
     private var sessionCheckInFlight: Bool = false
+    private var adoptInFlight: Bool = false
 
     // Most recent detected candidate from the pre-meeting scan — bound as
     // the meeting origin when the user taps "Record now".
@@ -70,6 +71,10 @@ final class CallDetectionManager {
     private var sessionEndedSignaled: Bool = false
     private var originMissingTicks: Int = 0
     private var sessionCheckCounter: Int = 0
+    // Cadence counter for the mid-meeting adoption scan. Mutually
+    // exclusive with sessionCheckCounter: one runs while no origin is
+    // bound (adoption), the other once it is (session-ended watch).
+    private var adoptCheckCounter: Int = 0
 
     /// Bundle-id prefix → canonical app id for the well-known callers, so
     /// the nudge reads "Microsoft Teams" instead of the raw bundle name.
@@ -157,6 +162,7 @@ final class CallDetectionManager {
         sessionEndedSignaled = false
         originMissingTicks = 0
         sessionCheckCounter = 0
+        adoptCheckCounter = 0
     }
 
     // MARK: - Poll tick (main)
@@ -176,14 +182,26 @@ final class CallDetectionManager {
         if meetingActive {
             // Silence backstop + manual meetings (always).
             meetingAmplitudeTick()
-            // Deterministic stop when this meeting came from a detected
-            // call: watch the origin process at ~1 Hz (CoreAudio enum is
-            // the heavy bit; the nudge doesn't need 4 Hz precision).
-            if meetingOriginPid != 0, !sessionEndedSignaled {
-                sessionCheckCounter &+= 1
-                if sessionCheckCounter >= 4 {
-                    sessionCheckCounter = 0
-                    sessionEndedCheckTick()
+            if !sessionEndedSignaled {
+                if meetingOriginPid == 0 {
+                    // Manual meeting (pill / window, not "Record now"):
+                    // try to adopt a call holding the mic NOW or as it
+                    // joins. Mirrors Windows TryAdoptCallOriginDuringMeeting.
+                    // ~1 Hz cadence (CoreAudio enum is the heavy bit).
+                    adoptCheckCounter &+= 1
+                    if adoptCheckCounter >= 4 {
+                        adoptCheckCounter = 0
+                        adoptCallOriginDuringMeetingTick()
+                    }
+                } else {
+                    // Origin bound (either via "Record now" or adopted
+                    // above): watch the process at ~1 Hz; fire
+                    // session_ended the moment it releases the mic.
+                    sessionCheckCounter &+= 1
+                    if sessionCheckCounter >= 4 {
+                        sessionCheckCounter = 0
+                        sessionEndedCheckTick()
+                    }
                 }
             }
             return
@@ -266,6 +284,43 @@ final class CallDetectionManager {
         }
     }
 
+    /// Adopt a call as the meeting origin WHILE a meeting is already
+    /// active — for a manually-started meeting (pill / window) where no
+    /// "Record now" nudge ran so `markMeetingOrigin()` was never called.
+    /// Reuses the same `scanRunningInputProcesses()` discovery as the
+    /// pre-meeting tick (excludes self pid + system bundles). On adoption
+    /// arms the Rust state machine via `callMeetingStartedExternal()` so
+    /// `signal_session_ended` will fire when the call closes — without
+    /// arming, `recording_active_from_us` stays false and the
+    /// stop-suggestion path is a silent NoChange. Mirror of Windows
+    /// `TryAdoptCallOriginDuringMeeting`.
+    private func adoptCallOriginDuringMeetingTick() {
+        if adoptInFlight { return }
+        guard meetingOriginPid == 0, !sessionEndedSignaled else { return }
+        adoptInFlight = true
+        Self.scanQueue.async { [weak self] in
+            let (active, appId, originPid) = Self.scanRunningInputProcesses()
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.adoptInFlight = false
+                // The meeting could have ended, or another path bound the
+                // origin (e.g. markMeetingOrigin) while the scan ran.
+                guard self.appState?.meetingActive == true,
+                      self.meetingOriginPid == 0,
+                      !self.sessionEndedSignaled
+                else { return }
+                if active, originPid != 0, let appId {
+                    self.meetingOriginPid = originPid
+                    self.meetingOriginApp = appId
+                    self.originMissingTicks = 0
+                    self.sessionCheckCounter = 0
+                    _ = DimmyCore.shared.callMeetingStartedExternal()
+                    print("[CallDetect] adopted call origin mid-meeting pid=\(originPid) app=\(appId)")
+                }
+            }
+        }
+    }
+
     // MARK: - CoreAudio enumeration (callable from any queue)
 
     /// Returns (any_call_app_active, app_id_or_nil, origin_pid). On 14.4+
@@ -274,14 +329,32 @@ final class CallDetectionManager {
     nonisolated private static func scanRunningInputProcesses() -> (Bool, String?, pid_t) {
         if #available(macOS 14.4, *) {
             let selfPid = ProcessInfo.processInfo.processIdentifier
-            for pid in inputRunningPids() where pid != selfPid {
-                if let appId = resolveAppId(pid) {
-                    return (true, appId, pid)
-                }
+            if let (pid, appId) = firstCallCandidate(
+                pids: inputRunningPids(), selfPid: selfPid, resolve: resolveAppId
+            ) {
+                return (true, appId, pid)
             }
             return (false, nil, 0)
         }
         return (anyInputDeviceRunning(), nil, 0)
+    }
+
+    /// Pure: pick the first non-self pid whose resolver returns a non-nil
+    /// app id. Deterministic — sorts pids ascending so production and
+    /// tests agree on which origin wins when multiple call apps hold the
+    /// mic simultaneously. Returns nil when no real call app is present
+    /// (manual meeting with no call → adoption skips, behaviour unchanged
+    /// from the pre-feature baseline). Internal access so DimmyTests can
+    /// pin the candidate-selection logic without going through CoreAudio.
+    nonisolated static func firstCallCandidate(
+        pids: Set<pid_t>, selfPid: pid_t, resolve: (pid_t) -> String?
+    ) -> (pid_t, String)? {
+        for pid in pids.sorted() where pid != selfPid {
+            if let appId = resolve(pid) {
+                return (pid, appId)
+            }
+        }
+        return nil
     }
 
     /// Resolve a pid to the canonical/display app id used as the nudge

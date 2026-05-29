@@ -470,3 +470,55 @@ private func withOptionalCString<R>(_ s: String?,
     guard let s, !s.isEmpty else { return body(nil) }
     return s.withCString { body($0) }
 }
+
+// MARK: - DimmyCore — multi-format audio decode + peaks
+
+extension DimmyCore {
+    /// Compute waveform peaks for any decodable audio file (WAV/Ogg/etc.
+    /// via Symphonia in the Rust core). Returns nil on FFI failure; the
+    /// caller falls back to "no waveform" (drawing an empty band).
+    /// Used by `WavPeaks.readPeaks` when the path is .ogg — WAV stays on
+    /// the in-Swift parser which is ~5× faster for the common case.
+    func computeAudioPeaks(at path: String, bucketCount: Int) -> [Float]? {
+        guard isInitialized, bucketCount > 0 else { return nil }
+        // 64 KB JSON buffer — enough for 4096 buckets × ~13 bytes/peak +
+        // metadata. The FFI returns -3 if not enough; we don't retry,
+        // we just degrade to "no peaks" (same as a decode failure).
+        let bufLen: Int32 = 64 * 1024
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+        let rc = path.withCString { p in
+            dimmy_compute_audio_peaks(p, Int32(bucketCount), buffer, bufLen)
+        }
+        guard rc > 0 else { return nil }
+        let json = String(cString: buffer)
+        guard let data = json.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let raw = obj["peaks"] as? [Any]
+        else { return nil }
+        var out = [Float](repeating: 0, count: raw.count)
+        for (i, v) in raw.enumerated() {
+            if let d = v as? Double { out[i] = Float(d) }
+            else if let n = v as? NSNumber { out[i] = n.floatValue }
+        }
+        return out
+    }
+
+    /// Decode an audio file (any format the Rust loader supports) to a
+    /// mono int16 WAV on disk at the source's native sample rate. Used
+    /// by AudioPlaybackBar so AVAudioPlayer — which doesn't natively
+    /// decode Ogg/Vorbis on macOS — can still play `audio.ogg` meetings
+    /// via a one-shot tmp WAV. Returns true on success; the caller is
+    /// expected to delete `dst` when the player is torn down.
+    @discardableResult
+    func decodeAudioToWav(source: String, destination: String) -> Bool {
+        guard isInitialized else { return false }
+        let rc = source.withCString { s in
+            destination.withCString { d in
+                dimmy_decode_audio_to_wav(s, d)
+            }
+        }
+        return rc > 0
+    }
+}

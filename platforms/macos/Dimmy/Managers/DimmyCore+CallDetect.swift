@@ -49,6 +49,19 @@ extension DimmyCore {
         return dimmy_call_signal_session_ended()
     }
 
+    /// Arm the stop-suggestion path for a manually-started meeting (pill /
+    /// meeting window, NOT the "Record now" nudge). Without this the Rust
+    /// state machine leaves `recording_active_from_us=false`, so a later
+    /// `callSignalSessionEnded()` returns NoChange and the user never gets
+    /// the stop-suggestion when the call ends. Idempotent (the host may
+    /// arm on the start edge AND mid-meeting when a call is adopted).
+    /// Returns Rust's documented rc = 1.
+    @discardableResult
+    func callMeetingStartedExternal() -> Int32 {
+        guard isInitialized else { return 0 }
+        return dimmy_call_meeting_started_external()
+    }
+
     /// Record the user's response. `response` ∈ {"record_now","not_now",
     /// "never","timeout","stop_and_recap","keep_recording","stop_timeout"}.
     /// True iff Rust accepted the response (rc=0).

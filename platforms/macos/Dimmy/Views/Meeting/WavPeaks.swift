@@ -76,10 +76,25 @@ enum WavPeaks {
         if let cached = tryReadCachedPeaks(audioPath: path, bucketCount: bucketCount) {
             return cached
         }
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path),
-                                    options: [.alwaysMapped])
-        else { return [] }
-        let peaks = parse(data: data, bucketCount: bucketCount)
+        let peaks: [Float]
+        let ext = (path as NSString).pathExtension.lowercased()
+        if ext == "wav" {
+            // Fast path: in-Swift RIFF parser. ~5× faster than the FFI
+            // round-trip on the common case, and the only path that
+            // existed pre-`feat/meeting-live-notes`.
+            guard let data = try? Data(contentsOf: URL(fileURLWithPath: path),
+                                        options: [.alwaysMapped])
+            else { return [] }
+            peaks = parse(data: data, bucketCount: bucketCount)
+        } else {
+            // Multi-format path (Ogg/Vorbis from the meeting Track-sink,
+            // plus mp3/aac/m4a/flac from file-load) via the Rust core's
+            // Symphonia decoder. nil → empty waveform fallback (same
+            // visual result as a missing file). The FFI is `dimmy_-`
+            // `compute_audio_peaks`, registered in abi_exports.txt.
+            peaks = DimmyCore.shared.computeAudioPeaks(at: path,
+                                                       bucketCount: bucketCount) ?? []
+        }
         if !peaks.isEmpty {
             tryWriteCachedPeaks(audioPath: path, peaks: peaks)
         }

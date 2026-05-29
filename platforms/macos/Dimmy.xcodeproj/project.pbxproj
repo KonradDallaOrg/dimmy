@@ -41,6 +41,9 @@
 		AA000704 /* AppStateRecapModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000704 /* AppStateRecapModelTests.swift */; };
 		AA000705 /* MeetingAmplitudeAGCTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000705 /* MeetingAmplitudeAGCTests.swift */; };
 		AA000706 /* MarkdownBlockParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000706 /* MarkdownBlockParserTests.swift */; };
+		AA000707 /* CallDetectionCandidateSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000707 /* CallDetectionCandidateSelectionTests.swift */; };
+		AA000708 /* MeetingStampTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000708 /* MeetingStampTests.swift */; };
+		AA000709 /* MeetingAudioResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000709 /* MeetingAudioResolverTests.swift */; };
 		AA000006 /* HotkeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000006 /* HotkeyManager.swift */; };
 		AA000007 /* AudioSimulator.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000007 /* AudioSimulator.swift */; };
 		AA000008 /* TextInjector.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000008 /* TextInjector.swift */; };
@@ -162,6 +165,9 @@
 		AB000704 /* AppStateRecapModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateRecapModelTests.swift; sourceTree = "<group>"; };
 		AB000705 /* MeetingAmplitudeAGCTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAmplitudeAGCTests.swift; sourceTree = "<group>"; };
 		AB000706 /* MarkdownBlockParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownBlockParserTests.swift; sourceTree = "<group>"; };
+		AB000707 /* CallDetectionCandidateSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallDetectionCandidateSelectionTests.swift; sourceTree = "<group>"; };
+		AB000708 /* MeetingStampTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingStampTests.swift; sourceTree = "<group>"; };
+		AB000709 /* MeetingAudioResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAudioResolverTests.swift; sourceTree = "<group>"; };
 		AB000006 /* HotkeyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyManager.swift; sourceTree = "<group>"; };
 		AB000007 /* AudioSimulator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSimulator.swift; sourceTree = "<group>"; };
 		AB000008 /* TextInjector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextInjector.swift; sourceTree = "<group>"; };
@@ -276,6 +282,9 @@
 				AB000704 /* AppStateRecapModelTests.swift */,
 				AB000705 /* MeetingAmplitudeAGCTests.swift */,
 				AB000706 /* MarkdownBlockParserTests.swift */,
+				AB000707 /* CallDetectionCandidateSelectionTests.swift */,
+				AB000708 /* MeetingStampTests.swift */,
+				AB000709 /* MeetingAudioResolverTests.swift */,
 			);
 			path = DimmyTests;
 			sourceTree = "<group>";
@@ -749,6 +758,9 @@
 				AA000704 /* AppStateRecapModelTests.swift in Sources */,
 				AA000705 /* MeetingAmplitudeAGCTests.swift in Sources */,
 				AA000706 /* MarkdownBlockParserTests.swift in Sources */,
+				AA000707 /* CallDetectionCandidateSelectionTests.swift in Sources */,
+				AA000708 /* MeetingStampTests.swift in Sources */,
+				AA000709 /* MeetingAudioResolverTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

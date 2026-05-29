@@ -567,6 +567,37 @@ int32_t dimmy_call_signal_sys(int32_t sys_active, const char * _Nullable app_id)
 /// (state is global). Returns 3 (stop_suggested emitted) or 0 (no-op).
 int32_t dimmy_call_signal_session_ended(void);
 
+/// Arm the stop-suggestion path for a meeting started OUTSIDE the
+/// "Record now" nudge — i.e. manually from the meeting window / pill —
+/// while a call is detected by the host. Without this the call
+/// detector's `recording_active_from_us` stays false and
+/// `dimmy_call_signal_session_ended` returns NoChange, so closing the
+/// call never suggests stop for a manually-started meeting. Idempotent;
+/// returns 1.
+int32_t dimmy_call_meeting_started_external(void);
+
+/// Compute a peak-summary JSON `{peaks:[f32;bucket_count], duration_secs}`
+/// from any audio file the Rust loader can decode (WAV via hound, m4a
+/// / mp3 / aac / flac / ogg via Symphonia). Same role as the in-Swift
+/// `WavPeaks.readPeaks`, but multi-format — used by the Mac meeting
+/// waveform when the on-disk track is Ogg/Vorbis instead of WAV.
+/// Returns bytes written or -1 (bad args) / -2 (decode) / -3 (buf too
+/// small — retry with a larger buffer).
+int32_t dimmy_compute_audio_peaks(const char * _Nonnull path,
+                                  int32_t bucket_count,
+                                  char * _Nonnull out_buf,
+                                  int32_t buf_len);
+
+/// Decode any supported audio file (WAV via hound, m4a/mp3/aac/flac/ogg
+/// via Symphonia) and write it as a real mono int16 WAV at the
+/// source's native sample rate. Used by AudioPlaybackBar to play
+/// Ogg/Vorbis meetings via AVAudioPlayer (which doesn't decode Ogg
+/// natively on macOS) — the bar decodes to a tmp WAV first. Returns
+/// the dst file size on success, or -1 (bad args) / -2 (decode) /
+/// -3 (WAV write).
+int32_t dimmy_decode_audio_to_wav(const char * _Nonnull src,
+                                  const char * _Nonnull dst);
+
 /// Record the user's response to a call/stop nudge.
 /// `response` ∈ {"record_now","not_now","never","timeout",
 /// "stop_and_recap","keep_recording","stop_timeout"}.

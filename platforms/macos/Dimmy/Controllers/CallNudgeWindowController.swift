@@ -71,14 +71,23 @@ final class CallNudgeWindowController {
     func showStopSuggestion(app: String?) {
         ensurePanel()
         guard let vm = viewModel else { return }
+        // Label the primary CTA from the recap flag pinned at meeting
+        // start. The response string sent to Rust stays "stop_and_recap"
+        // in both cases (it's just a "user accepted the stop" signal —
+        // the actual recap-skip is decided downstream in
+        // stopMeetingFromPill which reads the same flag). Win parity:
+        // popup CTA relabels "Stop" / "Stop & recap".
+        let withRecap = AppState.shared.meetingGenerateRecap
         vm.update(
             mode: .stopSuggested,
             app: app,
             displayName: Self.displayName(for: app),
             iconSystemName: "stop.circle.fill",
             title: Self.stopTitle(for: app),
-            body: "No activity for a while. Stop & recap?",
-            primary: "Stop & recap",
+            body: withRecap
+                ? "No activity for a while. Stop & recap?"
+                : "No activity for a while. Stop the meeting?",
+            primary: withRecap ? "Stop & recap" : "Stop",
             secondary: "Keep recording")
         present()
     }

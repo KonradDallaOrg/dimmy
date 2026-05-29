@@ -83,6 +83,25 @@ final class MeetingViewModel: ObservableObject {
     }
     @Published var doneSelectedTab: DoneTab = .recap
 
+    // ── Recording-view tab selection (Live transcript / Notes) ────
+    /// Mirror of the Win Recording-view Notes tab. The Notes editor and
+    /// the Done-view Notes editor share the SAME `doneNotes` buffer +
+    /// `<dir>/notes.md` on disk — single store, the handover doc calls
+    /// this out explicitly. So a note typed live survives into the Done
+    /// view of the same meeting without an extra load step.
+    enum RecordingTab: String, CaseIterable, Identifiable {
+        case live
+        case notes
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .live: return "Live transcript"
+            case .notes: return "Notes"
+            }
+        }
+    }
+    @Published var recordingSelectedTab: RecordingTab = .live
+
     /// Local-only meeting notes, persisted as `<dir>/notes.md`. Loaded
     /// by `loadDoneFromDisk` and `loadNotes`; written by `saveNotes`.
     /// Mirror of the Win Notes tab (`SelectDoneTab(\"Notes\")`).
@@ -339,6 +358,9 @@ final class MeetingViewModel: ObservableObject {
         doneAudioSystemURL = nil
         doneNotes = ""
         doneSelectedTab = .recap
+        // Recording view always opens on Live transcript — a previous
+        // meeting that ended on the Notes tab shouldn't carry over.
+        recordingSelectedTab = .live
         browsingPastMeeting = false
         systemAudioPermissionNeeded = false
         isPaused = false
@@ -365,6 +387,12 @@ final class MeetingViewModel: ObservableObject {
                 }
                 self.sessionId = id
                 self.startedAt = Date()
+                // Pin the recap choice for THIS meeting — every stop path
+                // (window, pill, call-detect popup) reads
+                // AppState.meetingGenerateRecap so a stale checkbox on a
+                // reopened window can't flip it. Mirror of Win
+                // AppViewModel.MeetingGenerateRecap captured at start.
+                AppState.shared.meetingGenerateRecap = self.generateRecap
                 self.statusLabel = "Recording"
                 self.subStatusLabel = "Session id \(String(id.prefix(8)))…"
                 self.titlebarTitle = "Recording…"
@@ -475,7 +503,9 @@ final class MeetingViewModel: ObservableObject {
                     self.statusLabel = "Empty recording"
                     self.subStatusLabel = "No transcript was produced"
                     self.loadHistory()
-                } else if self.generateRecap {
+                } else if AppState.shared.meetingGenerateRecap {
+                    // Read the flag pinned at meeting start, NOT the live
+                    // checkbox (which a reopened window can render stale).
                     self.processingStep = .generatingRecap
                     self.runPostProcess(dir: result.dir, transcript: cleanTranscript)
                 } else {
@@ -558,15 +588,17 @@ final class MeetingViewModel: ObservableObject {
         }
     }
 
-    /// Re-run the file-load transcribe path on `audio.wav` — replaces
-    /// transcripts.txt + re-runs the recap. Useful when the live STT
-    /// truncated or the user wants a different language pass.
+    /// Re-run the file-load transcribe path on the meeting's mix track
+    /// (audio.ogg / audio.wav fallback) — replaces transcripts.txt +
+    /// re-runs the recap. Useful when the live STT truncated or the user
+    /// wants a different language pass. `dimmy_transcribe_file` already
+    /// decodes both formats via Symphonia (the ABI is in the regen-ed
+    /// abi_exports.txt golden).
     func regenerateTranscript() {
         guard !activeMeetingDir.isEmpty || selectedDir != nil else { return }
         let dir = selectedDir ?? activeMeetingDir
-        let audioURL = URL(fileURLWithPath: dir).appendingPathComponent("audio.wav")
-        guard FileManager.default.fileExists(atPath: audioURL.path) else {
-            showToast("No audio.wav on disk to re-transcribe.")
+        guard let audioURL = Self.resolveMeetingAudio(dir: dir, base: "audio") else {
+            showToast("No mix track on disk to re-transcribe.")
             return
         }
         phase = .processing
@@ -696,6 +728,9 @@ final class MeetingViewModel: ObservableObject {
         doneAudioSystemURL = nil
         doneNotes = ""
         doneSelectedTab = .recap
+        // Recording view always opens on Live transcript — a previous
+        // meeting that ended on the Notes tab shouldn't carry over.
+        recordingSelectedTab = .live
         transcript = ""
     }
 
@@ -844,18 +879,35 @@ final class MeetingViewModel: ObservableObject {
     }
 
     private func audioURL(for dir: String) -> URL? {
-        let url = URL(fileURLWithPath: dir).appendingPathComponent("audio.wav")
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        return Self.resolveMeetingAudio(dir: dir, base: "audio")
     }
 
     private func micAudioURL(for dir: String) -> URL? {
-        let url = URL(fileURLWithPath: dir).appendingPathComponent("audio_mic.wav")
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        return Self.resolveMeetingAudio(dir: dir, base: "audio_mic")
     }
 
     private func systemAudioURL(for dir: String) -> URL? {
-        let url = URL(fileURLWithPath: dir).appendingPathComponent("audio_system.wav")
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        return Self.resolveMeetingAudio(dir: dir, base: "audio_system")
+    }
+
+    /// Resolve a meeting audio track to its on-disk URL, preferring the
+    /// newer Ogg/Vorbis file (`feat/meeting-live-notes`) over the older
+    /// WAV. Returns nil iff neither exists.
+    ///
+    /// Why .ogg first: once the `meeting.rs::TrackSink::create` gate is
+    /// widened to Mac, fresh meetings only emit `.ogg`. Older meetings
+    /// (pre-gate) stay `.wav` — the fallback keeps them playable +
+    /// re-transcribable. A single resolver is used by every path that
+    /// hardcoded `audio*.wav` (playback URLs, regenerate-transcript, the
+    /// mtime sort), so adding new audio surfaces touches one method, not
+    /// six. Pure / nonisolated so `MeetingAudioResolverTests` can pin
+    /// the precedence on real tmp files without spinning up a ViewModel.
+    nonisolated static func resolveMeetingAudio(dir: String, base: String) -> URL? {
+        let oggURL = URL(fileURLWithPath: dir).appendingPathComponent(base + ".ogg")
+        if FileManager.default.fileExists(atPath: oggURL.path) { return oggURL }
+        let wavURL = URL(fileURLWithPath: dir).appendingPathComponent(base + ".wav")
+        if FileManager.default.fileExists(atPath: wavURL.path) { return wavURL }
+        return nil
     }
 
     private func titleFromDir(_ dir: String) -> String {
@@ -960,6 +1012,41 @@ final class MeetingViewModel: ObservableObject {
     private static func readNotes(dir: String) -> String {
         let url = URL(fileURLWithPath: dir).appendingPathComponent("notes.md")
         return (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+    }
+
+    /// Append a `[mm:ss] ` time stamp at the end of the notes buffer so
+    /// the user can type the note after it. Mirror of the Win Recording-
+    /// view "Add note" / Ctrl+Enter behaviour. Uses the meeting elapsed
+    /// time (the same monotonic clock the recording bar shows). No-op
+    /// before a meeting has started — guards against accidental invokes
+    /// from the Done view (which has its own meta time, not elapsed).
+    func stampMeetingTime() {
+        guard phase == .recording else { return }
+        doneNotes = Self.stamping(notes: doneNotes, timerLabel: timerLabel)
+    }
+
+    /// Pure: the body of `stampMeetingTime()` factored out so the format
+    /// (trim `HH:` prefix, insert newline if needed) is pinned by
+    /// `MeetingStampTests` without spinning up a real ViewModel.
+    /// `internal` access so the test target reaches it via @testable.
+    nonisolated static func stamping(notes: String, timerLabel: String) -> String {
+        let stamp: String
+        if timerLabel.count >= 8 {
+            // "HH:MM:SS" → strip "HH:" to match Win "[mm:ss]" shape.
+            let idx = timerLabel.index(timerLabel.startIndex, offsetBy: 3)
+            stamp = "[" + String(timerLabel[idx...]) + "] "
+        } else {
+            stamp = "[" + timerLabel + "] "
+        }
+        let separator: String
+        if notes.isEmpty {
+            separator = ""
+        } else if notes.hasSuffix("\n") {
+            separator = ""
+        } else {
+            separator = "\n"
+        }
+        return notes + separator + stamp
     }
 
     /// Write the current `doneNotes` buffer to `<dir>/notes.md`. No-op
@@ -1127,8 +1214,14 @@ struct MeetingHistoryRow: Identifiable, Equatable {
                 return Date(timeIntervalSince1970: ended)
             }
         }
-        let wavURL = dirURL.appendingPathComponent("audio.wav")
-        if let m = try? wavURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate {
+        // Sort by mix-track mtime (audio.ogg on newer meetings, audio.wav
+        // on older). resolveMeetingAudio returns nil iff neither exists.
+        // Qualified to MeetingViewModel — this static lives on
+        // MeetingHistoryRow so `Self` would resolve there.
+        if let audioURL = MeetingViewModel.resolveMeetingAudio(
+            dir: dirURL.path, base: "audio"),
+           let m = try? audioURL.resourceValues(forKeys: [.contentModificationDateKey])
+            .contentModificationDate {
             return m
         }
         if let m = try? dirURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate {
