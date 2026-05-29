@@ -198,6 +198,23 @@ internal sealed class CallDetectionService : IDisposable
             _meetingOriginSessionId = null;
             _meetingDrivenByCallDetect = false;
         }
+        // Meeting just started WITHOUT a bound origin — i.e. a manual start
+        // from the meeting window / pill, not via a "Record now" nudge. If
+        // a call is currently detected, adopt its session as the origin so
+        // closing the call still fires the stop-suggestion. Without this,
+        // manually-started meetings only had the weaker amplitude heuristic
+        // and never suggested stop when the call (e.g. Teams) ended.
+        else if (!_prevMeetingActive && meetingActive && _meetingOriginSessionId == null)
+        {
+            if (MarkMeetingOriginFromCurrentSession())
+            {
+                // Tell the Rust call-state machine this manually-started
+                // meeting counts as "ours", so signal_session_ended will
+                // actually suggest stop when the bound call ends (otherwise
+                // recording_active_from_us stays false → NoChange → no popup).
+                try { DimmyNative.dimmy_call_meeting_started_external(); } catch { }
+            }
+        }
         _prevMeetingActive = meetingActive;
 
         if (meetingActive)

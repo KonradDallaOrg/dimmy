@@ -87,6 +87,12 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_call_signal_session_ended();
 
+    /// Arm the stop-suggestion path for a meeting started OUTSIDE the
+    /// "Record now" nudge (manual start while a call is detected), so
+    /// closing the call still suggests stop. Returns 1.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_call_meeting_started_external();
+
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_call_detector_state(byte[] outBuf, int bufLen);
 

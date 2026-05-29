@@ -80,7 +80,7 @@ public static class MeetingRecapHelpers
     /// the transcript). Section markers `===NAME===` are the contract
     /// with <see cref="ParseStructuredRecap"/>.
     /// </summary>
-    public static string BuildStructuredRecapPrompt(string transcript)
+    public static string BuildStructuredRecapPrompt(string transcript, string notes = "")
     {
         return
             "You are a senior meeting analyst writing a polished, Notion-style " +
@@ -208,7 +208,19 @@ public static class MeetingRecapHelpers
             "NOT a blank line, NOT an apology. JUST `# <title>` on line one.\n" +
             "═══════════════════════════════════════════════════════════════════\n\n" +
 
-            "## Transcript\n" + transcript;
+            "## Transcript\n" + transcript +
+            (string.IsNullOrWhiteSpace(notes)
+                ? ""
+                : "\n\n═══════════════════════════════════════════════════════════════════\n" +
+                  "## Listener's notes (HIGH PRIORITY — the user's own emphasis)\n" +
+                  "These notes were written by the person recording, during and/or after " +
+                  "the meeting, to flag what matters to them. A leading `[mm:ss]` marks when " +
+                  "during the meeting the note was taken — align it with the transcript at " +
+                  "that time. Treat the notes as the single strongest signal of importance: " +
+                  "weight their content and the discussion around their timestamp heavily, " +
+                  "surface them prominently in the relevant sections, and reflect any " +
+                  "explicit asks or to-dos under ACTIONS. Never ignore or drop a note.\n\n" +
+                  notes.Trim());
     }
 
     /// <summary>

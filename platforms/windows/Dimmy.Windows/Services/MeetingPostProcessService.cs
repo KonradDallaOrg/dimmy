@@ -44,7 +44,19 @@ public static class MeetingPostProcessService
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         try
         {
-            var prompt = Helpers.MeetingRecapHelpers.BuildStructuredRecapPrompt(transcript);
+            // Listener's notes (notes.md) are the user's own emphasis — fold
+            // them into the prompt as a high-priority section so both the
+            // auto-recap at stop AND a manual re-recap honour them.
+            string notes = "";
+            try
+            {
+                var notesPath = System.IO.Path.Combine(dir, "notes.md");
+                if (System.IO.File.Exists(notesPath))
+                    notes = (await System.IO.File.ReadAllTextAsync(notesPath))?.Trim() ?? "";
+            }
+            catch { /* notes are best-effort context, never block the recap */ }
+
+            var prompt = Helpers.MeetingRecapHelpers.BuildStructuredRecapPrompt(transcript, notes);
             var modelOverride = MeetingWindow.PickRecapModelInternal();
             App.Log($"recap (shared) model='{modelOverride}' prompt {prompt.Length} chars dir='{dir}'",
                 "MeetingRecap");

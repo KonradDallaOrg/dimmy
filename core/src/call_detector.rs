@@ -513,6 +513,21 @@ impl CallDetectorState {
         self.stop_suggestion_until = None;
     }
 
+    /// A meeting was started OUTSIDE the "Record now" nudge — i.e. manually
+    /// from the meeting window / pill — while a call was detected. Arm the
+    /// stop-suggestion path exactly as `record_response(RecordNow)` does so
+    /// that the call ending still suggests stop. Without this, a manually-
+    /// started meeting left `recording_active_from_us=false`, so
+    /// `signal_call_session_ended` returned NoChange and no popup appeared.
+    /// Idempotent. Cleared by `meeting_stopped()`.
+    pub fn meeting_started_external(&mut self) {
+        self.recording_active_from_us = true;
+        self.mic_inactive_since = None;
+        self.sys_inactive_since = None;
+        self.stop_suggestion_emitted = false;
+        self.stop_suggestion_until = None;
+    }
+
     /// JSON snapshot for the Settings UI (exclusion list view +
     /// debug / observability).
     pub fn state_snapshot(&self, now: i64) -> serde_json::Value {

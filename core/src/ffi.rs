@@ -7319,6 +7319,19 @@ pub unsafe extern "C" fn dimmy_call_signal_session_ended() -> c_int {
     }
 }
 
+/// Arm the stop-suggestion path for a meeting started OUTSIDE the
+/// "Record now" nudge (manual start from the meeting window / pill) while
+/// a call is detected by the host. Without this the call detector's
+/// `recording_active_from_us` stays false and `signal_call_session_ended`
+/// returns NoChange, so closing the call never suggests stop for a
+/// manually-started meeting. Idempotent; returns 1.
+#[no_mangle]
+pub extern "C" fn dimmy_call_meeting_started_external() -> c_int {
+    let mut g = call_detector_lock();
+    g.meeting_started_external();
+    1
+}
+
 /// Record the user's response to a call-detected nudge.
 /// `response` ∈ {"record_now","not_now","never","timeout"}.
 /// On "never" with a non-empty app_id the exclusion list is persisted

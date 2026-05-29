@@ -289,7 +289,10 @@
               </Grid>
             </Border>
 
-            <!-- Live transcript -->
+            <!-- Live transcript + Notes, as alternating tabs (no Recap tab
+                 during recording — the recap only exists after Stop). The
+                 Notes tab is the SAME notes.md the Done view's Notes tab
+                 edits and the recap reads as the listener's emphasis. -->
             <Border Grid.Row="1"
                     Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
@@ -299,34 +302,90 @@
                   <RowDefinition Height="Auto"/>
                   <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
-                <Border Grid.Row="0" Padding="14,10"
+
+                <!-- Tab header -->
+                <Border Grid.Row="0" Padding="14,8"
                         BorderThickness="0,0,0,1"
                         BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}">
-                  <Grid ColumnSpacing="10">
+                  <Grid ColumnSpacing="18">
                     <Grid.ColumnDefinitions>
-                      <ColumnDefinition Width="*"/>
                       <ColumnDefinition Width="Auto"/>
+                      <ColumnDefinition Width="Auto"/>
+                      <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Column="0" Text="Live transcript"
-                               FontSize="14" FontWeight="SemiBold"
-                               VerticalAlignment="Center"/>
-                    <TextBlock x:Name="TranscriptMeta" Grid.Column="1"
-                               Text="" FontSize="11"
+                    <StackPanel x:Name="RecTranscriptTabHeader" Grid.Column="0"
+                                Tag="transcript" Spacing="4"
+                                PointerPressed="RecTab_PointerPressed">
+                      <TextBlock x:Name="RecTranscriptTabLabel" Text="Live transcript"
+                                 FontSize="14" FontWeight="SemiBold"/>
+                      <Rectangle x:Name="RecTranscriptTabUnderline" Height="2"
+                                 Fill="{ThemeResource AccentFillColorDefaultBrush}"/>
+                    </StackPanel>
+                    <StackPanel x:Name="RecNotesTabHeader" Grid.Column="1"
+                                Tag="notes" Spacing="4"
+                                PointerPressed="RecTab_PointerPressed">
+                      <TextBlock x:Name="RecNotesTabLabel" Text="Notes"
+                                 FontSize="14" FontWeight="SemiBold" Opacity="0.6"/>
+                      <Rectangle x:Name="RecNotesTabUnderline" Height="2"
+                                 Fill="{ThemeResource AccentFillColorDefaultBrush}"
+                                 Visibility="Collapsed"/>
+                    </StackPanel>
+                    <TextBlock x:Name="TranscriptMeta" Grid.Column="2"
+                               Text="" FontSize="11" HorizontalAlignment="Right"
                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                                VerticalAlignment="Center"/>
                   </Grid>
                 </Border>
-                <ScrollViewer x:Name="TranscriptScroll" Grid.Row="1"
-                              VerticalScrollBarVisibility="Auto"
-                              HorizontalScrollBarVisibility="Disabled">
-                  <StackPanel Padding="14" Spacing="10">
-                    <TextBlock x:Name="TranscriptText"
-                               Text="🎙️ Listening… first chunk lands in ~15 s."
-                               TextWrapping="Wrap" FontSize="14"
-                               IsTextSelectionEnabled="True"
-                               Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
-                  </StackPanel>
-                </ScrollViewer>
+
+                <!-- Content: transcript scroll OR notes composer -->
+                <Grid Grid.Row="1">
+                  <ScrollViewer x:Name="TranscriptScroll"
+                                VerticalScrollBarVisibility="Auto"
+                                HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel Padding="14" Spacing="10">
+                      <TextBlock x:Name="TranscriptText"
+                                 Text="🎙️ Listening… first chunk lands in ~15 s."
+                                 TextWrapping="Wrap" FontSize="14"
+                                 IsTextSelectionEnabled="True"
+                                 Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
+                    </StackPanel>
+                  </ScrollViewer>
+
+                  <!-- Notes tab: a free, multi-line markdown scratchpad. Each
+                       "Add note" stamps the current [mm:ss] and appends the
+                       block to notes.md. Same store as the Done Notes tab. -->
+                  <Grid x:Name="RecNotesPanel" Visibility="Collapsed"
+                        Padding="14" RowSpacing="8">
+                    <Grid.RowDefinitions>
+                      <RowDefinition Height="*"/>
+                      <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <TextBox x:Name="NoteInput" Grid.Row="0"
+                             PlaceholderText="Jot a note — multi-line, markdown ok. Flagged as important for the recap."
+                             AcceptsReturn="True" TextWrapping="Wrap"
+                             VerticalAlignment="Stretch"
+                             VerticalContentAlignment="Top" MaxLength="4000"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto"
+                             KeyDown="NoteInput_KeyDown"/>
+                    <Grid Grid.Row="1">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                      </Grid.ColumnDefinitions>
+                      <TextBlock Grid.Column="0" VerticalAlignment="Center"
+                                 Text="Ctrl+Enter to add · stamped with the meeting time"
+                                 FontSize="11"
+                                 Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                      <Button x:Name="AddNoteBtn" Grid.Column="1"
+                              Click="AddNote_Click">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                          <FontIcon Glyph="&#xE70F;" FontSize="14"/>
+                          <TextBlock Text="Add note"/>
+                        </StackPanel>
+                      </Button>
+                    </Grid>
+                  </Grid>
+                </Grid>
               </Grid>
             </Border>
           </Grid>
