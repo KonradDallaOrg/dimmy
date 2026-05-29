@@ -72,6 +72,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
            ProcessInfo.processInfo.environment["DIMMY_TAP_PROBE"] == "1" {
             SystemAudioProcessTap.runDiagnosticProbe()
         }
+        if #available(macOS 14.4, *),
+           ProcessInfo.processInfo.environment["DIMMY_TAP_PROBE_MULTI"] == "1" {
+            DispatchQueue.global(qos: .userInteractive).async {
+                SystemAudioProcessTap.runMultiConfigProbe()
+            }
+        }
 
         // UI-only setup. No audio, no keychain, no permission-triggering calls yet.
         statusBarController = StatusBarController(appState: appState)

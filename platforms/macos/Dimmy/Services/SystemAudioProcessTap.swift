@@ -108,7 +108,16 @@ final class SystemAudioProcessTap {
             kAudioAggregateDeviceUIDKey: aggregateUID,
             kAudioAggregateDeviceIsPrivateKey: true,
             kAudioAggregateDeviceIsStackedKey: false,
-            kAudioAggregateDeviceTapAutoStartKey: true,
+            // Tahoe (macOS 26.x) HAL regression: when `TapAutoStart=true`, the
+            // aggregate registers but its IO proc never fires (observed on 26.2:
+            // `HALS_MultiTap::register_autostart_context` succeeds, then a flood
+            // of `HandleRecordingStatusChangeForIsolatedIO: No kDeviceInput
+            // streams` and zero samples ever reach the callback). With
+            // `TapAutoStart=false` + the explicit `AudioDeviceStart` below, the
+            // IO proc fires reliably across 14.4–26.2. Verified 2026-05-29 via
+            // `runMultiConfigProbe` (V0=samples=0 vs V1=samples=142848 in 3 s).
+            // Chromium upstream uses `false` for the same reason.
+            kAudioAggregateDeviceTapAutoStartKey: false,
             kAudioAggregateDeviceTapListKey: [[
                 kAudioSubTapDriftCompensationKey: true,
                 kAudioSubTapUIDKey: description.uuid.uuidString,
@@ -316,6 +325,189 @@ final class SystemAudioProcessTap {
             0, nil, &deviceSize, &deviceID) == noErr,
             deviceID != AudioObjectID(kAudioObjectUnknown) else { return nil }
 
+        var uidAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceUID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var uid: CFString?
+        var uidSize = UInt32(MemoryLayout<CFString?>.size)
+        let err = withUnsafeMutablePointer(to: &uid) {
+            AudioObjectGetPropertyData(deviceID, &uidAddress, 0, nil, &uidSize, $0)
+        }
+        guard err == noErr, let uid else { return nil }
+        return uid as String
+    }
+
+    /// Multi-config probe (`DIMMY_TAP_PROBE_MULTI=1`): try 6 aggregate
+    /// configurations sequentially to isolate why `runDiagnosticProbe`
+    /// returns samples=0 on Tahoe while Notion's tap captures audio.
+    /// Each variant runs ~3 s; play audio throughout for ~25 s total.
+    fileprivate struct ProbeVariant {
+        let label: String
+        let mutate: (inout [String: Any], String) -> Void
+        let useDefaultOutput: Bool
+        let driftComp: Bool
+    }
+
+    static func runMultiConfigProbe() {
+        NSLog("[ProbeMulti] starting — play system audio NOW and keep it playing for ~30 s")
+        let outDefSys = defaultOutputDeviceUID() ?? ""
+        let outDef = defaultRegularOutputDeviceUID() ?? ""
+        NSLog("[ProbeMulti] DefaultSystemOutput=%@ DefaultOutput=%@",
+              outDefSys, outDef)
+
+        let variants: [ProbeVariant] = [
+            ProbeVariant(label: "V0_baseline",
+                         mutate: { _, _ in },
+                         useDefaultOutput: false,
+                         driftComp: true),
+            ProbeVariant(label: "V1_no_autostart",
+                         mutate: { dict, _ in dict[kAudioAggregateDeviceTapAutoStartKey] = false },
+                         useDefaultOutput: false,
+                         driftComp: true),
+            ProbeVariant(label: "V2_tap_only",
+                         mutate: { dict, _ in
+                             dict.removeValue(forKey: kAudioAggregateDeviceMainSubDeviceKey)
+                             dict.removeValue(forKey: kAudioAggregateDeviceSubDeviceListKey)
+                         },
+                         useDefaultOutput: false,
+                         driftComp: true),
+            ProbeVariant(label: "V3_default_output",
+                         mutate: { _, _ in },
+                         useDefaultOutput: true,
+                         driftComp: true),
+            ProbeVariant(label: "V4_no_drift_comp",
+                         mutate: { _, _ in },
+                         useDefaultOutput: false,
+                         driftComp: false),
+            ProbeVariant(label: "V5_no_main_with_sublist",
+                         mutate: { dict, _ in
+                             dict.removeValue(forKey: kAudioAggregateDeviceMainSubDeviceKey)
+                         },
+                         useDefaultOutput: false,
+                         driftComp: true),
+        ]
+
+        for variant in variants {
+            tryVariant(variant)
+            Thread.sleep(forTimeInterval: 0.4)
+        }
+        NSLog("[ProbeMulti] ALL DONE")
+    }
+
+    private static func tryVariant(_ variant: ProbeVariant) {
+        let label = variant.label
+        let outputUID = variant.useDefaultOutput
+            ? (defaultRegularOutputDeviceUID() ?? defaultOutputDeviceUID())
+            : defaultOutputDeviceUID()
+
+        let description = CATapDescription(monoGlobalTapButExcludeProcesses: [])
+        description.uuid = UUID()
+        description.name = "Probe-\(label)"
+        description.muteBehavior = .unmuted
+        description.isPrivate = true
+        description.isExclusive = false
+
+        var tapID = AudioObjectID(kAudioObjectUnknown)
+        var err = AudioHardwareCreateProcessTap(description, &tapID)
+        guard err == noErr, tapID != AudioObjectID(kAudioObjectUnknown) else {
+            NSLog("[ProbeMulti] %@ CreateTap FAIL err=%d", label, err)
+            return
+        }
+        defer { AudioHardwareDestroyProcessTap(tapID) }
+
+        guard let asbd = readTapFormat(tapID) else {
+            NSLog("[ProbeMulti] %@ readTapFormat FAIL", label)
+            return
+        }
+        let rate = asbd.mSampleRate > 0 ? Int32(asbd.mSampleRate) : 48_000
+
+        let aggregateUID = UUID().uuidString
+        var dict: [String: Any] = [
+            kAudioAggregateDeviceNameKey: "Probe-Aggregate-\(label)",
+            kAudioAggregateDeviceUIDKey: aggregateUID,
+            kAudioAggregateDeviceIsPrivateKey: true,
+            kAudioAggregateDeviceIsStackedKey: false,
+            kAudioAggregateDeviceTapAutoStartKey: true,
+            kAudioAggregateDeviceTapListKey: [[
+                kAudioSubTapDriftCompensationKey: variant.driftComp,
+                kAudioSubTapUIDKey: description.uuid.uuidString,
+            ]],
+        ]
+        if let outputUID {
+            dict[kAudioAggregateDeviceMainSubDeviceKey] = outputUID
+            dict[kAudioAggregateDeviceSubDeviceListKey] = [[kAudioSubDeviceUIDKey: outputUID]]
+        }
+        variant.mutate(&dict, outputUID ?? "")
+
+        var aggregateID = AudioObjectID(kAudioObjectUnknown)
+        err = AudioHardwareCreateAggregateDevice(dict as CFDictionary, &aggregateID)
+        guard err == noErr, aggregateID != AudioObjectID(kAudioObjectUnknown) else {
+            NSLog("[ProbeMulti] %@ CreateAggregate FAIL err=%d", label, err)
+            return
+        }
+        defer { AudioHardwareDestroyAggregateDevice(aggregateID) }
+
+        // count input streams of aggregate (sanity)
+        var streamsAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreams,
+            mScope: kAudioDevicePropertyScopeInput,
+            mElement: kAudioObjectPropertyElementMain)
+        var sz: UInt32 = 0
+        AudioObjectGetPropertyDataSize(aggregateID, &streamsAddr, 0, nil, &sz)
+        let nStreams = Int(sz) / MemoryLayout<AudioObjectID>.size
+
+        final class C { var n = 0; var p: Float = 0 }
+        let counter = C()
+        nonisolated(unsafe) let unsafeCounter = counter
+
+        var procID: AudioDeviceIOProcID?
+        let queue = DispatchQueue(label: "probe.io.\(label)", qos: .userInteractive)
+        err = AudioDeviceCreateIOProcIDWithBlock(&procID, aggregateID, queue) { _, inInput, _, _, _ in
+            let abl = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inInput))
+            guard let buf = abl.first, let data = buf.mData else { return }
+            let count = Int(buf.mDataByteSize) / MemoryLayout<Float>.size
+            unsafeCounter.n += count
+            let fs = data.assumingMemoryBound(to: Float.self)
+            var pk: Float = 0
+            for i in 0..<count { pk = max(pk, abs(fs[i])) }
+            if pk > unsafeCounter.p { unsafeCounter.p = pk }
+        }
+        guard err == noErr, let procID else {
+            NSLog("[ProbeMulti] %@ CreateIOProc FAIL err=%d", label, err)
+            return
+        }
+        defer {
+            AudioDeviceStop(aggregateID, procID)
+            AudioDeviceDestroyIOProcID(aggregateID, procID)
+        }
+
+        err = AudioDeviceStart(aggregateID, procID)
+        if err != noErr {
+            NSLog("[ProbeMulti] %@ AudioDeviceStart FAIL err=%d nStreams=%d",
+                  label, err, nStreams)
+            return
+        }
+
+        Thread.sleep(forTimeInterval: 3.0)
+
+        NSLog("[ProbeMulti] %@ DONE outputUID=%@ nStreams=%d samples=%d peak=%.4f rate=%d",
+              label, outputUID ?? "<none>", nStreams, counter.n, counter.p, rate)
+    }
+
+    /// `kAudioHardwarePropertyDefaultOutputDevice` (vs DefaultSystemOutput).
+    /// On macOS the two diverge when audio routes change (e.g. BT plug-in).
+    private static func defaultRegularOutputDeviceUID() -> String? {
+        var deviceAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var deviceID = AudioObjectID(kAudioObjectUnknown)
+        var deviceSize = UInt32(MemoryLayout<AudioObjectID>.size)
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &deviceAddress,
+            0, nil, &deviceSize, &deviceID) == noErr,
+            deviceID != AudioObjectID(kAudioObjectUnknown) else { return nil }
         var uidAddress = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyDeviceUID,
             mScope: kAudioObjectPropertyScopeGlobal,
