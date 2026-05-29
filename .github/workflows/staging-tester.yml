@@ -399,6 +399,7 @@ jobs:
           ln -sf /Applications build/dmg-contents/Applications
           create-dmg \
             --volname "Dimmy Staging" \
+            --background "dmg-assets/dmg-background.png" \
             --window-pos 200 120 \
             --window-size 660 400 \
             --icon-size 128 \
