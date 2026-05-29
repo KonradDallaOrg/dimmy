@@ -286,6 +286,13 @@ public sealed partial class MeetingWindow : Window
         StartBtn.IsEnabled = false;
         try
         {
+            // Capture the recap choice NOW (start time) into a shared flag so
+            // EVERY stop path honours it — the checkbox lives only in this
+            // window and the meeting lifecycle is decoupled (window can close,
+            // pill/popup stop independently), so the live checkbox isn't
+            // reachable from those paths.
+            if (App.Instance?.AppViewModel != null)
+                App.Instance.AppViewModel.MeetingGenerateRecap = GenerateRecapCheck.IsChecked == true;
             var buf = new byte[256];
             int rc = DimmyNative.dimmy_meeting_start(buf, buf.Length);
             if (rc <= 0)
@@ -412,7 +419,8 @@ public sealed partial class MeetingWindow : Window
             await LoadDoneAudioAsync(dir);
             await LoadNotesAsync(dir);
 
-            if (GenerateRecapCheck.IsChecked == true && !string.IsNullOrWhiteSpace(transcript))
+            bool wantRecap = App.Instance?.AppViewModel?.MeetingGenerateRecap ?? true;
+            if (wantRecap && !string.IsNullOrWhiteSpace(transcript))
             {
                 SetProcStep(2, false);
                 await GeneratePostProcessAsync(dir, transcript);

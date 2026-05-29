@@ -1244,7 +1244,12 @@ public sealed partial class PillWindow : Window
             // the pill flipped back to Idle in 1-2 s while the recap
             // ran silently in the background, and the user had no
             // signal that the recap was being generated.
-            if (!string.IsNullOrEmpty(dir) && !string.IsNullOrWhiteSpace(transcript))
+            // Honour the recap choice captured at meeting start. If the user
+            // started with "Generate recap" unchecked, the stop path (pill OR
+            // call-detect popup, both land here) must NOT recap — same as the
+            // meeting window's own stop.
+            bool wantRecap = App.Instance?.AppViewModel?.MeetingGenerateRecap ?? true;
+            if (wantRecap && !string.IsNullOrEmpty(dir) && !string.IsNullOrWhiteSpace(transcript))
             {
                 var result = await Services.MeetingPostProcessService.RunRecapAsync(dir, transcript);
                 if (!result.Success)
@@ -1264,7 +1269,12 @@ public sealed partial class PillWindow : Window
             }
             else
             {
-                App.Log("Pill Stop: no transcript / dir — skipping recap", "Pill");
+                App.Log(wantRecap
+                    ? "Pill Stop: no transcript / dir — skipping recap"
+                    : "Pill Stop: recap disabled at start — skipping recap", "Pill");
+                // Even with no recap, surface the finished meeting (transcript
+                // + audio) in the window if it's open.
+                if (!string.IsNullOrEmpty(dir)) App.Instance?.NotifyMeetingRecapSaved(dir);
             }
         }
         catch (Exception ex)

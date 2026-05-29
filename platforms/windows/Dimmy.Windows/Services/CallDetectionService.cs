@@ -163,6 +163,39 @@ internal sealed class CallDetectionService : IDisposable
         return true;
     }
 
+    /// Adopt a call as the meeting origin WHILE a meeting is already
+    /// active — the common flow where the user starts recording first and
+    /// joins the call after (so the meeting-start binding ran before any
+    /// call existed). Samples capture sessions; the first real call app
+    /// (not Dimmy itself, not a system process) capturing the mic becomes
+    /// the origin and the Rust stop-path is armed. Idempotent; only acts
+    /// while `_meetingOriginSessionId` is still null.
+    private void TryAdoptCallOriginDuringMeeting()
+    {
+        try
+        {
+            var live = SampleActiveCaptureSessions();
+            int ownPid = Environment.ProcessId;
+            foreach (var (sessionId, pid) in live)
+            {
+                if (pid == ownPid) continue; // Dimmy's own meeting mic capture
+                var exe = ResolveProcessExeName(pid);
+                if (string.IsNullOrEmpty(exe) || SystemExesToIgnore.Contains(exe)) continue;
+                _emittedSessions[sessionId] = exe;
+                _lastEmittedExe = exe;
+                _meetingOriginSessionId = sessionId;
+                _meetingDrivenByCallDetect = true;
+                try { DimmyNative.dimmy_call_meeting_started_external(); } catch { }
+                App.Log($"adopted call origin mid-meeting: exe={exe} pid={pid} id=…{TailOf(sessionId)}", "CallDetect");
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            App.Log($"adopt-origin failed: {ex.Message}", "CallDetect");
+        }
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
@@ -221,6 +254,15 @@ internal sealed class CallDetectionService : IDisposable
         {
             try
             {
+                if (_meetingOriginSessionId == null)
+                {
+                    // Meeting active but no call origin yet — typically the
+                    // user started recording FIRST and joined the call after,
+                    // so the meeting-start binding ran before any call existed.
+                    // Keep watching: adopt the call session the moment it shows
+                    // up so leaving the call still suggests stop.
+                    TryAdoptCallOriginDuringMeeting();
+                }
                 if (_meetingDrivenByCallDetect && _meetingOriginSessionId != null)
                 {
                     // Session-id-driven stop. Re-enumerate, look for

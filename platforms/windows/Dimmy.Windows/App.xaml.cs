@@ -1578,6 +1578,9 @@ public partial class App : Application
                 return;
             }
             Log("StartMeetingFromCallDetect: meeting started, opening window", "CallDetect");
+            // Call-detect-started meetings recap by default (the nudge
+            // itself offers "Record + recap"). No checkbox is involved here.
+            if (_appViewModel != null) _appViewModel.MeetingGenerateRecap = true;
             // Bind the originating WASAPI session id so the
             // CallDetectionService meeting-tick can stop the meeting
             // the moment the call ends — no amplitude-based silence

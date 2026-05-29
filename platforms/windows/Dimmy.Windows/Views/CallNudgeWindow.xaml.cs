@@ -161,11 +161,17 @@ public sealed partial class CallNudgeWindow : Window
         TitleText.Text = string.IsNullOrEmpty(appId)
             ? "Call ended?"
             : $"{_currentAppName} call ended?";
-        BodyText.Text = "No activity for a while. Stop & recap?";
+        // Honour the recap choice from meeting start: if recap was turned
+        // off, the CTA must read (and do) "Stop" — not promise a recap it
+        // won't run.
+        bool wantRecap = App.Instance?.AppViewModel?.MeetingGenerateRecap ?? true;
+        BodyText.Text = wantRecap
+            ? "No activity for a while. Stop & recap?"
+            : "No activity for a while. Stop recording?";
         HeaderIcon.Glyph = "";
         DontAskMenuItem.Visibility = Visibility.Collapsed;
         NotNowButton.Content = "Keep recording";
-        RecordButton.Content = "Stop & recap";
+        RecordButton.Content = wantRecap ? "Stop & recap" : "Stop";
 
         PositionAtScreenBottomRight();
         WindowHelper.ShowWithoutActivating(this);
