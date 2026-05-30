@@ -224,6 +224,11 @@ Hardening status: see [`docs/dev/system-audio-capture-tests.md`](docs/dev/system
 - `process_buffer()` calls `process()` ONCE with all samples. The entire recording goes through a single VAD → AGC pass.
 - Always NaN/Inf-check and clamp audio output.
 
+### Windows icon assets — FROZEN, do NOT swap with brand-kit-latest
+The shipping `dimmy.ico`, `dimmy-logo.png`, `dimmy-tray-{dark,light}-{idle,recording,transcribing,processing,completing,paused}.ico` (12 + idle alias) are **SOLID-fill silhouettes** sourced from the older brand-kit revision (`~/Pictures/dimmy-brand/windows/icon-1024-edge.png` + `icon-1024-edge-white.png`). The current brand-kit-latest ships `icon-1024.png` / `icon-1024-white.png` which are **outline-only thin renders** — they downscale to 1px strokes at the 16-24px taskbar / tray sizes and visually vanish.
+
+**Rule:** never replace these assets with the `icon-1024.png` / `icon-1024-white.png` from any brand-kit refresh. If you must regenerate, run `scripts/dev/bake-win-tray-icons.py` (uses the solid sources via `DIMMY_TRAY_WHITE_SRC` + `DIMMY_APP_GRADIENT_SRC` env overrides). Burned 2026-05-30 twice — first bake used the thin outline source → user reported "icone PICCOLE si vedono di MERDA"; second pass used the solid edge source → fixed. The `ICONS.md` next to the assets must stay in sync.
+
 ### Config & keys — single-writer rule
 - **Only the Rust core writes `config.json`.** UIs send updates via `dimmy_set_config_json()` and re-read. The C# / Swift / Rust-UI layers NEVER write the config file directly.
 - API keys live in `~/.config/dimmy/keys.enc` (AES-256-GCM, machine-specific key derivation). **Never in `config.json`.** The `use_keyring` config field is forced to `false` — keyring is read-only fallback only.

@@ -100,4 +100,34 @@ public static class ThemeHelper
         }
         return false;
     }
+
+    /// <summary>True iff the Windows taskbar / Start / system chrome is dark.
+    ///
+    /// Windows exposes two separate theme switches: `AppsUseLightTheme`
+    /// (affects in-app surfaces) and `SystemUsesLightTheme` (affects the
+    /// taskbar, Start menu, action center). They can disagree — a common
+    /// setup is "apps dark, taskbar dark" but plenty of users run "apps
+    /// dark, taskbar light" too.
+    ///
+    /// For the system-tray icon, what matters is the TASKBAR theme, so
+    /// callers picking a tray .ico should ask this — NOT `SystemIsDark()`.
+    /// Defaults to dark on read failure: that matches Windows 11's
+    /// default install and the previously-shipped tray icon (white edge),
+    /// so users on a stock fresh install still get a readable icon.</summary>
+    public static bool SystemTaskbarIsDark()
+    {
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(
+                @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
+            if (key?.GetValue("SystemUsesLightTheme") is int v)
+                return v == 0;
+        }
+        catch
+        {
+            // Same rationale as SystemIsDark — keep the icon readable on
+            // the most common Win11 chrome rather than vanishing.
+        }
+        return true;
+    }
 }

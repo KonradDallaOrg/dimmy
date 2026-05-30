@@ -336,10 +336,14 @@ jobs:
           chmod +x "$RESOURCES_DIR/dimmy-mcp"
           codesign --force --sign - "$RESOURCES_DIR/dimmy-mcp"
 
-      - name: Generate DMG background (SVG → PNG)
+      - name: Generate DMG background (SVG → Retina PNG)
         run: |
           brew install librsvg
-          rsvg-convert -w 660 -h 400 platforms/macos/dmg-assets/dmg-background.svg -o platforms/macos/dmg-assets/dmg-background.png
+          # 2× of the 660×400 Finder window so Retina displays render
+          # the curve + label crisp instead of upscaling a 1× PNG.
+          # Finder scales to fit the window; a 1320×800 source = 1:1
+          # texel-to-pixel on Retina.
+          rsvg-convert -w 1320 -h 800 platforms/macos/dmg-assets/dmg-background.svg -o platforms/macos/dmg-assets/dmg-background.png
 
       - name: Create DMG
         working-directory: platforms/macos

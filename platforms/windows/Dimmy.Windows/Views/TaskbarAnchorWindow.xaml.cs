@@ -142,16 +142,16 @@ public sealed partial class TaskbarAnchorWindow : Window
         return DefSubclassProc(hWnd, msg, wParam, lParam);
     }
 
-    /// <summary>Set the taskbar button's icon. Prefers the white edge-to-edge
-    /// variant (dimmy-taskbar.ico) because Win11 taskbar chrome is dark; falls
-    /// back to the gradient EXE icon, then the WinUI default.</summary>
+    /// <summary>Set the taskbar button's icon to the gradient edge-to-edge
+    /// EXE icon. The taskbar button is the user's primary surface and
+    /// reads as "the app" — the gradient cloud is the brand mark. The
+    /// monochrome white/black variants are reserved for the system tray
+    /// where contrast against the system chrome is the constraint.</summary>
     private void TrySetWindowIcon()
     {
         var exeDir = AppContext.BaseDirectory;
         var paths = new[]
         {
-            Path.Combine(exeDir, "Assets", "dimmy-taskbar.ico"),
-            Path.Combine(exeDir, "dimmy-taskbar.ico"),
             Path.Combine(exeDir, "Assets", "dimmy.ico"),
             Path.Combine(exeDir, "dimmy.ico"),
         };

@@ -378,6 +378,13 @@ jobs:
           xcrun stapler staple "$APP_PATH"
           xcrun stapler validate "$APP_PATH"
 
+      - name: Generate DMG background (SVG → Retina PNG)
+        run: |
+          brew install librsvg
+          # 2× of the 660×400 Finder window so the arrow + label render
+          # crisp on Retina (see staging-auto-update.yml for context).
+          rsvg-convert -w 1320 -h 800 platforms/macos/dmg-assets/dmg-background.svg -o platforms/macos/dmg-assets/dmg-background.png
+
       - name: Create DMG
         working-directory: platforms/macos
         run: |

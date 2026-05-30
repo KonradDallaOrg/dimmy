@@ -204,6 +204,13 @@ public class TrayService : IDisposable
     // user relaunches Dimmy. Burned 2026-05-30 chasing icon-cache refresh.
     private uint _taskbarCreatedMsg;
 
+    // Win32 standard setting-change broadcast. Windows fires this with
+    // lParam = "ImmersiveColorSet" the moment the user toggles light/dark
+    // in Settings → Personalization → Colors. We use it to flip the tray
+    // icon's tone (black ↔ white silhouette) live, without waiting for
+    // the next state transition.
+    private const uint WM_SETTINGCHANGE = 0x001A;
+
     private Action? _onShowMenu;
 
     public TrayService(
@@ -238,8 +245,10 @@ public class TrayService : IDisposable
 
     private void AddTrayIcon()
     {
-        // Default state: idle / ready (white edge variant).
-        _currentIconPath = ResolveIconPath("dimmy-tray-idle.ico", "dimmy-taskbar.ico", "dimmy.ico");
+        // Default state: idle / ready. Picks the variant whose tone
+        // contrasts with the user's current taskbar chrome — white cloud
+        // on a dark taskbar, black cloud on a light taskbar.
+        _currentIconPath = ResolveIconPath(IdleIconForCurrentTaskbarTheme(), "dimmy-tray-idle.ico", "dimmy.ico");
         if (_hIcon != IntPtr.Zero) { DestroyIcon(_hIcon); _hIcon = IntPtr.Zero; }
         _hIcon = LoadTrayIconFromPath(_currentIconPath);
 
@@ -304,7 +313,76 @@ public class TrayService : IDisposable
             return IntPtr.Zero;
         }
 
+        if (msg == WM_SETTINGCHANGE && _iconAdded)
+        {
+            // lParam → null-terminated wide string naming the changed
+            // setting class. We only care about ImmersiveColorSet, the
+            // category that includes light/dark theme toggles. Filtering
+            // here avoids re-loading + NIM_MODIFY on every unrelated
+            // SystemParametersInfo broadcast.
+            try
+            {
+                if (lParam != IntPtr.Zero)
+                {
+                    var name = Marshal.PtrToStringUni(lParam);
+                    if (string.Equals(name, "ImmersiveColorSet", StringComparison.OrdinalIgnoreCase))
+                    {
+                        RefreshIconForTheme();
+                    }
+                }
+            }
+            catch
+            {
+                // Defensive: PtrToStringUni on a non-string lParam would
+                // throw. Swallow — we'd just miss one tone flip, the next
+                // state transition picks the right icon anyway.
+            }
+            // Fall through to DefSubclassProc so the system still gets to
+            // propagate the broadcast to other subscribers.
+        }
+
         return DefSubclassProc(hWnd, msg, wParam, lParam);
+    }
+
+    /// <summary>Re-pick the tray .ico for the current taskbar tone and swap
+    /// it in via NIM_MODIFY. Preserves the current state slug — only the
+    /// dark/light prefix changes. Cheap enough to call on every theme
+    /// broadcast without debouncing.</summary>
+    private void RefreshIconForTheme()
+    {
+        // Derive the state slug from the current icon path so the live
+        // flip preserves whatever state the app is in (recording → keeps
+        // the red dot, just swaps the cloud tone).
+        var current = Path.GetFileName(_currentIconPath);
+        string stateSlug = "idle";
+        if (!string.IsNullOrEmpty(current))
+        {
+            // Filename shape: dimmy-tray-{theme}-{state}.ico OR legacy
+            // dimmy-tray-{state}.ico — extract the trailing state slug.
+            var stem = Path.GetFileNameWithoutExtension(current);
+            var parts = stem.Split('-');
+            if (parts.Length >= 2) stateSlug = parts[^1];
+        }
+
+        var themeSlug = Helpers.ThemeHelper.SystemTaskbarIsDark() ? "dark" : "light";
+        var iconFile = $"dimmy-tray-{themeSlug}-{stateSlug}.ico";
+        var path = ResolveIconPath(iconFile, $"dimmy-tray-{stateSlug}.ico", "dimmy.ico");
+        if (string.IsNullOrEmpty(path) || path == _currentIconPath) return;
+
+        var newHIcon = LoadTrayIconFromPath(path);
+        if (newHIcon == IntPtr.Zero) return;
+
+        var oldHIcon = _hIcon;
+        _hIcon = newHIcon;
+        _currentIconPath = path;
+
+        var nid = MakeNid();
+        nid.uFlags = NIF_ICON | NIF_TIP;
+        nid.hIcon = _hIcon;
+        nid.szTip = _currentTip.Length > 127 ? _currentTip[..127] : _currentTip;
+        Shell_NotifyIcon(NIM_MODIFY, ref nid);
+
+        if (oldHIcon != IntPtr.Zero) DestroyIcon(oldHIcon);
     }
 
     private void ShowContextMenu()
@@ -390,6 +468,15 @@ public class TrayService : IDisposable
         {
             DestroyMenu(menu);
         }
+    }
+
+    /// <summary>Idle-state .ico for the user's current taskbar theme. Pulled
+    /// out as a one-liner so both AddTrayIcon (initial draw) and UpdateState
+    /// (state transitions) agree on the same source of truth.</summary>
+    private static string IdleIconForCurrentTaskbarTheme()
+    {
+        var themeSlug = Helpers.ThemeHelper.SystemTaskbarIsDark() ? "dark" : "light";
+        return $"dimmy-tray-{themeSlug}-idle.ico";
     }
 
     /// <summary>Resolve the first existing path among Assets/{name} or {name}
@@ -497,24 +584,30 @@ public class TrayService : IDisposable
     {
         if (!_iconAdded) return;
 
-        string iconFile;
+        string stateSlug;
         string tip;
-        if (meetingActive && meetingPaused) { iconFile = "dimmy-tray-paused.ico";       tip = "Dimmy — Meeting paused"; }
-        else if (meetingActive)             { iconFile = "dimmy-tray-recording.ico";    tip = "Dimmy — Meeting recording"; }
+        if (meetingActive && meetingPaused) { stateSlug = "paused";       tip = "Dimmy — Meeting paused"; }
+        else if (meetingActive)             { stateSlug = "recording";    tip = "Dimmy — Meeting recording"; }
         else
         {
             switch (state)
             {
-                case AppState.Recording:    iconFile = "dimmy-tray-recording.ico";    tip = "Dimmy — Recording…"; break;
-                case AppState.Transcribing: iconFile = "dimmy-tray-transcribing.ico"; tip = "Dimmy — Transcribing…"; break;
-                case AppState.Processing:   iconFile = "dimmy-tray-processing.ico";   tip = "Dimmy — Processing…"; break;
-                case AppState.Completing:   iconFile = "dimmy-tray-completing.ico";   tip = "Dimmy — Done"; break;
-                default:                    iconFile = "dimmy-tray-idle.ico";         tip = "Dimmy — Ready"; break;
+                case AppState.Recording:    stateSlug = "recording";    tip = "Dimmy — Recording…"; break;
+                case AppState.Transcribing: stateSlug = "transcribing"; tip = "Dimmy — Transcribing…"; break;
+                case AppState.Processing:   stateSlug = "processing";   tip = "Dimmy — Processing…"; break;
+                case AppState.Completing:   stateSlug = "completing";   tip = "Dimmy — Done"; break;
+                default:                    stateSlug = "idle";         tip = "Dimmy — Ready"; break;
             }
         }
         if (tooltip != null) tip = tooltip;
 
-        var path = ResolveIconPath(iconFile, "dimmy-taskbar.ico", "dimmy.ico");
+        // Re-resolve the taskbar tone every UpdateState call — cheap
+        // (one registry read) and means the icon flips automatically the
+        // next time the app changes state after the user toggles theme.
+        var themeSlug = Helpers.ThemeHelper.SystemTaskbarIsDark() ? "dark" : "light";
+        var iconFile = $"dimmy-tray-{themeSlug}-{stateSlug}.ico";
+        // Fallback chain: themed → legacy un-themed (dark only) → EXE icon.
+        var path = ResolveIconPath(iconFile, $"dimmy-tray-{stateSlug}.ico", "dimmy.ico");
         if (path == _currentIconPath && tip == _currentTip) return; // no-op
 
         var newHIcon = LoadTrayIconFromPath(path);

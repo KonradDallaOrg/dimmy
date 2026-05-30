@@ -1,0 +1,6 @@
+# Generated at build time by `rsvg-convert` in the DMG workflows
+# from dmg-background.svg. Committing it goes stale fast — only the
+# SVG is source-of-truth.
+dmg-background.png
+dmg-background@2x.png
+dmg-background.tiff
