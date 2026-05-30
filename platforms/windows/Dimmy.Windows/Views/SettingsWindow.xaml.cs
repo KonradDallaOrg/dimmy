@@ -4856,9 +4856,17 @@ public sealed partial class SettingsWindow : Window
     /// One-click "Enable & send": the previous attempt returned -2
     /// (telemetry disabled). Turn sending on, then retry the same
     /// message. The explicit click is the user's consent.
+    ///
+    /// Feedback rides the Sentry pipeline, which is gated by the
+    /// CRASH-reporting flag (dimmy_telemetry_set_crash_enabled), NOT
+    /// the analytics flag. Flipping TelemetryEnabled here left the
+    /// feedback gate closed → capture_feedback kept returning -2 and
+    /// the button "did nothing". Set the VM's CrashReportsEnabled
+    /// instead: its OnChanged forwards to the FFI and the bound
+    /// "Send crash reports" toggle updates with it (no UI lie).
     private void EnableAndSendFeedback_Click(object sender, RoutedEventArgs e)
     {
-        try { DimmyNative.TelemetryEnabled = true; }
+        try { ViewModel.CrashReportsEnabled = true; }
         catch { }
         EnableAndSendFeedbackBtn.Visibility = Visibility.Collapsed;
         TrySendFeedback();
