@@ -444,3 +444,89 @@ enum AddToDictionaryFlow {
         pb.setString(text, forType: .string)
     }
 }
+
+/// Capture whatever text is currently selected in the foreground app,
+/// without permanently clobbering the user's pasteboard. The macOS twin of
+/// Win's `SelectionCaptureService` and the selection grab for Command Mode.
+///
+/// Reuses the exact probe → synthesize Cmd+C → wait-for-changeCount → read
+/// → restore sequence proven by `AddToDictionaryFlow` above, with two
+/// differences: it RETURNS the captured text (instead of adding it to the
+/// dictionary), and has NO 100-char cap (Command Mode operates on
+/// paragraphs).
+///
+/// Lives in this file rather than its own so it doesn't need a new
+/// project.pbxproj entry — it sits next to `AddToDictionaryFlow`, the flow
+/// it mirrors. Accessibility is already granted for the dictation
+/// text-injection that ships today, so Command Mode adds no new prompt;
+/// when it's somehow absent the synthetic Cmd+C is a no-op, changeCount
+/// never bumps, and we return nil (caller falls back to plain dictation).
+enum SelectionCaptureFlow {
+
+    private static let probeSentinel = "__DIMMY_CMD_PROBE_v1__"
+
+    @MainActor
+    static func capture() async -> String? {
+        let pb = NSPasteboard.general
+        let previousText = pb.string(forType: .string)
+
+        // Phase 1: write sentinel, wait for changeCount bump.
+        let preProbe = pb.changeCount
+        pb.clearContents()
+        pb.setString(probeSentinel, forType: .string)
+        if !(await waitForChangeCountBump(baseline: preProbe, timeoutMs: 200)) {
+            NSLog("[CmdMode] sentinel write didn't bump pasteboard — abort")
+            return nil
+        }
+
+        // Phase 2: synthesize Cmd+C.
+        let preCopy = pb.changeCount
+        synthesizeCmdC()
+
+        // Phase 3: wait for the app to fulfill the copy.
+        if !(await waitForChangeCountBump(baseline: preCopy, timeoutMs: 500)) {
+            NSLog("[CmdMode] app didn't update pasteboard (no selection / password field / frozen)")
+            restorePasteboard(previousText)
+            return nil
+        }
+
+        guard let raw = pb.string(forType: .string) else {
+            restorePasteboard(previousText)
+            return nil
+        }
+        if raw == probeSentinel {
+            restorePasteboard(previousText)
+            return nil
+        }
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        restorePasteboard(previousText)
+        return text.isEmpty ? nil : text
+    }
+
+    private static func synthesizeCmdC() {
+        let src = CGEventSource(stateID: .combinedSessionState)
+        let down = CGEvent(keyboardEventSource: src, virtualKey: 0x08 /* kVK_ANSI_C */, keyDown: true)
+        down?.flags = .maskCommand
+        let up = CGEvent(keyboardEventSource: src, virtualKey: 0x08, keyDown: false)
+        up?.flags = .maskCommand
+        down?.post(tap: .cghidEventTap)
+        up?.post(tap: .cghidEventTap)
+    }
+
+    private static func waitForChangeCountBump(baseline: Int, timeoutMs: Int) async -> Bool {
+        let deadline = DispatchTime.now() + .milliseconds(timeoutMs)
+        let pollNs: UInt64 = 1_000_000 // 1 ms
+        while DispatchTime.now() < deadline {
+            if NSPasteboard.general.changeCount != baseline { return true }
+            try? await Task.sleep(nanoseconds: pollNs)
+        }
+        return false
+    }
+
+    private static func restorePasteboard(_ text: String?) {
+        guard let text else { return }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+    }
+}

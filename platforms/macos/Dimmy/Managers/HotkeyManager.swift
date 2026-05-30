@@ -327,6 +327,16 @@ final class HotkeyManager {
 
         let startedAt = recordingStartedAt
         recordingStartedAt = nil
+
+        // Command Mode branch: transform the user's selected text with the
+        // spoken instruction instead of dictating. Same hotkey; the
+        // status-bar/pill toggle decides the mode. Mirror of Win's
+        // App.StopAndProcess command branch.
+        if appState.commandMode {
+            Task { @MainActor in await self.stopAndCommandTransform() }
+            return
+        }
+
         // Stop recording + transcribe on background thread (blocking call)
         DispatchQueue.global(qos: .userInitiated).async {
             let transcript = DimmyCore.shared.stopRecording() ?? ""
@@ -404,6 +414,76 @@ final class HotkeyManager {
                 }
 
                 // Return to idle after brief completion animation
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    if case .completing = appState.recordingState {
+                        appState.recordingState = .idle
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Command Mode
+
+    /// Command Mode stop path: grab the user's selected text, transform it
+    /// with the spoken instruction, paste the result over the selection.
+    /// Falls back to plain dictation when nothing was selected. Mirror of
+    /// Win's `App.StopAndCommandTransform`.
+    @MainActor
+    private func stopAndCommandTransform() async {
+        guard let appState else { return }
+
+        // Grab the selection while the target app still has focus
+        // (synthetic Cmd+C round-trip; nil when nothing is selected).
+        let selection = await SelectionCaptureFlow.capture()
+        NSLog("[CmdMode] captured selection: \(selection != nil ? "\(selection!.count) chars" : "none")")
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            // Always stop recording so the session ends even with no
+            // selection. The spoken text is taken RAW (it's the
+            // instruction, not content to enhance).
+            let spoken = (DimmyCore.shared.stopRecording() ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            DimmyCore.shared.clearAppContext()
+
+            var resolved: String?
+            var resolvedRc: Int32 = 0
+            if !spoken.isEmpty {
+                if let sel = selection, !sel.isEmpty {
+                    let t = DimmyCore.shared.commandTransform(selection: sel, spoken: spoken)
+                    resolved = t.text
+                    resolvedRc = t.rc
+                } else {
+                    // No selection → behave like plain dictation and paste
+                    // what the user said (least-surprising fallback).
+                    resolved = spoken
+                    resolvedRc = 1
+                }
+            }
+            let wasEmpty = spoken.isEmpty
+            let finalText = resolved
+            let finalRc = resolvedRc
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let appState = self.appState else { return }
+                if wasEmpty {
+                    appState.recordingState = .idle
+                    return
+                }
+                guard let text = finalText, !text.isEmpty else {
+                    // rc -3 = no LLM key; other negatives = dispatch error.
+                    NSLog("[CmdMode] transform failed rc=\(finalRc)")
+                    appState.recordingState = .idle
+                    return
+                }
+                appState.lastTranscript = text
+                appState.recordingState = .completing
+                if !appState.keepInClipboard {
+                    TextInjector.shared.injectText(text)
+                } else {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                     if case .completing = appState.recordingState {
                         appState.recordingState = .idle

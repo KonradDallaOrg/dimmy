@@ -75,6 +75,15 @@ int32_t dimmy_process_with_llm(const char * _Nonnull text_ptr,
                                char * _Nonnull out_buf,
                                int32_t buf_len);
 
+/// Command Mode: transform (or replace) the user's selected text using
+/// their spoken instruction. Returns bytes written (>0) on success, or
+/// -1 invalid input, -2 dispatch failed, -3 no LLM key, -4 local model
+/// missing, -5 runtime create failed.
+int32_t dimmy_command_transform(const char * _Nonnull selection_ptr,
+                                const char * _Nonnull spoken_ptr,
+                                char * _Nonnull out_buf,
+                                int32_t buf_len);
+
 // ── Stats ───────────────────────────────────────────────────────────
 
 /// Update cumulative stats. Returns 0=OK, -1=invalid input.
