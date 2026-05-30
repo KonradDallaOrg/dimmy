@@ -1,0 +1,36 @@
+# Build artifacts — generated, NOT source. Graphify was indexing
+# obj/.g.i.cs, runtimeconfig.json, Dimmy.Windows.deps.json etc.
+# That noise produced false "god nodes" (XamlTypeInfoProvider, runtime×3,
+# DllImport-as-keyword, c_int-as-keyword) and ~35% inflated node count.
+platforms/windows/Dimmy.Windows/bin/
+platforms/windows/Dimmy.Windows/obj/
+platforms/windows/Dimmy.Windows/publish/
+platforms/windows/Dimmy.Windows.Tests/bin/
+platforms/windows/Dimmy.Windows.Tests/obj/
+core/target/
+mcp-server/target/
+platforms/linux/target/
+platforms/macos/build/
+platforms/macos/Dimmy.xcodeproj/project.xcworkspace/
+platforms/macos/Dimmy.xcodeproj/xcuserdata/
+platforms/macos/DerivedData/
+platforms/macos/Dimmy/build/
+
+# Mac AppleDouble metadata extracted from .zip — `._*` files are
+# extended-attribute placeholders, not code.
+**/__MACOSX/
+**/._*
+
+# An exploratory new-Mac mockup that lives untracked. Not part of the
+# active build; was inflating the graph (~393 nodes, dozens of fake
+# duplicate `.init()` / Contents.json entries).
+mockup/
+
+# Graphify's own outputs.
+graphify-out/
+
+# Lockfiles + manifests — they list dependencies, not code structure.
+Cargo.lock
+package-lock.json
+yarn.lock
+pnpm-lock.yaml

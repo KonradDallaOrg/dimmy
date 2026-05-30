@@ -47,3 +47,7 @@ dotnet-build.log
 
 # Local-only licensing flow notes (kept on disk, not in repo).
 docs/dev/licensing-flow.md
+
+# graphify knowledge-graph output — local experiment, do NOT commit while evaluating
+graphify-out/
+mockup/
