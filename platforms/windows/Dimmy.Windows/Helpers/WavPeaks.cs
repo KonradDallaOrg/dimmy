@@ -59,15 +59,28 @@ public static class WavPeaks
         if (cached.Length > 0) return cached;
         try
         {
-            // Heuristic: each peak serialises to at most ~14 chars
-            // ("0.1234567,"), plus 64 bytes for the duration + brackets
-            // + keys + null terminator. Round up to the next 4 KB
-            // boundary for safety on very wide canvases.
-            int needed = bucketCount * 16 + 128;
+            // Heuristic: each peak now serialises to at most 7 chars
+            // ("0.12345") + 1 separator after the Rust-side precision
+            // cap (5 decimals). Adding generous head/tail framing for
+            // duration + brackets + keys + null terminator. We retry
+            // once with 4× the budget if rc=-3 — defence-in-depth for
+            // the historical case where peaks were full f32 precision
+            // (`0.00005151328514330089`) and a 4 KB buffer overflowed
+            // → host saw rc=-3 → no peaks file written → tray meeting
+            // UI showed only the other track. Burned 2026-05-30 on
+            // `8d490f65`, `f39aceff`, `bc8750d6`.
+            int needed = bucketCount * 10 + 256;
             int bufLen = ((needed + 4095) / 4096) * 4096;
             var buf = new byte[bufLen];
             int rc = Interop.DimmyNative.dimmy_compute_audio_peaks(
                 path, bucketCount, buf, bufLen);
+            if (rc == -3)
+            {
+                bufLen *= 4;
+                buf = new byte[bufLen];
+                rc = Interop.DimmyNative.dimmy_compute_audio_peaks(
+                    path, bucketCount, buf, bufLen);
+            }
             if (rc <= 0) return Array.Empty<float>();
             string json = Encoding.UTF8.GetString(buf, 0, rc);
             using var doc = JsonDocument.Parse(json);

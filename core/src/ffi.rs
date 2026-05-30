@@ -5523,11 +5523,28 @@ pub unsafe extern "C" fn dimmy_compute_audio_peaks(
         peaks.push(peak.min(1.0));
     }
     let duration_secs = total as f64 / sample_rate as f64;
-    let payload = serde_json::json!({
-        "peaks": peaks,
-        "duration_secs": duration_secs,
-    })
-    .to_string();
+    // Manual JSON build with capped precision. `serde_json` would
+    // serialise f32 values through their f64 promotion and emit the
+    // full mantissa (~22 chars for `0.00005151328514330089`); 200
+    // buckets of those overflow the C# host's 4 KB fixed buffer →
+    // dimmy_compute_audio_peaks returns -3 and the host silently
+    // falls back to "no waveform". Cap at 5 decimals (≈3 px @ 1000 px
+    // canvas — well below the visual resolution of a waveform render)
+    // so each peak is at most 7 chars ("0.12345"), making the payload
+    // size deterministic in `bucket_count` and the buffer-sizing
+    // heuristic safe. Burned 2026-05-30 on mic-mostly-silent meetings
+    // (`8d490f65`, `f39aceff`, `bc8750d6`).
+    let mut payload = String::with_capacity(64 + buckets * 10);
+    payload.push_str(&format!(
+        "{{\"duration_secs\":{duration_secs:.3},\"peaks\":["
+    ));
+    for (i, p) in peaks.iter().enumerate() {
+        if i > 0 {
+            payload.push(',');
+        }
+        payload.push_str(&format!("{p:.5}"));
+    }
+    payload.push_str("]}");
     let bytes = payload.as_bytes();
     if bytes.len() + 1 > buf_len as usize {
         return -3;
