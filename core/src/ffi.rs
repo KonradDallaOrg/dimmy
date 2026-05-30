@@ -5307,14 +5307,31 @@ fn decode_via_symphonia(path: &str) -> Result<(Vec<f32>, u32), String> {
         .map_err(|e| format!("decoder: {e}"))?;
     let mut interleaved: Vec<f32> = Vec::new();
     let mut sample_buf: Option<SampleBuffer<f32>> = None;
+    let mut consecutive_packet_errs: u32 = 0;
     loop {
         let packet = match format.next_packet() {
-            Ok(p) => p,
+            Ok(p) => {
+                consecutive_packet_errs = 0;
+                p
+            }
             // End-of-stream surfaces as IoError(UnexpectedEof) in
             // symphonia 0.5 — treat as normal termination.
             Err(SymphoniaError::IoError(_)) => break,
             Err(SymphoniaError::ResetRequired) => break,
-            Err(e) => return Err(format!("packet: {e}")),
+            // Permissive: return whatever we decoded so far. Returning Err
+            // here used to lose ALL successfully decoded peaks just because
+            // the stream's tail was malformed — surfaced on Win as
+            // `f39aceff` (and other meetings) showing a single-band
+            // waveform instead of dual. Partial peaks > empty peaks.
+            // Burned 2026-05-30.
+            Err(SymphoniaError::DecodeError(_)) => {
+                consecutive_packet_errs += 1;
+                if consecutive_packet_errs > 64 {
+                    break;
+                }
+                continue;
+            }
+            Err(_) => break,
         };
         if packet.track_id() != track_id {
             continue;
@@ -5331,10 +5348,16 @@ fn decode_via_symphonia(path: &str) -> Result<(Vec<f32>, u32), String> {
                     interleaved.extend_from_slice(buf.samples());
                 }
             }
-            // Single-packet decode errors are recoverable on most
-            // codecs; resync on the next packet rather than aborting.
+            // Single-packet decode errors are recoverable on most codecs;
+            // resync on the next packet rather than aborting.
             Err(SymphoniaError::DecodeError(_)) => continue,
-            Err(e) => return Err(format!("decode: {e}")),
+            // ResetRequired during decode (rare): stop cleanly with the
+            // samples we've accumulated so far.
+            Err(SymphoniaError::ResetRequired) => break,
+            Err(SymphoniaError::IoError(_)) => break,
+            // Any other decoder error (Unsupported / Limit / Seek) — skip
+            // this packet and continue. Partial peaks > nothing.
+            Err(_) => continue,
         }
     }
     if interleaved.is_empty() {
