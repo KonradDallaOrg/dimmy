@@ -535,6 +535,20 @@
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4"
                             VerticalAlignment="Center">
+                  <!-- Done-view toolbar buttons (regen / copy / Notion / Claude /
+                       open folder) are flat-icon by default. Override the WinUI
+                       Button theme brushes locally so hover / pressed states
+                       paint a subtle fill — without this the entire toolbar
+                       had zero affordance and users couldn't tell which icon
+                       they were about to click. Burned 2026-05-30. -->
+                  <StackPanel.Resources>
+                    <SolidColorBrush x:Key="ButtonBackgroundPointerOver"
+                                     Color="{ThemeResource SubtleFillColorSecondary}"/>
+                    <SolidColorBrush x:Key="ButtonBackgroundPressed"
+                                     Color="{ThemeResource SubtleFillColorTertiary}"/>
+                    <SolidColorBrush x:Key="ButtonBorderBrushPointerOver" Color="Transparent"/>
+                    <SolidColorBrush x:Key="ButtonBorderBrushPressed" Color="Transparent"/>
+                  </StackPanel.Resources>
                   <Button x:Name="RegenTranscriptBtn" Click="RegenerateTranscript_Click"
                           ToolTipService.ToolTip="(Re)generate transcript from audio"
                           Background="Transparent" BorderThickness="0" Padding="8">

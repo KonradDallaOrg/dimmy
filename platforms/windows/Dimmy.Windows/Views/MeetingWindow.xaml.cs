@@ -1040,36 +1040,47 @@ public sealed partial class MeetingWindow : Window
         double h = DoneWaveformCanvas.ActualHeight;
         if (w <= 0 || h <= 0) return;
 
-        bool dual = _cachedMicPeaks != null && _cachedSystemPeaks != null;
+        // Render whichever bands actually decoded, using their canonical
+        // colours so the user can READ the failure mode at a glance:
+        //   mic = accent, system = LimeGreen, mix = accent mirrored.
+        // Burned 2026-05-30: meetings whose audio_mic.ogg has unrecoverable
+        // vorbis errors showed a blue mirrored mix waveform — visually
+        // indistinguishable from a healthy mic-only recording, so the
+        // user couldn't tell what was actually wrong.
+        var micBrush = Helpers.ThemeHelper.ResolvedAccentBrush();
+        var sysBrush = new SolidColorBrush(Microsoft.UI.Colors.LimeGreen);
         double midline = h / 2.0;
-        if (dual)
+        bool hasMic = _cachedMicPeaks != null && _cachedMicPeaks.Length > 0;
+        bool hasSys = _cachedSystemPeaks != null && _cachedSystemPeaks.Length > 0;
+        bool hasMix = _cachedDonePeaks != null && _cachedDonePeaks.Length > 0;
+        if (hasMic && hasSys)
         {
-            // Mirrored-stereo audiogram (Phase 3+ recordings with both
-            // per-track files). Both waveforms share the canvas's
-            // midline: mic (accent) grows UP, system (green) grows
-            // DOWN. Mic tracks the user's Windows accent colour;
-            // system stays LimeGreen for contrast even if the user's
-            // accent is itself blue/teal. Each band gets the FULL
-            // half-canvas height so a loud moment is readable even on
-            // short cards.
-            var micBrush = Helpers.ThemeHelper.ResolvedAccentBrush();
-            DrawDoneBandAnchored(_cachedMicPeaks!, micBrush,
-                midline, midline - 2, w, anchorTop: true);
-            DrawDoneBandAnchored(_cachedSystemPeaks!,
-                new SolidColorBrush(Microsoft.UI.Colors.LimeGreen),
-                midline, midline - 2, w, anchorTop: false);
+            // Dual-band audiogram: mic grows UP from midline (accent),
+            // system grows DOWN (green). Each gets the FULL half so loud
+            // moments stay legible on short cards.
+            DrawDoneBandAnchored(_cachedMicPeaks!, micBrush, midline, midline - 2, w, anchorTop: true);
+            DrawDoneBandAnchored(_cachedSystemPeaks!, sysBrush, midline, midline - 2, w, anchorTop: false);
         }
-        else if (_cachedDonePeaks != null && _cachedDonePeaks.Length > 0)
+        else if (hasMic)
         {
-            // Pre-Phase-3 recording (or Mic-only / System-only mode where
-            // one track file is absent). Single mirrored band so the
-            // layout matches the dual case visually. Both halves use
-            // the accent brush since only one channel is being represented.
-            var micBrush = Helpers.ThemeHelper.ResolvedAccentBrush();
-            DrawDoneBandAnchored(_cachedDonePeaks, micBrush,
-                midline, midline - 2, w, anchorTop: true);
-            DrawDoneBandAnchored(_cachedDonePeaks, micBrush,
-                midline, midline - 2, w, anchorTop: false);
+            // Mic decoded, system did not — show mic alone in accent so
+            // the user sees their voice was captured.
+            DrawDoneBandAnchored(_cachedMicPeaks!, micBrush, midline, midline - 2, w, anchorTop: true);
+            DrawDoneBandAnchored(_cachedMicPeaks!, micBrush, midline, midline - 2, w, anchorTop: false);
+        }
+        else if (hasSys)
+        {
+            // System decoded, mic did not — show system alone in green
+            // so the colour itself signals "the mic track is missing".
+            DrawDoneBandAnchored(_cachedSystemPeaks!, sysBrush, midline, midline - 2, w, anchorTop: true);
+            DrawDoneBandAnchored(_cachedSystemPeaks!, sysBrush, midline, midline - 2, w, anchorTop: false);
+        }
+        else if (hasMix)
+        {
+            // Neither per-track decoded — render the combined mix mirrored.
+            // Accent brush because there's no per-track signal to colour-code.
+            DrawDoneBandAnchored(_cachedDonePeaks!, micBrush, midline, midline - 2, w, anchorTop: true);
+            DrawDoneBandAnchored(_cachedDonePeaks!, micBrush, midline, midline - 2, w, anchorTop: false);
         }
 
         UpdateDonePlayhead(0);
@@ -1578,8 +1589,13 @@ public sealed partial class MeetingWindow : Window
             var meetings = Services.BuildInfo.MeetingsDirPath;
             if (!Directory.Exists(meetings)) return;
             var query = (HistorySearchBox.Text ?? "").Trim();
+            // Sort by CreationTime, NOT LastWriteTime — the directory's mtime
+            // gets bumped every time we regenerate peaks / save a recap edit /
+            // touch any sibling file, which used to scramble the list order
+            // and put yesterday's meetings at the top whenever a background
+            // job touched their folder. Burned 2026-05-30.
             var dirs = new DirectoryInfo(meetings).GetDirectories()
-                .OrderByDescending(d => d.LastWriteTime)
+                .OrderByDescending(d => d.CreationTime)
                 .ToList();
             foreach (var d in dirs)
             {
@@ -1589,7 +1605,16 @@ public sealed partial class MeetingWindow : Window
                 // title set by the recap LLM (via save_post_process or
                 // the MCP save_recap path).
                 string title = $"Meeting {d.Name[..Math.Min(8, d.Name.Length)]}";
-                string subtitle = d.LastWriteTime.ToString("yyyy-MM-dd HH:mm");
+                // Date hierarchy (most authoritative → least):
+                //   1. meta.json `started_at`    — unix seconds, written by Rust at meeting start
+                //   2. meta.json `ended_at - duration_secs` — back-computed for older meta schemas
+                //   3. meta.json `ended_at`       — last resort if duration missing
+                //   4. directory CreationTime    — folder mkdir at meeting start (NOT LastWrite,
+                //                                  which gets bumped every time we regen peaks
+                //                                  / save a recap edit / touch any file inside)
+                // Burned 2026-05-30: every meeting list row showed today's date because
+                // a peaks regen run had updated the dir mtime.
+                DateTime? startDt = d.CreationTime;
                 if (File.Exists(meta))
                 {
                     try
@@ -1601,12 +1626,34 @@ public sealed partial class MeetingWindow : Window
                             var metaTitle = t.GetString();
                             if (!string.IsNullOrEmpty(metaTitle)) title = metaTitle;
                         }
-                        if (doc.RootElement.TryGetProperty("started_at", out var sa))
-                        {
-                            var parsed = sa.GetString() ?? "";
-                            if (!string.IsNullOrEmpty(parsed)) subtitle = parsed;
-                        }
-                        if (doc.RootElement.TryGetProperty("duration_secs", out var dur))
+                        double startedAt = 0, endedAt = 0, durationSecs = 0;
+                        if (doc.RootElement.TryGetProperty("started_at", out var sa)
+                            && sa.ValueKind == JsonValueKind.Number)
+                            startedAt = sa.GetDouble();
+                        if (doc.RootElement.TryGetProperty("ended_at", out var ea)
+                            && ea.ValueKind == JsonValueKind.Number)
+                            endedAt = ea.GetDouble();
+                        if (doc.RootElement.TryGetProperty("duration_secs", out var ds)
+                            && ds.ValueKind == JsonValueKind.Number)
+                            durationSecs = ds.GetDouble();
+                        if (startedAt > 0)
+                            startDt = DateTimeOffset.FromUnixTimeMilliseconds((long)(startedAt * 1000)).LocalDateTime;
+                        else if (endedAt > 0 && durationSecs > 0)
+                            startDt = DateTimeOffset.FromUnixTimeMilliseconds((long)((endedAt - durationSecs) * 1000)).LocalDateTime;
+                        else if (endedAt > 0)
+                            startDt = DateTimeOffset.FromUnixTimeMilliseconds((long)(endedAt * 1000)).LocalDateTime;
+                        // duration suffix handled after subtitle string is built.
+                    }
+                    catch { }
+                }
+                string subtitle = (startDt ?? d.CreationTime).ToString("yyyy-MM-dd HH:mm");
+                if (File.Exists(meta))
+                {
+                    try
+                    {
+                        using var doc2 = JsonDocument.Parse(File.ReadAllText(meta));
+                        if (doc2.RootElement.TryGetProperty("duration_secs", out var dur)
+                            && dur.ValueKind == JsonValueKind.Number)
                         {
                             subtitle += " · " + FormatDuration(dur.GetDouble());
                         }
