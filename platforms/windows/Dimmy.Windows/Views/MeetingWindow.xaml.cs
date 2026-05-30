@@ -1392,72 +1392,10 @@ public sealed partial class MeetingWindow : Window
         target.Blocks.Add(p);
     }
 
-    /// Reverse of BuildMarkdownFromSections: split a persisted recap.md
-    /// back into the canonical section-key dictionary so the Done-view
-    /// cards can re-render. Heading lookup is case/space insensitive
-    /// so "## Topics", "## Topics discussed", "##  topics" all match.
-    private static Dictionary<string, string> SplitMarkdownIntoSections(string markdown)
-    {
-        var headingMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            { "context", "CONTEXT" },
-            { "tldr", "TLDR" },
-            { "tl;dr", "TLDR" },
-            { "highlights", "HIGHLIGHTS" },
-            { "narrative", "NARRATIVE" },
-            { "key decisions", "KEY_DECISIONS" },
-            { "decisions", "KEY_DECISIONS" },
-            { "topics", "TOPICS" },
-            { "topics discussed", "TOPICS" },
-            { "actions", "ACTIONS" },
-            { "action items", "ACTIONS" },
-            { "open questions", "OPEN_QUESTIONS" },
-            { "questions", "OPEN_QUESTIONS" },
-            { "risks", "RISKS" },
-            { "risks & blockers", "RISKS" },
-            { "blockers", "RISKS" },
-            { "next steps", "NEXT_STEPS" },
-            { "follow-ups", "FOLLOWUPS" },
-            { "followups", "FOLLOWUPS" },
-        };
-
-        var result = new Dictionary<string, string>();
-        if (string.IsNullOrWhiteSpace(markdown)) return result;
-
-        string? currentKey = null;
-        var sb = new System.Text.StringBuilder();
-        var lines = markdown.Replace("\r\n", "\n").Split('\n');
-
-        void Flush()
-        {
-            if (currentKey != null)
-            {
-                var body = sb.ToString().Trim();
-                if (!string.IsNullOrEmpty(body)) result[currentKey] = body;
-            }
-            sb.Clear();
-        }
-
-        foreach (var line in lines)
-        {
-            var trimmed = line.TrimStart();
-            if (trimmed.StartsWith("## "))
-            {
-                Flush();
-                var heading = trimmed.Substring(3).Trim();
-                if (headingMap.TryGetValue(heading, out var key))
-                    currentKey = key;
-                else
-                    currentKey = null;
-            }
-            else if (currentKey != null)
-            {
-                sb.AppendLine(line);
-            }
-        }
-        Flush();
-        return result;
-    }
+    // SplitMarkdownIntoSections moved into the unified parser in
+    // Helpers/MeetingRecapHelpers.cs::ParseStructuredRecap — that parser
+    // now accepts both the wire (`===NAME===`) and storage (`## Heading`)
+    // formats in a single pass, with synonym tolerance. Burned 2026-05-30.
 
     // BuildMarkdownFromSections moved to Helpers/MeetingRecapHelpers.cs
     // so the pure logic is unit-testable. Internal callers now go via
@@ -1785,20 +1723,11 @@ public sealed partial class MeetingWindow : Window
                 // sidebar-load path silently dropped every section of
                 // marker-based recaps because the legacy heading
                 // parser doesn't recognise `## ===CONTEXT===` etc.
+                // Unified, permissive parser — accepts wire format
+                // (`===NAME===`), persisted format (`## Heading` + synonyms),
+                // hybrids, and falls back to TLDR=full-body if nothing matched.
+                // See MeetingRecapHelpers.ParseStructuredRecap.
                 var parsed = Helpers.MeetingRecapHelpers.ParseStructuredRecap(text);
-                // ParseStructuredRecap returns at minimum a single
-                // "TLDR" entry with the whole raw body when no markers
-                // matched — so we count as "really parsed" only when
-                // it found 2+ sections or the single TLDR section
-                // is shorter than the raw body (markers were stripped).
-                bool markerParsed = parsed.Count > 1
-                    || (parsed.Count == 1
-                        && parsed.TryGetValue("TLDR", out var tldrOnly)
-                        && tldrOnly.Length < text.Length - 4);
-                if (!markerParsed)
-                {
-                    parsed = SplitMarkdownIntoSections(text);
-                }
                 if (parsed.Count > 0)
                 {
                     ApplyDoneSections(parsed);
