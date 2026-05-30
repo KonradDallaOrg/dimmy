@@ -70,6 +70,19 @@ Every feature, fix, or change MUST work identically on Windows, macOS, Linux. If
 - Default to no comments. Add one only when the WHY is non-obvious (hidden constraint, subtle invariant, workaround for a specific bug)
 - Don't explain WHAT the code does — well-named identifiers do that
 
+### CUPID + anti-enshittification (house rule)
+Filter every feature, refactor, and "let's also add X" through two screens BEFORE writing code:
+
+- **Anti-enshittification (Doctorow):** does this serve the actual user, or is it surface-bloat that dilutes Dimmy's focus? If it's "nice to have" / "for completism" / "what if someone…", say so out loud and don't ship. Saying *"I don't think we should build this"* is a contribution.
+- **CUPID (Dan North — joinable properties, not rules; see https://dannorth.net/cupid-for-joyful-coding/):**
+  - **C**omposable — does it play with the existing pieces (Rust core, FFI, host UI) or need its own bespoke pipeline?
+  - **U**nix-philosophy — one thing, well. A module / FFI entry / button that *also* does X and Y is a smell.
+  - **P**redictable — behaviour matches the name + the user's mental model; no surprise side-effects.
+  - **I**diomatic — fits the codebase (event callbacks, single-writer config, assertions over silent fallbacks). New code should look like the codebase, not like a different project bolted on.
+  - **D**omain-based — Dimmy is a voice-overlay app. Anything that doesn't speak the domain (capture, transcription, recap, history, hotkey, meeting) needs strong justification.
+
+In practice: default to the smaller option when a request is ambiguous (one card vs seven, one button vs a wizard, one field vs five). Refactors get the same filter — an "improvement" that adds layers without serving the user is still bloat. When existing code violates the filter, propose simplification (remove, merge, inline) rather than building on top.
+
 ## Pre-push checklist — run BEFORE every push
 
 **One-time setup** after cloning: activate the committed git hooks
