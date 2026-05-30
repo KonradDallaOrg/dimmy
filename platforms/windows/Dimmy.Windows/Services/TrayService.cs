@@ -55,6 +55,9 @@ public class TrayService : IDisposable
     private static extern IntPtr LoadImage(IntPtr hInst, string name, uint type,
         int cx, int cy, uint fuLoad);
 
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern uint RegisterWindowMessage(string lpString);
+
     [DllImport("user32.dll")]
     private static extern int GetSystemMetrics(int nIndex);
 
@@ -192,6 +195,14 @@ public class TrayService : IDisposable
 
     private WndProcDelegate? _wndProcDelegate;
     private IntPtr _hIcon;
+    private string _currentIconPath = string.Empty;
+    private string _currentTip = "Dimmy: Ready";
+
+    // Broadcast message from explorer.exe when the taskbar is (re)created — fired
+    // on first login AND after every explorer restart. Without re-adding our
+    // NIM_ADD here, killing/restarting explorer wipes the tray entry until the
+    // user relaunches Dimmy. Burned 2026-05-30 chasing icon-cache refresh.
+    private uint _taskbarCreatedMsg;
 
     private Action? _onShowMenu;
 
@@ -216,19 +227,27 @@ public class TrayService : IDisposable
     {
         _hwnd = hwnd;
 
-        // Subclass window to receive tray messages
+        // Subclass window to receive tray messages + the broadcast TaskbarCreated
+        // message that fires after every explorer restart.
         _wndProcDelegate = TrayWndProc;
         SetWindowSubclass(_hwnd, _wndProcDelegate, 1, 0);
+        _taskbarCreatedMsg = RegisterWindowMessage("TaskbarCreated");
 
-        // Load icon
-        _hIcon = LoadTrayIcon();
+        AddTrayIcon();
+    }
 
-        // Add tray icon
+    private void AddTrayIcon()
+    {
+        // Default state: idle / ready (white edge variant).
+        _currentIconPath = ResolveIconPath("dimmy-tray-idle.ico", "dimmy-taskbar.ico", "dimmy.ico");
+        if (_hIcon != IntPtr.Zero) { DestroyIcon(_hIcon); _hIcon = IntPtr.Zero; }
+        _hIcon = LoadTrayIconFromPath(_currentIconPath);
+
         var nid = MakeNid();
         nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
         nid.uCallbackMessage = WM_TRAYICON;
         nid.hIcon = _hIcon;
-        nid.szTip = "Dimmy: Ready";
+        nid.szTip = _currentTip.Length > 127 ? _currentTip[..127] : _currentTip;
 
         _iconAdded = Shell_NotifyIcon(NIM_ADD, ref nid);
         System.Diagnostics.Debug.WriteLine($"[Tray] Shell_NotifyIcon ADD = {_iconAdded}, hIcon={_hIcon}, hwnd={_hwnd}");
@@ -273,6 +292,15 @@ public class TrayService : IDisposable
                     ShowContextMenu();
                     break;
             }
+            return IntPtr.Zero;
+        }
+
+        if (_taskbarCreatedMsg != 0 && msg == _taskbarCreatedMsg)
+        {
+            // Explorer just (re)created the tray. Re-register our icon — the
+            // previous NIM_ADD was lost with the old taskbar.
+            _iconAdded = false;
+            AddTrayIcon();
             return IntPtr.Zero;
         }
 
@@ -364,34 +392,36 @@ public class TrayService : IDisposable
         }
     }
 
-    private IntPtr LoadTrayIcon()
+    /// <summary>Resolve the first existing path among Assets/{name} or {name}
+    /// alongside the EXE. Returns empty string if none of the candidates exist.</summary>
+    private static string ResolveIconPath(params string[] fileNames)
     {
-        // Try loading from Assets/dimmy.ico
         var exeDir = AppContext.BaseDirectory;
-        var paths = new[]
+        foreach (var fn in fileNames)
         {
-            Path.Combine(exeDir, "Assets", "dimmy.ico"),
-            Path.Combine(exeDir, "dimmy.ico"),
-        };
+            var p1 = Path.Combine(exeDir, "Assets", fn);
+            if (File.Exists(p1)) return p1;
+            var p2 = Path.Combine(exeDir, fn);
+            if (File.Exists(p2)) return p2;
+        }
+        return string.Empty;
+    }
 
+    private IntPtr LoadTrayIconFromPath(string path)
+    {
         // Request the DPI-correct small-icon size (16 @100%, 24 @150%,
         // 32 @200%) so LoadImage picks the matching frame out of the
         // multi-size .ico instead of forcing 16 and letting the shell
-        // upscale a tiny bitmap. The brand dimmy.ico ships 16·24·32·48
-        // frames, so the right one is always present.
+        // upscale a tiny bitmap.
         int sx = GetSystemMetrics(SM_CXSMICON);
         int sy = GetSystemMetrics(SM_CYSMICON);
         if (sx <= 0) sx = 16;
         if (sy <= 0) sy = 16;
 
-        foreach (var path in paths)
+        if (!string.IsNullOrEmpty(path) && File.Exists(path))
         {
-            if (File.Exists(path))
-            {
-                var h = LoadImage(IntPtr.Zero, path, IMAGE_ICON, sx, sy,
-                    LR_LOADFROMFILE);
-                if (h != IntPtr.Zero) return h;
-            }
+            var h = LoadImage(IntPtr.Zero, path, IMAGE_ICON, sx, sy, LR_LOADFROMFILE);
+            if (h != IntPtr.Zero) return h;
         }
 
         // Fallback: generate a tiny .ico and load it
@@ -451,10 +481,57 @@ public class TrayService : IDisposable
     public void UpdateState(string tooltip, string iconPath)
     {
         if (!_iconAdded) return;
+        _currentTip = tooltip;
         var nid = MakeNid();
         nid.uFlags = NIF_TIP;
         nid.szTip = tooltip.Length > 127 ? tooltip[..127] : tooltip;
         Shell_NotifyIcon(NIM_MODIFY, ref nid);
+    }
+
+    /// <summary>Swap the tray icon to reflect the current app/meeting state —
+    /// mirrors the macOS StatusBarController palette (white idle, red recording,
+    /// blue transcribing, purple processing, green done, orange meeting paused).
+    /// Meeting state takes precedence over dictation state because meetings can
+    /// last for minutes/hours while the dictation state stays Idle the whole time.</summary>
+    public void UpdateState(AppState state, bool meetingActive, bool meetingPaused, string? tooltip = null)
+    {
+        if (!_iconAdded) return;
+
+        string iconFile;
+        string tip;
+        if (meetingActive && meetingPaused) { iconFile = "dimmy-tray-paused.ico";       tip = "Dimmy — Meeting paused"; }
+        else if (meetingActive)             { iconFile = "dimmy-tray-recording.ico";    tip = "Dimmy — Meeting recording"; }
+        else
+        {
+            switch (state)
+            {
+                case AppState.Recording:    iconFile = "dimmy-tray-recording.ico";    tip = "Dimmy — Recording…"; break;
+                case AppState.Transcribing: iconFile = "dimmy-tray-transcribing.ico"; tip = "Dimmy — Transcribing…"; break;
+                case AppState.Processing:   iconFile = "dimmy-tray-processing.ico";   tip = "Dimmy — Processing…"; break;
+                case AppState.Completing:   iconFile = "dimmy-tray-completing.ico";   tip = "Dimmy — Done"; break;
+                default:                    iconFile = "dimmy-tray-idle.ico";         tip = "Dimmy — Ready"; break;
+            }
+        }
+        if (tooltip != null) tip = tooltip;
+
+        var path = ResolveIconPath(iconFile, "dimmy-taskbar.ico", "dimmy.ico");
+        if (path == _currentIconPath && tip == _currentTip) return; // no-op
+
+        var newHIcon = LoadTrayIconFromPath(path);
+        if (newHIcon == IntPtr.Zero) return; // keep current icon on failure
+
+        var oldHIcon = _hIcon;
+        _hIcon = newHIcon;
+        _currentIconPath = path;
+        _currentTip = tip;
+
+        var nid = MakeNid();
+        nid.uFlags = NIF_ICON | NIF_TIP;
+        nid.hIcon = _hIcon;
+        nid.szTip = tip.Length > 127 ? tip[..127] : tip;
+        Shell_NotifyIcon(NIM_MODIFY, ref nid);
+
+        if (oldHIcon != IntPtr.Zero) DestroyIcon(oldHIcon);
     }
 
     private NOTIFYICONDATA MakeNid()
