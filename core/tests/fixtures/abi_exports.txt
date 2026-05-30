@@ -23,6 +23,7 @@ dimmy_claude_desktop_install
 dimmy_claude_desktop_status
 dimmy_claude_desktop_uninstall
 dimmy_clear_app_context
+dimmy_command_transform
 dimmy_compute_audio_peaks
 dimmy_config_dir_name
 dimmy_cycle_llm_style

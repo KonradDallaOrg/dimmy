@@ -2796,6 +2796,172 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
     }
 }
 
+/// Command Mode: transform (or replace) the user's currently-selected
+/// text using their spoken instruction. The host captures the selection
+/// at hotkey-press and the transcript after STT, then calls this with
+/// both. We build a single constrained prompt (see
+/// `llm::build_command_transform_prompt`) that lets the model decide
+/// transform-vs-replace in one call — no host-side heuristic, no extra
+/// round-trip. Dispatches through the DICTATION LLM config (fast path),
+/// NOT the recap config: command mode is a dictation-adjacent action.
+///
+/// Return-code contract:
+/// ```text
+/// >0  bytes written to out_buf (success)
+/// -1  invalid input (null ptr, bad UTF-8, empty selection or spoken)
+/// -2  LLM dispatch failed (network / API error)
+/// -3  no LLM API key configured (cloud, non-subscription)
+/// -4  local mode but the model file is not on disk
+/// -5  failed to create the async runtime
+/// ```
+///
+/// # Safety
+/// `selection_ptr` and `spoken_ptr` must be valid NUL-terminated C
+/// strings; `out_buf` must point to at least `buf_len` writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_command_transform(
+    selection_ptr: *const c_char,
+    spoken_ptr: *const c_char,
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if selection_ptr.is_null() || spoken_ptr.is_null() || out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let selection = match CStr::from_ptr(selection_ptr).to_str() {
+        Ok(s) if !s.trim().is_empty() => s.to_string(),
+        _ => return -1,
+    };
+    let spoken = match CStr::from_ptr(spoken_ptr).to_str() {
+        Ok(s) if !s.trim().is_empty() => s.to_string(),
+        _ => return -1,
+    };
+
+    let prompt = crate::llm::build_command_transform_prompt(&selection, &spoken);
+
+    let st = state();
+    emit_event("status", r#"{"state":"processing"}"#);
+
+    // ── Local LLM mode ───────────────────────────────────────────
+    let llm_mode = st
+        .llm_mode
+        .lock()
+        .map(|m| m.clone())
+        .unwrap_or_else(|_| "cloud".to_string());
+
+    if llm_mode == "local" {
+        let model_filename = st
+            .local_llm_model
+            .lock()
+            .map(|m| m.clone())
+            .unwrap_or_else(|_| crate::local_llm::DEFAULT_LLM_MODEL.to_string());
+        let model_path = crate::local_llm::model_path(&model_filename);
+        if !model_path.is_file() {
+            log(&format!(
+                "[CmdMode] local mode but model not on disk: {}",
+                model_path.display()
+            ));
+            return -4;
+        }
+        return match crate::local_llm::process_raw_prompt_local(&model_path, &prompt, 4096) {
+            Ok(text) => write_to_buf(text.trim(), out_buf, buf_len),
+            Err(e) => {
+                log(&format!("[CmdMode] local transform failed: {}", e));
+                -2
+            }
+        };
+    }
+
+    // ── Cloud / subscription mode ────────────────────────────────
+    // Resolve the dictation LLM dispatch (mirrors dimmy_process_with_llm's
+    // cloud branch but without the style/tone/app-rule machinery — command
+    // mode carries its own instruction in the prompt). Subscription
+    // bypasses the key check via the local `claude` CLI.
+    let llm_url = st.llm_api_url.lock().map(|u| u.clone()).unwrap_or_default();
+    let llm_model = st
+        .llm_api_model
+        .lock()
+        .map(|m| m.clone())
+        .unwrap_or_default();
+    let auth_method = st
+        .llm_auth_method
+        .lock()
+        .map(|s| s.clone())
+        .unwrap_or_else(|_| "api_key".to_string());
+    let is_subscription =
+        auth_method == "subscription" || crate::claude_code::is_claude_code_url(&llm_url);
+
+    let api_key = if is_subscription {
+        String::new()
+    } else {
+        let llm_vendor = Provider::from_url(&llm_url);
+        let use_kr = st.use_keyring.lock().map(|k| *k).unwrap_or(false);
+        let use_same_key = st.llm_use_same_key.lock().map(|k| *k).unwrap_or(true);
+        let raw = if use_same_key {
+            let llm_scope =
+                crate::load_key_with_store(&st.key_store, KeyringScope::Llm(llm_vendor), use_kr)
+                    .unwrap_or_default();
+            if !llm_scope.is_empty() {
+                llm_scope
+            } else {
+                crate::load_key_with_store(&st.key_store, KeyringScope::Stt(llm_vendor), use_kr)
+                    .unwrap_or_default()
+            }
+        } else {
+            crate::load_key_with_store(&st.key_store, KeyringScope::Llm(llm_vendor), use_kr)
+                .unwrap_or_default()
+        };
+        if raw.is_empty() {
+            log("[CmdMode] no LLM API key configured");
+            emit_event("error", r#"{"message":"No LLM API key configured"}"#);
+            return -3;
+        }
+        raw
+    };
+
+    let api_url = if !llm_url.is_empty() {
+        llm_url
+    } else {
+        crate::DEFAULT_LLM_URL.to_string()
+    };
+    let api_model = if !llm_model.is_empty() {
+        llm_model
+    } else {
+        crate::DEFAULT_LLM_MODEL.to_string()
+    };
+
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            log(&format!("[CmdMode] runtime create failed: {}", e));
+            return -5;
+        }
+    };
+    let result = rt.block_on(crate::llm::process_raw_prompt(
+        &api_url,
+        &api_model,
+        &api_key,
+        &prompt,
+        4096,
+        &auth_method,
+    ));
+    match result {
+        Ok(text) => write_to_buf(text.trim(), out_buf, buf_len),
+        Err(e) => {
+            let err_msg = format!("{}", e);
+            log(&format!("[CmdMode] cloud transform failed: {}", err_msg));
+            emit_event(
+                "error",
+                &format!(
+                    r#"{{"message":"Command: {}"}}"#,
+                    err_msg.replace('"', "\\\"")
+                ),
+            );
+            -2
+        }
+    }
+}
+
 // ── Stats ───────────────────────────────────────────────────────────
 
 /// Update cumulative stats. Returns 0=OK, -1=invalid input.
