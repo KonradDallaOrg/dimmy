@@ -1306,6 +1306,15 @@ public partial class App : Application
         _stopInProgress = true;
         try
         {
+            // Command Mode branch: instead of dictating, transform the
+            // user's selected text with what they just spoke. Reuses the
+            // same hotkey — the pill-menu toggle decides the mode.
+            if (_appViewModel.CommandMode)
+            {
+                await StopAndCommandTransform();
+                return;
+            }
+
             PttLog("StopAndProcess: calling dimmy_stop_recording...");
             var result = await Services.TranscriptionService.StopAndProcessAsync();
             PttLog($"StopAndProcess: IsSuccess={result.IsSuccess}, IsEmpty={result.IsEmpty}, IsTimeout={result.IsTimeout}, Text={result.Text?.Length ?? 0} chars, Error={result.Error}");
@@ -1383,6 +1392,87 @@ public partial class App : Application
         finally
         {
             _stopInProgress = false;
+        }
+    }
+
+    /// <summary>Command Mode stop path: grab the user's selected text,
+    /// transform it with the spoken instruction, paste the result over
+    /// the selection. Falls back to plain dictation when nothing was
+    /// selected. Shares the foreground-restore + paste primitives with
+    /// the normal dictation path.</summary>
+    private async Task StopAndCommandTransform()
+    {
+        try
+        {
+            // Bring the recorded target back to the foreground BEFORE the
+            // Ctrl+C grab and the paste — both must land in the same app
+            // the user was selecting in, not whatever stole focus during
+            // the STT round-trip.
+            await RestoreTargetForegroundAsync();
+
+            // Grab the selection while the target is focused (Ctrl+C
+            // round-trip; null when nothing is selected).
+            var selection = await Services.SelectionCaptureService.CaptureAsync();
+            PttLog($"CommandMode: captured selection = {(selection == null ? "(none)" : $"{selection.Length} chars")}");
+
+            var result = await Services.TranscriptionService.StopAndCommandAsync(selection);
+
+            if (result.IsEmptyTranscript)
+            {
+                PttLog("CommandMode: empty transcript — idle");
+                _appViewModel.SetState(AppState.Idle);
+                return;
+            }
+            if (!result.IsSuccess)
+            {
+                PttLog($"CommandMode: failed — {result.Error}");
+                _appViewModel.SetError(result.Error!);
+                return;
+            }
+
+            // Re-assert foreground (the transform round-trip can take
+            // seconds; focus may have drifted again) then paste.
+            await RestoreTargetForegroundAsync();
+            if (result.IsPlainFallback)
+                PttLog("CommandMode: no selection — pasting spoken text as dictation");
+            else
+                PttLog($"CommandMode: pasting transformed text ({result.Text!.Length} chars)");
+            await TextInjectionService.PasteText(result.Text!, _appViewModel.KeepInClipboard);
+            _appViewModel.SetState(AppState.Completing);
+            _targetContext = null;
+        }
+        catch (Exception ex)
+        {
+            PttLog($"CommandMode: EXCEPTION {ex.GetType().Name}: {ex.Message}");
+            _appViewModel.SetError(ex.Message);
+        }
+    }
+
+    /// <summary>Restore the recorded PTT target (`_targetContext`) to the
+    /// foreground using the topmost-toggle trick that defeats Win11's
+    /// foreground lock. No-op when there's no recorded target or it's
+    /// already in front. Mirrors the inline restore in StopAndProcess —
+    /// extracted so Command Mode can reuse it for both its Ctrl+C grab
+    /// and its paste.</summary>
+    private async Task RestoreTargetForegroundAsync()
+    {
+        var target = _targetContext;
+        if (target == null || target.Hwnd == IntPtr.Zero) return;
+        var cur = Helpers.AppContextCapture.SnapshotForeground();
+        if (cur.Hwnd == target.Hwnd) return;
+        try
+        {
+            ShowWindow(target.Hwnd, SW_RESTORE);
+            SetWindowPos(target.Hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            SetWindowPos(target.Hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            SetForegroundWindow(target.Hwnd);
+            await Task.Delay(40);
+        }
+        catch (Exception ex)
+        {
+            PttLog($"RestoreTargetForeground EXC: {ex.Message}");
         }
     }
 
