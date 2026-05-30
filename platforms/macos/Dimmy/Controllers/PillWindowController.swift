@@ -180,6 +180,16 @@ final class PillWindowController {
         meetingItem.target = self
         menu.addItem(meetingItem)
 
+        // Command Mode toggle — same surface as the status-bar / dock
+        // entries. Mirror of Win's pill flyout entry. Checkmark reflects
+        // the live appState.commandMode.
+        let commandItem = NSMenuItem(title: "Command (edit selection)",
+                                     action: #selector(toggleCommandModeAction),
+                                     keyEquivalent: "")
+        commandItem.target = self
+        commandItem.state = appState.commandMode ? .on : .off
+        menu.addItem(commandItem)
+
         let hideItem = NSMenuItem(title: "Hide pill", action: #selector(hidePillAction), keyEquivalent: "")
         hideItem.target = self
         menu.addItem(hideItem)
@@ -203,6 +213,11 @@ final class PillWindowController {
 
     @objc private func hidePillAction() {
         appState.pillVisible = false
+    }
+
+    @objc private func toggleCommandModeAction() {
+        appState.commandMode.toggle()
+        hkLog("[CmdMode] pill menu toggled → \(appState.commandMode)")
     }
 
     @objc private func quitAction() {

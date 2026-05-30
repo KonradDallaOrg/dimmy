@@ -569,11 +569,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         meetingItem.isEnabled = true
         menu.addItem(meetingItem)
 
+        // Command Mode toggle — mirror of pill / status-bar entries.
+        // Title-flip (no checkmark) for the same Tahoe Dock-menu reason
+        // documented above on the pill-visibility item: state=.off items
+        // can silently swallow clicks in the Dock context.
+        let commandTitle = appState.commandMode
+            ? "✓ Command (edit selection)"
+            : "Command (edit selection)"
+        let commandItem = NSMenuItem(title: commandTitle,
+                                     action: #selector(toggleDockCommandMode),
+                                     keyEquivalent: "")
+        commandItem.target = self
+        commandItem.isEnabled = true
+        menu.addItem(commandItem)
+
         return menu
     }
 
     @objc func openMeetingFromDock() {
         openMeetingWindow()
+    }
+
+    @objc func toggleDockCommandMode() {
+        hkLog("[AppDelegate] dock menu: toggle command mode (was=\(appState.commandMode))")
+        appState.commandMode.toggle()
     }
 
     @objc func toggleDockPillVisibility() {
