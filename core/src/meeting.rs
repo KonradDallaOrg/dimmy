@@ -85,6 +85,124 @@ fn pcm16k_to_wav_bytes(pcm_16k: &[f32]) -> Vec<u8> {
     cursor.into_inner()
 }
 
+/// A single meeting audio track sink. Records to **Ogg/Vorbis** (compact,
+/// ~10× smaller than int16 WAV) when libvorbis initialises; falls back to
+/// int16 **WAV** per-track if the encoder can't start, so recording never
+/// fails for lack of the codec. The on-disk extension reflects the chosen
+/// format (`.ogg` vs `.wav`) — the host handles both: old meetings are
+/// `.wav`, and re-transcription + waveform peaks decode either format via
+/// the shared Symphonia/hound path (`dimmy_transcribe_file`,
+/// `dimmy_compute_audio_peaks`).
+enum TrackSink {
+    // Sink is the raw `File` (no userspace BufWriter): `encode_audio_block`
+    // writes complete Ogg pages straight to the OS as they're produced, so
+    // an app crash mid-meeting loses nothing already encoded (the file is a
+    // valid, decodable Ogg stream up to the last page — just missing the
+    // end-of-stream marker, which Symphonia tolerates).
+    // Boxed: the Vorbis encoder is far larger than the WAV writer, so an
+    // unboxed variant bloats every TrackSink to the encoder's size
+    // (clippy `large_enum_variant`).
+    Ogg(Box<vorbis_rs::VorbisEncoder<File>>),
+    Wav(hound::WavWriter<std::io::BufWriter<File>>),
+}
+
+impl TrackSink {
+    /// Create a mono sink for `<dir>/<base>`: tries `<base>.ogg`, falls
+    /// back to `<base>.wav` if the Vorbis encoder can't initialise.
+    fn create(dir: &std::path::Path, base: &str, sample_rate: u32) -> Result<TrackSink, String> {
+        // Ogg/Vorbis recording is enabled on Windows + macOS — both
+        // host UIs now resolve `.ogg` with `.wav` fallback (playback +
+        // waveform peaks + regenerate-transcript) via their respective
+        // helpers (`MeetingViewModel.resolveMeetingAudio` on Mac,
+        // `MeetingRecapHelpers.ResolveAudioTrack` on Win). Linux UI
+        // hasn't caught up yet → stays on WAV until it does. `cfg!`
+        // (not `#[cfg]`) keeps BOTH arms compiling on every target so
+        // CI lints / type-checks the Ogg path even on Linux builds.
+        if cfg!(any(target_os = "windows", target_os = "macos")) {
+            let rate = std::num::NonZeroU32::new(sample_rate.max(1))
+                .unwrap_or_else(|| std::num::NonZeroU32::new(48_000).unwrap());
+            let mono = std::num::NonZeroU8::new(1).unwrap();
+            let ogg_path = dir.join(format!("{base}.ogg"));
+            match File::create(&ogg_path) {
+                Ok(f) => match vorbis_rs::VorbisEncoderBuilder::new(rate, mono, f) {
+                    Ok(mut builder) => match builder.build() {
+                        Ok(enc) => return Ok(TrackSink::Ogg(Box::new(enc))),
+                        Err(e) => {
+                            crate::log(&format!(
+                                "[Meeting] vorbis build {base}.ogg failed: {e}; using WAV"
+                            ));
+                            let _ = std::fs::remove_file(&ogg_path);
+                        }
+                    },
+                    Err(e) => {
+                        crate::log(&format!(
+                            "[Meeting] vorbis init {base}.ogg failed: {e}; using WAV"
+                        ));
+                        let _ = std::fs::remove_file(&ogg_path);
+                    }
+                },
+                Err(e) => crate::log(&format!(
+                    "[Meeting] create {base}.ogg failed: {e}; using WAV"
+                )),
+            }
+        }
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: sample_rate.max(1),
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let w = hound::WavWriter::create(dir.join(format!("{base}.wav")), spec)
+            .map_err(|e| format!("wav create {base}.wav: {e}"))?;
+        Ok(TrackSink::Wav(w))
+    }
+
+    /// Append a window of mono f32 samples. Ogg encodes directly; WAV
+    /// clamps to [-1, 1] and converts to int16.
+    fn write(&mut self, samples: &[f32]) {
+        if samples.is_empty() {
+            return;
+        }
+        match self {
+            TrackSink::Ogg(enc) => {
+                if let Err(e) = enc.encode_audio_block([samples]) {
+                    crate::log(&format!("[Meeting] vorbis encode failed: {e}"));
+                }
+            }
+            TrackSink::Wav(w) => {
+                for s in samples {
+                    let clamped = s.clamp(-1.0, 1.0);
+                    let _ = w.write_sample((clamped * i16::MAX as f32) as i16);
+                }
+            }
+        }
+    }
+
+    /// Flush buffered data. Ogg writes pages incrementally inside
+    /// `write`, so only the WAV path needs an explicit flush.
+    fn flush(&mut self) {
+        if let TrackSink::Wav(w) = self {
+            let _ = w.flush();
+        }
+    }
+
+    /// Finalise the stream (Ogg trailer / WAV header) and close.
+    fn finalize(self) {
+        match self {
+            TrackSink::Ogg(enc) => {
+                if let Err(e) = enc.finish() {
+                    crate::log(&format!("[Meeting] vorbis finish failed: {e}"));
+                }
+            }
+            TrackSink::Wav(w) => {
+                if let Err(e) = w.finalize() {
+                    crate::log(&format!("[Meeting] wav finalize failed: {e}"));
+                }
+            }
+        }
+    }
+}
+
 pub struct MeetingSession {
     id: String,
     dir: PathBuf,
@@ -166,7 +284,6 @@ impl MeetingSession {
         //   - audio.wav         = mix (mic + system, what you hear)
         //   - audio_mic.wav     = AEC-cleaned mic only
         //   - audio_system.wav  = raw loopback only (Mix mode only)
-        let mix_active = matches!(source, crate::audio::AudioSource::Mix);
         // Per-track WAV files use their RESPECTIVE device's native rate.
         // audio_mic.wav  -> primary device (the mic) sr
         // audio_system.wav -> loopback device sr (typically 48 kHz on
@@ -178,34 +295,14 @@ impl MeetingSession {
         //                    the per-track audio_system.wav stays the
         //                    source of truth for system audio and plays
         //                    back at correct speed.
-        let mic_spec = hound::WavSpec {
-            channels: 1,
-            sample_rate: device_sample_rate,
-            bits_per_sample: 16,
-            sample_format: hound::SampleFormat::Int,
-        };
-        let system_spec = hound::WavSpec {
-            channels: 1,
-            sample_rate: system_sample_rate,
-            bits_per_sample: 16,
-            sample_format: hound::SampleFormat::Int,
-        };
         crate::log(&format!(
-            "[Meeting] WAV rates: mic={} Hz, system={} Hz, mix(audio.wav)={} Hz",
-            device_sample_rate, system_sample_rate, device_sample_rate
+            "[Meeting] audio tracks: mic={} Hz, system={} Hz (Ogg/Vorbis, WAV fallback)",
+            device_sample_rate, system_sample_rate
         ));
-        let writer = hound::WavWriter::create(dir.join("audio.wav"), mic_spec)
-            .map_err(|e| format!("wav create audio.wav: {}", e))?;
-        let writer_mic = hound::WavWriter::create(dir.join("audio_mic.wav"), mic_spec)
-            .map_err(|e| format!("wav create audio_mic.wav: {}", e))?;
-        let writer_system = if mix_active {
-            Some(
-                hound::WavWriter::create(dir.join("audio_system.wav"), system_spec)
-                    .map_err(|e| format!("wav create audio_system.wav: {}", e))?,
-            )
-        } else {
-            None
-        };
+        // Track sinks are created INSIDE the worker thread (the Vorbis
+        // encoder holds raw libvorbis pointers and is !Send, so it can't
+        // be moved across the spawn boundary). The worker owns them end
+        // to end.
 
         let cancel = Arc::new(AtomicBool::new(false));
         let paused = Arc::new(AtomicBool::new(false));
@@ -224,9 +321,6 @@ impl MeetingSession {
                     system_sample_rate,
                     source,
                     stt,
-                    writer,
-                    writer_mic,
-                    writer_system,
                     dir_w,
                     id_w,
                     cancel_w,
@@ -384,9 +478,6 @@ fn worker_loop(
     system_sample_rate: u32,
     source: crate::audio::AudioSource,
     stt: SttSnapshot,
-    mut writer: hound::WavWriter<std::io::BufWriter<File>>,
-    mut writer_mic: hound::WavWriter<std::io::BufWriter<File>>,
-    mut writer_system: Option<hound::WavWriter<std::io::BufWriter<File>>>,
     dir: PathBuf,
     id: String,
     cancel: Arc<AtomicBool>,
@@ -497,6 +588,38 @@ fn worker_loop(
                 error: Some(format!("open transcripts.txt: {}", e)),
             };
         }
+    };
+
+    // Track sinks — created HERE (on the worker thread) because the
+    // Vorbis encoder is !Send and can't cross the spawn boundary. Each
+    // tries Ogg/Vorbis, falls back to WAV. audio(.ogg)=mix @ primary
+    // rate, audio_mic=cleaned mic @ primary rate, audio_system=raw
+    // loopback @ system rate (Mix mode only).
+    let make_sink = |base: &str, rate: u32| -> Result<TrackSink, MeetingResult> {
+        TrackSink::create(&dir, base, rate).map_err(|e| MeetingResult {
+            id: id.clone(),
+            dir: dir.clone(),
+            transcript: String::new(),
+            duration_secs: 0.0,
+            chunk_count: 0,
+            error: Some(e),
+        })
+    };
+    let mut writer = match make_sink("audio", device_sample_rate) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let mut writer_mic = match make_sink("audio_mic", device_sample_rate) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let mut writer_system = if mix_active {
+        match make_sink("audio_system", system_sample_rate) {
+            Ok(s) => Some(s),
+            Err(r) => return r,
+        }
+    } else {
+        None
     };
 
     // Helper: read a slice of the SYNTHESIZED mix stream at the
@@ -714,42 +837,20 @@ fn worker_loop(
                 new_mic.clone()
             };
 
-            // Helper: write an f32 buffer to a hound int16 WAV writer.
-            let write_buf = |w: &mut hound::WavWriter<std::io::BufWriter<File>>,
-                             samples: &[f32]|
-             -> Result<(), hound::Error> {
-                for s in samples {
-                    let clamped = s.clamp(-1.0, 1.0);
-                    let i = (clamped * i16::MAX as f32) as i16;
-                    w.write_sample(i)?;
-                }
-                Ok(())
-            };
-
-            if let Err(e) = write_buf(&mut writer, &new_synth) {
-                crate::log(&format!("[Meeting] audio.wav write failed: {}", e));
-            }
-            if let Err(e) = write_buf(&mut writer_mic, &new_mic) {
-                crate::log(&format!("[Meeting] audio_mic.wav write failed: {}", e));
-            }
+            // Fan out to the three track sinks (Ogg/Vorbis or WAV fallback;
+            // each handles its own f32→encoded conversion + error logging).
+            writer.write(&new_synth);
+            writer_mic.write(&new_mic);
             if let Some(ref mut w) = writer_system {
-                if let Err(e) = write_buf(w, &new_system) {
-                    crate::log(&format!("[Meeting] audio_system.wav write failed: {}", e));
-                }
+                w.write(&new_system);
             }
             samples_written = buf_len_now;
 
             if last_fsync.elapsed() >= FSYNC_INTERVAL {
-                if let Err(e) = writer.flush() {
-                    crate::log(&format!("[Meeting] audio.wav flush: {}", e));
-                }
-                if let Err(e) = writer_mic.flush() {
-                    crate::log(&format!("[Meeting] audio_mic.wav flush: {}", e));
-                }
+                writer.flush();
+                writer_mic.flush();
                 if let Some(ref mut w) = writer_system {
-                    if let Err(e) = w.flush() {
-                        crate::log(&format!("[Meeting] audio_system.wav flush: {}", e));
-                    }
+                    w.flush();
                 }
                 last_fsync = Instant::now();
             }
@@ -982,17 +1083,11 @@ fn worker_loop(
         }
     }
 
-    // Finalize all three WAVs + meta.
-    if let Err(e) = writer.finalize() {
-        crate::log(&format!("[Meeting] audio.wav finalize: {}", e));
-    }
-    if let Err(e) = writer_mic.finalize() {
-        crate::log(&format!("[Meeting] audio_mic.wav finalize: {}", e));
-    }
+    // Finalize all three track sinks (Ogg trailer / WAV header) + meta.
+    writer.finalize();
+    writer_mic.finalize();
     if let Some(w) = writer_system {
-        if let Err(e) = w.finalize() {
-            crate::log(&format!("[Meeting] audio_system.wav finalize: {}", e));
-        }
+        w.finalize();
     }
     let duration_secs = started.elapsed().as_secs_f64();
     finalize_meeting_meta(&dir, &id, duration_secs, chunk_count);
@@ -1414,5 +1509,79 @@ mod tests {
         assert_eq!(v2["title"].as_str(), Some("My Meeting"));
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // ── TrackSink: meeting audio persistence (Ogg on Windows, WAV elsewhere) ──
+
+    #[test]
+    fn track_sink_preserves_every_sample() {
+        // Regression guard for the recording path: a TrackSink must produce
+        // a finalized, decodable file with every written sample preserved.
+        // On non-Windows (incl. macOS, which records meetings as WAV) this
+        // exercises the exact WAV branch the Mac meeting recorder relies on.
+        let dir = std::env::temp_dir().join(format!("dimmy_tracksink_{}", uuid_v4_simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let samples: Vec<f32> = (0..4800).map(|i| (i as f32 * 0.01).sin() * 0.5).collect();
+        let mut sink = TrackSink::create(&dir, "audio_mic", 48_000).expect("sink create");
+        sink.write(&samples);
+        sink.flush();
+        sink.finalize();
+
+        if cfg!(any(target_os = "windows", target_os = "macos")) {
+            let ogg = dir.join("audio_mic.ogg");
+            assert!(ogg.exists(), "Windows/macOS must record .ogg");
+            let bytes = std::fs::read(&ogg).unwrap();
+            assert_eq!(&bytes[0..4], b"OggS", "valid Ogg stream magic");
+        } else {
+            let wav = dir.join("audio_mic.wav");
+            assert!(
+                wav.exists(),
+                "Linux must record .wav (gate not widened yet)"
+            );
+            let reader = hound::WavReader::open(&wav).unwrap();
+            let spec = reader.spec();
+            assert_eq!(spec.sample_rate, 48_000);
+            assert_eq!(spec.channels, 1);
+            assert_eq!(spec.bits_per_sample, 16);
+            let decoded = reader.into_samples::<i16>().count();
+            assert_eq!(decoded, samples.len(), "every sample preserved");
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn track_sink_clamps_out_of_range_and_ignores_empty() {
+        // The WAV branch must clamp to [-1, 1] before int16 conversion
+        // (CLAUDE.md audio invariant — un-clamped values would wrap to the
+        // wrong sign as int16). An empty window must be a no-op, never a
+        // panic. On Windows this just proves the encoder accepts the input
+        // without panicking and still produces a valid Ogg.
+        let dir = std::env::temp_dir().join(format!("dimmy_tracksink_clamp_{}", uuid_v4_simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut sink = TrackSink::create(&dir, "audio", 16_000).expect("sink create");
+        sink.write(&[]); // no-op, must not panic or write
+        sink.write(&[2.0, -3.0, 0.5, -0.5]); // 2.0/-3.0 out of range
+        sink.finalize();
+
+        if cfg!(any(target_os = "windows", target_os = "macos")) {
+            assert!(dir.join("audio.ogg").exists());
+        } else {
+            let wav = dir.join("audio.wav");
+            let reader = hound::WavReader::open(&wav).unwrap();
+            let decoded: Vec<i16> = reader.into_samples::<i16>().map(|s| s.unwrap()).collect();
+            assert_eq!(decoded.len(), 4, "empty write skipped, 4 real samples kept");
+            // 2.0 → clamp 1.0 → i16::MAX; -3.0 → clamp -1.0 → -i16::MAX.
+            assert_eq!(decoded[0], i16::MAX);
+            assert_eq!(decoded[1], -i16::MAX);
+            // Clamp to [-1, 1] then *i16::MAX never reaches i16::MIN (-32768).
+            for s in &decoded {
+                assert!(*s >= -i16::MAX, "stays in clamped range");
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

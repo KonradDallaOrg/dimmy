@@ -859,9 +859,20 @@ public partial class App : Application
     private void OnAppViewModelPropertyChangedForTaskbar(object? sender,
         System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (e.PropertyName != nameof(AppViewModel.CurrentState)) return;
+        var name = e.PropertyName;
+        if (name != nameof(AppViewModel.CurrentState)
+            && name != nameof(AppViewModel.MeetingActive)
+            && name != nameof(AppViewModel.MeetingPaused)) return;
+
         var state = _appViewModel.CurrentState;
-        _dispatcherQueue?.TryEnqueue(() => _taskbarService?.UpdateState(state));
+        var mActive = _appViewModel.MeetingActive;
+        var mPaused = _appViewModel.MeetingPaused;
+        _dispatcherQueue?.TryEnqueue(() =>
+        {
+            if (name == nameof(AppViewModel.CurrentState))
+                _taskbarService?.UpdateState(state);
+            _trayService?.UpdateState(state, mActive, mPaused);
+        });
     }
 
     private void OnTaskbarAnchorClicked()
@@ -1578,6 +1589,9 @@ public partial class App : Application
                 return;
             }
             Log("StartMeetingFromCallDetect: meeting started, opening window", "CallDetect");
+            // Call-detect-started meetings recap by default (the nudge
+            // itself offers "Record + recap"). No checkbox is involved here.
+            if (_appViewModel != null) _appViewModel.MeetingGenerateRecap = true;
             // Bind the originating WASAPI session id so the
             // CallDetectionService meeting-tick can stop the meeting
             // the moment the call ends — no amplitude-based silence

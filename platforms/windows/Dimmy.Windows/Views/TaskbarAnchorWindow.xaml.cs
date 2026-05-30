@@ -142,14 +142,16 @@ public sealed partial class TaskbarAnchorWindow : Window
         return DefSubclassProc(hWnd, msg, wParam, lParam);
     }
 
-    /// <summary>Set the taskbar button's icon to dimmy.ico if present.
-    /// Falls back silently to the WinUI default icon otherwise — the
-    /// overlay state dots still render either way.</summary>
+    /// <summary>Set the taskbar button's icon. Prefers the white edge-to-edge
+    /// variant (dimmy-taskbar.ico) because Win11 taskbar chrome is dark; falls
+    /// back to the gradient EXE icon, then the WinUI default.</summary>
     private void TrySetWindowIcon()
     {
         var exeDir = AppContext.BaseDirectory;
         var paths = new[]
         {
+            Path.Combine(exeDir, "Assets", "dimmy-taskbar.ico"),
+            Path.Combine(exeDir, "dimmy-taskbar.ico"),
             Path.Combine(exeDir, "Assets", "dimmy.ico"),
             Path.Combine(exeDir, "dimmy.ico"),
         };

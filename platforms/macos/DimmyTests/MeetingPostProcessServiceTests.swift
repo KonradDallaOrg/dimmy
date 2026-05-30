@@ -45,6 +45,55 @@ final class MeetingPostProcessServiceTests: XCTestCase {
         XCTAssertTrue(prompt.contains("VERBATIM"))
     }
 
+    // MARK: - Listener's notes injection (Win parity)
+
+    func testPromptOmitsNotesSectionWhenNotesEmpty() {
+        // Default (no notes argument) and empty-string notes must NOT
+        // emit the appendix — older meetings have no notes.md, and the
+        // marker would confuse the LLM into treating "" as the user's
+        // emphasis.
+        let pDefault = MeetingPostProcessService.buildStructuredRecapPrompt(transcript: "x")
+        XCTAssertFalse(pDefault.contains("Listener's notes"))
+        let pEmpty = MeetingPostProcessService.buildStructuredRecapPrompt(transcript: "x", notes: "")
+        XCTAssertFalse(pEmpty.contains("Listener's notes"))
+        let pWhitespace = MeetingPostProcessService.buildStructuredRecapPrompt(
+            transcript: "x", notes: "   \n  \n  ")
+        XCTAssertFalse(
+            pWhitespace.contains("Listener's notes"),
+            "Whitespace-only notes must be treated as empty (no orphan appendix)")
+    }
+
+    func testPromptIncludesNotesSectionWithHighPriorityMarker() {
+        let notes = "[05:42] follow up on Q3 budget\n[12:03] action: ping legal"
+        let prompt = MeetingPostProcessService.buildStructuredRecapPrompt(
+            transcript: "transcript body", notes: notes)
+        XCTAssertTrue(
+            prompt.contains("## Listener's notes (HIGH PRIORITY — the user's own emphasis)"),
+            "The emphasis marker must appear verbatim — Win MeetingRecapHelpers parity")
+        XCTAssertTrue(prompt.contains(notes), "User's notes must appear verbatim in the prompt")
+        XCTAssertTrue(
+            prompt.contains("ACTIONS"),
+            "The instruction to surface notes under ACTIONS must be in the prompt")
+    }
+
+    func testPromptNotesAppearAfterTranscript() {
+        // Order matters for reasoning models: transcript first (the
+        // ground truth), then the user's emphasis as a closing appendix.
+        let notes = "<<NOTES_SENTINEL>>"
+        let transcript = "<<TRANSCRIPT_SENTINEL>>"
+        let prompt = MeetingPostProcessService.buildStructuredRecapPrompt(
+            transcript: transcript, notes: notes)
+        guard let tRange = prompt.range(of: transcript),
+              let nRange = prompt.range(of: notes)
+        else {
+            XCTFail("Both transcript and notes sentinels must appear in the prompt")
+            return
+        }
+        XCTAssertLessThan(
+            tRange.lowerBound, nRange.lowerBound,
+            "Transcript section must precede the notes appendix")
+    }
+
     // MARK: - Parser
 
     func testParseAllSectionsPresent() {

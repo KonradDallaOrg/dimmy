@@ -30,6 +30,7 @@ public sealed partial class MeetingWindow : Window
     private DispatcherQueueTimer? _toastTimer;
     private DateTime _startedAt;
     private string? _activeMeetingDir;       // dir of the LIVE recording (set on Start)
+    private string? _recordingNotesDir;      // meeting dir for live note writes (known at Start, before the first chunk)
     private string? _viewingMeetingDir;      // dir currently shown in main panel (may differ)
     private readonly System.Text.StringBuilder _liveTranscriptBuilder = new();
     private MeetingState _state = MeetingState.Idle;
@@ -250,6 +251,9 @@ public sealed partial class MeetingWindow : Window
         // visible the last time they were in Done. Cheap idempotent
         // call — safe even if SelectedTab is already "recap".
         if (s == MeetingState.Done) SelectDoneTab("recap");
+        // Entering Recording always lands on the live transcript tab,
+        // even after a previous meeting left the Notes tab selected.
+        if (s == MeetingState.Recording) SetRecTab("transcript");
         // RecordingBar lifecycle is keyed off _recordingActive (not the
         // visible panel) so the user can navigate to a past meeting
         // while still seeing — and being able to stop — the live one.
@@ -282,6 +286,13 @@ public sealed partial class MeetingWindow : Window
         StartBtn.IsEnabled = false;
         try
         {
+            // Capture the recap choice NOW (start time) into a shared flag so
+            // EVERY stop path honours it — the checkbox lives only in this
+            // window and the meeting lifecycle is decoupled (window can close,
+            // pill/popup stop independently), so the live checkbox isn't
+            // reachable from those paths.
+            if (App.Instance?.AppViewModel != null)
+                App.Instance.AppViewModel.MeetingGenerateRecap = GenerateRecapCheck.IsChecked == true;
             var buf = new byte[256];
             int rc = DimmyNative.dimmy_meeting_start(buf, buf.Length);
             if (rc <= 0)
@@ -317,6 +328,12 @@ public sealed partial class MeetingWindow : Window
             _ampHistory.Clear();
             _ampHistorySystem.Clear();
             _activeMeetingDir = null;       // first meeting_chunk event will set it
+            // Notes can be jotted before the first chunk lands, so resolve
+            // the meeting dir now from the id (meetingsDir/<id>) rather than
+            // waiting for the chunk event that fills _activeMeetingDir.
+            _recordingNotesDir = string.IsNullOrEmpty(id)
+                ? null
+                : System.IO.Path.Combine(Services.BuildInfo.MeetingsDirPath, id);
             _viewingMeetingDir = null;
 
             var fg = Helpers.AppContextCapture.SnapshotForeground();
@@ -402,7 +419,8 @@ public sealed partial class MeetingWindow : Window
             await LoadDoneAudioAsync(dir);
             await LoadNotesAsync(dir);
 
-            if (GenerateRecapCheck.IsChecked == true && !string.IsNullOrWhiteSpace(transcript))
+            bool wantRecap = App.Instance?.AppViewModel?.MeetingGenerateRecap ?? true;
+            if (wantRecap && !string.IsNullOrWhiteSpace(transcript))
             {
                 SetProcStep(2, false);
                 await GeneratePostProcessAsync(dir, transcript);
@@ -473,6 +491,87 @@ public sealed partial class MeetingWindow : Window
             PauseBtnIcon.Glyph = paused ? "" : "";
         if (PauseBtnLabel != null)
             PauseBtnLabel.Text = paused ? "Resume" : "Pause";
+    }
+
+    // ── Recording-view tabs (Live transcript ↔ Notes) ────────────
+    /// Switch the recording card between the live transcript and the
+    /// Notes composer. Mirrors the Done view's tab styling.
+    private void RecTab_PointerPressed(
+        object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+    {
+        var tag = (sender as FrameworkElement)?.Tag as string ?? "transcript";
+        SetRecTab(tag);
+    }
+
+    private void SetRecTab(string tab)
+    {
+        bool notes = tab == "notes";
+        if (TranscriptScroll != null)
+            TranscriptScroll.Visibility = notes ? Visibility.Collapsed : Visibility.Visible;
+        if (RecNotesPanel != null)
+            RecNotesPanel.Visibility = notes ? Visibility.Visible : Visibility.Collapsed;
+        if (RecTranscriptTabUnderline != null)
+            RecTranscriptTabUnderline.Visibility = notes ? Visibility.Collapsed : Visibility.Visible;
+        if (RecNotesTabUnderline != null)
+            RecNotesTabUnderline.Visibility = notes ? Visibility.Visible : Visibility.Collapsed;
+        if (RecTranscriptTabLabel != null) RecTranscriptTabLabel.Opacity = notes ? 0.6 : 1.0;
+        if (RecNotesTabLabel != null) RecNotesTabLabel.Opacity = notes ? 1.0 : 0.6;
+        if (notes && NoteInput != null) NoteInput.Focus(FocusState.Programmatic);
+    }
+
+    // ── Live notes (unified with the Done view's Notes tab) ───────
+    // The listener jots a free, multi-line note mid-meeting. "Add note"
+    // (or Ctrl+Enter) stamps the current meeting time and APPENDS the
+    // block to notes.md — the exact same file the Done view's Notes tab
+    // loads/edits, and the one MeetingPostProcessService feeds to the
+    // recap as the listener's high-priority emphasis. One notes store,
+    // usable during AND after the meeting. Plain Enter = newline.
+    private void NoteInput_KeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
+    {
+        if (e.Key != global::Windows.System.VirtualKey.Enter) return;
+        var ctrl = Microsoft.UI.Input.InputKeyboardSource
+            .GetKeyStateForCurrentThread(global::Windows.System.VirtualKey.Control)
+            .HasFlag(global::Windows.UI.Core.CoreVirtualKeyStates.Down);
+        if (!ctrl) return;   // plain Enter inserts a newline (multi-line)
+        e.Handled = true;
+        SubmitNote();
+    }
+
+    private void AddNote_Click(object sender, RoutedEventArgs e) => SubmitNote();
+
+    private void SubmitNote()
+    {
+        if (!_recordingActive)
+        {
+            ShowToast("Notes attach to an active recording.");
+            return;
+        }
+        var text = NoteInput.Text?.Trim() ?? string.Empty;
+        if (string.IsNullOrEmpty(text)) return;
+        var dir = _activeMeetingDir ?? _recordingNotesDir;
+        if (string.IsNullOrEmpty(dir))
+        {
+            ShowToast("One moment — the meeting is still spinning up.");
+            return;
+        }
+        try
+        {
+            var elapsed = DateTime.UtcNow - _startedAt;
+            string ts = elapsed.TotalHours >= 1
+                ? $"{(int)elapsed.TotalHours}:{elapsed.Minutes:D2}:{elapsed.Seconds:D2}"
+                : $"{elapsed.Minutes:D2}:{elapsed.Seconds:D2}";
+            // Markdown block: bold timestamp, the note body, blank-line
+            // separator. Appended so notes.md is a running, crash-safe log.
+            var block = $"**[{ts}]** {text}\n\n";
+            System.IO.File.AppendAllText(System.IO.Path.Combine(dir, "notes.md"), block);
+            NoteInput.Text = string.Empty;
+            ShowToast($"Note added at {ts}.");
+        }
+        catch (Exception ex)
+        {
+            App.Log($"add note exc: {ex.Message}", "Meeting");
+            ShowToast("Couldn't save the note. Try again.");
+        }
     }
 
     private void NewMeeting_Click(object sender, RoutedEventArgs e)
@@ -799,11 +898,24 @@ public sealed partial class MeetingWindow : Window
     private float[]? _cachedMicPeaks;
     private float[]? _cachedSystemPeaks;
 
+    /// Resolve a meeting audio track to its on-disk file: prefer the
+    /// compressed `.ogg` (current format), fall back to legacy `.wav`
+    /// (older recordings / WAV-fallback when the Vorbis encoder was
+    /// unavailable). Null if neither exists.
+    private static string? ResolveAudioTrack(string dir, string baseName)
+    {
+        var ogg = Path.Combine(dir, baseName + ".ogg");
+        if (File.Exists(ogg)) return ogg;
+        var wav = Path.Combine(dir, baseName + ".wav");
+        if (File.Exists(wav)) return wav;
+        return null;
+    }
+
     private async Task LoadDoneAudioAsync(string dir)
     {
         if (string.IsNullOrEmpty(dir)) return;
-        var wavPath = Path.Combine(dir, "audio.wav");
-        if (!File.Exists(wavPath))
+        var mixPath = ResolveAudioTrack(dir, "audio");
+        if (mixPath == null)
         {
             DoneWaveCard.Visibility = Visibility.Collapsed;
             _cachedDonePeaks = null;
@@ -811,14 +923,12 @@ public sealed partial class MeetingWindow : Window
             _cachedSystemPeaks = null;
             return;
         }
-        // Refuse to load a 0-byte audio.wav — that's the "interrupted
-        // recording" scenario where the WAV writer never finalised.
-        // Hide the card cleanly instead of feeding the MediaPlayer
-        // garbage. (Recording is now shielded from sidebar clicks
-        // during capture, so this should be rare.)
+        // Refuse a near-empty file — the "interrupted recording" case
+        // where the stream never finalised. Hide the card instead of
+        // feeding the MediaPlayer garbage.
         try
         {
-            if (new FileInfo(wavPath).Length < 64)
+            if (new FileInfo(mixPath).Length < 64)
             {
                 DoneWaveCard.Visibility = Visibility.Collapsed;
                 _cachedDonePeaks = null;
@@ -832,7 +942,7 @@ public sealed partial class MeetingWindow : Window
         try
         {
             DoneWaveCard.Visibility = Visibility.Visible;
-            DoneAudioPlayer.Source = global::Windows.Media.Core.MediaSource.CreateFromUri(new Uri(wavPath));
+            DoneAudioPlayer.Source = global::Windows.Media.Core.MediaSource.CreateFromUri(new Uri(mixPath));
             var mp = DoneAudioPlayer.MediaPlayer;
             if (mp != null)
             {
@@ -840,27 +950,43 @@ public sealed partial class MeetingWindow : Window
                 mp.PlaybackSession.PositionChanged += OnDonePlaybackPositionChanged;
             }
 
-            double width = DoneWaveformCanvas.ActualWidth;
-            if (width <= 0) width = 700;
-            int buckets = (int)Math.Max(80, Math.Min(500, width / 3));
+            // Fixed bucket count (NOT width-derived): the peaks are decoded
+            // once at this resolution, cached on disk keyed by (size,buckets)
+            // so re-opens are instant, and DrawDoneWaveform maps them across
+            // whatever the current canvas width is (responsive). 400 bars is
+            // a good density for any reasonable card width.
+            const int buckets = 400;
 
-            // Read all three tracks in parallel where present. Phase 3+
-            // recordings have audio_mic.wav and audio_system.wav as
-            // separate files; older recordings have only audio.wav.
-            var micPath = Path.Combine(dir, "audio_mic.wav");
-            var systemPath = Path.Combine(dir, "audio_system.wav");
-            var mixTask = Task.Run(() => Helpers.WavPeaks.ReadPeaks(wavPath, buckets));
-            var micTask = File.Exists(micPath)
-                ? Task.Run(() => Helpers.WavPeaks.ReadPeaks(micPath, buckets))
-                : Task.FromResult(System.Array.Empty<float>());
-            var sysTask = File.Exists(systemPath)
-                ? Task.Run(() => Helpers.WavPeaks.ReadPeaks(systemPath, buckets))
-                : Task.FromResult(System.Array.Empty<float>());
-            await Task.WhenAll(mixTask, micTask, sysTask);
+            // Decode peaks SEQUENTIALLY, not in parallel. Three concurrent
+            // full-file Vorbis decodes of a long meeting (each materialises
+            // the whole track in memory) hammered CPU/RAM and intermittently
+            // returned empty for one track — the waveform then showed a
+            // single band (and re-transcription-grade decode is proven fine,
+            // see the standalone check). One at a time is reliable; the disk
+            // cache makes every later open instant regardless.
+            // ReadPeaksAny handles both .ogg (Symphonia FFI) and .wav.
+            var micPath = ResolveAudioTrack(dir, "audio_mic");
+            var systemPath = ResolveAudioTrack(dir, "audio_system");
+            var mixForPeaks = mixPath;
 
-            _cachedDonePeaks = mixTask.Result;
-            _cachedMicPeaks = micTask.Result.Length > 0 ? micTask.Result : null;
-            _cachedSystemPeaks = sysTask.Result.Length > 0 ? sysTask.Result : null;
+            var micPeaks = micPath != null
+                ? await Task.Run(() => Helpers.WavPeaks.ReadPeaksAny(micPath, buckets))
+                : System.Array.Empty<float>();
+            var sysPeaks = systemPath != null
+                ? await Task.Run(() => Helpers.WavPeaks.ReadPeaksAny(systemPath, buckets))
+                : System.Array.Empty<float>();
+
+            _cachedMicPeaks = micPeaks.Length > 0 ? micPeaks : null;
+            _cachedSystemPeaks = sysPeaks.Length > 0 ? sysPeaks : null;
+
+            // The mix is only the single-band FALLBACK (old single-track
+            // recordings, or a per-track decode that came back empty). When
+            // both per-track bands are present we don't need it — skip that
+            // third decode (faster first open).
+            _cachedDonePeaks = (_cachedMicPeaks != null && _cachedSystemPeaks != null)
+                ? null
+                : await Task.Run(() => Helpers.WavPeaks.ReadPeaksAny(mixForPeaks, buckets));
+
             DrawDoneWaveform();
         }
         catch (Exception ex)
@@ -914,36 +1040,47 @@ public sealed partial class MeetingWindow : Window
         double h = DoneWaveformCanvas.ActualHeight;
         if (w <= 0 || h <= 0) return;
 
-        bool dual = _cachedMicPeaks != null && _cachedSystemPeaks != null;
+        // Render whichever bands actually decoded, using their canonical
+        // colours so the user can READ the failure mode at a glance:
+        //   mic = accent, system = LimeGreen, mix = accent mirrored.
+        // Burned 2026-05-30: meetings whose audio_mic.ogg has unrecoverable
+        // vorbis errors showed a blue mirrored mix waveform — visually
+        // indistinguishable from a healthy mic-only recording, so the
+        // user couldn't tell what was actually wrong.
+        var micBrush = Helpers.ThemeHelper.ResolvedAccentBrush();
+        var sysBrush = new SolidColorBrush(Microsoft.UI.Colors.LimeGreen);
         double midline = h / 2.0;
-        if (dual)
+        bool hasMic = _cachedMicPeaks != null && _cachedMicPeaks.Length > 0;
+        bool hasSys = _cachedSystemPeaks != null && _cachedSystemPeaks.Length > 0;
+        bool hasMix = _cachedDonePeaks != null && _cachedDonePeaks.Length > 0;
+        if (hasMic && hasSys)
         {
-            // Mirrored-stereo audiogram (Phase 3+ recordings with both
-            // per-track files). Both waveforms share the canvas's
-            // midline: mic (accent) grows UP, system (green) grows
-            // DOWN. Mic tracks the user's Windows accent colour;
-            // system stays LimeGreen for contrast even if the user's
-            // accent is itself blue/teal. Each band gets the FULL
-            // half-canvas height so a loud moment is readable even on
-            // short cards.
-            var micBrush = Helpers.ThemeHelper.ResolvedAccentBrush();
-            DrawDoneBandAnchored(_cachedMicPeaks!, micBrush,
-                midline, midline - 2, w, anchorTop: true);
-            DrawDoneBandAnchored(_cachedSystemPeaks!,
-                new SolidColorBrush(Microsoft.UI.Colors.LimeGreen),
-                midline, midline - 2, w, anchorTop: false);
+            // Dual-band audiogram: mic grows UP from midline (accent),
+            // system grows DOWN (green). Each gets the FULL half so loud
+            // moments stay legible on short cards.
+            DrawDoneBandAnchored(_cachedMicPeaks!, micBrush, midline, midline - 2, w, anchorTop: true);
+            DrawDoneBandAnchored(_cachedSystemPeaks!, sysBrush, midline, midline - 2, w, anchorTop: false);
         }
-        else if (_cachedDonePeaks != null && _cachedDonePeaks.Length > 0)
+        else if (hasMic)
         {
-            // Pre-Phase-3 recording (or Mic-only / System-only mode where
-            // one track file is absent). Single mirrored band so the
-            // layout matches the dual case visually. Both halves use
-            // the accent brush since only one channel is being represented.
-            var micBrush = Helpers.ThemeHelper.ResolvedAccentBrush();
-            DrawDoneBandAnchored(_cachedDonePeaks, micBrush,
-                midline, midline - 2, w, anchorTop: true);
-            DrawDoneBandAnchored(_cachedDonePeaks, micBrush,
-                midline, midline - 2, w, anchorTop: false);
+            // Mic decoded, system did not — show mic alone in accent so
+            // the user sees their voice was captured.
+            DrawDoneBandAnchored(_cachedMicPeaks!, micBrush, midline, midline - 2, w, anchorTop: true);
+            DrawDoneBandAnchored(_cachedMicPeaks!, micBrush, midline, midline - 2, w, anchorTop: false);
+        }
+        else if (hasSys)
+        {
+            // System decoded, mic did not — show system alone in green
+            // so the colour itself signals "the mic track is missing".
+            DrawDoneBandAnchored(_cachedSystemPeaks!, sysBrush, midline, midline - 2, w, anchorTop: true);
+            DrawDoneBandAnchored(_cachedSystemPeaks!, sysBrush, midline, midline - 2, w, anchorTop: false);
+        }
+        else if (hasMix)
+        {
+            // Neither per-track decoded — render the combined mix mirrored.
+            // Accent brush because there's no per-track signal to colour-code.
+            DrawDoneBandAnchored(_cachedDonePeaks!, micBrush, midline, midline - 2, w, anchorTop: true);
+            DrawDoneBandAnchored(_cachedDonePeaks!, micBrush, midline, midline - 2, w, anchorTop: false);
         }
 
         UpdateDonePlayhead(0);
@@ -979,14 +1116,25 @@ public sealed partial class MeetingWindow : Window
         }
     }
 
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _waveResizeTimer;
+
     private void DoneWaveformCanvas_SizeChanged(object sender, SizeChangedEventArgs e)
     {
         if (_cachedDonePeaks == null && _cachedMicPeaks == null && _cachedSystemPeaks == null) return;
         if (e.NewSize.Width <= 0 || e.NewSize.Height <= 0) return;
-        if (DoneWaveformCanvas.Children.Count <= 1)
+        // DEBOUNCE the redraw. Redrawing on every SizeChanged during a
+        // window drag rebuilds hundreds of Canvas rectangles dozens of
+        // times a second and froze the UI thread ("tutto piantato"). Wait
+        // ~120 ms of resize silence, then redraw once at the final width.
+        if (_waveResizeTimer == null)
         {
-            DrawDoneWaveform();
+            _waveResizeTimer = DispatcherQueue.CreateTimer();
+            _waveResizeTimer.Interval = TimeSpan.FromMilliseconds(120);
+            _waveResizeTimer.IsRepeating = false;
+            _waveResizeTimer.Tick += (s, _) => DrawDoneWaveform();
         }
+        _waveResizeTimer.Stop();
+        _waveResizeTimer.Start();
     }
 
     private void DoneWaveform_PointerPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
@@ -1255,72 +1403,10 @@ public sealed partial class MeetingWindow : Window
         target.Blocks.Add(p);
     }
 
-    /// Reverse of BuildMarkdownFromSections: split a persisted recap.md
-    /// back into the canonical section-key dictionary so the Done-view
-    /// cards can re-render. Heading lookup is case/space insensitive
-    /// so "## Topics", "## Topics discussed", "##  topics" all match.
-    private static Dictionary<string, string> SplitMarkdownIntoSections(string markdown)
-    {
-        var headingMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            { "context", "CONTEXT" },
-            { "tldr", "TLDR" },
-            { "tl;dr", "TLDR" },
-            { "highlights", "HIGHLIGHTS" },
-            { "narrative", "NARRATIVE" },
-            { "key decisions", "KEY_DECISIONS" },
-            { "decisions", "KEY_DECISIONS" },
-            { "topics", "TOPICS" },
-            { "topics discussed", "TOPICS" },
-            { "actions", "ACTIONS" },
-            { "action items", "ACTIONS" },
-            { "open questions", "OPEN_QUESTIONS" },
-            { "questions", "OPEN_QUESTIONS" },
-            { "risks", "RISKS" },
-            { "risks & blockers", "RISKS" },
-            { "blockers", "RISKS" },
-            { "next steps", "NEXT_STEPS" },
-            { "follow-ups", "FOLLOWUPS" },
-            { "followups", "FOLLOWUPS" },
-        };
-
-        var result = new Dictionary<string, string>();
-        if (string.IsNullOrWhiteSpace(markdown)) return result;
-
-        string? currentKey = null;
-        var sb = new System.Text.StringBuilder();
-        var lines = markdown.Replace("\r\n", "\n").Split('\n');
-
-        void Flush()
-        {
-            if (currentKey != null)
-            {
-                var body = sb.ToString().Trim();
-                if (!string.IsNullOrEmpty(body)) result[currentKey] = body;
-            }
-            sb.Clear();
-        }
-
-        foreach (var line in lines)
-        {
-            var trimmed = line.TrimStart();
-            if (trimmed.StartsWith("## "))
-            {
-                Flush();
-                var heading = trimmed.Substring(3).Trim();
-                if (headingMap.TryGetValue(heading, out var key))
-                    currentKey = key;
-                else
-                    currentKey = null;
-            }
-            else if (currentKey != null)
-            {
-                sb.AppendLine(line);
-            }
-        }
-        Flush();
-        return result;
-    }
+    // SplitMarkdownIntoSections moved into the unified parser in
+    // Helpers/MeetingRecapHelpers.cs::ParseStructuredRecap — that parser
+    // now accepts both the wire (`===NAME===`) and storage (`## Heading`)
+    // formats in a single pass, with synonym tolerance. Burned 2026-05-30.
 
     // BuildMarkdownFromSections moved to Helpers/MeetingRecapHelpers.cs
     // so the pure logic is unit-testable. Internal callers now go via
@@ -1503,8 +1589,13 @@ public sealed partial class MeetingWindow : Window
             var meetings = Services.BuildInfo.MeetingsDirPath;
             if (!Directory.Exists(meetings)) return;
             var query = (HistorySearchBox.Text ?? "").Trim();
+            // Sort by CreationTime, NOT LastWriteTime — the directory's mtime
+            // gets bumped every time we regenerate peaks / save a recap edit /
+            // touch any sibling file, which used to scramble the list order
+            // and put yesterday's meetings at the top whenever a background
+            // job touched their folder. Burned 2026-05-30.
             var dirs = new DirectoryInfo(meetings).GetDirectories()
-                .OrderByDescending(d => d.LastWriteTime)
+                .OrderByDescending(d => d.CreationTime)
                 .ToList();
             foreach (var d in dirs)
             {
@@ -1514,7 +1605,16 @@ public sealed partial class MeetingWindow : Window
                 // title set by the recap LLM (via save_post_process or
                 // the MCP save_recap path).
                 string title = $"Meeting {d.Name[..Math.Min(8, d.Name.Length)]}";
-                string subtitle = d.LastWriteTime.ToString("yyyy-MM-dd HH:mm");
+                // Date hierarchy (most authoritative → least):
+                //   1. meta.json `started_at`    — unix seconds, written by Rust at meeting start
+                //   2. meta.json `ended_at - duration_secs` — back-computed for older meta schemas
+                //   3. meta.json `ended_at`       — last resort if duration missing
+                //   4. directory CreationTime    — folder mkdir at meeting start (NOT LastWrite,
+                //                                  which gets bumped every time we regen peaks
+                //                                  / save a recap edit / touch any file inside)
+                // Burned 2026-05-30: every meeting list row showed today's date because
+                // a peaks regen run had updated the dir mtime.
+                DateTime? startDt = d.CreationTime;
                 if (File.Exists(meta))
                 {
                     try
@@ -1526,12 +1626,34 @@ public sealed partial class MeetingWindow : Window
                             var metaTitle = t.GetString();
                             if (!string.IsNullOrEmpty(metaTitle)) title = metaTitle;
                         }
-                        if (doc.RootElement.TryGetProperty("started_at", out var sa))
-                        {
-                            var parsed = sa.GetString() ?? "";
-                            if (!string.IsNullOrEmpty(parsed)) subtitle = parsed;
-                        }
-                        if (doc.RootElement.TryGetProperty("duration_secs", out var dur))
+                        double startedAt = 0, endedAt = 0, durationSecs = 0;
+                        if (doc.RootElement.TryGetProperty("started_at", out var sa)
+                            && sa.ValueKind == JsonValueKind.Number)
+                            startedAt = sa.GetDouble();
+                        if (doc.RootElement.TryGetProperty("ended_at", out var ea)
+                            && ea.ValueKind == JsonValueKind.Number)
+                            endedAt = ea.GetDouble();
+                        if (doc.RootElement.TryGetProperty("duration_secs", out var ds)
+                            && ds.ValueKind == JsonValueKind.Number)
+                            durationSecs = ds.GetDouble();
+                        if (startedAt > 0)
+                            startDt = DateTimeOffset.FromUnixTimeMilliseconds((long)(startedAt * 1000)).LocalDateTime;
+                        else if (endedAt > 0 && durationSecs > 0)
+                            startDt = DateTimeOffset.FromUnixTimeMilliseconds((long)((endedAt - durationSecs) * 1000)).LocalDateTime;
+                        else if (endedAt > 0)
+                            startDt = DateTimeOffset.FromUnixTimeMilliseconds((long)(endedAt * 1000)).LocalDateTime;
+                        // duration suffix handled after subtitle string is built.
+                    }
+                    catch { }
+                }
+                string subtitle = (startDt ?? d.CreationTime).ToString("yyyy-MM-dd HH:mm");
+                if (File.Exists(meta))
+                {
+                    try
+                    {
+                        using var doc2 = JsonDocument.Parse(File.ReadAllText(meta));
+                        if (doc2.RootElement.TryGetProperty("duration_secs", out var dur)
+                            && dur.ValueKind == JsonValueKind.Number)
                         {
                             subtitle += " · " + FormatDuration(dur.GetDouble());
                         }
@@ -1648,20 +1770,11 @@ public sealed partial class MeetingWindow : Window
                 // sidebar-load path silently dropped every section of
                 // marker-based recaps because the legacy heading
                 // parser doesn't recognise `## ===CONTEXT===` etc.
+                // Unified, permissive parser — accepts wire format
+                // (`===NAME===`), persisted format (`## Heading` + synonyms),
+                // hybrids, and falls back to TLDR=full-body if nothing matched.
+                // See MeetingRecapHelpers.ParseStructuredRecap.
                 var parsed = Helpers.MeetingRecapHelpers.ParseStructuredRecap(text);
-                // ParseStructuredRecap returns at minimum a single
-                // "TLDR" entry with the whole raw body when no markers
-                // matched — so we count as "really parsed" only when
-                // it found 2+ sections or the single TLDR section
-                // is shorter than the raw body (markers were stripped).
-                bool markerParsed = parsed.Count > 1
-                    || (parsed.Count == 1
-                        && parsed.TryGetValue("TLDR", out var tldrOnly)
-                        && tldrOnly.Length < text.Length - 4);
-                if (!markerParsed)
-                {
-                    parsed = SplitMarkdownIntoSections(text);
-                }
                 if (parsed.Count > 0)
                 {
                     ApplyDoneSections(parsed);
@@ -2193,29 +2306,32 @@ public sealed partial class MeetingWindow : Window
             return System.Text.Encoding.UTF8.GetString(buf, 0, rc);
         }
 
-        var micPath = Path.Combine(dir, "audio_mic.wav");
-        var systemPath = Path.Combine(dir, "audio_system.wav");
-        var monoPath = Path.Combine(dir, "audio.wav");
+        // Prefer the compressed .ogg tracks (current format), fall back
+        // to legacy .wav. dimmy_transcribe_file decodes either via the
+        // shared hound/Symphonia path, so re-transcription needs no WAV.
+        var micPath = ResolveAudioTrack(dir, "audio_mic");
+        var systemPath = ResolveAudioTrack(dir, "audio_system");
+        var monoPath = ResolveAudioTrack(dir, "audio");
 
-        bool hasMic = File.Exists(micPath) && new FileInfo(micPath).Length > 44;
-        bool hasSystem = File.Exists(systemPath) && new FileInfo(systemPath).Length > 44;
+        bool hasMic = micPath != null && new FileInfo(micPath).Length > 44;
+        bool hasSystem = systemPath != null && new FileInfo(systemPath).Length > 44;
 
         if (hasMic || hasSystem)
         {
             if (hasMic)
             {
-                var mic = TranscribeOne(micPath);
+                var mic = TranscribeOne(micPath!);
                 if (!string.IsNullOrWhiteSpace(mic))
                     sb.AppendLine("[mic]").AppendLine(mic.Trim()).AppendLine();
             }
             if (hasSystem)
             {
-                var sys = TranscribeOne(systemPath);
+                var sys = TranscribeOne(systemPath!);
                 if (!string.IsNullOrWhiteSpace(sys))
                     sb.AppendLine("[system]").AppendLine(sys.Trim()).AppendLine();
             }
         }
-        else if (File.Exists(monoPath) && new FileInfo(monoPath).Length > 44)
+        else if (monoPath != null && new FileInfo(monoPath).Length > 44)
         {
             var mono = TranscribeOne(monoPath);
             if (!string.IsNullOrWhiteSpace(mono))

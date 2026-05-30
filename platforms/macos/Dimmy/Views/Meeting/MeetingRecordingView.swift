@@ -14,6 +14,10 @@ import SwiftUI
 
 struct MeetingRecordingView: View {
     @ObservedObject var vm: MeetingViewModel
+    /// Focus tracker for the Notes editor — used to save on blur, same
+    /// pattern as MeetingDoneView. SwiftUI's TextEditor has no native
+    /// "lost focus" callback; the @FocusState onChange handler is it.
+    @FocusState private var notesFocused: Bool
 
     var body: some View {
         VStack(spacing: 12) {
@@ -125,46 +129,112 @@ struct MeetingRecordingView: View {
         .background(panelBackground)
     }
 
-    // MARK: Live transcript
+    // MARK: Live transcript / Notes (tabbed)
 
     private var transcriptCard: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("Live transcript")
-                    .font(.system(size: 14, weight: .semibold))
-                Spacer()
-                if !vm.chunkSummary.isEmpty {
-                    Text(vm.chunkSummary)
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.macTextTertiary)
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
+            recordingTabHeader
             Divider().opacity(0.4)
-            ScrollView {
-                ScrollViewReader { proxy in
-                    Text(vm.transcript.isEmpty
-                         ? "🎙️ Listening… first chunk lands in ~15 s."
-                         : vm.transcript)
-                        .font(.system(size: 13))
-                        .foregroundStyle(vm.transcript.isEmpty
-                                          ? Color.macTextSecondary
-                                          : Color.primary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
-                        .padding(14)
-                        .id("bottom")
-                        .onChange(of: vm.transcript) { _, _ in
-                            withAnimation(.easeOut(duration: 0.2)) {
-                                proxy.scrollTo("bottom", anchor: .bottom)
-                            }
-                        }
-                }
+            // Mutually exclusive content. The notes editor shares the
+            // SAME `vm.doneNotes` buffer + `<dir>/notes.md` on disk as
+            // the Done-view Notes tab — single store, so a note typed
+            // here survives into Done without an extra load step.
+            if vm.recordingSelectedTab == .live {
+                liveTranscriptScroll
+            } else {
+                notesEditor
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(panelBackground)
+        // Save when the user leaves the Notes tab — mirrors the Done-
+        // view onChange save (MeetingDoneView line ~169). Stop +
+        // newMeeting already call saveNotes too, so a tab-leave save
+        // is the only NEW persistence trigger this view introduces.
+        .onChange(of: vm.recordingSelectedTab) { oldTab, _ in
+            if oldTab == .notes { vm.saveNotes() }
+        }
+    }
+
+    private var recordingTabHeader: some View {
+        HStack {
+            Picker("", selection: $vm.recordingSelectedTab) {
+                ForEach(MeetingViewModel.RecordingTab.allCases) { tab in
+                    Text(tab.title).tag(tab)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: 280)
+            Spacer()
+            if vm.recordingSelectedTab == .notes {
+                Button(action: {
+                    vm.stampMeetingTime()
+                    notesFocused = true
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "plus.circle")
+                        Text("Stamp time")
+                    }
+                    .font(.system(size: 12))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Insert a [mm:ss] stamp at the end of your notes")
+            } else if !vm.chunkSummary.isEmpty {
+                Text(vm.chunkSummary)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.macTextTertiary)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    private var liveTranscriptScroll: some View {
+        ScrollView {
+            ScrollViewReader { proxy in
+                Text(vm.transcript.isEmpty
+                     ? "🎙️ Listening… first chunk lands in ~15 s."
+                     : vm.transcript)
+                    .font(.system(size: 13))
+                    .foregroundStyle(vm.transcript.isEmpty
+                                      ? Color.macTextSecondary
+                                      : Color.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+                    .padding(14)
+                    .id("bottom")
+                    .onChange(of: vm.transcript) { _, _ in
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            proxy.scrollTo("bottom", anchor: .bottom)
+                        }
+                    }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var notesEditor: some View {
+        ZStack(alignment: .topLeading) {
+            if vm.doneNotes.isEmpty {
+                Text("Your notes — stamp the current time with the button, then type. Saved to notes.md, also visible from the Done view.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.macTextSecondary.opacity(0.7))
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 16)
+                    .allowsHitTesting(false)
+            }
+            TextEditor(text: $vm.doneNotes)
+                .font(.system(size: 13))
+                .scrollContentBackground(.hidden)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .focused($notesFocused)
+                .onChange(of: notesFocused) { _, isFocused in
+                    if !isFocused { vm.saveNotes() }
+                }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var panelBackground: some View {

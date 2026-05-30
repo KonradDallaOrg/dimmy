@@ -94,7 +94,12 @@ enum MeetingPostProcessService {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .failure(.emptyTranscript) }
 
-        let prompt = buildStructuredRecapPrompt(transcript: trimmed)
+        // Read the user's notes.md (the live + Done tabs share this
+        // single file) and fold them into the prompt as HIGH PRIORITY
+        // emphasis. Missing file → empty string → no notes section.
+        let notesURL = URL(fileURLWithPath: dir).appendingPathComponent("notes.md")
+        let notes = (try? String(contentsOf: notesURL, encoding: .utf8)) ?? ""
+        let prompt = buildStructuredRecapPrompt(transcript: trimmed, notes: notes)
         let model = (modelOverride?.isEmpty == false) ? modelOverride! : pickRecapModel()
         // 32K tokens — same ceiling Win uses to give Opus 4.7 / Gemini
         // 3.1 Pro headroom for adaptive-thinking budgets. The provider
@@ -179,12 +184,32 @@ enum MeetingPostProcessService {
         "FOLLOWUPS",
     ]
 
-    static func buildStructuredRecapPrompt(transcript: String) -> String {
+    static func buildStructuredRecapPrompt(transcript: String, notes: String = "") -> String {
         // Verbatim port of MeetingWindow.xaml.cs::BuildStructuredRecapPrompt.
         // Notion-style recap targeting reasoning-tier models (Opus 4.7
         // adaptive thinking, Gemini 3.1 Pro thinkingLevel=high, GPT-5).
         // Leading spaces matter for the parser ===KEY=== markers — do
         // not reflow.
+        let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Listener's notes (notes.md) are the user's own emphasis — fold
+        // them in as a HIGH PRIORITY appendix after the transcript so the
+        // model weights timestamps + content. Verbatim port of Win
+        // MeetingRecapHelpers.cs::BuildStructuredRecapPrompt (line ~215).
+        let notesSection: String
+        if trimmedNotes.isEmpty {
+            notesSection = ""
+        } else {
+            notesSection = "\n\n═══════════════════════════════════════════════════════════════════\n"
+                + "## Listener's notes (HIGH PRIORITY — the user's own emphasis)\n"
+                + "These notes were written by the person recording, during and/or after "
+                + "the meeting, to flag what matters to them. A leading `[mm:ss]` marks when "
+                + "during the meeting the note was taken — align it with the transcript at "
+                + "that time. Treat the notes as the single strongest signal of importance: "
+                + "weight their content and the discussion around their timestamp heavily, "
+                + "surface them prominently in the relevant sections, and reflect any "
+                + "explicit asks or to-dos under ACTIONS. Never ignore or drop a note.\n\n"
+                + trimmedNotes
+        }
         return """
         You are a senior meeting analyst writing a polished, Notion-style summary of an audio recording. Output ONLY markdown with the EXACT marker headings shown — a downstream parser splits on them.
 
@@ -265,7 +290,7 @@ enum MeetingPostProcessService {
         ═══════════════════════════════════════════════════════════════════
 
         ## Transcript
-        \(transcript)
+        \(transcript)\(notesSection)
         """
     }
 

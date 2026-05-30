@@ -35,9 +35,10 @@ use std::time::Duration;
 use serial_test::serial;
 
 use dimmy_lib::ffi::{
-    dimmy_claude_code_ping, dimmy_claude_code_status, dimmy_clear_app_context,
-    dimmy_get_active_mic_sample_rate, dimmy_get_config_json, dimmy_get_loopback_amplitude,
-    dimmy_history_save, dimmy_history_update_audio, dimmy_history_update_enhanced,
+    dimmy_call_meeting_started_external, dimmy_call_signal_session_ended, dimmy_claude_code_ping,
+    dimmy_claude_code_status, dimmy_clear_app_context, dimmy_get_active_mic_sample_rate,
+    dimmy_get_config_json, dimmy_get_loopback_amplitude, dimmy_history_save,
+    dimmy_history_update_audio, dimmy_history_update_enhanced,
     dimmy_history_update_word_timestamps, dimmy_init, dimmy_llm_call_raw, dimmy_meeting_is_active,
     dimmy_meeting_save_post_process, dimmy_push_loopback_audio, dimmy_set_app_context,
     dimmy_set_config_json, dimmy_set_loopback_sample_rate, dimmy_transcribe_file,
@@ -1139,4 +1140,34 @@ fn secondary_sample_rate_falls_back_to_primary_on_non_windows() {
     // Out-of-range primary is replaced with the canonical 48 kHz so a
     // bug in the primary probe never propagates to the WAV header.
     assert_eq!(dimmy_lib::audio::secondary_sample_rate(0), 48_000);
+}
+
+// ── Tests: call_meeting_started_external (FFI boundary) ───────────────
+//
+// The full "manual meeting + call ends → StopSuggested" behaviour is
+// unit-tested in `call_detector.rs` (it needs `is_meeting_active=true`,
+// which `dimmy_call_signal_session_ended` reads from the global MEETING
+// static — and starting a real meeting needs cpal + an input device, so
+// it can't run in this offline harness). Here we only guard the FFI
+// boundary: the symbol is exported, callable, returns its documented rc,
+// and is safely idempotent (the host arms on the start edge AND on
+// mid-meeting ticks). With no meeting active, signal_session_ended must
+// stay NoChange (rc=0) regardless of arming.
+#[test]
+#[serial]
+fn call_meeting_started_external_round_trip() {
+    ensure_init();
+    assert_eq!(
+        dimmy_call_meeting_started_external(),
+        1,
+        "documented rc is 1"
+    );
+    // Idempotent: a second arm is still rc=1, never a crash.
+    assert_eq!(dimmy_call_meeting_started_external(), 1);
+    // No meeting active in this harness → the stop path is gated off.
+    let rc = unsafe { dimmy_call_signal_session_ended() };
+    assert_eq!(
+        rc, 0,
+        "no active meeting → NoChange even when armed (rc=3 path is unit-tested)"
+    );
 }

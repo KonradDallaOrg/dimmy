@@ -80,7 +80,7 @@ public static class MeetingRecapHelpers
     /// the transcript). Section markers `===NAME===` are the contract
     /// with <see cref="ParseStructuredRecap"/>.
     /// </summary>
-    public static string BuildStructuredRecapPrompt(string transcript)
+    public static string BuildStructuredRecapPrompt(string transcript, string notes = "")
     {
         return
             "You are a senior meeting analyst writing a polished, Notion-style " +
@@ -208,7 +208,19 @@ public static class MeetingRecapHelpers
             "NOT a blank line, NOT an apology. JUST `# <title>` on line one.\n" +
             "═══════════════════════════════════════════════════════════════════\n\n" +
 
-            "## Transcript\n" + transcript;
+            "## Transcript\n" + transcript +
+            (string.IsNullOrWhiteSpace(notes)
+                ? ""
+                : "\n\n═══════════════════════════════════════════════════════════════════\n" +
+                  "## Listener's notes (HIGH PRIORITY — the user's own emphasis)\n" +
+                  "These notes were written by the person recording, during and/or after " +
+                  "the meeting, to flag what matters to them. A leading `[mm:ss]` marks when " +
+                  "during the meeting the note was taken — align it with the transcript at " +
+                  "that time. Treat the notes as the single strongest signal of importance: " +
+                  "weight their content and the discussion around their timestamp heavily, " +
+                  "surface them prominently in the relevant sections, and reflect any " +
+                  "explicit asks or to-dos under ACTIONS. Never ignore or drop a note.\n\n" +
+                  notes.Trim());
     }
 
     /// <summary>
@@ -226,55 +238,180 @@ public static class MeetingRecapHelpers
     /// through to a single <c>TLDR</c> entry containing the whole raw
     /// text — defensive fallback for older / off-template responses.
     /// </summary>
+    /// <summary>
+    /// Friendly heading → canonical key map for the persisted markdown
+    /// format (`## Heading`). Drives the storage-format read path and
+    /// tolerates LLM-language drift ("Decisions" vs "Key decisions",
+    /// "Topics" vs "Topics discussed", "Tl;dr" vs "TL;DR", etc.).
+    /// Case- and whitespace-insensitive lookup via the dictionary
+    /// comparer + normalisation in <see cref="MapHeadingToCanonical"/>.
+    /// </summary>
+    private static readonly Dictionary<string, string> HeadingToKey = new(StringComparer.OrdinalIgnoreCase)
+    {
+        { "context", "CONTEXT" }, { "background", "CONTEXT" }, { "setting", "CONTEXT" },
+        { "tldr", "TLDR" }, { "tl;dr", "TLDR" }, { "tl,dr", "TLDR" }, { "summary", "TLDR" }, { "executive summary", "TLDR" },
+        { "highlights", "HIGHLIGHTS" }, { "key points", "HIGHLIGHTS" }, { "key moments", "HIGHLIGHTS" },
+        { "narrative", "NARRATIVE" }, { "discussion", "NARRATIVE" }, { "details", "NARRATIVE" }, { "story", "NARRATIVE" },
+        { "key decisions", "KEY_DECISIONS" }, { "decisions", "KEY_DECISIONS" }, { "decided", "KEY_DECISIONS" },
+        { "topics", "TOPICS" }, { "topics discussed", "TOPICS" }, { "topics covered", "TOPICS" }, { "agenda", "TOPICS" },
+        { "actions", "ACTIONS" }, { "action items", "ACTIONS" }, { "todos", "ACTIONS" }, { "to-dos", "ACTIONS" }, { "to do", "ACTIONS" }, { "tasks", "ACTIONS" },
+        { "open questions", "OPEN_QUESTIONS" }, { "questions", "OPEN_QUESTIONS" }, { "unresolved", "OPEN_QUESTIONS" }, { "unresolved questions", "OPEN_QUESTIONS" },
+        { "risks", "RISKS" }, { "risks & blockers", "RISKS" }, { "risks and blockers", "RISKS" }, { "blockers", "RISKS" }, { "concerns", "RISKS" },
+        { "next steps", "NEXT_STEPS" }, { "next step", "NEXT_STEPS" }, { "what's next", "NEXT_STEPS" }, { "going forward", "NEXT_STEPS" },
+        { "follow-ups", "FOLLOWUPS" }, { "followups", "FOLLOWUPS" }, { "follow ups", "FOLLOWUPS" }, { "follow-up", "FOLLOWUPS" }, { "follow up", "FOLLOWUPS" },
+    };
+
+    private static string? MapHeadingToCanonical(string heading)
+    {
+        // Normalise whitespace runs to a single space so "Topics  discussed"
+        // / "topics\tdiscussed" still match.
+        var key = System.Text.RegularExpressions.Regex.Replace(heading.Trim(), @"\s+", " ");
+        return HeadingToKey.TryGetValue(key, out var v) ? v : null;
+    }
+
+    /// <summary>
+    /// Try to interpret a single line as a section boundary. Accepts:
+    ///   <list type="bullet">
+    ///   <item>`===NAME===` — the wire-format marker (canonical key).</item>
+    ///   <item>`## ===NAME===` — same with the markdown heading prefix
+    ///        the LLM emits.</item>
+    ///   <item>`## Heading` — the persisted storage format (mapped via
+    ///        <see cref="HeadingToKey"/> synonyms).</item>
+    ///   </list>
+    /// Returns the canonical key or <c>null</c> if the line is body
+    /// content (or an unknown heading).
+    /// </summary>
+    private static string? TryParseSectionLine(string trimmed)
+    {
+        var s = trimmed;
+        // Strip an optional markdown heading prefix so we treat
+        // `## ===CONTEXT===` and bare `===CONTEXT===` identically.
+        while (s.StartsWith("#"))
+        {
+            s = s.Substring(1);
+            if (s.StartsWith(" ") || s.StartsWith("\t")) s = s.TrimStart();
+        }
+
+        // Wire format: ===NAME===
+        if (s.StartsWith("===") && s.Length > 6)
+        {
+            int close = s.IndexOf("===", 3, StringComparison.Ordinal);
+            if (close > 3)
+            {
+                var name = s.Substring(3, close - 3).Trim();
+                foreach (var k in CanonicalSectionKeys)
+                {
+                    if (string.Equals(k, name, StringComparison.OrdinalIgnoreCase)) return k;
+                }
+                // Unknown ===NAME=== marker — not a known section, treat as body.
+                return null;
+            }
+        }
+
+        // Storage format: friendly heading via synonym map.
+        // Strip a trailing `:` ("## TL;DR:") and trailing `#` runs
+        // (ATX-style "## Heading ##") before lookup.
+        var stripped = s.TrimEnd('#', ' ', '\t', '\r', '\n', ':').Trim();
+        if (stripped.Length == 0) return null;
+        return MapHeadingToCanonical(stripped);
+    }
+
+    /// <summary>
+    /// Unified, permissive recap parser. Accepts the LLM wire format
+    /// (`===NAME===` markers), the persisted storage format (`## Heading`
+    /// markdown — possibly with synonym variants), and any mix of the two.
+    /// Captures an optional leading `# Title` under the sentinel key
+    /// <c>__TITLE__</c> for the build / Rust meta.json round-trip.
+    ///
+    /// Permissive contract:
+    ///   <list type="bullet">
+    ///   <item>Missing sections → omitted from the result (caller hides cards).</item>
+    ///   <item>Out-of-order sections → fine; emit order is enforced at write time
+    ///        by <see cref="BuildMarkdownFromSections"/>.</item>
+    ///   <item>Unknown `## Heading` mid-section → treated as body content so
+    ///        nested headings (e.g. `### Subtopic` under TOPICS) don't break the
+    ///        section split.</item>
+    ///   <item>Empty input or input with NO recognised section → falls back to
+    ///        a single `TLDR` containing the whole body (minus the captured
+    ///        title) so the user always sees their content, even on weird LLM
+    ///        output.</item>
+    ///   </list>
+    /// Burned 2026-05-30: the old two-parser design (`===` first, fall back to
+    /// `##` only when count==1 AND length-heuristic matched) silently dumped
+    /// recent recaps (with `# Title` + `## Heading` markdown) into a single
+    /// TLDR card because the `__TITLE__` sentinel inflated the count past the
+    /// fallback gate.
+    /// </summary>
     public static Dictionary<string, string> ParseStructuredRecap(string raw)
     {
         var result = new Dictionary<string, string>();
-        // Capture the `# Title` H1 (if the LLM honoured the prompt rule)
-        // BEFORE we split on ===NAME=== markers. Without this the
-        // title gets lost in the parse→build round-trip because no
-        // canonical section key matches it. We stash it under a
-        // sentinel key `__TITLE__` which `BuildMarkdownFromSections`
-        // re-emits on line 1. The Rust `save_post_process` then
-        // parses the resulting recap.md's first H1 and persists it
-        // into `meta.json::title`.
-        var titleMatch = System.Text.RegularExpressions.Regex.Match(
-            raw, @"^\s*#\s+(?<t>[^\r\n]+?)\s*$",
-            System.Text.RegularExpressions.RegexOptions.Multiline);
-        if (titleMatch.Success)
+        if (string.IsNullOrWhiteSpace(raw)) return result;
+
+        var lines = raw.Replace("\r\n", "\n").Split('\n');
+        string? currentKey = null;
+        var sb = new System.Text.StringBuilder();
+
+        void Flush()
         {
-            var t = titleMatch.Groups["t"].Value.Trim();
-            if (t.Length > 0 && t.Length <= 200)
+            if (currentKey != null)
             {
-                result["__TITLE__"] = t;
+                var body = sb.ToString().Trim();
+                if (body.Length > 0) result[currentKey] = body;
             }
+            sb.Clear();
         }
-        var indices = new SortedDictionary<int, string>();
-        foreach (var k in CanonicalSectionKeys)
+
+        foreach (var line in lines)
         {
-            var marker = $"===" + k + "===";
-            int idx = raw.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-            if (idx >= 0) indices[idx] = k;
+            var trimmed = line.TrimStart();
+
+            // Section boundary (marker or friendly heading)?
+            var sectionKey = TryParseSectionLine(trimmed);
+            if (sectionKey != null)
+            {
+                Flush();
+                currentKey = sectionKey;
+                continue;
+            }
+
+            // Optional leading `# Title` — captured ONCE, only before any
+            // section opens. Won't intercept `## ...` (handled above) or
+            // body lines starting with `#`.
+            if (currentKey == null
+                && !result.ContainsKey("__TITLE__")
+                && trimmed.StartsWith("# ")
+                && !trimmed.StartsWith("## "))
+            {
+                var title = trimmed.Substring(2).TrimEnd('#', ' ', '\t', '\r', '\n').Trim();
+                if (title.Length > 0 && title.Length <= 200)
+                {
+                    result["__TITLE__"] = title;
+                    continue;
+                }
+            }
+
+            if (currentKey != null) sb.AppendLine(line);
         }
-        if (indices.Count == 0)
+        Flush();
+
+        // Fallback: if no canonical section landed, dump the whole body into
+        // TLDR (minus the title if we captured one) so the user always sees
+        // something. The OLDER recap format with no markers at all hits this
+        // path; covered by `Parse_no_markers_falls_back_to_TLDR_with_whole_text`.
+        int realCount = result.Count(kv => kv.Key != "__TITLE__");
+        if (realCount == 0)
         {
-            result["TLDR"] = raw.Trim();
-            return result;
-        }
-        var ordered = indices.ToList();
-        for (int i = 0; i < ordered.Count; i++)
-        {
-            var (start, key) = (ordered[i].Key, ordered[i].Value);
-            var marker = $"===" + key + "===";
-            int contentStart = start + marker.Length;
-            int contentEnd = i + 1 < ordered.Count ? ordered[i + 1].Key : raw.Length;
-            var content = raw.Substring(contentStart, contentEnd - contentStart).Trim();
-            // Trim BOTH ends of stray markdown noise. Leading: `## `
-            // bleeding from the LLM prefacing the marker with a heading.
-            // Trailing: `## ` that belongs to the next section's heading
-            // (the marker scan stops at `===`, not `## ===`, so the
-            // captured range overruns by 3 chars).
-            content = content.Trim('#', ' ', '\n', '\r');
-            result[key] = content;
+            var body = raw.Trim();
+            if (result.TryGetValue("__TITLE__", out var title) && title is not null)
+            {
+                // Strip the first `# Title` line from the body so we don't
+                // duplicate it inside the TLDR card.
+                var pattern = $@"^\s*#\s+{System.Text.RegularExpressions.Regex.Escape(title)}\s*(\r?\n)?";
+                body = System.Text.RegularExpressions.Regex.Replace(
+                    body, pattern, "",
+                    System.Text.RegularExpressions.RegexOptions.Multiline).Trim();
+            }
+            if (body.Length > 0) result["TLDR"] = body;
         }
         return result;
     }

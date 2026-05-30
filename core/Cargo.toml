@@ -160,6 +160,13 @@ symphonia = { version = "0.5", default-features = false, features = [
     "ogg",
     "vorbis",
 ] }
+# Ogg/Vorbis ENCODER for compressed meeting audio (realtime .ogg recording,
+# replacing the streamed WAVs). Symphonia (above) already DECODES vorbis/ogg
+# for re-transcription + file-load; this supplies the missing encoder. Wraps
+# libvorbis/libogg via `cc`. Vorbis (not Opus) because Symphonia's vorbis
+# decode is complete whereas its Opus decode is not — so .ogg/Vorbis round-
+# trips through our own re-transcription path.
+vorbis_rs = "0.5"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 dirs = "5"
 chrono = "0.4"

@@ -158,6 +158,168 @@ public class MeetingRecapHelpersTests
         Assert.Equal("lower-cased body", sections["TLDR"]);
     }
 
+    // ── Storage format (## Heading) — the persisted recap.md path ──
+
+    [Fact]
+    public void Parse_persisted_markdown_with_friendly_headings_extracts_sections()
+    {
+        // Persisted recap.md uses `## Heading` (not `===NAME===`).
+        // Unified parser must accept this format directly — without it the
+        // sidebar-load path silently dumped the whole body into the single
+        // TLDR card (burned 2026-05-30).
+        var raw = string.Join("\n", new[]
+        {
+            "# Meeting title here",
+            "",
+            "## Context",
+            "Two engineers in a status sync.",
+            "",
+            "## TL;DR",
+            "Ship now.",
+            "",
+            "## Highlights",
+            "- key moment",
+            "",
+            "## Key decisions",
+            "- decided x",
+            "",
+            "## Topics discussed",
+            "### Subtopic stays as body",
+            "- detail",
+        });
+        var sections = MeetingRecapHelpers.ParseStructuredRecap(raw);
+        Assert.Equal("Meeting title here", sections["__TITLE__"]);
+        Assert.Contains("Two engineers", sections["CONTEXT"]);
+        Assert.Equal("Ship now.", sections["TLDR"]);
+        Assert.Equal("- key moment", sections["HIGHLIGHTS"]);
+        Assert.Equal("- decided x", sections["KEY_DECISIONS"]);
+        // `### Subtopic` must stay inside TOPICS body — nested headings
+        // are NOT section boundaries.
+        Assert.Contains("### Subtopic", sections["TOPICS"]);
+        Assert.Contains("- detail", sections["TOPICS"]);
+    }
+
+    [Fact]
+    public void Parse_persisted_with_title_no_markers_does_not_collapse_into_single_TLDR()
+    {
+        // The exact bug class from 2026-05-30: `# Title` + `## Headings` →
+        // old parser produced {__TITLE__, TLDR=full_body} (count==2), the
+        // loader's heuristic flipped markerParsed=true on count>1 and
+        // skipped the heading-name fallback → ApplyDoneSections rendered
+        // the whole body into the single TLDR card.
+        var raw = "# Sample title\n\n## Context\nctx body\n\n## TL;DR\ntldr body";
+        var sections = MeetingRecapHelpers.ParseStructuredRecap(raw);
+        Assert.Equal("Sample title", sections["__TITLE__"]);
+        Assert.Equal("ctx body", sections["CONTEXT"]);
+        Assert.Equal("tldr body", sections["TLDR"]);
+        // CRITICAL: TLDR must NOT contain the whole body — just its own section.
+        Assert.DoesNotContain("ctx body", sections["TLDR"]);
+        Assert.DoesNotContain("Sample title", sections["TLDR"]);
+    }
+
+    [Theory]
+    [InlineData("Decisions", "KEY_DECISIONS")]
+    [InlineData("Topics", "TOPICS")]
+    [InlineData("Topics discussed", "TOPICS")]
+    [InlineData("Action items", "ACTIONS")]
+    [InlineData("TODOs", "ACTIONS")]
+    [InlineData("Tasks", "ACTIONS")]
+    [InlineData("Blockers", "RISKS")]
+    [InlineData("Risks and blockers", "RISKS")]
+    [InlineData("Follow ups", "FOLLOWUPS")]
+    [InlineData("Followups", "FOLLOWUPS")]
+    [InlineData("Follow-up", "FOLLOWUPS")]
+    [InlineData("Open questions", "OPEN_QUESTIONS")]
+    [InlineData("Questions", "OPEN_QUESTIONS")]
+    [InlineData("Summary", "TLDR")]
+    [InlineData("Background", "CONTEXT")]
+    [InlineData("Discussion", "NARRATIVE")]
+    [InlineData("Highlights", "HIGHLIGHTS")]
+    [InlineData("Key points", "HIGHLIGHTS")]
+    public void Parse_heading_synonym_maps_to_canonical_key(string heading, string expectedKey)
+    {
+        // Each `## Heading` synonym must route to the right canonical
+        // key — covers LLM-language drift across runs / providers.
+        var raw = $"## {heading}\nbody for {heading}";
+        var sections = MeetingRecapHelpers.ParseStructuredRecap(raw);
+        Assert.True(sections.ContainsKey(expectedKey),
+            $"heading '{heading}' should map to {expectedKey}, got keys: {string.Join(",", sections.Keys)}");
+        Assert.Contains($"body for {heading}", sections[expectedKey]);
+    }
+
+    [Fact]
+    public void Parse_hybrid_markers_and_friendly_headings_works()
+    {
+        // Mixed: LLM emitted some `===NAME===` markers and the prompt
+        // structure used `## Heading` for others. Parser handles both
+        // in a single pass.
+        var raw = "# A title\n\n## ===CONTEXT===\nctx\n\n## TL;DR\nbottom line\n\n## ===ACTIONS===\n1. do it";
+        var sections = MeetingRecapHelpers.ParseStructuredRecap(raw);
+        Assert.Equal("A title", sections["__TITLE__"]);
+        Assert.Equal("ctx", sections["CONTEXT"]);
+        Assert.Equal("bottom line", sections["TLDR"]);
+        Assert.Equal("1. do it", sections["ACTIONS"]);
+    }
+
+    [Fact]
+    public void Parse_unknown_heading_treated_as_body_not_section_boundary()
+    {
+        // An LLM-invented `## Stakeholders` (not in synonym map) must NOT
+        // close the previous section — it stays as body, preserving the
+        // currently open section's content.
+        var raw = "## TL;DR\nlead\n\n## Stakeholders\nalice, bob\n\nmore TLDR";
+        var sections = MeetingRecapHelpers.ParseStructuredRecap(raw);
+        Assert.Single(sections);
+        Assert.Contains("lead", sections["TLDR"]);
+        Assert.Contains("## Stakeholders", sections["TLDR"]);
+        Assert.Contains("more TLDR", sections["TLDR"]);
+    }
+
+    [Fact]
+    public void Parse_only_title_no_sections_falls_back_to_TLDR_without_title_dup()
+    {
+        // Edge: a recap with ONLY a title line + body, no markers, no
+        // friendly headings. Should land everything (except the title
+        // line) in TLDR — and the title line itself must not be
+        // duplicated inside the TLDR card body.
+        var raw = "# Just a title\n\nBody paragraph one.\nBody paragraph two.";
+        var sections = MeetingRecapHelpers.ParseStructuredRecap(raw);
+        Assert.Equal("Just a title", sections["__TITLE__"]);
+        Assert.Contains("Body paragraph one.", sections["TLDR"]);
+        Assert.Contains("Body paragraph two.", sections["TLDR"]);
+        Assert.DoesNotContain("# Just a title", sections["TLDR"]);
+    }
+
+    [Fact]
+    public void Parse_section_with_trailing_colon_or_ATX_close_still_matches()
+    {
+        // Tolerate `## TL;DR:` and ATX-style `## Decisions ##` — common
+        // markdown variants the LLM may emit.
+        var raw = "## TL;DR:\nfirst body\n\n## Decisions ##\nsecond body";
+        var sections = MeetingRecapHelpers.ParseStructuredRecap(raw);
+        Assert.Equal("first body", sections["TLDR"]);
+        Assert.Equal("second body", sections["KEY_DECISIONS"]);
+    }
+
+    [Fact]
+    public void Parse_empty_or_whitespace_returns_empty_dict()
+    {
+        Assert.Empty(MeetingRecapHelpers.ParseStructuredRecap(""));
+        Assert.Empty(MeetingRecapHelpers.ParseStructuredRecap("   \n\t  "));
+    }
+
+    [Fact]
+    public void Parse_title_too_long_is_not_captured()
+    {
+        // Defensive: prompt asks for 3-7 words but a misbehaving model
+        // could emit a paragraph as the H1. Guard at 200 chars.
+        var longTitle = new string('x', 201);
+        var raw = $"# {longTitle}\n\n## TL;DR\nbody";
+        var sections = MeetingRecapHelpers.ParseStructuredRecap(raw);
+        Assert.False(sections.ContainsKey("__TITLE__"));
+        Assert.Equal("body", sections["TLDR"]);
+    }
+
     // ── BuildMarkdownFromSections ──────────────────────────────────
 
     [Fact]

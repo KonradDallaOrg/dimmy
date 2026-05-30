@@ -103,6 +103,13 @@ public partial class AppViewModel : ObservableObject
     /// (CLAUDE.md "No FFI-state polling rule").</summary>
     [ObservableProperty] private bool _meetingActive;
 
+    /// <summary>Captured at meeting START from the "Generate recap"
+    /// checkbox (defaulted true for call-detect-started meetings). Read by
+    /// EVERY stop path — meeting window, pill, call-detect popup — so a
+    /// meeting started with recap unchecked never gets a recap, no matter
+    /// how it's stopped. Plain property, not bound to any control.</summary>
+    public bool MeetingGenerateRecap { get; set; } = true;
+
     /// <summary>True while the active meeting is paused. Same source
     /// as <see cref="MeetingActive"/> — set from the `meeting_state`
     /// envelope, never polled.</summary>

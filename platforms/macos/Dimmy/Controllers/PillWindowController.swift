@@ -239,6 +239,13 @@ final class PillWindowController {
             // Visual feedback during recap — recap can take 10-60s.
             appState.recordingState = .transcribing
             let notionAutoSend = appState.notionAutoSend
+            // Capture the recap flag pinned at meeting START (set by
+            // MeetingViewModel.start / call-detect-started) so a stale
+            // checkbox on a reopened window can't override the user's
+            // choice. Pill + call-detect popup stop paths used to run
+            // the recap unconditionally — fixed for cross-path parity
+            // with the meeting-window stop button (Win parity).
+            let generateRecap = appState.meetingGenerateRecap
             await Task.detached(priority: .userInitiated) {
                 let stopResult = DimmyCore.shared.meetingStop()
                 let transcript = stopResult?.transcript
@@ -258,6 +265,31 @@ final class PillWindowController {
                             userInfo: [
                                 "dir": stopResult?.dir ?? "",
                                 "success": false,
+                            ]
+                        )
+                    }
+                    return
+                }
+                // Recap-off path: meeting stopped cleanly with a real
+                // transcript, but the user toggled off "Generate recap".
+                // Skip the LLM call AND post meetingRecapSaved with the
+                // dir immediately, so the meeting window's $meetingActive
+                // sink (which already flipped to .processing) resolves to
+                // .done via loadDoneFromDisk instead of sitting until the
+                // 90 s wrap-up watchdog fires. `recapSkipped: true` is
+                // informational for any future consumer; the existing
+                // observer only reads `dir`.
+                if !generateRecap {
+                    await MainActor.run {
+                        appState.recordingState = .idle
+                        appState.meetingActive = DimmyCore.shared.meetingIsActive
+                        NotificationCenter.default.post(
+                            name: .meetingRecapSaved,
+                            object: nil,
+                            userInfo: [
+                                "dir": stopResult.dir,
+                                "success": true,
+                                "recapSkipped": true,
                             ]
                         )
                     }

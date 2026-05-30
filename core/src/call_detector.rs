@@ -513,6 +513,21 @@ impl CallDetectorState {
         self.stop_suggestion_until = None;
     }
 
+    /// A meeting was started OUTSIDE the "Record now" nudge — i.e. manually
+    /// from the meeting window / pill — while a call was detected. Arm the
+    /// stop-suggestion path exactly as `record_response(RecordNow)` does so
+    /// that the call ending still suggests stop. Without this, a manually-
+    /// started meeting left `recording_active_from_us=false`, so
+    /// `signal_call_session_ended` returned NoChange and no popup appeared.
+    /// Idempotent. Cleared by `meeting_stopped()`.
+    pub fn meeting_started_external(&mut self) {
+        self.recording_active_from_us = true;
+        self.mic_inactive_since = None;
+        self.sys_inactive_since = None;
+        self.stop_suggestion_emitted = false;
+        self.stop_suggestion_until = None;
+    }
+
     /// JSON snapshot for the Settings UI (exclusion list view +
     /// debug / observability).
     pub fn state_snapshot(&self, now: i64) -> serde_json::Value {
@@ -874,5 +889,61 @@ mod tests {
         let active = snap["active_cooldowns"].as_array().unwrap();
         assert_eq!(active.len(), 1);
         assert_eq!(active[0]["app"], "zoom");
+    }
+
+    // ── meeting_started_external: arm stop-suggestion for a MANUAL start ──
+
+    #[test]
+    fn meeting_started_external_arms_session_ended_stop_path() {
+        let mut s = fresh();
+        // Manual start (no Record-now nudge accepted) leaves
+        // recording_active_from_us=false, so a detected call ending
+        // suggests nothing — this is the bug the FFI fixes.
+        assert_eq!(
+            s.signal_call_session_ended(true, 1000),
+            CallSignalOutcome::NoChange,
+            "un-armed manual meeting must not suggest stop"
+        );
+        // Arm via the manual / mid-meeting path (what
+        // dimmy_call_meeting_started_external calls).
+        s.meeting_started_external();
+        assert!(
+            matches!(
+                s.signal_call_session_ended(true, 1001),
+                CallSignalOutcome::StopSuggested { .. }
+            ),
+            "armed manual meeting must suggest stop when the call ends"
+        );
+    }
+
+    #[test]
+    fn meeting_started_external_emits_once_and_is_idempotent() {
+        let mut s = fresh();
+        // Host may arm on the start edge AND again on a mid-meeting tick.
+        s.meeting_started_external();
+        s.meeting_started_external();
+        assert!(matches!(
+            s.signal_call_session_ended(true, 1000),
+            CallSignalOutcome::StopSuggested { .. }
+        ));
+        // Single-shot: the next session-ended tick is NoChange.
+        assert_eq!(
+            s.signal_call_session_ended(true, 1001),
+            CallSignalOutcome::NoChange
+        );
+    }
+
+    #[test]
+    fn meeting_stopped_clears_external_arm() {
+        // After the meeting ends the external arm must be cleared so a
+        // stray call-ended signal can't suggest stop for a meeting that is
+        // no longer recording (recording_active_from_us is the gate).
+        let mut s = fresh();
+        s.meeting_started_external();
+        s.meeting_stopped();
+        assert_eq!(
+            s.signal_call_session_ended(true, 1000),
+            CallSignalOutcome::NoChange
+        );
     }
 }

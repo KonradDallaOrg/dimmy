@@ -51,6 +51,12 @@ public static class WavPeaks
     /// waveform".
     private static float[] ReadPeaksViaFfi(string path, int bucketCount)
     {
+        // Decoding a compressed file (ogg/m4a/…) to peaks is a FULL Vorbis/
+        // AAC decode — expensive. Cache the result on disk (keyed by file
+        // size + bucket count) so only the first open of a meeting pays it;
+        // every later open is an instant JSON read.
+        var cached = TryReadCachedPeaks(path, bucketCount);
+        if (cached.Length > 0) return cached;
         try
         {
             // Heuristic: each peak serialises to at most ~14 chars
@@ -75,6 +81,7 @@ public static class WavPeaks
             {
                 peaks[i++] = (float)el.GetDouble();
             }
+            if (peaks.Length > 0) TryWriteCachedPeaks(path, peaks);
             return peaks;
         }
         catch

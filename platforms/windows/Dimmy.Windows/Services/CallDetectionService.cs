@@ -163,6 +163,39 @@ internal sealed class CallDetectionService : IDisposable
         return true;
     }
 
+    /// Adopt a call as the meeting origin WHILE a meeting is already
+    /// active — the common flow where the user starts recording first and
+    /// joins the call after (so the meeting-start binding ran before any
+    /// call existed). Samples capture sessions; the first real call app
+    /// (not Dimmy itself, not a system process) capturing the mic becomes
+    /// the origin and the Rust stop-path is armed. Idempotent; only acts
+    /// while `_meetingOriginSessionId` is still null.
+    private void TryAdoptCallOriginDuringMeeting()
+    {
+        try
+        {
+            var live = SampleActiveCaptureSessions();
+            int ownPid = Environment.ProcessId;
+            foreach (var (sessionId, pid) in live)
+            {
+                if (pid == ownPid) continue; // Dimmy's own meeting mic capture
+                var exe = ResolveProcessExeName(pid);
+                if (string.IsNullOrEmpty(exe) || SystemExesToIgnore.Contains(exe)) continue;
+                _emittedSessions[sessionId] = exe;
+                _lastEmittedExe = exe;
+                _meetingOriginSessionId = sessionId;
+                _meetingDrivenByCallDetect = true;
+                try { DimmyNative.dimmy_call_meeting_started_external(); } catch { }
+                App.Log($"adopted call origin mid-meeting: exe={exe} pid={pid} id=…{TailOf(sessionId)}", "CallDetect");
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            App.Log($"adopt-origin failed: {ex.Message}", "CallDetect");
+        }
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
@@ -198,12 +231,38 @@ internal sealed class CallDetectionService : IDisposable
             _meetingOriginSessionId = null;
             _meetingDrivenByCallDetect = false;
         }
+        // Meeting just started WITHOUT a bound origin — i.e. a manual start
+        // from the meeting window / pill, not via a "Record now" nudge. If
+        // a call is currently detected, adopt its session as the origin so
+        // closing the call still fires the stop-suggestion. Without this,
+        // manually-started meetings only had the weaker amplitude heuristic
+        // and never suggested stop when the call (e.g. Teams) ended.
+        else if (!_prevMeetingActive && meetingActive && _meetingOriginSessionId == null)
+        {
+            if (MarkMeetingOriginFromCurrentSession())
+            {
+                // Tell the Rust call-state machine this manually-started
+                // meeting counts as "ours", so signal_session_ended will
+                // actually suggest stop when the bound call ends (otherwise
+                // recording_active_from_us stays false → NoChange → no popup).
+                try { DimmyNative.dimmy_call_meeting_started_external(); } catch { }
+            }
+        }
         _prevMeetingActive = meetingActive;
 
         if (meetingActive)
         {
             try
             {
+                if (_meetingOriginSessionId == null)
+                {
+                    // Meeting active but no call origin yet — typically the
+                    // user started recording FIRST and joined the call after,
+                    // so the meeting-start binding ran before any call existed.
+                    // Keep watching: adopt the call session the moment it shows
+                    // up so leaving the call still suggests stop.
+                    TryAdoptCallOriginDuringMeeting();
+                }
                 if (_meetingDrivenByCallDetect && _meetingOriginSessionId != null)
                 {
                     // Session-id-driven stop. Re-enumerate, look for
