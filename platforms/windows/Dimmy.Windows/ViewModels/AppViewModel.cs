@@ -140,6 +140,16 @@ public partial class AppViewModel : ObservableObject
     /// UiPreferences. Default true.</summary>
     [ObservableProperty] private bool _showTaskbarIcon = true;
 
+    /// <summary>Command Mode: when true, the next recording transforms
+    /// the user's CURRENTLY-SELECTED text using what they speak as the
+    /// instruction (e.g. select a paragraph, hold the hotkey, say "make
+    /// this more concise"). When false, normal dictation. Runtime-only
+    /// (a transient mode, not persisted) — the user toggles it from the
+    /// pill menu and it stays until toggled off. The dictation hotkey is
+    /// reused; the mode decides whether the spoken text inserts (off) or
+    /// transforms the selection (on).</summary>
+    [ObservableProperty] private bool _commandMode;
+
     /// <summary>If true, pressing the global hotkey while the pill is
     /// hidden re-shows it. If false, the pill stays hidden — recording
     /// status is shown only via the taskbar overlay icon. Default true

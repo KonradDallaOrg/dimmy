@@ -36,9 +36,9 @@ use serial_test::serial;
 
 use dimmy_lib::ffi::{
     dimmy_call_meeting_started_external, dimmy_call_signal_session_ended, dimmy_claude_code_ping,
-    dimmy_claude_code_status, dimmy_clear_app_context, dimmy_get_active_mic_sample_rate,
-    dimmy_get_config_json, dimmy_get_loopback_amplitude, dimmy_history_save,
-    dimmy_history_update_audio, dimmy_history_update_enhanced,
+    dimmy_claude_code_status, dimmy_clear_app_context, dimmy_command_transform,
+    dimmy_get_active_mic_sample_rate, dimmy_get_config_json, dimmy_get_loopback_amplitude,
+    dimmy_history_save, dimmy_history_update_audio, dimmy_history_update_enhanced,
     dimmy_history_update_word_timestamps, dimmy_init, dimmy_llm_call_raw, dimmy_meeting_is_active,
     dimmy_meeting_save_post_process, dimmy_push_loopback_audio, dimmy_set_app_context,
     dimmy_set_config_json, dimmy_set_loopback_sample_rate, dimmy_transcribe_file,
@@ -372,6 +372,152 @@ fn llm_call_raw_returns_minus_two_when_not_configured() {
         "with no api_url/key configured llm_call_raw must return -2 (the auto-recap gate the Mac UI relies on); got {}",
         n
     );
+}
+
+// ── Tests: dimmy_command_transform input-validation surface ────────────
+//
+// The cloud-success (>0) and network-error (-2) paths require a live LLM,
+// so they're left to manual / pre-release runs. What we DO pin here is the
+// deterministic part of the rc contract that the Mac + Win hosts read at
+// runtime to choose between "paste fallback", "diagnostic toast", and
+// "swallow silently":
+//   -1 invalid input (null ptr OR empty / whitespace-only string)
+//   -3 cloud mode + no LLM key configured  (skipped — key store state
+//      varies across dev boxes, would be flaky)
+//   -4 local mode + the configured model file is not on disk
+// Pre-checks must happen BEFORE any LLM dispatch, so these are testable
+// without network or runtime.
+
+#[test]
+#[serial]
+fn command_transform_rejects_null_pointers() {
+    ensure_init();
+    let mut buf: Vec<u8> = vec![0; 256];
+    let buf_ptr = buf.as_mut_ptr() as *mut c_char;
+    let len = buf.len() as c_int;
+
+    let sel = CString::new("anything").unwrap();
+    let spoken = CString::new("rewrite").unwrap();
+
+    // Null selection pointer.
+    let n_sel = unsafe { dimmy_command_transform(std::ptr::null(), spoken.as_ptr(), buf_ptr, len) };
+    assert_eq!(
+        n_sel, -1,
+        "null selection pointer must return -1; got {}",
+        n_sel
+    );
+
+    // Null spoken pointer.
+    let n_spk = unsafe { dimmy_command_transform(sel.as_ptr(), std::ptr::null(), buf_ptr, len) };
+    assert_eq!(
+        n_spk, -1,
+        "null spoken pointer must return -1; got {}",
+        n_spk
+    );
+
+    // Null output buffer.
+    let n_buf = unsafe {
+        dimmy_command_transform(sel.as_ptr(), spoken.as_ptr(), std::ptr::null_mut(), len)
+    };
+    assert_eq!(
+        n_buf, -1,
+        "null out_buf pointer must return -1; got {}",
+        n_buf
+    );
+
+    // Zero / negative buffer length.
+    let n_len = unsafe { dimmy_command_transform(sel.as_ptr(), spoken.as_ptr(), buf_ptr, 0) };
+    assert_eq!(n_len, -1, "buf_len == 0 must return -1; got {}", n_len);
+}
+
+#[test]
+#[serial]
+fn command_transform_rejects_empty_and_whitespace_only_inputs() {
+    ensure_init();
+    let mut buf: Vec<u8> = vec![0; 256];
+    let buf_ptr = buf.as_mut_ptr() as *mut c_char;
+    let len = buf.len() as c_int;
+
+    // Empty selection.
+    let empty = CString::new("").unwrap();
+    let spoken = CString::new("make it formal").unwrap();
+    let n1 = unsafe { dimmy_command_transform(empty.as_ptr(), spoken.as_ptr(), buf_ptr, len) };
+    assert_eq!(
+        n1, -1,
+        "empty selection must short-circuit to -1; got {}",
+        n1
+    );
+
+    // Whitespace-only selection (tabs, spaces, newlines).
+    let ws_sel = CString::new("   \n\t  ").unwrap();
+    let n2 = unsafe { dimmy_command_transform(ws_sel.as_ptr(), spoken.as_ptr(), buf_ptr, len) };
+    assert_eq!(
+        n2, -1,
+        "whitespace-only selection must short-circuit to -1 (the host's selection-capture probe \
+         returns whitespace when nothing was selected); got {}",
+        n2
+    );
+
+    // Empty spoken instruction.
+    let sel = CString::new("Some content").unwrap();
+    let empty_spk = CString::new("").unwrap();
+    let n3 = unsafe { dimmy_command_transform(sel.as_ptr(), empty_spk.as_ptr(), buf_ptr, len) };
+    assert_eq!(
+        n3, -1,
+        "empty spoken instruction must short-circuit to -1; got {}",
+        n3
+    );
+
+    // Whitespace-only spoken instruction.
+    let ws_spk = CString::new("   ").unwrap();
+    let n4 = unsafe { dimmy_command_transform(sel.as_ptr(), ws_spk.as_ptr(), buf_ptr, len) };
+    assert_eq!(
+        n4, -1,
+        "whitespace-only spoken instruction must short-circuit to -1 (Win + Mac hosts trim \
+         transcript before calling, so this is the realistic empty case); got {}",
+        n4
+    );
+}
+
+#[test]
+#[serial]
+fn command_transform_returns_minus_four_when_local_mode_and_model_missing() {
+    ensure_init();
+    // Switch the runtime into local LLM mode pointing at a deliberately
+    // impossible filename. The pre-flight `model_path.is_file()` check
+    // must fire BEFORE we try to load the model, returning -4.
+    //
+    // Restored at the end so subsequent #[serial] tests see the cloud
+    // default they expect.
+    set_config(
+        &serde_json::json!({
+            "llm_mode": "local",
+            "local_llm_model": "__dimmy_test_does_not_exist_v1__.gguf",
+        })
+        .to_string(),
+    );
+
+    let mut buf: Vec<u8> = vec![0; 256];
+    let sel = CString::new("Some content the user selected.").unwrap();
+    let spoken = CString::new("translate to italian").unwrap();
+    let n = unsafe {
+        dimmy_command_transform(
+            sel.as_ptr(),
+            spoken.as_ptr(),
+            buf.as_mut_ptr() as *mut c_char,
+            buf.len() as c_int,
+        )
+    };
+    assert_eq!(
+        n, -4,
+        "local mode with a missing model file must return -4 BEFORE attempting inference \
+         (Mac + Win hosts surface this as 'local model not on disk', not a generic dispatch error); \
+         got {}",
+        n
+    );
+
+    // Restore cloud default so the serial test ordering stays well-defined.
+    set_config(&serde_json::json!({"llm_mode": "cloud"}).to_string());
 }
 
 // ── Tests: config round-trip + on-disk persistence (Mac UI bug guard) ──

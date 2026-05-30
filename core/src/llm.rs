@@ -22,6 +22,56 @@ spoken numbers to digits (e.g. \"three hundred forty two\" → \"342\"), \
 currencies (e.g. \"three hundred dollars\" → \"$300\"), \
 and format emails, phone numbers, and URLs when dictated naturally.";
 
+/// Build the prompt for Command Mode — the user has TEXT selected in some
+/// app and speaks while holding the hotkey. We can't know from context
+/// whether the spoken words are an *instruction to transform* the
+/// selection ("make this formal") or *replacement content* to dictate in
+/// its place ("the quick brown cat"). Instead of guessing host-side, we
+/// hand both to the LLM and let it decide in a single call — which also
+/// dissolves the "select-to-replace" ambiguity for free (no extra
+/// round-trip: this is the one call we'd make anyway).
+///
+/// Mirrors PREAMBLE's extreme-explicitness style because small local
+/// models (llama-8b / Gemma) otherwise drift into answering instead of
+/// transforming. The output must be ONLY the resulting text so the host
+/// can paste it straight back over the selection.
+pub fn build_command_transform_prompt(selection: &str, spoken: &str) -> String {
+    assert!(
+        !selection.is_empty(),
+        "build_command_transform_prompt: empty selection"
+    );
+    assert!(
+        !spoken.is_empty(),
+        "build_command_transform_prompt: empty spoken"
+    );
+    format!(
+        "\
+You are a text-editing engine inside a dictation app. The user has SELECTED some text in an \
+application and then SPOKEN out loud. Your job is to produce the text that should REPLACE the \
+selection.\n\n\
+Decide which case applies:\n\
+CASE A — SPOKEN is an INSTRUCTION to modify SELECTED_TEXT (e.g. \"make this more formal\", \
+\"translate to Spanish\", \"fix the grammar\", \"turn into bullet points\", \"shorten this\", \
+\"make it uppercase\"). → Output the transformed version of SELECTED_TEXT.\n\
+CASE B — SPOKEN is REPLACEMENT CONTENT the user dictated to put in place of the selection, NOT \
+an instruction about it (e.g. SELECTED_TEXT is \"the fox\" and SPOKEN is \"the quick brown cat\"). \
+→ Output SPOKEN, lightly cleaned up (capitalization + punctuation only), nothing else.\n\n\
+ABSOLUTE RULES — violating any is a critical failure:\n\
+1. Output ONLY the resulting text. Nothing before it, nothing after it. No quotes, no markdown \
+fences, no preamble like \"Sure\" or \"Here is\".\n\
+2. NEVER answer questions and NEVER converse. You transform or replace text; you do not chat. If \
+SELECTED_TEXT contains a question and SPOKEN asks to e.g. \"make it polite\", you rewrite the \
+question politely — you do NOT answer it.\n\
+3. When unsure between CASE A and CASE B, treat SPOKEN as an INSTRUCTION only if it clearly \
+describes an operation to perform ON the text; otherwise treat it as REPLACEMENT content.\n\
+4. Keep the user's language unless the instruction explicitly asks to translate.\n\n\
+SELECTED_TEXT:\n[SELECTION]\n{selection}\n[/SELECTION]\n\n\
+SPOKEN:\n[SPOKEN]\n{spoken}\n[/SPOKEN]",
+        selection = selection,
+        spoken = spoken,
+    )
+}
+
 // ── LlmStyle enum ────────────────────────────────────────────────────
 
 /// What the LLM does with the text. Exhaustive — adding a variant forces
@@ -898,6 +948,48 @@ pub async fn process_raw_prompt(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Command Mode prompt ─────────────────────────────────────
+
+    #[test]
+    fn command_transform_prompt_embeds_both_inputs_verbatim() {
+        let p = build_command_transform_prompt("the fox", "make it formal");
+        // Both the selection and the spoken text must appear inside
+        // their delimited blocks so the model sees exactly what the
+        // user selected/said — no paraphrasing host-side.
+        assert!(p.contains("[SELECTION]\nthe fox\n[/SELECTION]"));
+        assert!(p.contains("[SPOKEN]\nmake it formal\n[/SPOKEN]"));
+    }
+
+    #[test]
+    fn command_transform_prompt_states_both_cases_and_output_only_rule() {
+        let p = build_command_transform_prompt("x", "y");
+        // The dual-case framing is the whole point — it's what lets the
+        // single call handle transform AND replace, dissolving the
+        // select-to-replace ambiguity. Guard against someone trimming
+        // the prompt down to instruction-only.
+        assert!(p.contains("CASE A"), "must keep the instruction case");
+        assert!(p.contains("CASE B"), "must keep the replacement case");
+        // "Output ONLY ..." is the rule that makes paste-back safe.
+        assert!(p.to_ascii_lowercase().contains("output only"));
+        // Must explicitly forbid answering/conversing — the Aqua/HN
+        // failure mode where the model replies instead of transforming.
+        assert!(p.to_ascii_lowercase().contains("never answer"));
+    }
+
+    #[test]
+    #[should_panic(expected = "empty selection")]
+    fn command_transform_prompt_rejects_empty_selection() {
+        // Command Mode must never fire without a selection — the host
+        // gates on this, but the core asserts it too (negative space).
+        let _ = build_command_transform_prompt("", "do something");
+    }
+
+    #[test]
+    #[should_panic(expected = "empty spoken")]
+    fn command_transform_prompt_rejects_empty_spoken() {
+        let _ = build_command_transform_prompt("selected", "");
+    }
 
     // ── Claude Code dispatch branch (subscription login) ────────
     //

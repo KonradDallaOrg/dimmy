@@ -345,6 +345,17 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         styleItem.submenu = buildStyleSubmenu()
         menu.addItem(styleItem)
 
+        // Command Mode toggle — when on, the next recording transforms the
+        // selected text instead of dictating. Same hotkey; the mode picks
+        // the behaviour. Checkmark reflects the live state. Mirror of Win's
+        // pill/tray "Command (edit selection)" toggle.
+        let commandItem = NSMenuItem(title: "Command (edit selection)",
+                                     action: #selector(toggleCommandMode),
+                                     keyEquivalent: "")
+        commandItem.target = self
+        commandItem.state = appState.commandMode ? .on : .off
+        menu.addItem(commandItem)
+
         // Shortcut (read-only).
         let shortcutItem = NSMenuItem(title: "Shortcut: \(appState.shortcut.displayString)",
                                       action: nil, keyEquivalent: "")
@@ -404,6 +415,11 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     @objc private func openMeeting() {
         AppDelegate.shared?.openMeetingWindow()
+    }
+
+    @objc private func toggleCommandMode() {
+        appState.commandMode.toggle()
+        NSLog("[CmdMode] toggled → \(appState.commandMode)")
     }
 
     @objc private func toggleRecordingFromMenu() {

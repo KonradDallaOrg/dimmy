@@ -33,6 +33,7 @@ public class TrayService : IDisposable
     // Menu constants
     private const uint MF_STRING = 0x00;
     private const uint MF_SEPARATOR = 0x0800;
+    private const uint MF_CHECKED = 0x08;
     private const uint MF_GRAYED = 0x01;
     private const uint MF_DISABLED = 0x02;
     private const uint MF_OWNERDRAW = 0x0100;
@@ -46,6 +47,7 @@ public class TrayService : IDisposable
     private const int IDM_SETTINGS = 2;
     private const int IDM_QUIT = 3;
     private const int IDM_MEETING = 4;
+    private const int IDM_COMMAND = 5; // Command Mode toggle
     private const int IDM_STATUS = 99; // owner-drawn status item
 
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
@@ -440,6 +442,12 @@ public class TrayService : IDisposable
                 AppendMenu(menu, MF_STRING, (nuint)IDM_MEETING, "Open Meeting…");
             }
             AppendMenu(menu, MF_STRING, (nuint)IDM_SETTINGS, "Settings…");
+            // Command Mode toggle — checkmark reflects the current mode so
+            // the tray (taskbar-only users) can flip dictation ↔ command
+            // without opening the pill.
+            AppendMenu(menu,
+                MF_STRING | (_vm.CommandMode ? MF_CHECKED : 0),
+                (nuint)IDM_COMMAND, "Command (edit selection)");
             AppendMenu(menu, MF_SEPARATOR, 0, null);
             AppendMenu(menu, MF_STRING, (nuint)IDM_QUIT, "Quit Dimmy");
 
@@ -459,6 +467,7 @@ public class TrayService : IDisposable
                 case IDM_TOGGLE:   _onTogglePill();   break;
                 case IDM_MEETING:  _onMeetingClick?.Invoke(); break;
                 case IDM_SETTINGS: _onSettingsClick(); break;
+                case IDM_COMMAND:  _vm.CommandMode = !_vm.CommandMode; break;
                 case IDM_QUIT:     _onQuitClick();    break;
                 // 0 = dismissed without selection. IDM_STATUS is
                 // grayed and never returnable here.

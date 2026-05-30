@@ -938,6 +938,14 @@ final class AppState: ObservableObject {
     @Published var overlayPosition: String = "Bottom Right"
     @Published var keepInClipboard: Bool = false
 
+    /// Command Mode: when true, the next recording transforms the user's
+    /// CURRENTLY-SELECTED text using what they speak as the instruction,
+    /// instead of dictating. Runtime-only (a transient mode, not persisted)
+    /// — toggled from the status-bar / pill menu and reset on restart so a
+    /// forgotten toggle can't surprise the user across sessions. Mirrors
+    /// Win's `AppViewModel.CommandMode`.
+    @Published var commandMode: Bool = false
+
     // MARK: - Stats
 
     @Published var statsTotalWords: UInt64 = 0

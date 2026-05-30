@@ -149,6 +149,16 @@ public static class DimmyNative
         [MarshalAs(UnmanagedType.LPUTF8Str)] string text,
         byte[] outBuf, int bufLen);
 
+    // ── Command Mode ─────────────────────────────────────────────────
+    // Transform (or replace) the user's selected text using their spoken
+    // instruction. rc: >0 bytes written, -1 invalid, -2 dispatch failed,
+    // -3 no key, -4 local model missing, -5 runtime create failed.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_command_transform(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string selection,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string spoken,
+        byte[] outBuf, int bufLen);
+
     // ── Stats ────────────────────────────────────────────────────────
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_update_stats(int words, double speakingSecs);

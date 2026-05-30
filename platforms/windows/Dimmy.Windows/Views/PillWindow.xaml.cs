@@ -140,13 +140,27 @@ public sealed partial class PillWindow : Window
         if (e.PropertyName == nameof(AppViewModel.CurrentState) || e.PropertyName == nameof(AppViewModel.BorderStyle)
             || e.PropertyName == nameof(AppViewModel.Theme))
             DispatcherQueue.TryEnqueue(UpdateVisualState);
-        if (e.PropertyName == nameof(AppViewModel.LlmStyle))
-            DispatcherQueue.TryEnqueue(() => StyleDot.Fill = new SolidColorBrush(ParseColor(_vm.LlmStyleColor)));
+        if (e.PropertyName == nameof(AppViewModel.LlmStyle)
+            || e.PropertyName == nameof(AppViewModel.CommandMode))
+            DispatcherQueue.TryEnqueue(RefreshStyleDot);
         if (e.PropertyName == nameof(AppViewModel.WaveformStyle))
             DispatcherQueue.TryEnqueue(() => Waveform.StyleMode = _vm.WaveformStyle);
         if (e.PropertyName == nameof(AppViewModel.MeetingActive)
             || e.PropertyName == nameof(AppViewModel.MeetingPaused))
             DispatcherQueue.TryEnqueue(OnMeetingStateChanged);
+    }
+
+    /// <summary>Tint the pill's style dot. In Command Mode it goes amber
+    /// (a distinct, "you're about to act on a selection, not dictate" cue)
+    /// regardless of the LLM style; otherwise it shows the current style's
+    /// colour. The pill/tray menu checkmark is the authoritative toggle —
+    /// this is the at-a-glance confirmation.</summary>
+    private void RefreshStyleDot()
+    {
+        var color = _vm.CommandMode
+            ? global::Windows.UI.Color.FromArgb(0xFF, 0xFF, 0x9F, 0x0A) // amber
+            : ParseColor(_vm.LlmStyleColor);
+        StyleDot.Fill = new SolidColorBrush(color);
     }
 
     // ── Shape helpers ───────────────────────────────────────────────
@@ -1025,6 +1039,18 @@ public sealed partial class PillWindow : Window
         // (single writer: dimmy_set_config_json → Rust saves to disk).
         menu.Items.Add(BuildTranslateToSubmenu());
         menu.Items.Add(BuildStyleSubmenu());
+
+        // Command Mode toggle — when on, the next recording transforms the
+        // selected text instead of dictating. Same hotkey; the mode picks
+        // the behaviour. Checkable so the pill menu is the visible source
+        // of truth for "am I dictating or commanding?".
+        var commandItem = new ToggleMenuFlyoutItem
+        {
+            Text = "Command (edit selection)",
+            IsChecked = _vm.CommandMode,
+        };
+        commandItem.Click += (_, _) => _vm.CommandMode = !_vm.CommandMode;
+        menu.Items.Add(commandItem);
 
         menu.Items.Add(new MenuFlyoutItem { Text = $"Shortcut: {_vm.Shortcut}", IsEnabled = false });
         menu.Items.Add(new MenuFlyoutSeparator());

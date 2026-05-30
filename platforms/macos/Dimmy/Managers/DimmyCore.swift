@@ -267,6 +267,28 @@ final class DimmyCore {
         return String(cString: buffer)
     }
 
+    /// Command Mode transform. Given the user's selected text + the spoken
+    /// instruction, returns the rewritten text on success, or nil + the rc
+    /// on failure so the caller can surface the right message (-3 = no LLM
+    /// key configured). Blocking — call from a background thread.
+    func commandTransform(selection: String, spoken: String) -> (text: String?, rc: Int32) {
+        let bufLen = Self.transcriptBufferSize
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+
+        let rc = selection.withCString { selPtr in
+            spoken.withCString { spkPtr in
+                dimmy_command_transform(selPtr, spkPtr, buffer, bufLen)
+            }
+        }
+        if rc <= 0 {
+            print("[DimmyCore] commandTransform rc=\(rc)")
+            return (nil, rc)
+        }
+        return (String(cString: buffer), rc)
+    }
+
     // MARK: - Stats
 
     /// Update cumulative stats.
