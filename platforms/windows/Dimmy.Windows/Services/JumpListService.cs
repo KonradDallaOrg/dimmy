@@ -740,7 +740,14 @@ public static class JumpListService
     /// nothing leaks across).</summary>
     private static (byte b, byte g, byte r, string suffix) MonoTone()
     {
-        if (Helpers.ThemeHelper.SystemIsDark())
+        // The jump-list lives in the TASKBAR chrome, not in our app
+        // window — so the relevant Windows theme switch is
+        // `SystemUsesLightTheme` (taskbar / Start / action center), not
+        // `AppsUseLightTheme` (app surfaces). Users routinely run apps
+        // light + taskbar dark; reading the wrong key picked the
+        // 0x52 dark-grey glyph against a dark taskbar → invisible.
+        // Burned 2026-05-30.
+        if (Helpers.ThemeHelper.SystemTaskbarIsDark())
             return (0xC8, 0xC8, 0xC8, "_dark");
         return (0x52, 0x52, 0x52, "_light");
     }

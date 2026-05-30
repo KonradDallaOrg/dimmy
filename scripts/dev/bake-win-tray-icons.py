@@ -99,11 +99,13 @@ def draw_state_dot(canvas: Image.Image, color_hex: str) -> Image.Image:
     out = canvas.convert("RGBA").copy()
     draw = ImageDraw.Draw(out)
 
-    # Smaller dot (16% of canvas) so the cloud silhouette stays the
-    # primary affordance. 20% had the dot eating ~⅓ of the top half at
-    # tray size; the user's complaint was the cloud "looks smaller" —
-    # shrinking the occluder gives the cloud back its visible footprint.
-    r = int(H * 0.16)
+    # Dot at 25% of canvas — sized to match the visual weight of the
+    # taskbar-overlay state dot (which Windows renders as a near-100%
+    # circle in the small overlay slot pinned to the app button). The
+    # user reported the 16-19% pass as "too small" relative to the
+    # taskbar overlay; 25% is the proportion that reads consistently
+    # across both surfaces, per user direction 2026-05-30.
+    r = int(H * 0.25)
     inset = int(H * 0.02)
     cx = H - r - inset
     cy = r + inset                        # TOP-right per user preference
