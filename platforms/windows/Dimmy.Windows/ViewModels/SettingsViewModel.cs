@@ -375,6 +375,13 @@ public partial class SettingsViewModel : ObservableObject
     /// stays hidden — only the taskbar overlay reflects state.</summary>
     [ObservableProperty] private bool _pillShowOnHotkey = true;
 
+    /// <summary>If true, Dimmy registers a button on the Windows taskbar
+    /// (`TaskbarAnchorWindow`) with brand icon + amplitude overlay during
+    /// recording + jump-list shortcuts. False hides the taskbar button
+    /// while keeping system-tray + hotkey active. Persisted in
+    /// `ui_prefs.json`. Default true.</summary>
+    [ObservableProperty] private bool _showTaskbarIcon = true;
+
     // Telemetry — runtime-only for now (no persistence in config.json yet).
     // Initialised from DimmyNative state on viewmodel load; the on-change
     // partials forward toggles to the Rust core. Persistence is a separate

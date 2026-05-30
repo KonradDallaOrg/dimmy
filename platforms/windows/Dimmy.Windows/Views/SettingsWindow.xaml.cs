@@ -1386,6 +1386,7 @@ public sealed partial class SettingsWindow : Window
         var uiPrefs = Services.UiPreferences.Load();
         ViewModel.PillShowOnStartup = uiPrefs.PillShowOnStartup;
         ViewModel.PillShowOnHotkey = uiPrefs.PillShowOnHotkey;
+        ViewModel.ShowTaskbarIcon = uiPrefs.ShowTaskbarIcon;
         // Theme lives in UiPreferences, not config.json — see
         // UiPreferences.Theme docstring for the bug history. Override
         // any value LoadFromJson may have produced (which would always

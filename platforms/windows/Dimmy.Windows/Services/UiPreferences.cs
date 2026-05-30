@@ -34,6 +34,16 @@ public sealed class UiPreferences
     /// Default true.</summary>
     public bool PillShowOnStartup { get; set; } = true;
 
+    /// <summary>If true, Dimmy registers a button on the Windows taskbar
+    /// (`TaskbarAnchorWindow`) with the brand icon, the amplitude overlay
+    /// during recording, and the right-click jump-list shortcuts. If
+    /// false, the anchor window stays hidden and Dimmy is reachable only
+    /// via the system tray + global hotkey. Default true — most users
+    /// want the taskbar affordance because of the amplitude bar feedback
+    /// during recording. Live-applied: toggling the switch shows/hides
+    /// the entry without restart.</summary>
+    public bool ShowTaskbarIcon { get; set; } = true;
+
     /// <summary>Last email the user entered in the pre-checkout / activate
     /// modal. Persisted across Sign out so the user doesn't have to re-type
     /// it every time. Distinct from license.json (which Sign out drops):

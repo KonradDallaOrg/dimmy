@@ -133,7 +133,12 @@ public partial class AppViewModel : ObservableObject
     [ObservableProperty] private string _overlayPosition = "Bottom Right";
     [ObservableProperty] private string _theme = "Default";
     [ObservableProperty] private bool _keepInClipboard;
-    [ObservableProperty] private bool _showInTaskbar;
+
+    /// <summary>If true, the Dimmy entry is registered on the Windows
+    /// taskbar (`TaskbarAnchorWindow`). False hides the taskbar button
+    /// while keeping the system-tray icon + hotkey alive. Persisted in
+    /// UiPreferences. Default true.</summary>
+    [ObservableProperty] private bool _showTaskbarIcon = true;
 
     /// <summary>If true, pressing the global hotkey while the pill is
     /// hidden re-shows it. If false, the pill stays hidden — recording

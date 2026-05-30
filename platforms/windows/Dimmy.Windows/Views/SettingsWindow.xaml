@@ -1549,6 +1549,12 @@
                 <ToggleSwitch IsOn="{Binding PillShowOnHotkey, Mode=TwoWay}"
                               Toggled="PillVisibilityToggle_Toggled" />
               </controls:SettingCard>
+              <controls:SettingCard Glyph="&#xE71D;"
+                                    Label="Show Dimmy in Windows taskbar"
+                                    Description="The taskbar button shows the brand icon, the live amplitude bar during recording, and the right-click jump-list shortcuts. Turn off to keep only the system tray + global hotkey.">
+                <ToggleSwitch IsOn="{Binding ShowTaskbarIcon, Mode=TwoWay}"
+                              Toggled="PillVisibilityToggle_Toggled" />
+              </controls:SettingCard>
 
               <TextBlock Text="POSITION"
                          FontSize="12" FontWeight="SemiBold"

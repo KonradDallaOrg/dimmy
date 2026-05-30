@@ -134,6 +134,7 @@ public partial class App : Application
         // them to ui_prefs.json automatically.
         _appViewModel.PillShowOnStartup = settings.PillShowOnStartup;
         _appViewModel.PillShowOnHotkey = settings.PillShowOnHotkey;
+        _appViewModel.ShowTaskbarIcon = settings.ShowTaskbarIcon;
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
@@ -287,6 +288,7 @@ public partial class App : Application
             _uiPrefs = UiPreferences.Load();
             _appViewModel.PillShowOnHotkey = _uiPrefs.PillShowOnHotkey;
             _appViewModel.PillShowOnStartup = _uiPrefs.PillShowOnStartup;
+            _appViewModel.ShowTaskbarIcon = _uiPrefs.ShowTaskbarIcon;
             _appViewModel.Theme = _uiPrefs.Theme;
             _appViewModel.PropertyChanged += OnUiPrefsRelevantPropertyChanged;
 
@@ -840,7 +842,12 @@ public partial class App : Application
             // The process-wide AUMI alone (set in OnLaunched) is
             // sometimes insufficient on Win11 for unpackaged apps.
             JumpListService.SetWindowAumi(_taskbarAnchor.Hwnd);
-            _taskbarAnchor.ActivateAnchor();
+            // Honour the user's UiPreferences.ShowTaskbarIcon — the
+            // window object always exists (TaskbarService routes
+            // amplitude / state updates through its HWND), but its
+            // AppWindow stays hidden when the user opted out.
+            if (_appViewModel.ShowTaskbarIcon)
+                _taskbarAnchor.ActivateAnchor();
 
             _taskbarService = new TaskbarService(_taskbarAnchor.Hwnd);
             // Reflect any state we already have (Idle on first launch).
@@ -889,11 +896,46 @@ public partial class App : Application
         System.ComponentModel.PropertyChangedEventArgs e)
     {
         if (e.PropertyName != nameof(AppViewModel.PillShowOnHotkey)
-            && e.PropertyName != nameof(AppViewModel.PillShowOnStartup))
+            && e.PropertyName != nameof(AppViewModel.PillShowOnStartup)
+            && e.PropertyName != nameof(AppViewModel.ShowTaskbarIcon))
             return;
         _uiPrefs.PillShowOnHotkey = _appViewModel.PillShowOnHotkey;
         _uiPrefs.PillShowOnStartup = _appViewModel.PillShowOnStartup;
+        _uiPrefs.ShowTaskbarIcon = _appViewModel.ShowTaskbarIcon;
         _uiPrefs.Save();
+
+        // Live-apply the taskbar-anchor visibility on toggle. The window
+        // object stays around either way (TaskbarService updates funnel
+        // through it), but its AppWindow is hidden so the taskbar entry
+        // and amplitude overlay disappear. Toggling back re-activates.
+        if (e.PropertyName == nameof(AppViewModel.ShowTaskbarIcon))
+            ApplyTaskbarAnchorVisibility();
+    }
+
+    /// <summary>Show or hide the TaskbarAnchorWindow per the current
+    /// `_appViewModel.ShowTaskbarIcon`. Safe to call before the anchor
+    /// is constructed — early returns until InitTaskbarAnchor has run.</summary>
+    private void ApplyTaskbarAnchorVisibility()
+    {
+        if (_taskbarAnchor is null) return;
+        try
+        {
+            if (_appViewModel.ShowTaskbarIcon)
+            {
+                // ActivateAnchor also handles the "minimised, no focus
+                // steal" semantics — same code path used at first launch.
+                _taskbarAnchor.ActivateAnchor();
+            }
+            else
+            {
+                var aw = Helpers.WindowHelper.GetAppWindow(_taskbarAnchor);
+                aw?.Hide();
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[App] ApplyTaskbarAnchorVisibility failed: {ex.Message}");
+        }
     }
 
     private void OnboardingWindow_Closed(object sender, WindowEventArgs args)
