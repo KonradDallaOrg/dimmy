@@ -617,20 +617,18 @@
                 </controls:SettingCard>
               </StackPanel>
 
-              <!-- Microphone section: still gated by IsAdvanced toggle. -->
-              <StackPanel Spacing="4"
-                          Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+              <!-- Microphone. The Input-device picker is ESSENTIAL (you can't
+                   capture audio from the wrong mic) so it lives in Simple. The
+                   tuning knobs (gain / preprocessing / chunk / captions) stay
+                   behind Advanced. -->
+              <StackPanel Spacing="4">
                 <TextBlock Text="MICROPHONE"
                            FontSize="12" FontWeight="SemiBold"
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                            CharacterSpacing="40" Margin="2,20,0,8" />
-                <!-- Audio source picker removed 2026-05-08: the capture
-                     pipeline now ALWAYS opens both mic + system loopback
-                     (always-mix architecture, commit 3eddac3). Pill
-                     consumes mic-only, meeting consumes both, AEC3
-                     gracefully degrades when loopback is silent. The
-                     legacy `audio_source` config field is preserved on
-                     disk for backward compat but ignored at runtime. -->
+                <!-- Audio source picker removed 2026-05-08: always-mix capture
+                     (commit 3eddac3). Pill = mic-only, meeting = both, AEC3
+                     degrades when loopback is silent. -->
                 <controls:SettingCard Glyph="&#xE720;"
                                       Label="Input device"
                                       Description="Microphone Dimmy listens to. System audio loopback always uses the default playback device.">
@@ -638,32 +636,36 @@
                             SelectedItem="{Binding SelectedDevice, Mode=TwoWay}"
                             ItemsSource="{Binding Devices}" />
                 </controls:SettingCard>
-                <controls:SettingCard Glyph="&#xE992;"
-                                      Label="Microphone volume"
-                                      Description="Software gain applied before transcription.">
-                  <Slider x:Name="InputGainSlider" MinWidth="240"
-                          Minimum="10" Maximum="100" StepFrequency="5"
-                          Value="{Binding InputGainPercent, Mode=TwoWay}" />
-                </controls:SettingCard>
-                <controls:SettingCard Glyph="&#xE9F5;"
-                                      Label="Preprocessing"
-                                      Description="High-pass + VAD + AGC before transcribing.">
-                  <ToggleSwitch IsOn="{Binding PreprocessingEnabled, Mode=TwoWay}"
-                                OnContent="" OffContent="" />
-                </controls:SettingCard>
-                <controls:SettingCard Glyph="&#xE7F2;"
-                                      Label="Chunk streaming (Parakeet only)"
-                                      Description="Transcribe in 5 s windows during recording so the final paste lands ~700 ms after release instead of waiting for the full batch. Requires Local backend = Parakeet.">
-                  <ToggleSwitch IsOn="{Binding ChunkStreamingEnabled, Mode=TwoWay}"
-                                OnContent="" OffContent="" />
-                </controls:SettingCard>
-                <controls:SettingCard Glyph="&#xE890;"
-                                      Label="Live captions"
-                                      Description="Show a floating caption window below the pill while chunked streaming is active. Toggle off to keep chunked speed-up without the on-screen caption.">
-                  <ToggleSwitch IsOn="{Binding LiveCaptionsEnabled, Mode=TwoWay}"
-                                OnContent="" OffContent="" />
-                </controls:SettingCard>
-                <!-- API keys always stored in local encrypted file (keys.enc) -->
+
+                <!-- Advanced mic tuning -->
+                <StackPanel Spacing="4"
+                            Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                  <controls:SettingCard Glyph="&#xE992;"
+                                        Label="Microphone volume"
+                                        Description="Software gain applied before transcription.">
+                    <Slider x:Name="InputGainSlider" MinWidth="240"
+                            Minimum="10" Maximum="100" StepFrequency="5"
+                            Value="{Binding InputGainPercent, Mode=TwoWay}" />
+                  </controls:SettingCard>
+                  <controls:SettingCard Glyph="&#xE9F5;"
+                                        Label="Preprocessing"
+                                        Description="High-pass + VAD + AGC before transcribing.">
+                    <ToggleSwitch IsOn="{Binding PreprocessingEnabled, Mode=TwoWay}"
+                                  OnContent="" OffContent="" />
+                  </controls:SettingCard>
+                  <controls:SettingCard Glyph="&#xE7F2;"
+                                        Label="Chunk streaming (Parakeet only)"
+                                        Description="Transcribe in 5 s windows during recording so the final paste lands ~700 ms after release instead of waiting for the full batch. Requires Local backend = Parakeet.">
+                    <ToggleSwitch IsOn="{Binding ChunkStreamingEnabled, Mode=TwoWay}"
+                                  OnContent="" OffContent="" />
+                  </controls:SettingCard>
+                  <controls:SettingCard Glyph="&#xE890;"
+                                        Label="Live captions"
+                                        Description="Show a floating caption window below the pill while chunked streaming is active. Toggle off to keep chunked speed-up without the on-screen caption.">
+                    <ToggleSwitch IsOn="{Binding LiveCaptionsEnabled, Mode=TwoWay}"
+                                  OnContent="" OffContent="" />
+                  </controls:SettingCard>
+                </StackPanel>
               </StackPanel>
 
               <!-- ═══ Custom dictionary ═══ -->
@@ -1476,82 +1478,6 @@
                 <TextBlock Text="The floating pill. Where it lives and how it looks."
                            FontSize="13"
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-              </StackPanel>
-
-              <!-- LIVE PREVIEW — animated pill rendered with the same shapes
-                   as the real overlay. State buttons below switch the mock
-                   between idle / recording / transcribing / done / error. -->
-              <TextBlock Text="LIVE PREVIEW"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,16,0,8" />
-              <Border Background="#0F172A"
-                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="6"
-                      Height="140" Padding="0">
-                <Grid>
-                  <!-- Faint desktop stripes -->
-                  <Rectangle>
-                    <Rectangle.Fill>
-                      <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                        <GradientStop Offset="0" Color="#1E293B" />
-                        <GradientStop Offset="1" Color="#0B1220" />
-                      </LinearGradientBrush>
-                    </Rectangle.Fill>
-                  </Rectangle>
-                  <!-- Pill mock — content swapped from code based on state +
-                       BorderStyle + WaveformStyle so the preview reflects
-                       what the user just configured. -->
-                  <Border x:Name="PreviewPill"
-                          HorizontalAlignment="Center" VerticalAlignment="Center"
-                          MinWidth="140" Height="40" CornerRadius="20"
-                          BorderThickness="2"
-                          Background="#FF1A1A1A">
-                    <Border.BorderBrush>
-                      <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                        <GradientStop Offset="0.0" Color="#FF6EE7B7" />
-                        <GradientStop Offset="0.33" Color="#FF60A5FA" />
-                        <GradientStop Offset="0.66" Color="#FFF472B6" />
-                        <GradientStop Offset="1.0" Color="#FFFBBF24" />
-                      </LinearGradientBrush>
-                    </Border.BorderBrush>
-                    <!-- Two layers: dynamic waveform/dots/line content + glyph
-                         on top for non-recording states. -->
-                    <Grid Margin="14,0">
-                      <Grid x:Name="PreviewContentHost" />
-                      <FontIcon x:Name="PreviewGlyph"
-                                Glyph="&#xE720;" FontSize="14"
-                                Foreground="#94A3B8"
-                                Visibility="Collapsed"
-                                HorizontalAlignment="Center" VerticalAlignment="Center" />
-                    </Grid>
-                  </Border>
-                  <!-- State caption -->
-                  <TextBlock x:Name="PreviewCaption"
-                             Text="Preview · idle"
-                             FontSize="11"
-                             Foreground="#64748B"
-                             HorizontalAlignment="Center" VerticalAlignment="Bottom"
-                             Margin="0,0,0,8" />
-                </Grid>
-              </Border>
-              <!-- State chips: click to swap the preview to that state. -->
-              <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,8,0,0">
-                <RadioButton GroupName="PreviewState" Tag="idle"
-                             Content="idle" IsChecked="True"
-                             Checked="PreviewState_Checked" />
-                <RadioButton GroupName="PreviewState" Tag="recording"
-                             Content="recording"
-                             Checked="PreviewState_Checked" />
-                <RadioButton GroupName="PreviewState" Tag="transcribing"
-                             Content="transcribing"
-                             Checked="PreviewState_Checked" />
-                <RadioButton GroupName="PreviewState" Tag="done"
-                             Content="done"
-                             Checked="PreviewState_Checked" />
-                <RadioButton GroupName="PreviewState" Tag="error"
-                             Content="error"
-                             Checked="PreviewState_Checked" />
               </StackPanel>
 
               <TextBlock Text="VISIBILITY"
