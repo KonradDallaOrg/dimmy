@@ -2635,6 +2635,7 @@ public sealed partial class SettingsWindow : Window
             // Legacy tags (general / overlay / debug / stats) accepted for back-compat with any
             // saved nav-state path elsewhere — they map to the v2 panels behind the scenes.
             HomePanel.Visibility = Visibility.Collapsed;
+            ProvidersPanel.Visibility = Visibility.Collapsed;
             GeneralPanel.Visibility = Visibility.Collapsed;
             ShortcutPanel.Visibility = Visibility.Collapsed;
             OutputPanel.Visibility = Visibility.Collapsed;
@@ -2651,6 +2652,7 @@ public sealed partial class SettingsWindow : Window
             var panel = tag switch
             {
                 "home" => HomePanel,
+                "providers" => ProvidersPanel,
                 "voice" or "general" => GeneralPanel,
                 "output" => OutputPanel,
                 "pill" or "overlay" => OverlayPanel,
@@ -2667,6 +2669,7 @@ public sealed partial class SettingsWindow : Window
             };
             panel.Visibility = Visibility.Visible;
             if (tag == "history") LoadHistoryItems();
+            if (tag == "providers") EnsureProviderCards();
 
             if (tag == "privacy")
             {

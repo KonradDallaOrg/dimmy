@@ -36,6 +36,9 @@
         <NavigationViewItem Content="Output" Tag="output">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE945;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
+        <NavigationViewItem Content="Providers &amp; keys" Tag="providers">
+          <NavigationViewItem.Icon><FontIcon Glyph="&#xE8D7;" /></NavigationViewItem.Icon>
+        </NavigationViewItem>
         <NavigationViewItem Content="Pill overlay" Tag="pill">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE7B5;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
@@ -325,6 +328,24 @@
                 <ToggleSwitch IsOn="{Binding AutostartEnabled, Mode=TwoWay}"
                               OnContent="" OffContent="" />
               </controls:SettingCard>
+            </StackPanel>
+
+            <!-- ═══ Providers & keys — one card per AI provider. Cards + the
+                 advanced per-task override are built in code-behind
+                 (BuildProviderCards) so there is no DataTemplate/XAML-compiler
+                 surface; this panel is just the host + title. ═══ -->
+            <StackPanel x:Name="ProvidersPanel" Spacing="4" Visibility="Collapsed">
+              <StackPanel Spacing="2" Margin="0,0,0,16">
+                <TextBlock Text="Providers &amp; keys" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="Add an API key to switch a provider on. Models and capabilities are set up for you — on-device works with no key at all."
+                           FontSize="13" TextWrapping="Wrap"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+              </StackPanel>
+              <StackPanel x:Name="ProviderCardsHost" Spacing="10" />
+              <TextBlock x:Name="ProviderKeysFootnote"
+                         Text="&#x1F512; Keys are stored encrypted on this device (AES-256) and only ever sent to the provider you choose."
+                         FontSize="12" TextWrapping="Wrap" Margin="2,16,0,0"
+                         Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
             </StackPanel>
 
             <!-- ═══ Voice input (was General) — STT settings ═══ -->
