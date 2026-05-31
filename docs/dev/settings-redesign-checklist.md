@@ -133,3 +133,39 @@ Capabilities: Deepgram=STT only; Anthropic+OpenRouter=LLM/Recap only; rest=STT+L
 Per provider: status pill · key field · Connect/Verify/Remove · "Get key →" deep-link · models w/ STT/LLM/Recap badges.
 Advanced override: per-task STT/LLM/Recap dropdown (capable+connected models) + fallback.
 Maps to existing config: STT→api_url/api_model, LLM→llm_api_url/llm_api_model, Recap→recap_model_override; keys→keystore FFI.
+
+## Implementation notes (as shipped on `feat/settings-redesign`, 2026-06-01)
+
+What actually landed (5 local commits, nothing pushed; build green; 279
+C# tests pass incl. 19 new ProviderCatalog guards; app launches clean):
+
+1. **Providers & keys page** — additive nav page driven by `ProviderCatalog.cs`
+   + `SettingsWindow.Providers.cs` (cards built programmatically, no XAML
+   DataTemplate). One key per provider → saved to all capable scopes
+   (stt/llm/recap) via `dimmy_save_llm_provider_key`. Per-provider HTTPS
+   "Get key →" deep-link. Connected-state mirrored in `UiPreferences.ConnectedProviders`.
+2. **Mic device promoted** to Simple; gain/preprocessing/chunk/captions stay Advanced.
+3. **Live-preview pill demo removed** (widget + ~180 lines render code-behind).
+4. **Nav-level progressive disclosure** — App rules / Integrations / Privacy
+   gated behind the always-visible "Advanced mode" footer toggle (`IsAdvanced`,
+   default false). Daily-use pages stay in Simple.
+5. **Enable & send** kept as the existing contextual inline button (appears
+   only on rc -2) + tooltip; NOT converted to a modal (a modal interrupts
+   more — anti-enshittification). 3 verbose descriptions trimmed.
+
+**Verification agent verdict: PASS** — all 72 staging bindings still reachable,
+no orphaned handlers, no dangling x:Name. Nothing lost.
+
+**Deliberately deferred (NOT done — discuss before doing):**
+- The redesign is **additive, not relocating**: STT/LLM/recap provider+key
+  controls still live in the Voice/Output panels AND on the Providers page,
+  so a key can be entered in two places. This was the SAFE choice (guarantees
+  "nothing lost / works at least as well as now"). De-duplicating requires
+  first building the **per-task routing dropdowns** on the Providers page
+  (the mockup's "Avanzate · override per capability" section) so Voice/Output
+  can surrender provider *selection*, not just key entry. Until then, removing
+  the in-panel controls would lose the ability to pick which provider/model
+  serves each task.
+- Per-provider key **validation** ("Verify" / inline ✓) — currently optimistic
+  save. The deep-link wizard is "get a key", not "prove the key works".
+- **Mac parity** — this branch is Windows-only.
