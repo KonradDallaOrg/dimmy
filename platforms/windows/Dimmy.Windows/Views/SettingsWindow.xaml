@@ -42,7 +42,10 @@
         <NavigationViewItem Content="Pill overlay" Tag="pill">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE7B5;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
-        <NavigationViewItem Content="App rules" Tag="rules">
+        <!-- App rules is power-user territory (per-app style overrides) —
+             gated behind Advanced so the Simple view stays focused. -->
+        <NavigationViewItem Content="App rules" Tag="rules"
+                            Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xECAA;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
         <NavigationViewItem Content="Shortcut" Tag="shortcut">
@@ -51,10 +54,16 @@
         <NavigationViewItem Content="Recordings" Tag="history">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE7B8;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
-        <NavigationViewItem Content="Integrations" Tag="integrations">
+        <!-- Integrations (Notion / Claude subscription / MCP) are opt-in
+             extras — Advanced-gated. -->
+        <NavigationViewItem Content="Integrations" Tag="integrations"
+                            Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE71B;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
-        <NavigationViewItem Content="Privacy &amp; data" Tag="privacy">
+        <!-- Privacy &amp; data (telemetry consent, feedback) — sensible
+             defaults already applied, so Advanced-gated. -->
+        <NavigationViewItem Content="Privacy &amp; data" Tag="privacy"
+                            Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE72E;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
         <NavigationViewItem Content="License" Tag="license">
