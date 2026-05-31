@@ -1143,13 +1143,13 @@
               <StackPanel Spacing="4">
                 <controls:SettingCard Glyph="&#xE717;"
                                       Label="Detect calls and offer to record"
-                                      Description="Polls the default microphone once a second; suggests recording when a call lasts more than 5 s. Per-app cooldown (30 min) after 'Not now', permanent skip after 'Don't ask for this app'.">
+                                      Description="Suggests recording when a call runs past 5 s. 'Not now' snoozes that app for 30 min; 'Don't ask' skips it for good.">
                   <ToggleSwitch IsOn="{Binding CallDetectEnabled, Mode=TwoWay}"
                                 OnContent="" OffContent="" />
                 </controls:SettingCard>
                 <controls:SettingCard Glyph="&#xE71F;"
                                       Label="Excluded apps"
-                                      Description="Apps that will never trigger a record-meeting prompt. Adds here automatically when you pick 'Don't ask for this app'. Discord is excluded by default — usually gaming, not work.">
+                                      Description="Apps that never trigger a record prompt. 'Don't ask' adds them here. Discord is excluded by default.">
                   <ItemsControl ItemsSource="{Binding CallDetectExcludedApps}" Margin="0,0,0,0">
                     <ItemsControl.ItemsPanel>
                       <ItemsPanelTemplate>
@@ -1507,7 +1507,7 @@
               </controls:SettingCard>
               <controls:SettingCard Glyph="&#xE71D;"
                                     Label="Show Dimmy in Windows taskbar"
-                                    Description="The taskbar button shows the brand icon, the live amplitude bar during recording, and the right-click jump-list shortcuts. Turn off to keep only the system tray + global hotkey.">
+                                    Description="Brand icon, live amplitude bar while recording, and right-click jump-list shortcuts. Off = system tray + hotkey only.">
                 <ToggleSwitch IsOn="{Binding ShowTaskbarIcon, Mode=TwoWay}"
                               Toggled="PillVisibilityToggle_Toggled" />
               </controls:SettingCard>
@@ -2478,6 +2478,7 @@
                             Content="Enable &amp; send"
                             Click="EnableAndSendFeedback_Click"
                             Visibility="Collapsed"
+                            ToolTipService.ToolTip="Feedback rides on crash reporting, which is currently off. This turns it on and sends your message in one click."
                             Style="{ThemeResource AccentButtonStyle}" />
                     <TextBlock x:Name="FeedbackStatus" FontSize="11"
                                VerticalAlignment="Center"

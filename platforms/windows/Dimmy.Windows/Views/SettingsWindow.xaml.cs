@@ -4732,7 +4732,7 @@ public sealed partial class SettingsWindow : Window
                 break;
             case -2:
                 // Telemetry disabled — offer one-click enable + send.
-                FeedbackStatus.Text = "Feedback sending is off.";
+                FeedbackStatus.Text = "Sending is off — use “Enable & send”.";
                 EnableAndSendFeedbackBtn.Visibility = Visibility.Visible;
                 break;
             case -3:
