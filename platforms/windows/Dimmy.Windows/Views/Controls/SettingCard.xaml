@@ -40,26 +40,35 @@
         <ColumnDefinition Width="Auto" />
       </Grid.ColumnDefinitions>
 
-      <!-- Icon column. Visibility set from code-behind when Glyph changes. -->
+      <!-- Icon column. Visibility set from code-behind when Glyph changes.
+           Fixed 24px box, centered both ways, so every card's glyph sits on
+           the same baseline and x regardless of the right-side control height. -->
       <FontIcon Grid.Column="0"
                 x:Name="GlyphIcon"
                 FontSize="16"
                 Width="24" Height="24"
-                Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                HorizontalAlignment="Center" VerticalAlignment="Center"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
 
       <!-- Meta: label (+ optional ⓘ) + optional description -->
       <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
-        <StackPanel Orientation="Horizontal" Spacing="6">
+        <StackPanel Orientation="Horizontal" Spacing="5">
           <TextBlock x:Name="LabelText"
                      FontSize="14" VerticalAlignment="Center"
                      Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
           <!-- Info affordance. Hover shows a tooltip; click opens an in-app
                card with the text + an optional "Open full guide →" link. The
-               website only opens from that link, not from the icon. -->
+               website only opens from that link, not from the icon.
+               MinWidth/MinHeight=0 is load-bearing: the default Button style
+               forces 32px, which would float the icon away from the label and
+               break its optical centering. -->
           <Button x:Name="InfoButton" Visibility="Collapsed"
                   Background="Transparent" BorderThickness="0"
-                  Padding="0" Width="20" Height="20" CornerRadius="10"
-                  VerticalAlignment="Center">
+                  Padding="0" Width="18" Height="18" CornerRadius="9"
+                  MinWidth="0" MinHeight="0"
+                  VerticalAlignment="Center"
+                  VerticalContentAlignment="Center"
+                  HorizontalContentAlignment="Center">
             <FontIcon Glyph="&#xE946;" FontSize="13"
                       Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
             <Button.Flyout>
@@ -76,8 +85,13 @@
             </Button.Flyout>
           </Button>
         </StackPanel>
+        <!-- Collapsed by DEFAULT: when a card has no Description (most do now,
+             the detail lives behind the ⓘ), an empty-but-visible line would
+             reserve height and push the centred label upward. Code-behind flips
+             it Visible only when Description is non-empty. -->
         <TextBlock x:Name="DescriptionText"
                    FontSize="12"
+                   Visibility="Collapsed"
                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                    TextWrapping="Wrap" />
       </StackPanel>

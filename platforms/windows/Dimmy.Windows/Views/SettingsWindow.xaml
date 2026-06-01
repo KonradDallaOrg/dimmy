@@ -221,6 +221,13 @@
                 </Grid>
               </Border>
 
+              <!-- Meeting + Transcribe side by side to keep the cards compact. -->
+              <Grid ColumnSpacing="16">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" VerticalAlignment="Top">
               <!-- Meeting mode launcher — long-form recording with
                    streaming-to-disk + post-process recap + actions. -->
               <TextBlock Text="MEETING MODE"
@@ -234,7 +241,9 @@
                   <StackPanel Orientation="Horizontal" Spacing="6">
                     <TextBlock Text="Record a meeting" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
                     <Button Background="Transparent" BorderThickness="0" Padding="0"
-                            Width="18" Height="18" VerticalAlignment="Center"
+                            Width="18" Height="18" MinWidth="0" MinHeight="0"
+                            VerticalAlignment="Center" VerticalContentAlignment="Center"
+                            HorizontalContentAlignment="Center"
                             ToolTipService.ToolTip="Long-form recording streamed to disk. On stop, the LLM writes a recap with action items when an LLM key is set.">
                       <FontIcon Glyph="&#xE946;" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                       <Button.Flyout>
@@ -258,8 +267,9 @@
                   </Button>
                 </StackPanel>
               </Border>
-
-              <!-- Transcribe audio file (offline): drag a WAV here OR
+                </StackPanel>
+                <StackPanel Grid.Column="1" VerticalAlignment="Top">
+              <!-- Transcribe audio file (offline): drag a file here OR
                    pick one with the file picker. Routes through the
                    active local backend (whisper / parakeet) and saves
                    the transcript to History. -->
@@ -280,7 +290,9 @@
                   <StackPanel Orientation="Horizontal" Spacing="6">
                     <TextBlock Text="Transcribe an audio file" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
                     <Button Background="Transparent" BorderThickness="0" Padding="0"
-                            Width="18" Height="18" VerticalAlignment="Center"
+                            Width="18" Height="18" MinWidth="0" MinHeight="0"
+                            VerticalAlignment="Center" VerticalContentAlignment="Center"
+                            HorizontalContentAlignment="Center"
                             ToolTipService.ToolTip="Drag a file here or click Pick file. Works offline with your local model. Supports wav, mp3, m4a, aac, flac, opus, and ogg. The transcript lands in Recordings.">
                       <FontIcon Glyph="&#xE946;" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                       <Button.Flyout>
@@ -346,6 +358,8 @@
                   </StackPanel>
                 </StackPanel>
               </Border>
+                </StackPanel>
+              </Grid>
 
               <!-- System group: theme + launch-at-login — Advanced-gated. -->
               <StackPanel Spacing="4"
@@ -2010,20 +2024,6 @@
                                  NavigateUri="https://github.com/KonradDallaOrg/dimmy" />
               </controls:SettingCard>
 
-              <!-- Footer: Made with [Claude Code mark] — official Anthropic logo path -->
-              <StackPanel Orientation="Horizontal" Spacing="6"
-                          HorizontalAlignment="Center" Margin="0,24,0,4">
-                <TextBlock Text="Made with" FontSize="12"
-                           VerticalAlignment="Center"
-                           Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-                <Viewbox Width="14" Height="14" VerticalAlignment="Center">
-                  <Path Fill="#D97757"
-                        Data="m19.6 66.5 19.7-11 .3-1-.3-.5h-1l-3.3-.2-11.2-.3L14 53l-9.5-.5-2.4-.5L0 49l.2-1.5 2-1.3 2.9.2 6.3.5 9.5.6 6.9.4L38 49.1h1.6l.2-.7-.5-.4-.4-.4L29 41l-10.6-7-5.6-4.1-3-2-1.5-2-.6-4.2 2.7-3 3.7.3.9.2 3.7 2.9 8 6.1L37 36l1.5 1.2.6-.4.1-.3-.7-1.1L33 25l-6-10.4-2.7-4.3-.7-2.6c-.3-1-.4-2-.4-3l3-4.2L28 0l4.2.6L33.8 2l2.6 6 4.1 9.3L47 29.9l2 3.8 1 3.4.3 1h.7v-.5l.5-7.2 1-8.7 1-11.2.3-3.2 1.6-3.8 3-2L61 2.6l2 2.9-.3 1.8-1.1 7.7L59 27.1l-1.5 8.2h.9l1-1.1 4.1-5.4 6.9-8.6 3-3.5L77 13l2.3-1.8h4.3l3.1 4.7-1.4 4.9-4.4 5.6-3.7 4.7-5.3 7.1-3.2 5.7.3.4h.7l12-2.6 6.4-1.1 7.6-1.3 3.5 1.6.4 1.6-1.4 3.4-8.2 2-9.6 2-14.3 3.3-.2.1.2.3 6.4.6 2.8.2h6.8l12.6 1 3.3 2 1.9 2.7-.3 2-5.1 2.6-6.8-1.6-16-3.8-5.4-1.3h-.8v.4l4.6 4.5 8.3 7.5L89 80.1l.5 2.4-1.3 2-1.4-.2-9.2-7-3.6-3-8-6.8h-.5v.7l1.8 2.7 9.8 14.7.5 4.5-.7 1.4-2.6 1-2.7-.6-5.8-8-6-9-4.7-8.2-.5.4-2.9 30.2-1.3 1.5-3 1.2-2.5-2-1.4-3 1.4-6.2 1.6-8 1.3-6.4 1.2-7.9.7-2.6v-.2H49L43 72l-9 12.3-7.2 7.6-1.7.7-3-1.5.3-2.8L24 86l10-12.8 6-7.9 4-4.6-.1-.5h-.3L17.2 77.4l-4.7.6-2-2 .2-3 1-1 8-5.5Z" />
-                </Viewbox>
-                <TextBlock Text="Claude Code" FontSize="12" FontWeight="SemiBold"
-                           VerticalAlignment="Center"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-              </StackPanel>
             </StackPanel>
 
             <!-- ═══ History ═══ -->
@@ -2212,7 +2212,9 @@
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                            CharacterSpacing="40" VerticalAlignment="Center" />
                 <Button Background="Transparent" BorderThickness="0" Padding="0"
-                        Width="18" Height="18" VerticalAlignment="Center"
+                        Width="18" Height="18" MinWidth="0" MinHeight="0"
+                        VerticalAlignment="Center" VerticalContentAlignment="Center"
+                        HorizontalContentAlignment="Center"
                         ToolTipService.ToolTip="Free Notion accounts work fine. Your token and destination stay on this device. Only the recap text leaves, and only when you send it.">
                   <FontIcon Glyph="&#xE946;" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                   <Button.Flyout>
@@ -2324,7 +2326,9 @@
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                            CharacterSpacing="40" VerticalAlignment="Center" />
                 <Button Background="Transparent" BorderThickness="0" Padding="0"
-                        Width="18" Height="18" VerticalAlignment="Center"
+                        Width="18" Height="18" MinWidth="0" MinHeight="0"
+                        VerticalAlignment="Center" VerticalContentAlignment="Center"
+                        HorizontalContentAlignment="Center"
                         ToolTipService.ToolTip="Use your Anthropic Pro, Team, or Max plan through the local Claude CLI, so no API credit is spent. Dimmy never sees your token. Turn it on under Output once connected.">
                   <FontIcon Glyph="&#xE946;" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                   <Button.Flyout>
@@ -2443,7 +2447,9 @@
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                            CharacterSpacing="40" VerticalAlignment="Center" />
                 <Button Background="Transparent" BorderThickness="0" Padding="0"
-                        Width="18" Height="18" VerticalAlignment="Center"
+                        Width="18" Height="18" MinWidth="0" MinHeight="0"
+                        VerticalAlignment="Center" VerticalContentAlignment="Center"
+                        HorizontalContentAlignment="Center"
                         ToolTipService.ToolTip="Lets Claude Desktop read your recent meetings and save recaps back. Everything runs on this device. Disconnect anytime and Dimmy removes its entry.">
                   <FontIcon Glyph="&#xE946;" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                   <Button.Flyout>
