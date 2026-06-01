@@ -32,6 +32,13 @@ public sealed partial class SettingsWindow
 {
     private bool _providerCardsBuilt;
 
+    /// <summary>Resolved once per build from the host's ActualTheme. We must NOT
+    /// pull theme brushes from Application.Current.Resources in code — those
+    /// don't track a window whose theme is force-set (the user pins Light/Dark
+    /// in Settings), so e.g. white "primary text" lands on a light card and is
+    /// invisible. Reading ActualTheme + explicit light/dark hex is bulletproof.</summary>
+    private bool _dark;
+
     // Capability accent colours — readable on light + dark tints alike.
     private const string SttColor = "#2FB37A";   // speech-to-text
     private const string LlmColor = "#6472FF";   // rewrite
@@ -50,6 +57,7 @@ public sealed partial class SettingsWindow
     private void BuildProviderCards()
     {
         if (ProviderCardsHost is null) return;
+        _dark = ProviderCardsHost.ActualTheme == ElementTheme.Dark;
         ProviderCardsHost.Children.Clear();
 
         SeedConnectedFromCurrentConfig();
@@ -404,11 +412,11 @@ public sealed partial class SettingsWindow
 
         return new Border
         {
-            CornerRadius = new CornerRadius(20),
-            Padding = new Thickness(9, 3, 11, 3),
+            CornerRadius = new CornerRadius(5),
+            Padding = new Thickness(8, 3, 9, 3),
             VerticalAlignment = VerticalAlignment.Center,
             Background = ok ? SolidBrush(WithAlpha(OkColor, 0x22)) : ThemeBrush("ControlFillColorSecondaryBrush"),
-            BorderBrush = ok ? SolidBrush(WithAlpha(OkColor, 0x44)) : ThemeBrush("ControlStrokeColorDefaultBrush"),
+            BorderBrush = ok ? SolidBrush(WithAlpha(OkColor, 0x55)) : ThemeBrush("ControlStrokeColorDefaultBrush"),
             BorderThickness = new Thickness(1),
             Child = inner,
         };
@@ -454,14 +462,20 @@ public sealed partial class SettingsWindow
 
     // ── Colour / URI plumbing ────────────────────────────────────────────
 
-    private static SolidColorBrush ThemeBrushOrNull(string key) =>
-        Application.Current.Resources.TryGetValue(key, out var v) && v is SolidColorBrush b ? b : null!;
-
-    private SolidColorBrush ThemeBrush(string key)
+    /// <summary>Theme-correct brush for a logical role, resolved from the host's
+    /// ActualTheme (NOT from app resources, which don't track a force-set
+    /// window theme). Explicit light/dark hex per role so text always reads.</summary>
+    private SolidColorBrush ThemeBrush(string key) => key switch
     {
-        var b = ThemeBrushOrNull(key);
-        return b ?? SolidBrush("#9AA0AC");
-    }
+        "TextFillColorPrimaryBrush" => SolidBrush(_dark ? "#F2F2F3" : "#1B1B1B"),
+        "TextFillColorSecondaryBrush" => SolidBrush(_dark ? "#B4B4B8" : "#5B5B61"),
+        "CardBackgroundFillColorSecondaryBrush" => SolidBrush(_dark ? "#2B2B30" : "#F6F6F8"),
+        "ControlStrokeColorDefaultBrush" => SolidBrush(_dark ? "#3A3A40" : "#E4E4E7"),
+        "ControlStrokeColorSecondaryBrush" => SolidBrush(_dark ? "#48484F" : "#E0E0E3"),
+        "DividerStrokeColorDefaultBrush" => SolidBrush(_dark ? "#37373C" : "#EAEAEE"),
+        "ControlFillColorSecondaryBrush" => SolidBrush(_dark ? "#34343B" : "#F0F0F3"),
+        _ => SolidBrush(_dark ? "#B4B4B8" : "#5B5B61"),
+    };
 
     private static Uri SafeUri(string url)
     {

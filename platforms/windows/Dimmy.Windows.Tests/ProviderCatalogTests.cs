@@ -47,7 +47,7 @@ public class ProviderCatalogTests
     [InlineData("deepgram", true, false)]   // STT only
     [InlineData("anthropic", false, true)]  // LLM/Recap only
     [InlineData("openrouter", false, true)] // LLM/Recap only
-    [InlineData("together", false, true)]   // LLM/Recap only
+    [InlineData("together", true, true)]    // Together offers STT (parakeet/whisper) + LLM in the Win picker
     [InlineData("custom", true, true)]
     public void Capability_truth_matches_core(string id, bool stt, bool llm)
     {
