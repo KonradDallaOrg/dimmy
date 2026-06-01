@@ -188,7 +188,7 @@ public sealed partial class SettingsWindow
 
         var box = new PasswordBox
         {
-            PlaceholderText = connected ? "Key saved — paste a new one to replace" : "Paste your API key…",
+            PlaceholderText = connected ? "Key saved. Paste a new one to replace." : "Paste your API key…",
             Tag = p.Id,
             VerticalAlignment = VerticalAlignment.Center,
         };
