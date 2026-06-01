@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // Output, LLM enhancement style + provider + paste behaviour. Style
@@ -112,14 +113,99 @@ struct MacOutputPage: View {
             llmModeGroup
             recapModelGroup
 
-            // Per settings-map.md: CLIPBOARD and ADVANCED LLM both
-            // live behind Advanced. Pasteboard is a single toggle
-            // ("Keep in clipboard history") which 95% of users
-            // never change, perfect Advanced fodder.
+            // Per settings-map.md: CLIPBOARD, MEETINGS folder and
+            // ADVANCED LLM all live behind Advanced. Pasteboard is a
+            // single toggle ("Keep in clipboard history") that 95%
+            // of users never change. Meetings folder used to be on
+            // the Debug page on Mac, the checklist puts it here.
             if appState.showAdvanced {
                 pasteboardGroup
+                meetingStorageGroup
                 advancedLlmGroup
             }
+        }
+    }
+
+    // MARK: - Meeting storage directory
+    //
+    // Moved here from MacAdvancedPage so the Output page hosts every
+    // setting that shapes meeting recaps and dictation routing, per
+    // docs/dev/settings-redesign-checklist.md "Meetings folder = A
+    // on Output". The Rust core still owns the directory, this row
+    // just round-trips `meeting_storage_path` through `setConfig`.
+
+    @State private var meetingStorageError: String? = nil
+
+    private var meetingStorageGroup: some View {
+        Group {
+            MacGroupLabel(text: "Meetings storage")
+            MacTile {
+                MacRow(
+                    "Storage folder",
+                    description: meetingStorageDescription,
+                    hint: "Where meeting recordings, transcripts and recaps are saved. Switching folders affects new meetings only.",
+                    hintURL: URL(string: "https://dimmy.app/help/settings-overview"),
+                    showsDivider: meetingStorageError != nil
+                ) {
+                    HStack(spacing: 8) {
+                        Button("Browse...") { pickMeetingFolder() }
+                            .controlSize(.small)
+                            .buttonStyle(.borderedProminent)
+                        Button("Reset") { persistMeetingStoragePath("") }
+                            .controlSize(.small)
+                            .disabled(appState.meetingStoragePath.isEmpty)
+                            .help("Reset to the default location")
+                    }
+                }
+                if let err = meetingStorageError {
+                    MacRow("", description: err, showsDivider: false) { EmptyView() }
+                }
+            }
+        }
+    }
+
+    private var meetingStorageDescription: String {
+        let effective = DimmyCore.shared.meetingsDirURL?.path ?? "-"
+        return appState.meetingStoragePath.isEmpty
+            ? "\(effective), default"
+            : effective
+    }
+
+    private func pickMeetingFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Choose"
+        panel.message = "Choose where to store meeting recordings"
+        if let current = DimmyCore.shared.meetingsDirURL { panel.directoryURL = current }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if !isDirectoryWritable(url.path) {
+            meetingStorageError = "Can't write to '\(url.lastPathComponent)'. Pick a folder you have write access to."
+            return
+        }
+        meetingStorageError = nil
+        persistMeetingStoragePath(url.path)
+    }
+
+    private func persistMeetingStoragePath(_ path: String) {
+        meetingStorageError = nil
+        if DimmyCore.shared.setConfig(["meeting_storage_path": path]) {
+            appState.meetingStoragePath = path
+        }
+    }
+
+    private func isDirectoryWritable(_ dir: String) -> Bool {
+        let fm = FileManager.default
+        do {
+            try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            let probe = (dir as NSString).appendingPathComponent(".dimmy_write_probe")
+            try "".write(toFile: probe, atomically: true, encoding: .utf8)
+            try? fm.removeItem(atPath: probe)
+            return true
+        } catch {
+            return false
         }
     }
 
@@ -299,7 +385,8 @@ struct MacOutputPage: View {
                 MacRow(
                     "Recap model",
                     description: "Auto inherits \(autoResolutionLabel).",
-                    hint: "Used for the meeting recap pipeline and the long-dictation auto-recap. Auto follows your dictation LLM. Pick a flagship Anthropic / Gemini / OpenAI for best recap quality, or run it locally on a Gemma/Phi model, download one under Voice → Local model, then set this app's LLM to local to keep the transcript offline.",
+                    hint: "Picks the model that summarises long dictations and meetings. Auto follows your dictation LLM.",
+                    hintURL: URL(string: "https://dimmy.app/help/use-meeting-recaps"),
                     showsDivider: false
                 ) {
                     Picker("", selection: Binding<String>(
@@ -354,7 +441,8 @@ struct MacOutputPage: View {
                 if recapSubscriptionAvailable {
                     MacRow(
                         "Use Anthropic subscription for recap",
-                        hint: "Routes the recap LLM call through the local `claude` CLI (Pro / Team / Max). Dictation rewrite keeps its own auth method. Recommended, the subscription cost is amortized over the recap's longer inference window.",
+                        hint: "Sends the recap through your local Claude CLI instead of an API key. Dictation rewrite keeps its own auth method.",
+                        hintURL: URL(string: "https://dimmy.app/help/integrations-claude-cli"),
                         showsDivider: recapUseSameKeyToggleShouldShow || recapKeyFieldShouldShow
                     ) {
                         Toggle("", isOn: Binding(
@@ -391,7 +479,8 @@ struct MacOutputPage: View {
                 if recapUseSameKeyToggleShouldShow {
                     MacRow(
                         "Use same key as \(recapProviderTag.capitalized)",
-                        hint: "When you already have a \(recapProviderTag.capitalized) key saved (via STT or LLM), reuse it for recap too. Turn off to enter a dedicated recap key for the same vendor.",
+                        hint: "Reuse the \(recapProviderTag.capitalized) key you already saved. Turn off to enter a dedicated recap key for the same vendor.",
+                        hintURL: URL(string: "https://dimmy.app/help/api-keys"),
                         showsDivider: recapKeyFieldShouldShow || !appState.recapUseSameKey
                     ) {
                         Toggle("", isOn: Binding(
@@ -418,9 +507,8 @@ struct MacOutputPage: View {
                     MacRow(
                         "Recap API key",
                         description: "Encrypted locally.",
-                        hint: !recapUpstreamKeyAvailable
-                            ? "No upstream \(recapProviderTag.capitalized) key found for STT or LLM, so the recap call needs a dedicated one. Stored at ~/.config/dimmy/keys.enc with AES-256-GCM."
-                            : "Used because you turned off key sharing above. Stored at ~/.config/dimmy/keys.enc with AES-256-GCM.",
+                        hint: "Stored encrypted on this device with AES-256. Used only for the recap call.",
+                        hintURL: URL(string: "https://dimmy.app/help/api-keys"),
                         showsDivider: showRecapKeyField
                     ) {
                         if recapKeyAlreadySaved {
@@ -433,8 +521,8 @@ struct MacOutputPage: View {
                             }
                         }
                         Button(recapKeyAlreadySaved
-                               ? (showRecapKeyField ? "Cancel" : "Replace…")
-                               : (showRecapKeyField ? "Cancel" : "Add key…")) {
+                               ? (showRecapKeyField ? "Cancel" : "Replace...")
+                               : (showRecapKeyField ? "Cancel" : "Add key...")) {
                             showRecapKeyField.toggle()
                             if !showRecapKeyField { recapKeyInput = "" }
                         }
@@ -459,7 +547,10 @@ struct MacOutputPage: View {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack(spacing: 4) {
                         Text("Style").font(.system(size: 13))
-                        MacInfoButton(text: "After transcribing, Dimmy rewrites your text with the active style before pasting. \"Off\" skips the LLM call entirely, what you said is what gets pasted.")
+                        MacInfoButton(
+                            text: "An LLM cleans up or reshapes your transcript. Off leaves it exactly as spoken.",
+                            url: URL(string: "https://dimmy.app/help/styles")
+                        )
                     }
                     chipFlow
                 }
@@ -499,7 +590,8 @@ struct MacOutputPage: View {
             MacTile {
                 MacRow(
                     "Mode",
-                    hint: "On device runs the rewrite on a local Gemma / Phi model (download required). Cloud sends the transcript to your chosen LLM vendor, faster and usually higher quality but it leaves the machine."
+                    hint: "Local runs the LLM on your device and stays private. Cloud sends your transcript to the provider you pick.",
+                    hintURL: URL(string: "https://dimmy.app/help/local-llm")
                 ) {
                     Picker("", selection: Binding(
                         get: { appState.llmMode },
@@ -519,7 +611,8 @@ struct MacOutputPage: View {
                 if appState.llmMode == "cloud" {
                     MacRow(
                         "Provider",
-                        hint: "LLM vendor that rewrites the transcript. Anthropic is the only one that supports the Claude Pro subscription path; everyone else uses pay-as-you-go API keys."
+                        hint: "The model you pick sets where your transcript is sent. Free options are marked.",
+                        hintURL: URL(string: "https://dimmy.app/help/cloud-providers")
                     ) {
                         Picker("", selection: llmPresetBinding) {
                             ForEach(LlmPreset.presets) { preset in
@@ -573,9 +666,8 @@ struct MacOutputPage: View {
                                 description: appState.llmAuthMethod == "subscription"
                                     ? "Claude Pro / Team / Max."
                                     : "Direct API key, pay-as-you-go.",
-                                hint: appState.llmAuthMethod == "subscription"
-                                    ? "Routes LLM rewrite via the local `claude` CLI. Slower (about 5-7 s subprocess cold-start per call) but no credit consumed."
-                                    : "Direct Anthropic API call billed per token. Lower latency than the subscription path; you pay for every rewrite.",
+                                hint: "Sends the rewrite through your local Claude CLI instead of an API key. A few seconds slower per call, but no credit is used.",
+                                hintURL: URL(string: "https://dimmy.app/help/integrations-claude-cli"),
                                 showsDivider: appState.llmAuthMethod == "subscription" || sameKeyShouldShow
                             ) {
                                 Picker("", selection: Binding(
@@ -633,7 +725,8 @@ struct MacOutputPage: View {
                         if sameKeyShouldShow {
                             MacRow(
                                 "Use my saved API key for this provider",
-                                hint: "When you already have a key for the LLM's vendor (saved via STT or LLM), reuse it. Turn off to enter a dedicated LLM key for the same vendor.",
+                                hint: "When you already have a key for the LLM's vendor, reuse it. Turn off to enter a dedicated LLM key for the same vendor.",
+                                hintURL: URL(string: "https://dimmy.app/help/api-keys"),
                                 showsDivider: !appState.llmUseSameKey
                             ) {
                                 Toggle("", isOn: Binding(
@@ -652,9 +745,8 @@ struct MacOutputPage: View {
                             MacRow(
                                 "LLM API key",
                                 description: "Encrypted locally.",
-                                hint: sameKeyShouldShow
-                                    ? "Dedicated LLM key, used because the toggle above is off. Stored at ~/.config/dimmy/keys.enc with AES-256-GCM."
-                                    : "STT and LLM use different vendors, so a dedicated LLM key is required. Stored at ~/.config/dimmy/keys.enc with AES-256-GCM.",
+                                hint: "Stored encrypted on this device with AES-256. The provider only ever receives your transcript and this key, nothing else.",
+                                hintURL: URL(string: "https://dimmy.app/help/api-keys"),
                                 showsDivider: showLlmKeyField
                             ) {
                                 if appState.hasLlmKey {
@@ -666,8 +758,8 @@ struct MacOutputPage: View {
                                             .foregroundStyle(.green)
                                     }
                                 }
-                                Button(appState.hasLlmKey ? (showLlmKeyField ? "Cancel" : "Replace…")
-                                                          : (showLlmKeyField ? "Cancel" : "Add key…")) {
+                                Button(appState.hasLlmKey ? (showLlmKeyField ? "Cancel" : "Replace...")
+                                                          : (showLlmKeyField ? "Cancel" : "Add key...")) {
                                     showLlmKeyField.toggle()
                                     if !showLlmKeyField { llmKeyInput = "" }
                                 }
@@ -682,7 +774,8 @@ struct MacOutputPage: View {
                 } else {
                     MacRow(
                         "Local model",
-                        hint: "Runs entirely on this Mac via llama.cpp + Metal. Gemma 4 E4B Q4 is the recommended balance of speed and quality on Apple Silicon; the larger Q8 variant trades RAM for accuracy. Phi-4 Mini is a multilingual fallback.",
+                        hint: "Runs fully offline. Larger models read better but need more memory and time.",
+                        hintURL: URL(string: "https://dimmy.app/help/local-llm"),
                         showsDivider: !localLlmExists || llmDownloadInFlight
                     ) {
                         Picker("", selection: Binding(
@@ -710,7 +803,7 @@ struct MacOutputPage: View {
                     }
 
                     if llmDownloadInFlight {
-                        MacRow("Downloading \(appState.localLlmModel)…", showsDivider: false) {
+                        MacRow("Downloading \(appState.localLlmModel)...", showsDivider: false) {
                             HStack(spacing: 8) {
                                 ProgressView(value: appState.llmModelDownloadProgress)
                                     .frame(width: 160)
@@ -786,7 +879,7 @@ struct MacOutputPage: View {
     /// to refresh `hasLlmKey`.
     private var llmKeyEntryRow: some View {
         MacRow("Paste key", showsDivider: false) {
-            SecureField("sk-…", text: $llmKeyInput)
+            SecureField("sk-...", text: $llmKeyInput)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 240)
                 .onSubmit { saveLlmKey() }
@@ -823,7 +916,7 @@ struct MacOutputPage: View {
     /// flips → green ✓ surfaces.
     private var recapKeyEntryRow: some View {
         MacRow("Paste key", showsDivider: false) {
-            SecureField("sk-…", text: $recapKeyInput)
+            SecureField("sk-...", text: $recapKeyInput)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 240)
                 .onSubmit { saveRecapKeyAndRefresh() }
@@ -836,7 +929,7 @@ struct MacOutputPage: View {
 
     /// Wrap `saveRecapProviderKey` with the same close-the-field +
     /// refresh-AppState dance that `saveLlmKey` / `saveApiKey` do, so
-    /// the row collapses back to the "Saved" + Replace… state after a
+    /// the row collapses back to the "Saved" + Replace... state after a
     /// successful save (without this the SecureField stayed open with
     /// the cleared buffer and looked like a no-op to the user).
     private func saveRecapKeyAndRefresh() {
@@ -856,7 +949,8 @@ struct MacOutputPage: View {
             MacTile {
                 MacRow(
                     "Keep in clipboard history",
-                    hint: "Leaves the transcription on the system clipboard after auto-paste so you can paste it again later in any app.",
+                    hint: "Leaves the transcription on the system clipboard after auto-paste so you can paste it again later.",
+                    hintURL: URL(string: "https://dimmy.app/help/settings-overview"),
                     showsDivider: false
                 ) {
                     Toggle("", isOn: Binding(
@@ -881,7 +975,8 @@ struct MacOutputPage: View {
             MacTile {
                 MacRow(
                     "Tone",
-                    hint: "Adjusts how formal or casual the LLM rewrite sounds. Applied on top of the active style, e.g. Professional + Casual = approachable email."
+                    hint: "Adjusts how formal or casual the LLM rewrite sounds. Applied on top of the active style.",
+                    hintURL: URL(string: "https://dimmy.app/help/tones")
                 ) {
                     Picker("", selection: Binding(
                         get: { appState.llmTone },
@@ -900,7 +995,8 @@ struct MacOutputPage: View {
 
                 MacRow(
                     "Translate output to",
-                    hint: "Translates the LLM rewrite to this language. The pill's scroll wheel changes the same setting, handy mid-dictation."
+                    hint: "Translates the LLM rewrite to this language. The pill's scroll wheel changes the same setting.",
+                    hintURL: URL(string: "https://dimmy.app/help/use-multilingual")
                 ) {
                     Picker("", selection: Binding(
                         get: { appState.llmTranslateTo },
@@ -925,7 +1021,10 @@ struct MacOutputPage: View {
                     HStack(spacing: 4) {
                         Text("Custom prompt")
                             .font(.system(size: 13))
-                        MacInfoButton(text: "Free-form instruction prepended to the LLM prompt when the active style is Custom. Goes through verbatim, use it to set persona, audience, or strict formatting rules.")
+                        MacInfoButton(
+                            text: "Free-form instruction prepended to the LLM prompt when the active style is Custom. Use it to set persona, audience, or strict formatting rules.",
+                            url: URL(string: "https://dimmy.app/help/custom-prompts")
+                        )
                     }
                     TextEditor(text: Binding(
                         get: { appState.llmCustomPrompt },

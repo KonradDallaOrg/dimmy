@@ -248,7 +248,7 @@ struct MacInfoButton: View {
                     .foregroundStyle(Color.primary)
                     .fixedSize(horizontal: false, vertical: true)
                 if let url {
-                    Link(urlLabel ?? "Learn more", destination: url)
+                    Link(urlLabel ?? "Open full guide \u{203A}", destination: url)
                         .font(.system(size: 12))
                 }
             }

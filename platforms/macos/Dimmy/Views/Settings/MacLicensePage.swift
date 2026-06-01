@@ -103,7 +103,7 @@ struct MacLicensePage: View {
 
             HStack(spacing: 8) {
                 if isManageableTier {
-                    Button(manageBusy ? "Opening…" : "Manage subscription") {
+                    Button(manageBusy ? "Opening..." : "Manage subscription") {
                         Task { await openBillingPortal() }
                     }
                     .buttonStyle(.borderedProminent)
@@ -317,7 +317,7 @@ struct MacLicensePage: View {
                     }
                 }
                 if showPortalHint {
-                    MacRow("Need to downgrade, cancel, or update payment? Use the “Manage subscription” button above, it opens the secure Stripe billing portal.",
+                    MacRow("Need to downgrade, cancel, or update payment? Use the "Manage subscription" button above, it opens the secure Stripe billing portal.",
                            description: "",
                            showsDivider: false) {
                         EmptyView()
@@ -479,7 +479,7 @@ struct MacLicensePage: View {
                 }
                 return
             }
-            buyStatus = "Switching plan to \(tier) (proration applies)…"
+            buyStatus = "Switching plan to \(tier) (proration applies)..."
             let pc = await DimmyCore.shared.licensePlanChange(newTier: tier)
             guard pc.ok else {
                 buyIsError = true
@@ -536,7 +536,7 @@ struct MacLicensePage: View {
         // Persist for next time.
         await MainActor.run { appState.buyerEmail = email }
 
-        buyStatus = "Opening Stripe checkout for \(tier)…"
+        buyStatus = "Opening Stripe checkout for \(tier)..."
         let r = await DimmyCore.shared.licenseCheckoutUrl(tier: tier, email: email)
         if !r.ok {
             // 409 path → license already exists. Offer "send magic link"
@@ -599,7 +599,7 @@ struct MacLicensePage: View {
                         TextField("you@example.com", text: $trialEmail)
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 220)
-                        Button(trialBusy ? "Sending…" : "Activate") {
+                        Button(trialBusy ? "Sending..." : "Activate") {
                             Task { await sendMagicLink() }
                         }
                         .keyboardShortcut(.defaultAction)
@@ -786,7 +786,7 @@ struct MacLicensePage: View {
         }
         trialBusy = true
         defer { trialBusy = false }
-        trialStatus = "Requesting magic link…"
+        trialStatus = "Requesting magic link..."
         trialIsError = false
         let r = await DimmyCore.shared.licenseRequestTrial(email: email)
         if !r.ok {
@@ -799,7 +799,7 @@ struct MacLicensePage: View {
             return
         }
         if link.hasPrefix("dimmy://") {
-            trialStatus = "Activating via magic link…"
+            trialStatus = "Activating via magic link..."
             if let url = URL(string: link) { NSWorkspace.shared.open(url) }
             // Poll status briefly, URL scheme dispatch redeems async.
             for _ in 0..<20 {

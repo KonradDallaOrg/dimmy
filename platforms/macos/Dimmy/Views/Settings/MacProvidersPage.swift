@@ -90,13 +90,27 @@ struct MacProvidersPage: View {
         }
     }
 
+    /// Real brand mark on a white squircle tile. Falls back to the
+    /// 2-letter monogram only when the asset is missing (should not
+    /// happen in shipping builds, all 10 imagesets exist under
+    /// Assets.xcassets/Providers/).
     private func logoTile(_ p: ProviderInfo) -> some View {
         RoundedRectangle(cornerRadius: 6, style: .continuous)
             .fill(Color.white)
             .overlay(
-                Text(p.mark)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color(hex: p.accentHex) ?? .accentColor)
+                Group {
+                    if NSImage(named: p.id) != nil {
+                        Image(p.id)
+                            .renderingMode(.original)
+                            .resizable()
+                            .scaledToFit()
+                            .padding(5)
+                    } else {
+                        Text(p.mark)
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color(hex: p.accentHex) ?? .accentColor)
+                    }
+                }
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)

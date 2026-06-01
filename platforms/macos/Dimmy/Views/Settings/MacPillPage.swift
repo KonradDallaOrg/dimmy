@@ -31,7 +31,8 @@ struct MacPillPage: View {
             MacTile {
                 MacRow(
                     "Show in Dock",
-                    hint: "When off, Dimmy disappears from the Dock and Cmd-Tab. The global hotkey still works; the pill and menu-bar icon remain available."
+                    hint: "When off, Dimmy disappears from the Dock and Cmd-Tab. The global hotkey still works.",
+                    hintURL: URL(string: "https://dimmy.app/help/tray-menu")
                 ) {
                     Toggle("", isOn: $appState.showInDock)
                         .toggleStyle(.switch)
@@ -39,7 +40,8 @@ struct MacPillPage: View {
                 }
                 MacRow(
                     "Show in menu bar",
-                    hint: "When off, the menu-bar icon at the top-right disappears. At least one of Dock or menu bar must stay on so you keep a way to open Settings.",
+                    hint: "When off, the menu-bar icon at the top-right disappears. At least one of Dock or menu bar must stay on.",
+                    hintURL: URL(string: "https://dimmy.app/help/tray-menu"),
                     showsDivider: false
                 ) {
                     Toggle("", isOn: $appState.showInMenuBar)
@@ -241,7 +243,8 @@ struct MacPillPage: View {
             MacTile {
                 MacRow(
                     "Default position",
-                    hint: "Where the pill appears when Dimmy launches or after Reset position. You can always drag it to a custom spot, the dragged location overrides this default until you reset."
+                    hint: "Where the pill appears when Dimmy launches or after Reset position. You can always drag it to a custom spot.",
+                    hintURL: URL(string: "https://dimmy.app/help/pill-position")
                 ) {
                     MacPositionPicker(
                         selection: Binding(
@@ -283,7 +286,8 @@ struct MacPillPage: View {
             MacTile {
                 MacRow(
                     "Border style",
-                    hint: "Color of the pill outline when idle. Recording, transcribing, done and error states use fixed status colors regardless of this choice."
+                    hint: "Color of the pill outline when idle. Recording, transcribing, done and error states use fixed status colors.",
+                    hintURL: URL(string: "https://dimmy.app/help/pill-overview")
                 ) {
                     Picker("", selection: Binding(
                         get: { appState.borderStyle },
@@ -305,7 +309,8 @@ struct MacPillPage: View {
 
                 MacRow(
                     "Waveform style",
-                    hint: "How sound is visualised inside the pill while recording. Bars are densest, Dots are subtlest, Line is somewhere in between.",
+                    hint: "How sound is visualised inside the pill while recording. Bars are densest, Dots are subtlest.",
+                    hintURL: URL(string: "https://dimmy.app/help/pill-states"),
                     showsDivider: false
                 ) {
                     Picker("", selection: Binding(

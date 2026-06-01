@@ -4,12 +4,12 @@ import AVFoundation
 
 // MARK: - MeetingDoneView
 //
-// Done state — shows a finished meeting (just-stopped OR a sidebar
+// Done state, shows a finished meeting (just-stopped OR a sidebar
 // selection of a past meeting). Mirror of Win MeetingWindow.xaml
 // DonePanel: a title+meta header card, an audio playback card with a
 // click-to-seek waveform (dual-band mirrored stereo when per-track
-// WAVs are present), then a 3-tab strip — "Recap | Transcript | Notes"
-// — with the action toolbar (regen transcript, regen recap, copy,
+// WAVs are present), then a 3-tab strip, "Recap | Transcript | Notes"
+//, with the action toolbar (regen transcript, regen recap, copy,
 // send-to-notion, open-folder) pinned to its right.
 //
 //   • Recap     : TL;DR accent card + structural section cards
@@ -21,7 +21,7 @@ import AVFoundation
 //                 focus-loss / tab-switch / view-disappear.
 //
 // Markdown rendering uses Apple's native `AttributedString.markdown`
-// initialiser — no extra dependency, and it's the same vocabulary
+// initialiser, no extra dependency, and it's the same vocabulary
 // users see across macOS apps.
 
 struct MeetingDoneView: View {
@@ -58,11 +58,11 @@ struct MeetingDoneView: View {
         .onDisappear { vm.saveNotes() }
     }
 
-    // MARK: Header (title + meta only — toolbar moved next to tab strip)
+    // MARK: Header (title + meta only, toolbar moved next to tab strip)
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 2) {
-            // Click-to-edit title — mirror of Win's
+            // Click-to-edit title, mirror of Win's
             // DoneTitle_Tapped + DoneTitleEdit (Enter commits, Esc
             // cancels, focus-out commits). Persisted to meta.json
             // via MeetingViewModel.renameSelectedMeeting.
@@ -109,7 +109,7 @@ struct MeetingDoneView: View {
 
     // MARK: Tab strip + action toolbar
     //
-    // Mirror of Win MeetingWindow.xaml:409-475 — tab labels on the
+    // Mirror of Win MeetingWindow.xaml:409-475, tab labels on the
     // left with a 2pt accent underline on the selected entry, action
     // icons on the right always visible regardless of which tab is
     // active. Selected tab = SemiBold + full opacity + accent
@@ -163,7 +163,7 @@ struct MeetingDoneView: View {
     private func tabLabel(_ tab: MeetingViewModel.DoneTab) -> some View {
         let selected = vm.doneSelectedTab == tab
         return Button {
-            // Save any in-flight notes edit before switching away — the
+            // Save any in-flight notes edit before switching away, the
             // TextEditor's focus loss already triggers a save, but a
             // tab click before focus change wouldn't.
             if vm.doneSelectedTab == .notes && tab != .notes { vm.saveNotes() }
@@ -214,7 +214,7 @@ struct MeetingDoneView: View {
                 cardIfPresent(key: "NEXT_STEPS", title: "Next steps", systemImage: "arrow.right.circle", tint: .accentColor)
                 cardIfPresent(key: "FOLLOWUPS", title: "Follow-ups", systemImage: "envelope.open", tint: .secondary)
                 if vm.doneSections.isEmpty {
-                    Text("No recap yet — click the (Re)generate recap button to run the LLM, or wait if it's still processing.")
+                    Text("No recap yet, click the (Re)generate recap button to run the LLM, or wait if it's still processing.")
                         .font(.system(size: 13))
                         .foregroundStyle(Color.macTextSecondary)
                         .padding(14)
@@ -245,13 +245,13 @@ struct MeetingDoneView: View {
 
     private var notesContent: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Local notes — saved to notes.md in the meeting folder. Markdown supported.")
+            Text("Local notes, saved to notes.md in the meeting folder. Markdown supported.")
                 .font(.system(size: 11))
                 .foregroundStyle(Color.macTextSecondary)
                 .padding(.horizontal, 4)
             ZStack(alignment: .topLeading) {
                 if vm.doneNotes.isEmpty {
-                    Text("Write notes about this meeting…")
+                    Text("Write notes about this meeting...")
                         .font(.system(size: 13))
                         .foregroundStyle(Color.macTextSecondary.opacity(0.7))
                         .padding(.horizontal, 18)
@@ -290,18 +290,18 @@ struct MeetingDoneView: View {
         }
     }
 
-    /// "Recap with Claude Desktop" — opens `claude://claude.ai/new?q=...`
+    /// "Recap with Claude Desktop", opens `claude://claude.ai/new?q=...`
     /// with the structured-recap prompt. Mirror of the Win
     /// `RecapWithClaude_Click` handler in MeetingWindow.xaml.cs. Visible
     /// only when the MCP extension is installed. Falls back to copying
     /// the prompt to the pasteboard if the deeplink fails (e.g. Claude
     /// Desktop's URI handler not yet registered after a fresh install).
     ///
-    /// Icon: bundled `ClaudeMark.imageset` — the canonical orange
+    /// Icon: bundled `ClaudeMark.imageset`, the canonical orange
     /// Anthropic burst (#D97757), pulled from the official Anthropic
     /// brand mark. At 16-px toolbar size the bare burst reads cleaner
     /// than the full Mac AppIcon (which is the burst on a rounded
-    /// squircle background). No SF-Symbol fallback — the brand mark
+    /// squircle background). No SF-Symbol fallback, the brand mark
     /// is committed to the app bundle, always available.
     private var recapWithClaudeButton: some View {
         ToolbarIconButton(help: "Recap with Claude Desktop (uses MCP)") {
@@ -319,7 +319,7 @@ struct MeetingDoneView: View {
         let meetingId = (dir as NSString).lastPathComponent
         guard !meetingId.isEmpty else { return }
 
-        // Tight prompt — Claude consults `dimmy_get_recap_template` for
+        // Tight prompt, Claude consults `dimmy_get_recap_template` for
         // the structure, so we don't have to inline the entire format
         // here. Keep VERBATIM in sync with the Win counterpart in
         // `MeetingWindow.xaml.cs::RecapWithClaudeDesktop_Click`.
@@ -484,7 +484,7 @@ struct MeetingDoneView: View {
     private func cardIfPresent(key: String, title: String, systemImage: String, tint: Color) -> some View {
         if let body = vm.doneSections[key],
            !body.isEmpty,
-           !(body == "—" || body == "-") {
+           !(body == ", " || body == "-") {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
                     Image(systemName: systemImage)
@@ -517,7 +517,7 @@ struct MeetingDoneView: View {
 
     /// Render a multi-line markdown body. Apple's
     /// `AttributedString.markdown` only handles inline syntax (bold,
-    /// italic, code, links) — block-level constructs (bullets, numbered
+    /// italic, code, links), block-level constructs (bullets, numbered
     /// lists, sub-headings, block quotes) come out as literal text.
     /// We split on lines, classify each, and render each block with the
     /// right SwiftUI shape. Inline syntax inside the block content
@@ -539,7 +539,7 @@ struct MeetingDoneView: View {
         case .blank:
             Color.clear.frame(height: 4)
         case .heading(let level, let text):
-            // Levels 1–4. Level 4 collapses into the ### size — past the
+            // Levels 1-4. Level 4 collapses into the ### size, past the
             // recap structural headings (level 2) the LLM rarely needs
             // a fifth tier.
             let size: CGFloat = {
@@ -628,7 +628,7 @@ struct MeetingDoneView: View {
 // emits: ATX headings (`# `..`#### `), block quotes, dash/star bullets,
 // `N. ` numbered lists, fenced code blocks, blank-line spacers, and a
 // "paragraph" fallback for everything else. Tables and HTML are NOT
-// supported — the recap prompt doesn't ask the LLM to emit them, but
+// supported, the recap prompt doesn't ask the LLM to emit them, but
 // if it does the line lands in `paragraph` and renders as inline text.
 
 enum MarkdownBlock: Equatable {
@@ -706,7 +706,7 @@ enum MarkdownBlockParser {
         return nil
     }
 
-    /// `1. item` / `12. item` → (n, "item"). Caps at three digits —
+    /// `1. item` / `12. item` → (n, "item"). Caps at three digits , 
     /// meeting recaps don't have 1000-item lists, so anything longer is
     /// almost certainly a sentence starting with digits, not a marker.
     private static func numberedBody(_ s: String) -> (n: Int, body: String)? {
@@ -729,7 +729,7 @@ enum MarkdownBlockParser {
 
 // MARK: - ToolbarIconButton
 //
-// Borderless icon button with a soft hover background — the macOS
+// Borderless icon button with a soft hover background, the macOS
 // Mail / Messages toolbar style. Default state is flat (icon only) so
 // the header stays clean; on hover a subtle rounded fill appears,
 // giving the click affordance without the heavy default Bordered pill.

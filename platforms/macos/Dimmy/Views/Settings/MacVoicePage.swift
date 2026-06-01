@@ -52,7 +52,7 @@ struct MacVoicePage: View {
     }
 
     /// User-facing label for the call-detect exclusion list. Maps the
-    /// canonical lowercase id ("teams", "zoom", …) back to the brand
+    /// canonical lowercase id ("teams", "zoom", ...) back to the brand
     /// name. Mirror of CallNudgeWindowController.appDisplayNames.
     private static func exclusionDisplayName(for app: String) -> String {
         switch app.lowercased() {
@@ -181,7 +181,7 @@ struct MacVoicePage: View {
             newDictWord = ""
             dictAddError = nil
         case .alreadyPresent:
-            dictAddError = "“\(trimmed)” is already in the dictionary"
+            dictAddError = ""\(trimmed)" is already in the dictionary"
             newDictWord = ""
         case .error:
             dictAddError = "Could not add, check log"
@@ -203,7 +203,8 @@ struct MacVoicePage: View {
             MacTile {
                 MacRow(
                     "Mode",
-                    hint: "On device keeps audio offline (Whisper or Parakeet). Cloud sends the recording to your chosen provider, usually faster and more accurate but it leaves the machine."
+                    hint: "Local is fully private and works offline. Cloud sends your audio to the provider you pick and is often more accurate.",
+                    hintURL: URL(string: "https://dimmy.app/help/local-mode")
                 ) {
                     Picker("", selection: Binding(
                         get: { appState.sttMode },
@@ -223,7 +224,8 @@ struct MacVoicePage: View {
                 if appState.sttMode == "cloud" {
                     MacRow(
                         "Provider",
-                        hint: "Cloud speech-to-text vendor used for transcription. ≈250 ms typical latency on Groq Whisper Turbo; other providers vary."
+                        hint: "The model you pick sets where your audio is sent. Free options are marked.",
+                        hintURL: URL(string: "https://dimmy.app/help/cloud-providers")
                     ) {
                         Picker("", selection: sttPresetBinding) {
                             ForEach(SttPreset.presets) { preset in
@@ -250,7 +252,8 @@ struct MacVoicePage: View {
                     MacRow(
                         "API key",
                         description: "Encrypted locally.",
-                        hint: "Stored at ~/.config/dimmy/keys.enc with AES-256-GCM. The key never leaves this Mac and is never written to config.json.",
+                        hint: "Stored encrypted on this device with AES-256. The provider only ever receives your audio and this key, nothing else.",
+                        hintURL: URL(string: "https://dimmy.app/help/api-keys"),
                         showsDivider: showKeyField
                     ) {
                         if appState.hasKey {
@@ -262,8 +265,8 @@ struct MacVoicePage: View {
                                     .foregroundStyle(.green)
                             }
                         }
-                        Button(appState.hasKey ? (showKeyField ? "Cancel" : "Replace…")
-                                               : (showKeyField ? "Cancel" : "Add key…")) {
+                        Button(appState.hasKey ? (showKeyField ? "Cancel" : "Replace...")
+                                               : (showKeyField ? "Cancel" : "Add key...")) {
                             showKeyField.toggle()
                             if !showKeyField { apiKeyInput = "" }
                         }
@@ -276,7 +279,8 @@ struct MacVoicePage: View {
                 } else {
                     MacRow(
                         "Local model",
-                        hint: "Whisper.cpp sizes run entirely offline on CPU/Metal. Parakeet TDT v3 is faster (Apple Neural Engine, 100-300× real-time) and EU-language friendly but is a one-time about 466 MB download.",
+                        hint: "Whisper sizes run fully offline. Parakeet TDT v3 is faster and strong on European languages, but it downloads once at about 2.5 GB.",
+                        hintURL: URL(string: "https://dimmy.app/help/whisper-models"),
                         showsDivider: !localModelReady || downloadInFlight
                     ) {
                         Picker("", selection: localModelPickerBinding) {
@@ -297,8 +301,8 @@ struct MacVoicePage: View {
                                 ? appState.parakeetDownloadProgress
                                 : appState.modelDownloadProgress,
                             label: localBackendIsParakeet
-                                ? "Downloading Parakeet CoreML bundle (about 466 MB)…"
-                                : "Downloading \(appState.localModel)…"
+                                ? "Downloading Parakeet CoreML bundle (about 466 MB)..."
+                                : "Downloading \(appState.localModel)..."
                         )
                     } else if !localModelReady {
                         MacRow(
@@ -320,7 +324,8 @@ struct MacVoicePage: View {
 
                 MacRow(
                     "Language",
-                    hint: "What the speech-to-text engine assumes you're speaking. Use the pill's scroll wheel, or Output then Translate, to convert to another language instead of changing this picker."
+                    hint: "Tells the speech engine what to expect. To translate into another language, use the pill's scroll wheel instead.",
+                    hintURL: URL(string: "https://dimmy.app/help/language")
                 ) {
                     Picker("", selection: Binding(
                         get: { appState.selectedLanguage },
@@ -343,7 +348,8 @@ struct MacVoicePage: View {
                 // / live-captions stay behind Advanced.
                 MacRow(
                     "Input device",
-                    hint: "Microphone Dimmy listens to. \"System default\" follows the macOS sound preference; pick a specific device to pin to it even if the default changes.",
+                    hint: "System audio loopback (used for meetings) always records from your default playback device, whatever you pick here.",
+                    hintURL: URL(string: "https://dimmy.app/help/audio-input"),
                     showsDivider: false
                 ) {
                     if appState.devices.isEmpty {
@@ -501,7 +507,7 @@ struct MacVoicePage: View {
     /// to the Rust core, then re-reads the config so `hasKey` flips.
     private var apiKeyEntryRow: some View {
         MacRow("Paste key", showsDivider: false) {
-            SecureField("sk-…", text: $apiKeyInput)
+            SecureField("sk-...", text: $apiKeyInput)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 240)
                 .onSubmit { saveApiKey() }
@@ -536,7 +542,8 @@ struct MacVoicePage: View {
                 MacRow(
                     "Microphone volume",
                     description: "50% default.",
-                    hint: "Software gain applied before transcription, on top of macOS' own input level. Higher values amplify quiet speakers but also any background noise.",
+                    hint: "Raises your input level so soft speech is picked up. Leave it low if your mic is already loud.",
+                    hintURL: URL(string: "https://dimmy.app/help/audio-input"),
                     showsDivider: false
                 ) {
                     // Slider runs over the same Rust-validated range
@@ -575,7 +582,8 @@ struct MacVoicePage: View {
             MacTile {
                 MacRow(
                     "Preprocessing",
-                    hint: "Cleans the raw mic signal before transcription: a high-pass filter removes rumble, voice-activity detection trims long silences, and automatic gain control evens out volume. Turn off only when debugging audio issues."
+                    hint: "Runs a high pass filter, voice activity detection, and automatic gain control. Leave it on unless you are debugging audio.",
+                    hintURL: URL(string: "https://dimmy.app/help/audio-input")
                 ) {
                     Toggle("", isOn: Binding(
                         get: { appState.preprocessingEnabled },
@@ -590,7 +598,8 @@ struct MacVoicePage: View {
 
                 MacRow(
                     "Remove filler words",
-                    hint: "Strips um, uh, basically, cioè etc. across English, Italian, Spanish, French, German and Portuguese before the rewrite step sees the transcript.",
+                    hint: "Removes common filler words in 6 languages (including Italian 'cioè', 'ecc.') after transcription.",
+                    hintURL: URL(string: "https://dimmy.app/help/filler-removal"),
                     showsDivider: appState.showAdvanced
                 ) {
                     Toggle("", isOn: Binding(
@@ -608,7 +617,7 @@ struct MacVoicePage: View {
                     MacRow(
                         "Chunk streaming",
                         description: "Parakeet local backend only.",
-                        hint: "Transcribes in 5 s windows during recording so the final paste lands about 700 ms after release instead of waiting for the full batch. Requires the local STT backend set to Parakeet.",
+                        hint: "Transcribes while you speak, so the final text lands about 700 ms after you release the key instead of waiting for the whole clip. Needs the Parakeet local backend.",
                         showsDivider: appState.chunkStreamingEnabled
                             && appState.localSttBackend == "parakeet"
                     ) {
@@ -632,7 +641,7 @@ struct MacVoicePage: View {
                         && appState.localSttBackend == "parakeet" {
                         MacRow(
                             "Live captions",
-                            hint: "Floating subtitle window below the pill while chunked streaming is active. Turn off to keep the speed-up without on-screen captions.",
+                            hint: "Shows a floating caption while chunk streaming is on. Turn it off to keep the speed without showing text on screen.",
                             showsDivider: true
                         ) {
                             Toggle("", isOn: Binding(

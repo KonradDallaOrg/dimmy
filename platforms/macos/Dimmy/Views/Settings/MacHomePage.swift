@@ -177,7 +177,7 @@ struct MacHomePage: View {
                 if micTestRunning {
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.small).scaleEffect(0.7)
-                        Text("Testing…")
+                        Text("Testing...")
                     }
                 } else {
                     Label("Test microphone", systemImage: "mic.fill")
@@ -187,7 +187,7 @@ struct MacHomePage: View {
             .controlSize(.regular)
             .disabled(micTestRunning)
 
-            Button("Change shortcut…") { onTabChange(.shortcut) }
+            Button("Change shortcut...") { onTabChange(.shortcut) }
                 .controlSize(.regular)
 
             if let result = micTestResult {

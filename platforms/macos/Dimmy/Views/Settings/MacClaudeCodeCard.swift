@@ -218,7 +218,7 @@ struct MacClaudeCodeCard: View {
 
     private func testConnection() {
         testRunning = true
-        statusMessage = "Sending ping…"
+        statusMessage = "Sending ping..."
         DispatchQueue.global(qos: .userInitiated).async {
             let result = DimmyCore.shared.pingClaudeCode()
             DispatchQueue.main.async {

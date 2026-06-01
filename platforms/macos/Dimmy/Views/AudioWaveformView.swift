@@ -49,7 +49,7 @@ final class WaveformSamples: ObservableObject {
         let duration: Double
     }
 
-    /// Pure decode — no shared state, safe to call from a background
+    /// Pure decode, no shared state, safe to call from a background
     /// thread. Marked `nonisolated` so the @MainActor on the enclosing
     /// class doesn't require us to bounce off the main thread.
     nonisolated private static func decode(url: URL) -> Result<Payload, Error> {
@@ -100,7 +100,7 @@ final class WaveformSamples: ObservableObject {
                 bins[b] = peak
             }
 
-            // Normalise to 0-1 — the file's loudest peak becomes 1.0
+            // Normalise to 0-1, the file's loudest peak becomes 1.0
             // so a quiet-but-clear recording reads visually the same
             // as a loud one. Whisper-grade denoised audio typically
             // peaks around 0.3 absolute, would otherwise look flat.
@@ -193,7 +193,7 @@ struct AudioWaveformView: View {
         } else if samples.bins.isEmpty {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small).scaleEffect(0.7)
-                Text("Loading waveform…")
+                Text("Loading waveform...")
                     .font(.system(size: 11))
                     .foregroundStyle(Color.macTextSecondary)
             }

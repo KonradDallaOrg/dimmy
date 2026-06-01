@@ -80,7 +80,7 @@ struct MeetingSidebar: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 11))
                 .foregroundStyle(Color.macTextSecondary)
-            TextField("Search past meetings…", text: Binding(
+            TextField("Search past meetings...", text: Binding(
                 get: { vm.historySearch },
                 set: { newValue in
                     vm.historySearch = newValue

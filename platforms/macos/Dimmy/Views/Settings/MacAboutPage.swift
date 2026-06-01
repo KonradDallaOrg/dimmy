@@ -33,7 +33,7 @@ struct MacAboutPage: View {
                     Button {
                         updates.checkForUpdatesNow()
                     } label: {
-                        Label("Check for updates…", systemImage: "arrow.down.circle.fill")
+                        Label("Check for updates...", systemImage: "arrow.down.circle.fill")
                     }
                     .buttonStyle(.borderedProminent)
 
@@ -87,7 +87,8 @@ struct MacAboutPage: View {
                 }
                 MacRow(
                     "Update channel",
-                    hint: "Stable only is the safer default. Prerelease also offers staging builds with new features earlier, expect occasional regressions.",
+                    hint: "Stable only is the safer default. Prerelease also offers staging builds with new features earlier.",
+                    hintURL: URL(string: "https://dimmy.app/help/about-and-updates"),
                     showsDivider: false
                 ) {
                     Picker("", selection: $updates.channel) {

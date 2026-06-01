@@ -25,7 +25,8 @@ struct MacPrivacyPage: View {
             .padding(.bottom, 8)
 
             telemetryGroup
-            audioRetentionGroup
+            // Audio retention moved to the Recordings page where the
+            // saved audio actually plays back (see HistorySettingsView).
             feedbackGroup
             resourcesGroup
 
@@ -112,9 +113,8 @@ struct MacPrivacyPage: View {
                 MacRow(
                     "Send anonymous usage data",
                     description: "No content, no identifiers.",
-                    hint: "Events like \"app started\", \"transcription completed in 2.3 s\", \"cloud provider: groq\". Never the transcribed text, your microphone name, file paths, or your username.",
-                    hintURL: URL(string: "https://dimmy.app/privacy#data"),
-                    hintURLLabel: "What we collect ›"
+                    hint: "Events like 'app started', 'transcription completed in 2.3 s', 'cloud provider: groq'. Never the transcribed text, your microphone name, file paths, or your username.",
+                    hintURL: URL(string: "https://dimmy.app/help/telemetry")
                 ) {
                     Toggle("", isOn: Binding(
                         get: { DimmyCore.shared.telemetryEnabled },
@@ -127,8 +127,7 @@ struct MacPrivacyPage: View {
                     "Send crash reports",
                     description: "Stack trace only.",
                     hint: "If Dimmy crashes, sends a stack trace via Sentry. No environment variables, no paths containing your username, no transcript content.",
-                    hintURL: URL(string: "https://dimmy.app/privacy"),
-                    hintURLLabel: "Privacy policy ›",
+                    hintURL: URL(string: "https://dimmy.app/help/telemetry"),
                     showsDivider: false
                 ) {
                     Toggle("", isOn: Binding(
@@ -153,6 +152,7 @@ struct MacPrivacyPage: View {
                     "Local ID",
                     description: "Random, generated on first launch.",
                     hint: "Anonymous identifier used to group telemetry events from the same install. Resetting takes effect on the next event and creates a fresh, unlinked ID.",
+                    hintURL: URL(string: "https://dimmy.app/help/telemetry"),
                     showsDivider: false
                 ) {
                     Text(anonymousIdText)

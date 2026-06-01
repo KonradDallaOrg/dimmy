@@ -13,7 +13,13 @@ struct MacShortcutPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             hotkeyGroup
-            dictHotkeyGroup
+            // Add-to-dictionary shortcut is power-user fodder per
+            // settings-redesign-checklist.md ("Add-to-dictionary
+            // shortcut = A"). Gate behind Advanced so the Simple
+            // Shortcut page stays focused on the activation hotkey.
+            if appState.showAdvanced {
+                dictHotkeyGroup
+            }
             behaviorGroup
         }
         .sheet(isPresented: $showDictRecorder) {
@@ -50,8 +56,9 @@ struct MacShortcutPage: View {
             MacTile {
                 MacRow(
                     "Activation hotkey",
-                    description: "Press Change… to capture a new combo.",
-                    hint: "The global keyboard shortcut that starts (and, in toggle mode, stops) recording. Captured combos require at least one modifier, plain letters would conflict with normal typing.",
+                    description: "Press Change... to capture a new combo.",
+                    hint: "Press the keys you want, then release to confirm. This is the shortcut you press to dictate.",
+                    hintURL: URL(string: "https://dimmy.app/help/hotkey-change"),
                     icon: "keyboard.fill",
                     iconBackground: Color(red: 0.04, green: 0.52, blue: 1.00)
                 ) {
@@ -60,13 +67,14 @@ struct MacShortcutPage: View {
                             MacKeycap(glyph: glyph)
                         }
                     }
-                    Button("Change…") { showRecorder = true }
+                    Button("Change...") { showRecorder = true }
                         .controlSize(.small)
                 }
 
                 MacRow(
                     "Behavior",
-                    hint: "Push-to-talk records while the hotkey is held, release to transcribe. Toggle starts on the first press and stops on the next press; you can let go in between.",
+                    hint: "Push-to-Talk records only while you hold the keys. Toggle starts on one press and stops on the next.",
+                    hintURL: URL(string: "https://dimmy.app/help/hotkey-modes"),
                     showsDivider: false
                 ) {
                     Picker("", selection: Binding(
@@ -94,7 +102,8 @@ struct MacShortcutPage: View {
                 MacRow(
                     "Add to dictionary",
                     description: "Select text in any app, then press the combo.",
-                    hint: "Adds the selected word to your custom dictionary so Dimmy biases future transcriptions toward it. macOS Services menu has the same action, right-click any selection.",
+                    hint: "Select text in any app and press these keys to add it to your custom dictionary. Press the keys here, then release to confirm.",
+                    hintURL: URL(string: "https://dimmy.app/help/hotkey-change"),
                     icon: "text.badge.plus",
                     iconBackground: Color(red: 0.40, green: 0.73, blue: 0.42),
                     showsDivider: false
@@ -104,7 +113,7 @@ struct MacShortcutPage: View {
                             MacKeycap(glyph: glyph)
                         }
                     }
-                    Button("Change…") { showDictRecorder = true }
+                    Button("Change...") { showDictRecorder = true }
                         .controlSize(.small)
                 }
             }
@@ -142,7 +151,7 @@ struct MacShortcutPage: View {
                 .foregroundStyle(.red)
                 .font(.system(size: 12, weight: .medium))
         case .uninstalled:
-            Label("Initialising…", systemImage: "hourglass")
+            Label("Initialising...", systemImage: "hourglass")
                 .foregroundStyle(.gray)
                 .font(.system(size: 12, weight: .medium))
         }
@@ -198,7 +207,7 @@ private struct DictHotkeyRecorderSheet: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.orange)
             } else {
-                Text("Listening…")
+                Text("Listening...")
                     .font(.system(size: 11))
                     .foregroundStyle(Color.macTextSecondary)
             }

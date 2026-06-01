@@ -14,7 +14,7 @@ import SwiftUI
 
 struct MeetingRecordingView: View {
     @ObservedObject var vm: MeetingViewModel
-    /// Focus tracker for the Notes editor — used to save on blur, same
+    /// Focus tracker for the Notes editor, used to save on blur, same
     /// pattern as MeetingDoneView. SwiftUI's TextEditor has no native
     /// "lost focus" callback; the @FocusState onChange handler is it.
     @FocusState private var notesFocused: Bool
@@ -51,7 +51,7 @@ struct MeetingRecordingView: View {
             Spacer()
             HStack(spacing: 6) {
                 // Back-to-live CTA lives in the parent MeetingView's
-                // `liveRecordingBanner` now — it's only relevant when
+                // `liveRecordingBanner` now, it's only relevant when
                 // `vm.browsingPastMeeting == true`, and that state
                 // routes the main panel to MeetingDoneView (not here),
                 // so this button would have been unreachable from this
@@ -112,7 +112,7 @@ struct MeetingRecordingView: View {
             .foregroundStyle(Color.macTextSecondary)
             .frame(width: 64, alignment: .leading)
 
-            // Live amplitude bars — VM updates 12× per second from the
+            // Live amplitude bars, VM updates 12× per second from the
             // FFI peak (mic + system). Bars grow up from a centre line:
             // mic above, system audio below (mirrored). When system is
             // 0 across the buffer, the lower band collapses and we
@@ -137,7 +137,7 @@ struct MeetingRecordingView: View {
             Divider().opacity(0.4)
             // Mutually exclusive content. The notes editor shares the
             // SAME `vm.doneNotes` buffer + `<dir>/notes.md` on disk as
-            // the Done-view Notes tab — single store, so a note typed
+            // the Done-view Notes tab, single store, so a note typed
             // here survives into Done without an extra load step.
             if vm.recordingSelectedTab == .live {
                 liveTranscriptScroll
@@ -146,7 +146,7 @@ struct MeetingRecordingView: View {
             }
         }
         .background(panelBackground)
-        // Save when the user leaves the Notes tab — mirrors the Done-
+        // Save when the user leaves the Notes tab, mirrors the Done-
         // view onChange save (MeetingDoneView line ~169). Stop +
         // newMeeting already call saveNotes too, so a tab-leave save
         // is the only NEW persistence trigger this view introduces.
@@ -194,7 +194,7 @@ struct MeetingRecordingView: View {
         ScrollView {
             ScrollViewReader { proxy in
                 Text(vm.transcript.isEmpty
-                     ? "🎙️ Listening… first chunk lands in ~15 s."
+                     ? "🎙️ Listening... first chunk lands in ~15 s."
                      : vm.transcript)
                     .font(.system(size: 13))
                     .foregroundStyle(vm.transcript.isEmpty
@@ -217,7 +217,7 @@ struct MeetingRecordingView: View {
     private var notesEditor: some View {
         ZStack(alignment: .topLeading) {
             if vm.doneNotes.isEmpty {
-                Text("Your notes — stamp the current time with the button, then type. Saved to notes.md, also visible from the Done view.")
+                Text("Your notes, stamp the current time with the button, then type. Saved to notes.md, also visible from the Done view.")
                     .font(.system(size: 13))
                     .foregroundStyle(Color.macTextSecondary.opacity(0.7))
                     .padding(.horizontal, 18)
@@ -256,7 +256,7 @@ struct MeetingRecordingView: View {
 // `MeetingWindow.LiveWaveformCanvas_SizeChanged`).
 //
 // The view reads from `MeetingViewModel.liveAmplitudeBars` which is a
-// scrolling FIFO of the last N FFI samples — so the bars truly
+// scrolling FIFO of the last N FFI samples, so the bars truly
 // represent recent audio history, not a single instantaneous value
 // repeated N times.
 
