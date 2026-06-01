@@ -11,7 +11,12 @@ struct MacPillPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            livePreviewGroup
+            // Live-preview pill mock removed per user request 2026-06-01:
+            // it ate vertical space on every Settings open while only
+            // really serving the *appearance* knobs at the bottom of
+            // the page. Border + Waveform pickers already preview
+            // themselves on the *real* pill once the user picks an
+            // option. Keep the page focused on actual toggles.
             positionGroup
             visibilityGroup
             appearanceGroup

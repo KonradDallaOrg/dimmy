@@ -13,7 +13,13 @@ import SwiftUI
 // reserves space at the top so visual alignment matches.
 
 enum MacSettingsTab: String, CaseIterable, Identifiable {
-    case home, voice, output, rules, history, integrations, pill, shortcut, permissions, privacy, license, about, advanced
+    // Sidebar order mirrors Windows (SettingsWindow.xaml NavigationView.MenuItems):
+    // Home → Voice input → Output → Pill overlay → App rules → Shortcut →
+    // Recordings → Integrations → Privacy & data → License → About → Advanced.
+    // Permissions is Mac-only (no Win analogue — TCC vs UAC model differ);
+    // we tuck it next to Privacy where it semantically belongs.
+    case home, voice, output, pill, rules, shortcut, history, integrations,
+         privacy, permissions, license, about, advanced
 
     var id: String { rawValue }
 
@@ -23,7 +29,7 @@ enum MacSettingsTab: String, CaseIterable, Identifiable {
         case .voice:        return "Voice input"
         case .output:       return "Output"
         case .rules:        return "App rules"
-        case .history:      return "History"
+        case .history:      return "Recordings"
         case .integrations: return "Integrations"
         case .pill:         return "Pill overlay"
         case .shortcut:     return "Shortcut"

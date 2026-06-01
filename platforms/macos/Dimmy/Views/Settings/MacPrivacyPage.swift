@@ -26,9 +26,15 @@ struct MacPrivacyPage: View {
 
             telemetryGroup
             audioRetentionGroup
-            anonymousIdGroup
             feedbackGroup
             resourcesGroup
+
+            // The raw local-ID + reset is power-user territory: 99%
+            // of users never need to see (let alone reset) the random
+            // hash. Hide it unless Advanced mode is on.
+            if appState.showAdvanced {
+                anonymousIdGroup
+            }
         }
     }
 

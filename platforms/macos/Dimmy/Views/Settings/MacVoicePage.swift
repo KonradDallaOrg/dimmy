@@ -68,11 +68,15 @@ struct MacVoicePage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             speechRecognitionGroup
-            microphoneGroup
-            audioProcessingGroup
             customDictionaryGroup
 
+            // Win parity (SettingsWindow.xaml line 599: "Microphone
+            // section: still gated by IsAdvanced toggle"). Mic device,
+            // gain, preprocessing and chunked-stream knobs are not
+            // needed by 95% of users — they belong behind Advanced.
             if appState.showAdvanced {
+                microphoneGroup
+                audioProcessingGroup
                 advancedGroup
             }
         }
