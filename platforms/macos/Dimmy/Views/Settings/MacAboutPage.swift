@@ -1,6 +1,6 @@
 import SwiftUI
 
-// About — hero with app icon + version + check-for-updates / release
+// About, hero with app icon + version + check-for-updates / release
 // notes, then Updates settings (auto-update, channel) and Resources
 // links. Footer credit "Made with [Anthropic mark] Claude Code" matches
 // the Windows v3 footer.
@@ -13,9 +13,62 @@ struct MacAboutPage: View {
         VStack(alignment: .leading, spacing: 0) {
             heroCard
                 .padding(.bottom, 8)
-            updatesGroup
+
+            // Updates group has Status (Simple) + Update channel.
+            // Update channel is Advanced per Win XAML (visibility
+            // bound to IsAdvanced) since it controls whether the
+            // user sees prerelease builds. Status alone stays
+            // visible in Simple.
+            statusOnlyGroup
+            if appState.showAdvanced {
+                updateChannelGroup
+            }
+
             resourcesGroup
-            anthropicCredit
+            // "Made with Claude Code" credit removed per Win redesign
+            // (commit 4080ff06).
+        }
+    }
+
+    private var statusOnlyGroup: some View {
+        Group {
+            MacGroupLabel(text: "Updates")
+            MacTile {
+                MacRow(
+                    "Status",
+                    description: updates.statusText,
+                    showsDivider: false
+                ) {
+                    if updates.isUpdateReady {
+                        Circle()
+                            .fill(Color.accentColor)
+                            .frame(width: 8, height: 8)
+                    } else {
+                        EmptyView()
+                    }
+                }
+            }
+        }
+    }
+
+    private var updateChannelGroup: some View {
+        Group {
+            MacGroupLabel(text: "Channel")
+            MacTile {
+                MacRow(
+                    "Update channel",
+                    hint: "Stable only is the safer default. Prerelease also offers staging builds with new features earlier.",
+                    hintURL: URL(string: "https://dimmy.app/help/about-and-updates"),
+                    showsDivider: false
+                ) {
+                    Picker("", selection: $updates.channel) {
+                        Text("Stable").tag("stable")
+                        Text("Prerelease").tag("prerelease")
+                    }
+                    .labelsHidden()
+                    .frame(width: 140)
+                }
+            }
         }
     }
 
@@ -30,7 +83,7 @@ struct MacAboutPage: View {
                     Button {
                         updates.checkForUpdatesNow()
                     } label: {
-                        Label("Check for updates…", systemImage: "arrow.down.circle.fill")
+                        Label("Check for updates...", systemImage: "arrow.down.circle.fill")
                     }
                     .buttonStyle(.borderedProminent)
 
@@ -63,40 +116,8 @@ struct MacAboutPage: View {
 
     // MARK: Updates
 
-    private var updatesGroup: some View {
-        Group {
-            MacGroupLabel(text: "Updates")
-            MacTile {
-                MacRow(
-                    "Status",
-                    description: updates.statusText
-                ) {
-                    if updates.isUpdateReady {
-                        // Tiny pulsing dot for the "update ready" case so
-                        // a glance is enough to know action is pending
-                        // when the user quits.
-                        Circle()
-                            .fill(Color.accentColor)
-                            .frame(width: 8, height: 8)
-                    } else {
-                        EmptyView()
-                    }
-                }
-                MacRow(
-                    "Update channel",
-                    description: "Stable releases or early previews",
-                    showsDivider: false
-                ) {
-                    Picker("", selection: $updates.channel) {
-                        Text("Stable").tag("stable")
-                        Text("Prerelease").tag("prerelease")
-                    }
-                    .labelsHidden()
-                    .frame(width: 140)
-                }
-            }
-        }
-    }
+    // Legacy combined group replaced by statusOnlyGroup +
+    // updateChannelGroup (channel gated behind Advanced).
 
     // MARK: Resources
 
@@ -148,7 +169,7 @@ struct MacAboutPage: View {
             Text("Made with")
                 .font(.system(size: 12))
                 .foregroundStyle(Color.macTextTertiary)
-            // Same SVG path data as Windows About panel — bundled as a
+            // Same SVG path data as Windows About panel, bundled as a
             // vector asset so it stays crisp at any size.
             Image("ClaudeMark")
                 .resizable()

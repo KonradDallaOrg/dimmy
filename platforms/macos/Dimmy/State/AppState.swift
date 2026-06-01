@@ -1311,6 +1311,29 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Does the keystore hold a key for `providerId` under ANY scope
+    /// (STT, LLM, or Recap)? Drives the "Connected" pill on the
+    /// Providers and keys page. Mirror of the Win
+    /// `SettingsViewModel.HasAnyKeyForProvider` method.
+    func hasAnyKeyForProvider(_ providerId: String) -> Bool {
+        let v = providerId.lowercased()
+        if llmKeyByVendor[v] == true { return true }
+        if recapKeyByVendor[v] == true { return true }
+        switch v {
+        case "groq": return hasGroqKey
+        case "openai": return hasOpenaiKey
+        case "openrouter": return hasOpenrouterKey
+        case "gemini": return hasGeminiKey
+        case "deepgram": return hasDeepgramKey
+        case "fireworks": return hasFireworksKey
+        case "together": return hasTogetherKey
+        case "anthropic": return false  // no STT scope; LLM/Recap handled above
+        case "custom": return hasCustomKey
+        case "local": return true       // on-device, no key needed
+        default: return false
+        }
+    }
+
     private func sttProviderTag(forUrl url: String) -> String {
         if url.isEmpty { return "groq" }
         if url.contains("groq.com") { return "groq" }

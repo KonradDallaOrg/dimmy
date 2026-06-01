@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 
 // MARK: - FileLoadCard
 //
-// Drag-drop a WAV onto the card or click "Choose file…" to pick one.
+// Drag-drop a WAV onto the card or click "Choose file..." to pick one.
 // We then call `dimmy_transcribe_file` on a background thread; the Rust
 // core decodes via hound, runs the same preprocess pipeline as live
 // recording (highpass + VAD + AGC + downsample to 16 k), routes per the
@@ -13,7 +13,7 @@ import UniformTypeIdentifiers
 // Progress arrives via `file_transcribe_progress` events on the global
 // AppState publisher (see DimmyCore.swift event dispatcher). We bind a
 // determinate progress bar to it; the chunk index/total drive the
-// "Transcribing… X / Y s (Z%)" status text.
+// "Transcribing... X / Y s (Z%)" status text.
 
 struct FileLoadCard: View {
     @ObservedObject var appState: AppState
@@ -28,7 +28,7 @@ struct FileLoadCard: View {
 
     @State private var status: Status = .idle
     @State private var dropTargeted: Bool = false
-    /// The path of the file we last asked Rust to transcribe — used so
+    /// The path of the file we last asked Rust to transcribe, used so
     /// the "Reveal" button still works after the result lands.
     @State private var lastPath: String?
 
@@ -54,7 +54,7 @@ struct FileLoadCard: View {
                         Button {
                             chooseFile()
                         } label: {
-                            Label("Choose file…", systemImage: "doc.badge.plus")
+                            Label("Choose file...", systemImage: "doc.badge.plus")
                         }
                         .controlSize(.small)
                         .disabled(isWorking)
@@ -67,7 +67,7 @@ struct FileLoadCard: View {
             }
         }
         .overlay {
-            // Drop highlight — accent border + subtle wash. Falls back
+            // Drop highlight, accent border + subtle wash. Falls back
             // gracefully when the user drags something other than a WAV.
             if dropTargeted {
                 RoundedRectangle(cornerRadius: MacTheme.tileCornerRadius, style: .continuous)
@@ -90,8 +90,8 @@ struct FileLoadCard: View {
     }
 
     private var descriptionText: String {
-        if isWorking { return "Working… leave the page open." }
-        return "Drag a .wav / .mp3 / .m4a / .aac / .flac / .ogg onto this card, or click Choose file. Routed through your active local STT backend."
+        if isWorking { return "Working, leave the page open." }
+        return "Drag an audio file here or click Choose file."
     }
 
     private var isWorking: Bool {
@@ -109,7 +109,7 @@ struct FileLoadCard: View {
         case .starting:
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small).scaleEffect(0.7)
-                Text("Starting…")
+                Text("Starting...")
                     .font(.system(size: 11))
                     .foregroundStyle(Color.macTextSecondary)
             }
@@ -124,7 +124,7 @@ struct FileLoadCard: View {
                 } else {
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.small).scaleEffect(0.7)
-                        Text("Transcribing…")
+                        Text("Transcribing...")
                             .font(.system(size: 11))
                             .foregroundStyle(Color.macTextSecondary)
                     }
@@ -135,7 +135,7 @@ struct FileLoadCard: View {
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(.green)
-                    Text("Transcribed — saved to history")
+                    Text("Transcribed, saved to history")
                         .font(.system(size: 12, weight: .medium))
                     Spacer()
                     Button("Copy") {
@@ -159,12 +159,12 @@ struct FileLoadCard: View {
                 }
                 .frame(maxHeight: 80)
                 .padding(8)
-                .background(Color.gray.opacity(0.08))
+                .background(Color.primary.opacity(0.06))
                 .cornerRadius(6)
 
                 // Run-recap-as-meeting bridge. Same UX as the Win
                 // "Run recap as meeting" button in
-                // SettingsWindow.xaml — mints a synthetic meeting
+                // SettingsWindow.xaml, mints a synthetic meeting
                 // dir with the WAV + transcript, fires the same LLM
                 // recap pipeline used by live meetings. Result shows
                 // up in Meeting → History.
@@ -244,9 +244,9 @@ struct FileLoadCard: View {
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
         // Narrow set of audio UTTypes the Rust core decodes (WAV native
-        // + Symphonia for the rest). Avoid the parent `.audio` type —
+        // + Symphonia for the rest). Avoid the parent `.audio` type , 
         // it pulls the Music sidebar onto the panel on Sequoia 15.x and
-        // triggers the "Dimmy would like to access Apple Music…" TCC
+        // triggers the "Dimmy would like to access Apple Music..." TCC
         // prompt even though we never read the Music library. The
         // explicit list keeps that prompt off the table.
         let mp3Type = UTType("public.mp3") ?? UTType.mp3
@@ -273,26 +273,26 @@ struct FileLoadCard: View {
 
     // MARK: - Run recap as meeting
 
-    /// "Run recap as meeting" — promotes the last successful
+    /// "Run recap as meeting", promotes the last successful
     /// file-load transcript into a synthetic meeting dir + runs the
     /// same LLM recap pipeline live meetings use. Result lands in
     /// Meeting → History.
     ///
     /// The LLM call (`MeetingPostProcessService.runRecap`) can take
-    /// 10–60 s — runs on a background queue so the SwiftUI thread
+    /// 10-60 s, runs on a background queue so the SwiftUI thread
     /// stays responsive. Button stays disabled until completion to
     /// prevent double-fires.
     private func runRecapAsMeeting(transcript: String) {
         guard !recapRunning else { return }
         recapRunning = true
-        recapStatus = "Building meeting + running recap…"
+        recapStatus = "Building meeting + running recap..."
         recapDir = nil
 
         let path = lastPath ?? ""
         let transcriptCopy = transcript
         // Capture the @MainActor-isolated notionAutoSend flag here on
         // the main thread so the background dispatch doesn't need to
-        // touch AppState.shared.notionAutoSend — Swift 6 rejects that
+        // touch AppState.shared.notionAutoSend, Swift 6 rejects that
         // cross-isolation read as a hard error.
         let notionAutoSend = AppState.shared.notionAutoSend
         DispatchQueue.global(qos: .userInitiated).async {
@@ -318,7 +318,7 @@ struct FileLoadCard: View {
     // MARK: - Run
 
     private func run(path: String) {
-        // Cloud STT is unsupported via this entry point — fail fast
+        // Cloud STT is unsupported via this entry point, fail fast
         // with a clear hint instead of waiting for the -4 return.
         if appState.sttMode != "local" {
             status = .error("File-load works only with a local STT backend. Switch to local in Voice → Speech-to-text.")
@@ -332,7 +332,7 @@ struct FileLoadCard: View {
         DispatchQueue.global(qos: .userInitiated).async {
             // Lazy init for users who skipped mic permission. dimmy_init is
             // idempotent (returns 1 = "already inited"), so this is safe to
-            // call from any feature path — file load doesn't need a mic.
+            // call from any feature path, file load doesn't need a mic.
             if !DimmyCore.shared.isInitialized {
                 _ = DimmyCore.shared.initialize()
             }

@@ -51,3 +51,7 @@ docs/dev/licensing-flow.md
 # graphify knowledge-graph output — local experiment, do NOT commit while evaluating
 graphify-out/
 mockup/
+
+# generated UI screenshots (scripts/dev/capture-settings-ui.ps1)
+docs/ui-shots/
+default.profraw

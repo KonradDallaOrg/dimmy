@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 import AVFoundation
 
-/// History — past dictations grouped by date, in the Tahoe design
+/// History, past dictations grouped by date, in the Tahoe design
 /// language (MacTile + MacRow). v2 fields surfaced: enhanced_text
 /// (Raw/Enhanced toggle in the detail sheet), audio_path (waveform
 /// playback), app_bundle_id (real Mac icon + display name),
@@ -24,6 +24,14 @@ struct HistorySettingsView: View {
                 statsTile(stats)
                     .padding(.bottom, 12)
             }
+
+            // Audio retention controls. Moved from Privacy & data
+            // per docs/dev/settings-redesign-checklist.md: the toggle
+            // and its nested retention/quota knobs belong on
+            // Recordings because that is where the saved audio
+            // actually plays back.
+            audioRetentionGroup
+                .padding(.bottom, 12)
 
             if transcripts.isEmpty {
                 emptyState
@@ -53,6 +61,67 @@ struct HistorySettingsView: View {
         }
     }
 
+    // MARK: - Audio retention
+
+    private var audioRetentionGroup: some View {
+        Group {
+            MacGroupLabel(text: "Audio retention")
+            MacTile {
+                MacRow(
+                    "Save audio with each recording",
+                    description: "Off by default.",
+                    hint: "When on, each transcription's audio file is saved alongside the row at 16 kHz mono so you can play it back from the detail sheet. Use the retention controls below to bound disk usage.",
+                    hintURL: URL(string: "https://dimmy.app/help/history-search")
+                ) {
+                    Toggle("", isOn: Binding(
+                        get: { appState.saveAudioInHistory },
+                        set: { newValue in
+                            appState.saveAudioInHistory = newValue
+                            DimmyCore.shared.setConfig(appState.toRustConfig())
+                        }
+                    ))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                }
+                MacRow(
+                    "Keep for",
+                    description: "0 = never auto-delete by age.",
+                    hint: "Days before a saved audio file is automatically deleted from the history_audio folder. Does not affect the recording row itself, only the audio file.",
+                    hintURL: URL(string: "https://dimmy.app/help/history-search")
+                ) {
+                    Stepper(value: Binding(
+                        get: { Int(appState.historyAudioKeepDays) },
+                        set: { appState.historyAudioKeepDays = UInt32(max(0, $0))
+                               DimmyCore.shared.setConfig(appState.toRustConfig()) }
+                    ), in: 0...365) {
+                        Text("\(appState.historyAudioKeepDays) day\(appState.historyAudioKeepDays == 1 ? "" : "s")")
+                            .font(.system(size: 12))
+                    }
+                    .controlSize(.small)
+                    .disabled(!appState.saveAudioInHistory)
+                }
+                MacRow(
+                    "Storage cap",
+                    description: "0 = no cap.",
+                    hint: "Maximum size of the history_audio folder in megabytes. Oldest audio files are deleted first when over the cap, even if they are still within the Keep-for window.",
+                    hintURL: URL(string: "https://dimmy.app/help/history-search"),
+                    showsDivider: false
+                ) {
+                    Stepper(value: Binding(
+                        get: { Int(appState.historyAudioMaxMb) },
+                        set: { appState.historyAudioMaxMb = UInt32(max(0, $0))
+                               DimmyCore.shared.setConfig(appState.toRustConfig()) }
+                    ), in: 0...50_000, step: 100) {
+                        Text("\(appState.historyAudioMaxMb) MB")
+                            .font(.system(size: 12))
+                    }
+                    .controlSize(.small)
+                    .disabled(!appState.saveAudioInHistory)
+                }
+            }
+        }
+    }
+
     // MARK: - Search bar
 
     private var searchField: some View {
@@ -61,7 +130,7 @@ struct HistorySettingsView: View {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 12))
                     .foregroundStyle(Color.macTextSecondary)
-                TextField("Search transcripts…", text: $searchQuery)
+                TextField("Search transcripts...", text: $searchQuery)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13))
                     .onChange(of: searchQuery) { _, _ in loadTranscripts() }
@@ -104,7 +173,7 @@ struct HistorySettingsView: View {
                 Text(searchQuery.isEmpty ? "No transcriptions yet" : "No results for \"\(searchQuery)\"")
                     .font(.system(size: 13, weight: .medium))
                 if searchQuery.isEmpty {
-                    Text("Press your shortcut anywhere or drop a WAV on Home — recordings land here.")
+                    Text("Press your shortcut anywhere or drop an audio file on Home. Recordings land here.")
                         .font(.system(size: 11))
                         .foregroundStyle(Color.macTextSecondary)
                         .multilineTextAlignment(.center)
@@ -221,7 +290,7 @@ struct HistorySettingsView: View {
             // (and lines up with the rest of the Tahoe layout) even
             // when the .icns is just a flat glyph.
             RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(Color.primary.opacity(0.06))
+                .fill(Color.primary.opacity(0.12))
                 .frame(width: 36, height: 36)
 
             if let bundleId = entry.appBundleId,
@@ -414,7 +483,7 @@ struct HistoryEntry: Identifiable, Equatable {
             .replacingOccurrences(of: "\n", with: " ")
             .replacingOccurrences(of: "\r", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        if s.count > 110 { return String(s.prefix(110)) + "…" }
+        if s.count > 110 { return String(s.prefix(110)) + "..." }
         return s
     }
 
@@ -494,7 +563,7 @@ struct HistoryDetailSheet: View {
         HStack(alignment: .center, spacing: 12) {
             ZStack {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.primary.opacity(0.06))
+                    .fill(Color.primary.opacity(0.12))
                     .frame(width: 48, height: 48)
                 if let bid = entry.appBundleId, !bid.isEmpty,
                    let icon = AppContextCapture.appIcon(for: bid) {

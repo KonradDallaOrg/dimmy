@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Settings → Integrations page. Mac mirror of the Win
-/// `IntegrationsPanel` — summary card + 3-step sheet wizard
+/// `IntegrationsPanel`, summary card + 3-step sheet wizard
 /// (`NotionConnectSheet`) for full setup. Re-runnable: "Change
 /// destination" reopens the wizard at step 3.
 struct MacIntegrationsPage: View {
@@ -21,9 +21,9 @@ struct MacIntegrationsPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            MacGroupLabel(text: "Anthropic — Claude Code subscription")
+            MacGroupLabel(text: "Anthropic, Claude Code subscription")
             // Detailed status + sign-in card. Sign-in opens the
-            // browser via `claude /login` running in Terminal — the
+            // browser via `claude /login` running in Terminal, the
             // token is stored either in `~/.claude/credentials.json`
             // or (recent CLIs) macOS Keychain under service
             // "Claude Code-credentials". Dimmy never touches the
@@ -32,15 +32,15 @@ struct MacIntegrationsPage: View {
                 appState: appState,
                 onWizardRequested: { showClaudeWizard = true }
             )
-            MacGroupFooter(text: "Sign-in opens Anthropic's OAuth in your browser via the local `claude` CLI. The OAuth token is stored by the CLI in macOS Keychain (or ~/.claude/credentials.json on older versions). Dimmy reads only the existence of the token — never its contents.")
+            MacGroupFooter(text: "OAuth token stays with the `claude` CLI in macOS Keychain (or ~/.claude/credentials.json). Dimmy only checks existence, never reads the token.")
 
             Spacer().frame(height: 24)
             MacGroupLabel(text: "Notion")
 
-            // Summary card — current state + action buttons.
+            // Summary card, current state + action buttons.
             summaryCard
 
-            // Auto-send toggle — only meaningful once connected.
+            // Auto-send toggle, only meaningful once connected.
             // Stays inline (not in wizard) because users may flip it
             // on/off over time without re-entering setup.
             Spacer().frame(height: 16)
@@ -48,7 +48,7 @@ struct MacIntegrationsPage: View {
             MacTile {
                 MacRow(
                     "Auto-send each meeting",
-                    description: "When on, every meeting's recap uploads to your Notion destination as soon as the recap finishes. When off, you click Send to Notion from the meeting Done view per meeting.",
+                    hint: "When on, every meeting's recap uploads to your Notion destination as soon as the recap finishes. When off, you click Send to Notion from the meeting Done view per meeting.",
                     showsDivider: false
                 ) {
                     Toggle("", isOn: Binding(
@@ -76,15 +76,18 @@ struct MacIntegrationsPage: View {
 
             // Help footer
             Spacer().frame(height: 16)
-            Text("Free Notion accounts work — no API limits per plan, only the standard 3 requests/sec rate limit. Token + destination stay on this device; only the recap markdown leaves when you (or auto-send) trigger an upload.")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 4) {
+                Text("Free Notion accounts work. Token + destination stay on this Mac.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                MacInfoButton(text: "Free Notion plans have no per-plan API limits, only the standard 3 requests/sec rate limit. Token + destination are stored locally; only the recap markdown leaves this Mac when you (or auto-send) trigger an upload.")
+            }
+            .fixedSize(horizontal: false, vertical: true)
 
             Spacer().frame(height: 24)
             MacGroupLabel(text: "Claude Desktop (MCP)")
             mcpCard
-            MacGroupFooter(text: "Lets Claude Desktop see your recent meetings and save recaps back. Runs entirely on this device — Claude Desktop spawns Dimmy's MCP binary at startup; no network round-trip. Disconnect anytime; we just remove our entry from claude_desktop_config.json.")
+            MacGroupFooter(text: "Claude Desktop spawns Dimmy's MCP binary locally, no network round-trip. Disconnect removes the entry from claude_desktop_config.json.")
         }
         .sheet(isPresented: $showWizard) {
             NotionConnectSheet(
@@ -94,7 +97,7 @@ struct MacIntegrationsPage: View {
                     showWizard = false
                     if appState.hasNotionToken && !appState.notionTargetTitle.isEmpty {
                         statusIsError = false
-                        statusMessage = "Recaps will land in “\(appState.notionTargetTitle)”."
+                        statusMessage = "Recaps will land in '\(appState.notionTargetTitle)'."
                     }
                 }
             )
@@ -169,7 +172,7 @@ struct MacIntegrationsPage: View {
     @ViewBuilder
     private var summaryCard: some View {
         HStack(alignment: .top, spacing: 14) {
-            // Real Notion logo — bundled SVG (Providers/notion.imageset).
+            // Real Notion logo, bundled SVG (Providers/notion.imageset).
             // Rendered as a template so the monochrome mark tints to the
             // label colour: black in light, white in dark (the asset itself
             // is the black "original" mark, invisible on a dark surface).
@@ -223,7 +226,7 @@ struct MacIntegrationsPage: View {
     private var headerStatusText: String {
         if appState.hasNotionToken {
             if !appState.notionTargetTitle.isEmpty {
-                return "Connected · recaps land in “\(appState.notionTargetTitle)”"
+                return "Connected. Recaps land in '\(appState.notionTargetTitle)'."
             }
             return "Connected · pick a destination"
         }
@@ -241,7 +244,7 @@ struct MacIntegrationsPage: View {
         appState.notionTargetKind = ""
         appState.notionTargetTitle = ""
         appState.notionAutoSend = false
-        // includeNotion: true — explicit clear intent. Generic
+        // includeNotion: true, explicit clear intent. Generic
         // saves omit the target fields to avoid wiping a valid
         // destination accidentally; the disconnect path is one of
         // the only two sites that owns the clear semantics.
@@ -262,7 +265,7 @@ struct MacIntegrationsPage: View {
         HStack(alignment: .top, spacing: 14) {
             // Real Claude.app icon when extractable from /Applications;
             // otherwise the real Claude asterisk mark (ClaudeMark.imageset,
-            // #D97757 burst) — never an invented placeholder.
+            // #D97757 burst), never an invented placeholder.
             // Cached under <configDir>/cache/claude-desktop-icon.png.
             if let p = claudeIconPath, let img = NSImage(contentsOfFile: p) {
                 Image(nsImage: img)
@@ -315,7 +318,7 @@ struct MacIntegrationsPage: View {
         }
         if mcpStatus.extensionInstalled {
             // Heartbeat ages out fast (Claude kills idle MCP servers
-            // by design). Keep the wording neutral — not an error.
+            // by design). Keep the wording neutral, not an error.
             if let v = mcpStatus.extensionVersion {
                 return "Installed (v\(v)) · Claude spawns on demand"
             }

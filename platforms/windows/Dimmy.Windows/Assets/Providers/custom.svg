@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Custom endpoint mark — sliders, conveying "point Dimmy at any
+     OpenAI-compatible endpoint you configure". Monochrome currentColor so it
+     renders dark on the white logo tile in both themes. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img">
+  <title>Custom endpoint</title>
+  <path fill="currentColor" d="M3 6h9.17a3.001 3.001 0 0 1 5.66 0H21v2h-3.17a3.001 3.001 0 0 1-5.66 0H3V6zm0 10h3.17a3.001 3.001 0 0 1 5.66 0H21v2h-9.17a3.001 3.001 0 0 1-5.66 0H3v-2zm12-9a1 1 0 1 0 0 2 1 1 0 0 0 0-2zM9 16a1 1 0 1 0 0 2 1 1 0 0 0 0-2z"/>
+</svg>

@@ -7,7 +7,7 @@ import SwiftUI
 // Centralising values here keeps every page consistent and avoids the
 // drift you get when each view re-implements its own padding / radius /
 // stroke colour. macOS dark/light is derived from `NSAppearance` rather
-// than a custom toggle — the OS already picks the right side of the
+// than a custom toggle, the OS already picks the right side of the
 // `Color` shape resolver.
 
 enum MacTheme {
@@ -121,6 +121,9 @@ struct MacTile<Content: View>: View {
 struct MacRow<Trailing: View>: View {
     let label: String
     var description: String? = nil
+    var hint: String? = nil
+    var hintURL: URL? = nil
+    var hintURLLabel: String? = nil
     var icon: String? = nil
     var iconBackground: Color? = nil
     var showsDivider: Bool = true
@@ -129,6 +132,9 @@ struct MacRow<Trailing: View>: View {
     init(
         _ label: String,
         description: String? = nil,
+        hint: String? = nil,
+        hintURL: URL? = nil,
+        hintURLLabel: String? = nil,
         icon: String? = nil,
         iconBackground: Color? = nil,
         showsDivider: Bool = true,
@@ -136,6 +142,9 @@ struct MacRow<Trailing: View>: View {
     ) {
         self.label = label
         self.description = description
+        self.hint = hint
+        self.hintURL = hintURL
+        self.hintURLLabel = hintURLLabel
         self.icon = icon
         self.iconBackground = iconBackground
         self.showsDivider = showsDivider
@@ -149,7 +158,12 @@ struct MacRow<Trailing: View>: View {
                     MacSquircleIcon(systemName: icon, background: bg)
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(label).font(.system(size: 13))
+                    HStack(spacing: 4) {
+                        Text(label).font(.system(size: 13))
+                        if let hint {
+                            MacInfoButton(text: hint, url: hintURL, urlLabel: hintURLLabel)
+                        }
+                    }
                     if let description {
                         Text(description)
                             .font(.system(size: 11))
@@ -179,13 +193,67 @@ extension MacRow where Trailing == EmptyView {
     init(
         _ label: String,
         description: String? = nil,
+        hint: String? = nil,
+        hintURL: URL? = nil,
+        hintURLLabel: String? = nil,
         icon: String? = nil,
         iconBackground: Color? = nil,
         showsDivider: Bool = true
     ) {
-        self.init(label, description: description, icon: icon,
-                  iconBackground: iconBackground, showsDivider: showsDivider) {
+        self.init(label,
+                  description: description,
+                  hint: hint,
+                  hintURL: hintURL,
+                  hintURLLabel: hintURLLabel,
+                  icon: icon,
+                  iconBackground: iconBackground,
+                  showsDivider: showsDivider) {
             EmptyView()
+        }
+    }
+}
+
+// MARK: - Info button (inline (i) → popover)
+//
+// Mirrors the Windows SettingCard.Hint pattern (PR #95). A subtle 12pt
+// `info.circle` button next to a row label. Click opens an NSPopover
+// with the verbose copy (max width about 320) and an optional "Learn more"
+// link. Hover surfaces the same copy via SwiftUI's `.help()` so
+// keyboard-only / hover-only users get the explanation too.
+
+struct MacInfoButton: View {
+    let text: String
+    var url: URL? = nil
+    var urlLabel: String? = nil
+
+    @State private var isOpen = false
+
+    var body: some View {
+        Button {
+            isOpen.toggle()
+        } label: {
+            Image(systemName: "info.circle")
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(Color.macTextSecondary)
+                .contentShape(Rectangle())
+                .frame(width: 16, height: 16)
+        }
+        .buttonStyle(.plain)
+        .help(text)
+        .accessibilityLabel("Show details")
+        .popover(isPresented: $isOpen, arrowEdge: .top) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(text)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let url {
+                    Link(urlLabel ?? "Open full guide \u{203A}", destination: url)
+                        .font(.system(size: 12))
+                }
+            }
+            .padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14))
+            .frame(maxWidth: 320, alignment: .leading)
         }
     }
 }
@@ -193,7 +261,7 @@ extension MacRow where Trailing == EmptyView {
 // MARK: - Squircle icon
 //
 // 28×28 rounded square with a coloured background and a centred SF Symbol
-// glyph in white — matches the sidebar nav icons and per-row leading icons.
+// glyph in white, matches the sidebar nav icons and per-row leading icons.
 
 struct MacSquircleIcon: View {
     let systemName: String
@@ -226,7 +294,7 @@ struct MacSquircleIcon: View {
 
 // MARK: - Hero card
 //
-// Used on Home and About — large rounded tile with text on the left and
+// Used on Home and About, large rounded tile with text on the left and
 // an arbitrary trailing visual (pill stage / app icon) on the right.
 
 struct MacHero<Trailing: View>: View {
@@ -338,7 +406,7 @@ struct MacChip: View {
 
 // MARK: - Position picker (3×3 grid)
 //
-// Wallpaper-position picker style — eight valid corners + middle-center,
+// Wallpaper-position picker style, eight valid corners + middle-center,
 // or a subset depending on what the platform supports.
 
 struct MacPositionPicker: View {
@@ -373,18 +441,26 @@ struct MacPositionPicker: View {
         Button {
             if allowed { selection = id }
         } label: {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(selected ? Color.accentColor :
-                        Color(nsColor: .controlBackgroundColor))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .stroke(
-                            selected ? Color.accentColor : Color.macControlStroke,
-                            lineWidth: 0.5
-                        )
-                )
-                .opacity(allowed ? 1.0 : 0.25)
-                .frame(width: 24, height: 24)
+            ZStack {
+                // Base surface: solid system background that adapts
+                // to dark + a primary-opacity tint on top so the
+                // cell stays visibly distinct from the parent tile
+                // (the tile already uses windowBackgroundColor at
+                // 0.6, so a plain controlBackgroundColor used to
+                // disappear into it on dark mode).
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(selected ? AnyShapeStyle(Color.accentColor)
+                                   : AnyShapeStyle(Color(nsColor: .controlBackgroundColor)))
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Color.primary.opacity(selected ? 0 : 0.10))
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(
+                        selected ? Color.accentColor : Color.macControlStrokeStrong,
+                        lineWidth: selected ? 1.2 : 0.8
+                    )
+            }
+            .opacity(allowed ? 1.0 : 0.20)
+            .frame(width: 24, height: 24)
         }
         .buttonStyle(.plain)
         .disabled(!allowed)
@@ -417,7 +493,7 @@ struct MacKeycap: View {
 
 // MARK: - Inline status pill
 //
-// Small "● Listening — groq whisper" pill rendered in the toolbar to show
+// Small "● Listening, groq whisper" pill rendered in the toolbar to show
 // current STT provider. Reused for "Live detection" on App Rules page.
 
 struct MacStatusPill: View {
@@ -442,14 +518,14 @@ struct MacStatusPill: View {
         )
         .overlay(
             Capsule()
-                .stroke(Color.white.opacity(0.5), lineWidth: 0.5)
+                .stroke(Color.primary.opacity(0.2), lineWidth: 0.5)
         )
     }
 }
 
 // MARK: - Note (info banner)
 //
-// Used on Privacy and App Rules pages — accent-circled icon + "**Title**\nbody".
+// Used on Privacy and App Rules pages, accent-circled icon + "**Title**\nbody".
 
 struct MacNote: View {
     let title: String
@@ -515,7 +591,7 @@ struct MacSavedPulse: View {
 // Mirrors the Windows StyleToColorBrushConverter so the dot colour next
 // to each style chip matches across platforms. Kept inline rather than
 // extending `LlmStyle` so the design tokens sit alongside the other Mac
-// atoms — `LlmStyle.color` already exists for the pill but uses slightly
+// atoms, `LlmStyle.color` already exists for the pill but uses slightly
 // different hues; this enum keeps the design-bundle palette specifically.
 
 enum MacStyleColor {

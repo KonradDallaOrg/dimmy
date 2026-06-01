@@ -39,11 +39,11 @@ struct MacClaudeCodeCard: View {
         // cards lower on this page (icon left, content + buttons
         // middle, status badge top-right, all with the same padding
         // + spacing). Using MacRow + an overlay produced a check
-        // that collided with the action buttons — see git history.
+        // that collided with the action buttons, see git history.
         HStack(alignment: .top, spacing: 14) {
             // Real Anthropic wordmark (Assets/Providers/anthropic.svg from
             // the Win brand assets), rendered as a template so it tints to
-            // the label colour (black in light, white in dark) — no
+            // the label colour (black in light, white in dark), no
             // invented orange tile. Claude Code subscriptions are an
             // Anthropic Pro/Max account, hence the Anthropic mark here vs
             // the Claude asterisk on the Claude Desktop card.
@@ -172,7 +172,7 @@ struct MacClaudeCodeCard: View {
 
     private func signIn() {
         signInRunning = true
-        statusMessage = "Launching `claude /login` in Terminal — complete the browser flow there."
+        statusMessage = "Launching `claude /login` in Terminal, complete the browser flow there."
         DispatchQueue.global(qos: .userInitiated).async {
             let ok = DimmyCore.shared.spawnClaudeCodeLogin()
             DispatchQueue.main.async {
@@ -218,7 +218,7 @@ struct MacClaudeCodeCard: View {
 
     private func testConnection() {
         testRunning = true
-        statusMessage = "Sending ping…"
+        statusMessage = "Sending ping..."
         DispatchQueue.global(qos: .userInitiated).async {
             let result = DimmyCore.shared.pingClaudeCode()
             DispatchQueue.main.async {
@@ -234,7 +234,7 @@ struct MacClaudeCodeCard: View {
         case .notInstalled: return "✗ `claude` binary not found. Install Claude Code first."
         case .notLoggedIn: return "✗ Not logged in. Click Sign in to authenticate."
         case .spawnFailed: return "✗ Could not spawn the CLI. See ~/Library/Logs/Dimmy/dimmy.log."
-        case .timeout: return "✗ Timed out after 15 s — network or rate-limit issue."
+        case .timeout: return "✗ Timed out after 15 s, network or rate-limit issue."
         case .nonZeroExit: return "✗ `claude` returned a non-zero exit code. See dimmy.log."
         case .invalidUtf8: return "✗ Unexpected output from `claude`. See dimmy.log."
         case .unknownError: return "✗ Unknown error. See dimmy.log."

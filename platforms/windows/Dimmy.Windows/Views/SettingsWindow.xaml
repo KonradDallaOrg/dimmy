@@ -36,19 +36,34 @@
         <NavigationViewItem Content="Output" Tag="output">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE945;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
-        <NavigationViewItem Content="Pill overlay" Tag="pill">
+        <NavigationViewItem Content="Providers &amp; keys" Tag="providers">
+          <NavigationViewItem.Icon><FontIcon Glyph="&#xE8D7;" /></NavigationViewItem.Icon>
+        </NavigationViewItem>
+        <!-- Pill overlay is cosmetic tuning (position, border, waveform,
+             visibility) — Advanced-gated; the pill works fine out of the box. -->
+        <NavigationViewItem Content="Pill overlay" Tag="pill"
+                            Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE7B5;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
-        <NavigationViewItem Content="App rules" Tag="rules">
+        <!-- App rules is power-user territory (per-app style overrides) —
+             gated behind Advanced so the Simple view stays focused. -->
+        <NavigationViewItem Content="App rules" Tag="rules"
+                            Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xECAA;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
         <NavigationViewItem Content="Shortcut" Tag="shortcut">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE765;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
-        <NavigationViewItem Content="Recordings" Tag="history">
+        <!-- Recordings is history review, not a setting you need to work —
+             Advanced-gated. -->
+        <NavigationViewItem Content="Recordings" Tag="history"
+                            Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE7B8;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
-        <NavigationViewItem Content="Integrations" Tag="integrations">
+        <!-- Integrations (Notion / Claude subscription / MCP) are opt-in
+             extras — Advanced-gated. -->
+        <NavigationViewItem Content="Integrations" Tag="integrations"
+                            Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE71B;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
         <NavigationViewItem Content="Privacy &amp; data" Tag="privacy">
@@ -60,7 +75,7 @@
         <NavigationViewItem Content="About" Tag="about">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE946;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
-        <NavigationViewItem Content="Advanced" Tag="advanced"
+        <NavigationViewItem Content="Debug" Tag="advanced"
                             Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE957;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
@@ -151,108 +166,9 @@
                 </Grid>
               </Border>
 
-              <!-- Meeting mode launcher — long-form recording with
-                   streaming-to-disk + post-process recap + actions. -->
-              <TextBlock Text="MEETING MODE"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,20,0,8" />
-              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="4" Padding="20,16">
-                <StackPanel Spacing="8">
-                  <TextBlock Text="Record a meeting" FontSize="16" FontWeight="SemiBold" />
-                  <TextBlock TextWrapping="Wrap"
-                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                             Text="Streamed to disk so a multi-hour session won't fill RAM. Live transcript every ~15 s. On stop, the LLM produces a recap + action items (when an LLM key is configured)." />
-                  <Button x:Name="OpenMeetingBtn" Click="OpenMeeting_Click"
-                          Style="{ThemeResource AccentButtonStyle}"
-                          Margin="0,4,0,0">
-                    <StackPanel Orientation="Horizontal" Spacing="6">
-                      <FontIcon Glyph="&#xE7C8;" FontSize="14"/>
-                      <TextBlock Text="Open meeting window" />
-                    </StackPanel>
-                  </Button>
-                </StackPanel>
-              </Border>
-
-              <!-- Transcribe audio file (offline): drag a WAV here OR
-                   pick one with the file picker. Routes through the
-                   active local backend (whisper / parakeet) and saves
-                   the transcript to History. -->
-              <TextBlock Text="TRANSCRIBE A FILE"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,20,0,8" />
-              <!-- DragOver/Drop are wired in code-behind via AddHandler
-                   with handledEventsToo=true: the parent ScrollViewer's
-                   built-in drag-to-scroll marks DragOver as handled,
-                   so the declarative attribute path never fires. -->
-              <Border x:Name="FileLoadDropTarget"
-                      Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="4" Padding="20,16"
-                      AllowDrop="True">
-                <StackPanel Spacing="8">
-                  <TextBlock Text="Transcribe a WAV file" FontSize="16" FontWeight="SemiBold" />
-                  <TextBlock TextWrapping="Wrap"
-                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                             Text="Drag a .wav file here or click Pick file. The active local backend (whisper.cpp or Parakeet) processes it offline and the transcript lands in History. Cloud + non-WAV formats are a follow-up." />
-                  <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
-                    <Button x:Name="FileLoadPickBtn" Click="FileLoadPick_Click">
-                      <StackPanel Orientation="Horizontal" Spacing="6">
-                        <FontIcon Glyph="&#xE8E5;" FontSize="14"/>
-                        <TextBlock Text="Pick file..."/>
-                      </StackPanel>
-                    </Button>
-                    <ProgressRing x:Name="FileLoadProgress"
-                                  IsActive="False" Visibility="Collapsed"
-                                  Width="20" Height="20" />
-                    <TextBlock x:Name="FileLoadStatus" Text=""
-                               VerticalAlignment="Center"
-                               FontSize="12"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                               TextWrapping="Wrap" />
-                  </StackPanel>
-                  <ProgressBar x:Name="FileLoadBar"
-                               Visibility="Collapsed"
-                               Minimum="0" Maximum="100" Value="0"
-                               Margin="0,4,0,0"/>
-                  <TextBox x:Name="FileLoadResult"
-                           Visibility="Collapsed"
-                           IsReadOnly="True"
-                           AcceptsReturn="True"
-                           TextWrapping="Wrap"
-                           MinHeight="120"
-                           MaxHeight="240"
-                           Margin="0,8,0,0" />
-                  <!-- Promote to a meeting: writes a synthetic
-                       meeting dir with the transcript + WAV, then
-                       runs the same LLM recap pipeline used by live
-                       meetings. Result lands in Meeting → History. -->
-                  <StackPanel x:Name="FileLoadRecapPanel"
-                              Visibility="Collapsed"
-                              Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
-                    <Button x:Name="FileLoadRunRecapBtn" Click="FileLoadRunRecap_Click">
-                      <StackPanel Orientation="Horizontal" Spacing="6">
-                        <FontIcon Glyph="&#xE8FD;" FontSize="14"/>
-                        <TextBlock Text="Run recap as meeting"/>
-                      </StackPanel>
-                    </Button>
-                    <ProgressRing x:Name="FileLoadRecapProgress"
-                                  IsActive="False" Visibility="Collapsed"
-                                  Width="18" Height="18" />
-                    <TextBlock x:Name="FileLoadRecapStatus"
-                               VerticalAlignment="Center"
-                               FontSize="12"
-                               TextWrapping="Wrap"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                  </StackPanel>
-                </StackPanel>
-              </Border>
-
               <!-- Quick stats: bordered card with two big numbers — visually
-                   distinct from setting rows so it reads as a dashboard. -->
+                   distinct from setting rows so it reads as a dashboard.
+                   Placed right under the hero (user-requested order). -->
               <TextBlock Text="YOUR DICTATION"
                          FontSize="12" FontWeight="SemiBold"
                          Foreground="{ThemeResource TextFillColorSecondaryBrush}"
@@ -305,26 +221,187 @@
                 </Grid>
               </Border>
 
-              <!-- System group: SettingCards for theme + launch-at-login -->
-              <TextBlock Text="SYSTEM"
+              <!-- Meeting + Transcribe side by side to keep the cards compact. -->
+              <Grid ColumnSpacing="16">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" VerticalAlignment="Top">
+              <!-- Meeting mode launcher — long-form recording with
+                   streaming-to-disk + post-process recap + actions. -->
+              <TextBlock Text="MEETING MODE"
                          FontSize="12" FontWeight="SemiBold"
                          Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                          CharacterSpacing="40" Margin="2,20,0,8" />
-              <controls:SettingCard Glyph="&#xE790;"
-                                    Label="Theme"
-                                    Description="Match Windows or pick a fixed mode for the Settings window.">
-                <StackPanel x:Name="ThemeRadioPanel" Orientation="Horizontal" Spacing="12">
-                  <RadioButton Content="Auto" GroupName="Theme" Tag="Default" Checked="Theme_Checked" />
-                  <RadioButton Content="Light" GroupName="Theme" Tag="Light" Checked="Theme_Checked" />
-                  <RadioButton Content="Dark" GroupName="Theme" Tag="Dark" Checked="Theme_Checked" />
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="4" Padding="20,16">
+                <StackPanel Spacing="8">
+                  <StackPanel Orientation="Horizontal" Spacing="6">
+                    <TextBlock Text="Record a meeting" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    <Button Background="Transparent" BorderThickness="0" Padding="0"
+                            Width="18" Height="18" MinWidth="0" MinHeight="0"
+                            VerticalAlignment="Center" VerticalContentAlignment="Center"
+                            HorizontalContentAlignment="Center"
+                            ToolTipService.ToolTip="Long-form recording streamed to disk. On stop, the LLM writes a recap with action items when an LLM key is set.">
+                      <FontIcon Glyph="&#xE946;" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                      <Button.Flyout>
+                        <Flyout>
+                          <StackPanel MaxWidth="300" Spacing="10">
+                            <TextBlock TextWrapping="Wrap" FontSize="13" Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                                       Text="Long-form recording streamed to disk. On stop, the LLM writes a recap with action items when an LLM key is set." />
+                            <HyperlinkButton Content="Open full guide →" Padding="0" NavigateUri="https://dimmy.app/help/use-meeting-recaps" />
+                          </StackPanel>
+                        </Flyout>
+                      </Button.Flyout>
+                    </Button>
+                  </StackPanel>
+                  <Button x:Name="OpenMeetingBtn" Click="OpenMeeting_Click"
+                          Style="{ThemeResource AccentButtonStyle}"
+                          Margin="0,4,0,0">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <FontIcon Glyph="&#xE7C8;" FontSize="14"/>
+                      <TextBlock Text="Open meeting window" />
+                    </StackPanel>
+                  </Button>
                 </StackPanel>
-              </controls:SettingCard>
-              <controls:SettingCard Glyph="&#xE7E8;"
-                                    Label="Launch at login"
-                                    Description="Start Dimmy automatically when you sign in to Windows.">
-                <ToggleSwitch IsOn="{Binding AutostartEnabled, Mode=TwoWay}"
-                              OnContent="" OffContent="" />
-              </controls:SettingCard>
+              </Border>
+                </StackPanel>
+                <StackPanel Grid.Column="1" VerticalAlignment="Top">
+              <!-- Transcribe audio file (offline): drag a file here OR
+                   pick one with the file picker. Routes through the
+                   active local backend (whisper / parakeet) and saves
+                   the transcript to History. -->
+              <TextBlock Text="TRANSCRIBE A FILE"
+                         FontSize="12" FontWeight="SemiBold"
+                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                         CharacterSpacing="40" Margin="2,20,0,8" />
+              <!-- DragOver/Drop are wired in code-behind via AddHandler
+                   with handledEventsToo=true: the parent ScrollViewer's
+                   built-in drag-to-scroll marks DragOver as handled,
+                   so the declarative attribute path never fires. -->
+              <Border x:Name="FileLoadDropTarget"
+                      Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="4" Padding="20,16"
+                      AllowDrop="True">
+                <StackPanel Spacing="8">
+                  <StackPanel Orientation="Horizontal" Spacing="6">
+                    <TextBlock Text="Transcribe an audio file" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    <Button Background="Transparent" BorderThickness="0" Padding="0"
+                            Width="18" Height="18" MinWidth="0" MinHeight="0"
+                            VerticalAlignment="Center" VerticalContentAlignment="Center"
+                            HorizontalContentAlignment="Center"
+                            ToolTipService.ToolTip="Drag a file here or click Pick file. Works offline with your local model. Supports wav, mp3, m4a, aac, flac, opus, and ogg. The transcript lands in Recordings.">
+                      <FontIcon Glyph="&#xE946;" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                      <Button.Flyout>
+                        <Flyout>
+                          <StackPanel MaxWidth="300" Spacing="10">
+                            <TextBlock TextWrapping="Wrap" FontSize="13" Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                                       Text="Drag a file here or click Pick file. Works offline with your local model. Supports wav, mp3, m4a, aac, flac, opus, and ogg. The transcript lands in Recordings." />
+                            <HyperlinkButton Content="Open full guide →" Padding="0" NavigateUri="https://dimmy.app/help/first-dictation" />
+                          </StackPanel>
+                        </Flyout>
+                      </Button.Flyout>
+                    </Button>
+                  </StackPanel>
+                  <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
+                    <Button x:Name="FileLoadPickBtn" Click="FileLoadPick_Click">
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xE8E5;" FontSize="14"/>
+                        <TextBlock Text="Pick file..."/>
+                      </StackPanel>
+                    </Button>
+                    <ProgressRing x:Name="FileLoadProgress"
+                                  IsActive="False" Visibility="Collapsed"
+                                  Width="20" Height="20" />
+                    <TextBlock x:Name="FileLoadStatus" Text=""
+                               VerticalAlignment="Center"
+                               FontSize="12"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               TextWrapping="Wrap" />
+                  </StackPanel>
+                  <ProgressBar x:Name="FileLoadBar"
+                               Visibility="Collapsed"
+                               Minimum="0" Maximum="100" Value="0"
+                               Margin="0,4,0,0"/>
+                  <TextBox x:Name="FileLoadResult"
+                           Visibility="Collapsed"
+                           IsReadOnly="True"
+                           AcceptsReturn="True"
+                           TextWrapping="Wrap"
+                           MinHeight="120"
+                           MaxHeight="240"
+                           Margin="0,8,0,0" />
+                  <!-- Promote to a meeting: writes a synthetic
+                       meeting dir with the transcript + WAV, then
+                       runs the same LLM recap pipeline used by live
+                       meetings. Result lands in Meeting → History. -->
+                  <StackPanel x:Name="FileLoadRecapPanel"
+                              Visibility="Collapsed"
+                              Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
+                    <Button x:Name="FileLoadRunRecapBtn" Click="FileLoadRunRecap_Click">
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xE8FD;" FontSize="14"/>
+                        <TextBlock Text="Run recap as meeting"/>
+                      </StackPanel>
+                    </Button>
+                    <ProgressRing x:Name="FileLoadRecapProgress"
+                                  IsActive="False" Visibility="Collapsed"
+                                  Width="18" Height="18" />
+                    <TextBlock x:Name="FileLoadRecapStatus"
+                               VerticalAlignment="Center"
+                               FontSize="12"
+                               TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                  </StackPanel>
+                </StackPanel>
+              </Border>
+                </StackPanel>
+              </Grid>
+
+              <!-- System group: theme + launch-at-login — Advanced-gated. -->
+              <StackPanel Spacing="4"
+                          Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                <TextBlock Text="SYSTEM"
+                           FontSize="12" FontWeight="SemiBold"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           CharacterSpacing="40" Margin="2,20,0,8" />
+                <controls:SettingCard Glyph="&#xE790;"
+                                      Label="Theme"
+                                      InfoTip="Sets the look of the Settings window. Auto follows your Windows theme.">
+                  <StackPanel x:Name="ThemeRadioPanel" Orientation="Horizontal" Spacing="12">
+                    <RadioButton Content="Auto" GroupName="Theme" Tag="Default" Checked="Theme_Checked" Style="{StaticResource ChoiceRadioButton}" />
+                    <RadioButton Content="Light" GroupName="Theme" Tag="Light" Checked="Theme_Checked" Style="{StaticResource ChoiceRadioButton}" />
+                    <RadioButton Content="Dark" GroupName="Theme" Tag="Dark" Checked="Theme_Checked" Style="{StaticResource ChoiceRadioButton}" />
+                  </StackPanel>
+                </controls:SettingCard>
+                <controls:SettingCard Glyph="&#xE7E8;"
+                                      Label="Launch at login"
+                                      InfoTip="Dimmy starts with Windows and waits quietly for your shortcut.">
+                  <ToggleSwitch IsOn="{Binding AutostartEnabled, Mode=TwoWay}"
+                                Style="{StaticResource CompactToggleSwitch}" />
+                </controls:SettingCard>
+              </StackPanel>
+            </StackPanel>
+
+            <!-- ═══ Providers & keys — one card per AI provider. Cards + the
+                 advanced per-task override are built in code-behind
+                 (BuildProviderCards) so there is no DataTemplate/XAML-compiler
+                 surface; this panel is just the host + title. ═══ -->
+            <StackPanel x:Name="ProvidersPanel" Spacing="4" Visibility="Collapsed">
+              <StackPanel Spacing="2" Margin="0,0,0,16">
+                <TextBlock Text="Providers &amp; keys" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="Add an API key to switch a provider on. Models and settings are handled for you. On-device works with no key at all."
+                           FontSize="13" TextWrapping="Wrap"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+              </StackPanel>
+              <StackPanel x:Name="ProviderCardsHost" Spacing="10" />
+              <TextBlock x:Name="ProviderKeysFootnote"
+                         Text="&#x1F512; Keys are stored encrypted on this device (AES-256) and only ever sent to the provider you choose."
+                         FontSize="12" TextWrapping="Wrap" Margin="2,16,0,0"
+                         Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
             </StackPanel>
 
             <!-- ═══ Voice input (was General) — STT settings ═══ -->
@@ -343,8 +420,9 @@
                          CharacterSpacing="40" Margin="2,16,0,8" />
               <controls:SettingCard Glyph="&#xF2B7;"
                                     Label="Native language (you speak)"
-                                    Description="What the speech-to-text engine assumes you're speaking. Use the pill to translate output instead.">
-                <ComboBox x:Name="LanguageComboBox" MinWidth="200"
+                                    InfoTip="Tells the speech engine what to expect. To translate into another language, use the pill's scroll wheel instead."
+                                    HelpUrl="https://dimmy.app/help/language">
+                <ComboBox x:Name="LanguageComboBox" MinWidth="{StaticResource SettingFieldWidth}"
                           DisplayMemberPath="Value"
                           ItemsSource="{Binding LanguageItems}"
                           SelectionChanged="Language_SelectionChanged" />
@@ -357,11 +435,14 @@
                          CharacterSpacing="40" Margin="2,20,0,8" />
               <controls:SettingCard Glyph="&#xE753;"
                                     Label="Mode"
-                                    Description="Local runs the model on your machine; cloud sends audio to a provider.">
+                                    InfoTip="Local is fully private and works offline. Cloud sends your audio to the provider you pick and is often more accurate."
+                                    HelpUrl="https://dimmy.app/help/local-mode">
                 <StackPanel Orientation="Horizontal" Spacing="12">
                   <RadioButton x:Name="SttModeLocal" Content="Local" GroupName="SttMode"
+                               Style="{StaticResource ChoiceRadioButton}"
                                Checked="SttMode_Checked" Tag="local" />
                   <RadioButton x:Name="SttModeCloud" Content="Cloud" GroupName="SttMode"
+                               Style="{StaticResource ChoiceRadioButton}"
                                Checked="SttMode_Checked" Tag="cloud" />
                 </StackPanel>
               </controls:SettingCard>
@@ -373,14 +454,15 @@
               <StackPanel x:Name="LocalSttPanel" Spacing="4">
                 <controls:SettingCard Glyph="&#xE968;"
                                       Label="Local model"
-                                      Description="Whisper.cpp sizes run entirely offline; Parakeet TDT v3 is faster + EU-language friendly but is a one-time 2.5 GB download.">
+                                      InfoTip="Whisper sizes run fully offline. Parakeet TDT v3 is faster and strong on European languages, but it downloads once at about 2.5 GB."
+                                      HelpUrl="https://dimmy.app/help/whisper-models">
                   <!-- Width is FIXED (not MinWidth) so long model names
                        like "ggml-large-v3-turbo-q5_0.bin" don't expand
                        the combo and shove the SettingCard layout out of
                        alignment. Header truncates with TextTrimming on
                        the item template; full text shows in the popup. -->
                   <ComboBox x:Name="LocalModelComboBox"
-                            Width="280" MaxWidth="280"
+                            Width="{StaticResource SettingFieldWidth}" MaxWidth="{StaticResource SettingFieldWidth}"
                             HorizontalAlignment="Left"
                             HorizontalContentAlignment="Left"
                             SelectionChanged="LocalModel_SelectionChanged" />
@@ -399,9 +481,10 @@
                 </controls:SettingCard>
                 <controls:SettingCard Glyph="&#xE74D;"
                                       Label="Remove filler words"
-                                      Description="Strips um, uh, basically, cioè, ecc. in 6 languages.">
+                                      InfoTip="Removes common filler words in 6 languages (including Italian 'cioè', 'ecc.') after transcription."
+                                      HelpUrl="https://dimmy.app/help/filler-removal">
                   <ToggleSwitch IsOn="{Binding FillerRemovalEnabled, Mode=TwoWay}"
-                                OnContent="" OffContent="" />
+                                Style="{StaticResource CompactToggleSwitch}" />
                 </controls:SettingCard>
               </StackPanel>
 
@@ -418,8 +501,9 @@
               <StackPanel x:Name="CloudSttPanel" Spacing="4" Visibility="Collapsed">
                 <controls:SettingCard Glyph="&#xE968;"
                                       Label="Provider"
-                                      Description="Choose the cloud STT model to send audio to.">
-                  <ComboBox x:Name="ProviderComboBox" MinWidth="320"
+                                      InfoTip="The model you pick sets where your audio is sent. Free options are marked."
+                                      HelpUrl="https://dimmy.app/help/cloud-providers">
+                  <ComboBox x:Name="ProviderComboBox" MinWidth="{StaticResource SettingFieldWidth}"
                             SelectionChanged="Provider_SelectionChanged">
                     <ComboBoxItem Tag="groq">
                       <StackPanel Orientation="Horizontal" Spacing="8">
@@ -548,29 +632,32 @@
                      LLM card directly below it visually. -->
                 <controls:SettingCard Glyph="&#xE192;"
                                       Label="API key"
-                                      Description="Encrypted locally. The provider receives only audio + key, never anything else.">
-                  <StackPanel Orientation="Horizontal" Spacing="8">
-                    <PasswordBox x:Name="CloudApiKeyBox" Width="320"
-                                 PlaceholderText="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}" />
+                                      InfoTip="Stored encrypted on this device with AES-256. The provider only ever receives your audio and this key, nothing else."
+                                      HelpUrl="https://dimmy.app/help/api-keys">
+                  <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
                     <FontIcon Glyph="&#xE73E;" FontSize="16" Foreground="#4ade80"
                               VerticalAlignment="Center"
                               Visibility="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
+                    <PasswordBox x:Name="CloudApiKeyBox" Width="{StaticResource SettingFieldWidth}"
+                                 PlaceholderText="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}" />
                   </StackPanel>
                 </controls:SettingCard>
                 <controls:SettingCard x:Name="CustomUrlCard"
                                       Glyph="&#xE71B;"
                                       Label="Custom endpoint URL"
-                                      Description="OpenAI-compatible endpoint, used when Provider is set to Custom."
+                                      InfoTip="Used only when Provider is set to Custom. Point it at any OpenAI-compatible speech endpoint."
+                                      HelpUrl="https://dimmy.app/help/cloud-providers"
                                       Visibility="Collapsed">
-                  <TextBox x:Name="CustomUrlBox" MinWidth="280"
+                  <TextBox x:Name="CustomUrlBox" MinWidth="{StaticResource SettingFieldWidth}"
                            Text="{Binding ApiUrl, Mode=TwoWay}" />
                 </controls:SettingCard>
                 <controls:SettingCard x:Name="CustomModelCard"
                                       Glyph="&#xE950;"
                                       Label="Custom model"
-                                      Description="Model identifier for the custom endpoint."
+                                      InfoTip="The model identifier your custom endpoint expects."
+                                      HelpUrl="https://dimmy.app/help/cloud-providers"
                                       Visibility="Collapsed">
-                  <TextBox x:Name="CustomModelBox" MinWidth="240"
+                  <TextBox x:Name="CustomModelBox" MinWidth="{StaticResource SettingFieldWidth}"
                            Text="{Binding ApiModel, Mode=TwoWay}" />
                 </controls:SettingCard>
               </StackPanel>
@@ -582,75 +669,87 @@
                    visibility gating as CloudSttPanel (cloud-only).
                    The CustomDictionary section below this is the
                    per-word hotkey-add list — different concept. -->
-              <StackPanel x:Name="CloudVocabularyPanel" Spacing="4" Visibility="Collapsed">
-                <TextBlock Text="VOCABULARY"
-                           FontSize="12" FontWeight="SemiBold"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                           CharacterSpacing="40" Margin="2,20,0,8" />
-                <controls:SettingCard Glyph="&#xE82D;"
-                                      Label="Recognition prompt"
-                                      Description="Optional context that primes the recognizer with names, jargon, brands.">
-                  <TextBox MinWidth="320" MaxWidth="360"
-                           AcceptsReturn="True" TextWrapping="Wrap" Height="80"
-                           Text="{Binding Prompt, Mode=TwoWay}" />
-                </controls:SettingCard>
+              <!-- Outer wrapper = Advanced gate; inner CloudVocabularyPanel keeps
+                   its cloud-only visibility (set in code-behind). Shows only when
+                   Advanced AND cloud STT. -->
+              <StackPanel Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                <StackPanel x:Name="CloudVocabularyPanel" Spacing="4" Visibility="Collapsed">
+                  <TextBlock Text="VOCABULARY"
+                             FontSize="12" FontWeight="SemiBold"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                             CharacterSpacing="40" Margin="2,20,0,8" />
+                  <controls:SettingCard Glyph="&#xE82D;"
+                                        Label="Recognition prompt"
+                                        InfoTip="Optional. Add names, jargon, or brand spellings so they're transcribed the way you mean."
+                                        HelpUrl="https://dimmy.app/help/cloud-providers">
+                    <TextBox MinWidth="{StaticResource SettingFieldWidth}" MaxWidth="{StaticResource SettingFieldWidth}"
+                             AcceptsReturn="True" TextWrapping="Wrap" Height="80"
+                             Text="{Binding Prompt, Mode=TwoWay}" />
+                  </controls:SettingCard>
+                </StackPanel>
               </StackPanel>
 
-              <!-- Microphone section: still gated by IsAdvanced toggle. -->
-              <StackPanel Spacing="4"
-                          Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+              <!-- Microphone. The Input-device picker is ESSENTIAL (you can't
+                   capture audio from the wrong mic) so it lives in Simple. The
+                   tuning knobs (gain / preprocessing / chunk / captions) stay
+                   behind Advanced. -->
+              <StackPanel Spacing="4">
                 <TextBlock Text="MICROPHONE"
                            FontSize="12" FontWeight="SemiBold"
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                            CharacterSpacing="40" Margin="2,20,0,8" />
-                <!-- Audio source picker removed 2026-05-08: the capture
-                     pipeline now ALWAYS opens both mic + system loopback
-                     (always-mix architecture, commit 3eddac3). Pill
-                     consumes mic-only, meeting consumes both, AEC3
-                     gracefully degrades when loopback is silent. The
-                     legacy `audio_source` config field is preserved on
-                     disk for backward compat but ignored at runtime. -->
+                <!-- Audio source picker removed 2026-05-08: always-mix capture
+                     (commit 3eddac3). Pill = mic-only, meeting = both, AEC3
+                     degrades when loopback is silent. -->
                 <controls:SettingCard Glyph="&#xE720;"
                                       Label="Input device"
-                                      Description="Microphone Dimmy listens to. System audio loopback always uses the default playback device.">
-                  <ComboBox MinWidth="240"
+                                      InfoTip="System audio loopback (used for meetings) always records from your default playback device, whatever you pick here."
+                                      HelpUrl="https://dimmy.app/help/audio-input">
+                  <ComboBox MinWidth="{StaticResource SettingFieldWidth}"
                             SelectedItem="{Binding SelectedDevice, Mode=TwoWay}"
                             ItemsSource="{Binding Devices}" />
                 </controls:SettingCard>
-                <controls:SettingCard Glyph="&#xE992;"
-                                      Label="Microphone volume"
-                                      Description="Software gain applied before transcription.">
-                  <Slider x:Name="InputGainSlider" MinWidth="240"
-                          Minimum="10" Maximum="100" StepFrequency="5"
-                          Value="{Binding InputGainPercent, Mode=TwoWay}" />
-                </controls:SettingCard>
-                <controls:SettingCard Glyph="&#xE9F5;"
-                                      Label="Preprocessing"
-                                      Description="High-pass + VAD + AGC before transcribing.">
-                  <ToggleSwitch IsOn="{Binding PreprocessingEnabled, Mode=TwoWay}"
-                                OnContent="" OffContent="" />
-                </controls:SettingCard>
-                <controls:SettingCard Glyph="&#xE7F2;"
-                                      Label="Chunk streaming (Parakeet only)"
-                                      Description="Transcribe in 5 s windows during recording so the final paste lands ~700 ms after release instead of waiting for the full batch. Requires Local backend = Parakeet.">
-                  <ToggleSwitch IsOn="{Binding ChunkStreamingEnabled, Mode=TwoWay}"
-                                OnContent="" OffContent="" />
-                </controls:SettingCard>
-                <controls:SettingCard Glyph="&#xE890;"
-                                      Label="Live captions"
-                                      Description="Show a floating caption window below the pill while chunked streaming is active. Toggle off to keep chunked speed-up without the on-screen caption.">
-                  <ToggleSwitch IsOn="{Binding LiveCaptionsEnabled, Mode=TwoWay}"
-                                OnContent="" OffContent="" />
-                </controls:SettingCard>
-                <!-- API keys always stored in local encrypted file (keys.enc) -->
+
+                <!-- Advanced mic tuning -->
+                <StackPanel Spacing="4"
+                            Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                  <controls:SettingCard Glyph="&#xE992;"
+                                        Label="Microphone volume"
+                                        InfoTip="Raises your input level so soft speech is picked up. Leave it low if your mic is already loud."
+                                        HelpUrl="https://dimmy.app/help/audio-input">
+                    <Slider x:Name="InputGainSlider" MinWidth="{StaticResource SettingFieldWidth}"
+                            Minimum="10" Maximum="100" StepFrequency="5"
+                            Value="{Binding InputGainPercent, Mode=TwoWay}" />
+                  </controls:SettingCard>
+                  <controls:SettingCard Glyph="&#xE9F5;"
+                                        Label="Preprocessing"
+                                        InfoTip="Runs a high pass filter, voice activity detection, and automatic gain control. Leave it on unless you are debugging audio."
+                                        HelpUrl="https://dimmy.app/help/audio-input">
+                    <ToggleSwitch IsOn="{Binding PreprocessingEnabled, Mode=TwoWay}"
+                                  Style="{StaticResource CompactToggleSwitch}" />
+                  </controls:SettingCard>
+                  <controls:SettingCard Glyph="&#xE7F2;"
+                                        Label="Chunk streaming (Parakeet only)"
+                                        InfoTip="Transcribes while you speak, so the final text lands about 700 ms after you release the key instead of waiting for the whole clip. Needs the Parakeet local backend.">
+                    <ToggleSwitch IsOn="{Binding ChunkStreamingEnabled, Mode=TwoWay}"
+                                  Style="{StaticResource CompactToggleSwitch}" />
+                  </controls:SettingCard>
+                  <controls:SettingCard Glyph="&#xE890;"
+                                        Label="Live captions"
+                                        InfoTip="Shows a floating caption while chunk streaming is on. Turn it off to keep the speed without showing text on screen.">
+                    <ToggleSwitch IsOn="{Binding LiveCaptionsEnabled, Mode=TwoWay}"
+                                  Style="{StaticResource CompactToggleSwitch}" />
+                  </controls:SettingCard>
+                </StackPanel>
               </StackPanel>
 
-              <!-- ═══ Custom dictionary ═══ -->
+              <!-- ═══ Custom dictionary ═══ — Advanced-gated per the settings map. -->
+              <StackPanel Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
               <TextBlock Text="CUSTOM DICTIONARY"
                          FontSize="12" FontWeight="SemiBold"
                          Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                          CharacterSpacing="40" Margin="2,20,0,8" />
-              <TextBlock Text="Words you add here are injected as context on every transcription, so the STT model learns your jargon, names, and acronyms. Press the hotkey below in any app after selecting text to add a word in one keystroke."
+              <TextBlock Text="Teach Dimmy your names, jargon, and acronyms."
                          FontSize="12"
                          Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                          TextWrapping="Wrap" Margin="2,0,0,8" />
@@ -710,6 +809,7 @@
                              Visibility="Collapsed"/>
                 </StackPanel>
               </Border>
+              </StackPanel>
             </StackPanel>
 
             <!-- ═══ Shortcut ═══ -->
@@ -727,16 +827,20 @@
                          CharacterSpacing="40" Margin="2,16,0,8" />
               <controls:SettingCard Glyph="&#xE765;"
                                     Label="Recording shortcut"
-                                    Description="Press the combo you want to use, then release to confirm.">
+                                    InfoTip="Press the keys you want, then release to confirm. This is the shortcut you press to dictate."
+                                    HelpUrl="https://dimmy.app/help/hotkey-change">
                 <controls:ShortcutRecorder Shortcut="{Binding Shortcut, Mode=TwoWay}" />
               </controls:SettingCard>
               <controls:SettingCard Glyph="&#xE7C8;"
                                     Label="Mode"
-                                    Description="Push-to-Talk records while held; Toggle starts/stops on each press.">
+                                    InfoTip="Push-to-Talk records only while you hold the keys. Toggle starts on one press and stops on the next."
+                                    HelpUrl="https://dimmy.app/help/hotkey-modes">
                 <StackPanel Orientation="Horizontal" Spacing="12">
                   <RadioButton Content="Push-to-Talk" GroupName="ShortcutMode"
+                               Style="{StaticResource ChoiceRadioButton}"
                                IsChecked="{Binding ShortcutMode, Mode=TwoWay, Converter={StaticResource StringToBoolConverter}, ConverterParameter=hold}" />
                   <RadioButton Content="Toggle" GroupName="ShortcutMode"
+                               Style="{StaticResource ChoiceRadioButton}"
                                IsChecked="{Binding ShortcutMode, Mode=TwoWay, Converter={StaticResource StringToBoolConverter}, ConverterParameter=toggle}" />
                 </StackPanel>
               </controls:SettingCard>
@@ -747,7 +851,8 @@
                          CharacterSpacing="40" Margin="2,20,0,8" />
               <controls:SettingCard Glyph="&#xE82D;"
                                     Label="Add-to-dictionary shortcut"
-                                    Description="Press the combo, then release to confirm. After pressing in any app while text is selected, the word is added to your custom dictionary in Voice input.">
+                                    InfoTip="Select text in any app and press these keys to add it to your custom dictionary. Press the keys here, then release to confirm."
+                                    HelpUrl="https://dimmy.app/help/hotkey-change">
                 <controls:ShortcutRecorder Shortcut="{Binding DictHotkey, Mode=TwoWay}" />
               </controls:SettingCard>
             </StackPanel>
@@ -767,8 +872,9 @@
                          CharacterSpacing="40" Margin="2,16,0,8" />
               <controls:SettingCard Glyph="&#xE945;"
                                     Label="Style"
-                                    Description="How Dimmy rewrites the raw transcription. Off = leave it as-is.">
-                <ComboBox MinWidth="220"
+                                    InfoTip="An LLM cleans up or reshapes your transcript. Off leaves it exactly as spoken."
+                                    HelpUrl="https://dimmy.app/help/styles">
+                <ComboBox MinWidth="{StaticResource SettingFieldWidth}"
                           SelectedItem="{Binding LlmStyle, Mode=TwoWay}"
                           ItemsSource="{Binding LlmStyleItems}">
                   <ComboBox.ItemTemplate>
@@ -789,11 +895,14 @@
                          CharacterSpacing="40" Margin="2,20,0,8" />
               <controls:SettingCard Glyph="&#xE753;"
                                     Label="Mode"
-                                    Description="Run the LLM on your machine or send the transcript to a provider.">
+                                    InfoTip="Local runs the LLM on your device and stays private. Cloud sends your transcript to the provider you pick."
+                                    HelpUrl="https://dimmy.app/help/local-llm">
                 <StackPanel Orientation="Horizontal" Spacing="12">
                   <RadioButton x:Name="LlmModeLocal" Content="Local" GroupName="LlmMode"
+                               Style="{StaticResource ChoiceRadioButton}"
                                Checked="LlmMode_Checked" Tag="local" />
                   <RadioButton x:Name="LlmModeCloud" Content="Cloud" GroupName="LlmMode"
+                               Style="{StaticResource ChoiceRadioButton}"
                                Checked="LlmMode_Checked" Tag="cloud" />
                 </StackPanel>
               </controls:SettingCard>
@@ -802,12 +911,13 @@
               <StackPanel x:Name="LocalLlmPanel" Spacing="4" Visibility="Collapsed">
                 <controls:SettingCard Glyph="&#xE968;"
                                       Label="Local LLM model"
-                                      Description="Runs entirely on your device.">
+                                      InfoTip="Runs fully offline. Larger models read better but need more memory and time."
+                                      HelpUrl="https://dimmy.app/help/local-llm">
                   <!-- Same width-locking pattern as LocalModelComboBox:
                        prevents long quantization suffixes like
                        "gemma-3-4b-it-q4_0.gguf" from expanding the row. -->
                   <ComboBox x:Name="LocalLlmModelComboBox"
-                            Width="280" MaxWidth="280"
+                            Width="{StaticResource SettingFieldWidth}" MaxWidth="{StaticResource SettingFieldWidth}"
                             HorizontalAlignment="Left"
                             HorizontalContentAlignment="Left"
                             SelectionChanged="LocalLlmModel_SelectionChanged" />
@@ -830,8 +940,9 @@
               <StackPanel x:Name="CloudLlmPanel" Spacing="4">
                 <controls:SettingCard Glyph="&#xE968;"
                                       Label="Cloud LLM provider"
-                                      Description="Where the rewrite runs and which model.">
-                  <ComboBox x:Name="LlmProviderComboBox" MinWidth="320"
+                                      InfoTip="The model you pick sets where your transcript is sent. Free options are marked."
+                                      HelpUrl="https://dimmy.app/help/cloud-providers">
+                  <ComboBox x:Name="LlmProviderComboBox" MinWidth="{StaticResource SettingFieldWidth}"
                             SelectionChanged="LlmProvider_SelectionChanged">
                     <ComboBoxItem Tag="groq">
                       <StackPanel Orientation="Horizontal" Spacing="8">
@@ -1033,26 +1144,29 @@
                 <controls:SettingCard x:Name="LlmUseSubscriptionCard"
                                       Glyph="&#xE779;"
                                       Label="Use Anthropic subscription"
-                                      Description="Route LLM rewrite via the local `claude` CLI instead of paying per token. Slower (~5-7 s subprocess cold-start per call) but no credit consumed."
+                                      InfoTip="Sends the rewrite through your local Claude CLI instead of an API key. A few seconds slower per call, but no credit is used."
+                                      HelpUrl="https://dimmy.app/help/integrations-claude-cli"
                                       Visibility="Collapsed">
                   <ToggleSwitch x:Name="LlmUseSubscriptionToggle"
                                 Toggled="LlmUseSubscription_Toggled"
-                                OnContent="" OffContent=""/>
+                                Style="{StaticResource CompactToggleSwitch}"/>
                 </controls:SettingCard>
                 <controls:SettingCard x:Name="LlmCustomUrlCard"
                                       Glyph="&#xE71B;"
                                       Label="Custom LLM endpoint"
-                                      Description="OpenAI-compatible URL for the Custom provider option."
+                                      InfoTip="Used only when the provider is set to Custom. Point it at any OpenAI-compatible chat endpoint."
+                                      HelpUrl="https://dimmy.app/help/cloud-providers"
                                       Visibility="Collapsed">
-                  <TextBox x:Name="LlmCustomUrlBox" MinWidth="280"
+                  <TextBox x:Name="LlmCustomUrlBox" MinWidth="{StaticResource SettingFieldWidth}"
                            Text="{Binding LlmApiUrl, Mode=TwoWay}" />
                 </controls:SettingCard>
                 <controls:SettingCard x:Name="LlmCustomModelCard"
                                       Glyph="&#xE950;"
                                       Label="Custom LLM model"
-                                      Description="Model identifier for the custom endpoint."
+                                      InfoTip="The model identifier your custom endpoint expects."
+                                      HelpUrl="https://dimmy.app/help/cloud-providers"
                                       Visibility="Collapsed">
-                  <TextBox x:Name="LlmCustomModelBox" MinWidth="240"
+                  <TextBox x:Name="LlmCustomModelBox" MinWidth="{StaticResource SettingFieldWidth}"
                            Text="{Binding LlmApiModel, Mode=TwoWay}" />
                 </controls:SettingCard>
                 <!-- "Use my saved STT key" — mirror of the Recap
@@ -1066,12 +1180,13 @@
                 <controls:SettingCard x:Name="LlmUseSameKeyCard"
                                       Glyph="&#xE192;"
                                       Label="Use my saved API key for this provider"
-                                      Description="When you already have a key for the LLM's vendor (saved via STT or LLM), reuse it. Turn off to enter a dedicated LLM key for the same vendor."
+                                      InfoTip="Dimmy already has a key for this provider. Turn off to enter a separate key just for rewrites."
+                                      HelpUrl="https://dimmy.app/help/api-keys"
                                       Visibility="Collapsed">
                   <ToggleSwitch x:Name="LlmUseSameKeyToggle"
                                 IsOn="{Binding LlmUseSameKey, Mode=TwoWay}"
                                 Toggled="LlmUseSameKey_Toggled"
-                                OnContent="" OffContent="" />
+                                Style="{StaticResource CompactToggleSwitch}" />
                 </controls:SettingCard>
                 <!-- LLM API key input. Visibility set by code-behind
                      (RefreshAuthIntegrationStatus) to follow the
@@ -1082,14 +1197,15 @@
                 <controls:SettingCard x:Name="LlmApiKeyCard"
                                       Glyph="&#xE192;"
                                       Label="LLM API key"
-                                      Description="Encrypted locally. Used when not sharing with STT."
+                                      InfoTip="Stored encrypted on this device. Used when the rewrite provider differs from your speech provider."
+                                      HelpUrl="https://dimmy.app/help/api-keys"
                                       Visibility="Collapsed">
-                  <StackPanel Orientation="Horizontal" Spacing="8">
-                    <PasswordBox x:Name="LlmApiKeyBox" Width="320"
-                                 PlaceholderText="{Binding HasLlmKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}" />
+                  <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
                     <FontIcon Glyph="&#xE73E;" FontSize="16" Foreground="#4ade80"
                               VerticalAlignment="Center"
                               Visibility="{Binding HasLlmKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
+                    <PasswordBox x:Name="LlmApiKeyBox" Width="{StaticResource SettingFieldWidth}"
+                                 PlaceholderText="{Binding HasLlmKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}" />
                   </StackPanel>
                 </controls:SettingCard>
                 <!-- Subscription status card moved to Integrations →
@@ -1099,25 +1215,29 @@
                      own integration card alongside Notion. -->
               </StackPanel>
 
+              <!-- Auto-detect meetings + Meetings folder — Advanced-gated per the settings map. -->
+              <StackPanel Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
               <!-- ═══ Auto-detect meetings ═══ -->
               <TextBlock Text="AUTO-DETECT MEETINGS"
                          FontSize="12" FontWeight="SemiBold"
                          Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                          CharacterSpacing="40" Margin="2,20,0,8" />
-              <TextBlock Text="When Dimmy notices your microphone has gone live (Teams, Zoom, Meet, …) it can offer to record the meeting via a small non-intrusive prompt. No mic data is recorded until you press Record."
+              <TextBlock Text="Offer to record when a call starts."
                          FontSize="12"
                          Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                          TextWrapping="Wrap" Margin="2,0,0,8" />
               <StackPanel Spacing="4">
                 <controls:SettingCard Glyph="&#xE717;"
                                       Label="Detect calls and offer to record"
-                                      Description="Polls the default microphone once a second; suggests recording when a call lasts more than 5 s. Per-app cooldown (30 min) after 'Not now', permanent skip after 'Don't ask for this app'.">
+                                      InfoTip="Suggests recording a few seconds into a call. 'Not now' snoozes that app for half an hour. 'Don't ask' skips it for good."
+                                      HelpUrl="https://dimmy.app/help/use-meeting-recaps">
                   <ToggleSwitch IsOn="{Binding CallDetectEnabled, Mode=TwoWay}"
-                                OnContent="" OffContent="" />
+                                Style="{StaticResource CompactToggleSwitch}" />
                 </controls:SettingCard>
                 <controls:SettingCard Glyph="&#xE71F;"
                                       Label="Excluded apps"
-                                      Description="Apps that will never trigger a record-meeting prompt. Adds here automatically when you pick 'Don't ask for this app'. Discord is excluded by default — usually gaming, not work.">
+                                      InfoTip="Choosing 'Don't ask' on a prompt adds that app here. Discord is excluded by default."
+                                      HelpUrl="https://dimmy.app/help/use-meeting-recaps">
                   <ItemsControl ItemsSource="{Binding CallDetectExcludedApps}" Margin="0,0,0,0">
                     <ItemsControl.ItemsPanel>
                       <ItemsPanelTemplate>
@@ -1196,6 +1316,7 @@
                   </StackPanel>
                 </StackPanel>
               </Border>
+              </StackPanel>
 
               <!-- ═══ Recap section ═══
                    Standalone — NOT inside CloudLlmPanel. Recap must
@@ -1214,8 +1335,9 @@
               <StackPanel x:Name="RecapPanel" Spacing="4">
                 <controls:SettingCard Glyph="&#xE8B5;"
                                       Label="Meeting recap model"
-                                      Description="Which LLM writes the recap when a meeting ends.">
-                  <ComboBox x:Name="RecapModelComboBox" MinWidth="280"
+                                      InfoTip="Runs when a meeting ends to produce the summary and action items. Auto picks a good model for your provider."
+                                      HelpUrl="https://dimmy.app/help/use-meeting-recaps">
+                  <ComboBox x:Name="RecapModelComboBox" MinWidth="{StaticResource SettingFieldWidth}"
                             SelectionChanged="RecapModel_SelectionChanged">
                     <ComboBoxItem Tag="">
                       <TextBlock Text="Auto · pick best for your provider" VerticalAlignment="Center"/>
@@ -1345,17 +1467,19 @@
                 <controls:SettingCard x:Name="RecapUseSubscriptionCard"
                                       Glyph="&#xE779;"
                                       Label="Use Anthropic subscription for recap"
-                                      Description="Route the meeting recap call via the local `claude` CLI regardless of the LLM rewrite auth above. Recommended: subscription cost is amortized over the recap's longer inference window."
+                                      InfoTip="Sends the recap through your local Claude CLI instead of an API key. Recommended, since recaps run long and use no credit this way."
+                                      HelpUrl="https://dimmy.app/help/integrations-claude-cli"
                                       Visibility="Collapsed">
                   <ToggleSwitch x:Name="RecapUseSubscriptionToggle"
                                 Toggled="RecapUseSubscription_Toggled"
-                                OnContent="" OffContent=""/>
+                                Style="{StaticResource CompactToggleSwitch}"/>
                 </controls:SettingCard>
                 <controls:SettingCard Glyph="&#xE932;"
                                       Label="Custom recap model id"
-                                      Description="Used only when the picker above is set to Custom."
+                                      InfoTip="Used only when the picker above is set to Custom. Enter the exact model identifier."
+                                      HelpUrl="https://dimmy.app/help/use-meeting-recaps"
                                       x:Name="RecapModelCustomCard">
-                  <TextBox x:Name="RecapModelOverrideBox" MinWidth="280"
+                  <TextBox x:Name="RecapModelOverrideBox" MinWidth="{StaticResource SettingFieldWidth}"
                            PlaceholderText="e.g. claude-opus-4-7-thinking-extra"
                            Text="{Binding RecapModelOverride, Mode=TwoWay}"
                            LostFocus="RecapModelCustom_LostFocus" />
@@ -1370,12 +1494,13 @@
                 <controls:SettingCard x:Name="RecapUseSameKeyCard"
                                       Glyph="&#xE192;"
                                       Label="Use my saved API key for this provider"
-                                      Description="When you already have a key for the recap's vendor (saved via STT or LLM), reuse it. Turn off to enter a dedicated recap key for the same vendor."
+                                      InfoTip="Dimmy already has a key for the recap provider. Turn off to enter a separate key just for recaps."
+                                      HelpUrl="https://dimmy.app/help/api-keys"
                                       Visibility="Collapsed">
                   <ToggleSwitch x:Name="RecapUseSameKeyToggle"
                                 IsOn="{Binding RecapUseSameKey, Mode=TwoWay}"
                                 Toggled="RecapUseSameKey_Toggled"
-                                OnContent="" OffContent=""/>
+                                Style="{StaticResource CompactToggleSwitch}"/>
                 </controls:SettingCard>
                 <!-- Recap API key field. Visible when (a) the toggle
                      above is OFF, OR (b) no upstream key exists for
@@ -1386,34 +1511,40 @@
                 <controls:SettingCard x:Name="RecapKeyCard"
                                       Glyph="&#xE192;"
                                       Label="Recap API key"
-                                      Description="Saved separately for the recap provider. The dictation key is untouched."
+                                      InfoTip="Saved separately for the recap provider, so your dictation key stays untouched. Stored encrypted on this device."
+                                      HelpUrl="https://dimmy.app/help/api-keys"
                                       Visibility="Collapsed">
-                  <StackPanel Orientation="Horizontal" Spacing="8">
-                    <!-- Persisted by Save_Click / AutoSaveOnClose
-                         (mirror of LlmApiKeyBox). No inline Save
-                         button — the user types and the value is
-                         drained into the Rust keystore on the next
-                         Settings save (button or window close). -->
-                    <PasswordBox x:Name="RecapKeyBox" Width="320"
-                                 PlaceholderText="{Binding HasRecapKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}"/>
+                  <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
                     <FontIcon Glyph="&#xE73E;" FontSize="16" Foreground="#4ade80"
                               VerticalAlignment="Center"
                               Visibility="{Binding HasRecapKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
                               ToolTipService.ToolTip="A key is already saved for this provider"/>
+                    <!-- Persisted by Save_Click / AutoSaveOnClose
+                         (mirror of LlmApiKeyBox). No inline Save
+                         button. The user types and the value is
+                         drained into the Rust keystore on the next
+                         Settings save (button or window close). -->
+                    <PasswordBox x:Name="RecapKeyBox" Width="{StaticResource SettingFieldWidth}"
+                                 PlaceholderText="{Binding HasRecapKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}"/>
                   </StackPanel>
                 </controls:SettingCard>
               </StackPanel>
 
-              <TextBlock Text="CLIPBOARD"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,20,0,8" />
-              <controls:SettingCard Glyph="&#xE16F;"
-                                    Label="Keep in clipboard history"
-                                    Description="Leave the transcription on the clipboard after auto-paste so you can paste it again later.">
-                <ToggleSwitch IsOn="{Binding KeepInClipboard, Mode=TwoWay}"
-                              OnContent="" OffContent="" />
-              </controls:SettingCard>
+              <!-- Clipboard — Advanced-gated per the settings map. -->
+              <StackPanel Spacing="4"
+                          Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                <TextBlock Text="CLIPBOARD"
+                           FontSize="12" FontWeight="SemiBold"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           CharacterSpacing="40" Margin="2,20,0,8" />
+                <controls:SettingCard Glyph="&#xE16F;"
+                                      Label="Keep in clipboard history"
+                                      InfoTip="After Dimmy pastes for you, the transcript stays on the clipboard so you can paste it again."
+                                      HelpUrl="https://dimmy.app/help/settings-overview">
+                  <ToggleSwitch IsOn="{Binding KeepInClipboard, Mode=TwoWay}"
+                                Style="{StaticResource CompactToggleSwitch}" />
+                </controls:SettingCard>
+              </StackPanel>
 
               <!-- Advanced LLM cards -->
               <StackPanel Spacing="4"
@@ -1424,15 +1555,17 @@
                            CharacterSpacing="40" Margin="2,20,0,8" />
                 <controls:SettingCard Glyph="&#xE76C;"
                                       Label="Tone"
-                                      Description="Adjusts how formal or casual the rewrite sounds.">
-                  <ComboBox MinWidth="200"
+                                      InfoTip="Nudges the rewrite warmer or more businesslike, on top of the style you chose."
+                                      HelpUrl="https://dimmy.app/help/tones">
+                  <ComboBox MinWidth="{StaticResource SettingFieldWidth}"
                             SelectedItem="{Binding LlmTone, Mode=TwoWay}"
                             ItemsSource="{Binding LlmToneItems}" />
                 </controls:SettingCard>
                 <controls:SettingCard Glyph="&#xF2B7;"
                                       Label="Translate output to"
-                                      Description="Translate the LLM rewrite to this language. The pill's scroll wheel changes the same setting.">
-                  <ComboBox MinWidth="220"
+                                      InfoTip="Speak in your language and Dimmy pastes the translation. The pill's scroll wheel changes the same setting."
+                                      HelpUrl="https://dimmy.app/help/use-multilingual">
+                  <ComboBox MinWidth="{StaticResource SettingFieldWidth}"
                             DisplayMemberPath="Value"
                             SelectedValuePath="Key"
                             SelectedValue="{Binding LlmTranslateTo, Mode=TwoWay}"
@@ -1440,8 +1573,9 @@
                 </controls:SettingCard>
                 <controls:SettingCard Glyph="&#xE82D;"
                                       Label="Custom prompt"
-                                      Description="Free-form instruction prepended to the LLM prompt for the Custom style.">
-                  <TextBox MinWidth="320" MaxWidth="360"
+                                      InfoTip="Tells the LLM exactly how to rewrite. Used when the style above is set to Custom."
+                                      HelpUrl="https://dimmy.app/help/custom-prompts">
+                  <TextBox MinWidth="{StaticResource SettingFieldWidth}" MaxWidth="{StaticResource SettingFieldWidth}"
                            AcceptsReturn="True" TextWrapping="Wrap" Height="80"
                            Text="{Binding LlmCustomPrompt, Mode=TwoWay}" />
                 </controls:SettingCard>
@@ -1457,103 +1591,33 @@
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
               </StackPanel>
 
-              <!-- LIVE PREVIEW — animated pill rendered with the same shapes
-                   as the real overlay. State buttons below switch the mock
-                   between idle / recording / transcribing / done / error. -->
-              <TextBlock Text="LIVE PREVIEW"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,16,0,8" />
-              <Border Background="#0F172A"
-                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                      BorderThickness="1" CornerRadius="6"
-                      Height="140" Padding="0">
-                <Grid>
-                  <!-- Faint desktop stripes -->
-                  <Rectangle>
-                    <Rectangle.Fill>
-                      <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                        <GradientStop Offset="0" Color="#1E293B" />
-                        <GradientStop Offset="1" Color="#0B1220" />
-                      </LinearGradientBrush>
-                    </Rectangle.Fill>
-                  </Rectangle>
-                  <!-- Pill mock — content swapped from code based on state +
-                       BorderStyle + WaveformStyle so the preview reflects
-                       what the user just configured. -->
-                  <Border x:Name="PreviewPill"
-                          HorizontalAlignment="Center" VerticalAlignment="Center"
-                          MinWidth="140" Height="40" CornerRadius="20"
-                          BorderThickness="2"
-                          Background="#FF1A1A1A">
-                    <Border.BorderBrush>
-                      <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                        <GradientStop Offset="0.0" Color="#FF6EE7B7" />
-                        <GradientStop Offset="0.33" Color="#FF60A5FA" />
-                        <GradientStop Offset="0.66" Color="#FFF472B6" />
-                        <GradientStop Offset="1.0" Color="#FFFBBF24" />
-                      </LinearGradientBrush>
-                    </Border.BorderBrush>
-                    <!-- Two layers: dynamic waveform/dots/line content + glyph
-                         on top for non-recording states. -->
-                    <Grid Margin="14,0">
-                      <Grid x:Name="PreviewContentHost" />
-                      <FontIcon x:Name="PreviewGlyph"
-                                Glyph="&#xE720;" FontSize="14"
-                                Foreground="#94A3B8"
-                                Visibility="Collapsed"
-                                HorizontalAlignment="Center" VerticalAlignment="Center" />
-                    </Grid>
-                  </Border>
-                  <!-- State caption -->
-                  <TextBlock x:Name="PreviewCaption"
-                             Text="Preview · idle"
-                             FontSize="11"
-                             Foreground="#64748B"
-                             HorizontalAlignment="Center" VerticalAlignment="Bottom"
-                             Margin="0,0,0,8" />
-                </Grid>
-              </Border>
-              <!-- State chips: click to swap the preview to that state. -->
-              <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,8,0,0">
-                <RadioButton GroupName="PreviewState" Tag="idle"
-                             Content="idle" IsChecked="True"
-                             Checked="PreviewState_Checked" />
-                <RadioButton GroupName="PreviewState" Tag="recording"
-                             Content="recording"
-                             Checked="PreviewState_Checked" />
-                <RadioButton GroupName="PreviewState" Tag="transcribing"
-                             Content="transcribing"
-                             Checked="PreviewState_Checked" />
-                <RadioButton GroupName="PreviewState" Tag="done"
-                             Content="done"
-                             Checked="PreviewState_Checked" />
-                <RadioButton GroupName="PreviewState" Tag="error"
-                             Content="error"
-                             Checked="PreviewState_Checked" />
-              </StackPanel>
-
               <TextBlock Text="VISIBILITY"
                          FontSize="12" FontWeight="SemiBold"
                          Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                          CharacterSpacing="40" Margin="2,20,0,8" />
               <controls:SettingCard Glyph="&#xE7E8;"
                                     Label="Show pill on app start"
-                                    Description="When off, Dimmy boots in 'taskbar only' mode. The pill stays hidden and recording status shows only on the taskbar icon.">
+                                    InfoTip="Off starts Dimmy in taskbar-only mode. The pill stays hidden and recording status shows on the taskbar icon."
+                                    HelpUrl="https://dimmy.app/help/pill-overview">
                 <ToggleSwitch IsOn="{Binding PillShowOnStartup, Mode=TwoWay}"
-                              Toggled="PillVisibilityToggle_Toggled" />
+                              Toggled="PillVisibilityToggle_Toggled"
+                              Style="{StaticResource CompactToggleSwitch}" />
               </controls:SettingCard>
               <controls:SettingCard Glyph="&#xE9F5;"
                                     Label="Show pill when recording"
-                                    Description="When off, pressing the global hotkey while the pill is hidden does NOT bring it back. Status lives only on the taskbar overlay icon (red dot + amplitude bar).">
+                                    InfoTip="Off keeps the pill hidden even during recording. Status shows on the taskbar icon with a red dot and level bar."
+                                    HelpUrl="https://dimmy.app/help/pill-states">
                 <ToggleSwitch IsOn="{Binding PillShowOnHotkey, Mode=TwoWay}"
-                              Toggled="PillVisibilityToggle_Toggled" />
+                              Toggled="PillVisibilityToggle_Toggled"
+                              Style="{StaticResource CompactToggleSwitch}" />
               </controls:SettingCard>
               <controls:SettingCard Glyph="&#xE71D;"
                                     Label="Show Dimmy in Windows taskbar"
-                                    Description="The taskbar button shows the brand icon, the live amplitude bar during recording, and the right-click jump-list shortcuts. Turn off to keep only the system tray + global hotkey.">
+                                    InfoTip="Adds the icon, a live level bar while recording, and right-click shortcuts. Off keeps Dimmy in the system tray with the hotkey only."
+                                    HelpUrl="https://dimmy.app/help/tray-menu">
                 <ToggleSwitch IsOn="{Binding ShowTaskbarIcon, Mode=TwoWay}"
-                              Toggled="PillVisibilityToggle_Toggled" />
+                              Toggled="PillVisibilityToggle_Toggled"
+                              Style="{StaticResource CompactToggleSwitch}" />
               </controls:SettingCard>
 
               <TextBlock Text="POSITION"
@@ -1562,7 +1626,8 @@
                          CharacterSpacing="40" Margin="2,20,0,8" />
               <controls:SettingCard Glyph="&#xE759;"
                                     Label="Default position"
-                                    Description="Where the pill spawns at startup. You can always drag it to reposition.">
+                                    InfoTip="Sets the corner the pill starts in. You can always drag it somewhere else."
+                                    HelpUrl="https://dimmy.app/help/pill-position">
                 <!-- Compact 3×2 grid embedded as the right-side control of the
                      SettingCard — matches the design's wallpaper-position
                      picker. Top-Center is intentionally empty. -->
@@ -1623,7 +1688,8 @@
               </controls:SettingCard>
               <controls:SettingCard Glyph="&#xE777;"
                                     Label="Reset position"
-                                    Description="Snap the pill back to your default location.">
+                                    InfoTip="Moves the pill back to the default position you set above, in case you dragged it off screen."
+                                    HelpUrl="https://dimmy.app/help/pill-position">
                 <Button Content="Reset" Click="ResetPosition_Click" />
               </controls:SettingCard>
 
@@ -1633,8 +1699,9 @@
                          CharacterSpacing="40" Margin="2,20,0,8" />
               <controls:SettingCard Glyph="&#xE790;"
                                     Label="Border style"
-                                    Description="Color of the pill outline when idle.">
-                <ComboBox MinWidth="180"
+                                    InfoTip="Pick the rainbow glow or a solid color. None hides the outline."
+                                    HelpUrl="https://dimmy.app/help/pill-overview">
+                <ComboBox MinWidth="{StaticResource SettingFieldWidth}"
                           SelectedItem="{Binding BorderStyle, Mode=TwoWay}"
                           SelectionChanged="BorderStyle_SelectionChanged">
                   <x:String>Rainbow</x:String>
@@ -1647,8 +1714,9 @@
               </controls:SettingCard>
               <controls:SettingCard Glyph="&#xE9F5;"
                                     Label="Waveform style"
-                                    Description="How sound is visualized inside the pill while recording.">
-                <ComboBox MinWidth="180"
+                                    InfoTip="Sets the shape of the live audio animation while you record. Pick whichever you like best."
+                                    HelpUrl="https://dimmy.app/help/pill-states">
+                <ComboBox MinWidth="{StaticResource SettingFieldWidth}"
                           SelectedItem="{Binding WaveformStyle, Mode=TwoWay}"
                           SelectionChanged="WaveformStyle_SelectionChanged">
                   <x:String>Bars</x:String>
@@ -1666,7 +1734,7 @@
                 <TextBlock Text="App rules" FontSize="28" FontWeight="SemiBold" />
                 <TextBlock TextWrapping="Wrap"
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                           Text="Auto-switch the LLM style + translation target based on the foreground app at hotkey-down. First match wins, top-to-bottom. Disabled rules stay in the list but are skipped." />
+                           Text="Auto-switch style and translation per app." />
               </StackPanel>
 
               <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
@@ -1911,7 +1979,8 @@
               <controls:SettingCard x:Name="UpdateCard"
                                     Glyph="&#xEBD3;"
                                     Label="Update ready"
-                                    Description="A new version of Dimmy is downloaded and ready to install."
+                                    InfoTip="Dimmy downloaded the update in the background. Install and restart to apply it now, or it applies next time you quit."
+                                    HelpUrl="https://dimmy.app/help/about-and-updates"
                                     Visibility="Collapsed"
                                     Margin="0,16,0,0">
                 <StackPanel Orientation="Horizontal" Spacing="8">
@@ -1936,11 +2005,12 @@
               <controls:SettingCard x:Name="UpdateChannelCard"
                                     Glyph="&#xE74C;"
                                     Label="Update channel"
-                                    Description="Stable only is the safer default. Pre-release also offers staging builds with new features earlier."
+                                    InfoTip="Stable only is the safer default. Pre-release gets new features earlier, with a higher chance of rough edges."
+                                    HelpUrl="https://dimmy.app/help/about-and-updates"
                                     Visibility="Collapsed"
                                     Margin="0,8,0,0">
                 <ComboBox x:Name="UpdateChannelCombo"
-                          MinWidth="200"
+                          MinWidth="{StaticResource SettingFieldWidth}"
                           SelectionChanged="UpdateChannel_SelectionChanged">
                   <ComboBoxItem Content="Stable only" Tag="stable"/>
                   <ComboBoxItem Content="Stable + Pre-release" Tag="prerelease"/>
@@ -1953,30 +2023,16 @@
                          CharacterSpacing="40" Margin="2,20,0,8" />
               <controls:SettingCard Glyph="&#xE71B;"
                                     Label="Website"
-                                    Description="dimmy.app: features, downloads, and docs.">
+                                    InfoTip="dimmy.app: features, downloads, and docs.">
                 <HyperlinkButton Content="Open" NavigateUri="https://dimmy.app" />
               </controls:SettingCard>
               <controls:SettingCard Glyph="&#xE943;"
                                     Label="Source code"
-                                    Description="Open-source on GitHub.">
+                                    InfoTip="Open-source on GitHub.">
                 <HyperlinkButton Content="GitHub"
                                  NavigateUri="https://github.com/KonradDallaOrg/dimmy" />
               </controls:SettingCard>
 
-              <!-- Footer: Made with [Claude Code mark] — official Anthropic logo path -->
-              <StackPanel Orientation="Horizontal" Spacing="6"
-                          HorizontalAlignment="Center" Margin="0,24,0,4">
-                <TextBlock Text="Made with" FontSize="12"
-                           VerticalAlignment="Center"
-                           Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-                <Viewbox Width="14" Height="14" VerticalAlignment="Center">
-                  <Path Fill="#D97757"
-                        Data="m19.6 66.5 19.7-11 .3-1-.3-.5h-1l-3.3-.2-11.2-.3L14 53l-9.5-.5-2.4-.5L0 49l.2-1.5 2-1.3 2.9.2 6.3.5 9.5.6 6.9.4L38 49.1h1.6l.2-.7-.5-.4-.4-.4L29 41l-10.6-7-5.6-4.1-3-2-1.5-2-.6-4.2 2.7-3 3.7.3.9.2 3.7 2.9 8 6.1L37 36l1.5 1.2.6-.4.1-.3-.7-1.1L33 25l-6-10.4-2.7-4.3-.7-2.6c-.3-1-.4-2-.4-3l3-4.2L28 0l4.2.6L33.8 2l2.6 6 4.1 9.3L47 29.9l2 3.8 1 3.4.3 1h.7v-.5l.5-7.2 1-8.7 1-11.2.3-3.2 1.6-3.8 3-2L61 2.6l2 2.9-.3 1.8-1.1 7.7L59 27.1l-1.5 8.2h.9l1-1.1 4.1-5.4 6.9-8.6 3-3.5L77 13l2.3-1.8h4.3l3.1 4.7-1.4 4.9-4.4 5.6-3.7 4.7-5.3 7.1-3.2 5.7.3.4h.7l12-2.6 6.4-1.1 7.6-1.3 3.5 1.6.4 1.6-1.4 3.4-8.2 2-9.6 2-14.3 3.3-.2.1.2.3 6.4.6 2.8.2h6.8l12.6 1 3.3 2 1.9 2.7-.3 2-5.1 2.6-6.8-1.6-16-3.8-5.4-1.3h-.8v.4l4.6 4.5 8.3 7.5L89 80.1l.5 2.4-1.3 2-1.4-.2-9.2-7-3.6-3-8-6.8h-.5v.7l1.8 2.7 9.8 14.7.5 4.5-.7 1.4-2.6 1-2.7-.6-5.8-8-6-9-4.7-8.2-.5.4-2.9 30.2-1.3 1.5-3 1.2-2.5-2-1.4-3 1.4-6.2 1.6-8 1.3-6.4 1.2-7.9.7-2.6v-.2H49L43 72l-9 12.3-7.2 7.6-1.7.7-3-1.5.3-2.8L24 86l10-12.8 6-7.9 4-4.6-.1-.5h-.3L17.2 77.4l-4.7.6-2-2 .2-3 1-1 8-5.5Z" />
-                </Viewbox>
-                <TextBlock Text="Claude Code" FontSize="12" FontWeight="SemiBold"
-                           VerticalAlignment="Center"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-              </StackPanel>
             </StackPanel>
 
             <!-- ═══ History ═══ -->
@@ -1985,7 +2041,7 @@
                 <TextBlock Text="Recordings" FontSize="28" FontWeight="SemiBold" />
                 <TextBlock TextWrapping="Wrap"
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                           Text="Past transcriptions: dictations, file-load, meetings. Full-text searchable. Audio retention is opt-in (off by default for privacy). Meeting recordings live separately in &lt;config&gt;/meetings/&lt;id&gt;/." />
+                           Text="Search past dictations, file loads, and meetings." />
               </StackPanel>
 
               <Grid ColumnSpacing="8" Margin="0,4,0,0">
@@ -2012,19 +2068,22 @@
 
               <controls:SettingCard Glyph="&#xE7B8;"
                                     Label="Save audio with history"
-                                    Description="Off by default. When on, each transcription's WAV is saved alongside the row at 16 kHz mono. Use the retention controls below to bound disk usage.">
+                                    InfoTip="Off by default for privacy. When on, the audio is saved next to each transcription. Use the limits below to cap disk use."
+                                    HelpUrl="https://dimmy.app/help/history-search">
                 <ToggleSwitch IsOn="{Binding SaveAudioInHistory, Mode=TwoWay}"
-                              OnContent="" OffContent="" />
+                              Style="{StaticResource CompactToggleSwitch}" />
               </controls:SettingCard>
               <controls:SettingCard Glyph="&#xE823;"
                                     Label="Audio retention (days)"
-                                    Description="Files older than this are pruned at startup. 0 disables age-based pruning.">
+                                    InfoTip="Old audio is removed at startup once it passes this age. Set 0 to never delete by age."
+                                    HelpUrl="https://dimmy.app/help/history-search">
                 <NumberBox MinWidth="120" Minimum="0" Maximum="3650"
                            Value="{Binding HistoryAudioKeepDays, Mode=TwoWay}" />
               </controls:SettingCard>
               <controls:SettingCard Glyph="&#xEDA2;"
                                     Label="Audio quota (MB)"
-                                    Description="Oldest audio is deleted first when this size is exceeded. 0 disables size-based pruning.">
+                                    InfoTip="When saved audio passes this size, the oldest files are removed first. Set 0 to never delete by size."
+                                    HelpUrl="https://dimmy.app/help/history-search">
                 <NumberBox MinWidth="120" Minimum="0" Maximum="100000"
                            Value="{Binding HistoryAudioMaxMb, Mode=TwoWay}" />
               </controls:SettingCard>
@@ -2156,10 +2215,30 @@
               </StackPanel>
 
               <!-- Group: NOTION -->
-              <TextBlock Text="NOTION"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,16,0,8" />
+              <StackPanel Orientation="Horizontal" Spacing="6" Margin="2,16,0,8">
+                <TextBlock Text="NOTION"
+                           FontSize="12" FontWeight="SemiBold"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           CharacterSpacing="40" VerticalAlignment="Center" />
+                <Button Background="Transparent" BorderThickness="0" Padding="0"
+                        Width="18" Height="18" MinWidth="0" MinHeight="0"
+                        VerticalAlignment="Center" VerticalContentAlignment="Center"
+                        HorizontalContentAlignment="Center"
+                        ToolTipService.ToolTip="Free Notion accounts work fine. Your token and destination stay on this device. Only the recap text leaves, and only when you send it.">
+                  <FontIcon Glyph="&#xE946;" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                  <Button.Flyout>
+                    <Flyout>
+                      <StackPanel MaxWidth="300" Spacing="10">
+                        <TextBlock TextWrapping="Wrap" FontSize="13"
+                                   Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                                   Text="Free Notion accounts work fine. Your token and destination stay on this device. Only the recap text leaves, and only when you send it." />
+                        <HyperlinkButton Content="Open full guide →" Padding="0"
+                                         NavigateUri="https://dimmy.app/help/integrations-notion" />
+                      </StackPanel>
+                    </Flyout>
+                  </Button.Flyout>
+                </Button>
+              </StackPanel>
 
               <!-- Summary card — shows current connection state. Two
                    variants: NOT CONNECTED (default, big "Connect"
@@ -2228,18 +2307,14 @@
                    over time without re-entering setup. -->
               <controls:SettingCard Glyph="&#xE945;"
                                     Label="Auto-send each meeting"
-                                    Description="When on, every meeting's recap is uploaded to your Notion destination as soon as the recap finishes. When off, you click the Notion button on the meeting Done view per meeting.">
+                                    Description="Send every recap to Notion."
+                                    InfoTip="On uploads each recap as soon as it's ready. Off lets you send manually from the meeting's Done view."
+                                    HelpUrl="https://dimmy.app/help/integrations-notion">
                 <ToggleSwitch IsOn="{Binding NotionAutoSend, Mode=TwoWay}"
                               IsEnabled="{Binding HasNotionToken}"
                               Toggled="NotionAutoSend_Toggled"
-                              OnContent="" OffContent="" />
+                              Style="{StaticResource CompactToggleSwitch}" />
               </controls:SettingCard>
-
-              <!-- Help footer -->
-              <TextBlock Margin="2,16,0,0" FontSize="12"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         TextWrapping="Wrap"
-                         Text="Free Notion accounts work — no API limits per plan. Token + destination stay on this device; only the recap markdown leaves when you (or auto-send) trigger an upload." />
 
               <!-- Status / errors -->
               <Border x:Name="NotionMessageBar" Background="{ThemeResource SystemFillColorAttentionBackgroundBrush}"
@@ -2254,10 +2329,30 @@
                    the Output → LLM and Output → Recap sections
                    expose toggles to route those calls through the
                    subscription instead of through API keys. -->
-              <TextBlock Text="ANTHROPIC SUBSCRIPTION"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,32,0,8" />
+              <StackPanel Orientation="Horizontal" Spacing="6" Margin="2,32,0,8">
+                <TextBlock Text="ANTHROPIC SUBSCRIPTION"
+                           FontSize="12" FontWeight="SemiBold"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           CharacterSpacing="40" VerticalAlignment="Center" />
+                <Button Background="Transparent" BorderThickness="0" Padding="0"
+                        Width="18" Height="18" MinWidth="0" MinHeight="0"
+                        VerticalAlignment="Center" VerticalContentAlignment="Center"
+                        HorizontalContentAlignment="Center"
+                        ToolTipService.ToolTip="Use your Anthropic Pro, Team, or Max plan through the local Claude CLI, so no API credit is spent. Dimmy never sees your token. Turn it on under Output once connected.">
+                  <FontIcon Glyph="&#xE946;" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                  <Button.Flyout>
+                    <Flyout>
+                      <StackPanel MaxWidth="300" Spacing="10">
+                        <TextBlock TextWrapping="Wrap" FontSize="13"
+                                   Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                                   Text="Use your Anthropic Pro, Team, or Max plan through the local Claude CLI, so no API credit is spent. Dimmy never sees your token. Turn it on under Output once connected." />
+                        <HyperlinkButton Content="Open full guide →" Padding="0"
+                                         NavigateUri="https://dimmy.app/help/integrations-claude-cli" />
+                      </StackPanel>
+                    </Flyout>
+                  </Button.Flyout>
+                </Button>
+              </StackPanel>
 
               <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                       BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
@@ -2342,11 +2437,6 @@
                 </Grid>
               </Border>
 
-              <!-- Help footer. -->
-              <TextBlock Margin="2,16,0,0" FontSize="12"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         TextWrapping="Wrap"
-                         Text="Uses your Anthropic Pro / Team / Max plan via the local `claude` CLI. No API credit consumed. Dimmy never sees your token — the CLI owns it (~/.claude/credentials.json). Once connected, toggle the use under Output → LLM (rewrite) or Output → Recap." />
 
               <!-- Status / errors. -->
               <Border x:Name="AnthropicIntegrationMessageBar" Background="{ThemeResource SystemFillColorAttentionBackgroundBrush}"
@@ -2360,10 +2450,30 @@
                    writes recaps back via the dimmy-mcp stdio binary.
                    Distinct from the Anthropic CLI subscription above
                    (which is the LLM dispatch path for recap/rewrite). -->
-              <TextBlock Text="CLAUDE DESKTOP (MCP)"
-                         FontSize="12" FontWeight="SemiBold"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         CharacterSpacing="40" Margin="2,32,0,8" />
+              <StackPanel Orientation="Horizontal" Spacing="6" Margin="2,32,0,8">
+                <TextBlock Text="CLAUDE DESKTOP (MCP)"
+                           FontSize="12" FontWeight="SemiBold"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           CharacterSpacing="40" VerticalAlignment="Center" />
+                <Button Background="Transparent" BorderThickness="0" Padding="0"
+                        Width="18" Height="18" MinWidth="0" MinHeight="0"
+                        VerticalAlignment="Center" VerticalContentAlignment="Center"
+                        HorizontalContentAlignment="Center"
+                        ToolTipService.ToolTip="Lets Claude Desktop read your recent meetings and save recaps back. Everything runs on this device. Disconnect anytime and Dimmy removes its entry.">
+                  <FontIcon Glyph="&#xE946;" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                  <Button.Flyout>
+                    <Flyout>
+                      <StackPanel MaxWidth="300" Spacing="10">
+                        <TextBlock TextWrapping="Wrap" FontSize="13"
+                                   Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                                   Text="Lets Claude Desktop read your recent meetings and save recaps back. Everything runs on this device. Disconnect anytime and Dimmy removes its entry." />
+                        <HyperlinkButton Content="Open full guide →" Padding="0"
+                                         NavigateUri="https://dimmy.app/help/integrations-claude-desktop" />
+                      </StackPanel>
+                    </Flyout>
+                  </Button.Flyout>
+                </Button>
+              </StackPanel>
 
               <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                       BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
@@ -2419,11 +2529,6 @@
                 </Grid>
               </Border>
 
-              <TextBlock Margin="2,16,0,0" FontSize="12"
-                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                         TextWrapping="Wrap"
-                         Text="Lets Claude Desktop see your recent meetings and save recaps back. Runs entirely on this device — Claude Desktop spawns Dimmy's MCP binary at startup; no network round-trip. Disconnect anytime; we just remove our entry from claude_desktop_config.json." />
-
             </StackPanel>
 
             <!-- ═══ Privacy & data ═══ -->
@@ -2449,23 +2554,28 @@
                 </StackPanel>
               </Border>
 
+              <!-- Telemetry + Anonymous ID — Advanced-gated per the settings map.
+                   Send feedback + policy links stay in Simple. -->
+              <StackPanel Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
               <TextBlock Text="TELEMETRY"
                          FontSize="12" FontWeight="SemiBold"
                          Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                          CharacterSpacing="40" Margin="2,20,0,8" />
               <controls:SettingCard Glyph="&#xE9D9;"
                                     Label="Send anonymous usage data"
-                                    Description="&quot;app started&quot;, &quot;transcription completed in 2.3s&quot;, &quot;cloud provider: groq&quot;. No content, no identifiers.">
+                                    InfoTip="Things like &quot;app started&quot; or &quot;transcription took 2.3s&quot;. Never your text, audio, or anything that identifies you."
+                                    HelpUrl="https://dimmy.app/help/telemetry">
                 <ToggleSwitch x:Name="AnalyticsToggle"
                               IsOn="{Binding TelemetryEnabled, Mode=TwoWay}"
-                              OnContent="" OffContent="" />
+                              Style="{StaticResource CompactToggleSwitch}" />
               </controls:SettingCard>
               <controls:SettingCard Glyph="&#xE730;"
                                     Label="Send crash reports"
-                                    Description="If Dimmy crashes, sends a stack trace (no environment variables, no paths with your username) so we can fix it.">
+                                    InfoTip="Sends a crash trace so we can fix the bug. No usernames, paths, or environment details are included."
+                                    HelpUrl="https://dimmy.app/help/telemetry">
                 <ToggleSwitch x:Name="CrashesToggle"
                               IsOn="{Binding CrashReportsEnabled, Mode=TwoWay}"
-                              OnContent="" OffContent="" />
+                              Style="{StaticResource CompactToggleSwitch}" />
               </controls:SettingCard>
 
               <TextBlock Text="ANONYMOUS IDENTIFIER"
@@ -2474,7 +2584,8 @@
                          CharacterSpacing="40" Margin="2,20,0,8" />
               <controls:SettingCard Glyph="&#xE77B;"
                                     Label="Your anonymous ID"
-                                    Description="A random ID generated locally on first launch. Resetting takes effect after restart.">
+                                    InfoTip="Created on this device at first launch. It ties anonymous events together without identifying you. Reset applies after a restart."
+                                    HelpUrl="https://dimmy.app/help/telemetry">
                 <StackPanel Orientation="Horizontal" Spacing="12">
                   <TextBlock x:Name="AnonymousIdText" FontSize="12"
                              FontFamily="Consolas"
@@ -2485,6 +2596,7 @@
                           Click="ResetAnonymousId_Click" />
                 </StackPanel>
               </controls:SettingCard>
+              </StackPanel>
 
               <TextBlock Text="SEND FEEDBACK"
                          FontSize="12" FontWeight="SemiBold"
@@ -2492,8 +2604,8 @@
                          CharacterSpacing="40" Margin="2,20,0,8" />
               <controls:SettingCard Glyph="&#xE939;"
                                     Label="Kind"
-                                    Description="What type of feedback this is.">
-                <ComboBox x:Name="FeedbackKindCombo" SelectedIndex="0" MinWidth="180">
+                                    InfoTip="Helps us route your message: a general note, a bug, or a feature idea.">
+                <ComboBox x:Name="FeedbackKindCombo" SelectedIndex="0" MinWidth="{StaticResource SettingFieldWidth}">
                   <ComboBoxItem Content="General" Tag="general" />
                   <ComboBoxItem Content="Bug report" Tag="bug" />
                   <ComboBoxItem Content="Feature request" Tag="feature" />
@@ -2522,6 +2634,7 @@
                             Content="Enable &amp; send"
                             Click="EnableAndSendFeedback_Click"
                             Visibility="Collapsed"
+                            ToolTipService.ToolTip="Feedback rides on crash reporting, which is currently off. This turns it on and sends your message in one click."
                             Style="{ThemeResource AccentButtonStyle}" />
                     <TextBlock x:Name="FeedbackStatus" FontSize="11"
                                VerticalAlignment="Center"
@@ -2536,13 +2649,15 @@
                          CharacterSpacing="40" Margin="2,20,0,8" />
               <controls:SettingCard Glyph="&#xE72E;"
                                     Label="Privacy policy"
-                                    Description="The full text of what we collect, store, and never share.">
+                                    InfoTip="Opens the complete privacy policy on dimmy.app."
+                                    HelpUrl="https://dimmy.app/help/telemetry">
                 <HyperlinkButton Content="Open"
                                  NavigateUri="https://dimmy.app/privacy" />
               </controls:SettingCard>
               <controls:SettingCard Glyph="&#xE946;"
                                     Label="What we collect"
-                                    Description="Plain-language summary of every event Dimmy sends.">
+                                    InfoTip="A short, readable list of each anonymous event, so there are no surprises."
+                                    HelpUrl="https://dimmy.app/help/telemetry">
                 <HyperlinkButton Content="Open"
                                  NavigateUri="https://dimmy.app/privacy#data" />
               </controls:SettingCard>
@@ -2735,7 +2850,7 @@
                   <TextBlock FontSize="12"
                              Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                              TextWrapping="Wrap"
-                             Text="Enter your email. We'll send you a magic link. Clicking it opens Dimmy and activates the license automatically. New device on the same email? Same flow, the device joins your existing license." />
+                             Text="Enter your email and we send you a sign-in link." />
                   <Grid ColumnSpacing="8">
                     <Grid.ColumnDefinitions>
                       <ColumnDefinition Width="*" />
@@ -2784,10 +2899,10 @@
               <TextBlock x:Name="TimeSavedText" Visibility="Collapsed" />
             </StackPanel>
 
-            <!-- ═══ Advanced (was Debug) ═══ -->
+            <!-- ═══ Debug ═══ -->
             <StackPanel x:Name="DebugPanel" Spacing="4" Visibility="Collapsed">
               <StackPanel Spacing="2" Margin="0,0,0,16">
-                <TextBlock Text="Advanced" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Text="Debug" FontSize="28" FontWeight="SemiBold" />
                 <TextBlock Text="Developer-leaning controls and diagnostics."
                            FontSize="13"
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
@@ -2799,21 +2914,24 @@
                          CharacterSpacing="40" Margin="2,16,0,8" />
               <controls:SettingCard Glyph="&#xE82D;"
                                     Label="LLM log enabled"
-                                    Description="Write every LLM prompt and response to llm.log for debugging.">
+                                    InfoTip="Writes each rewrite prompt and response to llm.log. Useful when a rewrite looks wrong."
+                                    HelpUrl="https://dimmy.app/help/transcription-issues">
                 <ToggleSwitch IsOn="{Binding LlmLogEnabled, Mode=TwoWay}"
-                              OnContent="" OffContent="" />
+                              Style="{StaticResource CompactToggleSwitch}" />
               </controls:SettingCard>
               <controls:SettingCard Glyph="&#xE9F5;"
                                     Label="Audio debug"
-                                    Description="Save raw audio captures and verbose DSP traces.">
+                                    InfoTip="Keeps the raw capture and verbose audio logs so we can diagnose recording problems."
+                                    HelpUrl="https://dimmy.app/help/transcription-issues">
                 <ToggleSwitch IsOn="{Binding AudioDebugEnabled, Mode=TwoWay}"
-                              OnContent="" OffContent="" />
+                              Style="{StaticResource CompactToggleSwitch}" />
               </controls:SettingCard>
               <controls:SettingCard Glyph="&#xE7B5;"
                                     Label="ggml debug logging"
-                                    Description="Verbose model load output from ggml. Useful when local models fail to start.">
+                                    InfoTip="Shows detailed startup logs from the local model engine. Turn on when a local model won't load."
+                                    HelpUrl="https://dimmy.app/help/install-issues">
                 <ToggleSwitch IsOn="{Binding GgmlDebugLogging, Mode=TwoWay}"
-                              OnContent="" OffContent="" />
+                              Style="{StaticResource CompactToggleSwitch}" />
               </controls:SettingCard>
 
               <TextBlock Text="GPU ACCELERATION"
@@ -2822,7 +2940,8 @@
                          CharacterSpacing="40" Margin="2,20,0,8" />
               <controls:SettingCard Glyph="&#xE950;"
                                     Label="GPU status"
-                                    Description="Dimmy auto-disables the GPU after a driver crash. Use Retry once you've updated drivers.">
+                                    InfoTip="Dimmy turns the GPU off after a driver crash and falls back to CPU. Update your drivers, then press Retry."
+                                    HelpUrl="https://dimmy.app/help/install-issues">
                 <StackPanel Orientation="Horizontal" Spacing="12">
                   <TextBlock Text="Enabled"
                              VerticalAlignment="Center"

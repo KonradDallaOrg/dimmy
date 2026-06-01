@@ -1,11 +1,11 @@
 import SwiftUI
 
-// Home — landing tab. Three blocks:
+// Home, landing tab. Three blocks:
 //   1. Hero (welcome + shortcut hint + Test microphone / Change shortcut buttons)
 //   2. Stats grid (words / speaking time / time saved)
 //   3. "Current setup" tile (STT provider, output style, shortcut summary)
 //
-// The "Recent dictations" tile from the design is omitted for now — the
+// The "Recent dictations" tile from the design is omitted for now, the
 // macOS app already has a full History tab, and the Home recent list
 // would duplicate that data. We can add a 3-row preview here in Phase 6
 // polish if the user wants it.
@@ -33,8 +33,10 @@ struct MacHomePage: View {
             MacGroupLabel(text: "Meeting mode")
             MacTile {
                 MacRow(
-                    "Long-form recording with recap",
-                    description: "Record a meeting, get a live transcript, and an LLM-generated recap + action items at the end. Independent from the dictation hotkey.",
+                    "Record a meeting",
+                    description: "Live transcript and an AI recap when you stop.",
+                    hint: "Records a long-form session independently of the dictation hotkey. Stop the meeting to get an LLM-generated recap with action items, saved alongside the transcript.",
+                    hintURL: URL(string: "https://dimmy.app/help/use-meeting-recaps"),
                     icon: "rectangle.dashed.and.paperclip",
                     iconBackground: Color(red: 0.92, green: 0.25, blue: 0.48),
                     showsDivider: false
@@ -82,7 +84,8 @@ struct MacHomePage: View {
                     description: appState.preferredMode == .pushToTalk
                                     ? "Push-to-talk" : "Toggle recording",
                     icon: "keyboard.fill",
-                    iconBackground: Color(red: 0.04, green: 0.52, blue: 1.00)
+                    iconBackground: Color(red: 0.04, green: 0.52, blue: 1.00),
+                    showsDivider: false
                 ) {
                     HStack(spacing: 4) {
                         ForEach(shortcutKeycaps, id: \.self) { glyph in
@@ -91,32 +94,49 @@ struct MacHomePage: View {
                     }
                 }
 
-                MacRow(
-                    "Appearance",
-                    description: "Dimmy follows the system theme by default.",
-                    icon: "paintpalette.fill",
-                    iconBackground: Color(red: 0.69, green: 0.32, blue: 0.87),
-                    showsDivider: false
-                ) {
-                    Picker("", selection: Binding(
-                        get: { appState.theme },
-                        set: { newValue in
-                            appState.theme = newValue
-                            applyTheme(newValue)
+                // "Appearance" row used to live here; it has moved
+                // into the Advanced-gated "System" section below so
+                // the Simple Home view stays focused on the four
+                // navigation shortcuts (STT, Output style, Shortcut
+                // + their current state).
+                // Drop the last MacRow's divider for the new last row.
+                let _ = ()
+            }
+
+            // SYSTEM section per docs/dev/settings-map.md "Vuoi" col:
+            // Theme picker is Advanced-only on Mac. (Launch at login
+            // sits in the macOS Login Items prefpane on this
+            // platform; not duplicated as a Dimmy toggle yet.)
+            if appState.showAdvanced {
+                MacGroupLabel(text: "System")
+                MacTile {
+                    MacRow(
+                        "Appearance",
+                        description: "Dimmy follows the system theme by default.",
+                        icon: "paintpalette.fill",
+                        iconBackground: Color(red: 0.69, green: 0.32, blue: 0.87),
+                        showsDivider: false
+                    ) {
+                        Picker("", selection: Binding(
+                            get: { appState.theme },
+                            set: { newValue in
+                                appState.theme = newValue
+                                applyTheme(newValue)
+                            }
+                        )) {
+                            ForEach(AppTheme.allCases, id: \.self) { theme in
+                                Text(theme.rawValue).tag(theme)
+                            }
                         }
-                    )) {
-                        ForEach(AppTheme.allCases, id: \.self) { theme in
-                            Text(theme.rawValue).tag(theme)
-                        }
+                        .labelsHidden()
+                        .frame(width: 110)
                     }
-                    .labelsHidden()
-                    .frame(width: 110)
                 }
             }
         }
     }
 
-    /// Theme is a UI-only preference (no Rust round-trip) — directly flips
+    /// Theme is a UI-only preference (no Rust round-trip), directly flips
     /// the NSApp.appearance to follow / force light / force dark.
     private func applyTheme(_ theme: AppTheme) {
         switch theme {
@@ -139,7 +159,7 @@ struct MacHomePage: View {
             // catalogue's `AppIcon` rather than loading a separate PNG.
             ZStack {
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(Color.black.opacity(0.06))
+                    .fill(Color.primary.opacity(0.06))
                     .frame(width: 200, height: 96)
                 Image("DimmyAppIcon")
                     .resizable()
@@ -159,7 +179,7 @@ struct MacHomePage: View {
                 if micTestRunning {
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.small).scaleEffect(0.7)
-                        Text("Testing…")
+                        Text("Testing...")
                     }
                 } else {
                     Label("Test microphone", systemImage: "mic.fill")
@@ -169,7 +189,7 @@ struct MacHomePage: View {
             .controlSize(.regular)
             .disabled(micTestRunning)
 
-            Button("Change shortcut…") { onTabChange(.shortcut) }
+            Button("Change shortcut...") { onTabChange(.shortcut) }
                 .controlSize(.regular)
 
             if let result = micTestResult {
@@ -246,7 +266,7 @@ struct MacHomePage: View {
 
     private var speakingTimeText: String {
         let secs = appState.statsTotalSpeakingSecs
-        if secs < 1 { return "—" }
+        if secs < 1 { return "-" }
         let mins = Int(secs / 60)
         let remSecs = Int(secs.truncatingRemainder(dividingBy: 60))
         if mins == 0 { return "\(remSecs)s" }
@@ -254,10 +274,10 @@ struct MacHomePage: View {
     }
 
     private var timeSavedText: String {
-        // Same heuristic as Windows: typing ~40 WPM vs dictation ~150 WPM.
+        // Same heuristic as Windows: typing about 40 WPM vs dictation about 150 WPM.
         let words = Double(appState.statsTotalWords)
         let secs = words * (1.0 / 40 - 1.0 / 150) * 60
-        if secs < 1 { return "—" }
+        if secs < 1 { return "-" }
         if secs < 60 { return "\(Int(secs))s" }
         let mins = Int(secs / 60)
         if mins < 60 { return "~\(mins)m" }

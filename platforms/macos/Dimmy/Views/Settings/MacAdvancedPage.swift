@@ -1,20 +1,17 @@
 import AppKit
 import SwiftUI
 
-// Advanced — diagnostics + GPU acceleration. Visible only when the
+// Advanced, diagnostics + GPU acceleration. Visible only when the
 // sidebar Advanced toggle is ON (gated by `MacSettingsTab.advanced`
 // filter in MacSettingsContainerView.filteredTabs).
 
 struct MacAdvancedPage: View {
     @ObservedObject var appState: AppState
 
-    /// Inline error when a picked meeting-storage folder isn't writable.
-    @State private var meetingStorageError: String? = nil
-
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             MacNote(
-                title: "Advanced settings",
+                title: "Debug settings",
                 message: "These options can affect performance and stability. Change them only if you know what you're doing.",
                 systemImage: "exclamationmark.triangle.fill"
             )
@@ -22,7 +19,8 @@ struct MacAdvancedPage: View {
 
             performanceGroup
             autoRecapGroup
-            meetingStorageGroup
+            // Meetings storage folder moved to Output > Advanced
+            // (settings-redesign-checklist.md says it lives on Output).
             #if DEBUG
             debugSeedGroup
             #endif
@@ -31,95 +29,14 @@ struct MacAdvancedPage: View {
         }
     }
 
-    // MARK: - Meeting storage directory
-
-    /// User-configurable meeting storage folder. Mirror of the Win
-    /// Settings → Meetings card. The effective path comes from the Rust
-    /// core (`meetingsDirURL`, which applies the override + a writability
-    /// fallback); `appState.meetingStoragePath` is the raw override
-    /// (empty = default).
-    private var meetingStorageGroup: some View {
-        Group {
-            MacGroupLabel(text: "Meetings · storage")
-            MacTile {
-                MacRow(
-                    "Storage folder",
-                    description: meetingStorageDescription,
-                    showsDivider: meetingStorageError != nil
-                ) {
-                    HStack(spacing: 8) {
-                        Button("Browse…") { pickMeetingFolder() }
-                            .controlSize(.small)
-                            .buttonStyle(.borderedProminent)
-                        Button("Reset") { persistMeetingStoragePath("") }
-                            .controlSize(.small)
-                            .disabled(appState.meetingStoragePath.isEmpty)
-                            .help("Reset to the default location")
-                    }
-                }
-                if let err = meetingStorageError {
-                    MacRow("", description: err, showsDivider: false) { EmptyView() }
-                }
-            }
-            MacGroupFooter(text: "Where meeting recordings, transcripts and recaps are saved. New meetings use the new folder; existing ones stay where they are.")
-        }
-    }
-
-    private var meetingStorageDescription: String {
-        let effective = DimmyCore.shared.meetingsDirURL?.path ?? "—"
-        return appState.meetingStoragePath.isEmpty
-            ? "\(effective)  ·  default"
-            : effective
-    }
-
-    private func pickMeetingFolder() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.canCreateDirectories = true
-        panel.prompt = "Choose"
-        panel.message = "Choose where to store meeting recordings"
-        if let current = DimmyCore.shared.meetingsDirURL { panel.directoryURL = current }
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        if !isDirectoryWritable(url.path) {
-            meetingStorageError = "Can't write to “\(url.lastPathComponent)”. Pick a folder you have write access to."
-            return
-        }
-        meetingStorageError = nil
-        persistMeetingStoragePath(url.path)
-    }
-
-    /// Single-writer rule: a targeted partial config update through the
-    /// core (never write config.json from Swift). Empty = reset to default;
-    /// the core re-resolves `meetings_dir()` on next read. The if-empty-omit
-    /// guard in `toRustConfig` means only this explicit path can reset it.
-    private func persistMeetingStoragePath(_ path: String) {
-        meetingStorageError = nil
-        if DimmyCore.shared.setConfig(["meeting_storage_path": path]) {
-            appState.meetingStoragePath = path
-        }
-    }
-
-    /// Mirror of Win `IsDirectoryWritable`: create the dir, write + delete a
-    /// probe file. Catches read-only / vanished shares before committing.
-    private func isDirectoryWritable(_ dir: String) -> Bool {
-        let fm = FileManager.default
-        do {
-            try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
-            let probe = (dir as NSString).appendingPathComponent(".dimmy_write_probe")
-            try "".write(toFile: probe, atomically: true, encoding: .utf8)
-            try? fm.removeItem(atPath: probe)
-            return true
-        } catch {
-            return false
-        }
-    }
+    // Meeting storage folder lives on MacOutputPage now (Advanced
+    // gate). See settings-redesign-checklist.md "Meetings folder = A
+    // on Output".
 
     #if DEBUG
     /// Debug-only: drop one sample row with a synthesised WAV so the
     /// History detail's waveform + Raw/Enhanced toggle can be demoed
-    /// without a microphone. Compiled out in Release/Staging — under
+    /// without a microphone. Compiled out in Release/Staging, under
     /// `#if DEBUG` instead of a runtime flag so a binary you ship
     /// physically cannot insert fake rows.
     private var debugSeedGroup: some View {
@@ -128,7 +45,8 @@ struct MacAdvancedPage: View {
             MacTile {
                 MacRow(
                     "Insert sample row",
-                    description: "Adds one fake history entry with a synthesised 4 s WAV so the waveform + playback can be exercised without a real recording.",
+                    description: "Debug-only.",
+                    hint: "Adds one fake history entry with a synthesised 4 s audio file so the waveform and playback UI can be exercised without making a real recording. Compiled out of Release builds.",
                     showsDivider: false
                 ) {
                     Button("Add sample") {
@@ -171,7 +89,7 @@ struct MacAdvancedPage: View {
     }
     #endif
 
-    /// Phase 6.4 — fire-and-forget recap on long dictations. Independent
+    /// Phase 6.4, fire-and-forget recap on long dictations. Independent
     /// of meeting mode (which always recaps) and from the dictation
     /// rewrite (which uses llm_style). 0 = disabled.
     private var autoRecapGroup: some View {
@@ -180,7 +98,8 @@ struct MacAdvancedPage: View {
             MacTile {
                 MacRow(
                     "Long dictation auto-recap",
-                    description: "When a single dictation runs longer than the threshold, ask the LLM for a quick bullet recap and append it to the History row. 0 disables.",
+                    description: "0 disables.",
+                    hint: "When a single dictation runs longer than the threshold, Dimmy asks the LLM for a quick bullet recap and appends it to the History row below the original transcript.",
                     showsDivider: false
                 ) {
                     HStack(spacing: 6) {
@@ -198,7 +117,6 @@ struct MacAdvancedPage: View {
                     }
                 }
             }
-            MacGroupFooter(text: "The recap is appended to the History row's enhanced_text — visible in the History detail under the original transcript.")
         }
     }
 
@@ -208,7 +126,7 @@ struct MacAdvancedPage: View {
             MacTile {
                 MacRow(
                     "Metal acceleration",
-                    description: "GPU-accelerated whisper.cpp + llama.cpp on Apple Silicon",
+                    hint: "Whisper.cpp and llama.cpp use the Apple Silicon GPU via Metal. Always on, no toggle. Listed here so you can confirm it's active in support tickets.",
                     showsDivider: false
                 ) {
                     Label("Active", systemImage: "checkmark.circle.fill")
@@ -225,7 +143,7 @@ struct MacAdvancedPage: View {
             MacTile {
                 MacRow(
                     "LLM log enabled",
-                    description: "Write all prompts and responses to disk for debugging"
+                    hint: "Writes every LLM prompt and response to dimmy.log. Useful for debugging rewrite issues, leave off otherwise so the log doesn't fill with content."
                 ) {
                     Toggle("", isOn: Binding(
                         get: { appState.llmLogEnabled },
@@ -240,7 +158,7 @@ struct MacAdvancedPage: View {
 
                 MacRow(
                     "Audio debug",
-                    description: "Save raw audio of each recording locally",
+                    hint: "Saves the raw mic capture and preprocessed buffer for every recording. Helpful when reporting an audio issue; consumes disk so leave off in normal use.",
                     showsDivider: false
                 ) {
                     Toggle("", isOn: Binding(
@@ -263,7 +181,7 @@ struct MacAdvancedPage: View {
             MacTile {
                 MacRow(
                     "Open log folder",
-                    description: "View dimmy.log and audio_debug session dumps in Finder"
+                    hint: "Reveals dimmy.log and audio_debug session dumps in Finder. Attach these when filing a support ticket so we can diagnose without remote access."
                 ) {
                     Button {
                         if let logUrl = logDirectoryURL() {
@@ -277,7 +195,7 @@ struct MacAdvancedPage: View {
 
                 MacRow(
                     "Reset all settings",
-                    description: "Restore Dimmy to factory defaults",
+                    hint: "Restores Dimmy to factory defaults. Wipes config.json (keeps your encrypted API keys, history, and saved meetings). Currently a placeholder, wire-up lands in a later phase.",
                     showsDivider: false
                 ) {
                     Button(role: .destructive) {
@@ -285,7 +203,7 @@ struct MacAdvancedPage: View {
                         // Today this is intentionally a no-op so the button
                         // can ship as a visible-but-safe placeholder.
                     } label: {
-                        Text("Reset…")
+                        Text("Reset...")
                             .foregroundStyle(.red)
                     }
                     .controlSize(.small)

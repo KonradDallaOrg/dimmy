@@ -4028,22 +4028,26 @@ pub unsafe extern "C" fn dimmy_save_llm_provider_key(
         Err(_) => return -1,
     };
     let provider = match Provider::from_tag(provider_tag) {
-        Some(p) if p.default_llm_url().is_some() => p,
-        _ => {
+        Some(p) => p,
+        None => {
             log(&format!(
-                "[Keystore] rejecting save for unknown/unmapped provider tag '{}'",
+                "[Keystore] rejecting save for unknown provider tag '{}'",
                 provider_tag
             ));
             return -1;
         }
     };
+    // Scope is validated against the provider's capabilities: "stt" only for
+    // speech-capable vendors (Deepgram is STT-only and has no LLM URL, but is
+    // valid here), "llm"/"recap" only for vendors with a completions endpoint.
     let scope = match scope_tag {
-        "llm" => KeyringScope::Llm(provider),
-        "recap" => KeyringScope::Recap(provider),
+        "stt" if provider.supports_stt() => KeyringScope::Stt(provider),
+        "llm" if provider.default_llm_url().is_some() => KeyringScope::Llm(provider),
+        "recap" if provider.default_llm_url().is_some() => KeyringScope::Recap(provider),
         _ => {
             log(&format!(
-                "[Keystore] rejecting save for unknown scope tag '{}' (expected 'llm' or 'recap')",
-                scope_tag
+                "[Keystore] rejecting scope '{}' for provider '{}' (capability mismatch)",
+                scope_tag, provider_tag
             ));
             return -1;
         }

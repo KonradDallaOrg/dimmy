@@ -15,13 +15,13 @@ struct MeetingProcessingView: View {
             ProgressView()
                 .controlSize(.large)
                 .scaleEffect(1.4)
-            Text("Wrapping up…")
+            Text("Wrapping up...")
                 .font(.system(size: 20, weight: .semibold))
             VStack(alignment: .leading, spacing: 10) {
                 step(title: "Saved audio + transcripts",
                      icon: stepIconName(.saving),
                      color: stepIconColor(.saving))
-                step(title: "Generating recap with LLM…",
+                step(title: "Generating recap with LLM...",
                      icon: stepIconName(.generatingRecap),
                      color: stepIconColor(.generatingRecap))
                 step(title: "Extracting action items",

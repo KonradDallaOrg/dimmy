@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Pill overlay — live preview + 3×3 position picker + appearance.
+// Pill overlay, live preview + 3×3 position picker + appearance.
 // Live preview is a static SwiftUI mock (NOT the real PillView so we don't
 // risk firing a real recording from inside Settings) that reflects the
 // user's current border-style + waveform-style choices in real time.
@@ -11,7 +11,12 @@ struct MacPillPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            livePreviewGroup
+            // Live-preview pill mock removed per user request 2026-06-01:
+            // it ate vertical space on every Settings open while only
+            // really serving the *appearance* knobs at the bottom of
+            // the page. Border + Waveform pickers already preview
+            // themselves on the *real* pill once the user picks an
+            // option. Keep the page focused on actual toggles.
             positionGroup
             visibilityGroup
             appearanceGroup
@@ -26,7 +31,8 @@ struct MacPillPage: View {
             MacTile {
                 MacRow(
                     "Show in Dock",
-                    description: "When off, Dimmy is hidden from the Dock and Cmd-Tab"
+                    hint: "When off, Dimmy disappears from the Dock and Cmd-Tab. The global hotkey still works.",
+                    hintURL: URL(string: "https://dimmy.app/help/tray-menu")
                 ) {
                     Toggle("", isOn: $appState.showInDock)
                         .toggleStyle(.switch)
@@ -34,7 +40,8 @@ struct MacPillPage: View {
                 }
                 MacRow(
                     "Show in menu bar",
-                    description: "When off, the icon at the top-right disappears. At least one of Dock or menu bar must stay on",
+                    hint: "When off, the menu-bar icon at the top-right disappears. At least one of Dock or menu bar must stay on.",
+                    hintURL: URL(string: "https://dimmy.app/help/tray-menu"),
                     showsDivider: false
                 ) {
                     Toggle("", isOn: $appState.showInMenuBar)
@@ -126,7 +133,7 @@ struct MacPillPage: View {
         let style = appState.waveformStyle.lowercased()
         switch style {
         case "line":
-            // Sinuous line — Path with smooth bezier-ish polyline.
+            // Sinuous line, Path with smooth bezier-ish polyline.
             Canvas { context, size in
                 var path = Path()
                 let amplitude: CGFloat = 8
@@ -236,7 +243,8 @@ struct MacPillPage: View {
             MacTile {
                 MacRow(
                     "Default position",
-                    description: "You can always drag the pill to reposition it"
+                    hint: "Where the pill appears when Dimmy launches or after Reset position. You can always drag it to a custom spot.",
+                    hintURL: URL(string: "https://dimmy.app/help/pill-position")
                 ) {
                     MacPositionPicker(
                         selection: Binding(
@@ -254,7 +262,7 @@ struct MacPillPage: View {
                 }
                 MacRow(
                     "Reset position",
-                    description: "Snap the pill back to your default location",
+                    description: "Snap back to default.",
                     showsDivider: false
                 ) {
                     Button {
@@ -278,7 +286,8 @@ struct MacPillPage: View {
             MacTile {
                 MacRow(
                     "Border style",
-                    description: "Color of the pill outline when idle"
+                    hint: "Color of the pill outline when idle. Recording, transcribing, done and error states use fixed status colors.",
+                    hintURL: URL(string: "https://dimmy.app/help/pill-overview")
                 ) {
                     Picker("", selection: Binding(
                         get: { appState.borderStyle },
@@ -300,7 +309,8 @@ struct MacPillPage: View {
 
                 MacRow(
                     "Waveform style",
-                    description: "How sound is visualised inside the pill while recording",
+                    hint: "How sound is visualised inside the pill while recording. Bars are densest, Dots are subtlest.",
+                    hintURL: URL(string: "https://dimmy.app/help/pill-states"),
                     showsDivider: false
                 ) {
                     Picker("", selection: Binding(

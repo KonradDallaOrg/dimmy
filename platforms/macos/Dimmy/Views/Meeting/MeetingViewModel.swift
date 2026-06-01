@@ -15,7 +15,7 @@ import Combine
 //                 sidebar selection of a past meeting)
 //
 // Recording state is OWNED BY THE RUST CORE (`MEETING` static). This
-// VM is a thin mirror over the FFI — it does NOT cache "is recording"
+// VM is a thin mirror over the FFI, it does NOT cache "is recording"
 // independently of the core. Window close / reopen MUST re-sync via
 // `dimmy_meeting_is_active()` and `dimmy_meeting_is_paused()` in
 // `attachToInflightIfAny`.
@@ -86,7 +86,7 @@ final class MeetingViewModel: ObservableObject {
     // ── Recording-view tab selection (Live transcript / Notes) ────
     /// Mirror of the Win Recording-view Notes tab. The Notes editor and
     /// the Done-view Notes editor share the SAME `doneNotes` buffer +
-    /// `<dir>/notes.md` on disk — single store, the handover doc calls
+    /// `<dir>/notes.md` on disk, single store, the handover doc calls
     /// this out explicitly. So a note typed live survives into the Done
     /// view of the same meeting without an extra load step.
     enum RecordingTab: String, CaseIterable, Identifiable {
@@ -111,7 +111,7 @@ final class MeetingViewModel: ObservableObject {
     @Published var toastMessage: String?
 
     /// Persistent (non-auto-dismissing) banner shown when the meeting is
-    /// recording but the Core Audio tap never delivered a frame — i.e. the
+    /// recording but the Core Audio tap never delivered a frame, i.e. the
     /// system-audio-recording TCC grant is missing. Unlike `toastMessage`
     /// this stays up with an "Open System Settings" CTA so the user can
     /// actually act on it (the 2.5 s toast vanished before they could).
@@ -128,7 +128,7 @@ final class MeetingViewModel: ObservableObject {
 
     init() {
         // Replaces the absent 2 s file polling that Win used to run
-        // on transcripts.txt — purely event-driven. Subscription is
+        // on transcripts.txt, purely event-driven. Subscription is
         // permanent (no cancel/re-subscribe per meeting) because
         // AppState.meetingLiveTranscript is reset to "" on each
         // start() / stopAndProcess(); we just mirror.
@@ -150,7 +150,7 @@ final class MeetingViewModel: ObservableObject {
         // it onto `self.isPaused` (plus the statusLabel hint) so the
         // recording bar / banner read a single vm property instead of
         // reaching into AppState. Replaces the old 1 Hz mirror in
-        // pollTick — no polling needed.
+        // pollTick, no polling needed.
         AppState.shared.$meetingIsPaused
             .receive(on: DispatchQueue.main)
             .sink { [weak self] paused in
@@ -161,7 +161,7 @@ final class MeetingViewModel: ObservableObject {
                     // Freeze / resume the elapsed-time clock so the
                     // timer label matches the recording the worker
                     // actually keeps (meeting.rs gap-skips the paused
-                    // window — the WAV + transcript exclude it). On
+                    // window, the WAV + transcript exclude it). On
                     // pause: stamp the pause-start instant. On resume:
                     // fold the paused span into pausedAccumulator so
                     // pollTick subtracts it from the wall-clock delta.
@@ -176,11 +176,11 @@ final class MeetingViewModel: ObservableObject {
             }
             .store(in: &liveTranscriptBag)
         // Mirror Win: when an EXTERNAL surface (pill stop, call-detect
-        // popup "Stop & recap", future tray menu…) stops the meeting,
+        // popup "Stop & recap", future tray menu...) stops the meeting,
         // Rust emits `meeting_state` with `active=false` which lands
         // in AppState.meetingActive via DimmyCore.handleEvent. Without
         // this subscription the meeting window stayed pinned in
-        // `.recording` for the entire recap LLM duration (~10–30 s),
+        // `.recording` for the entire recap LLM duration (~10-30 s),
         // the user assumed nothing was happening and pressed Stop a
         // second time, racing the pill-side stop. Flip to `.processing`
         // here; `loadDoneFromDisk` (called by `meetingRecapSaved`)
@@ -193,7 +193,7 @@ final class MeetingViewModel: ObservableObject {
                     self.stopPollingForExternalStop()
                     self.phase = .processing
                     self.processingStep = .generatingRecap
-                    self.statusLabel = "Wrapping up…"
+                    self.statusLabel = "Wrapping up..."
                     self.subStatusLabel = ""
                     self.armWrapUpWatchdog()
                 }
@@ -211,12 +211,12 @@ final class MeetingViewModel: ObservableObject {
         amplitudeTimer = nil
     }
 
-    /// Safety net for the external-stop → "Wrapping up…" transition. The
+    /// Safety net for the external-stop → "Wrapping up..." transition. The
     /// happy path resolves via `meetingRecapSaved` → `loadDoneFromDisk`,
     /// but an empty meeting (no recap), a recap crash, or a dropped
     /// notification would otherwise pin the window in `.processing`
-    /// forever — that's the "can't terminate the meeting" trap. If we're
-    /// still processing after a generous window (a real recap is 10–60 s),
+    /// forever, that's the "can't terminate the meeting" trap. If we're
+    /// still processing after a generous window (a real recap is 10-60 s),
     /// force-resolve from disk so the user is never stranded.
     private func armWrapUpWatchdog() {
         wrapUpWatchdog?.invalidate()
@@ -261,7 +261,7 @@ final class MeetingViewModel: ObservableObject {
     private var pauseStartedAt: Date?
     private var pollTimer: Timer?
     private var amplitudeTimer: Timer?
-    /// One-shot safety net for the external-stop "Wrapping up…" state.
+    /// One-shot safety net for the external-stop "Wrapping up..." state.
     /// If no recap lands us in `.done`, this force-resolves from disk so
     /// the window can never strand the user in processing limbo.
     private var wrapUpWatchdog: Timer?
@@ -298,7 +298,7 @@ final class MeetingViewModel: ObservableObject {
         if DimmyCore.shared.meetingIsActive {
             attachToInflightMeeting()
         } else if phase == .idle {
-            // Nothing to attach to — keep current state. If we just
+            // Nothing to attach to, keep current state. If we just
             // came back from a Done (selected past meeting), don't
             // reset; the Idle hero is already correct otherwise.
         }
@@ -313,13 +313,13 @@ final class MeetingViewModel: ObservableObject {
         isPaused = DimmyCore.shared.meetingIsPaused
 
         // Prefer the already-attached `activeMeetingDir` when we have
-        // one — that's the cheap-and-correct path for "Back to live"
+        // one, that's the cheap-and-correct path for "Back to live"
         // after the user browsed a past meeting in the sidebar. Falling
         // back to `freshestMeetingDir()` was risky: it sorts by mtime,
         // and any file we just wrote inside a past dir (transcript
         // load, notes save) would mask the real live dir.
         //
-        // Likewise, leave `startedAt` alone when it's already set —
+        // Likewise, leave `startedAt` alone when it's already set , 
         // the pollTimer clock has been ticking since `start()` and
         // re-deriving from the dir's `creationDate` introduces drift
         // (FS mtime granularity, copy-on-write timestamps).
@@ -343,11 +343,11 @@ final class MeetingViewModel: ObservableObject {
     func start() {
         guard !isWorking, phase == .idle || phase == .done else { return }
         // Flush any unsaved notes from the previous Done view before
-        // we wipe the buffer — matches the LostFocus save on Win.
+        // we wipe the buffer, matches the LostFocus save on Win.
         saveNotes()
         isWorking = true
         phase = .recording
-        statusLabel = "Starting…"
+        statusLabel = "Starting..."
         subStatusLabel = ""
         chunkSummary = ""
         transcript = ""
@@ -358,7 +358,7 @@ final class MeetingViewModel: ObservableObject {
         doneAudioSystemURL = nil
         doneNotes = ""
         doneSelectedTab = .recap
-        // Recording view always opens on Live transcript — a previous
+        // Recording view always opens on Live transcript, a previous
         // meeting that ended on the Notes tab shouldn't carry over.
         recordingSelectedTab = .live
         browsingPastMeeting = false
@@ -387,15 +387,15 @@ final class MeetingViewModel: ObservableObject {
                 }
                 self.sessionId = id
                 self.startedAt = Date()
-                // Pin the recap choice for THIS meeting — every stop path
+                // Pin the recap choice for THIS meeting, every stop path
                 // (window, pill, call-detect popup) reads
                 // AppState.meetingGenerateRecap so a stale checkbox on a
                 // reopened window can't flip it. Mirror of Win
                 // AppViewModel.MeetingGenerateRecap captured at start.
                 AppState.shared.meetingGenerateRecap = self.generateRecap
                 self.statusLabel = "Recording"
-                self.subStatusLabel = "Session id \(String(id.prefix(8)))…"
-                self.titlebarTitle = "Recording…"
+                self.subStatusLabel = "Session id \(String(id.prefix(8)))..."
+                self.titlebarTitle = "Recording..."
                 self.startRecordingPolling()
                 self.loadHistory()  // surfaces the new dir in the sidebar
                 Task {
@@ -442,7 +442,7 @@ final class MeetingViewModel: ObservableObject {
             _ = DimmyCore.shared.meetingPause()
             isPaused = true
             statusLabel = "Paused"
-            showToast("Paused — audio + transcript skipped until you resume.")
+            showToast("Paused, audio + transcript skipped until you resume.")
         }
     }
 
@@ -453,7 +453,7 @@ final class MeetingViewModel: ObservableObject {
         isWorking = true
         phase = .processing
         processingStep = .saving
-        statusLabel = "Stopping & finalising…"
+        statusLabel = "Stopping & finalising..."
         subStatusLabel = ""
         stopRecordingPolling()
         systemAudioPermissionNeeded = false
@@ -493,12 +493,12 @@ final class MeetingViewModel: ObservableObject {
                 if cleanTranscript.isEmpty {
                     // No speech captured (very short recording, VAD
                     // rejected everything, or STT failed silently).
-                    // Don't pretend the recap "wasn't generated" — be
+                    // Don't pretend the recap "wasn't generated", be
                     // explicit so the user knows nothing landed.
                     self.isWorking = false
                     self.phase = .done
                     self.doneSections = [
-                        "TLDR": "Nothing was recorded — no speech was detected. Try moving closer to the microphone, checking input device settings, or recording for longer.",
+                        "TLDR": "Nothing was recorded, no speech was detected. Try moving closer to the microphone, checking input device settings, or recording for longer.",
                     ]
                     self.statusLabel = "Empty recording"
                     self.subStatusLabel = "No transcript was produced"
@@ -512,7 +512,7 @@ final class MeetingViewModel: ObservableObject {
                     self.isWorking = false
                     self.phase = .done
                     self.doneSections = [
-                        "TLDR": "Recap skipped — toggle on \"Generate recap\" before stopping next time, or click Regenerate to run it now.",
+                        "TLDR": "Recap skipped, toggle on \"Generate recap\" before stopping next time, or click Regenerate to run it now.",
                     ]
                     self.statusLabel = "Done"
                     self.loadHistory()
@@ -522,7 +522,7 @@ final class MeetingViewModel: ObservableObject {
     }
 
     private func runPostProcess(dir: String, transcript: String) {
-        statusLabel = "Generating recap with LLM…"
+        statusLabel = "Generating recap with LLM..."
         let notionAutoSend = AppState.shared.notionAutoSend
         DispatchQueue.global(qos: .userInitiated).async {
             let result = MeetingPostProcessService.runRecap(
@@ -540,7 +540,7 @@ final class MeetingViewModel: ObservableObject {
                     self.statusLabel = "Done"
                     self.subStatusLabel = "Recap saved to \(URL(fileURLWithPath: dir).lastPathComponent)"
                 case .failure(let err):
-                    self.doneSections = ["TLDR": "(recap failed — \(err))"]
+                    self.doneSections = ["TLDR": "(recap failed, \(err))"]
                     self.statusLabel = "Recap failed"
                     self.subStatusLabel = "\(err)"
                 }
@@ -565,7 +565,7 @@ final class MeetingViewModel: ObservableObject {
         }
         phase = .processing
         processingStep = .generatingRecap
-        statusLabel = "Regenerating recap…"
+        statusLabel = "Regenerating recap..."
         let notionAutoSend = AppState.shared.notionAutoSend
         DispatchQueue.global(qos: .userInitiated).async {
             let result = MeetingPostProcessService.runRecap(
@@ -589,7 +589,7 @@ final class MeetingViewModel: ObservableObject {
     }
 
     /// Re-run the file-load transcribe path on the meeting's mix track
-    /// (audio.ogg / audio.wav fallback) — replaces transcripts.txt +
+    /// (audio.ogg / audio.wav fallback), replaces transcripts.txt +
     /// re-runs the recap. Useful when the live STT truncated or the user
     /// wants a different language pass. `dimmy_transcribe_file` already
     /// decodes both formats via Symphonia (the ABI is in the regen-ed
@@ -603,7 +603,7 @@ final class MeetingViewModel: ObservableObject {
         }
         phase = .processing
         processingStep = .saving
-        statusLabel = "Re-transcribing audio…"
+        statusLabel = "Re-transcribing audio..."
         DispatchQueue.global(qos: .userInitiated).async {
             let result = DimmyCore.shared.transcribeFile(at: audioURL.path)
             DispatchQueue.main.async {
@@ -642,7 +642,7 @@ final class MeetingViewModel: ObservableObject {
         }
         let rows: [MeetingHistoryRow] = dirs.compactMap { url in
             let name = url.lastPathComponent
-            // Date comes from meta.json `started_at`, NOT the dir mtime —
+            // Date comes from meta.json `started_at`, NOT the dir mtime , 
             // editing a title rewrites meta.json + bumps the dir mtime, so
             // an mtime sort reordered the meeting and showed "now" as its
             // date. See MeetingHistoryRow.dateFor.
@@ -677,7 +677,7 @@ final class MeetingViewModel: ObservableObject {
     func selectHistory(_ row: MeetingHistoryRow) {
         // Flush pending notes BEFORE we switch selectedDir. saveNotes
         // resolves the target via `notesTargetDir` which prefers
-        // `selectedDir` — so doing it after the assignment would write
+        // `selectedDir`, so doing it after the assignment would write
         // the LIVE meeting's (typically empty) notes buffer into the
         // PAST meeting's `notes.md`, either overwriting or deleting it.
         // The empty-notes branch in saveNotes also touches the past
@@ -728,7 +728,7 @@ final class MeetingViewModel: ObservableObject {
         doneAudioSystemURL = nil
         doneNotes = ""
         doneSelectedTab = .recap
-        // Recording view always opens on Live transcript — a previous
+        // Recording view always opens on Live transcript, a previous
         // meeting that ended on the Notes tab shouldn't carry over.
         recordingSelectedTab = .live
         transcript = ""
@@ -771,7 +771,7 @@ final class MeetingViewModel: ObservableObject {
 
     private func startRecordingPolling() {
         stopRecordingPolling()
-        // 1 Hz — CLAUDE.md "documented exceptions" lists the recording
+        // 1 Hz, CLAUDE.md "documented exceptions" lists the recording
         // clock at 1 Hz for the elapsed-time label. The old 2 s
         // interval made the timer visibly jump (00:00 → 00:02 → 00:04)
         // and felt frozen. pollTick is cheap (Date diff + a Combine
@@ -799,7 +799,7 @@ final class MeetingViewModel: ObservableObject {
     }
 
     private func pollTick() {
-        // Pure local clock — no FFI poll, no disk read. CLAUDE.md
+        // Pure local clock, no FFI poll, no disk read. CLAUDE.md
         // "documented exceptions" allows the recording clock at 1 Hz.
         // Pause state and live transcript come in via Combine from
         // AppState (event-driven, hooked in init()), so they're NOT
@@ -809,7 +809,7 @@ final class MeetingViewModel: ObservableObject {
         //     overwrote the Combine-driven `self.transcript`,
         //     creating a redundant race against the `meeting_chunk`
         //     event pipe.
-        // Both removed — the timer label is the only thing left.
+        // Both removed, the timer label is the only thing left.
         guard let started = startedAt else { return }
         // While paused, freeze the clock at the pause-start instant;
         // otherwise use now. Subtract every paused span so the label
@@ -846,11 +846,11 @@ final class MeetingViewModel: ObservableObject {
     // MARK: - Disk helpers
 
     private func meetingsDir() -> URL? {
-        // Effective meetings dir from the Rust core — honours the user's
+        // Effective meetings dir from the Rust core, honours the user's
         // `meeting_storage_path` override AND the flavor-aware default
         // (`dimmy`/`dimmy-staging`). Resolved fresh each call so a
         // runtime change of the storage dir is picked up. Never re-derive
-        // `configDirURL/meetings` here — that bypasses the override.
+        // `configDirURL/meetings` here, that bypasses the override.
         DimmyCore.shared.meetingsDirURL
     }
 
@@ -896,7 +896,7 @@ final class MeetingViewModel: ObservableObject {
     ///
     /// Why .ogg first: once the `meeting.rs::TrackSink::create` gate is
     /// widened to Mac, fresh meetings only emit `.ogg`. Older meetings
-    /// (pre-gate) stay `.wav` — the fallback keeps them playable +
+    /// (pre-gate) stay `.wav`, the fallback keeps them playable +
     /// re-transcribable. A single resolver is used by every path that
     /// hardcoded `audio*.wav` (playback URLs, regenerate-transcript, the
     /// mtime sort), so adding new audio surfaces touches one method, not
@@ -961,7 +961,7 @@ final class MeetingViewModel: ObservableObject {
     }
 
     func loadDoneFromDisk(dir: String) {
-        // We reached a terminal state — cancel the wrap-up safety net.
+        // We reached a terminal state, cancel the wrap-up safety net.
         wrapUpWatchdog?.invalidate()
         wrapUpWatchdog = nil
         // Callers are responsible for flushing pending notes BEFORE
@@ -973,7 +973,7 @@ final class MeetingViewModel: ObservableObject {
         let url = URL(fileURLWithPath: dir)
         doneTitle = titleFromDir(dir)
         // Meeting date from meta.json `started_at` (stable across title
-        // edits), not the dir mtime — see MeetingHistoryRow.dateFor.
+        // edits), not the dir mtime, see MeetingHistoryRow.dateFor.
         doneMeta = MeetingHistoryRow.subtitleFor(date: MeetingHistoryRow.dateFor(dirURL: url))
 
         let recapURL = url.appendingPathComponent("recap.md")
@@ -1018,7 +1018,7 @@ final class MeetingViewModel: ObservableObject {
     /// the user can type the note after it. Mirror of the Win Recording-
     /// view "Add note" / Ctrl+Enter behaviour. Uses the meeting elapsed
     /// time (the same monotonic clock the recording bar shows). No-op
-    /// before a meeting has started — guards against accidental invokes
+    /// before a meeting has started, guards against accidental invokes
     /// from the Done view (which has its own meta time, not elapsed).
     func stampMeetingTime() {
         guard phase == .recording else { return }
@@ -1050,7 +1050,7 @@ final class MeetingViewModel: ObservableObject {
     }
 
     /// Write the current `doneNotes` buffer to `<dir>/notes.md`. No-op
-    /// when there's no target dir (Idle state) — avoids creating an
+    /// when there's no target dir (Idle state), avoids creating an
     /// orphan notes file on disk. Mirrors the Win LostFocus save.
     func saveNotes() {
         guard let dir = notesTargetDir else { return }
@@ -1122,12 +1122,12 @@ struct MeetingHistoryRow: Identifiable, Equatable {
     ///      titles like "TL;DR" / "Context" + ===KEY=== markers).
     ///   2. Prettified `2026-05-09T14-32-08` shape if dir name looks
     ///      like a timestamp.
-    ///   3. `"Meeting <first-8-chars>"` for UUID-shaped dir names —
+    ///   3. `"Meeting <first-8-chars>"` for UUID-shaped dir names , 
     ///      mirrors `MeetingWindow.LoadHistory` on Win so the user
     ///      always gets a stable short label even when the recap
     ///      didn't generate.
     static func titleFor(dirName: String, recapPath: String?, metaPath: String? = nil) -> String {
-        // Highest priority: meta.json["title"] — written by the Rust
+        // Highest priority: meta.json["title"], written by the Rust
         // core's save_post_process (parse_recap_title) AND by the
         // Done view click-to-edit handler. Mirror of Win's metaTitle
         // lookup in MeetingWindow.xaml.cs LoadHistory.
@@ -1197,7 +1197,7 @@ struct MeetingHistoryRow: Identifiable, Equatable {
     /// written at record start) → meta.json `ended_at` → `audio.wav`
     /// mtime → directory mtime → distantPast.
     ///
-    /// Reading the epoch from meta.json — instead of the directory mtime —
+    /// Reading the epoch from meta.json, instead of the directory mtime , 
     /// is what keeps a meeting's date STABLE when the user edits its
     /// title: a rename rewrites meta.json and bumps the dir mtime, which
     /// (under the old mtime-sort) made the meeting jump to the top of the
@@ -1216,7 +1216,7 @@ struct MeetingHistoryRow: Identifiable, Equatable {
         }
         // Sort by mix-track mtime (audio.ogg on newer meetings, audio.wav
         // on older). resolveMeetingAudio returns nil iff neither exists.
-        // Qualified to MeetingViewModel — this static lives on
+        // Qualified to MeetingViewModel, this static lives on
         // MeetingHistoryRow so `Self` would resolve there.
         if let audioURL = MeetingViewModel.resolveMeetingAudio(
             dir: dirURL.path, base: "audio"),
@@ -1232,7 +1232,7 @@ struct MeetingHistoryRow: Identifiable, Equatable {
 
     private static func prettifyDirName(_ name: String) -> String {
         // Drop a trailing `_uuid` if present, then convert
-        // `2026-05-09T14-32-08` → `2026-05-09 14:32`. Best-effort —
+        // `2026-05-09T14-32-08` → `2026-05-09 14:32`. Best-effort , 
         // we keep the raw name on parse failure.
         let primary = name.components(separatedBy: "_").first ?? name
         let parts = primary.components(separatedBy: "T")

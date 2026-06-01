@@ -89,7 +89,7 @@ struct ShortcutStepView: View {
     private var currentShortcutDisplay: some View {
         HStack(spacing: 8) {
             if isRecording {
-                Text("Press your shortcut…")
+                Text("Press your shortcut...")
                     .font(.system(size: 15, weight: .medium))
                     .foregroundColor(.orange)
             } else {
@@ -155,7 +155,7 @@ struct ShortcutStepView: View {
                 startRecording()
             }
         }) {
-            Text(isRecording ? "…" : "Custom")
+            Text(isRecording ? "..." : "Custom")
                 .font(.system(size: 13, weight: .medium))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 10)
@@ -182,7 +182,7 @@ struct ShortcutStepView: View {
                 Text("macOS may intercept Fn")
                     .font(.system(size: 13, weight: .semibold))
             }
-            Text("If Fn doesn't trigger Dimmy, open **System Settings → Keyboard → Dictation** and set **Shortcut** to anything else — or set **Press 🌐 Key to** to **Do Nothing**.")
+            Text("If Fn doesn't trigger Dimmy, open **System Settings → Keyboard → Dictation** and set **Shortcut** to anything else, or set **Press 🌐 Key to** to **Do Nothing**.")
                 .font(.system(size: 12))
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

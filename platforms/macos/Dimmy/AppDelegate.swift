@@ -307,6 +307,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 hkLog("[AppDelegate] core ready — starting HotkeyManager")
                 HotkeyManager.shared.start(appState: self.appState)
 
+                // Honour DIMMY_SCREENSHOT_ALL=1, drives the in-process
+                // Settings shooter once core init + main loop are up.
+                // No-op when the env var is unset.
+                SettingsScreenshotter.runIfRequested()
+
                 // Secondary global hotkey for "add selected text to
                 // dictionary" (Wispr Flow-style). Independent CGEventTap
                 // for keyDown events; uses the same Accessibility

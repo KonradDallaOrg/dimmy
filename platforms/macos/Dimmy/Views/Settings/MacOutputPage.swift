@@ -1,7 +1,8 @@
+import AppKit
 import SwiftUI
 
-// Output — LLM enhancement style + provider + paste behaviour. Style
-// chips replace the old Picker — coloured swatches make the dozen
+// Output, LLM enhancement style + provider + paste behaviour. Style
+// chips replace the old Picker, coloured swatches make the dozen
 // options scannable. Sub-mode (cloud / on-device) and provider routing
 // follow the design's two-tier layout.
 
@@ -11,7 +12,7 @@ struct MacOutputPage: View {
     @State private var llmKeyInput: String = ""
     @State private var showLlmKeyField: Bool = false
 
-    // Recap-vendor key save — separate field from the dictation
+    // Recap-vendor key save, separate field from the dictation
     // llmKeyInput. Routes to `dimmy_save_llm_provider_key` under
     // KeyringScope::Recap(<recap_provider>), leaving the dictation
     // llm_api_url + dictation key untouched. Used when the user
@@ -68,7 +69,7 @@ struct MacOutputPage: View {
         return appState.hasUpstreamKey(forLlmUrl: appState.llmApiUrl)
     }
 
-    /// Human-readable label for the STT provider — used in the
+    /// Human-readable label for the STT provider, used in the
     /// "Use same \(provider) key" description so the user knows what
     /// the toggle actually reuses.
     private var sttProviderLabel: String {
@@ -87,15 +88,15 @@ struct MacOutputPage: View {
 
     private var authMethodDescription: String {
         appState.llmAuthMethod == "subscription"
-            ? "Claude Pro / Team / Max — routed through the local `claude` CLI. No API key needed."
-            : "Direct Anthropic API key — pay-as-you-go billing."
+            ? "Claude Pro / Team / Max, routed through the local `claude` CLI. No API key needed."
+            : "Direct Anthropic API key, pay-as-you-go billing."
     }
 
     /// Side-effects of flipping the auth-method radio: if the user
     /// moves to API key while the URL is the magic `claude-code://`
     /// (which Rust still routes through the subscription CLI), swap
     /// it for the real Anthropic endpoint so the API-key path is
-    /// actually used. Going the other direction we keep the URL —
+    /// actually used. Going the other direction we keep the URL , 
     /// Rust only checks `auth_method == "subscription"`.
     private func normalizeLlmUrlForAuth(_ method: String) {
         if method == "api_key" && appState.llmApiUrl.hasPrefix("claude-code://") {
@@ -111,15 +112,104 @@ struct MacOutputPage: View {
             rewriteStyleGroup
             llmModeGroup
             recapModelGroup
-            pasteboardGroup
 
+            // Per settings-map.md: CLIPBOARD, MEETINGS folder and
+            // ADVANCED LLM all live behind Advanced. Pasteboard is a
+            // single toggle ("Keep in clipboard history") that 95%
+            // of users never change. Meetings folder used to be on
+            // the Debug page on Mac, the checklist puts it here.
             if appState.showAdvanced {
+                pasteboardGroup
+                meetingStorageGroup
                 advancedLlmGroup
             }
         }
     }
 
-    /// Recap effective provider tag — derived purely from the chosen
+    // MARK: - Meeting storage directory
+    //
+    // Moved here from MacAdvancedPage so the Output page hosts every
+    // setting that shapes meeting recaps and dictation routing, per
+    // docs/dev/settings-redesign-checklist.md "Meetings folder = A
+    // on Output". The Rust core still owns the directory, this row
+    // just round-trips `meeting_storage_path` through `setConfig`.
+
+    @State private var meetingStorageError: String? = nil
+
+    private var meetingStorageGroup: some View {
+        Group {
+            MacGroupLabel(text: "Meetings storage")
+            MacTile {
+                MacRow(
+                    "Storage folder",
+                    description: meetingStorageDescription,
+                    hint: "Where meeting recordings, transcripts and recaps are saved. Switching folders affects new meetings only.",
+                    hintURL: URL(string: "https://dimmy.app/help/settings-overview"),
+                    showsDivider: meetingStorageError != nil
+                ) {
+                    HStack(spacing: 8) {
+                        Button("Browse...") { pickMeetingFolder() }
+                            .controlSize(.small)
+                            .buttonStyle(.borderedProminent)
+                        Button("Reset") { persistMeetingStoragePath("") }
+                            .controlSize(.small)
+                            .disabled(appState.meetingStoragePath.isEmpty)
+                            .help("Reset to the default location")
+                    }
+                }
+                if let err = meetingStorageError {
+                    MacRow("", description: err, showsDivider: false) { EmptyView() }
+                }
+            }
+        }
+    }
+
+    private var meetingStorageDescription: String {
+        let effective = DimmyCore.shared.meetingsDirURL?.path ?? "-"
+        return appState.meetingStoragePath.isEmpty
+            ? "\(effective), default"
+            : effective
+    }
+
+    private func pickMeetingFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Choose"
+        panel.message = "Choose where to store meeting recordings"
+        if let current = DimmyCore.shared.meetingsDirURL { panel.directoryURL = current }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if !isDirectoryWritable(url.path) {
+            meetingStorageError = "Can't write to '\(url.lastPathComponent)'. Pick a folder you have write access to."
+            return
+        }
+        meetingStorageError = nil
+        persistMeetingStoragePath(url.path)
+    }
+
+    private func persistMeetingStoragePath(_ path: String) {
+        meetingStorageError = nil
+        if DimmyCore.shared.setConfig(["meeting_storage_path": path]) {
+            appState.meetingStoragePath = path
+        }
+    }
+
+    private func isDirectoryWritable(_ dir: String) -> Bool {
+        let fm = FileManager.default
+        do {
+            try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            let probe = (dir as NSString).appendingPathComponent(".dimmy_write_probe")
+            try "".write(toFile: probe, atomically: true, encoding: .utf8)
+            try? fm.removeItem(atPath: probe)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// Recap effective provider tag, derived purely from the chosen
     /// recap model id. claude-* → anthropic, gpt-/o3 → openai,
     /// gemini-* → gemini, "" (Auto) or unknown → "" (falls back to
     /// the dictation provider in the dispatcher).
@@ -156,7 +246,7 @@ struct MacOutputPage: View {
     /// True when a Recap-scope key for the chosen vendor is already
     /// saved in the keystore. Drives the green ✓ next to the recap
     /// key field. Mirrors Win `HasRecapKey` (SettingsWindow.xaml.cs:3771)
-    /// which reads `has_<vendor>_recap_key` — the dedicated Recap
+    /// which reads `has_<vendor>_recap_key`, the dedicated Recap
     /// keystore scope, separate from the LLM-scope and STT-scope keys.
     private var recapKeyAlreadySaved: Bool {
         let vendor = recapProviderTag
@@ -187,9 +277,9 @@ struct MacOutputPage: View {
 
     /// True when the recap call is effectively routed through the
     /// Anthropic subscription (Claude Code CLI). When active, the
-    /// Recap key UI is entirely hidden — the CLI handles its own auth.
+    /// Recap key UI is entirely hidden, the CLI handles its own auth.
     /// Win parity: SettingsWindow.xaml.cs:3686.
-    /// Recap auth is INDEPENDENT of dictation since 2026-05-16 — the
+    /// Recap auth is INDEPENDENT of dictation since 2026-05-16, the
     /// previous "empty == inherit from llm_auth_method" loop caused
     /// the dictation=subscription + recap=Gemini bug where the Gemini
     /// model was routed to the `claude` CLI ("HTTP 1" error).
@@ -212,11 +302,11 @@ struct MacOutputPage: View {
     ///   - recap vendor is known (cloud, not Auto/Local)
     ///   - subscription path is NOT active (then no key needed at all)
     ///   - an upstream key for this vendor exists in LLM scope or
-    ///     STT scope (otherwise the toggle has nothing to reuse — we
+    ///     STT scope (otherwise the toggle has nothing to reuse, we
     ///     show the key field directly instead)
     ///
     /// Note the toggle ALSO appears when the recap vendor matches the
-    /// LLM vendor — user reported they couldn't enter a dedicated
+    /// LLM vendor, user reported they couldn't enter a dedicated
     /// recap key when recap was same-vendor as LLM. Win parity: the
     /// matrix in `UpdateRecapKeyCardVisibility` is gated on "upstream
     /// key exists", not on "vendor mismatch".
@@ -241,7 +331,7 @@ struct MacOutputPage: View {
     /// control). Routes to `KeyringScope::Recap(<vendor>)` without
     /// touching the dictation llm_api_url. Empty key clears the entry.
     ///
-    /// We deliberately DON'T guard on `vendor != llmProviderTag` —
+    /// We deliberately DON'T guard on `vendor != llmProviderTag` , 
     /// the user is allowed to store a separate Recap-scope key even
     /// when same-vendor as the LLM (e.g. different sub-account for
     /// billing/quota isolation). When same-vendor + toggle ON, the
@@ -261,14 +351,14 @@ struct MacOutputPage: View {
         }
         if rc == 0 {
             recapKeyInput = ""
-            // No explicit refresh needed — `recapKeyAlreadySaved`
+            // No explicit refresh needed, `recapKeyAlreadySaved`
             // reads `dimmy_get_config_json` on demand each render.
         } else {
             NSLog("[Auth] dimmy_save_llm_provider_key rc=\(rc) provider=\(vendor)")
         }
     }
 
-    /// Resolve what "Auto" actually means right now — the dictation
+    /// Resolve what "Auto" actually means right now, the dictation
     /// LLM's model id. Lets the picker show the inherited target
     /// instead of the opaque "match LLM provider" label.
     private var autoResolutionLabel: String {
@@ -280,7 +370,7 @@ struct MacOutputPage: View {
     /// it will dispatch to right now, so the user sees what's going to
     /// run without having to read the description below.
     private func displayLabel(for opt: RecapModelOption) -> String {
-        opt.id.isEmpty ? "Auto — \(autoResolutionLabel)" : opt.label
+        opt.id.isEmpty ? "Auto, \(autoResolutionLabel)" : opt.label
     }
 
     /// Meeting / long-dictation recap model picker. Always visible so a
@@ -294,7 +384,9 @@ struct MacOutputPage: View {
             MacTile {
                 MacRow(
                     "Recap model",
-                    description: "Used for the meeting recap pipeline and the long-dictation auto-recap. Auto inherits your dictation LLM (currently \(autoResolutionLabel)). Pick a flagship Anthropic / Gemini / OpenAI for best recap quality, or run it locally on a Gemma/Phi model — download one under Voice → Local model, then set this app's LLM to local (recap Auto will use it) to keep the transcript offline.",
+                    description: "Auto inherits \(autoResolutionLabel).",
+                    hint: "Picks the model that summarises long dictations and meetings. Auto follows your dictation LLM.",
+                    hintURL: URL(string: "https://dimmy.app/help/use-meeting-recaps"),
                     showsDivider: false
                 ) {
                     Picker("", selection: Binding<String>(
@@ -327,7 +419,7 @@ struct MacOutputPage: View {
                         if !appState.recapModelOverride.isEmpty,
                            !RecapModelOption.curated.contains(where: { $0.id == appState.recapModelOverride }) {
                             Divider()
-                            Label("Custom — \(appState.recapModelOverride)",
+                            Label("Custom, \(appState.recapModelOverride)",
                                   systemImage: "wrench.adjustable")
                                 .tag(appState.recapModelOverride)
                         }
@@ -337,7 +429,7 @@ struct MacOutputPage: View {
                     .frame(minWidth: 280)
                 }
 
-                // Subscription toggle for the recap call site —
+                // Subscription toggle for the recap call site , 
                 // only appears when (a) recap model is Anthropic AND
                 // (b) Claude Code integration is actually connected.
                 // For any other recap provider the toggle is hidden
@@ -349,20 +441,21 @@ struct MacOutputPage: View {
                 if recapSubscriptionAvailable {
                     MacRow(
                         "Use Anthropic subscription for recap",
-                        description: "Routes the recap LLM call through Claude Code (Pro / Team / Max). Dictation rewrite keeps its own auth method.",
+                        hint: "Sends the recap through your local Claude CLI instead of an API key. Dictation rewrite keeps its own auth method.",
+                        hintURL: URL(string: "https://dimmy.app/help/integrations-claude-cli"),
                         showsDivider: recapUseSameKeyToggleShouldShow || recapKeyFieldShouldShow
                     ) {
                         Toggle("", isOn: Binding(
                             // Recap auth is independent of dictation
                             // since 2026-05-16. GET reads the literal
-                            // recap_auth_method only — no inheritance.
+                            // recap_auth_method only, no inheritance.
                             // Empty == api_key (default).
                             get: {
                                 appState.recapAuthMethod == "subscription"
                             },
                             // SET writes an EXPLICIT choice. We still
                             // write "api_key" for OFF (not "") so the
-                            // field is unambiguous in config.json —
+                            // field is unambiguous in config.json , 
                             // an empty string is also accepted by the
                             // Rust core as api_key, but explicit values
                             // are easier to grep in logs.
@@ -378,7 +471,7 @@ struct MacOutputPage: View {
 
                 // Key reuse toggle for the recap call. Appears whenever
                 // an upstream key for the recap vendor is already in
-                // the keystore (LLM-scope or STT-scope) — same-vendor
+                // the keystore (LLM-scope or STT-scope), same-vendor
                 // case too (LLM = Anthropic + Recap = Anthropic). Default
                 // ON; user can flip it OFF to force a dedicated
                 // Recap-scope key below. Win parity:
@@ -386,7 +479,8 @@ struct MacOutputPage: View {
                 if recapUseSameKeyToggleShouldShow {
                     MacRow(
                         "Use same key as \(recapProviderTag.capitalized)",
-                        description: "Reuse the \(recapProviderTag.capitalized) key you already saved for STT/LLM — no need to paste a separate Recap key.",
+                        hint: "Reuse the \(recapProviderTag.capitalized) key you already saved. Turn off to enter a dedicated recap key for the same vendor.",
+                        hintURL: URL(string: "https://dimmy.app/help/api-keys"),
                         showsDivider: recapKeyFieldShouldShow || !appState.recapUseSameKey
                     ) {
                         Toggle("", isOn: Binding(
@@ -405,16 +499,16 @@ struct MacOutputPage: View {
                 // recap vendor is known AND (no upstream key exists,
                 // OR the user toggled "use same key" OFF above). The
                 // user CAN store a separate recap key even when same-
-                // vendor as the LLM — useful for splitting billing or
+                // vendor as the LLM, useful for splitting billing or
                 // routing recap through a different sub-account. Writes
                 // via `dimmy_save_llm_provider_key("recap", vendor, key)`.
                 // Win parity: SettingsWindow.xaml.cs:3795-3823.
                 if recapKeyFieldShouldShow {
                     MacRow(
                         "Recap API key",
-                        description: !recapUpstreamKeyAvailable
-                            ? "Encrypted locally. No upstream \(recapProviderTag.capitalized) key found for STT/LLM, so the recap call needs a dedicated one."
-                            : "Encrypted locally. Used because you turned off key sharing above.",
+                        description: "Encrypted locally.",
+                        hint: "Stored encrypted on this device with AES-256. Used only for the recap call.",
+                        hintURL: URL(string: "https://dimmy.app/help/api-keys"),
                         showsDivider: showRecapKeyField
                     ) {
                         if recapKeyAlreadySaved {
@@ -427,8 +521,8 @@ struct MacOutputPage: View {
                             }
                         }
                         Button(recapKeyAlreadySaved
-                               ? (showRecapKeyField ? "Cancel" : "Replace…")
-                               : (showRecapKeyField ? "Cancel" : "Add key…")) {
+                               ? (showRecapKeyField ? "Cancel" : "Replace...")
+                               : (showRecapKeyField ? "Cancel" : "Add key...")) {
                             showRecapKeyField.toggle()
                             if !showRecapKeyField { recapKeyInput = "" }
                         }
@@ -440,7 +534,7 @@ struct MacOutputPage: View {
                     }
                 }
             }
-            MacGroupFooter(text: "Cloud entries use your configured LLM API key. Local entries use the matching Gemma `.gguf` from Settings → Voice (download required).")
+            MacGroupFooter(text: "Cloud entries reuse your LLM key. Local entries need a Gemma `.gguf` downloaded under Voice → Local model.")
         }
     }
 
@@ -451,11 +545,12 @@ struct MacOutputPage: View {
             MacGroupLabel(text: "Rewrite style")
             MacTile {
                 VStack(alignment: .leading, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 4) {
                         Text("Style").font(.system(size: 13))
-                        Text("After transcribing, Dimmy rewrites your text before pasting.")
-                            .font(.system(size: 11))
-                            .foregroundStyle(Color.macTextSecondary)
+                        MacInfoButton(
+                            text: "An LLM cleans up or reshapes your transcript. Off leaves it exactly as spoken.",
+                            url: URL(string: "https://dimmy.app/help/styles")
+                        )
                     }
                     chipFlow
                 }
@@ -493,7 +588,11 @@ struct MacOutputPage: View {
         Group {
             MacGroupLabel(text: "LLM provider")
             MacTile {
-                MacRow("Mode", description: "Where the rewrite runs") {
+                MacRow(
+                    "Mode",
+                    hint: "Local runs the LLM on your device and stays private. Cloud sends your transcript to the provider you pick.",
+                    hintURL: URL(string: "https://dimmy.app/help/local-llm")
+                ) {
                     Picker("", selection: Binding(
                         get: { appState.llmMode },
                         set: { newValue in
@@ -510,7 +609,11 @@ struct MacOutputPage: View {
                 }
 
                 if appState.llmMode == "cloud" {
-                    MacRow("Provider") {
+                    MacRow(
+                        "Provider",
+                        hint: "The model you pick sets where your transcript is sent. Free options are marked.",
+                        hintURL: URL(string: "https://dimmy.app/help/cloud-providers")
+                    ) {
                         Picker("", selection: llmPresetBinding) {
                             ForEach(LlmPreset.presets) { preset in
                                 Label {
@@ -560,7 +663,11 @@ struct MacOutputPage: View {
                         if canSwitchToSubscription {
                             MacRow(
                                 "Authentication",
-                                description: authMethodDescription,
+                                description: appState.llmAuthMethod == "subscription"
+                                    ? "Claude Pro / Team / Max."
+                                    : "Direct API key, pay-as-you-go.",
+                                hint: "Sends the rewrite through your local Claude CLI instead of an API key. A few seconds slower per call, but no credit is used.",
+                                hintURL: URL(string: "https://dimmy.app/help/integrations-claude-cli"),
                                 showsDivider: appState.llmAuthMethod == "subscription" || sameKeyShouldShow
                             ) {
                                 Picker("", selection: Binding(
@@ -581,7 +688,8 @@ struct MacOutputPage: View {
                         } else {
                             MacRow(
                                 "Subscription auth not available",
-                                description: "Connect Claude Code in Settings → Integrations to use your Anthropic Pro / Team / Max subscription. Otherwise pay-as-you-go API key below.",
+                                description: "Connect Claude Code in Settings → Integrations.",
+                                hint: "Anthropic Pro / Team / Max subscriptions route through the local `claude` CLI. Until that's signed in here, the LLM can only authenticate with a pay-as-you-go API key.",
                                 showsDivider: true
                             ) {
                                 EmptyView()
@@ -599,8 +707,11 @@ struct MacOutputPage: View {
                         MacRow(
                             "Subscription connection",
                             description: appState.claudeCodeReady
-                                ? "✓ Connected. Sign-in / disconnect lives in Settings → Integrations. The token is read on every LLM call via the local `claude` CLI."
-                                : "⚠ Subscription selected but Claude Code isn't connected — calls will fail. Open Settings → Integrations to sign in.",
+                                ? "✓ Connected via Settings → Integrations."
+                                : "⚠ Not connected, calls will fail.",
+                            hint: appState.claudeCodeReady
+                                ? "Sign-in and disconnect live in Settings → Integrations. The token is read on every LLM call via the local `claude` CLI; Dimmy never stores or sees its contents."
+                                : "Subscription is selected but Claude Code isn't signed in yet. Open Settings → Integrations to connect, otherwise every LLM call will return an error.",
                             showsDivider: false
                         ) {
                             EmptyView()
@@ -614,7 +725,8 @@ struct MacOutputPage: View {
                         if sameKeyShouldShow {
                             MacRow(
                                 "Use my saved API key for this provider",
-                                description: "When you already have a key for the LLM's vendor (saved via STT or LLM), reuse it. Turn off to enter a dedicated LLM key for the same vendor.",
+                                hint: "When you already have a key for the LLM's vendor, reuse it. Turn off to enter a dedicated LLM key for the same vendor.",
+                                hintURL: URL(string: "https://dimmy.app/help/api-keys"),
                                 showsDivider: !appState.llmUseSameKey
                             ) {
                                 Toggle("", isOn: Binding(
@@ -632,9 +744,9 @@ struct MacOutputPage: View {
                         if !sameKeyShouldShow || !appState.llmUseSameKey {
                             MacRow(
                                 "LLM API key",
-                                description: sameKeyShouldShow
-                                    ? "Encrypted locally. Used when not sharing with STT."
-                                    : "Encrypted locally. STT and LLM use different providers, so a dedicated key is required.",
+                                description: "Encrypted locally.",
+                                hint: "Stored encrypted on this device with AES-256. The provider only ever receives your transcript and this key, nothing else.",
+                                hintURL: URL(string: "https://dimmy.app/help/api-keys"),
                                 showsDivider: showLlmKeyField
                             ) {
                                 if appState.hasLlmKey {
@@ -646,8 +758,8 @@ struct MacOutputPage: View {
                                             .foregroundStyle(.green)
                                     }
                                 }
-                                Button(appState.hasLlmKey ? (showLlmKeyField ? "Cancel" : "Replace…")
-                                                          : (showLlmKeyField ? "Cancel" : "Add key…")) {
+                                Button(appState.hasLlmKey ? (showLlmKeyField ? "Cancel" : "Replace...")
+                                                          : (showLlmKeyField ? "Cancel" : "Add key...")) {
                                     showLlmKeyField.toggle()
                                     if !showLlmKeyField { llmKeyInput = "" }
                                 }
@@ -662,7 +774,8 @@ struct MacOutputPage: View {
                 } else {
                     MacRow(
                         "Local model",
-                        description: "Runs entirely on your device",
+                        hint: "Runs fully offline. Larger models read better but need more memory and time.",
+                        hintURL: URL(string: "https://dimmy.app/help/local-llm"),
                         showsDivider: !localLlmExists || llmDownloadInFlight
                     ) {
                         Picker("", selection: Binding(
@@ -673,7 +786,7 @@ struct MacOutputPage: View {
                                 refreshLocalLlmStatus()
                             }
                         )) {
-                            // Gemma 4 family — same catalogue as
+                            // Gemma 4 family, same catalogue as
                             // core/src/local_llm.rs AVAILABLE_LLM_MODELS.
                             // Order: small→large so the dropdown lines up
                             // with VRAM requirements top-to-bottom.
@@ -682,7 +795,7 @@ struct MacOutputPage: View {
                             Text("Gemma 4 E4B Q3 · 4.1 GB").tag("gemma-4-E4B-it-Q3_K_M.gguf")
                             Text("Gemma 4 E4B Q4 · 5.0 GB · recommended").tag("gemma-4-E4B-it-Q4_K_M.gguf")
                             Text("Gemma 4 E4B Q8 · 8.2 GB · max quality").tag("gemma-4-E4B-it-Q8_0.gguf")
-                            // Phi-4 Mini — multilingual fallback
+                            // Phi-4 Mini, multilingual fallback
                             Text("Phi-4 Mini Q4 · 2.5 GB").tag("phi-4-mini-instruct-q4_k_m.gguf")
                         }
                         .labelsHidden()
@@ -690,7 +803,7 @@ struct MacOutputPage: View {
                     }
 
                     if llmDownloadInFlight {
-                        MacRow("Downloading \(appState.localLlmModel)…", showsDivider: false) {
+                        MacRow("Downloading \(appState.localLlmModel)...", showsDivider: false) {
                             HStack(spacing: 8) {
                                 ProgressView(value: appState.llmModelDownloadProgress)
                                     .frame(width: 160)
@@ -725,7 +838,7 @@ struct MacOutputPage: View {
             localLlmExists = false
             return
         }
-        // Check via the listLLMModels payload — each entry has `downloaded`.
+        // Check via the listLLMModels payload, each entry has `downloaded`.
         if let arr = DimmyCore.shared.listLLMModels() {
             let me = arr.first(where: {
                 ($0["filename"] as? String) == appState.localLlmModel
@@ -766,7 +879,7 @@ struct MacOutputPage: View {
     /// to refresh `hasLlmKey`.
     private var llmKeyEntryRow: some View {
         MacRow("Paste key", showsDivider: false) {
-            SecureField("sk-…", text: $llmKeyInput)
+            SecureField("sk-...", text: $llmKeyInput)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 240)
                 .onSubmit { saveLlmKey() }
@@ -779,7 +892,7 @@ struct MacOutputPage: View {
 
     private func saveLlmKey() {
         guard !llmKeyInput.isEmpty else { return }
-        // includeLlm:true — user is wiring up the LLM key and the
+        // includeLlm:true, user is wiring up the LLM key and the
         // RECAP section + LLM URL fields must travel with it, else
         // the Rust core sees only `llm_api_key` and the URL/model
         // chosen in this same UI step never makes it to disk.
@@ -795,7 +908,7 @@ struct MacOutputPage: View {
 
     /// Inline SecureField revealed under "Recap API key" when the user
     /// opts in via the Add/Replace button. Same shape as
-    /// `apiKeyEntryRow` (STT) and `llmKeyEntryRow` (LLM) — uniform UI
+    /// `apiKeyEntryRow` (STT) and `llmKeyEntryRow` (LLM), uniform UI
     /// across the three key sections per the user's "stessi componenti"
     /// rule. The Save action calls the shared
     /// `dimmy_save_llm_provider_key("recap", vendor, key)` FFI and
@@ -803,7 +916,7 @@ struct MacOutputPage: View {
     /// flips → green ✓ surfaces.
     private var recapKeyEntryRow: some View {
         MacRow("Paste key", showsDivider: false) {
-            SecureField("sk-…", text: $recapKeyInput)
+            SecureField("sk-...", text: $recapKeyInput)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 240)
                 .onSubmit { saveRecapKeyAndRefresh() }
@@ -816,7 +929,7 @@ struct MacOutputPage: View {
 
     /// Wrap `saveRecapProviderKey` with the same close-the-field +
     /// refresh-AppState dance that `saveLlmKey` / `saveApiKey` do, so
-    /// the row collapses back to the "Saved" + Replace… state after a
+    /// the row collapses back to the "Saved" + Replace... state after a
     /// successful save (without this the SecureField stayed open with
     /// the cleared buffer and looked like a no-op to the user).
     private func saveRecapKeyAndRefresh() {
@@ -836,7 +949,8 @@ struct MacOutputPage: View {
             MacTile {
                 MacRow(
                     "Keep in clipboard history",
-                    description: "Leave the transcription on the clipboard after auto-paste so you can paste it again later.",
+                    hint: "Leaves the transcription on the system clipboard after auto-paste so you can paste it again later.",
+                    hintURL: URL(string: "https://dimmy.app/help/settings-overview"),
                     showsDivider: false
                 ) {
                     Toggle("", isOn: Binding(
@@ -853,13 +967,17 @@ struct MacOutputPage: View {
         }
     }
 
-    // MARK: Advanced — tone, translate, custom prompt
+    // MARK: Advanced, tone, translate, custom prompt
 
     private var advancedLlmGroup: some View {
         Group {
             MacGroupLabel(text: "Advanced LLM")
             MacTile {
-                MacRow("Tone", description: "Adjusts how formal or casual the rewrite sounds") {
+                MacRow(
+                    "Tone",
+                    hint: "Adjusts how formal or casual the LLM rewrite sounds. Applied on top of the active style.",
+                    hintURL: URL(string: "https://dimmy.app/help/tones")
+                ) {
                     Picker("", selection: Binding(
                         get: { appState.llmTone },
                         set: { newValue in
@@ -877,7 +995,8 @@ struct MacOutputPage: View {
 
                 MacRow(
                     "Translate output to",
-                    description: "Translate the LLM rewrite to this language. The pill's scroll wheel changes the same setting."
+                    hint: "Translates the LLM rewrite to this language. The pill's scroll wheel changes the same setting.",
+                    hintURL: URL(string: "https://dimmy.app/help/use-multilingual")
                 ) {
                     Picker("", selection: Binding(
                         get: { appState.llmTranslateTo },
@@ -899,11 +1018,14 @@ struct MacOutputPage: View {
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Custom prompt")
-                        .font(.system(size: 13))
-                    Text("Free-form instruction prepended to the LLM prompt for the Custom style.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.macTextSecondary)
+                    HStack(spacing: 4) {
+                        Text("Custom prompt")
+                            .font(.system(size: 13))
+                        MacInfoButton(
+                            text: "Free-form instruction prepended to the LLM prompt when the active style is Custom. Use it to set persona, audience, or strict formatting rules.",
+                            url: URL(string: "https://dimmy.app/help/custom-prompts")
+                        )
+                    }
                     TextEditor(text: Binding(
                         get: { appState.llmCustomPrompt },
                         set: { newValue in
@@ -916,7 +1038,7 @@ struct MacOutputPage: View {
                     .padding(8)
                     .background(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Color.black.opacity(0.04))
+                            .fill(Color.primary.opacity(0.04))
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -965,7 +1087,7 @@ struct MacOutputPage: View {
         // MacOutputPage owns LLM provider + Recap settings. ALL its
         // saves must include both flags, otherwise the Picker /
         // Toggle / TextField interactions in this page are silently
-        // dropped. Found 2026-05-15 — same bug pattern as Notion.
+        // dropped. Found 2026-05-15, same bug pattern as Notion.
         DimmyCore.shared.setConfig(
             appState.toRustConfig(includeLlm: true, includeRecap: true)
         )

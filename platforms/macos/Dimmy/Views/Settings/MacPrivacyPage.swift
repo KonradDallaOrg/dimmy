@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Privacy & data — telemetry toggles, anonymous identifier, feedback
+// Privacy & data, telemetry toggles, anonymous identifier, feedback
 // form, resource links. Mirrors Windows v3 layout. Telemetry on macOS
 // today is disabled by default in the binary; the toggle here is a
 // scaffolded stub awaiting the macOS telemetry FFI hookup (Phase 6).
@@ -24,17 +24,25 @@ struct MacPrivacyPage: View {
             )
             .padding(.bottom, 8)
 
-            telemetryGroup
-            audioRetentionGroup
-            anonymousIdGroup
+            // Telemetry + Anonymous ID are Advanced per
+            // docs/dev/settings-map.md "Vuoi" = A-sez. Simple Privacy
+            // shows the promise, the feedback form, and resources.
             feedbackGroup
             resourcesGroup
+
+            if appState.showAdvanced {
+                telemetryGroup
+                anonymousIdGroup
+            }
+
+            // Audio retention moved to the Recordings page where the
+            // saved audio actually plays back (see HistorySettingsView).
         }
     }
 
     // MARK: Audio retention
 
-    /// On-disk retention of the recorded audio. Off by default — opt
+    /// On-disk retention of the recorded audio. Off by default, opt
     /// in for users who want the audio next to each history row (lets
     /// them replay a past dictation). Updates round-trip through the
     /// Rust core which owns the prune thread.
@@ -44,7 +52,8 @@ struct MacPrivacyPage: View {
             MacTile {
                 MacRow(
                     "Save audio with each history row",
-                    description: "16 kHz mono WAV in ~/Library/Application Support/dimmy/history_audio. Off by default."
+                    description: "Off by default.",
+                    hint: "When on, each transcription's audio file is saved alongside the row at 16 kHz mono in ~/Library/Application Support/dimmy/history_audio. Use the retention controls below to bound disk usage."
                 ) {
                     Toggle("", isOn: Binding(
                         get: { appState.saveAudioInHistory },
@@ -58,7 +67,8 @@ struct MacPrivacyPage: View {
                 }
                 MacRow(
                     "Keep for",
-                    description: "Days before automatic delete. 0 = never auto-delete by age."
+                    description: "0 = never auto-delete by age.",
+                    hint: "Days before a saved audio file is automatically deleted from the history_audio folder. Doesn't affect the history row itself, only the WAV."
                 ) {
                     Stepper(value: Binding(
                         get: { Int(appState.historyAudioKeepDays) },
@@ -72,7 +82,8 @@ struct MacPrivacyPage: View {
                 }
                 MacRow(
                     "Storage cap",
-                    description: "Maximum size of the history_audio folder. Oldest WAVs are deleted first when over the cap. 0 = no cap.",
+                    description: "0 = no cap.",
+                    hint: "Maximum size of the history_audio folder in megabytes. Oldest audio files are deleted first when over the cap, even if they're still within the Keep-for window.",
                     showsDivider: false
                 ) {
                     Stepper(value: Binding(
@@ -102,7 +113,9 @@ struct MacPrivacyPage: View {
             MacTile {
                 MacRow(
                     "Send anonymous usage data",
-                    description: "\"app started\", \"transcription completed in 2.3s\". No content, no identifiers."
+                    description: "No content, no identifiers.",
+                    hint: "Events like 'app started', 'transcription completed in 2.3 s', 'cloud provider: groq'. Never the transcribed text, your microphone name, file paths, or your username.",
+                    hintURL: URL(string: "https://dimmy.app/help/telemetry")
                 ) {
                     Toggle("", isOn: Binding(
                         get: { DimmyCore.shared.telemetryEnabled },
@@ -113,7 +126,9 @@ struct MacPrivacyPage: View {
                 }
                 MacRow(
                     "Send crash reports",
-                    description: "Stack trace only — no environment, no usernames in paths.",
+                    description: "Stack trace only.",
+                    hint: "If Dimmy crashes, sends a stack trace via Sentry. No environment variables, no paths containing your username, no transcript content.",
+                    hintURL: URL(string: "https://dimmy.app/help/telemetry"),
                     showsDivider: false
                 ) {
                     Toggle("", isOn: Binding(
@@ -124,7 +139,7 @@ struct MacPrivacyPage: View {
                     .labelsHidden()
                 }
             }
-            MacGroupFooter(text: "Same pipeline as the Windows build — PostHog + Sentry, both gated by the toggles above. Off by default.")
+            MacGroupFooter(text: "Both toggles are off by default. PostHog for usage events, Sentry for crashes.")
         }
     }
 
@@ -136,7 +151,9 @@ struct MacPrivacyPage: View {
             MacTile {
                 MacRow(
                     "Local ID",
-                    description: "Random, generated on first launch. Resetting takes effect immediately.",
+                    description: "Random, generated on first launch.",
+                    hint: "Anonymous identifier used to group telemetry events from the same install. Resetting takes effect on the next event and creates a fresh, unlinked ID.",
+                    hintURL: URL(string: "https://dimmy.app/help/telemetry"),
                     showsDivider: false
                 ) {
                     Text(anonymousIdText)
@@ -156,7 +173,7 @@ struct MacPrivacyPage: View {
 
     private var anonymousIdText: String {
         let id = DimmyCore.shared.telemetryAnonymousId
-        return id.isEmpty ? "—" : id
+        return id.isEmpty ? ", " : id
     }
 
     // MARK: Feedback
@@ -180,7 +197,7 @@ struct MacPrivacyPage: View {
                         .padding(8)
                         .background(
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(Color.black.opacity(0.04))
+                                .fill(Color.primary.opacity(0.04))
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -192,7 +209,7 @@ struct MacPrivacyPage: View {
                         .padding(8)
                         .background(
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(Color.black.opacity(0.04))
+                                .fill(Color.primary.opacity(0.04))
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -213,7 +230,7 @@ struct MacPrivacyPage: View {
                         // click = consent.
                         //
                         // Feedback rides the Sentry pipeline, gated by the
-                        // CRASH-reporting flag — NOT the analytics flag.
+                        // CRASH-reporting flag, NOT the analytics flag.
                         // Flipping telemetryEnabled left the gate closed →
                         // capture_feedback kept returning -2. Flip
                         // crashReportingEnabled instead.
@@ -256,7 +273,7 @@ struct MacPrivacyPage: View {
             feedbackEmail = ""
             feedbackNeedsEnable = false
         case -2:
-            // Telemetry disabled — offer one-click enable + send.
+            // Telemetry disabled, offer one-click enable + send.
             feedbackStatus = "Feedback sending is off."
             feedbackNeedsEnable = true
         case -3:

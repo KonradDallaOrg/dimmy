@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Shortcut — hotkey display + push-to-talk vs toggle behaviour. Capture
+// Shortcut, hotkey display + push-to-talk vs toggle behaviour. Capture
 // of new shortcuts reuses the legacy ShortcutSettingsView's recorder via
 // a sheet because rebuilding the modifier-flag capture from scratch is
 // orthogonal to the visual redesign.
@@ -13,7 +13,13 @@ struct MacShortcutPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             hotkeyGroup
-            dictHotkeyGroup
+            // Add-to-dictionary shortcut is power-user fodder per
+            // settings-redesign-checklist.md ("Add-to-dictionary
+            // shortcut = A"). Gate behind Advanced so the Simple
+            // Shortcut page stays focused on the activation hotkey.
+            if appState.showAdvanced {
+                dictHotkeyGroup
+            }
             behaviorGroup
         }
         .sheet(isPresented: $showDictRecorder) {
@@ -24,7 +30,7 @@ struct MacShortcutPage: View {
             // Phase 4: dedicated capture sheet. For now jump back to the
             // legacy ShortcutSettingsView in a sheet so users can still
             // record a new combo without leaving the Tahoe Settings.
-            // The legacy view has no Close button of its own — wrap it
+            // The legacy view has no Close button of its own, wrap it
             // with a header so the sheet is dismissible.
             VStack(alignment: .leading, spacing: 0) {
                 HStack {
@@ -50,7 +56,9 @@ struct MacShortcutPage: View {
             MacTile {
                 MacRow(
                     "Activation hotkey",
-                    description: "Click to capture a new key combination",
+                    description: "Press Change... to capture a new combo.",
+                    hint: "Press the keys you want, then release to confirm. This is the shortcut you press to dictate.",
+                    hintURL: URL(string: "https://dimmy.app/help/hotkey-change"),
                     icon: "keyboard.fill",
                     iconBackground: Color(red: 0.04, green: 0.52, blue: 1.00)
                 ) {
@@ -59,11 +67,16 @@ struct MacShortcutPage: View {
                             MacKeycap(glyph: glyph)
                         }
                     }
-                    Button("Change…") { showRecorder = true }
+                    Button("Change...") { showRecorder = true }
                         .controlSize(.small)
                 }
 
-                MacRow("Behavior", showsDivider: false) {
+                MacRow(
+                    "Behavior",
+                    hint: "Push-to-Talk records only while you hold the keys. Toggle starts on one press and stops on the next.",
+                    hintURL: URL(string: "https://dimmy.app/help/hotkey-modes"),
+                    showsDivider: false
+                ) {
                     Picker("", selection: Binding(
                         get: { appState.preferredMode == .pushToTalk ? "ptt" : "toggle" },
                         set: { newValue in
@@ -79,7 +92,6 @@ struct MacShortcutPage: View {
                     .frame(width: 200)
                 }
             }
-            MacGroupFooter(text: "Push-to-talk records while held; release to transcribe. Toggle starts and stops on each press.")
         }
     }
 
@@ -89,7 +101,9 @@ struct MacShortcutPage: View {
             MacTile {
                 MacRow(
                     "Add to dictionary",
-                    description: "Select text in any app, press this combo to teach Dimmy your custom words",
+                    description: "Select text in any app, then press the combo.",
+                    hint: "Select text in any app and press these keys to add it to your custom dictionary. Press the keys here, then release to confirm.",
+                    hintURL: URL(string: "https://dimmy.app/help/hotkey-change"),
                     icon: "text.badge.plus",
                     iconBackground: Color(red: 0.40, green: 0.73, blue: 0.42),
                     showsDivider: false
@@ -99,11 +113,10 @@ struct MacShortcutPage: View {
                             MacKeycap(glyph: glyph)
                         }
                     }
-                    Button("Change…") { showDictRecorder = true }
+                    Button("Change...") { showDictRecorder = true }
                         .controlSize(.small)
                 }
             }
-            MacGroupFooter(text: "macOS Services menu also has “Add to Dimmy Dictionary” — right-click any selection.")
         }
     }
 
@@ -113,7 +126,7 @@ struct MacShortcutPage: View {
             MacTile {
                 MacRow(
                     "CGEventTap status",
-                    description: "Required for the global shortcut to intercept keys system-wide",
+                    hint: "The low-level event tap that lets Dimmy intercept your hotkey from any focused app. Requires Accessibility (and, for Fn-key combos, Input Monitoring), check Permissions if this stays orange.",
                     showsDivider: false
                 ) {
                     statusBadge
@@ -138,7 +151,7 @@ struct MacShortcutPage: View {
                 .foregroundStyle(.red)
                 .font(.system(size: 12, weight: .medium))
         case .uninstalled:
-            Label("Initialising…", systemImage: "hourglass")
+            Label("Initialising...", systemImage: "hourglass")
                 .foregroundStyle(.gray)
                 .font(.system(size: 12, weight: .medium))
         }
@@ -148,7 +161,7 @@ struct MacShortcutPage: View {
 /// Capture sheet for the "add to dictionary" hotkey. Press any
 /// modifier+letter combo to bind. Mirrors the Win
 /// `DictHotkeyCaptureDialog` semantics: at least one modifier required,
-/// letter must be A–Z. The sheet uses `NSEvent.addLocalMonitorForEvents`
+/// letter must be A-Z. The sheet uses `NSEvent.addLocalMonitorForEvents`
 /// while shown so we don't fight with the global CGEventTap; closes
 /// itself after a valid bind. The persistence side (UserDefaults +
 /// DictHotkeyManager refresh) is driven by `AppState.dictHotkey.didSet`.
@@ -168,7 +181,7 @@ private struct DictHotkeyRecorderSheet: View {
                     .keyboardShortcut(.cancelAction)
             }
 
-            Text("Press a combination — at least one modifier plus a letter. Cmd+Shift+D is the default.")
+            Text("Press a combination, at least one modifier plus a letter. Cmd+Shift+D is the default.")
                 .font(.system(size: 12))
                 .foregroundStyle(Color.macTextSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -194,7 +207,7 @@ private struct DictHotkeyRecorderSheet: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.orange)
             } else {
-                Text("Listening…")
+                Text("Listening...")
                     .font(.system(size: 11))
                     .foregroundStyle(Color.macTextSecondary)
             }
@@ -217,10 +230,10 @@ private struct DictHotkeyRecorderSheet: View {
     }
 
     private func installMonitor() {
-        // Local key monitor — fires for keys delivered to this window.
+        // Local key monitor, fires for keys delivered to this window.
         // We must consume the event (return nil) so the standard "key
         // beep on unhandled keyDown" doesn't fire for every press.
-        // Explicit `-> NSEvent?` annotation — without it the compiler
+        // Explicit `-> NSEvent?` annotation, without it the compiler
         // sometimes infers `-> NSEvent` from a non-optional code path
         // (depending on Swift version) and refuses the `return nil`s.
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { (event: NSEvent) -> NSEvent? in
@@ -235,7 +248,7 @@ private struct DictHotkeyRecorderSheet: View {
             }
             guard let chars = event.charactersIgnoringModifiers?.uppercased(),
                   let letter = chars.first, letter.isLetter else {
-                lastError = "Use a letter (A–Z)"
+                lastError = "Use a letter (A-Z)"
                 return nil
             }
             appState.dictHotkey = HotkeyCombo(
