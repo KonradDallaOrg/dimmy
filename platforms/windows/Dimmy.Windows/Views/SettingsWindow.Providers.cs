@@ -305,9 +305,11 @@ public sealed partial class SettingsWindow
         var key = box.Password?.Trim() ?? "";
         if (string.IsNullOrEmpty(key)) { box.Focus(FocusState.Programmatic); return; }
 
-        // Save the one key into every scope the keystore FFI accepts for this
-        // vendor (llm + recap). The FFI rejects the "stt" scope, so an STT key
-        // for a provider used for speech still comes from the Voice input page.
+        // Save the one key into every scope this vendor supports — STT for
+        // speech vendors, LLM + Recap for completion vendors (see
+        // ProviderCatalog.KeySaveScopes). One key per provider covers
+        // dictation, rewrite, and recap; the STT/LLM/Recap settings sections
+        // only pick a model now, they no longer take a key.
         var scopes = p.KeySaveScopes();
         int worst = 0;
         foreach (var scope in scopes)

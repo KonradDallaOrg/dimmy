@@ -1732,20 +1732,17 @@ public sealed partial class SettingsWindow : Window
             ViewModel.LlmUseSameKey = false;
             App.Log("[Auth] coerced llm_use_same_key=false (no upstream key for LLM vendor)", "Auth");
         }
-        // Use the LLM-specific path flag so an Anthropic + subscription LLM
-        // hides BOTH the "use saved key" toggle and the api-key input,
-        // regardless of Recap configuration. Bug burned 2026-05-18: with the
-        // legacy OR'd `keyPathLive`, the LLM key surfaces stayed visible if
-        // Recap was still on api-key, contradicting the "subscription
-        // bypasses keys" intent.
-        LlmUseSameKeyCard.Visibility = (llmKeyPathLive && hasUpstreamKey)
-            ? Visibility.Visible : Visibility.Collapsed;
-        // LLM API key input: visible when the key path is live AND the
-        // toggle is OFF (the dispatcher needs an LLM-scope key). When the
-        // toggle is hidden (no upstream key OR subscription on), the
-        // coercion above flips LlmUseSameKey=false → input appears so the
-        // user can type a key. Under subscription the entire block hides.
-        LlmApiKeyCard.Visibility = (llmKeyPathLive && !ViewModel.LlmUseSameKey)
+        // The "use my saved key" inheritance toggle is gone: keys now live
+        // ONLY in the Providers & keys page, so there's no second place to
+        // reuse a key FROM. The dispatcher still reads Llm(vendor) then
+        // Stt(vendor) at call time (llm_use_same_key stays true), so a key
+        // saved in Providers is picked up automatically.
+        LlmUseSameKeyCard.Visibility = Visibility.Collapsed;
+        // Inline LLM key input is for the Custom endpoint ONLY (catalog
+        // providers are keyed from Providers & keys). Still hidden under
+        // subscription (llmKeyPathLive == false).
+        var isLlmCustom = string.Equals(llmVendor, "custom", StringComparison.OrdinalIgnoreCase);
+        LlmApiKeyCard.Visibility = (llmKeyPathLive && isLlmCustom)
             ? Visibility.Visible : Visibility.Collapsed;
         // Surface the green ✓ when a key for the LLM vendor already
         // exists in Llm-scope (drives `HasLlmKey` binding on the
@@ -1814,6 +1811,12 @@ public sealed partial class SettingsWindow : Window
         // - PasswordBox + Save visible only when the model's vendor
         //   differs from the dictation vendor AND auth != subscription.
         UpdateRecapKeyCardVisibility(llmUrl);
+
+        // Filter the cloud STT + LLM provider pickers down to the providers
+        // the user actually has a key for (keys live in Providers & keys now).
+        // Custom is always offered (inline URL+key); Anthropic stays offered
+        // when the Claude CLI subscription is connected (keyless path).
+        FilterCloudProviderPickers(integrationReady);
 
         // Per-vendor filter of the recap-model picker is INTENTIONALLY
         // dropped: the user picks any model (claude / gpt / gemini),
@@ -1899,6 +1902,36 @@ public sealed partial class SettingsWindow : Window
     /// endpoint, no upstream key" from "matches anthropic" etc.
     /// Used by the LLM section to look up `_sttKeyByProvider` and
     /// `_llmKeyByProvider` per the chosen LLM URL.
+    /// <summary>Hide cloud-provider combo items whose vendor has no saved
+    /// key, so the picker only offers providers you can actually use. Custom
+    /// is always kept (it carries its own inline URL+key); Anthropic is kept
+    /// when the subscription integration is live; the currently-selected item
+    /// is never hidden (so the box never goes blank on a legacy config).</summary>
+    private void FilterCloudProviderPickers(bool integrationReady)
+    {
+        FilterComboByKeys(ProviderComboBox, _sttKeyByProvider, anthropicSubReady: false);
+        FilterComboByKeys(LlmProviderComboBox, _llmKeyByProvider, anthropicSubReady: integrationReady);
+    }
+
+    private static void FilterComboByKeys(
+        ComboBox? combo,
+        System.Collections.Generic.Dictionary<string, bool> keyMap,
+        bool anthropicSubReady)
+    {
+        if (combo == null) return;
+        foreach (var obj in combo.Items)
+        {
+            if (obj is not ComboBoxItem item || item.Tag is not string tag) continue;
+            // Tags are "<vendor>" or "<vendor>-<model>" (e.g. "groq-v3").
+            var vendor = tag.Split('-')[0].ToLowerInvariant();
+            bool keep = vendor == "custom"
+                        || (keyMap.TryGetValue(vendor, out var has) && has)
+                        || (vendor == "anthropic" && anthropicSubReady)
+                        || ReferenceEquals(item, combo.SelectedItem);
+            item.Visibility = keep ? Visibility.Visible : Visibility.Collapsed;
+        }
+    }
+
     private static string VendorTagFromAnyUrl(string url)
     {
         if (string.IsNullOrEmpty(url)) return "";
@@ -2616,9 +2649,10 @@ public sealed partial class SettingsWindow : Window
             var preset = SettingsViewModel.ProviderPresets.FirstOrDefault(p =>
                 p.Name.ToLowerInvariant() == tag);
 
-            if (preset != null && !string.IsNullOrEmpty(preset.Url))
+            var isCustom = preset == null || string.IsNullOrEmpty(preset.Url);
+            if (!isCustom)
             {
-                ViewModel.ApiUrl = preset.Url;
+                ViewModel.ApiUrl = preset!.Url;
                 ViewModel.ApiModel = preset.DefaultModel;
                 // Hide custom fields for known presets
                 CustomUrlBox.Visibility = Visibility.Collapsed;
@@ -2630,6 +2664,10 @@ public sealed partial class SettingsWindow : Window
                 CustomUrlBox.Visibility = Visibility.Visible;
                 CustomModelBox.Visibility = Visibility.Visible;
             }
+            // The inline STT key field is for the Custom endpoint ONLY —
+            // catalog providers are keyed from the Providers & keys page.
+            if (SttApiKeyCard != null)
+                SttApiKeyCard.Visibility = isCustom ? Visibility.Visible : Visibility.Collapsed;
             // Refresh the green-check badge for the newly-selected provider.
             // Without this, switching to a provider with a saved key still
             // showed "no key" until the user closed + reopened Settings.
@@ -3991,55 +4029,14 @@ public sealed partial class SettingsWindow : Window
             catch { /* keep all booleans false on parse / FFI errors */ }
         }
 
-        var hasUpstreamKey = hasLlmScopeKey || hasSttScopeKey;
+        _ = hasLlmScopeKey | hasSttScopeKey; // upstream presence no longer gates UI here
 
-        // ─── Subscription branch — hides all key UI ─────────────
-        if (subscriptionActive)
-        {
-            RecapUseSameKeyCard.Visibility = Visibility.Collapsed;
-            RecapKeyCard.Visibility = Visibility.Collapsed;
-            return;
-        }
-
-        // ─── Recap vendor unknown (Auto / Local / Custom) ───────
-        // No way to derive a URL or a key — inherits the entire LLM
-        // dispatch path. Hide all recap-specific key UI.
-        if (string.IsNullOrEmpty(recapVendor))
-        {
-            RecapUseSameKeyCard.Visibility = Visibility.Collapsed;
-            RecapKeyCard.Visibility = Visibility.Collapsed;
-            return;
-        }
-
-        // ─── Recap vendor known (same OR different from dictation)
-        // ALWAYS show the toggle when an upstream key exists for this
-        // vendor, including the same-vendor case — the user might
-        // want a separate Recap-scope key (e.g. different billing
-        // account on the same vendor). Toggle ON = reuse upstream,
-        // OFF = type a dedicated Recap key. When no upstream key
-        // exists, hide the toggle + show the input directly.
-        if (hasUpstreamKey)
-        {
-            // Show the toggle so the user can opt out of inheriting.
-            RecapUseSameKeyCard.Visibility = Visibility.Visible;
-            // Key card shows when the user has explicitly opted OUT.
-            RecapKeyCard.Visibility = ViewModel.RecapUseSameKey
-                ? Visibility.Collapsed : Visibility.Visible;
-        }
-        else
-        {
-            // No upstream key for this vendor — toggle is meaningless,
-            // hide it AND coerce the underlying value to false so a
-            // stale `true` from a previous config doesn't keep the
-            // key card hidden (would lock the user out).
-            RecapUseSameKeyCard.Visibility = Visibility.Collapsed;
-            if (ViewModel.RecapUseSameKey)
-            {
-                ViewModel.RecapUseSameKey = false;
-                App.Log("[Auth] coerced recap_use_same_key=false (no upstream key for vendor)", "Auth");
-            }
-            RecapKeyCard.Visibility = Visibility.Visible;
-        }
+        // Recap keys come from the Providers & keys page (recap scope) or the
+        // subscription path — there's no inline recap key field or inheritance
+        // toggle anymore. The dispatcher derives the recap vendor from the
+        // model and pulls its recap/llm-scope key from the keystore.
+        RecapUseSameKeyCard.Visibility = Visibility.Collapsed;
+        RecapKeyCard.Visibility = Visibility.Collapsed;
 
         // Update the bound `HasRecapKey` so the PasswordBox shows the
         // ✓ badge + "Already saved · paste to replace" placeholder

@@ -628,12 +628,16 @@
                     </ComboBoxItem>
                   </ComboBox>
                 </controls:SettingCard>
-                <!-- API key — second in the order, matches the Output
-                     LLM card directly below it visually. -->
-                <controls:SettingCard Glyph="&#xE192;"
+                <!-- Custom-endpoint key only. Catalog providers (Groq,
+                     OpenAI, …) get their key from the Providers & keys page,
+                     so this card is shown ONLY when Provider = Custom (the
+                     one case Providers can't cover — it needs a base URL). -->
+                <controls:SettingCard x:Name="SttApiKeyCard"
+                                      Glyph="&#xE192;"
                                       Label="API key"
-                                      InfoTip="Stored encrypted on this device with AES-256. The provider only ever receives your audio and this key, nothing else."
-                                      HelpUrl="https://dimmy.app/help/api-keys">
+                                      InfoTip="The key for your custom speech endpoint. Stored encrypted on this device with AES-256. Catalog providers are keyed from the Providers and keys page instead."
+                                      HelpUrl="https://dimmy.app/help/api-keys"
+                                      Visibility="Collapsed">
                   <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
                     <FontIcon Glyph="&#xE73E;" FontSize="16" Foreground="#4ade80"
                               VerticalAlignment="Center"
