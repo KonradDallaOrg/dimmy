@@ -156,7 +156,7 @@ struct MacVoicePage: View {
                 }
                 .padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14))
             }
-            MacGroupFooter(text: "Words listed here are passed to the STT engine on every transcription to bias recognition. Cloud (Whisper / Gemini), Deepgram keyterms, and local Whisper all honour this; Parakeet ignores it (NeMo TDT has no boost-word API).")
+            MacGroupFooter(text: "Words listed here bias the STT engine. Parakeet ignores them — its API has no boost-word slot.")
         }
     }
 
@@ -196,7 +196,10 @@ struct MacVoicePage: View {
         Group {
             MacGroupLabel(text: "Speech recognition")
             MacTile {
-                MacRow("Mode", description: "Where transcription runs") {
+                MacRow(
+                    "Mode",
+                    hint: "On device keeps audio offline (Whisper or Parakeet). Cloud sends the recording to your chosen provider — usually faster and more accurate but it leaves the machine."
+                ) {
                     Picker("", selection: Binding(
                         get: { appState.sttMode },
                         set: { newValue in
@@ -215,7 +218,7 @@ struct MacVoicePage: View {
                 if appState.sttMode == "cloud" {
                     MacRow(
                         "Provider",
-                        description: "≈250 ms typical latency"
+                        hint: "Cloud speech-to-text vendor used for transcription. ≈250 ms typical latency on Groq Whisper Turbo; other providers vary."
                     ) {
                         Picker("", selection: sttPresetBinding) {
                             ForEach(SttPreset.presets) { preset in
@@ -241,7 +244,8 @@ struct MacVoicePage: View {
 
                     MacRow(
                         "API key",
-                        description: "Stored locally · AES-256-GCM",
+                        description: "Encrypted locally.",
+                        hint: "Stored at ~/.config/dimmy/keys.enc with AES-256-GCM. The key never leaves this Mac and is never written to config.json.",
                         showsDivider: showKeyField
                     ) {
                         if appState.hasKey {
@@ -267,9 +271,7 @@ struct MacVoicePage: View {
                 } else {
                     MacRow(
                         "Local model",
-                        description: localBackendIsParakeet
-                            ? "NVIDIA Parakeet TDT v3 — Apple Neural Engine, fastest"
-                            : "Whisper, runs entirely offline",
+                        hint: "Whisper.cpp sizes run entirely offline on CPU/Metal. Parakeet TDT v3 is faster (Apple Neural Engine, 100-300× real-time) and EU-language friendly but is a one-time ~466 MB download.",
                         showsDivider: !localModelReady || downloadInFlight
                     ) {
                         Picker("", selection: localModelPickerBinding) {
@@ -311,7 +313,11 @@ struct MacVoicePage: View {
                     }
                 }
 
-                MacRow("Language", showsDivider: false) {
+                MacRow(
+                    "Language",
+                    hint: "What the speech-to-text engine assumes you're speaking. Use the pill's scroll wheel — or Output → Translate — to convert to another language instead of changing this picker.",
+                    showsDivider: false
+                ) {
                     Picker("", selection: Binding(
                         get: { appState.selectedLanguage },
                         set: { newValue in
@@ -327,7 +333,6 @@ struct MacVoicePage: View {
                     .frame(width: 160)
                 }
             }
-            MacGroupFooter(text: "Helps the model with rare words and names. Auto-detect identifies the language from your first sentence — but tends to misfire on clips shorter than two seconds.")
         }
         .onAppear {
             localModels = DimmyCore.shared.listLocalModels() ?? []
@@ -490,7 +495,10 @@ struct MacVoicePage: View {
         Group {
             MacGroupLabel(text: "Microphone")
             MacTile {
-                MacRow("Input device") {
+                MacRow(
+                    "Input device",
+                    hint: "Microphone Dimmy listens to. \"System default\" follows the macOS sound preference; pick a specific device to pin to it even if the default changes."
+                ) {
                     if appState.devices.isEmpty {
                         Text("System default")
                             .font(.system(size: 12))
@@ -515,7 +523,8 @@ struct MacVoicePage: View {
 
                 MacRow(
                     "Microphone volume",
-                    description: "Software gain applied before transcription · 50% default",
+                    description: "50% default.",
+                    hint: "Software gain applied before transcription, on top of macOS' own input level. Higher values amplify quiet speakers but also any background noise.",
                     showsDivider: false
                 ) {
                     // Slider runs over the same Rust-validated range
@@ -554,7 +563,7 @@ struct MacVoicePage: View {
             MacTile {
                 MacRow(
                     "Preprocessing",
-                    description: "High-pass + VAD + AGC before transcribing"
+                    hint: "Cleans the raw mic signal before transcription: a high-pass filter removes rumble, voice-activity detection trims long silences, and automatic gain control evens out volume. Turn off only when debugging audio issues."
                 ) {
                     Toggle("", isOn: Binding(
                         get: { appState.preprocessingEnabled },
@@ -569,7 +578,7 @@ struct MacVoicePage: View {
 
                 MacRow(
                     "Remove filler words",
-                    description: "Strips um, uh, basically, cioè, ecc. across 6 languages",
+                    hint: "Strips um, uh, basically, cioè etc. across English, Italian, Spanish, French, German and Portuguese before the rewrite step sees the transcript.",
                     showsDivider: appState.showAdvanced
                 ) {
                     Toggle("", isOn: Binding(
@@ -586,7 +595,8 @@ struct MacVoicePage: View {
                 if appState.showAdvanced {
                     MacRow(
                         "Chunk streaming",
-                        description: "Stream audio in 5 s chunks (Parakeet only)",
+                        description: "Parakeet local backend only.",
+                        hint: "Transcribes in 5 s windows during recording so the final paste lands ~700 ms after release instead of waiting for the full batch. Requires the local STT backend set to Parakeet.",
                         showsDivider: appState.chunkStreamingEnabled
                             && appState.localSttBackend == "parakeet"
                     ) {
@@ -610,7 +620,7 @@ struct MacVoicePage: View {
                         && appState.localSttBackend == "parakeet" {
                         MacRow(
                             "Live captions",
-                            description: "Floating subtitle window during recording",
+                            hint: "Floating subtitle window below the pill while chunked streaming is active. Turn off to keep the speed-up without on-screen captions.",
                             showsDivider: true
                         ) {
                             Toggle("", isOn: Binding(
@@ -630,7 +640,7 @@ struct MacVoicePage: View {
                     // Off ⇒ no enumeration, no popup. Default on.
                     MacRow(
                         "Auto-detect meetings",
-                        description: "Show a bottom-right popup when a call is detected and offer to record",
+                        hint: "Polls the default microphone once a second and shows a bottom-right popup when a call lasts longer than 5 s. Per-app cooldown of 30 min after \"Not now\", permanent skip after \"Don't ask for this app\".",
                         showsDivider: !appState.callDetectExcludedApps.isEmpty
                     ) {
                         Toggle("", isOn: Binding(
@@ -653,7 +663,7 @@ struct MacVoicePage: View {
                         ForEach(Array(entries.enumerated()), id: \.element) { idx, app in
                             MacRow(
                                 Self.exclusionDisplayName(for: app),
-                                description: "Won't show the auto-detect popup for this app",
+                                description: "Auto-detect popup skipped.",
                                 showsDivider: idx < entries.count - 1
                             ) {
                                 Button("Remove") {

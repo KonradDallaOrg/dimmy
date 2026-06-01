@@ -45,6 +45,7 @@ struct MacAdvancedPage: View {
                 MacRow(
                     "Storage folder",
                     description: meetingStorageDescription,
+                    hint: "Where meeting recordings, transcripts and recaps are saved. Switching folders affects new meetings only — existing meetings stay where they were recorded.",
                     showsDivider: meetingStorageError != nil
                 ) {
                     HStack(spacing: 8) {
@@ -61,7 +62,6 @@ struct MacAdvancedPage: View {
                     MacRow("", description: err, showsDivider: false) { EmptyView() }
                 }
             }
-            MacGroupFooter(text: "Where meeting recordings, transcripts and recaps are saved. New meetings use the new folder; existing ones stay where they are.")
         }
     }
 
@@ -128,7 +128,8 @@ struct MacAdvancedPage: View {
             MacTile {
                 MacRow(
                     "Insert sample row",
-                    description: "Adds one fake history entry with a synthesised 4 s WAV so the waveform + playback can be exercised without a real recording.",
+                    description: "Debug-only.",
+                    hint: "Adds one fake history entry with a synthesised 4 s WAV so the waveform and playback UI can be exercised without making a real recording. Compiled out of Release builds.",
                     showsDivider: false
                 ) {
                     Button("Add sample") {
@@ -180,7 +181,8 @@ struct MacAdvancedPage: View {
             MacTile {
                 MacRow(
                     "Long dictation auto-recap",
-                    description: "When a single dictation runs longer than the threshold, ask the LLM for a quick bullet recap and append it to the History row. 0 disables.",
+                    description: "0 disables.",
+                    hint: "When a single dictation runs longer than the threshold, Dimmy asks the LLM for a quick bullet recap and appends it to the History row below the original transcript.",
                     showsDivider: false
                 ) {
                     HStack(spacing: 6) {
@@ -198,7 +200,6 @@ struct MacAdvancedPage: View {
                     }
                 }
             }
-            MacGroupFooter(text: "The recap is appended to the History row's enhanced_text — visible in the History detail under the original transcript.")
         }
     }
 
@@ -208,7 +209,7 @@ struct MacAdvancedPage: View {
             MacTile {
                 MacRow(
                     "Metal acceleration",
-                    description: "GPU-accelerated whisper.cpp + llama.cpp on Apple Silicon",
+                    hint: "Whisper.cpp and llama.cpp use the Apple Silicon GPU via Metal. Always on — no toggle. Listed here so you can confirm it's active in support tickets.",
                     showsDivider: false
                 ) {
                     Label("Active", systemImage: "checkmark.circle.fill")
@@ -225,7 +226,7 @@ struct MacAdvancedPage: View {
             MacTile {
                 MacRow(
                     "LLM log enabled",
-                    description: "Write all prompts and responses to disk for debugging"
+                    hint: "Writes every LLM prompt and response to dimmy.log. Useful for debugging rewrite issues — leave off otherwise so the log doesn't fill with content."
                 ) {
                     Toggle("", isOn: Binding(
                         get: { appState.llmLogEnabled },
@@ -240,7 +241,7 @@ struct MacAdvancedPage: View {
 
                 MacRow(
                     "Audio debug",
-                    description: "Save raw audio of each recording locally",
+                    hint: "Saves the raw mic capture and preprocessed buffer for every recording. Helpful when reporting an audio issue; consumes disk so leave off in normal use.",
                     showsDivider: false
                 ) {
                     Toggle("", isOn: Binding(
@@ -263,7 +264,7 @@ struct MacAdvancedPage: View {
             MacTile {
                 MacRow(
                     "Open log folder",
-                    description: "View dimmy.log and audio_debug session dumps in Finder"
+                    hint: "Reveals dimmy.log and audio_debug session dumps in Finder. Attach these when filing a support ticket so we can diagnose without remote access."
                 ) {
                     Button {
                         if let logUrl = logDirectoryURL() {
@@ -277,7 +278,7 @@ struct MacAdvancedPage: View {
 
                 MacRow(
                     "Reset all settings",
-                    description: "Restore Dimmy to factory defaults",
+                    hint: "Restores Dimmy to factory defaults. Wipes config.json (keeps your encrypted API keys, history, and saved meetings). Currently a placeholder — wire-up lands in a later phase.",
                     showsDivider: false
                 ) {
                     Button(role: .destructive) {

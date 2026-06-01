@@ -44,7 +44,8 @@ struct MacPrivacyPage: View {
             MacTile {
                 MacRow(
                     "Save audio with each history row",
-                    description: "16 kHz mono WAV in ~/Library/Application Support/dimmy/history_audio. Off by default."
+                    description: "Off by default.",
+                    hint: "When on, each transcription's WAV is saved alongside the row at 16 kHz mono in ~/Library/Application Support/dimmy/history_audio. Use the retention controls below to bound disk usage."
                 ) {
                     Toggle("", isOn: Binding(
                         get: { appState.saveAudioInHistory },
@@ -58,7 +59,8 @@ struct MacPrivacyPage: View {
                 }
                 MacRow(
                     "Keep for",
-                    description: "Days before automatic delete. 0 = never auto-delete by age."
+                    description: "0 = never auto-delete by age.",
+                    hint: "Days before a saved audio file is automatically deleted from the history_audio folder. Doesn't affect the history row itself — only the WAV."
                 ) {
                     Stepper(value: Binding(
                         get: { Int(appState.historyAudioKeepDays) },
@@ -72,7 +74,8 @@ struct MacPrivacyPage: View {
                 }
                 MacRow(
                     "Storage cap",
-                    description: "Maximum size of the history_audio folder. Oldest WAVs are deleted first when over the cap. 0 = no cap.",
+                    description: "0 = no cap.",
+                    hint: "Maximum size of the history_audio folder in megabytes. Oldest WAVs are deleted first when over the cap, even if they're still within the Keep-for window.",
                     showsDivider: false
                 ) {
                     Stepper(value: Binding(
@@ -102,7 +105,10 @@ struct MacPrivacyPage: View {
             MacTile {
                 MacRow(
                     "Send anonymous usage data",
-                    description: "\"app started\", \"transcription completed in 2.3s\". No content, no identifiers."
+                    description: "No content, no identifiers.",
+                    hint: "Events like \"app started\", \"transcription completed in 2.3 s\", \"cloud provider: groq\". Never the transcribed text, your microphone name, file paths, or your username.",
+                    hintURL: URL(string: "https://dimmy.app/privacy#data"),
+                    hintURLLabel: "What we collect ›"
                 ) {
                     Toggle("", isOn: Binding(
                         get: { DimmyCore.shared.telemetryEnabled },
@@ -113,7 +119,10 @@ struct MacPrivacyPage: View {
                 }
                 MacRow(
                     "Send crash reports",
-                    description: "Stack trace only — no environment, no usernames in paths.",
+                    description: "Stack trace only.",
+                    hint: "If Dimmy crashes, sends a stack trace via Sentry. No environment variables, no paths containing your username, no transcript content.",
+                    hintURL: URL(string: "https://dimmy.app/privacy"),
+                    hintURLLabel: "Privacy policy ›",
                     showsDivider: false
                 ) {
                     Toggle("", isOn: Binding(
@@ -124,7 +133,7 @@ struct MacPrivacyPage: View {
                     .labelsHidden()
                 }
             }
-            MacGroupFooter(text: "Same pipeline as the Windows build — PostHog + Sentry, both gated by the toggles above. Off by default.")
+            MacGroupFooter(text: "Both toggles are off by default. PostHog for usage events, Sentry for crashes.")
         }
     }
 
@@ -136,7 +145,8 @@ struct MacPrivacyPage: View {
             MacTile {
                 MacRow(
                     "Local ID",
-                    description: "Random, generated on first launch. Resetting takes effect immediately.",
+                    description: "Random, generated on first launch.",
+                    hint: "Anonymous identifier used to group telemetry events from the same install. Resetting takes effect on the next event and creates a fresh, unlinked ID.",
                     showsDivider: false
                 ) {
                     Text(anonymousIdText)

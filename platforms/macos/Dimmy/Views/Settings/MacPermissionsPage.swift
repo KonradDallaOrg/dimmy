@@ -76,7 +76,8 @@ struct MacPermissionsPage: View {
                     icon: "hand.raised.fill",
                     iconBg: Color(red: 0.04, green: 0.52, blue: 1.00),
                     title: "Accessibility",
-                    description: "Paste text into the focused app and listen for the global hotkey.",
+                    description: "Hotkey + paste back.",
+                    hint: "Lets Dimmy listen for the global hotkey from any app and paste the transcript back into the focused field. Without it the shortcut is dead and the transcript stays on the clipboard only.",
                     granted: perms.accessibilityGranted,
                     pending: !perms.accessibilityGranted && !accessibilityPromptShown,
                     showsDivider: true,
@@ -92,8 +93,9 @@ struct MacPermissionsPage: View {
                     iconBg: Color(red: 0.20, green: 0.78, blue: 0.35),
                     title: "Input Monitoring",
                     description: appState.shortcut.isFnOnly
-                        ? "Required by your current Fn-key shortcut."
-                        : "Only required if you switch to a Fn-key shortcut.",
+                        ? "Required by your Fn-key shortcut."
+                        : "Only needed for Fn-key shortcuts.",
+                    hint: "macOS treats the Fn / Globe key as a HID device, not a regular modifier. Dimmy needs Input Monitoring to see Fn-based combos. Cmd/Ctrl/Opt/Shift combos work without it.",
                     granted: perms.inputMonitoringGranted,
                     pending: perms.inputMonitoring == kIOHIDAccessTypeUnknown && !inputMonitoringPromptShown,
                     showsDivider: false,
@@ -139,6 +141,7 @@ struct MacPermissionsPage: View {
         iconBg: Color,
         title: String,
         description: String,
+        hint: String? = nil,
         granted: Bool,
         pending: Bool,
         showsDivider: Bool,
@@ -148,6 +151,7 @@ struct MacPermissionsPage: View {
         MacRow(
             title,
             description: description,
+            hint: hint,
             icon: icon,
             iconBackground: iconBg,
             showsDivider: showsDivider
@@ -200,7 +204,7 @@ struct MacPermissionsPage: View {
                 }
                 MacRow(
                     "Reset and re-prompt",
-                    description: "Wipes Dimmy's TCC entry for the chosen permission so the next launch shows a fresh prompt. Useful when grants look stale.",
+                    hint: "Wipes Dimmy's TCC entry for the chosen permission so the next request shows a fresh system prompt. Useful when a grant looks stale (e.g. \"granted\" but recording is silent).",
                     showsDivider: false
                 ) {
                     Button("Reset Microphone") {

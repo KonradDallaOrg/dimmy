@@ -84,7 +84,7 @@ struct MacAboutPage: View {
                 }
                 MacRow(
                     "Update channel",
-                    description: "Stable releases or early previews",
+                    hint: "Stable only is the safer default. Prerelease also offers staging builds with new features earlier — expect occasional regressions.",
                     showsDivider: false
                 ) {
                     Picker("", selection: $updates.channel) {

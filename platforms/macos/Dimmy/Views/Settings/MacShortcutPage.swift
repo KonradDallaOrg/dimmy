@@ -50,7 +50,8 @@ struct MacShortcutPage: View {
             MacTile {
                 MacRow(
                     "Activation hotkey",
-                    description: "Click to capture a new key combination",
+                    description: "Press Change… to capture a new combo.",
+                    hint: "The global keyboard shortcut that starts (and, in toggle mode, stops) recording. Captured combos require at least one modifier — plain letters would conflict with normal typing.",
                     icon: "keyboard.fill",
                     iconBackground: Color(red: 0.04, green: 0.52, blue: 1.00)
                 ) {
@@ -63,7 +64,11 @@ struct MacShortcutPage: View {
                         .controlSize(.small)
                 }
 
-                MacRow("Behavior", showsDivider: false) {
+                MacRow(
+                    "Behavior",
+                    hint: "Push-to-talk records while the hotkey is held — release to transcribe. Toggle starts on the first press and stops on the next press; you can let go in between.",
+                    showsDivider: false
+                ) {
                     Picker("", selection: Binding(
                         get: { appState.preferredMode == .pushToTalk ? "ptt" : "toggle" },
                         set: { newValue in
@@ -79,7 +84,6 @@ struct MacShortcutPage: View {
                     .frame(width: 200)
                 }
             }
-            MacGroupFooter(text: "Push-to-talk records while held; release to transcribe. Toggle starts and stops on each press.")
         }
     }
 
@@ -89,7 +93,8 @@ struct MacShortcutPage: View {
             MacTile {
                 MacRow(
                     "Add to dictionary",
-                    description: "Select text in any app, press this combo to teach Dimmy your custom words",
+                    description: "Select text in any app, then press the combo.",
+                    hint: "Adds the selected word to your custom dictionary so Dimmy biases future transcriptions toward it. macOS Services menu has the same action — right-click any selection.",
                     icon: "text.badge.plus",
                     iconBackground: Color(red: 0.40, green: 0.73, blue: 0.42),
                     showsDivider: false
@@ -103,7 +108,6 @@ struct MacShortcutPage: View {
                         .controlSize(.small)
                 }
             }
-            MacGroupFooter(text: "macOS Services menu also has “Add to Dimmy Dictionary” — right-click any selection.")
         }
     }
 
@@ -113,7 +117,7 @@ struct MacShortcutPage: View {
             MacTile {
                 MacRow(
                     "CGEventTap status",
-                    description: "Required for the global shortcut to intercept keys system-wide",
+                    hint: "The low-level event tap that lets Dimmy intercept your hotkey from any focused app. Requires Accessibility (and, for Fn-key combos, Input Monitoring) — check Permissions if this stays orange.",
                     showsDivider: false
                 ) {
                     statusBadge

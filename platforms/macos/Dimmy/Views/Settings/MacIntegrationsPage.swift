@@ -32,7 +32,7 @@ struct MacIntegrationsPage: View {
                 appState: appState,
                 onWizardRequested: { showClaudeWizard = true }
             )
-            MacGroupFooter(text: "Sign-in opens Anthropic's OAuth in your browser via the local `claude` CLI. The OAuth token is stored by the CLI in macOS Keychain (or ~/.claude/credentials.json on older versions). Dimmy reads only the existence of the token — never its contents.")
+            MacGroupFooter(text: "OAuth token stays with the `claude` CLI in macOS Keychain (or ~/.claude/credentials.json). Dimmy only checks existence — never reads the token.")
 
             Spacer().frame(height: 24)
             MacGroupLabel(text: "Notion")
@@ -48,7 +48,7 @@ struct MacIntegrationsPage: View {
             MacTile {
                 MacRow(
                     "Auto-send each meeting",
-                    description: "When on, every meeting's recap uploads to your Notion destination as soon as the recap finishes. When off, you click Send to Notion from the meeting Done view per meeting.",
+                    hint: "When on, every meeting's recap uploads to your Notion destination as soon as the recap finishes. When off, you click Send to Notion from the meeting Done view per meeting.",
                     showsDivider: false
                 ) {
                     Toggle("", isOn: Binding(
@@ -76,15 +76,18 @@ struct MacIntegrationsPage: View {
 
             // Help footer
             Spacer().frame(height: 16)
-            Text("Free Notion accounts work — no API limits per plan, only the standard 3 requests/sec rate limit. Token + destination stay on this device; only the recap markdown leaves when you (or auto-send) trigger an upload.")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 4) {
+                Text("Free Notion accounts work. Token + destination stay on this Mac.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                MacInfoButton(text: "Free Notion plans have no per-plan API limits — only the standard 3 requests/sec rate limit. Token + destination are stored locally; only the recap markdown leaves this Mac when you (or auto-send) trigger an upload.")
+            }
+            .fixedSize(horizontal: false, vertical: true)
 
             Spacer().frame(height: 24)
             MacGroupLabel(text: "Claude Desktop (MCP)")
             mcpCard
-            MacGroupFooter(text: "Lets Claude Desktop see your recent meetings and save recaps back. Runs entirely on this device — Claude Desktop spawns Dimmy's MCP binary at startup; no network round-trip. Disconnect anytime; we just remove our entry from claude_desktop_config.json.")
+            MacGroupFooter(text: "Claude Desktop spawns Dimmy's MCP binary locally — no network round-trip. Disconnect removes the entry from claude_desktop_config.json.")
         }
         .sheet(isPresented: $showWizard) {
             NotionConnectSheet(

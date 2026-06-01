@@ -121,6 +121,9 @@ struct MacTile<Content: View>: View {
 struct MacRow<Trailing: View>: View {
     let label: String
     var description: String? = nil
+    var hint: String? = nil
+    var hintURL: URL? = nil
+    var hintURLLabel: String? = nil
     var icon: String? = nil
     var iconBackground: Color? = nil
     var showsDivider: Bool = true
@@ -129,6 +132,9 @@ struct MacRow<Trailing: View>: View {
     init(
         _ label: String,
         description: String? = nil,
+        hint: String? = nil,
+        hintURL: URL? = nil,
+        hintURLLabel: String? = nil,
         icon: String? = nil,
         iconBackground: Color? = nil,
         showsDivider: Bool = true,
@@ -136,6 +142,9 @@ struct MacRow<Trailing: View>: View {
     ) {
         self.label = label
         self.description = description
+        self.hint = hint
+        self.hintURL = hintURL
+        self.hintURLLabel = hintURLLabel
         self.icon = icon
         self.iconBackground = iconBackground
         self.showsDivider = showsDivider
@@ -149,7 +158,12 @@ struct MacRow<Trailing: View>: View {
                     MacSquircleIcon(systemName: icon, background: bg)
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(label).font(.system(size: 13))
+                    HStack(spacing: 4) {
+                        Text(label).font(.system(size: 13))
+                        if let hint {
+                            MacInfoButton(text: hint, url: hintURL, urlLabel: hintURLLabel)
+                        }
+                    }
                     if let description {
                         Text(description)
                             .font(.system(size: 11))
@@ -179,13 +193,67 @@ extension MacRow where Trailing == EmptyView {
     init(
         _ label: String,
         description: String? = nil,
+        hint: String? = nil,
+        hintURL: URL? = nil,
+        hintURLLabel: String? = nil,
         icon: String? = nil,
         iconBackground: Color? = nil,
         showsDivider: Bool = true
     ) {
-        self.init(label, description: description, icon: icon,
-                  iconBackground: iconBackground, showsDivider: showsDivider) {
+        self.init(label,
+                  description: description,
+                  hint: hint,
+                  hintURL: hintURL,
+                  hintURLLabel: hintURLLabel,
+                  icon: icon,
+                  iconBackground: iconBackground,
+                  showsDivider: showsDivider) {
             EmptyView()
+        }
+    }
+}
+
+// MARK: - Info button (inline (i) → popover)
+//
+// Mirrors the Windows SettingCard.Hint pattern (PR #95). A subtle 12pt
+// `info.circle` button next to a row label. Click opens an NSPopover
+// with the verbose copy (max width ~320) and an optional "Learn more"
+// link. Hover surfaces the same copy via SwiftUI's `.help()` so
+// keyboard-only / hover-only users get the explanation too.
+
+struct MacInfoButton: View {
+    let text: String
+    var url: URL? = nil
+    var urlLabel: String? = nil
+
+    @State private var isOpen = false
+
+    var body: some View {
+        Button {
+            isOpen.toggle()
+        } label: {
+            Image(systemName: "info.circle")
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(Color.macTextSecondary)
+                .contentShape(Rectangle())
+                .frame(width: 16, height: 16)
+        }
+        .buttonStyle(.plain)
+        .help(text)
+        .accessibilityLabel("Show details")
+        .popover(isPresented: $isOpen, arrowEdge: .top) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(text)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let url {
+                    Link(urlLabel ?? "Learn more", destination: url)
+                        .font(.system(size: 12))
+                }
+            }
+            .padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14))
+            .frame(maxWidth: 320, alignment: .leading)
         }
     }
 }

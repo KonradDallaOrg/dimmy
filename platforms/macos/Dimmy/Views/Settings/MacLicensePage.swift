@@ -277,7 +277,8 @@ struct MacLicensePage: View {
             MacTile {
                 MacRow(
                     buyDetail,
-                    description: "Stripe handles payment + tax. We email you a magic link the moment payment clears.",
+                    description: "Stripe handles payment.",
+                    hint: "Stripe processes payment + tax. The moment payment clears we email you a magic link that activates this Mac in one click — no manual code copy.",
                     showsDivider: false
                 ) {
                     HStack(spacing: 8) {
@@ -591,7 +592,8 @@ struct MacLicensePage: View {
             MacTile {
                 MacRow(
                     "Email",
-                    description: "We'll send a magic link. Clicking it opens Dimmy and activates the license. Same email on another device joins your existing license."
+                    description: "We'll send a magic link.",
+                    hint: "Clicking the magic link opens Dimmy and activates the license on this Mac. Using the same email on another device joins it to the same license (subject to the device cap)."
                 ) {
                     HStack(spacing: 8) {
                         TextField("you@example.com", text: $trialEmail)
@@ -686,7 +688,8 @@ struct MacLicensePage: View {
                 MacTile {
                     MacRow(
                         "Activation code",
-                        description: "Paste the bare 32-char code or the full magic-link URL from your email."
+                        description: "32-char code or full magic-link URL.",
+                        hint: "Use this when the magic link from your email doesn't open Dimmy automatically — happens on machines where dimmy:// isn't registered as a URL handler. Paste either the bare code or the whole URL; we extract the code."
                     ) {
                         TextField("32-char code or magic-link URL", text: $pasteCode)
                             .textFieldStyle(.roundedBorder)

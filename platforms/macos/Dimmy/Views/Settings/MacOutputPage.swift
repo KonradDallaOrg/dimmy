@@ -294,7 +294,8 @@ struct MacOutputPage: View {
             MacTile {
                 MacRow(
                     "Recap model",
-                    description: "Used for the meeting recap pipeline and the long-dictation auto-recap. Auto inherits your dictation LLM (currently \(autoResolutionLabel)). Pick a flagship Anthropic / Gemini / OpenAI for best recap quality, or run it locally on a Gemma/Phi model — download one under Voice → Local model, then set this app's LLM to local (recap Auto will use it) to keep the transcript offline.",
+                    description: "Auto inherits \(autoResolutionLabel).",
+                    hint: "Used for the meeting recap pipeline and the long-dictation auto-recap. Auto follows your dictation LLM. Pick a flagship Anthropic / Gemini / OpenAI for best recap quality, or run it locally on a Gemma/Phi model — download one under Voice → Local model, then set this app's LLM to local to keep the transcript offline.",
                     showsDivider: false
                 ) {
                     Picker("", selection: Binding<String>(
@@ -349,7 +350,7 @@ struct MacOutputPage: View {
                 if recapSubscriptionAvailable {
                     MacRow(
                         "Use Anthropic subscription for recap",
-                        description: "Routes the recap LLM call through Claude Code (Pro / Team / Max). Dictation rewrite keeps its own auth method.",
+                        hint: "Routes the recap LLM call through the local `claude` CLI (Pro / Team / Max). Dictation rewrite keeps its own auth method. Recommended — the subscription cost is amortized over the recap's longer inference window.",
                         showsDivider: recapUseSameKeyToggleShouldShow || recapKeyFieldShouldShow
                     ) {
                         Toggle("", isOn: Binding(
@@ -386,7 +387,7 @@ struct MacOutputPage: View {
                 if recapUseSameKeyToggleShouldShow {
                     MacRow(
                         "Use same key as \(recapProviderTag.capitalized)",
-                        description: "Reuse the \(recapProviderTag.capitalized) key you already saved for STT/LLM — no need to paste a separate Recap key.",
+                        hint: "When you already have a \(recapProviderTag.capitalized) key saved (via STT or LLM), reuse it for recap too. Turn off to enter a dedicated recap key for the same vendor.",
                         showsDivider: recapKeyFieldShouldShow || !appState.recapUseSameKey
                     ) {
                         Toggle("", isOn: Binding(
@@ -412,9 +413,10 @@ struct MacOutputPage: View {
                 if recapKeyFieldShouldShow {
                     MacRow(
                         "Recap API key",
-                        description: !recapUpstreamKeyAvailable
-                            ? "Encrypted locally. No upstream \(recapProviderTag.capitalized) key found for STT/LLM, so the recap call needs a dedicated one."
-                            : "Encrypted locally. Used because you turned off key sharing above.",
+                        description: "Encrypted locally.",
+                        hint: !recapUpstreamKeyAvailable
+                            ? "No upstream \(recapProviderTag.capitalized) key found for STT or LLM, so the recap call needs a dedicated one. Stored at ~/.config/dimmy/keys.enc with AES-256-GCM."
+                            : "Used because you turned off key sharing above. Stored at ~/.config/dimmy/keys.enc with AES-256-GCM.",
                         showsDivider: showRecapKeyField
                     ) {
                         if recapKeyAlreadySaved {
@@ -440,7 +442,7 @@ struct MacOutputPage: View {
                     }
                 }
             }
-            MacGroupFooter(text: "Cloud entries use your configured LLM API key. Local entries use the matching Gemma `.gguf` from Settings → Voice (download required).")
+            MacGroupFooter(text: "Cloud entries reuse your LLM key. Local entries need a Gemma `.gguf` downloaded under Voice → Local model.")
         }
     }
 
@@ -451,11 +453,9 @@ struct MacOutputPage: View {
             MacGroupLabel(text: "Rewrite style")
             MacTile {
                 VStack(alignment: .leading, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 4) {
                         Text("Style").font(.system(size: 13))
-                        Text("After transcribing, Dimmy rewrites your text before pasting.")
-                            .font(.system(size: 11))
-                            .foregroundStyle(Color.macTextSecondary)
+                        MacInfoButton(text: "After transcribing, Dimmy rewrites your text with the active style before pasting. \"Off\" skips the LLM call entirely — what you said is what gets pasted.")
                     }
                     chipFlow
                 }
@@ -493,7 +493,10 @@ struct MacOutputPage: View {
         Group {
             MacGroupLabel(text: "LLM provider")
             MacTile {
-                MacRow("Mode", description: "Where the rewrite runs") {
+                MacRow(
+                    "Mode",
+                    hint: "On device runs the rewrite on a local Gemma / Phi model (download required). Cloud sends the transcript to your chosen LLM vendor — faster and usually higher quality but it leaves the machine."
+                ) {
                     Picker("", selection: Binding(
                         get: { appState.llmMode },
                         set: { newValue in
@@ -510,7 +513,10 @@ struct MacOutputPage: View {
                 }
 
                 if appState.llmMode == "cloud" {
-                    MacRow("Provider") {
+                    MacRow(
+                        "Provider",
+                        hint: "LLM vendor that rewrites the transcript. Anthropic is the only one that supports the Claude Pro subscription path; everyone else uses pay-as-you-go API keys."
+                    ) {
                         Picker("", selection: llmPresetBinding) {
                             ForEach(LlmPreset.presets) { preset in
                                 Label {
@@ -560,7 +566,12 @@ struct MacOutputPage: View {
                         if canSwitchToSubscription {
                             MacRow(
                                 "Authentication",
-                                description: authMethodDescription,
+                                description: appState.llmAuthMethod == "subscription"
+                                    ? "Claude Pro / Team / Max."
+                                    : "Direct API key, pay-as-you-go.",
+                                hint: appState.llmAuthMethod == "subscription"
+                                    ? "Routes LLM rewrite via the local `claude` CLI. Slower (~5-7 s subprocess cold-start per call) but no credit consumed."
+                                    : "Direct Anthropic API call billed per token. Lower latency than the subscription path; you pay for every rewrite.",
                                 showsDivider: appState.llmAuthMethod == "subscription" || sameKeyShouldShow
                             ) {
                                 Picker("", selection: Binding(
@@ -581,7 +592,8 @@ struct MacOutputPage: View {
                         } else {
                             MacRow(
                                 "Subscription auth not available",
-                                description: "Connect Claude Code in Settings → Integrations to use your Anthropic Pro / Team / Max subscription. Otherwise pay-as-you-go API key below.",
+                                description: "Connect Claude Code in Settings → Integrations.",
+                                hint: "Anthropic Pro / Team / Max subscriptions route through the local `claude` CLI. Until that's signed in here, the LLM can only authenticate with a pay-as-you-go API key.",
                                 showsDivider: true
                             ) {
                                 EmptyView()
@@ -599,8 +611,11 @@ struct MacOutputPage: View {
                         MacRow(
                             "Subscription connection",
                             description: appState.claudeCodeReady
-                                ? "✓ Connected. Sign-in / disconnect lives in Settings → Integrations. The token is read on every LLM call via the local `claude` CLI."
-                                : "⚠ Subscription selected but Claude Code isn't connected — calls will fail. Open Settings → Integrations to sign in.",
+                                ? "✓ Connected via Settings → Integrations."
+                                : "⚠ Not connected — calls will fail.",
+                            hint: appState.claudeCodeReady
+                                ? "Sign-in and disconnect live in Settings → Integrations. The token is read on every LLM call via the local `claude` CLI; Dimmy never stores or sees its contents."
+                                : "Subscription is selected but Claude Code isn't signed in yet. Open Settings → Integrations to connect, otherwise every LLM call will return an error.",
                             showsDivider: false
                         ) {
                             EmptyView()
@@ -614,7 +629,7 @@ struct MacOutputPage: View {
                         if sameKeyShouldShow {
                             MacRow(
                                 "Use my saved API key for this provider",
-                                description: "When you already have a key for the LLM's vendor (saved via STT or LLM), reuse it. Turn off to enter a dedicated LLM key for the same vendor.",
+                                hint: "When you already have a key for the LLM's vendor (saved via STT or LLM), reuse it. Turn off to enter a dedicated LLM key for the same vendor.",
                                 showsDivider: !appState.llmUseSameKey
                             ) {
                                 Toggle("", isOn: Binding(
@@ -632,9 +647,10 @@ struct MacOutputPage: View {
                         if !sameKeyShouldShow || !appState.llmUseSameKey {
                             MacRow(
                                 "LLM API key",
-                                description: sameKeyShouldShow
-                                    ? "Encrypted locally. Used when not sharing with STT."
-                                    : "Encrypted locally. STT and LLM use different providers, so a dedicated key is required.",
+                                description: "Encrypted locally.",
+                                hint: sameKeyShouldShow
+                                    ? "Dedicated LLM key — used because the toggle above is off. Stored at ~/.config/dimmy/keys.enc with AES-256-GCM."
+                                    : "STT and LLM use different vendors, so a dedicated LLM key is required. Stored at ~/.config/dimmy/keys.enc with AES-256-GCM.",
                                 showsDivider: showLlmKeyField
                             ) {
                                 if appState.hasLlmKey {
@@ -662,7 +678,7 @@ struct MacOutputPage: View {
                 } else {
                     MacRow(
                         "Local model",
-                        description: "Runs entirely on your device",
+                        hint: "Runs entirely on this Mac via llama.cpp + Metal. Gemma 4 E4B Q4 is the recommended balance of speed and quality on Apple Silicon; the larger Q8 variant trades RAM for accuracy. Phi-4 Mini is a multilingual fallback.",
                         showsDivider: !localLlmExists || llmDownloadInFlight
                     ) {
                         Picker("", selection: Binding(
@@ -836,7 +852,7 @@ struct MacOutputPage: View {
             MacTile {
                 MacRow(
                     "Keep in clipboard history",
-                    description: "Leave the transcription on the clipboard after auto-paste so you can paste it again later.",
+                    hint: "Leaves the transcription on the system clipboard after auto-paste so you can paste it again later in any app.",
                     showsDivider: false
                 ) {
                     Toggle("", isOn: Binding(
@@ -859,7 +875,10 @@ struct MacOutputPage: View {
         Group {
             MacGroupLabel(text: "Advanced LLM")
             MacTile {
-                MacRow("Tone", description: "Adjusts how formal or casual the rewrite sounds") {
+                MacRow(
+                    "Tone",
+                    hint: "Adjusts how formal or casual the LLM rewrite sounds. Applied on top of the active style — e.g. Professional + Casual = approachable email."
+                ) {
                     Picker("", selection: Binding(
                         get: { appState.llmTone },
                         set: { newValue in
@@ -877,7 +896,7 @@ struct MacOutputPage: View {
 
                 MacRow(
                     "Translate output to",
-                    description: "Translate the LLM rewrite to this language. The pill's scroll wheel changes the same setting."
+                    hint: "Translates the LLM rewrite to this language. The pill's scroll wheel changes the same setting — handy mid-dictation."
                 ) {
                     Picker("", selection: Binding(
                         get: { appState.llmTranslateTo },
@@ -899,11 +918,11 @@ struct MacOutputPage: View {
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Custom prompt")
-                        .font(.system(size: 13))
-                    Text("Free-form instruction prepended to the LLM prompt for the Custom style.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.macTextSecondary)
+                    HStack(spacing: 4) {
+                        Text("Custom prompt")
+                            .font(.system(size: 13))
+                        MacInfoButton(text: "Free-form instruction prepended to the LLM prompt when the active style is Custom. Goes through verbatim — use it to set persona, audience, or strict formatting rules.")
+                    }
                     TextEditor(text: Binding(
                         get: { appState.llmCustomPrompt },
                         set: { newValue in
