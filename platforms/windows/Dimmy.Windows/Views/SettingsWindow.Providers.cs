@@ -69,38 +69,19 @@ public sealed partial class SettingsWindow
         };
         ProviderCardsHost.Children.Clear();
 
-        SeedConnectedFromCurrentConfig();
-
         foreach (var p in ProviderCatalog.All)
             ProviderCardsHost.Children.Add(BuildProviderCard(p));
     }
 
-    /// <summary>On first run, mark whichever providers the current STT/LLM URLs
-    /// point at as connected, so existing setups light up without re-entering
-    /// keys. Idempotent — only seeds when the list is empty.</summary>
-    private void SeedConnectedFromCurrentConfig()
-    {
-        var prefs = UiPreferences.Load();
-        if (prefs.ConnectedProviders.Count > 0) return;
-
-        void SeedFromUrl(string? url)
-        {
-            if (string.IsNullOrWhiteSpace(url)) return;
-            var match = ProviderCatalog.All.FirstOrDefault(p =>
-                !string.IsNullOrEmpty(p.Id) && p.Id != "custom" && p.Id != "local"
-                && url!.Contains(p.Id, StringComparison.OrdinalIgnoreCase));
-            if (match != null && !prefs.ConnectedProviders.Contains(match.Id))
-                prefs.ConnectedProviders.Add(match.Id);
-        }
-        SeedFromUrl(ViewModel.ApiUrl);
-        SeedFromUrl(ViewModel.LlmApiUrl);
-        if (!prefs.ConnectedProviders.Contains("local"))
-            prefs.ConnectedProviders.Add("local");
-        prefs.Save();
-    }
-
+    /// <summary>A provider is "connected" when the encrypted keystore actually
+    /// holds a key for it (any scope), wherever it was entered — that's the
+    /// truthful, connection-driven signal. The UiPreferences mirror is only a
+    /// transient fallback for the brief window after a Connect click, before the
+    /// VM re-reads the per-vendor key flags. On-device is always ready.</summary>
     private bool IsProviderConnected(string id) =>
-        id == "local" || UiPreferences.Load().ConnectedProviders.Contains(id);
+        id == "local"
+        || (ViewModel?.HasAnyKeyForProvider(id) ?? false)
+        || UiPreferences.Load().ConnectedProviders.Contains(id);
 
     // ── Card construction ────────────────────────────────────────────────
 
