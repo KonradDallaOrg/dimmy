@@ -181,14 +181,12 @@ public sealed partial class SettingsWindow
         }
         else
         {
-            // Deepgram (STT-only) and Custom can't be keyed via the per-provider
-            // FFI — their key lives on the Voice input / Output page. Be honest
-            // rather than showing a Connect button that silently does nothing.
+            // Only Custom reaches here now (Deepgram is keyable since the FFI
+            // accepts the stt scope). Custom needs a base URL, so its key lives
+            // on the Voice input / Output page next to that URL.
             body.Children.Add(new TextBlock
             {
-                Text = p.Id == "deepgram"
-                    ? "Deepgram is speech-to-text only — enter its API key on the Voice input page (Speech-to-text → Cloud → Deepgram)."
-                    : "Set a custom OpenAI-compatible endpoint + key on the Voice input page (STT) or Output page (rewrite).",
+                Text = "Set a custom OpenAI-compatible endpoint and key on the Voice input page for speech, or the Output page for rewrite.",
                 TextWrapping = TextWrapping.Wrap,
                 FontSize = 13,
                 Foreground = ThemeBrush("TextFillColorSecondaryBrush"),

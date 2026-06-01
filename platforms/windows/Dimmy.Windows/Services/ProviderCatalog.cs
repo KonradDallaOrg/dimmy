@@ -45,26 +45,38 @@ public static class ProviderCatalog
     /// <summary>Recap is an LLM operation — any LLM-capable provider can do it.</summary>
     public static bool Recap(this ProviderInfo p) => p.Llm;
 
-    /// <summary>Vendors the per-provider keystore FFI (dimmy_save_llm_provider_key)
-    /// accepts — i.e. those with a known default LLM endpoint. Deepgram (STT-only),
-    /// Custom (user URL) and On-device are NOT in here: the FFI rejects them, so
-    /// their keys are entered on the Voice input / Output pages instead.</summary>
-    private static readonly HashSet<string> KeyableVendors = new(StringComparer.OrdinalIgnoreCase)
+    /// <summary>Vendors whose LLM/recap key the keystore FFI accepts — those with
+    /// a completions endpoint. Anthropic/OpenRouter are LLM-only; Deepgram is not
+    /// here (STT-only); Custom/Local are configured elsewhere.</summary>
+    private static readonly HashSet<string> LlmKeyVendors = new(StringComparer.OrdinalIgnoreCase)
     {
         "groq", "openai", "anthropic", "gemini", "openrouter", "fireworks", "together",
     };
 
-    /// <summary>True when a key for this provider can be saved from the Providers
-    /// page. False for On-device (no key), Deepgram (STT-only — the FFI has no STT
-    /// scope) and Custom (arbitrary endpoint) — those are keyed on Voice/Output.</summary>
-    public static bool IsKeyableHere(this ProviderInfo p) => p.Llm && KeyableVendors.Contains(p.Id);
+    /// <summary>Vendors whose STT key the FFI accepts — those with a cloud speech
+    /// endpoint (mirrors Provider::supports_stt in core/src/provider.rs). Deepgram
+    /// is here (STT-only). Custom needs a URL so it's keyed on Voice/Output.</summary>
+    private static readonly HashSet<string> SttKeyVendors = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "groq", "openai", "gemini", "deepgram", "fireworks", "together",
+    };
 
-    /// <summary>The keystore scopes the Providers page writes the single key into.
-    /// The FFI only accepts "llm" and "recap" (not "stt"), so an STT-capable
-    /// provider's STT key still comes from the Voice input page. Empty when the
-    /// provider can't be keyed here at all.</summary>
-    public static IReadOnlyList<string> KeySaveScopes(this ProviderInfo p) =>
-        p.IsKeyableHere() ? new[] { "llm", "recap" } : Array.Empty<string>();
+    /// <summary>The keystore scopes the Providers page writes the single key into,
+    /// matching what dimmy_save_llm_provider_key accepts per vendor. STT-capable
+    /// vendors get "stt"; LLM-capable vendors get "llm"+"recap". Empty when the
+    /// provider can't be keyed here (Custom needs a URL, On-device needs no key).</summary>
+    public static IReadOnlyList<string> KeySaveScopes(this ProviderInfo p)
+    {
+        var scopes = new List<string>();
+        if (p.Stt && SttKeyVendors.Contains(p.Id)) scopes.Add("stt");
+        if (p.Llm && LlmKeyVendors.Contains(p.Id)) { scopes.Add("llm"); scopes.Add("recap"); }
+        return scopes;
+    }
+
+    /// <summary>True when a key for this provider can be saved from the Providers
+    /// page (it has at least one FFI-accepted scope). Deepgram is now keyable
+    /// (stt). Custom (arbitrary endpoint) and On-device are not.</summary>
+    public static bool IsKeyableHere(this ProviderInfo p) => p.KeySaveScopes().Count > 0;
 
     // Capability shorthands for readable model tables below.
     private static ProviderModel S(string name) => new(name, true, false, false);   // speech
