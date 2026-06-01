@@ -855,7 +855,7 @@
                 <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
                   <Button Content="Clear" Click="CommandHotkeyClear_Click"
                           VerticalAlignment="Center" />
-                  <controls:ShortcutRecorder Shortcut="{Binding CommandHotkey, Mode=TwoWay}" />
+                  <controls:ShortcutRecorder Shortcut="{Binding CommandHotkey, Mode=TwoWay}" RequireKey="True" />
                 </StackPanel>
               </controls:SettingCard>
 
@@ -867,7 +867,7 @@
                                     Label="Add-to-dictionary shortcut"
                                     InfoTip="Select text in any app and press these keys to add it to your custom dictionary. Press the keys here, then release to confirm."
                                     HelpUrl="https://dimmy.app/help/hotkey-change">
-                <controls:ShortcutRecorder Shortcut="{Binding DictHotkey, Mode=TwoWay}" />
+                <controls:ShortcutRecorder Shortcut="{Binding DictHotkey, Mode=TwoWay}" RequireKey="True" />
               </controls:SettingCard>
             </StackPanel>
 

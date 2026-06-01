@@ -78,6 +78,12 @@ public sealed class CommandHotkeyService : IDisposable
     /// thread — the consumer marshals onto the UI dispatcher.</summary>
     public event Action? Triggered;
 
+    /// <summary>Raised when RegisterHotKey rejects the combo (almost always
+    /// because another app already owns it). Carries the combo string so the
+    /// host can tell the user to pick a different one instead of failing
+    /// silently. Fires on the pump thread.</summary>
+    public event Action<string>? RegistrationFailed;
+
     private Thread? _thread;
     private uint _threadId;
     private IntPtr _hwnd;
@@ -132,6 +138,7 @@ public sealed class CommandHotkeyService : IDisposable
         {
             App.Log("CommandHotkey: RegisterHotKey failed for initial combo (err=" +
                 Marshal.GetLastWin32Error() + ")", "Hotkey");
+            try { RegistrationFailed?.Invoke(_currentCombo); } catch { }
             DestroyWindow(_hwnd);
             _hwnd = IntPtr.Zero;
             return;
@@ -160,6 +167,7 @@ public sealed class CommandHotkeyService : IDisposable
                 {
                     App.Log("CommandHotkey: re-register failed (err=" +
                         Marshal.GetLastWin32Error() + ")", "Hotkey");
+                    try { RegistrationFailed?.Invoke(_currentCombo); } catch { }
                 }
                 else
                 {

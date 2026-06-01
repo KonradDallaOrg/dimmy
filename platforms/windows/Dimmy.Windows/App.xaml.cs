@@ -517,6 +517,8 @@ public partial class App : Application
         {
             _commandHotkey = new CommandHotkeyService();
             _commandHotkey.Triggered += OnCommandHotkeyTriggered;
+            _commandHotkey.RegistrationFailed += combo =>
+                RunOnUI(() => Services.DictNotificationService.ShowHotkeyConflict(combo));
             _commandHotkey.Register(_uiPrefs.CommandHotkey);
         }
         catch (Exception ex)
