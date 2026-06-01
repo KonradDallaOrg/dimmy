@@ -174,9 +174,25 @@ public sealed partial class SettingsWindow
                 Foreground = ThemeBrush("TextFillColorSecondaryBrush"),
             });
         }
-        else
+        else if (p.IsKeyableHere())
         {
             body.Children.Add(BuildKeyRow(p, connected));
+            body.Children.Add(BuildGetKeyRow(p));
+        }
+        else
+        {
+            // Deepgram (STT-only) and Custom can't be keyed via the per-provider
+            // FFI — their key lives on the Voice input / Output page. Be honest
+            // rather than showing a Connect button that silently does nothing.
+            body.Children.Add(new TextBlock
+            {
+                Text = p.Id == "deepgram"
+                    ? "Deepgram is speech-to-text only — enter its API key on the Voice input page (Speech-to-text → Cloud → Deepgram)."
+                    : "Set a custom OpenAI-compatible endpoint + key on the Voice input page (STT) or Output page (rewrite).",
+                TextWrapping = TextWrapping.Wrap,
+                FontSize = 13,
+                Foreground = ThemeBrush("TextFillColorSecondaryBrush"),
+            });
             body.Children.Add(BuildGetKeyRow(p));
         }
 
@@ -310,17 +326,15 @@ public sealed partial class SettingsWindow
         var key = box.Password?.Trim() ?? "";
         if (string.IsNullOrEmpty(key)) { box.Focus(FocusState.Programmatic); return; }
 
+        // Save the one key into every scope the keystore FFI accepts for this
+        // vendor (llm + recap). The FFI rejects the "stt" scope, so an STT key
+        // for a provider used for speech still comes from the Voice input page.
+        var scopes = p.KeySaveScopes();
         int worst = 0;
-        // Save the one key into every scope the provider can serve, so
-        // whichever capability dispatches to it finds the key.
-        if (p.Stt) worst = Math.Min(worst, SaveProviderKey("stt", p.Id, key));
-        if (p.Llm)
-        {
-            worst = Math.Min(worst, SaveProviderKey("llm", p.Id, key));
-            worst = Math.Min(worst, SaveProviderKey("recap", p.Id, key));
-        }
+        foreach (var scope in scopes)
+            worst = Math.Min(worst, SaveProviderKey(scope, p.Id, key));
 
-        if (worst == 0)
+        if (scopes.Count > 0 && worst == 0)
         {
             box.Password = "";
             MarkConnected(p.Id, true);

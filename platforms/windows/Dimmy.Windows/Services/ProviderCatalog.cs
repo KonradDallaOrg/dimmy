@@ -45,6 +45,27 @@ public static class ProviderCatalog
     /// <summary>Recap is an LLM operation — any LLM-capable provider can do it.</summary>
     public static bool Recap(this ProviderInfo p) => p.Llm;
 
+    /// <summary>Vendors the per-provider keystore FFI (dimmy_save_llm_provider_key)
+    /// accepts — i.e. those with a known default LLM endpoint. Deepgram (STT-only),
+    /// Custom (user URL) and On-device are NOT in here: the FFI rejects them, so
+    /// their keys are entered on the Voice input / Output pages instead.</summary>
+    private static readonly HashSet<string> KeyableVendors = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "groq", "openai", "anthropic", "gemini", "openrouter", "fireworks", "together",
+    };
+
+    /// <summary>True when a key for this provider can be saved from the Providers
+    /// page. False for On-device (no key), Deepgram (STT-only — the FFI has no STT
+    /// scope) and Custom (arbitrary endpoint) — those are keyed on Voice/Output.</summary>
+    public static bool IsKeyableHere(this ProviderInfo p) => p.Llm && KeyableVendors.Contains(p.Id);
+
+    /// <summary>The keystore scopes the Providers page writes the single key into.
+    /// The FFI only accepts "llm" and "recap" (not "stt"), so an STT-capable
+    /// provider's STT key still comes from the Voice input page. Empty when the
+    /// provider can't be keyed here at all.</summary>
+    public static IReadOnlyList<string> KeySaveScopes(this ProviderInfo p) =>
+        p.IsKeyableHere() ? new[] { "llm", "recap" } : Array.Empty<string>();
+
     // Capability shorthands for readable model tables below.
     private static ProviderModel S(string name) => new(name, true, false, false);   // speech
     private static ProviderModel L(string name) => new(name, false, true, true);    // rewrite + recap

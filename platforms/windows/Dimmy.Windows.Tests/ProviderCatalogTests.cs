@@ -136,6 +136,73 @@ public class ProviderCatalogTests
         Assert.NotNull(local);
         Assert.Equal(string.Empty, local!.ConsoleUrl);
     }
+
+    // ── Key save scopes (what the Providers page writes per provider) ──
+    // The keystore FFI (dimmy_save_llm_provider_key) only accepts "llm" + "recap"
+    // and only for vendors with a default LLM endpoint. STT keys + Deepgram +
+    // Custom are entered on the Voice input / Output pages.
+
+    [Theory]
+    [InlineData("groq", true)]
+    [InlineData("openai", true)]
+    [InlineData("anthropic", true)]
+    [InlineData("gemini", true)]
+    [InlineData("openrouter", true)]
+    [InlineData("fireworks", true)]
+    [InlineData("together", true)]
+    [InlineData("deepgram", false)] // STT-only — FFI has no STT scope
+    [InlineData("custom", false)]   // arbitrary endpoint — FFI rejects vendor
+    [InlineData("local", false)]    // on-device — no key at all
+    public void IsKeyableHere_matches_ffi_acceptance(string id, bool keyable)
+    {
+        var p = ProviderCatalog.ById(id);
+        Assert.NotNull(p);
+        Assert.Equal(keyable, p!.IsKeyableHere());
+    }
+
+    [Fact]
+    public void Keyable_providers_save_into_llm_and_recap_scopes()
+    {
+        foreach (var p in ProviderCatalog.All)
+        {
+            var scopes = p.KeySaveScopes();
+            if (p.IsKeyableHere())
+            {
+                // Exactly llm + recap — never "stt" (the FFI rejects it).
+                Assert.Equal(new[] { "llm", "recap" }, scopes);
+                Assert.DoesNotContain("stt", scopes);
+            }
+            else
+            {
+                Assert.Empty(scopes);
+            }
+        }
+    }
+
+    [Fact]
+    public void Key_scopes_are_a_subset_of_what_the_provider_serves()
+    {
+        // We must never write a key into a scope the provider can't serve
+        // (e.g. a recap key for a provider with no LLM). "stt" is never written
+        // here regardless, so only llm/recap need checking.
+        foreach (var p in ProviderCatalog.All)
+            foreach (var scope in p.KeySaveScopes())
+            {
+                if (scope is "llm" or "recap")
+                    Assert.True(p.Llm, $"{p.Id} writes {scope} but has no LLM capability");
+            }
+    }
+
+    [Fact]
+    public void Stt_capable_providers_are_documented_as_keyed_elsewhere()
+    {
+        // A provider that does STT but is keyable here (Groq/OpenAI/Gemini/
+        // Fireworks/Together) writes only llm+recap from this page — its STT key
+        // still comes from Voice input. Pin that the page never claims to write
+        // an STT scope, so the "STT key lives on Voice input" contract holds.
+        foreach (var p in ProviderCatalog.All.Where(p => p.Stt))
+            Assert.DoesNotContain("stt", p.KeySaveScopes());
+    }
 }
 
 internal static class ProviderInfoTestExt
