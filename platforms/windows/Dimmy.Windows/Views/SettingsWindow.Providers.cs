@@ -5,6 +5,8 @@ using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Imaging;
+using Microsoft.UI.Xaml.Shapes;
 using WinColor = global::Windows.UI.Color;
 
 namespace Dimmy.Windows.Views;
@@ -12,19 +14,29 @@ namespace Dimmy.Windows.Views;
 /// <summary>
 /// Providers &amp; keys page — built programmatically (no XAML DataTemplates) so
 /// there is zero XAML-compiler surface. One card per provider from
-/// <see cref="ProviderCatalog"/>: status, key entry, a deep-link "Get key →"
-/// wizard to the exact console, and capability badges per model.
+/// <see cref="ProviderCatalog"/>: real brand logo, status, key entry, a
+/// deep-link "Get key →" wizard to the exact console, and a per-model
+/// capability list.
 ///
-/// Backend is UNCHANGED: keys go through dimmy_save_llm_provider_key into the
-/// existing AES-256 keystore (scopes stt/llm/recap per the provider's
-/// capabilities). "Connected" state is mirrored in UiPreferences for display.
-/// The per-task routing (which provider does STT/LLM/Recap) keeps using the
-/// existing config fields via the existing pages — this page is the clean
-/// one-key-per-provider entry surface that was the user's #1 pain point.
+/// Visual rules (locked decisions):
+///   • Native Fluent, theme-aware — every colour comes from a ThemeResource
+///     brush, NOT a hardcoded hex, so the page looks right in light AND dark.
+///     The ONE exception is the logo tile, which is intentionally a white
+///     squircle (favicon-tile convention) so monochrome currentColor marks
+///     (groq/openai/anthropic/openrouter) stay visible in both themes.
+///   • Backend UNCHANGED: keys go through dimmy_save_llm_provider_key into the
+///     existing AES-256 keystore (scopes stt/llm/recap per the provider's
+///     capabilities). "Connected" state is mirrored in UiPreferences.
 /// </summary>
 public sealed partial class SettingsWindow
 {
     private bool _providerCardsBuilt;
+
+    // Capability accent colours — readable on light + dark tints alike.
+    private const string SttColor = "#2FB37A";   // speech-to-text
+    private const string LlmColor = "#6472FF";   // rewrite
+    private const string RecapColor = "#C766E6"; // recap
+    private const string OkColor = "#2FB37A";    // connected / ready
 
     /// <summary>Build the provider cards once, lazily, when the page is first
     /// shown. Re-entrant-safe.</summary>
@@ -65,7 +77,6 @@ public sealed partial class SettingsWindow
         }
         SeedFromUrl(ViewModel.ApiUrl);
         SeedFromUrl(ViewModel.LlmApiUrl);
-        // On-device is always "connected" — no key needed.
         if (!prefs.ConnectedProviders.Contains("local"))
             prefs.ConnectedProviders.Add("local");
         prefs.Save();
@@ -84,23 +95,37 @@ public sealed partial class SettingsWindow
         {
             HorizontalAlignment = HorizontalAlignment.Stretch,
             HorizontalContentAlignment = HorizontalAlignment.Stretch,
-            IsExpanded = !connected && p.Id != "local", // open the ones that need a key
+            // Open the ones that still need a key; leave connected / on-device tidy.
+            IsExpanded = !connected && p.Id != "local",
         };
 
-        // ── Header: mark chip + name + status pill + sub-line ──
-        var header = new Grid { ColumnSpacing = 12 };
-        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        card.Header = BuildHeader(p, connected);
+        card.Content = BuildBody(p, connected);
+        return card;
+    }
 
-        var mark = MakeMarkChip(p);
-        Grid.SetColumn(mark, 0);
-        header.Children.Add(mark);
+    /// <summary>Header: [logo tile] [name + sub-status] … [status pill].
+    /// Three columns so the pill is right-aligned and the name block flexes,
+    /// everything centred on one baseline.</summary>
+    private FrameworkElement BuildHeader(ProviderInfo p, bool connected)
+    {
+        var grid = new Grid { ColumnSpacing = 14, MinHeight = 40 };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-        var meta = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Spacing = 1 };
-        var nameRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-        nameRow.Children.Add(new TextBlock { Text = p.Name, FontWeight = FontWeights.SemiBold, FontSize = 15 });
-        nameRow.Children.Add(MakeStatusPill(p, connected));
-        meta.Children.Add(nameRow);
+        var tile = MakeLogoTile(p);
+        Grid.SetColumn(tile, 0);
+        grid.Children.Add(tile);
+
+        var meta = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Spacing = 2 };
+        meta.Children.Add(new TextBlock
+        {
+            Text = p.Name,
+            FontWeight = FontWeights.SemiBold,
+            FontSize = 15,
+            Foreground = ThemeBrush("TextFillColorPrimaryBrush"),
+        });
         meta.Children.Add(new TextBlock
         {
             Text = SubStatusFor(p, connected),
@@ -108,17 +133,26 @@ public sealed partial class SettingsWindow
             Foreground = ThemeBrush("TextFillColorSecondaryBrush"),
         });
         Grid.SetColumn(meta, 1);
-        header.Children.Add(meta);
-        card.Header = header;
+        grid.Children.Add(meta);
 
-        // ── Body ──
-        var body = new StackPanel { Spacing = 12, Padding = new Thickness(0, 4, 0, 2) };
+        var pill = MakeStatusPill(p, connected);
+        Grid.SetColumn(pill, 2);
+        grid.Children.Add(pill);
+
+        return grid;
+    }
+
+    /// <summary>Body: key entry + deep-link (or the on-device blurb), then the
+    /// model list. Single column, consistent 14 px rhythm.</summary>
+    private FrameworkElement BuildBody(ProviderInfo p, bool connected)
+    {
+        var body = new StackPanel { Spacing = 14, Padding = new Thickness(0, 6, 0, 2) };
 
         if (p.Id == "local")
         {
             body.Children.Add(new TextBlock
             {
-                Text = "Runs entirely on your machine — private and free. No API key required. Pick the on-device model on the Voice input and Output pages.",
+                Text = "Runs entirely on your machine — private, offline, and free. No API key needed. Pick the exact on-device model on the Voice input and Output pages.",
                 TextWrapping = TextWrapping.Wrap,
                 FontSize = 13,
                 Foreground = ThemeBrush("TextFillColorSecondaryBrush"),
@@ -130,22 +164,9 @@ public sealed partial class SettingsWindow
             body.Children.Add(BuildGetKeyRow(p));
         }
 
-        // Models + capability badges (the educational "what can it do").
-        var mlabel = new TextBlock
-        {
-            Text = "MODELS",
-            FontSize = 11,
-            FontWeight = FontWeights.SemiBold,
-            CharacterSpacing = 60,
-            Margin = new Thickness(0, 4, 0, 0),
-            Foreground = ThemeBrush("TextFillColorSecondaryBrush"),
-        };
-        body.Children.Add(mlabel);
-        foreach (var m in p.Models)
-            body.Children.Add(BuildModelRow(m));
-
-        card.Content = body;
-        return card;
+        body.Children.Add(SectionCaption("MODELS"));
+        body.Children.Add(BuildModelsList(p));
+        return body;
     }
 
     private FrameworkElement BuildKeyRow(ProviderInfo p, bool connected)
@@ -158,6 +179,7 @@ public sealed partial class SettingsWindow
         {
             PlaceholderText = connected ? "Key saved — paste a new one to replace" : "Paste your API key…",
             Tag = p.Id,
+            VerticalAlignment = VerticalAlignment.Center,
         };
         Grid.SetColumn(box, 0);
         row.Children.Add(box);
@@ -165,6 +187,7 @@ public sealed partial class SettingsWindow
         var btn = new Button
         {
             Content = connected ? "Replace" : "Connect",
+            VerticalAlignment = VerticalAlignment.Center,
             Style = connected ? null : (Style)Application.Current.Resources["AccentButtonStyle"],
         };
         btn.Click += (_, _) => ProviderConnectClicked(p, box);
@@ -173,9 +196,7 @@ public sealed partial class SettingsWindow
 
         if (connected)
         {
-            // A "Remove" affordance lives under the field so it isn't a fat
-            // finger away from Replace.
-            var stack = new StackPanel { Spacing = 8 };
+            var stack = new StackPanel { Spacing = 6 };
             stack.Children.Add(row);
             var remove = new HyperlinkButton { Content = "Remove key", Padding = new Thickness(0) };
             remove.Click += (_, _) => ProviderRemoveClicked(p);
@@ -187,7 +208,7 @@ public sealed partial class SettingsWindow
 
     private FrameworkElement BuildGetKeyRow(ProviderInfo p)
     {
-        var stack = new StackPanel { Spacing = 4 };
+        var stack = new StackPanel { Spacing = 2 };
         if (!string.IsNullOrEmpty(p.ConsoleUrl))
         {
             var get = new HyperlinkButton
@@ -208,20 +229,59 @@ public sealed partial class SettingsWindow
         return stack;
     }
 
+    /// <summary>The model list — a bordered card with one row per model and a
+    /// hairline divider between them, so it reads as a list, not a clump.</summary>
+    private FrameworkElement BuildModelsList(ProviderInfo p)
+    {
+        var stack = new StackPanel();
+        for (int i = 0; i < p.Models.Count; i++)
+        {
+            if (i > 0)
+                stack.Children.Add(new Border
+                {
+                    Height = 1,
+                    Margin = new Thickness(12, 0, 12, 0),
+                    Background = ThemeBrush("DividerStrokeColorDefaultBrush"),
+                });
+            stack.Children.Add(BuildModelRow(p.Models[i]));
+        }
+
+        return new Border
+        {
+            CornerRadius = new CornerRadius(8),
+            Background = ThemeBrush("CardBackgroundFillColorSecondaryBrush"),
+            BorderBrush = ThemeBrush("ControlStrokeColorDefaultBrush"),
+            BorderThickness = new Thickness(1),
+            Child = stack,
+        };
+    }
+
     private FrameworkElement BuildModelRow(ProviderModel m)
     {
-        var row = new Grid { ColumnSpacing = 10, Padding = new Thickness(0, 6, 0, 6) };
+        var row = new Grid { ColumnSpacing = 10, Padding = new Thickness(12, 9, 12, 9) };
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-        var name = new TextBlock { Text = m.Name, FontSize = 13.5, VerticalAlignment = VerticalAlignment.Center };
+        var name = new TextBlock
+        {
+            Text = m.Name,
+            FontSize = 13.5,
+            TextWrapping = TextWrapping.Wrap,
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = ThemeBrush("TextFillColorPrimaryBrush"),
+        };
         Grid.SetColumn(name, 0);
         row.Children.Add(name);
 
-        var badges = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5, VerticalAlignment = VerticalAlignment.Center };
-        if (m.Stt) badges.Children.Add(MakeBadge("STT", "#46D4A0"));
-        if (m.Llm) badges.Children.Add(MakeBadge("LLM", "#7C8CFF"));
-        if (m.Recap) badges.Children.Add(MakeBadge("Recap", "#E07CFF"));
+        var badges = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 5,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        if (m.Stt) badges.Children.Add(MakeBadge("STT", SttColor));
+        if (m.Llm) badges.Children.Add(MakeBadge("LLM", LlmColor));
+        if (m.Recap) badges.Children.Add(MakeBadge("Recap", RecapColor));
         Grid.SetColumn(badges, 1);
         row.Children.Add(badges);
         return row;
@@ -236,8 +296,7 @@ public sealed partial class SettingsWindow
 
         int worst = 0;
         // Save the one key into every scope the provider can serve, so
-        // whichever capability dispatches to it finds the key. Harmless extra
-        // entries for capabilities the provider can't do.
+        // whichever capability dispatches to it finds the key.
         if (p.Stt) worst = Math.Min(worst, SaveProviderKey("stt", p.Id, key));
         if (p.Llm)
         {
@@ -289,47 +348,69 @@ public sealed partial class SettingsWindow
 
     // ── Small visual helpers ─────────────────────────────────────────────
 
-    private static Border MakeMarkChip(ProviderInfo p)
+    /// <summary>White rounded tile holding the real brand SVG. White on purpose
+    /// (favicon-tile convention) so monochrome currentColor marks render dark
+    /// and stay visible in both themes; colour marks sit cleanly on it too.</summary>
+    private FrameworkElement MakeLogoTile(ProviderInfo p)
     {
+        var img = new Image
+        {
+            Width = 22,
+            Height = 22,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            Source = new SvgImageSource(SafeUri($"ms-appx:///Assets/Providers/{p.Id}.svg")),
+        };
         return new Border
         {
-            Width = 34,
-            Height = 34,
-            CornerRadius = new CornerRadius(9),
-            VerticalAlignment = VerticalAlignment.Center,
-            Background = SolidBrush("#1B1E25"),
-            BorderBrush = SolidBrush("#262A33"),
+            Width = 40,
+            Height = 40,
+            CornerRadius = new CornerRadius(11),
+            Background = SolidBrush("#FFFFFF"),
+            BorderBrush = ThemeBrush("ControlStrokeColorSecondaryBrush"),
             BorderThickness = new Thickness(1),
-            Child = new TextBlock
-            {
-                Text = p.Mark,
-                FontWeight = FontWeights.Bold,
-                FontSize = 14,
-                Foreground = SolidBrush(p.AccentHex),
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-            },
+            VerticalAlignment = VerticalAlignment.Center,
+            Child = img,
         };
     }
 
-    private Border MakeStatusPill(ProviderInfo p, bool connected)
+    private FrameworkElement MakeStatusPill(ProviderInfo p, bool connected)
     {
-        var (txt, fg, bg) = connected
-            ? ("connected", "#46D4A0", "#1A46D4A0")
-            : (p.Id == "local" ? ("ready", "#46D4A0", "#1A46D4A0") : ("no key", "#9AA0AC", "#14FFFFFF"));
+        bool ok = connected || p.Id == "local";
+        string label = p.Id == "local" ? "Ready" : connected ? "Connected" : "Add key";
+
+        var inner = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 6,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        if (ok)
+            inner.Children.Add(new Ellipse
+            {
+                Width = 7,
+                Height = 7,
+                Fill = SolidBrush(OkColor),
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+        inner.Children.Add(new TextBlock
+        {
+            Text = label,
+            FontSize = 11.5,
+            FontWeight = FontWeights.Medium,
+            Foreground = ok ? SolidBrush(OkColor) : ThemeBrush("TextFillColorSecondaryBrush"),
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+
         return new Border
         {
             CornerRadius = new CornerRadius(20),
-            Padding = new Thickness(7, 2, 7, 2),
+            Padding = new Thickness(9, 3, 11, 3),
             VerticalAlignment = VerticalAlignment.Center,
-            Background = SolidBrush(bg),
-            Child = new TextBlock
-            {
-                Text = txt,
-                FontSize = 10.5,
-                FontWeight = FontWeights.Medium,
-                Foreground = SolidBrush(fg),
-            },
+            Background = ok ? SolidBrush(WithAlpha(OkColor, 0x22)) : ThemeBrush("ControlFillColorSecondaryBrush"),
+            BorderBrush = ok ? SolidBrush(WithAlpha(OkColor, 0x44)) : ThemeBrush("ControlStrokeColorDefaultBrush"),
+            BorderThickness = new Thickness(1),
+            Child = inner,
         };
     }
 
@@ -339,25 +420,39 @@ public sealed partial class SettingsWindow
         {
             CornerRadius = new CornerRadius(5),
             Padding = new Thickness(7, 2, 7, 2),
-            Background = SolidBrush(WithAlpha(colorHex, 0x14)),
-            BorderBrush = SolidBrush(WithAlpha(colorHex, 0x33)),
+            Background = SolidBrush(WithAlpha(colorHex, 0x22)),
+            BorderBrush = SolidBrush(WithAlpha(colorHex, 0x44)),
             BorderThickness = new Thickness(1),
             Child = new TextBlock
             {
                 Text = text,
                 FontSize = 10,
-                FontWeight = FontWeights.Medium,
+                FontWeight = FontWeights.SemiBold,
                 Foreground = SolidBrush(colorHex),
             },
         };
     }
 
+    private TextBlock SectionCaption(string text) => new()
+    {
+        Text = text,
+        FontSize = 11,
+        FontWeight = FontWeights.SemiBold,
+        CharacterSpacing = 60,
+        Foreground = ThemeBrush("TextFillColorSecondaryBrush"),
+    };
+
     private string SubStatusFor(ProviderInfo p, bool connected)
     {
         if (p.Id == "local") return "On-device · no key needed";
-        if (connected) return $"{p.Models.Count} model{(p.Models.Count == 1 ? "" : "s")} available";
-        return "API key required";
+        int n = p.Models.Count;
+        if (connected) return $"Connected · {n} model{(n == 1 ? "" : "s")}";
+        return p.Stt && p.Llm ? "Speech + rewrite · API key required"
+            : p.Stt ? "Speech-to-text · API key required"
+            : "Rewrite & recap · API key required";
     }
+
+    // ── Colour / URI plumbing ────────────────────────────────────────────
 
     private static SolidColorBrush ThemeBrushOrNull(string key) =>
         Application.Current.Resources.TryGetValue(key, out var v) && v is SolidColorBrush b ? b : null!;
@@ -402,7 +497,7 @@ public sealed partial class SettingsWindow
         catch { return WinColor.FromArgb(0xFF, 0x9A, 0xA0, 0xAC); }
     }
 
-    /// <summary>#RRGGBB + alpha byte → #AARRGGBB string for the badge tints.</summary>
+    /// <summary>#RRGGBB + alpha byte → #AARRGGBB string for the badge/pill tints.</summary>
     private static string WithAlpha(string hex, byte alpha)
     {
         hex = hex.TrimStart('#');
