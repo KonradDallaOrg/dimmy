@@ -104,9 +104,10 @@ public static class TranscriptionService
 
     /// <summary>Command Mode: stop recording (always — the spoken text is
     /// the instruction, taken RAW with no dictation LLM enhancement), then
-    /// either transform <paramref name="selection"/> with it, or — when no
-    /// text was selected — fall back to returning the raw transcript so
-    /// the caller can paste it like plain dictation.</summary>
+    /// run the command FFI. With a <paramref name="selection"/> the LLM
+    /// transforms/replaces it; with NO selection the LLM treats the spoken
+    /// words as a generation instruction and returns text to insert at the
+    /// cursor. The selection-vs-generate split is decided inside the FFI.</summary>
     public static async Task<CommandResult> StopAndCommandAsync(string? selection)
     {
         // Step 1: stop + raw transcribe (always, so recording ends even
@@ -124,18 +125,14 @@ public static class TranscriptionService
         if (string.IsNullOrEmpty(spoken))
             return CommandResult.EmptyTranscript();
 
-        // No selection captured → graceful: behave like plain dictation
-        // and paste what the user said. They were in Command Mode but
-        // selected nothing; inserting the spoken text is the least
-        // surprising outcome.
-        if (string.IsNullOrWhiteSpace(selection))
-            return CommandResult.PlainFallback(spoken);
-
-        // Step 2: transform selection + spoken via the command-mode FFI.
+        // Step 2: run the command FFI. Empty selection (no text was
+        // selected) is passed through as "" so the core takes the
+        // generate-and-insert path instead of transform/replace.
+        var sel = selection ?? "";
         var transformTask = Task.Run(() =>
         {
             var buf = new byte[BufSize];
-            int rc = DimmyNative.dimmy_command_transform(selection, spoken, buf, buf.Length);
+            int rc = DimmyNative.dimmy_command_transform(sel, spoken, buf, buf.Length);
             return (rc, rc > 0 ? Encoding.UTF8.GetString(buf, 0, rc) : null);
         });
         var tCompleted = await Task.WhenAny(transformTask, Task.Delay(LlmTimeout));
@@ -145,7 +142,7 @@ public static class TranscriptionService
         if (rc <= 0 || string.IsNullOrEmpty(text))
         {
             var msg = rc == -3
-                ? "Command Mode needs an LLM key (Settings → Output)"
+                ? "Command Mode needs an LLM key (Settings → Providers & keys)"
                 : $"Command transform failed (rc {rc})";
             return CommandResult.Fail(msg, spoken);
         }
@@ -235,27 +232,21 @@ public sealed class TranscriptionResult
 /// <summary>Result of the Command Mode stop → transform pipeline.</summary>
 public sealed class CommandResult
 {
-    /// <summary>The transformed text to paste over the selection (null
-    /// unless <see cref="IsSuccess"/>).</summary>
+    /// <summary>The result text to paste (null unless <see cref="IsSuccess"/>).
+    /// With a selection it's the transform; with none it's the generated
+    /// text to insert at the cursor.</summary>
     public string? Text { get; private init; }
 
-    /// <summary>The raw spoken instruction — kept so the caller can fall
-    /// back to pasting it as plain dictation when there was no selection,
-    /// or surface it in an error toast.</summary>
+    /// <summary>The raw spoken instruction — kept to surface in an error
+    /// toast.</summary>
     public string? Spoken { get; private init; }
 
     public string? Error { get; private init; }
-
-    /// <summary>True when this was a no-selection fallback — Text holds the
-    /// raw spoken transcript to paste as plain dictation, not a transform.</summary>
-    public bool IsPlainFallback { get; private init; }
 
     public bool IsSuccess => Text != null && Error == null;
     public bool IsEmptyTranscript => Text == null && Error == null && Spoken == null;
 
     public static CommandResult Ok(string text, string spoken) => new() { Text = text, Spoken = spoken };
-    public static CommandResult PlainFallback(string spoken) =>
-        new() { Text = spoken, Spoken = spoken, IsPlainFallback = true };
     public static CommandResult EmptyTranscript() => new();
     public static CommandResult Fail(string message, string? spoken = null) =>
         new() { Error = message, Spoken = spoken };

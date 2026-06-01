@@ -214,33 +214,51 @@ public sealed partial class SettingsWindow : Window
             var prefs = Services.UiPreferences.Load();
             ViewModel.DictHotkey = string.IsNullOrEmpty(prefs.DictHotkey)
                 ? "ctrl+shift+d" : prefs.DictHotkey;
+            ViewModel.CommandHotkey = prefs.CommandHotkey ?? "";
         }
         catch { }
 
-        // Persist DictHotkey changes + re-register the global hotkey
-        // on the App's DictHotkeyService so the new combo binds
-        // without a restart.
+        // Persist DictHotkey / CommandHotkey changes + re-register the global
+        // hotkey on the App's services so the new combo binds without a
+        // restart.
         ViewModel.PropertyChanged += (_, e) =>
         {
-            if (e.PropertyName != nameof(ViewModel.DictHotkey)) return;
             if (!_loaded) return;
             try
             {
-                var prefs = Services.UiPreferences.Load();
-                prefs.DictHotkey = ViewModel.DictHotkey;
-                prefs.Save();
-                App.Instance?.ReregisterDictHotkey(ViewModel.DictHotkey);
-                App.Log($"dict hotkey updated to '{ViewModel.DictHotkey}'", "Dict");
+                if (e.PropertyName == nameof(ViewModel.DictHotkey))
+                {
+                    var prefs = Services.UiPreferences.Load();
+                    prefs.DictHotkey = ViewModel.DictHotkey;
+                    prefs.Save();
+                    App.Instance?.ReregisterDictHotkey(ViewModel.DictHotkey);
+                    App.Log($"dict hotkey updated to '{ViewModel.DictHotkey}'", "Dict");
+                }
+                else if (e.PropertyName == nameof(ViewModel.CommandHotkey))
+                {
+                    var prefs = Services.UiPreferences.Load();
+                    prefs.CommandHotkey = ViewModel.CommandHotkey ?? "";
+                    prefs.Save();
+                    App.Instance?.ReregisterCommandHotkey(ViewModel.CommandHotkey ?? "");
+                    App.Log($"command hotkey updated to '{ViewModel.CommandHotkey}'", "Hotkey");
+                }
             }
             catch (Exception ex)
             {
-                App.Log($"DictHotkey save exc: {ex.Message}", "Dict");
+                App.Log($"Hotkey save exc: {ex.Message}", "Hotkey");
             }
         };
 
         RefreshMeetingFolderDisplay();
 
         _loaded = true;
+    }
+
+    /// <summary>Disable the optional command-mode hotkey. Empties the combo
+    /// → the PropertyChanged handler persists "" and unregisters it.</summary>
+    private void CommandHotkeyClear_Click(object sender, RoutedEventArgs e)
+    {
+        ViewModel.CommandHotkey = "";
     }
 
     /// File extensions accepted by `dimmy_transcribe_file`. WAV is the

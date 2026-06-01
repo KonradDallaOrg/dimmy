@@ -48,9 +48,12 @@ public sealed partial class ShortcutRecorder : UserControl
         }
         else
         {
-            DisplayText.Text = Shortcut;
+            // Empty is a valid state for optional hotkeys (e.g. the command
+            // hotkey is opt-in) — show a placeholder rather than a blank box.
+            var empty = string.IsNullOrWhiteSpace(Shortcut);
+            DisplayText.Text = empty ? "Not set" : Shortcut;
             RecorderBorder.Background = (Brush)Application.Current.Resources["CardBackgroundFillColorDefaultBrush"];
-            DisplayText.FontSize = 24;
+            DisplayText.FontSize = empty ? 16 : 24;
         }
     }
 

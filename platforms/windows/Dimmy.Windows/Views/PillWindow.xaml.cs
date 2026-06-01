@@ -141,7 +141,8 @@ public sealed partial class PillWindow : Window
             || e.PropertyName == nameof(AppViewModel.Theme))
             DispatcherQueue.TryEnqueue(UpdateVisualState);
         if (e.PropertyName == nameof(AppViewModel.LlmStyle)
-            || e.PropertyName == nameof(AppViewModel.CommandMode))
+            || e.PropertyName == nameof(AppViewModel.CommandMode)
+            || e.PropertyName == nameof(AppViewModel.CommandOneShot))
             DispatcherQueue.TryEnqueue(RefreshStyleDot);
         if (e.PropertyName == nameof(AppViewModel.WaveformStyle))
             DispatcherQueue.TryEnqueue(() => Waveform.StyleMode = _vm.WaveformStyle);
@@ -166,7 +167,11 @@ public sealed partial class PillWindow : Window
 
     private void RefreshStyleDot()
     {
-        var color = _vm.CommandMode ? CommandAmber : ParseColor(_vm.LlmStyleColor);
+        // Amber while command mode is active EITHER way: the sticky menu
+        // toggle (CommandMode) or a one-shot fired by the dedicated hotkey
+        // (CommandOneShot).
+        var inCommand = _vm.CommandMode || _vm.CommandOneShot;
+        var color = inCommand ? CommandAmber : ParseColor(_vm.LlmStyleColor);
         StyleDot.Fill = new SolidColorBrush(color);
     }
 
@@ -666,7 +671,7 @@ public sealed partial class PillWindow : Window
                 SetPillBodyColor(IsGlass ? BgGlassIdle : BgDark);
                 _rainbowTimer?.Stop();
                 AnimateToCircle(global::Windows.UI.Color.FromArgb(0, 0, 0, 0), newPanel, oldPanel);
-                UpdateGlow(_vm.CommandMode ? CommandAmber : ParseColor(_vm.LlmStyleColor), subtle: true);
+                UpdateGlow((_vm.CommandMode || _vm.CommandOneShot) ? CommandAmber : ParseColor(_vm.LlmStyleColor), subtle: true);
                 break;
 
             case AppState.Recording:

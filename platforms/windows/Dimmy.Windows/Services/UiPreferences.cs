@@ -81,6 +81,15 @@ public sealed class UiPreferences
     /// only on what's IN the dict.</summary>
     public string DictHotkey { get; set; } = "ctrl+shift+d";
 
+    /// <summary>Optional dedicated global hotkey that fires a ONE-SHOT
+    /// command-mode recording (then reverts to normal output), as opposed
+    /// to the pill-menu toggle which is a sticky mode. Same combo grammar
+    /// as the dictation + dictionary hotkeys. EMPTY by default — command
+    /// mode works via the menu toggle out of the box; the dedicated hotkey
+    /// is opt-in so we never grab a global key the user didn't ask for.
+    /// Win-only UI knob, hence here and not in config.json.</summary>
+    public string CommandHotkey { get; set; } = "";
+
     private static string PrefsPath
     {
         get
