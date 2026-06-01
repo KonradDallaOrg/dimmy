@@ -166,9 +166,19 @@ struct MacSettingsContainerView: View {
             if !newValue && current == .advanced { goTo(.home) }
         }
         .onReceive(NotificationCenter.default.publisher(for: .dimmyOpenLicenseTab)) { _ in
-            // AppDelegate posts this after dimmy:// activation succeeds , 
+            // AppDelegate posts this after dimmy:// activation succeeds ,
             // bring the user to the License page so they see the result.
             goTo(.license)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .dimmyNavigateSettingsTab)) { note in
+            // Drives SettingsScreenshotter: navigate to an arbitrary
+            // tab by raw value posted in userInfo["tab"]. No-op for
+            // unknown raw values, so a stale shooter cannot land us
+            // on a missing tab.
+            if let raw = note.userInfo?["tab"] as? String,
+               let tab = MacSettingsTab(rawValue: raw) {
+                current = tab
+            }
         }
     }
 
@@ -274,7 +284,7 @@ struct MacSettingsContainerView: View {
         .overlay(alignment: .trailing) {
             // Right-edge hairline divider matches design's `--sidebar-shadow`.
             Rectangle()
-                .fill(Color.black.opacity(0.08))
+                .fill(Color.primary.opacity(0.08))
                 .frame(width: 0.5)
         }
     }

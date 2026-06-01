@@ -54,3 +54,4 @@ mockup/
 
 # generated UI screenshots (scripts/dev/capture-settings-ui.ps1)
 docs/ui-shots/
+default.profraw

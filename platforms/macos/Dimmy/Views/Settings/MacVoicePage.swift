@@ -151,7 +151,7 @@ struct MacVoicePage: View {
                                     .padding(.vertical, 6)
                                     .background(
                                         RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                            .fill(Color.black.opacity(0.04))
+                                            .fill(Color.primary.opacity(0.04))
                                     )
                                 }
                             }
@@ -181,7 +181,7 @@ struct MacVoicePage: View {
             newDictWord = ""
             dictAddError = nil
         case .alreadyPresent:
-            dictAddError = ""\(trimmed)" is already in the dictionary"
+            dictAddError = "'\(trimmed)' is already in the dictionary"
             newDictWord = ""
         case .error:
             dictAddError = "Could not add, check log"
@@ -723,7 +723,7 @@ struct MacVoicePage: View {
                     .padding(8)
                     .background(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Color.black.opacity(0.04))
+                            .fill(Color.primary.opacity(0.04))
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)

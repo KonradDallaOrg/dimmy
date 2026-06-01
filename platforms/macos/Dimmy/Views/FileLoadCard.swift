@@ -90,8 +90,8 @@ struct FileLoadCard: View {
     }
 
     private var descriptionText: String {
-        if isWorking { return "Working... leave the page open." }
-        return "Drag a .wav / .mp3 / .m4a / .aac / .flac / .ogg onto this card, or click Choose file. Routed through your active local STT backend."
+        if isWorking { return "Working, leave the page open." }
+        return "Drag an audio file here or click Choose file."
     }
 
     private var isWorking: Bool {
@@ -159,7 +159,7 @@ struct FileLoadCard: View {
                 }
                 .frame(maxHeight: 80)
                 .padding(8)
-                .background(Color.gray.opacity(0.08))
+                .background(Color.primary.opacity(0.06))
                 .cornerRadius(6)
 
                 // Run-recap-as-meeting bridge. Same UX as the Win

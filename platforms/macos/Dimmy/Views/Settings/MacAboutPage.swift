@@ -13,12 +13,62 @@ struct MacAboutPage: View {
         VStack(alignment: .leading, spacing: 0) {
             heroCard
                 .padding(.bottom, 8)
-            updatesGroup
+
+            // Updates group has Status (Simple) + Update channel.
+            // Update channel is Advanced per Win XAML (visibility
+            // bound to IsAdvanced) since it controls whether the
+            // user sees prerelease builds. Status alone stays
+            // visible in Simple.
+            statusOnlyGroup
+            if appState.showAdvanced {
+                updateChannelGroup
+            }
+
             resourcesGroup
             // "Made with Claude Code" credit removed per Win redesign
-            // (commit 4080ff06). The footer is not a setting and ate
-            // a row of attention on every Settings open without
-            // serving the user, anti-enshittification cut.
+            // (commit 4080ff06).
+        }
+    }
+
+    private var statusOnlyGroup: some View {
+        Group {
+            MacGroupLabel(text: "Updates")
+            MacTile {
+                MacRow(
+                    "Status",
+                    description: updates.statusText,
+                    showsDivider: false
+                ) {
+                    if updates.isUpdateReady {
+                        Circle()
+                            .fill(Color.accentColor)
+                            .frame(width: 8, height: 8)
+                    } else {
+                        EmptyView()
+                    }
+                }
+            }
+        }
+    }
+
+    private var updateChannelGroup: some View {
+        Group {
+            MacGroupLabel(text: "Channel")
+            MacTile {
+                MacRow(
+                    "Update channel",
+                    hint: "Stable only is the safer default. Prerelease also offers staging builds with new features earlier.",
+                    hintURL: URL(string: "https://dimmy.app/help/about-and-updates"),
+                    showsDivider: false
+                ) {
+                    Picker("", selection: $updates.channel) {
+                        Text("Stable").tag("stable")
+                        Text("Prerelease").tag("prerelease")
+                    }
+                    .labelsHidden()
+                    .frame(width: 140)
+                }
+            }
         }
     }
 
@@ -66,41 +116,8 @@ struct MacAboutPage: View {
 
     // MARK: Updates
 
-    private var updatesGroup: some View {
-        Group {
-            MacGroupLabel(text: "Updates")
-            MacTile {
-                MacRow(
-                    "Status",
-                    description: updates.statusText
-                ) {
-                    if updates.isUpdateReady {
-                        // Tiny pulsing dot for the "update ready" case so
-                        // a glance is enough to know action is pending
-                        // when the user quits.
-                        Circle()
-                            .fill(Color.accentColor)
-                            .frame(width: 8, height: 8)
-                    } else {
-                        EmptyView()
-                    }
-                }
-                MacRow(
-                    "Update channel",
-                    hint: "Stable only is the safer default. Prerelease also offers staging builds with new features earlier.",
-                    hintURL: URL(string: "https://dimmy.app/help/about-and-updates"),
-                    showsDivider: false
-                ) {
-                    Picker("", selection: $updates.channel) {
-                        Text("Stable").tag("stable")
-                        Text("Prerelease").tag("prerelease")
-                    }
-                    .labelsHidden()
-                    .frame(width: 140)
-                }
-            }
-        }
-    }
+    // Legacy combined group replaced by statusOnlyGroup +
+    // updateChannelGroup (channel gated behind Advanced).
 
     // MARK: Resources
 

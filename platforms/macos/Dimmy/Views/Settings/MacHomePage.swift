@@ -33,8 +33,10 @@ struct MacHomePage: View {
             MacGroupLabel(text: "Meeting mode")
             MacTile {
                 MacRow(
-                    "Long-form recording with recap",
-                    description: "Record a meeting, get a live transcript, and an LLM-generated recap + action items at the end. Independent from the dictation hotkey.",
+                    "Record a meeting",
+                    description: "Live transcript and an AI recap when you stop.",
+                    hint: "Records a long-form session independently of the dictation hotkey. Stop the meeting to get an LLM-generated recap with action items, saved alongside the transcript.",
+                    hintURL: URL(string: "https://dimmy.app/help/use-meeting-recaps"),
                     icon: "rectangle.dashed.and.paperclip",
                     iconBackground: Color(red: 0.92, green: 0.25, blue: 0.48),
                     showsDivider: false
@@ -157,7 +159,7 @@ struct MacHomePage: View {
             // catalogue's `AppIcon` rather than loading a separate PNG.
             ZStack {
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(Color.black.opacity(0.06))
+                    .fill(Color.primary.opacity(0.06))
                     .frame(width: 200, height: 96)
                 Image("DimmyAppIcon")
                     .resizable()

@@ -90,27 +90,22 @@ struct MacProvidersPage: View {
         }
     }
 
-    /// Real brand mark on a white squircle tile. Falls back to the
-    /// 2-letter monogram only when the asset is missing (should not
-    /// happen in shipping builds, all 10 imagesets exist under
-    /// Assets.xcassets/Providers/).
+    /// Real brand mark on a white squircle tile. SwiftUI's `Image`
+    /// renders the SVG from the asset catalog directly; if the
+    /// imageset is somehow missing it will fall back to nothing on
+    /// the host platform, so the white tile + the (already visible)
+    /// provider name in the header are enough context. We avoid an
+    /// NSImage(named:) probe because that path uses LaunchServices
+    /// caches that do not always pick up newly-bundled imagesets.
     private func logoTile(_ p: ProviderInfo) -> some View {
         RoundedRectangle(cornerRadius: 6, style: .continuous)
             .fill(Color.white)
             .overlay(
-                Group {
-                    if NSImage(named: p.id) != nil {
-                        Image(p.id)
-                            .renderingMode(.original)
-                            .resizable()
-                            .scaledToFit()
-                            .padding(5)
-                    } else {
-                        Text(p.mark)
-                            .font(.system(size: 12, weight: .semibold, design: .rounded))
-                            .foregroundStyle(Color(hex: p.accentHex) ?? .accentColor)
-                    }
-                }
+                Image(p.id)
+                    .renderingMode(.original)
+                    .resizable()
+                    .scaledToFit()
+                    .padding(5)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -143,10 +138,10 @@ struct MacProvidersPage: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
         .background(
-            Capsule().fill(color.opacity(0.10))
+            Capsule().fill(color.opacity(0.20))
         )
         .overlay(
-            Capsule().stroke(color.opacity(0.35), lineWidth: 0.5)
+            Capsule().stroke(color.opacity(0.50), lineWidth: 0.5)
         )
     }
 
@@ -261,7 +256,7 @@ struct MacProvidersPage: View {
             }
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color.black.opacity(0.04))
+                    .fill(Color.primary.opacity(0.04))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -277,10 +272,12 @@ struct MacProvidersPage: View {
             .padding(.vertical, 1)
             .foregroundStyle(color)
             .background(
-                Capsule().fill(color.opacity(0.12))
+                // Dark theme needs more tint to surface the badge over
+                // the dark tile; the earlier 0.12 fill was invisible.
+                Capsule().fill(color.opacity(0.22))
             )
             .overlay(
-                Capsule().stroke(color.opacity(0.35), lineWidth: 0.5)
+                Capsule().stroke(color.opacity(0.55), lineWidth: 0.5)
             )
     }
 

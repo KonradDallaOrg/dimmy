@@ -24,18 +24,19 @@ struct MacPrivacyPage: View {
             )
             .padding(.bottom, 8)
 
-            telemetryGroup
-            // Audio retention moved to the Recordings page where the
-            // saved audio actually plays back (see HistorySettingsView).
+            // Telemetry + Anonymous ID are Advanced per
+            // docs/dev/settings-map.md "Vuoi" = A-sez. Simple Privacy
+            // shows the promise, the feedback form, and resources.
             feedbackGroup
             resourcesGroup
 
-            // The raw local-ID + reset is power-user territory: 99%
-            // of users never need to see (let alone reset) the random
-            // hash. Hide it unless Advanced mode is on.
             if appState.showAdvanced {
+                telemetryGroup
                 anonymousIdGroup
             }
+
+            // Audio retention moved to the Recordings page where the
+            // saved audio actually plays back (see HistorySettingsView).
         }
     }
 
@@ -196,7 +197,7 @@ struct MacPrivacyPage: View {
                         .padding(8)
                         .background(
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(Color.black.opacity(0.04))
+                                .fill(Color.primary.opacity(0.04))
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -208,7 +209,7 @@ struct MacPrivacyPage: View {
                         .padding(8)
                         .background(
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(Color.black.opacity(0.04))
+                                .fill(Color.primary.opacity(0.04))
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: 8, style: .continuous)

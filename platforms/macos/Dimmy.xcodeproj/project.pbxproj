@@ -94,6 +94,7 @@
 		AA000205 /* MacPillPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000205 /* MacPillPage.swift */; };
 		AA00FF01 /* MacProvidersPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00FF01 /* MacProvidersPage.swift */; };
 		AA00FF02 /* ProviderCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00FF02 /* ProviderCatalog.swift */; };
+		AA00FF03 /* SettingsScreenshotter.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00FF03 /* SettingsScreenshotter.swift */; };
 		AA000206 /* MacShortcutPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000206 /* MacShortcutPage.swift */; };
 		AA000207 /* MacPrivacyPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000207 /* MacPrivacyPage.swift */; };
 		AA000208 /* MacAboutPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000208 /* MacAboutPage.swift */; };
@@ -222,6 +223,7 @@
 		AB000205 /* MacPillPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPillPage.swift; sourceTree = "<group>"; };
 		AB00FF01 /* MacProvidersPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacProvidersPage.swift; sourceTree = "<group>"; };
 		AB00FF02 /* ProviderCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderCatalog.swift; sourceTree = "<group>"; };
+		AB00FF03 /* SettingsScreenshotter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsScreenshotter.swift; sourceTree = "<group>"; };
 		AB000206 /* MacShortcutPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacShortcutPage.swift; sourceTree = "<group>"; };
 		AB000207 /* MacPrivacyPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPrivacyPage.swift; sourceTree = "<group>"; };
 		AB000208 /* MacAboutPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAboutPage.swift; sourceTree = "<group>"; };
@@ -476,6 +478,7 @@
 				AB000509 /* FirstMouseHostingView.swift */,
 				AB00050A /* ProviderTagging.swift */,
 				AB00FF02 /* ProviderCatalog.swift */,
+				AB00FF03 /* SettingsScreenshotter.swift */,
 			);
 			path = Utilities;
 			sourceTree = "<group>";
@@ -704,6 +707,7 @@
 				AA000205 /* MacPillPage.swift in Sources */,
 				AA00FF01 /* MacProvidersPage.swift in Sources */,
 				AA00FF02 /* ProviderCatalog.swift in Sources */,
+				AA00FF03 /* SettingsScreenshotter.swift in Sources */,
 				AA000206 /* MacShortcutPage.swift in Sources */,
 				AA000207 /* MacPrivacyPage.swift in Sources */,
 				AA000208 /* MacAboutPage.swift in Sources */,

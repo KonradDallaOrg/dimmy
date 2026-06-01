@@ -290,7 +290,7 @@ struct HistorySettingsView: View {
             // (and lines up with the rest of the Tahoe layout) even
             // when the .icns is just a flat glyph.
             RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(Color.primary.opacity(0.06))
+                .fill(Color.primary.opacity(0.12))
                 .frame(width: 36, height: 36)
 
             if let bundleId = entry.appBundleId,
@@ -563,7 +563,7 @@ struct HistoryDetailSheet: View {
         HStack(alignment: .center, spacing: 12) {
             ZStack {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.primary.opacity(0.06))
+                    .fill(Color.primary.opacity(0.12))
                     .frame(width: 48, height: 48)
                 if let bid = entry.appBundleId, !bid.isEmpty,
                    let icon = AppContextCapture.appIcon(for: bid) {

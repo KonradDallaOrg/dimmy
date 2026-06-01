@@ -441,18 +441,26 @@ struct MacPositionPicker: View {
         Button {
             if allowed { selection = id }
         } label: {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(selected ? Color.accentColor :
-                        Color(nsColor: .controlBackgroundColor))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .stroke(
-                            selected ? Color.accentColor : Color.macControlStroke,
-                            lineWidth: 0.5
-                        )
-                )
-                .opacity(allowed ? 1.0 : 0.25)
-                .frame(width: 24, height: 24)
+            ZStack {
+                // Base surface: solid system background that adapts
+                // to dark + a primary-opacity tint on top so the
+                // cell stays visibly distinct from the parent tile
+                // (the tile already uses windowBackgroundColor at
+                // 0.6, so a plain controlBackgroundColor used to
+                // disappear into it on dark mode).
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(selected ? AnyShapeStyle(Color.accentColor)
+                                   : AnyShapeStyle(Color(nsColor: .controlBackgroundColor)))
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Color.primary.opacity(selected ? 0 : 0.10))
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(
+                        selected ? Color.accentColor : Color.macControlStrokeStrong,
+                        lineWidth: selected ? 1.2 : 0.8
+                    )
+            }
+            .opacity(allowed ? 1.0 : 0.20)
+            .frame(width: 24, height: 24)
         }
         .buttonStyle(.plain)
         .disabled(!allowed)
@@ -510,7 +518,7 @@ struct MacStatusPill: View {
         )
         .overlay(
             Capsule()
-                .stroke(Color.white.opacity(0.5), lineWidth: 0.5)
+                .stroke(Color.primary.opacity(0.2), lineWidth: 0.5)
         )
     }
 }

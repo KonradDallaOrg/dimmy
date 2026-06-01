@@ -1038,7 +1038,7 @@ struct MacOutputPage: View {
                     .padding(8)
                     .background(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Color.black.opacity(0.04))
+                            .fill(Color.primary.opacity(0.04))
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)

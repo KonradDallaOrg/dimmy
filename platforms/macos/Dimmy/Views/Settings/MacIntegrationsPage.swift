@@ -97,7 +97,7 @@ struct MacIntegrationsPage: View {
                     showWizard = false
                     if appState.hasNotionToken && !appState.notionTargetTitle.isEmpty {
                         statusIsError = false
-                        statusMessage = "Recaps will land in "\(appState.notionTargetTitle)"."
+                        statusMessage = "Recaps will land in '\(appState.notionTargetTitle)'."
                     }
                 }
             )
@@ -226,7 +226,7 @@ struct MacIntegrationsPage: View {
     private var headerStatusText: String {
         if appState.hasNotionToken {
             if !appState.notionTargetTitle.isEmpty {
-                return "Connected · recaps land in "\(appState.notionTargetTitle)""
+                return "Connected. Recaps land in '\(appState.notionTargetTitle)'."
             }
             return "Connected · pick a destination"
         }

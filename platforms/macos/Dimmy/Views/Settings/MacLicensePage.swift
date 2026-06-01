@@ -317,7 +317,7 @@ struct MacLicensePage: View {
                     }
                 }
                 if showPortalHint {
-                    MacRow("Need to downgrade, cancel, or update payment? Use the "Manage subscription" button above, it opens the secure Stripe billing portal.",
+                    MacRow("Need to downgrade, cancel, or update payment? Use the 'Manage subscription' button above, it opens the secure Stripe billing portal.",
                            description: "",
                            showsDivider: false) {
                         EmptyView()
