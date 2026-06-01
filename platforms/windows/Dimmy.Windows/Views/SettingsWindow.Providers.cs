@@ -57,7 +57,16 @@ public sealed partial class SettingsWindow
     private void BuildProviderCards()
     {
         if (ProviderCardsHost is null) return;
-        _dark = ProviderCardsHost.ActualTheme == ElementTheme.Dark;
+        // Resolve theme from the SAVED preference (the source of truth the rest
+        // of the app uses), NOT ActualTheme — a force-set Light/Dark theme may
+        // not have propagated to this lazily-built host yet, which made the
+        // model-list container render near-black on a light window.
+        _dark = UiPreferences.Load().Theme switch
+        {
+            "Dark" => true,
+            "Light" => false,
+            _ => ProviderCardsHost.ActualTheme == ElementTheme.Dark, // "Default" = follow system
+        };
         ProviderCardsHost.Children.Clear();
 
         SeedConnectedFromCurrentConfig();
@@ -103,8 +112,7 @@ public sealed partial class SettingsWindow
         {
             HorizontalAlignment = HorizontalAlignment.Stretch,
             HorizontalContentAlignment = HorizontalAlignment.Stretch,
-            // Open the ones that still need a key; leave connected / on-device tidy.
-            IsExpanded = !connected && p.Id != "local",
+            IsExpanded = false, // all collapsed by default — the header tells the story
         };
 
         card.Header = BuildHeader(p, connected);
