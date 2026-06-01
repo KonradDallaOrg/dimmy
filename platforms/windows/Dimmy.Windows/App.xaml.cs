@@ -1430,13 +1430,23 @@ public partial class App : Application
                 return;
             }
 
+            // Command mode with nothing selected: don't silently dictate the
+            // spoken words (that reads like the mode broke). Hint the user and
+            // stay in command mode — the pill keeps its amber dot, so the next
+            // selection + command works without re-toggling.
+            if (result.IsPlainFallback)
+            {
+                PttLog("CommandMode: no selection — hint shown, staying in command mode");
+                Services.DictNotificationService.ShowCommandNoSelection();
+                _appViewModel.SetState(AppState.Idle);
+                _targetContext = null;
+                return;
+            }
+
             // Re-assert foreground (the transform round-trip can take
             // seconds; focus may have drifted again) then paste.
             await RestoreTargetForegroundAsync();
-            if (result.IsPlainFallback)
-                PttLog("CommandMode: no selection — pasting spoken text as dictation");
-            else
-                PttLog($"CommandMode: pasting transformed text ({result.Text!.Length} chars)");
+            PttLog($"CommandMode: pasting transformed text ({result.Text!.Length} chars)");
             await TextInjectionService.PasteText(result.Text!, _appViewModel.KeepInClipboard);
             _appViewModel.SetState(AppState.Completing);
             _targetContext = null;

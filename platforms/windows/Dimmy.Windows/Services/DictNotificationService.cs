@@ -45,6 +45,16 @@ public static class DictNotificationService
              "Dimmy was upgraded in the background and is ready to use.");
     }
 
+    /// <summary>Command mode is on but nothing was selected when the user
+    /// spoke. We deliberately do NOT dictate the spoken words (that looks
+    /// like command mode silently turned off) — instead we hint and stay in
+    /// command mode so the next selection just works.</summary>
+    public static void ShowCommandNoSelection()
+    {
+        Show("Command mode",
+             "Select some text first, then speak your command.");
+    }
+
     private static void Show(string title, string body)
     {
         try

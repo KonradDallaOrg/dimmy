@@ -155,11 +155,18 @@ public sealed partial class PillWindow : Window
     /// regardless of the LLM style; otherwise it shows the current style's
     /// colour. The pill/tray menu checkmark is the authoritative toggle —
     /// this is the at-a-glance confirmation.</summary>
+    // Command-mode accent. The dot (and the idle glow) turn this amber while
+    // CommandMode is on, so the colour is the at-a-glance "I'm in command
+    // mode" signal. RefreshStyleDot is the single source of truth for the dot
+    // — every other site that used to set StyleDot directly now calls it, so
+    // the colour can never desync from CommandMode (the bug where it reverted
+    // to the LLM colour the moment the pill returned to Idle).
+    private static readonly global::Windows.UI.Color CommandAmber =
+        global::Windows.UI.Color.FromArgb(0xFF, 0xFF, 0x9F, 0x0A);
+
     private void RefreshStyleDot()
     {
-        var color = _vm.CommandMode
-            ? global::Windows.UI.Color.FromArgb(0xFF, 0xFF, 0x9F, 0x0A) // amber
-            : ParseColor(_vm.LlmStyleColor);
+        var color = _vm.CommandMode ? CommandAmber : ParseColor(_vm.LlmStyleColor);
         StyleDot.Fill = new SolidColorBrush(color);
     }
 
@@ -654,12 +661,12 @@ public sealed partial class PillWindow : Window
         switch (_vm.CurrentState)
         {
             case AppState.Idle:
-                StyleDot.Fill = new SolidColorBrush(ParseColor(_vm.LlmStyleColor));
+                RefreshStyleDot();
                 RootGrid.Opacity = 1.0;
                 SetPillBodyColor(IsGlass ? BgGlassIdle : BgDark);
                 _rainbowTimer?.Stop();
                 AnimateToCircle(global::Windows.UI.Color.FromArgb(0, 0, 0, 0), newPanel, oldPanel);
-                UpdateGlow(ParseColor(_vm.LlmStyleColor), subtle: true);
+                UpdateGlow(_vm.CommandMode ? CommandAmber : ParseColor(_vm.LlmStyleColor), subtle: true);
                 break;
 
             case AppState.Recording:
@@ -962,7 +969,7 @@ public sealed partial class PillWindow : Window
         if (idx < 0) idx = 0;
         idx = (idx + (delta > 0 ? -1 : 1) + LlmStyles.Length) % LlmStyles.Length;
         _vm.LlmStyle = LlmStyles[idx];
-        StyleDot.Fill = new SolidColorBrush(ParseColor(_vm.LlmStyleColor));
+        RefreshStyleDot();
         ShowScrollTooltip(_vm.LlmStyle == "off" ? "Off" : _vm.LlmStyle);
         // Single writer: only FFI, Rust saves to disk
         DimmyNative.dimmy_set_config_json(System.Text.Json.JsonSerializer.Serialize(
@@ -1165,7 +1172,7 @@ public sealed partial class PillWindow : Window
             item.Click += (_, _) =>
             {
                 _vm.LlmStyle = styleValue;
-                StyleDot.Fill = new SolidColorBrush(ParseColor(_vm.LlmStyleColor));
+                RefreshStyleDot();
                 DimmyNative.dimmy_set_config_json(System.Text.Json.JsonSerializer.Serialize(
                     new System.Collections.Generic.Dictionary<string, object>
                     {
