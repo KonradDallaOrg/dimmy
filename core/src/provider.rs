@@ -137,6 +137,23 @@ impl Provider {
         }
     }
 
+    /// Whether this provider exposes a cloud speech-to-text endpoint, i.e. an
+    /// STT key for it is meaningful. Used by the per-vendor keystore save FFI
+    /// to accept scope "stt" for these vendors (Deepgram is STT-only, so it has
+    /// no LLM URL but must still be keyable for speech). Anthropic / OpenRouter
+    /// are LLM-only and excluded. Custom / Local are configured elsewhere.
+    pub fn supports_stt(&self) -> bool {
+        matches!(
+            self,
+            Self::Groq
+                | Self::OpenAI
+                | Self::Gemini
+                | Self::Deepgram
+                | Self::Fireworks
+                | Self::Together
+        )
+    }
+
     /// Maximum file size in bytes this provider accepts for STT upload.
     /// Used to decide whether to chunk a long recording before sending.
     /// Returns a conservative 25MB default for unknown/custom providers.
@@ -461,6 +478,27 @@ mod tests {
         assert!(Provider::Local.default_llm_url().is_none());
         assert!(Provider::Custom.default_llm_url().is_none());
         assert!(Provider::Deepgram.default_llm_url().is_none());
+    }
+
+    #[test]
+    fn supports_stt_matches_speech_vendors() {
+        // STT-capable vendors — an "stt" key for these is meaningful and the
+        // per-vendor keystore FFI must accept it (Deepgram is STT-only).
+        for p in [
+            Provider::Groq,
+            Provider::OpenAI,
+            Provider::Gemini,
+            Provider::Deepgram,
+            Provider::Fireworks,
+            Provider::Together,
+        ] {
+            assert!(p.supports_stt(), "{} should support STT", p.as_str());
+        }
+        // LLM-only vendors — no STT endpoint, the FFI must reject scope "stt".
+        assert!(!Provider::Anthropic.supports_stt());
+        assert!(!Provider::OpenRouter.supports_stt());
+        assert!(!Provider::Local.supports_stt());
+        assert!(!Provider::Custom.supports_stt());
     }
 
     #[test]

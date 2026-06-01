@@ -336,6 +336,17 @@ public partial class SettingsViewModel : ObservableObject
         return _sttHasKeyByProvider.TryGetValue(key, out var v) && v;
     }
 
+    /// <summary>True if the encrypted keystore holds ANY key (STT or LLM) for the
+    /// given vendor id (e.g. "groq", "deepgram"). Used by the Providers page to
+    /// show a truthful "connected" status driven by real keys, wherever entered,
+    /// rather than a cached UI mirror.</summary>
+    public bool HasAnyKeyForProvider(string vendorId)
+    {
+        var k = (vendorId ?? string.Empty).ToLowerInvariant();
+        return (_sttHasKeyByProvider.TryGetValue(k, out var s) && s)
+            || (_llmHasKeyByProvider.TryGetValue(k, out var l) && l);
+    }
+
     private static string LlmProviderKeyFromUrl(string url)
     {
         if (string.IsNullOrEmpty(url)) return "groq"; // matches Rust default
