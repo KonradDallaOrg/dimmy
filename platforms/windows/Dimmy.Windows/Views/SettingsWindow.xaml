@@ -372,16 +372,16 @@
                                       Label="Theme"
                                       InfoTip="Sets the look of the Settings window. Auto follows your Windows theme.">
                   <StackPanel x:Name="ThemeRadioPanel" Orientation="Horizontal" Spacing="12">
-                    <RadioButton Content="Auto" GroupName="Theme" Tag="Default" Checked="Theme_Checked" />
-                    <RadioButton Content="Light" GroupName="Theme" Tag="Light" Checked="Theme_Checked" />
-                    <RadioButton Content="Dark" GroupName="Theme" Tag="Dark" Checked="Theme_Checked" />
+                    <RadioButton Content="Auto" GroupName="Theme" Tag="Default" Checked="Theme_Checked" Style="{StaticResource ChoiceRadioButton}" />
+                    <RadioButton Content="Light" GroupName="Theme" Tag="Light" Checked="Theme_Checked" Style="{StaticResource ChoiceRadioButton}" />
+                    <RadioButton Content="Dark" GroupName="Theme" Tag="Dark" Checked="Theme_Checked" Style="{StaticResource ChoiceRadioButton}" />
                   </StackPanel>
                 </controls:SettingCard>
                 <controls:SettingCard Glyph="&#xE7E8;"
                                       Label="Launch at login"
                                       InfoTip="Dimmy starts with Windows and waits quietly for your shortcut.">
                   <ToggleSwitch IsOn="{Binding AutostartEnabled, Mode=TwoWay}"
-                                OnContent="" OffContent="" />
+                                Style="{StaticResource CompactToggleSwitch}" />
                 </controls:SettingCard>
               </StackPanel>
             </StackPanel>
@@ -422,7 +422,7 @@
                                     Label="Native language (you speak)"
                                     InfoTip="Tells the speech engine what to expect. To translate into another language, use the pill's scroll wheel instead."
                                     HelpUrl="https://dimmy.app/help/language">
-                <ComboBox x:Name="LanguageComboBox" MinWidth="200"
+                <ComboBox x:Name="LanguageComboBox" MinWidth="{StaticResource SettingFieldWidth}"
                           DisplayMemberPath="Value"
                           ItemsSource="{Binding LanguageItems}"
                           SelectionChanged="Language_SelectionChanged" />
@@ -439,8 +439,10 @@
                                     HelpUrl="https://dimmy.app/help/local-mode">
                 <StackPanel Orientation="Horizontal" Spacing="12">
                   <RadioButton x:Name="SttModeLocal" Content="Local" GroupName="SttMode"
+                               Style="{StaticResource ChoiceRadioButton}"
                                Checked="SttMode_Checked" Tag="local" />
                   <RadioButton x:Name="SttModeCloud" Content="Cloud" GroupName="SttMode"
+                               Style="{StaticResource ChoiceRadioButton}"
                                Checked="SttMode_Checked" Tag="cloud" />
                 </StackPanel>
               </controls:SettingCard>
@@ -460,7 +462,7 @@
                        alignment. Header truncates with TextTrimming on
                        the item template; full text shows in the popup. -->
                   <ComboBox x:Name="LocalModelComboBox"
-                            Width="280" MaxWidth="280"
+                            Width="{StaticResource SettingFieldWidth}" MaxWidth="{StaticResource SettingFieldWidth}"
                             HorizontalAlignment="Left"
                             HorizontalContentAlignment="Left"
                             SelectionChanged="LocalModel_SelectionChanged" />
@@ -482,7 +484,7 @@
                                       InfoTip="Removes common filler words in 6 languages (including Italian 'cioè', 'ecc.') after transcription."
                                       HelpUrl="https://dimmy.app/help/filler-removal">
                   <ToggleSwitch IsOn="{Binding FillerRemovalEnabled, Mode=TwoWay}"
-                                OnContent="" OffContent="" />
+                                Style="{StaticResource CompactToggleSwitch}" />
                 </controls:SettingCard>
               </StackPanel>
 
@@ -501,7 +503,7 @@
                                       Label="Provider"
                                       InfoTip="The model you pick sets where your audio is sent. Free options are marked."
                                       HelpUrl="https://dimmy.app/help/cloud-providers">
-                  <ComboBox x:Name="ProviderComboBox" MinWidth="320"
+                  <ComboBox x:Name="ProviderComboBox" MinWidth="{StaticResource SettingFieldWidth}"
                             SelectionChanged="Provider_SelectionChanged">
                     <ComboBoxItem Tag="groq">
                       <StackPanel Orientation="Horizontal" Spacing="8">
@@ -632,12 +634,12 @@
                                       Label="API key"
                                       InfoTip="Stored encrypted on this device with AES-256. The provider only ever receives your audio and this key, nothing else."
                                       HelpUrl="https://dimmy.app/help/api-keys">
-                  <StackPanel Orientation="Horizontal" Spacing="8">
-                    <PasswordBox x:Name="CloudApiKeyBox" Width="320"
-                                 PlaceholderText="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}" />
+                  <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
                     <FontIcon Glyph="&#xE73E;" FontSize="16" Foreground="#4ade80"
                               VerticalAlignment="Center"
                               Visibility="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
+                    <PasswordBox x:Name="CloudApiKeyBox" Width="{StaticResource SettingFieldWidth}"
+                                 PlaceholderText="{Binding HasApiKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}" />
                   </StackPanel>
                 </controls:SettingCard>
                 <controls:SettingCard x:Name="CustomUrlCard"
@@ -646,7 +648,7 @@
                                       InfoTip="Used only when Provider is set to Custom. Point it at any OpenAI-compatible speech endpoint."
                                       HelpUrl="https://dimmy.app/help/cloud-providers"
                                       Visibility="Collapsed">
-                  <TextBox x:Name="CustomUrlBox" MinWidth="280"
+                  <TextBox x:Name="CustomUrlBox" MinWidth="{StaticResource SettingFieldWidth}"
                            Text="{Binding ApiUrl, Mode=TwoWay}" />
                 </controls:SettingCard>
                 <controls:SettingCard x:Name="CustomModelCard"
@@ -655,7 +657,7 @@
                                       InfoTip="The model identifier your custom endpoint expects."
                                       HelpUrl="https://dimmy.app/help/cloud-providers"
                                       Visibility="Collapsed">
-                  <TextBox x:Name="CustomModelBox" MinWidth="240"
+                  <TextBox x:Name="CustomModelBox" MinWidth="{StaticResource SettingFieldWidth}"
                            Text="{Binding ApiModel, Mode=TwoWay}" />
                 </controls:SettingCard>
               </StackPanel>
@@ -680,7 +682,7 @@
                                         Label="Recognition prompt"
                                         InfoTip="Optional. Add names, jargon, or brand spellings so they're transcribed the way you mean."
                                         HelpUrl="https://dimmy.app/help/cloud-providers">
-                    <TextBox MinWidth="320" MaxWidth="360"
+                    <TextBox MinWidth="{StaticResource SettingFieldWidth}" MaxWidth="{StaticResource SettingFieldWidth}"
                              AcceptsReturn="True" TextWrapping="Wrap" Height="80"
                              Text="{Binding Prompt, Mode=TwoWay}" />
                   </controls:SettingCard>
@@ -703,7 +705,7 @@
                                       Label="Input device"
                                       InfoTip="System audio loopback (used for meetings) always records from your default playback device, whatever you pick here."
                                       HelpUrl="https://dimmy.app/help/audio-input">
-                  <ComboBox MinWidth="240"
+                  <ComboBox MinWidth="{StaticResource SettingFieldWidth}"
                             SelectedItem="{Binding SelectedDevice, Mode=TwoWay}"
                             ItemsSource="{Binding Devices}" />
                 </controls:SettingCard>
@@ -715,7 +717,7 @@
                                         Label="Microphone volume"
                                         InfoTip="Raises your input level so soft speech is picked up. Leave it low if your mic is already loud."
                                         HelpUrl="https://dimmy.app/help/audio-input">
-                    <Slider x:Name="InputGainSlider" MinWidth="240"
+                    <Slider x:Name="InputGainSlider" MinWidth="{StaticResource SettingFieldWidth}"
                             Minimum="10" Maximum="100" StepFrequency="5"
                             Value="{Binding InputGainPercent, Mode=TwoWay}" />
                   </controls:SettingCard>
@@ -724,19 +726,19 @@
                                         InfoTip="Runs a high pass filter, voice activity detection, and automatic gain control. Leave it on unless you are debugging audio."
                                         HelpUrl="https://dimmy.app/help/audio-input">
                     <ToggleSwitch IsOn="{Binding PreprocessingEnabled, Mode=TwoWay}"
-                                  OnContent="" OffContent="" />
+                                  Style="{StaticResource CompactToggleSwitch}" />
                   </controls:SettingCard>
                   <controls:SettingCard Glyph="&#xE7F2;"
                                         Label="Chunk streaming (Parakeet only)"
                                         InfoTip="Transcribes while you speak, so the final text lands about 700 ms after you release the key instead of waiting for the whole clip. Needs the Parakeet local backend.">
                     <ToggleSwitch IsOn="{Binding ChunkStreamingEnabled, Mode=TwoWay}"
-                                  OnContent="" OffContent="" />
+                                  Style="{StaticResource CompactToggleSwitch}" />
                   </controls:SettingCard>
                   <controls:SettingCard Glyph="&#xE890;"
                                         Label="Live captions"
                                         InfoTip="Shows a floating caption while chunk streaming is on. Turn it off to keep the speed without showing text on screen.">
                     <ToggleSwitch IsOn="{Binding LiveCaptionsEnabled, Mode=TwoWay}"
-                                  OnContent="" OffContent="" />
+                                  Style="{StaticResource CompactToggleSwitch}" />
                   </controls:SettingCard>
                 </StackPanel>
               </StackPanel>
@@ -835,8 +837,10 @@
                                     HelpUrl="https://dimmy.app/help/hotkey-modes">
                 <StackPanel Orientation="Horizontal" Spacing="12">
                   <RadioButton Content="Push-to-Talk" GroupName="ShortcutMode"
+                               Style="{StaticResource ChoiceRadioButton}"
                                IsChecked="{Binding ShortcutMode, Mode=TwoWay, Converter={StaticResource StringToBoolConverter}, ConverterParameter=hold}" />
                   <RadioButton Content="Toggle" GroupName="ShortcutMode"
+                               Style="{StaticResource ChoiceRadioButton}"
                                IsChecked="{Binding ShortcutMode, Mode=TwoWay, Converter={StaticResource StringToBoolConverter}, ConverterParameter=toggle}" />
                 </StackPanel>
               </controls:SettingCard>
@@ -870,7 +874,7 @@
                                     Label="Style"
                                     InfoTip="An LLM cleans up or reshapes your transcript. Off leaves it exactly as spoken."
                                     HelpUrl="https://dimmy.app/help/styles">
-                <ComboBox MinWidth="220"
+                <ComboBox MinWidth="{StaticResource SettingFieldWidth}"
                           SelectedItem="{Binding LlmStyle, Mode=TwoWay}"
                           ItemsSource="{Binding LlmStyleItems}">
                   <ComboBox.ItemTemplate>
@@ -895,8 +899,10 @@
                                     HelpUrl="https://dimmy.app/help/local-llm">
                 <StackPanel Orientation="Horizontal" Spacing="12">
                   <RadioButton x:Name="LlmModeLocal" Content="Local" GroupName="LlmMode"
+                               Style="{StaticResource ChoiceRadioButton}"
                                Checked="LlmMode_Checked" Tag="local" />
                   <RadioButton x:Name="LlmModeCloud" Content="Cloud" GroupName="LlmMode"
+                               Style="{StaticResource ChoiceRadioButton}"
                                Checked="LlmMode_Checked" Tag="cloud" />
                 </StackPanel>
               </controls:SettingCard>
@@ -911,7 +917,7 @@
                        prevents long quantization suffixes like
                        "gemma-3-4b-it-q4_0.gguf" from expanding the row. -->
                   <ComboBox x:Name="LocalLlmModelComboBox"
-                            Width="280" MaxWidth="280"
+                            Width="{StaticResource SettingFieldWidth}" MaxWidth="{StaticResource SettingFieldWidth}"
                             HorizontalAlignment="Left"
                             HorizontalContentAlignment="Left"
                             SelectionChanged="LocalLlmModel_SelectionChanged" />
@@ -936,7 +942,7 @@
                                       Label="Cloud LLM provider"
                                       InfoTip="The model you pick sets where your transcript is sent. Free options are marked."
                                       HelpUrl="https://dimmy.app/help/cloud-providers">
-                  <ComboBox x:Name="LlmProviderComboBox" MinWidth="320"
+                  <ComboBox x:Name="LlmProviderComboBox" MinWidth="{StaticResource SettingFieldWidth}"
                             SelectionChanged="LlmProvider_SelectionChanged">
                     <ComboBoxItem Tag="groq">
                       <StackPanel Orientation="Horizontal" Spacing="8">
@@ -1143,7 +1149,7 @@
                                       Visibility="Collapsed">
                   <ToggleSwitch x:Name="LlmUseSubscriptionToggle"
                                 Toggled="LlmUseSubscription_Toggled"
-                                OnContent="" OffContent=""/>
+                                Style="{StaticResource CompactToggleSwitch}"/>
                 </controls:SettingCard>
                 <controls:SettingCard x:Name="LlmCustomUrlCard"
                                       Glyph="&#xE71B;"
@@ -1151,7 +1157,7 @@
                                       InfoTip="Used only when the provider is set to Custom. Point it at any OpenAI-compatible chat endpoint."
                                       HelpUrl="https://dimmy.app/help/cloud-providers"
                                       Visibility="Collapsed">
-                  <TextBox x:Name="LlmCustomUrlBox" MinWidth="280"
+                  <TextBox x:Name="LlmCustomUrlBox" MinWidth="{StaticResource SettingFieldWidth}"
                            Text="{Binding LlmApiUrl, Mode=TwoWay}" />
                 </controls:SettingCard>
                 <controls:SettingCard x:Name="LlmCustomModelCard"
@@ -1160,7 +1166,7 @@
                                       InfoTip="The model identifier your custom endpoint expects."
                                       HelpUrl="https://dimmy.app/help/cloud-providers"
                                       Visibility="Collapsed">
-                  <TextBox x:Name="LlmCustomModelBox" MinWidth="240"
+                  <TextBox x:Name="LlmCustomModelBox" MinWidth="{StaticResource SettingFieldWidth}"
                            Text="{Binding LlmApiModel, Mode=TwoWay}" />
                 </controls:SettingCard>
                 <!-- "Use my saved STT key" — mirror of the Recap
@@ -1180,7 +1186,7 @@
                   <ToggleSwitch x:Name="LlmUseSameKeyToggle"
                                 IsOn="{Binding LlmUseSameKey, Mode=TwoWay}"
                                 Toggled="LlmUseSameKey_Toggled"
-                                OnContent="" OffContent="" />
+                                Style="{StaticResource CompactToggleSwitch}" />
                 </controls:SettingCard>
                 <!-- LLM API key input. Visibility set by code-behind
                      (RefreshAuthIntegrationStatus) to follow the
@@ -1194,12 +1200,12 @@
                                       InfoTip="Stored encrypted on this device. Used when the rewrite provider differs from your speech provider."
                                       HelpUrl="https://dimmy.app/help/api-keys"
                                       Visibility="Collapsed">
-                  <StackPanel Orientation="Horizontal" Spacing="8">
-                    <PasswordBox x:Name="LlmApiKeyBox" Width="320"
-                                 PlaceholderText="{Binding HasLlmKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}" />
+                  <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
                     <FontIcon Glyph="&#xE73E;" FontSize="16" Foreground="#4ade80"
                               VerticalAlignment="Center"
                               Visibility="{Binding HasLlmKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
+                    <PasswordBox x:Name="LlmApiKeyBox" Width="{StaticResource SettingFieldWidth}"
+                                 PlaceholderText="{Binding HasLlmKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}" />
                   </StackPanel>
                 </controls:SettingCard>
                 <!-- Subscription status card moved to Integrations →
@@ -1226,7 +1232,7 @@
                                       InfoTip="Suggests recording a few seconds into a call. 'Not now' snoozes that app for half an hour. 'Don't ask' skips it for good."
                                       HelpUrl="https://dimmy.app/help/use-meeting-recaps">
                   <ToggleSwitch IsOn="{Binding CallDetectEnabled, Mode=TwoWay}"
-                                OnContent="" OffContent="" />
+                                Style="{StaticResource CompactToggleSwitch}" />
                 </controls:SettingCard>
                 <controls:SettingCard Glyph="&#xE71F;"
                                       Label="Excluded apps"
@@ -1331,7 +1337,7 @@
                                       Label="Meeting recap model"
                                       InfoTip="Runs when a meeting ends to produce the summary and action items. Auto picks a good model for your provider."
                                       HelpUrl="https://dimmy.app/help/use-meeting-recaps">
-                  <ComboBox x:Name="RecapModelComboBox" MinWidth="280"
+                  <ComboBox x:Name="RecapModelComboBox" MinWidth="{StaticResource SettingFieldWidth}"
                             SelectionChanged="RecapModel_SelectionChanged">
                     <ComboBoxItem Tag="">
                       <TextBlock Text="Auto · pick best for your provider" VerticalAlignment="Center"/>
@@ -1466,14 +1472,14 @@
                                       Visibility="Collapsed">
                   <ToggleSwitch x:Name="RecapUseSubscriptionToggle"
                                 Toggled="RecapUseSubscription_Toggled"
-                                OnContent="" OffContent=""/>
+                                Style="{StaticResource CompactToggleSwitch}"/>
                 </controls:SettingCard>
                 <controls:SettingCard Glyph="&#xE932;"
                                       Label="Custom recap model id"
                                       InfoTip="Used only when the picker above is set to Custom. Enter the exact model identifier."
                                       HelpUrl="https://dimmy.app/help/use-meeting-recaps"
                                       x:Name="RecapModelCustomCard">
-                  <TextBox x:Name="RecapModelOverrideBox" MinWidth="280"
+                  <TextBox x:Name="RecapModelOverrideBox" MinWidth="{StaticResource SettingFieldWidth}"
                            PlaceholderText="e.g. claude-opus-4-7-thinking-extra"
                            Text="{Binding RecapModelOverride, Mode=TwoWay}"
                            LostFocus="RecapModelCustom_LostFocus" />
@@ -1494,7 +1500,7 @@
                   <ToggleSwitch x:Name="RecapUseSameKeyToggle"
                                 IsOn="{Binding RecapUseSameKey, Mode=TwoWay}"
                                 Toggled="RecapUseSameKey_Toggled"
-                                OnContent="" OffContent=""/>
+                                Style="{StaticResource CompactToggleSwitch}"/>
                 </controls:SettingCard>
                 <!-- Recap API key field. Visible when (a) the toggle
                      above is OFF, OR (b) no upstream key exists for
@@ -1508,18 +1514,18 @@
                                       InfoTip="Saved separately for the recap provider, so your dictation key stays untouched. Stored encrypted on this device."
                                       HelpUrl="https://dimmy.app/help/api-keys"
                                       Visibility="Collapsed">
-                  <StackPanel Orientation="Horizontal" Spacing="8">
-                    <!-- Persisted by Save_Click / AutoSaveOnClose
-                         (mirror of LlmApiKeyBox). No inline Save
-                         button — the user types and the value is
-                         drained into the Rust keystore on the next
-                         Settings save (button or window close). -->
-                    <PasswordBox x:Name="RecapKeyBox" Width="320"
-                                 PlaceholderText="{Binding HasRecapKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}"/>
+                  <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
                     <FontIcon Glyph="&#xE73E;" FontSize="16" Foreground="#4ade80"
                               VerticalAlignment="Center"
                               Visibility="{Binding HasRecapKey, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
                               ToolTipService.ToolTip="A key is already saved for this provider"/>
+                    <!-- Persisted by Save_Click / AutoSaveOnClose
+                         (mirror of LlmApiKeyBox). No inline Save
+                         button. The user types and the value is
+                         drained into the Rust keystore on the next
+                         Settings save (button or window close). -->
+                    <PasswordBox x:Name="RecapKeyBox" Width="{StaticResource SettingFieldWidth}"
+                                 PlaceholderText="{Binding HasRecapKey, Mode=OneWay, Converter={StaticResource BoolToApiKeyPlaceholder}}"/>
                   </StackPanel>
                 </controls:SettingCard>
               </StackPanel>
@@ -1536,7 +1542,7 @@
                                       InfoTip="After Dimmy pastes for you, the transcript stays on the clipboard so you can paste it again."
                                       HelpUrl="https://dimmy.app/help/settings-overview">
                   <ToggleSwitch IsOn="{Binding KeepInClipboard, Mode=TwoWay}"
-                                OnContent="" OffContent="" />
+                                Style="{StaticResource CompactToggleSwitch}" />
                 </controls:SettingCard>
               </StackPanel>
 
@@ -1551,7 +1557,7 @@
                                       Label="Tone"
                                       InfoTip="Nudges the rewrite warmer or more businesslike, on top of the style you chose."
                                       HelpUrl="https://dimmy.app/help/tones">
-                  <ComboBox MinWidth="200"
+                  <ComboBox MinWidth="{StaticResource SettingFieldWidth}"
                             SelectedItem="{Binding LlmTone, Mode=TwoWay}"
                             ItemsSource="{Binding LlmToneItems}" />
                 </controls:SettingCard>
@@ -1559,7 +1565,7 @@
                                       Label="Translate output to"
                                       InfoTip="Speak in your language and Dimmy pastes the translation. The pill's scroll wheel changes the same setting."
                                       HelpUrl="https://dimmy.app/help/use-multilingual">
-                  <ComboBox MinWidth="220"
+                  <ComboBox MinWidth="{StaticResource SettingFieldWidth}"
                             DisplayMemberPath="Value"
                             SelectedValuePath="Key"
                             SelectedValue="{Binding LlmTranslateTo, Mode=TwoWay}"
@@ -1569,7 +1575,7 @@
                                       Label="Custom prompt"
                                       InfoTip="Tells the LLM exactly how to rewrite. Used when the style above is set to Custom."
                                       HelpUrl="https://dimmy.app/help/custom-prompts">
-                  <TextBox MinWidth="320" MaxWidth="360"
+                  <TextBox MinWidth="{StaticResource SettingFieldWidth}" MaxWidth="{StaticResource SettingFieldWidth}"
                            AcceptsReturn="True" TextWrapping="Wrap" Height="80"
                            Text="{Binding LlmCustomPrompt, Mode=TwoWay}" />
                 </controls:SettingCard>
@@ -1594,21 +1600,24 @@
                                     InfoTip="Off starts Dimmy in taskbar-only mode. The pill stays hidden and recording status shows on the taskbar icon."
                                     HelpUrl="https://dimmy.app/help/pill-overview">
                 <ToggleSwitch IsOn="{Binding PillShowOnStartup, Mode=TwoWay}"
-                              Toggled="PillVisibilityToggle_Toggled" />
+                              Toggled="PillVisibilityToggle_Toggled"
+                              Style="{StaticResource CompactToggleSwitch}" />
               </controls:SettingCard>
               <controls:SettingCard Glyph="&#xE9F5;"
                                     Label="Show pill when recording"
                                     InfoTip="Off keeps the pill hidden even during recording. Status shows on the taskbar icon with a red dot and level bar."
                                     HelpUrl="https://dimmy.app/help/pill-states">
                 <ToggleSwitch IsOn="{Binding PillShowOnHotkey, Mode=TwoWay}"
-                              Toggled="PillVisibilityToggle_Toggled" />
+                              Toggled="PillVisibilityToggle_Toggled"
+                              Style="{StaticResource CompactToggleSwitch}" />
               </controls:SettingCard>
               <controls:SettingCard Glyph="&#xE71D;"
                                     Label="Show Dimmy in Windows taskbar"
                                     InfoTip="Adds the icon, a live level bar while recording, and right-click shortcuts. Off keeps Dimmy in the system tray with the hotkey only."
                                     HelpUrl="https://dimmy.app/help/tray-menu">
                 <ToggleSwitch IsOn="{Binding ShowTaskbarIcon, Mode=TwoWay}"
-                              Toggled="PillVisibilityToggle_Toggled" />
+                              Toggled="PillVisibilityToggle_Toggled"
+                              Style="{StaticResource CompactToggleSwitch}" />
               </controls:SettingCard>
 
               <TextBlock Text="POSITION"
@@ -1692,7 +1701,7 @@
                                     Label="Border style"
                                     InfoTip="Pick the rainbow glow or a solid color. None hides the outline."
                                     HelpUrl="https://dimmy.app/help/pill-overview">
-                <ComboBox MinWidth="180"
+                <ComboBox MinWidth="{StaticResource SettingFieldWidth}"
                           SelectedItem="{Binding BorderStyle, Mode=TwoWay}"
                           SelectionChanged="BorderStyle_SelectionChanged">
                   <x:String>Rainbow</x:String>
@@ -1707,7 +1716,7 @@
                                     Label="Waveform style"
                                     InfoTip="Sets the shape of the live audio animation while you record. Pick whichever you like best."
                                     HelpUrl="https://dimmy.app/help/pill-states">
-                <ComboBox MinWidth="180"
+                <ComboBox MinWidth="{StaticResource SettingFieldWidth}"
                           SelectedItem="{Binding WaveformStyle, Mode=TwoWay}"
                           SelectionChanged="WaveformStyle_SelectionChanged">
                   <x:String>Bars</x:String>
@@ -2001,7 +2010,7 @@
                                     Visibility="Collapsed"
                                     Margin="0,8,0,0">
                 <ComboBox x:Name="UpdateChannelCombo"
-                          MinWidth="200"
+                          MinWidth="{StaticResource SettingFieldWidth}"
                           SelectionChanged="UpdateChannel_SelectionChanged">
                   <ComboBoxItem Content="Stable only" Tag="stable"/>
                   <ComboBoxItem Content="Stable + Pre-release" Tag="prerelease"/>
@@ -2062,7 +2071,7 @@
                                     InfoTip="Off by default for privacy. When on, the audio is saved next to each transcription. Use the limits below to cap disk use."
                                     HelpUrl="https://dimmy.app/help/history-search">
                 <ToggleSwitch IsOn="{Binding SaveAudioInHistory, Mode=TwoWay}"
-                              OnContent="" OffContent="" />
+                              Style="{StaticResource CompactToggleSwitch}" />
               </controls:SettingCard>
               <controls:SettingCard Glyph="&#xE823;"
                                     Label="Audio retention (days)"
@@ -2304,7 +2313,7 @@
                 <ToggleSwitch IsOn="{Binding NotionAutoSend, Mode=TwoWay}"
                               IsEnabled="{Binding HasNotionToken}"
                               Toggled="NotionAutoSend_Toggled"
-                              OnContent="" OffContent="" />
+                              Style="{StaticResource CompactToggleSwitch}" />
               </controls:SettingCard>
 
               <!-- Status / errors -->
@@ -2558,7 +2567,7 @@
                                     HelpUrl="https://dimmy.app/help/telemetry">
                 <ToggleSwitch x:Name="AnalyticsToggle"
                               IsOn="{Binding TelemetryEnabled, Mode=TwoWay}"
-                              OnContent="" OffContent="" />
+                              Style="{StaticResource CompactToggleSwitch}" />
               </controls:SettingCard>
               <controls:SettingCard Glyph="&#xE730;"
                                     Label="Send crash reports"
@@ -2566,7 +2575,7 @@
                                     HelpUrl="https://dimmy.app/help/telemetry">
                 <ToggleSwitch x:Name="CrashesToggle"
                               IsOn="{Binding CrashReportsEnabled, Mode=TwoWay}"
-                              OnContent="" OffContent="" />
+                              Style="{StaticResource CompactToggleSwitch}" />
               </controls:SettingCard>
 
               <TextBlock Text="ANONYMOUS IDENTIFIER"
@@ -2596,7 +2605,7 @@
               <controls:SettingCard Glyph="&#xE939;"
                                     Label="Kind"
                                     InfoTip="Helps us route your message: a general note, a bug, or a feature idea.">
-                <ComboBox x:Name="FeedbackKindCombo" SelectedIndex="0" MinWidth="180">
+                <ComboBox x:Name="FeedbackKindCombo" SelectedIndex="0" MinWidth="{StaticResource SettingFieldWidth}">
                   <ComboBoxItem Content="General" Tag="general" />
                   <ComboBoxItem Content="Bug report" Tag="bug" />
                   <ComboBoxItem Content="Feature request" Tag="feature" />
@@ -2908,21 +2917,21 @@
                                     InfoTip="Writes each rewrite prompt and response to llm.log. Useful when a rewrite looks wrong."
                                     HelpUrl="https://dimmy.app/help/transcription-issues">
                 <ToggleSwitch IsOn="{Binding LlmLogEnabled, Mode=TwoWay}"
-                              OnContent="" OffContent="" />
+                              Style="{StaticResource CompactToggleSwitch}" />
               </controls:SettingCard>
               <controls:SettingCard Glyph="&#xE9F5;"
                                     Label="Audio debug"
                                     InfoTip="Keeps the raw capture and verbose audio logs so we can diagnose recording problems."
                                     HelpUrl="https://dimmy.app/help/transcription-issues">
                 <ToggleSwitch IsOn="{Binding AudioDebugEnabled, Mode=TwoWay}"
-                              OnContent="" OffContent="" />
+                              Style="{StaticResource CompactToggleSwitch}" />
               </controls:SettingCard>
               <controls:SettingCard Glyph="&#xE7B5;"
                                     Label="ggml debug logging"
                                     InfoTip="Shows detailed startup logs from the local model engine. Turn on when a local model won't load."
                                     HelpUrl="https://dimmy.app/help/install-issues">
                 <ToggleSwitch IsOn="{Binding GgmlDebugLogging, Mode=TwoWay}"
-                              OnContent="" OffContent="" />
+                              Style="{StaticResource CompactToggleSwitch}" />
               </controls:SettingCard>
 
               <TextBlock Text="GPU ACCELERATION"

@@ -57,6 +57,34 @@
             <converters:BoolToAccentBrushConverter x:Key="BoolToAccentBrush" />
             <converters:StyleToColorBrushConverter x:Key="StyleToColorBrush" />
 
+            <!-- Settings field sizing. One shared width so every trailing
+                 combo / text field collapses to the same size and their
+                 right edges line up. Long content (provider rows with a
+                 logo) expands only the open popup, never the box. -->
+            <x:Double x:Key="SettingFieldWidth">320</x:Double>
+
+            <!-- In-card ToggleSwitch. The default control reserves ~154px
+                 for the On/Off label column, which floats the knob far
+                 left of the card's right edge. Zeroing the min-width and
+                 the content + right-aligning makes the knob sit flush
+                 right like every other trailing control. Opt-in via key:
+                 the sidebar "Advanced mode" toggle keeps its visible
+                 label and must NOT use this. -->
+            <Style x:Key="CompactToggleSwitch" TargetType="ToggleSwitch"
+                   BasedOn="{StaticResource DefaultToggleSwitchStyle}">
+                <Setter Property="MinWidth" Value="0" />
+                <Setter Property="HorizontalAlignment" Value="Right" />
+                <Setter Property="OnContent" Value="" />
+                <Setter Property="OffContent" Value="" />
+            </Style>
+
+            <!-- In-card choice radios. Hug the content so a right-aligned
+                 pair ends at the same right edge as the combos above it. -->
+            <Style x:Key="ChoiceRadioButton" TargetType="RadioButton"
+                   BasedOn="{StaticResource DefaultRadioButtonStyle}">
+                <Setter Property="MinWidth" Value="0" />
+            </Style>
+
             <!-- Position grid cell style — a clickable square that mimics a
                  monitor quadrant. Selected state shows the accent ring + a
                  mini pill marker indicating where the overlay will spawn. -->
