@@ -6,12 +6,14 @@ namespace Dimmy.Windows.Views.Controls;
 
 /// <summary>
 /// Win11 Settings card — `.scard` pattern from the design bundle.
-/// One card per setting: icon + label + description + control on the right.
+/// One card per setting: icon + label + (i) info button + short description
+/// + control on the right.
 ///
 /// Use <see cref="Glyph"/> for the Segoe Fluent codepoint, <see cref="Label"/>
-/// for the primary line, <see cref="Description"/> for the secondary line,
-/// and <see cref="Control"/> (the default Content slot) for the right-side
-/// element (Toggle / ComboBox / Button / etc.).
+/// for the primary line, <see cref="Description"/> for the (short) secondary
+/// line, <see cref="Hint"/> for the long-form explanation behind the (i)
+/// button, and <see cref="Control"/> (the default Content slot) for the
+/// right-side element (Toggle / ComboBox / Button / etc.).
 /// </summary>
 [ContentProperty(Name = "Control")]
 public sealed partial class SettingCard : UserControl
@@ -77,6 +79,35 @@ public sealed partial class SettingCard : UserControl
             var desc = e.NewValue as string ?? string.Empty;
             card.DescriptionText.Text = desc;
             card.DescriptionText.Visibility = string.IsNullOrEmpty(desc)
+                ? Visibility.Collapsed : Visibility.Visible;
+        }
+    }
+
+    public static readonly DependencyProperty HintProperty =
+        DependencyProperty.Register(nameof(Hint), typeof(string), typeof(SettingCard),
+            new PropertyMetadata(string.Empty, OnHintChanged));
+
+    /// <summary>
+    /// Long-form explanation surfaced behind the inline (i) button. Hidden
+    /// when empty. The same string is wired up as the hover tooltip on the
+    /// icon so users who never click still see the copy. Mirrors the macOS
+    /// <c>MacGroupFooter</c> / <c>MacNote</c> off-row pattern.
+    /// </summary>
+    public string Hint
+    {
+        get => (string)GetValue(HintProperty);
+        set => SetValue(HintProperty, value);
+    }
+
+    private static void OnHintChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is SettingCard card)
+        {
+            var hint = e.NewValue as string ?? string.Empty;
+            card.HintFlyoutText.Text = hint;
+            ToolTipService.SetToolTip(card.HintButton,
+                string.IsNullOrEmpty(hint) ? null : hint);
+            card.HintButton.Visibility = string.IsNullOrEmpty(hint)
                 ? Visibility.Collapsed : Visibility.Visible;
         }
     }

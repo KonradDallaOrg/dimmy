@@ -8,8 +8,13 @@
     Win11 Settings card pattern — replicates `.scard` from the design bundle.
 
     Layout:
-      [icon 24px] [label                              ] [control]
+      [icon 24px] [label  (i)                        ] [control]
                   [description (optional, smaller)  ]
+
+    The optional `(i)` info button sits inline next to the label and reveals
+    a Flyout carrying the long-form explanation. Mirrors the macOS Tahoe
+    redesign rule — short label + short description; verbose copy lives
+    off-row. See `MacAtoms.swift` (`MacGroupFooter`, `MacNote`).
 
     - Min height 64 px (per design tokens).
     - Border 1 px hairline, corner radius 4 px.
@@ -19,7 +24,10 @@
     Public properties (set from XAML or code):
     - Glyph (string)        — Segoe Fluent codepoint, e.g. "&#xE720;"
     - Label (string)        — primary line
-    - Description (string)  — secondary line, hidden when empty
+    - Description (string)  — short secondary line, hidden when empty
+    - Hint (string)         — long-form explanation behind the (i) button,
+                              hidden when empty; ALSO surfaces as the
+                              ToolTip on the (i) glyph for hover-only users
     - Control (object)      — the right-side control (default Content slot)
   -->
 
@@ -41,11 +49,39 @@
                 Width="24" Height="24"
                 Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
 
-      <!-- Meta: label + optional description -->
+      <!-- Meta: label (+ optional info button) + optional description -->
       <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
-        <TextBlock x:Name="LabelText"
-                   FontSize="14"
-                   Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+          <TextBlock x:Name="LabelText"
+                     FontSize="14"
+                     VerticalAlignment="Center"
+                     Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+          <!--
+            Subtle inline info button. Collapsed by default; OnHintChanged
+            in code-behind flips Visibility + populates the Flyout TextBlock
+            and the hover ToolTip from a single `Hint` DP.
+          -->
+          <Button x:Name="HintButton"
+                  Background="Transparent"
+                  BorderThickness="0"
+                  Padding="2"
+                  MinHeight="0" MinWidth="0"
+                  VerticalAlignment="Center"
+                  Visibility="Collapsed"
+                  AutomationProperties.Name="Show details">
+            <FontIcon Glyph="&#xE946;"
+                      FontSize="12"
+                      Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            <Button.Flyout>
+              <Flyout>
+                <TextBlock x:Name="HintFlyoutText"
+                           TextWrapping="Wrap"
+                           MaxWidth="320"
+                           FontSize="13" />
+              </Flyout>
+            </Button.Flyout>
+          </Button>
+        </StackPanel>
         <TextBlock x:Name="DescriptionText"
                    FontSize="12"
                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
