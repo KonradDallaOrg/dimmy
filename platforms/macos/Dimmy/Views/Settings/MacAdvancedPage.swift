@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-// Advanced — diagnostics + GPU acceleration. Visible only when the
+// Advanced, diagnostics + GPU acceleration. Visible only when the
 // sidebar Advanced toggle is ON (gated by `MacSettingsTab.advanced`
 // filter in MacSettingsContainerView.filteredTabs).
 
@@ -45,7 +45,7 @@ struct MacAdvancedPage: View {
                 MacRow(
                     "Storage folder",
                     description: meetingStorageDescription,
-                    hint: "Where meeting recordings, transcripts and recaps are saved. Switching folders affects new meetings only — existing meetings stay where they were recorded.",
+                    hint: "Where meeting recordings, transcripts and recaps are saved. Switching folders affects new meetings only, existing meetings stay where they were recorded.",
                     showsDivider: meetingStorageError != nil
                 ) {
                     HStack(spacing: 8) {
@@ -66,7 +66,7 @@ struct MacAdvancedPage: View {
     }
 
     private var meetingStorageDescription: String {
-        let effective = DimmyCore.shared.meetingsDirURL?.path ?? "—"
+        let effective = DimmyCore.shared.meetingsDirURL?.path ?? "-"
         return appState.meetingStoragePath.isEmpty
             ? "\(effective)  ·  default"
             : effective
@@ -119,7 +119,7 @@ struct MacAdvancedPage: View {
     #if DEBUG
     /// Debug-only: drop one sample row with a synthesised WAV so the
     /// History detail's waveform + Raw/Enhanced toggle can be demoed
-    /// without a microphone. Compiled out in Release/Staging — under
+    /// without a microphone. Compiled out in Release/Staging, under
     /// `#if DEBUG` instead of a runtime flag so a binary you ship
     /// physically cannot insert fake rows.
     private var debugSeedGroup: some View {
@@ -129,7 +129,7 @@ struct MacAdvancedPage: View {
                 MacRow(
                     "Insert sample row",
                     description: "Debug-only.",
-                    hint: "Adds one fake history entry with a synthesised 4 s WAV so the waveform and playback UI can be exercised without making a real recording. Compiled out of Release builds.",
+                    hint: "Adds one fake history entry with a synthesised 4 s audio file so the waveform and playback UI can be exercised without making a real recording. Compiled out of Release builds.",
                     showsDivider: false
                 ) {
                     Button("Add sample") {
@@ -172,7 +172,7 @@ struct MacAdvancedPage: View {
     }
     #endif
 
-    /// Phase 6.4 — fire-and-forget recap on long dictations. Independent
+    /// Phase 6.4, fire-and-forget recap on long dictations. Independent
     /// of meeting mode (which always recaps) and from the dictation
     /// rewrite (which uses llm_style). 0 = disabled.
     private var autoRecapGroup: some View {
@@ -209,7 +209,7 @@ struct MacAdvancedPage: View {
             MacTile {
                 MacRow(
                     "Metal acceleration",
-                    hint: "Whisper.cpp and llama.cpp use the Apple Silicon GPU via Metal. Always on — no toggle. Listed here so you can confirm it's active in support tickets.",
+                    hint: "Whisper.cpp and llama.cpp use the Apple Silicon GPU via Metal. Always on, no toggle. Listed here so you can confirm it's active in support tickets.",
                     showsDivider: false
                 ) {
                     Label("Active", systemImage: "checkmark.circle.fill")
@@ -226,7 +226,7 @@ struct MacAdvancedPage: View {
             MacTile {
                 MacRow(
                     "LLM log enabled",
-                    hint: "Writes every LLM prompt and response to dimmy.log. Useful for debugging rewrite issues — leave off otherwise so the log doesn't fill with content."
+                    hint: "Writes every LLM prompt and response to dimmy.log. Useful for debugging rewrite issues, leave off otherwise so the log doesn't fill with content."
                 ) {
                     Toggle("", isOn: Binding(
                         get: { appState.llmLogEnabled },
@@ -278,7 +278,7 @@ struct MacAdvancedPage: View {
 
                 MacRow(
                     "Reset all settings",
-                    hint: "Restores Dimmy to factory defaults. Wipes config.json (keeps your encrypted API keys, history, and saved meetings). Currently a placeholder — wire-up lands in a later phase.",
+                    hint: "Restores Dimmy to factory defaults. Wipes config.json (keeps your encrypted API keys, history, and saved meetings). Currently a placeholder, wire-up lands in a later phase.",
                     showsDivider: false
                 ) {
                     Button(role: .destructive) {

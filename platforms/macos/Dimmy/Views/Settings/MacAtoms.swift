@@ -7,7 +7,7 @@ import SwiftUI
 // Centralising values here keeps every page consistent and avoids the
 // drift you get when each view re-implements its own padding / radius /
 // stroke colour. macOS dark/light is derived from `NSAppearance` rather
-// than a custom toggle — the OS already picks the right side of the
+// than a custom toggle, the OS already picks the right side of the
 // `Color` shape resolver.
 
 enum MacTheme {
@@ -217,7 +217,7 @@ extension MacRow where Trailing == EmptyView {
 //
 // Mirrors the Windows SettingCard.Hint pattern (PR #95). A subtle 12pt
 // `info.circle` button next to a row label. Click opens an NSPopover
-// with the verbose copy (max width ~320) and an optional "Learn more"
+// with the verbose copy (max width about 320) and an optional "Learn more"
 // link. Hover surfaces the same copy via SwiftUI's `.help()` so
 // keyboard-only / hover-only users get the explanation too.
 
@@ -261,7 +261,7 @@ struct MacInfoButton: View {
 // MARK: - Squircle icon
 //
 // 28×28 rounded square with a coloured background and a centred SF Symbol
-// glyph in white — matches the sidebar nav icons and per-row leading icons.
+// glyph in white, matches the sidebar nav icons and per-row leading icons.
 
 struct MacSquircleIcon: View {
     let systemName: String
@@ -294,7 +294,7 @@ struct MacSquircleIcon: View {
 
 // MARK: - Hero card
 //
-// Used on Home and About — large rounded tile with text on the left and
+// Used on Home and About, large rounded tile with text on the left and
 // an arbitrary trailing visual (pill stage / app icon) on the right.
 
 struct MacHero<Trailing: View>: View {
@@ -406,7 +406,7 @@ struct MacChip: View {
 
 // MARK: - Position picker (3×3 grid)
 //
-// Wallpaper-position picker style — eight valid corners + middle-center,
+// Wallpaper-position picker style, eight valid corners + middle-center,
 // or a subset depending on what the platform supports.
 
 struct MacPositionPicker: View {
@@ -485,7 +485,7 @@ struct MacKeycap: View {
 
 // MARK: - Inline status pill
 //
-// Small "● Listening — groq whisper" pill rendered in the toolbar to show
+// Small "● Listening, groq whisper" pill rendered in the toolbar to show
 // current STT provider. Reused for "Live detection" on App Rules page.
 
 struct MacStatusPill: View {
@@ -517,7 +517,7 @@ struct MacStatusPill: View {
 
 // MARK: - Note (info banner)
 //
-// Used on Privacy and App Rules pages — accent-circled icon + "**Title**\nbody".
+// Used on Privacy and App Rules pages, accent-circled icon + "**Title**\nbody".
 
 struct MacNote: View {
     let title: String
@@ -583,7 +583,7 @@ struct MacSavedPulse: View {
 // Mirrors the Windows StyleToColorBrushConverter so the dot colour next
 // to each style chip matches across platforms. Kept inline rather than
 // extending `LlmStyle` so the design tokens sit alongside the other Mac
-// atoms — `LlmStyle.color` already exists for the pill but uses slightly
+// atoms, `LlmStyle.color` already exists for the pill but uses slightly
 // different hues; this enum keeps the design-bundle palette specifically.
 
 enum MacStyleColor {

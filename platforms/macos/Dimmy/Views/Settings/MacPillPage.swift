@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Pill overlay — live preview + 3×3 position picker + appearance.
+// Pill overlay, live preview + 3×3 position picker + appearance.
 // Live preview is a static SwiftUI mock (NOT the real PillView so we don't
 // risk firing a real recording from inside Settings) that reflects the
 // user's current border-style + waveform-style choices in real time.
@@ -131,7 +131,7 @@ struct MacPillPage: View {
         let style = appState.waveformStyle.lowercased()
         switch style {
         case "line":
-            // Sinuous line — Path with smooth bezier-ish polyline.
+            // Sinuous line, Path with smooth bezier-ish polyline.
             Canvas { context, size in
                 var path = Path()
                 let amplitude: CGFloat = 8
@@ -241,7 +241,7 @@ struct MacPillPage: View {
             MacTile {
                 MacRow(
                     "Default position",
-                    hint: "Where the pill appears when Dimmy launches or after Reset position. You can always drag it to a custom spot — the dragged location overrides this default until you reset."
+                    hint: "Where the pill appears when Dimmy launches or after Reset position. You can always drag it to a custom spot, the dragged location overrides this default until you reset."
                 ) {
                     MacPositionPicker(
                         selection: Binding(

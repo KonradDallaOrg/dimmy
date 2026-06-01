@@ -92,6 +92,8 @@
 		AA000203 /* MacVoicePage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000203 /* MacVoicePage.swift */; };
 		AA000204 /* MacOutputPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000204 /* MacOutputPage.swift */; };
 		AA000205 /* MacPillPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000205 /* MacPillPage.swift */; };
+		AA00FF01 /* MacProvidersPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00FF01 /* MacProvidersPage.swift */; };
+		AA00FF02 /* ProviderCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00FF02 /* ProviderCatalog.swift */; };
 		AA000206 /* MacShortcutPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000206 /* MacShortcutPage.swift */; };
 		AA000207 /* MacPrivacyPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000207 /* MacPrivacyPage.swift */; };
 		AA000208 /* MacAboutPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000208 /* MacAboutPage.swift */; };
@@ -218,6 +220,8 @@
 		AB000203 /* MacVoicePage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacVoicePage.swift; sourceTree = "<group>"; };
 		AB000204 /* MacOutputPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacOutputPage.swift; sourceTree = "<group>"; };
 		AB000205 /* MacPillPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPillPage.swift; sourceTree = "<group>"; };
+		AB00FF01 /* MacProvidersPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacProvidersPage.swift; sourceTree = "<group>"; };
+		AB00FF02 /* ProviderCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderCatalog.swift; sourceTree = "<group>"; };
 		AB000206 /* MacShortcutPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacShortcutPage.swift; sourceTree = "<group>"; };
 		AB000207 /* MacPrivacyPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPrivacyPage.swift; sourceTree = "<group>"; };
 		AB000208 /* MacAboutPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAboutPage.swift; sourceTree = "<group>"; };
@@ -443,6 +447,7 @@
 				AB000203 /* MacVoicePage.swift */,
 				AB000204 /* MacOutputPage.swift */,
 				AB000205 /* MacPillPage.swift */,
+				AB00FF01 /* MacProvidersPage.swift */,
 				AB000206 /* MacShortcutPage.swift */,
 				AB000207 /* MacPrivacyPage.swift */,
 				AB000208 /* MacAboutPage.swift */,
@@ -470,6 +475,7 @@
 				AB000508 /* SampleAudioSynth.swift */,
 				AB000509 /* FirstMouseHostingView.swift */,
 				AB00050A /* ProviderTagging.swift */,
+				AB00FF02 /* ProviderCatalog.swift */,
 			);
 			path = Utilities;
 			sourceTree = "<group>";
@@ -696,6 +702,8 @@
 				AA000203 /* MacVoicePage.swift in Sources */,
 				AA000204 /* MacOutputPage.swift in Sources */,
 				AA000205 /* MacPillPage.swift in Sources */,
+				AA00FF01 /* MacProvidersPage.swift in Sources */,
+				AA00FF02 /* ProviderCatalog.swift in Sources */,
 				AA000206 /* MacShortcutPage.swift in Sources */,
 				AA000207 /* MacPrivacyPage.swift in Sources */,
 				AA000208 /* MacAboutPage.swift in Sources */,

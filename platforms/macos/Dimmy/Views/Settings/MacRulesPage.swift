@@ -1,12 +1,12 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-// App rules — auto-switch the rewrite style based on the focused app.
+// App rules, auto-switch the rewrite style based on the focused app.
 //
 // The Rust core (core/src/app_rules.rs) resolves rules at LLM-enhance
 // time using the bundle id captured at hotkey-down. This page lets the
 // user view, add, edit, reorder, and delete those rules. State is
-// round-tripped through `DimmyCore.setConfig` — no local mutation goes
+// round-tripped through `DimmyCore.setConfig`, no local mutation goes
 // unsaved.
 
 struct MacRulesPage: View {
@@ -26,7 +26,7 @@ struct MacRulesPage: View {
         VStack(alignment: .leading, spacing: 0) {
             MacNote(
                 title: "Match the rewrite to the app you're in",
-                message: "Dimmy detects the focused app and applies its rule before pasting. Slack gets Imbruttito, Outlook gets Professional, Xcode gets nothing — your call. Rules are evaluated top-down; the first match wins.",
+                message: "Dimmy detects the focused app and applies its rule before pasting. Slack gets Imbruttito, Outlook gets Professional, Xcode gets nothing, your call. Rules are evaluated top-down; the first match wins.",
                 systemImage: "info.circle.fill"
             )
             .padding(.bottom, 8)
@@ -42,7 +42,7 @@ struct MacRulesPage: View {
         .onAppear { reloadFromAppState() }
         .onChange(of: appState.appRules) { _, _ in
             // Another component (e.g. licensing flow) might have
-            // refreshed the config — keep our local mirror in sync.
+            // refreshed the config, keep our local mirror in sync.
             // Skipping the persist on this path is automatic because we
             // copy without mutating.
             reloadFromAppState()
@@ -65,7 +65,7 @@ struct MacRulesPage: View {
             MacTile {
                 MacRow(
                     "Foreground capture",
-                    description: "Active — rules are evaluated top-down at hotkey-down.",
+                    description: "Active, rules are evaluated top-down at hotkey-down.",
                     icon: "rectangle.3.group.fill",
                     iconBackground: Color(red: 0.20, green: 0.78, blue: 0.35),
                     showsDivider: false
@@ -110,7 +110,7 @@ struct MacRulesPage: View {
                 .foregroundStyle(Color.macTextTertiary)
             Text("No rules yet.")
                 .font(.system(size: 13))
-            Text("Click \"Load defaults\" to ship with sensible Slack / Teams / Outlook / VS Code rules — or build your own from scratch.")
+            Text("Click \"Load defaults\" to ship with sensible Slack / Teams / Outlook / VS Code rules, or build your own from scratch.")
                 .font(.system(size: 11))
                 .foregroundStyle(Color.macTextSecondary)
                 .multilineTextAlignment(.center)
@@ -124,7 +124,7 @@ struct MacRulesPage: View {
     @ViewBuilder
     private func ruleRow(at index: Int, rule: AppRule) -> some View {
         HStack(spacing: 10) {
-            // Drag handle — three-line glyph the user grabs to reorder.
+            // Drag handle, three-line glyph the user grabs to reorder.
             // The whole row is a drag source, but the handle gives the
             // affordance + keeps clicks on textfields / pickers from
             // accidentally starting a drag (we only attach .onDrag to
@@ -266,7 +266,7 @@ struct MacRulesPage: View {
 
     private func loadDefaults() {
         // Append-without-duplicates so the user doesn't lose hand-built
-        // rules when they explore the defaults. Match by bundle id —
+        // rules when they explore the defaults. Match by bundle id , 
         // case-sensitive per Apple convention.
         var existing = Set(appState.appRules.map { $0.matchPattern })
         for rule in AppRulesDefaults.macV1 where !existing.contains(rule.matchPattern) {

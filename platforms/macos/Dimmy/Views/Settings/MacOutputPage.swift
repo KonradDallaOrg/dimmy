@@ -1,7 +1,7 @@
 import SwiftUI
 
-// Output — LLM enhancement style + provider + paste behaviour. Style
-// chips replace the old Picker — coloured swatches make the dozen
+// Output, LLM enhancement style + provider + paste behaviour. Style
+// chips replace the old Picker, coloured swatches make the dozen
 // options scannable. Sub-mode (cloud / on-device) and provider routing
 // follow the design's two-tier layout.
 
@@ -11,7 +11,7 @@ struct MacOutputPage: View {
     @State private var llmKeyInput: String = ""
     @State private var showLlmKeyField: Bool = false
 
-    // Recap-vendor key save — separate field from the dictation
+    // Recap-vendor key save, separate field from the dictation
     // llmKeyInput. Routes to `dimmy_save_llm_provider_key` under
     // KeyringScope::Recap(<recap_provider>), leaving the dictation
     // llm_api_url + dictation key untouched. Used when the user
@@ -68,7 +68,7 @@ struct MacOutputPage: View {
         return appState.hasUpstreamKey(forLlmUrl: appState.llmApiUrl)
     }
 
-    /// Human-readable label for the STT provider — used in the
+    /// Human-readable label for the STT provider, used in the
     /// "Use same \(provider) key" description so the user knows what
     /// the toggle actually reuses.
     private var sttProviderLabel: String {
@@ -87,15 +87,15 @@ struct MacOutputPage: View {
 
     private var authMethodDescription: String {
         appState.llmAuthMethod == "subscription"
-            ? "Claude Pro / Team / Max — routed through the local `claude` CLI. No API key needed."
-            : "Direct Anthropic API key — pay-as-you-go billing."
+            ? "Claude Pro / Team / Max, routed through the local `claude` CLI. No API key needed."
+            : "Direct Anthropic API key, pay-as-you-go billing."
     }
 
     /// Side-effects of flipping the auth-method radio: if the user
     /// moves to API key while the URL is the magic `claude-code://`
     /// (which Rust still routes through the subscription CLI), swap
     /// it for the real Anthropic endpoint so the API-key path is
-    /// actually used. Going the other direction we keep the URL —
+    /// actually used. Going the other direction we keep the URL , 
     /// Rust only checks `auth_method == "subscription"`.
     private func normalizeLlmUrlForAuth(_ method: String) {
         if method == "api_key" && appState.llmApiUrl.hasPrefix("claude-code://") {
@@ -111,15 +111,19 @@ struct MacOutputPage: View {
             rewriteStyleGroup
             llmModeGroup
             recapModelGroup
-            pasteboardGroup
 
+            // Per settings-map.md: CLIPBOARD and ADVANCED LLM both
+            // live behind Advanced. Pasteboard is a single toggle
+            // ("Keep in clipboard history") which 95% of users
+            // never change, perfect Advanced fodder.
             if appState.showAdvanced {
+                pasteboardGroup
                 advancedLlmGroup
             }
         }
     }
 
-    /// Recap effective provider tag — derived purely from the chosen
+    /// Recap effective provider tag, derived purely from the chosen
     /// recap model id. claude-* → anthropic, gpt-/o3 → openai,
     /// gemini-* → gemini, "" (Auto) or unknown → "" (falls back to
     /// the dictation provider in the dispatcher).
@@ -156,7 +160,7 @@ struct MacOutputPage: View {
     /// True when a Recap-scope key for the chosen vendor is already
     /// saved in the keystore. Drives the green ✓ next to the recap
     /// key field. Mirrors Win `HasRecapKey` (SettingsWindow.xaml.cs:3771)
-    /// which reads `has_<vendor>_recap_key` — the dedicated Recap
+    /// which reads `has_<vendor>_recap_key`, the dedicated Recap
     /// keystore scope, separate from the LLM-scope and STT-scope keys.
     private var recapKeyAlreadySaved: Bool {
         let vendor = recapProviderTag
@@ -187,9 +191,9 @@ struct MacOutputPage: View {
 
     /// True when the recap call is effectively routed through the
     /// Anthropic subscription (Claude Code CLI). When active, the
-    /// Recap key UI is entirely hidden — the CLI handles its own auth.
+    /// Recap key UI is entirely hidden, the CLI handles its own auth.
     /// Win parity: SettingsWindow.xaml.cs:3686.
-    /// Recap auth is INDEPENDENT of dictation since 2026-05-16 — the
+    /// Recap auth is INDEPENDENT of dictation since 2026-05-16, the
     /// previous "empty == inherit from llm_auth_method" loop caused
     /// the dictation=subscription + recap=Gemini bug where the Gemini
     /// model was routed to the `claude` CLI ("HTTP 1" error).
@@ -212,11 +216,11 @@ struct MacOutputPage: View {
     ///   - recap vendor is known (cloud, not Auto/Local)
     ///   - subscription path is NOT active (then no key needed at all)
     ///   - an upstream key for this vendor exists in LLM scope or
-    ///     STT scope (otherwise the toggle has nothing to reuse — we
+    ///     STT scope (otherwise the toggle has nothing to reuse, we
     ///     show the key field directly instead)
     ///
     /// Note the toggle ALSO appears when the recap vendor matches the
-    /// LLM vendor — user reported they couldn't enter a dedicated
+    /// LLM vendor, user reported they couldn't enter a dedicated
     /// recap key when recap was same-vendor as LLM. Win parity: the
     /// matrix in `UpdateRecapKeyCardVisibility` is gated on "upstream
     /// key exists", not on "vendor mismatch".
@@ -241,7 +245,7 @@ struct MacOutputPage: View {
     /// control). Routes to `KeyringScope::Recap(<vendor>)` without
     /// touching the dictation llm_api_url. Empty key clears the entry.
     ///
-    /// We deliberately DON'T guard on `vendor != llmProviderTag` —
+    /// We deliberately DON'T guard on `vendor != llmProviderTag` , 
     /// the user is allowed to store a separate Recap-scope key even
     /// when same-vendor as the LLM (e.g. different sub-account for
     /// billing/quota isolation). When same-vendor + toggle ON, the
@@ -261,14 +265,14 @@ struct MacOutputPage: View {
         }
         if rc == 0 {
             recapKeyInput = ""
-            // No explicit refresh needed — `recapKeyAlreadySaved`
+            // No explicit refresh needed, `recapKeyAlreadySaved`
             // reads `dimmy_get_config_json` on demand each render.
         } else {
             NSLog("[Auth] dimmy_save_llm_provider_key rc=\(rc) provider=\(vendor)")
         }
     }
 
-    /// Resolve what "Auto" actually means right now — the dictation
+    /// Resolve what "Auto" actually means right now, the dictation
     /// LLM's model id. Lets the picker show the inherited target
     /// instead of the opaque "match LLM provider" label.
     private var autoResolutionLabel: String {
@@ -280,7 +284,7 @@ struct MacOutputPage: View {
     /// it will dispatch to right now, so the user sees what's going to
     /// run without having to read the description below.
     private func displayLabel(for opt: RecapModelOption) -> String {
-        opt.id.isEmpty ? "Auto — \(autoResolutionLabel)" : opt.label
+        opt.id.isEmpty ? "Auto, \(autoResolutionLabel)" : opt.label
     }
 
     /// Meeting / long-dictation recap model picker. Always visible so a
@@ -295,7 +299,7 @@ struct MacOutputPage: View {
                 MacRow(
                     "Recap model",
                     description: "Auto inherits \(autoResolutionLabel).",
-                    hint: "Used for the meeting recap pipeline and the long-dictation auto-recap. Auto follows your dictation LLM. Pick a flagship Anthropic / Gemini / OpenAI for best recap quality, or run it locally on a Gemma/Phi model — download one under Voice → Local model, then set this app's LLM to local to keep the transcript offline.",
+                    hint: "Used for the meeting recap pipeline and the long-dictation auto-recap. Auto follows your dictation LLM. Pick a flagship Anthropic / Gemini / OpenAI for best recap quality, or run it locally on a Gemma/Phi model, download one under Voice → Local model, then set this app's LLM to local to keep the transcript offline.",
                     showsDivider: false
                 ) {
                     Picker("", selection: Binding<String>(
@@ -328,7 +332,7 @@ struct MacOutputPage: View {
                         if !appState.recapModelOverride.isEmpty,
                            !RecapModelOption.curated.contains(where: { $0.id == appState.recapModelOverride }) {
                             Divider()
-                            Label("Custom — \(appState.recapModelOverride)",
+                            Label("Custom, \(appState.recapModelOverride)",
                                   systemImage: "wrench.adjustable")
                                 .tag(appState.recapModelOverride)
                         }
@@ -338,7 +342,7 @@ struct MacOutputPage: View {
                     .frame(minWidth: 280)
                 }
 
-                // Subscription toggle for the recap call site —
+                // Subscription toggle for the recap call site , 
                 // only appears when (a) recap model is Anthropic AND
                 // (b) Claude Code integration is actually connected.
                 // For any other recap provider the toggle is hidden
@@ -350,20 +354,20 @@ struct MacOutputPage: View {
                 if recapSubscriptionAvailable {
                     MacRow(
                         "Use Anthropic subscription for recap",
-                        hint: "Routes the recap LLM call through the local `claude` CLI (Pro / Team / Max). Dictation rewrite keeps its own auth method. Recommended — the subscription cost is amortized over the recap's longer inference window.",
+                        hint: "Routes the recap LLM call through the local `claude` CLI (Pro / Team / Max). Dictation rewrite keeps its own auth method. Recommended, the subscription cost is amortized over the recap's longer inference window.",
                         showsDivider: recapUseSameKeyToggleShouldShow || recapKeyFieldShouldShow
                     ) {
                         Toggle("", isOn: Binding(
                             // Recap auth is independent of dictation
                             // since 2026-05-16. GET reads the literal
-                            // recap_auth_method only — no inheritance.
+                            // recap_auth_method only, no inheritance.
                             // Empty == api_key (default).
                             get: {
                                 appState.recapAuthMethod == "subscription"
                             },
                             // SET writes an EXPLICIT choice. We still
                             // write "api_key" for OFF (not "") so the
-                            // field is unambiguous in config.json —
+                            // field is unambiguous in config.json , 
                             // an empty string is also accepted by the
                             // Rust core as api_key, but explicit values
                             // are easier to grep in logs.
@@ -379,7 +383,7 @@ struct MacOutputPage: View {
 
                 // Key reuse toggle for the recap call. Appears whenever
                 // an upstream key for the recap vendor is already in
-                // the keystore (LLM-scope or STT-scope) — same-vendor
+                // the keystore (LLM-scope or STT-scope), same-vendor
                 // case too (LLM = Anthropic + Recap = Anthropic). Default
                 // ON; user can flip it OFF to force a dedicated
                 // Recap-scope key below. Win parity:
@@ -406,7 +410,7 @@ struct MacOutputPage: View {
                 // recap vendor is known AND (no upstream key exists,
                 // OR the user toggled "use same key" OFF above). The
                 // user CAN store a separate recap key even when same-
-                // vendor as the LLM — useful for splitting billing or
+                // vendor as the LLM, useful for splitting billing or
                 // routing recap through a different sub-account. Writes
                 // via `dimmy_save_llm_provider_key("recap", vendor, key)`.
                 // Win parity: SettingsWindow.xaml.cs:3795-3823.
@@ -455,7 +459,7 @@ struct MacOutputPage: View {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack(spacing: 4) {
                         Text("Style").font(.system(size: 13))
-                        MacInfoButton(text: "After transcribing, Dimmy rewrites your text with the active style before pasting. \"Off\" skips the LLM call entirely — what you said is what gets pasted.")
+                        MacInfoButton(text: "After transcribing, Dimmy rewrites your text with the active style before pasting. \"Off\" skips the LLM call entirely, what you said is what gets pasted.")
                     }
                     chipFlow
                 }
@@ -495,7 +499,7 @@ struct MacOutputPage: View {
             MacTile {
                 MacRow(
                     "Mode",
-                    hint: "On device runs the rewrite on a local Gemma / Phi model (download required). Cloud sends the transcript to your chosen LLM vendor — faster and usually higher quality but it leaves the machine."
+                    hint: "On device runs the rewrite on a local Gemma / Phi model (download required). Cloud sends the transcript to your chosen LLM vendor, faster and usually higher quality but it leaves the machine."
                 ) {
                     Picker("", selection: Binding(
                         get: { appState.llmMode },
@@ -570,7 +574,7 @@ struct MacOutputPage: View {
                                     ? "Claude Pro / Team / Max."
                                     : "Direct API key, pay-as-you-go.",
                                 hint: appState.llmAuthMethod == "subscription"
-                                    ? "Routes LLM rewrite via the local `claude` CLI. Slower (~5-7 s subprocess cold-start per call) but no credit consumed."
+                                    ? "Routes LLM rewrite via the local `claude` CLI. Slower (about 5-7 s subprocess cold-start per call) but no credit consumed."
                                     : "Direct Anthropic API call billed per token. Lower latency than the subscription path; you pay for every rewrite.",
                                 showsDivider: appState.llmAuthMethod == "subscription" || sameKeyShouldShow
                             ) {
@@ -612,7 +616,7 @@ struct MacOutputPage: View {
                             "Subscription connection",
                             description: appState.claudeCodeReady
                                 ? "✓ Connected via Settings → Integrations."
-                                : "⚠ Not connected — calls will fail.",
+                                : "⚠ Not connected, calls will fail.",
                             hint: appState.claudeCodeReady
                                 ? "Sign-in and disconnect live in Settings → Integrations. The token is read on every LLM call via the local `claude` CLI; Dimmy never stores or sees its contents."
                                 : "Subscription is selected but Claude Code isn't signed in yet. Open Settings → Integrations to connect, otherwise every LLM call will return an error.",
@@ -649,7 +653,7 @@ struct MacOutputPage: View {
                                 "LLM API key",
                                 description: "Encrypted locally.",
                                 hint: sameKeyShouldShow
-                                    ? "Dedicated LLM key — used because the toggle above is off. Stored at ~/.config/dimmy/keys.enc with AES-256-GCM."
+                                    ? "Dedicated LLM key, used because the toggle above is off. Stored at ~/.config/dimmy/keys.enc with AES-256-GCM."
                                     : "STT and LLM use different vendors, so a dedicated LLM key is required. Stored at ~/.config/dimmy/keys.enc with AES-256-GCM.",
                                 showsDivider: showLlmKeyField
                             ) {
@@ -689,7 +693,7 @@ struct MacOutputPage: View {
                                 refreshLocalLlmStatus()
                             }
                         )) {
-                            // Gemma 4 family — same catalogue as
+                            // Gemma 4 family, same catalogue as
                             // core/src/local_llm.rs AVAILABLE_LLM_MODELS.
                             // Order: small→large so the dropdown lines up
                             // with VRAM requirements top-to-bottom.
@@ -698,7 +702,7 @@ struct MacOutputPage: View {
                             Text("Gemma 4 E4B Q3 · 4.1 GB").tag("gemma-4-E4B-it-Q3_K_M.gguf")
                             Text("Gemma 4 E4B Q4 · 5.0 GB · recommended").tag("gemma-4-E4B-it-Q4_K_M.gguf")
                             Text("Gemma 4 E4B Q8 · 8.2 GB · max quality").tag("gemma-4-E4B-it-Q8_0.gguf")
-                            // Phi-4 Mini — multilingual fallback
+                            // Phi-4 Mini, multilingual fallback
                             Text("Phi-4 Mini Q4 · 2.5 GB").tag("phi-4-mini-instruct-q4_k_m.gguf")
                         }
                         .labelsHidden()
@@ -741,7 +745,7 @@ struct MacOutputPage: View {
             localLlmExists = false
             return
         }
-        // Check via the listLLMModels payload — each entry has `downloaded`.
+        // Check via the listLLMModels payload, each entry has `downloaded`.
         if let arr = DimmyCore.shared.listLLMModels() {
             let me = arr.first(where: {
                 ($0["filename"] as? String) == appState.localLlmModel
@@ -795,7 +799,7 @@ struct MacOutputPage: View {
 
     private func saveLlmKey() {
         guard !llmKeyInput.isEmpty else { return }
-        // includeLlm:true — user is wiring up the LLM key and the
+        // includeLlm:true, user is wiring up the LLM key and the
         // RECAP section + LLM URL fields must travel with it, else
         // the Rust core sees only `llm_api_key` and the URL/model
         // chosen in this same UI step never makes it to disk.
@@ -811,7 +815,7 @@ struct MacOutputPage: View {
 
     /// Inline SecureField revealed under "Recap API key" when the user
     /// opts in via the Add/Replace button. Same shape as
-    /// `apiKeyEntryRow` (STT) and `llmKeyEntryRow` (LLM) — uniform UI
+    /// `apiKeyEntryRow` (STT) and `llmKeyEntryRow` (LLM), uniform UI
     /// across the three key sections per the user's "stessi componenti"
     /// rule. The Save action calls the shared
     /// `dimmy_save_llm_provider_key("recap", vendor, key)` FFI and
@@ -869,7 +873,7 @@ struct MacOutputPage: View {
         }
     }
 
-    // MARK: Advanced — tone, translate, custom prompt
+    // MARK: Advanced, tone, translate, custom prompt
 
     private var advancedLlmGroup: some View {
         Group {
@@ -877,7 +881,7 @@ struct MacOutputPage: View {
             MacTile {
                 MacRow(
                     "Tone",
-                    hint: "Adjusts how formal or casual the LLM rewrite sounds. Applied on top of the active style — e.g. Professional + Casual = approachable email."
+                    hint: "Adjusts how formal or casual the LLM rewrite sounds. Applied on top of the active style, e.g. Professional + Casual = approachable email."
                 ) {
                     Picker("", selection: Binding(
                         get: { appState.llmTone },
@@ -896,7 +900,7 @@ struct MacOutputPage: View {
 
                 MacRow(
                     "Translate output to",
-                    hint: "Translates the LLM rewrite to this language. The pill's scroll wheel changes the same setting — handy mid-dictation."
+                    hint: "Translates the LLM rewrite to this language. The pill's scroll wheel changes the same setting, handy mid-dictation."
                 ) {
                     Picker("", selection: Binding(
                         get: { appState.llmTranslateTo },
@@ -921,7 +925,7 @@ struct MacOutputPage: View {
                     HStack(spacing: 4) {
                         Text("Custom prompt")
                             .font(.system(size: 13))
-                        MacInfoButton(text: "Free-form instruction prepended to the LLM prompt when the active style is Custom. Goes through verbatim — use it to set persona, audience, or strict formatting rules.")
+                        MacInfoButton(text: "Free-form instruction prepended to the LLM prompt when the active style is Custom. Goes through verbatim, use it to set persona, audience, or strict formatting rules.")
                     }
                     TextEditor(text: Binding(
                         get: { appState.llmCustomPrompt },
@@ -984,7 +988,7 @@ struct MacOutputPage: View {
         // MacOutputPage owns LLM provider + Recap settings. ALL its
         // saves must include both flags, otherwise the Picker /
         // Toggle / TextField interactions in this page are silently
-        // dropped. Found 2026-05-15 — same bug pattern as Notion.
+        // dropped. Found 2026-05-15, same bug pattern as Notion.
         DimmyCore.shared.setConfig(
             appState.toRustConfig(includeLlm: true, includeRecap: true)
         )

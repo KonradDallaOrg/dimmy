@@ -1,6 +1,6 @@
 import SwiftUI
 
-// About — hero with app icon + version + check-for-updates / release
+// About, hero with app icon + version + check-for-updates / release
 // notes, then Updates settings (auto-update, channel) and Resources
 // links. Footer credit "Made with [Anthropic mark] Claude Code" matches
 // the Windows v3 footer.
@@ -15,7 +15,10 @@ struct MacAboutPage: View {
                 .padding(.bottom, 8)
             updatesGroup
             resourcesGroup
-            anthropicCredit
+            // "Made with Claude Code" credit removed per Win redesign
+            // (commit 4080ff06). The footer is not a setting and ate
+            // a row of attention on every Settings open without
+            // serving the user, anti-enshittification cut.
         }
     }
 
@@ -84,7 +87,7 @@ struct MacAboutPage: View {
                 }
                 MacRow(
                     "Update channel",
-                    hint: "Stable only is the safer default. Prerelease also offers staging builds with new features earlier — expect occasional regressions.",
+                    hint: "Stable only is the safer default. Prerelease also offers staging builds with new features earlier, expect occasional regressions.",
                     showsDivider: false
                 ) {
                     Picker("", selection: $updates.channel) {
@@ -148,7 +151,7 @@ struct MacAboutPage: View {
             Text("Made with")
                 .font(.system(size: 12))
                 .foregroundStyle(Color.macTextTertiary)
-            // Same SVG path data as Windows About panel — bundled as a
+            // Same SVG path data as Windows About panel, bundled as a
             // vector asset so it stays crisp at any size.
             Image("ClaudeMark")
                 .resizable()

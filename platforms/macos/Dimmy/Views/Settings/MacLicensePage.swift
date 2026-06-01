@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-// License — Tahoe Settings page mirroring Windows v3 Settings → License.
+// License, Tahoe Settings page mirroring Windows v3 Settings → License.
 //
 // Layout: status hero → activation form → capability grid → devices list →
 // fallback paste-code (collapsed) → server URL override (collapsed).
@@ -123,7 +123,7 @@ struct MacLicensePage: View {
                         "Your subscription on Stripe will stay active and will keep " +
                         "billing on its renewal date. To cancel billing, use 'Manage subscription' instead.\n\n" +
                         "If you sign out, your activation token on this device is removed. " +
-                        "You can sign in again from the same email — we'll resend the magic link."
+                        "You can sign in again from the same email, we'll resend the magic link."
                     alert.alertStyle = .warning
                     alert.addButton(withTitle: "Sign out")
                     alert.addButton(withTitle: "Cancel")
@@ -146,10 +146,10 @@ struct MacLicensePage: View {
     }
 
     private var tierBadge: some View {
-        // Win11 Fluent badge style: subtle tinted fill (~14%), matching
+        // Win11 Fluent badge style: subtle tinted fill (about 14%), matching
         // 35% tinted stroke, tint-colored text. Same recipe as
         // SettingsWindow.xaml.cs::ApplyLicenseHero so both platforms
-        // read at identical visual weight — no saturated solid pills.
+        // read at identical visual weight, no saturated solid pills.
         Text(tierBadgeText)
             .font(.system(size: 11, weight: .semibold, design: .rounded))
             .tracking(0.6)
@@ -185,11 +185,11 @@ struct MacLicensePage: View {
     }
 
     private var statusTint: Color {
-        // Color is reserved for *positive* state — TrialActive (orange,
+        // Color is reserved for *positive* state, TrialActive (orange,
         // "act soon") and Active (green, "you're paid"). Everything else
         // (NotFound, TrialExpired, Expired, Invalid, Suspended) shows as
         // neutral gray: a license problem isn't an error to alarm about,
-        // it's just a state. Red was reading as "something is broken" —
+        // it's just a state. Red was reading as "something is broken" , 
         // exactly the wrong vibe for a user who simply hasn't activated.
         switch status.kind {
         case "TrialActive":   return Color(red: 1.00, green: 0.62, blue: 0.04)   // orange
@@ -217,15 +217,15 @@ struct MacLicensePage: View {
 
     private var statusHeadline: String {
         switch status.kind {
-        case "Unrestricted":  return "Source build — licensing disabled"
+        case "Unrestricted":  return "Source build, licensing disabled"
         case "NotFound":      return "No license on this device"
         case "TrialActive":   return "Trial active"
         case "TrialExpired":  return "Trial ended"
         case "Active":
             switch status.tier {
-            case "monthly":  return "Pro license — Monthly"
-            case "annual":   return "Pro license — Annual"
-            case "lifetime": return "Pro license — Lifetime (3y)"
+            case "monthly":  return "Pro license, Monthly"
+            case "annual":   return "Pro license, Annual"
+            case "lifetime": return "Pro license, Lifetime (3y)"
             default:         return "Pro license"
             }
         case "Expired":   return "License expired"
@@ -265,9 +265,9 @@ struct MacLicensePage: View {
         }
     }
 
-    // MARK: Buy / Upgrade — three-tier picker shown for NotFound,
+    // MARK: Buy / Upgrade, three-tier picker shown for NotFound,
     // TrialActive, TrialExpired, Expired. Hidden when Active (the user
-    // already has a license — they go to "Manage subscription") or in
+    // already has a license, they go to "Manage subscription") or in
     // dev/Suspended/Invalid states.
 
     @ViewBuilder
@@ -278,7 +278,7 @@ struct MacLicensePage: View {
                 MacRow(
                     buyDetail,
                     description: "Stripe handles payment.",
-                    hint: "Stripe processes payment + tax. The moment payment clears we email you a magic link that activates this Mac in one click — no manual code copy.",
+                    hint: "Stripe processes payment + tax. The moment payment clears we email you a magic link that activates this Mac in one click, no manual code copy.",
                     showsDivider: false
                 ) {
                     HStack(spacing: 8) {
@@ -317,7 +317,7 @@ struct MacLicensePage: View {
                     }
                 }
                 if showPortalHint {
-                    MacRow("Need to downgrade, cancel, or update payment? Use the “Manage subscription” button above — it opens the secure Stripe billing portal.",
+                    MacRow("Need to downgrade, cancel, or update payment? Use the “Manage subscription” button above, it opens the secure Stripe billing portal.",
                            description: "",
                            showsDivider: false) {
                         EmptyView()
@@ -333,7 +333,7 @@ struct MacLicensePage: View {
         }
     }
 
-    /// Tier-aware visibility — see Win counterpart in
+    /// Tier-aware visibility, see Win counterpart in
     /// SettingsWindow.xaml.cs::ApplyBuyCardForStatus for the matrix.
     /// Active{lifetime} hides everything (lifetime is the ceiling).
     /// Active{monthly} hides Monthly. Active{annual} hides Monthly + Annual.
@@ -402,7 +402,7 @@ struct MacLicensePage: View {
         switch status.kind {
         case "NotFound":     return "Buy a license"
         case "TrialActive":  return "Upgrade to Pro"
-        case "TrialExpired": return "Trial ended — buy to continue"
+        case "TrialExpired": return "Trial ended, buy to continue"
         case "Expired":      return "Renew your license"
         case "Suspended":    return "Resume your license"
         case "Active":
@@ -445,7 +445,7 @@ struct MacLicensePage: View {
         // monthly⇄annual on an Active sub is a Stripe subscription update
         // (proration, no second charge for the period), NOT a new checkout.
         // Sending users through Checkout for a tier-switch was billing them
-        // again while leaving the old sub running — see PR description.
+        // again while leaving the old sub running, see PR description.
         let currentTier = status.tier?.lowercased()
         let isPlanChange = status.kind == "Active"
             && (currentTier == "monthly" || currentTier == "annual")
@@ -456,17 +456,17 @@ struct MacLicensePage: View {
             // existing sub (proration on next invoice, no second card
             // prompt) rather than opening a fresh Checkout. Without
             // it the click 'flagga istantaneamente' the new tier and
-            // the silent UX feels off — same dialog also on Win.
+            // the silent UX feels off, same dialog also on Win.
             let confirmed = await MainActor.run { () -> Bool in
                 let alert = NSAlert()
                 alert.messageText = "Switch plan to \(tier.capitalized)?"
                 alert.informativeText =
                     "You're already subscribed (current: \(currentTier?.capitalized ?? "")).\n\n" +
                     "Switching to \(tier.capitalized) mutates your existing subscription:\n\n" +
-                    "• No new payment now — Stripe reuses your saved card.\n" +
+                    "• No new payment now, Stripe reuses your saved card.\n" +
                     "• Stripe issues a prorated invoice on the next billing date " +
                     "(credit for unused days of the old plan, debit for the new one).\n" +
-                    "• No magic-link email — your license stays active, just the tier changes."
+                    "• No magic-link email, your license stays active, just the tier changes."
                 alert.alertStyle = .informational
                 alert.addButton(withTitle: "Switch to \(tier.capitalized)")
                 alert.addButton(withTitle: "Cancel")
@@ -503,7 +503,7 @@ struct MacLicensePage: View {
         // minting the Stripe Checkout URL. The server uses the email
         // to look up an existing license and 409 BEFORE Stripe charges.
         // Pre-fill with the previously-entered email (persisted in
-        // AppState; survives Sign out — UX convenience, no auth weight).
+        // AppState; survives Sign out, UX convenience, no auth weight).
         let prefilled = appState.buyerEmail ?? ""
         let promptedEmail: String? = await MainActor.run { () -> String? in
             let alert = NSAlert()
@@ -547,7 +547,7 @@ struct MacLicensePage: View {
                     alert.messageText = "You already have a \(curTier) license"
                     alert.informativeText =
                         "The email \(email) is already linked to an active \(curTier) license. " +
-                        "We can resend the activation magic link for that license — " +
+                        "We can resend the activation magic link for that license, " +
                         "no new payment, no second sub."
                     alert.alertStyle = .informational
                     alert.addButton(withTitle: "Send magic link")
@@ -689,7 +689,7 @@ struct MacLicensePage: View {
                     MacRow(
                         "Activation code",
                         description: "32-char code or full magic-link URL.",
-                        hint: "Use this when the magic link from your email doesn't open Dimmy automatically — happens on machines where dimmy:// isn't registered as a URL handler. Paste either the bare code or the whole URL; we extract the code."
+                        hint: "Use this when the magic link from your email doesn't open Dimmy automatically, happens on machines where dimmy:// isn't registered as a URL handler. Paste either the bare code or the whole URL; we extract the code."
                     ) {
                         TextField("32-char code or magic-link URL", text: $pasteCode)
                             .textFieldStyle(.roundedBorder)
@@ -728,7 +728,7 @@ struct MacLicensePage: View {
 
     /// Show the "Manage subscription" button only for paid tiers that
     /// have a Stripe billing relationship attached. Trials don't, and
-    /// Unrestricted (source build) doesn't. Lifetime DOES — even if it
+    /// Unrestricted (source build) doesn't. Lifetime DOES, even if it
     /// can't be cancelled, the portal lets the user view the invoice
     /// and update payment method for future purchases.
     private var isManageableTier: Bool {
@@ -741,9 +741,9 @@ struct MacLicensePage: View {
 
     /// Open Stripe Customer Portal via the licensing FFI. Goes through
     /// the same server URL the rest of the FFI uses (default
-    /// localhost:8787 in dev, license.dimmy.app in prod) — no hardcoded
+    /// localhost:8787 in dev, license.dimmy.app in prod), no hardcoded
     /// URL, no manual file I/O for the token. The portal session is
-    /// single-tab + ~5 min lifetime; we never store the URL.
+    /// single-tab + about 5 min lifetime; we never store the URL.
     private func openBillingPortal() async {
         await MainActor.run {
             manageBusy = true
@@ -801,7 +801,7 @@ struct MacLicensePage: View {
         if link.hasPrefix("dimmy://") {
             trialStatus = "Activating via magic link…"
             if let url = URL(string: link) { NSWorkspace.shared.open(url) }
-            // Poll status briefly — URL scheme dispatch redeems async.
+            // Poll status briefly, URL scheme dispatch redeems async.
             for _ in 0..<20 {
                 try? await Task.sleep(nanoseconds: 400_000_000)
                 let s = DimmyCore.shared.licenseStatus()
@@ -832,7 +832,7 @@ struct MacLicensePage: View {
         // same code first (when the user opened the magic link in a browser
         // AND pasted the code here). The server then 409s the second redeem
         // with "code already consumed". If the local file is now active,
-        // treat it as success — the device is licensed regardless of which
+        // treat it as success, the device is licensed regardless of which
         // call won the race.
         let postStatus = DimmyCore.shared.licenseStatus()
         let alreadyActive = postStatus.kind == "TrialActive" || postStatus.kind == "Active"
@@ -878,7 +878,7 @@ struct MacLicensePage: View {
     }
 
     private func formatDate(_ epoch: Int64) -> String {
-        guard epoch > 0 else { return "—" }
+        guard epoch > 0 else { return "-" }
         let d = Date(timeIntervalSince1970: TimeInterval(epoch))
         let fmt = DateFormatter()
         fmt.dateStyle = .short

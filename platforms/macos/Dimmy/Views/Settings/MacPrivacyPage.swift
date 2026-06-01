@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Privacy & data — telemetry toggles, anonymous identifier, feedback
+// Privacy & data, telemetry toggles, anonymous identifier, feedback
 // form, resource links. Mirrors Windows v3 layout. Telemetry on macOS
 // today is disabled by default in the binary; the toggle here is a
 // scaffolded stub awaiting the macOS telemetry FFI hookup (Phase 6).
@@ -40,7 +40,7 @@ struct MacPrivacyPage: View {
 
     // MARK: Audio retention
 
-    /// On-disk retention of the recorded audio. Off by default — opt
+    /// On-disk retention of the recorded audio. Off by default, opt
     /// in for users who want the audio next to each history row (lets
     /// them replay a past dictation). Updates round-trip through the
     /// Rust core which owns the prune thread.
@@ -51,7 +51,7 @@ struct MacPrivacyPage: View {
                 MacRow(
                     "Save audio with each history row",
                     description: "Off by default.",
-                    hint: "When on, each transcription's WAV is saved alongside the row at 16 kHz mono in ~/Library/Application Support/dimmy/history_audio. Use the retention controls below to bound disk usage."
+                    hint: "When on, each transcription's audio file is saved alongside the row at 16 kHz mono in ~/Library/Application Support/dimmy/history_audio. Use the retention controls below to bound disk usage."
                 ) {
                     Toggle("", isOn: Binding(
                         get: { appState.saveAudioInHistory },
@@ -66,7 +66,7 @@ struct MacPrivacyPage: View {
                 MacRow(
                     "Keep for",
                     description: "0 = never auto-delete by age.",
-                    hint: "Days before a saved audio file is automatically deleted from the history_audio folder. Doesn't affect the history row itself — only the WAV."
+                    hint: "Days before a saved audio file is automatically deleted from the history_audio folder. Doesn't affect the history row itself, only the WAV."
                 ) {
                     Stepper(value: Binding(
                         get: { Int(appState.historyAudioKeepDays) },
@@ -81,7 +81,7 @@ struct MacPrivacyPage: View {
                 MacRow(
                     "Storage cap",
                     description: "0 = no cap.",
-                    hint: "Maximum size of the history_audio folder in megabytes. Oldest WAVs are deleted first when over the cap, even if they're still within the Keep-for window.",
+                    hint: "Maximum size of the history_audio folder in megabytes. Oldest audio files are deleted first when over the cap, even if they're still within the Keep-for window.",
                     showsDivider: false
                 ) {
                     Stepper(value: Binding(
@@ -172,7 +172,7 @@ struct MacPrivacyPage: View {
 
     private var anonymousIdText: String {
         let id = DimmyCore.shared.telemetryAnonymousId
-        return id.isEmpty ? "—" : id
+        return id.isEmpty ? ", " : id
     }
 
     // MARK: Feedback
@@ -229,7 +229,7 @@ struct MacPrivacyPage: View {
                         // click = consent.
                         //
                         // Feedback rides the Sentry pipeline, gated by the
-                        // CRASH-reporting flag — NOT the analytics flag.
+                        // CRASH-reporting flag, NOT the analytics flag.
                         // Flipping telemetryEnabled left the gate closed →
                         // capture_feedback kept returning -2. Flip
                         // crashReportingEnabled instead.
@@ -272,7 +272,7 @@ struct MacPrivacyPage: View {
             feedbackEmail = ""
             feedbackNeedsEnable = false
         case -2:
-            // Telemetry disabled — offer one-click enable + send.
+            // Telemetry disabled, offer one-click enable + send.
             feedbackStatus = "Feedback sending is off."
             feedbackNeedsEnable = true
         case -3:

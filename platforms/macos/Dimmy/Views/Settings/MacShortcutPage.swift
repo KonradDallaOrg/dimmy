@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Shortcut — hotkey display + push-to-talk vs toggle behaviour. Capture
+// Shortcut, hotkey display + push-to-talk vs toggle behaviour. Capture
 // of new shortcuts reuses the legacy ShortcutSettingsView's recorder via
 // a sheet because rebuilding the modifier-flag capture from scratch is
 // orthogonal to the visual redesign.
@@ -24,7 +24,7 @@ struct MacShortcutPage: View {
             // Phase 4: dedicated capture sheet. For now jump back to the
             // legacy ShortcutSettingsView in a sheet so users can still
             // record a new combo without leaving the Tahoe Settings.
-            // The legacy view has no Close button of its own — wrap it
+            // The legacy view has no Close button of its own, wrap it
             // with a header so the sheet is dismissible.
             VStack(alignment: .leading, spacing: 0) {
                 HStack {
@@ -51,7 +51,7 @@ struct MacShortcutPage: View {
                 MacRow(
                     "Activation hotkey",
                     description: "Press Change… to capture a new combo.",
-                    hint: "The global keyboard shortcut that starts (and, in toggle mode, stops) recording. Captured combos require at least one modifier — plain letters would conflict with normal typing.",
+                    hint: "The global keyboard shortcut that starts (and, in toggle mode, stops) recording. Captured combos require at least one modifier, plain letters would conflict with normal typing.",
                     icon: "keyboard.fill",
                     iconBackground: Color(red: 0.04, green: 0.52, blue: 1.00)
                 ) {
@@ -66,7 +66,7 @@ struct MacShortcutPage: View {
 
                 MacRow(
                     "Behavior",
-                    hint: "Push-to-talk records while the hotkey is held — release to transcribe. Toggle starts on the first press and stops on the next press; you can let go in between.",
+                    hint: "Push-to-talk records while the hotkey is held, release to transcribe. Toggle starts on the first press and stops on the next press; you can let go in between.",
                     showsDivider: false
                 ) {
                     Picker("", selection: Binding(
@@ -94,7 +94,7 @@ struct MacShortcutPage: View {
                 MacRow(
                     "Add to dictionary",
                     description: "Select text in any app, then press the combo.",
-                    hint: "Adds the selected word to your custom dictionary so Dimmy biases future transcriptions toward it. macOS Services menu has the same action — right-click any selection.",
+                    hint: "Adds the selected word to your custom dictionary so Dimmy biases future transcriptions toward it. macOS Services menu has the same action, right-click any selection.",
                     icon: "text.badge.plus",
                     iconBackground: Color(red: 0.40, green: 0.73, blue: 0.42),
                     showsDivider: false
@@ -117,7 +117,7 @@ struct MacShortcutPage: View {
             MacTile {
                 MacRow(
                     "CGEventTap status",
-                    hint: "The low-level event tap that lets Dimmy intercept your hotkey from any focused app. Requires Accessibility (and, for Fn-key combos, Input Monitoring) — check Permissions if this stays orange.",
+                    hint: "The low-level event tap that lets Dimmy intercept your hotkey from any focused app. Requires Accessibility (and, for Fn-key combos, Input Monitoring), check Permissions if this stays orange.",
                     showsDivider: false
                 ) {
                     statusBadge
@@ -152,7 +152,7 @@ struct MacShortcutPage: View {
 /// Capture sheet for the "add to dictionary" hotkey. Press any
 /// modifier+letter combo to bind. Mirrors the Win
 /// `DictHotkeyCaptureDialog` semantics: at least one modifier required,
-/// letter must be A–Z. The sheet uses `NSEvent.addLocalMonitorForEvents`
+/// letter must be A-Z. The sheet uses `NSEvent.addLocalMonitorForEvents`
 /// while shown so we don't fight with the global CGEventTap; closes
 /// itself after a valid bind. The persistence side (UserDefaults +
 /// DictHotkeyManager refresh) is driven by `AppState.dictHotkey.didSet`.
@@ -172,7 +172,7 @@ private struct DictHotkeyRecorderSheet: View {
                     .keyboardShortcut(.cancelAction)
             }
 
-            Text("Press a combination — at least one modifier plus a letter. Cmd+Shift+D is the default.")
+            Text("Press a combination, at least one modifier plus a letter. Cmd+Shift+D is the default.")
                 .font(.system(size: 12))
                 .foregroundStyle(Color.macTextSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -221,10 +221,10 @@ private struct DictHotkeyRecorderSheet: View {
     }
 
     private func installMonitor() {
-        // Local key monitor — fires for keys delivered to this window.
+        // Local key monitor, fires for keys delivered to this window.
         // We must consume the event (return nil) so the standard "key
         // beep on unhandled keyDown" doesn't fire for every press.
-        // Explicit `-> NSEvent?` annotation — without it the compiler
+        // Explicit `-> NSEvent?` annotation, without it the compiler
         // sometimes infers `-> NSEvent` from a non-optional code path
         // (depending on Swift version) and refuses the `return nil`s.
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { (event: NSEvent) -> NSEvent? in
@@ -239,7 +239,7 @@ private struct DictHotkeyRecorderSheet: View {
             }
             guard let chars = event.charactersIgnoringModifiers?.uppercased(),
                   let letter = chars.first, letter.isLetter else {
-                lastError = "Use a letter (A–Z)"
+                lastError = "Use a letter (A-Z)"
                 return nil
             }
             appState.dictHotkey = HotkeyCombo(

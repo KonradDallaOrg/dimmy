@@ -8,7 +8,7 @@ import SwiftUI
 //   inline status pill) and a scrollable content area
 // - Sidebar footer with version + Advanced toggle
 //
-// We do NOT render fake traffic lights — the SwiftUI Settings scene gives
+// We do NOT render fake traffic lights, the SwiftUI Settings scene gives
 // us the real ones for free at the window chrome level. The sidebar
 // reserves space at the top so visual alignment matches.
 
@@ -16,10 +16,10 @@ enum MacSettingsTab: String, CaseIterable, Identifiable {
     // Sidebar order mirrors Windows (SettingsWindow.xaml NavigationView.MenuItems):
     // Home → Voice input → Output → Pill overlay → App rules → Shortcut →
     // Recordings → Integrations → Privacy & data → License → About → Advanced.
-    // Permissions is Mac-only (no Win analogue — TCC vs UAC model differ);
+    // Permissions is Mac-only (no Win analogue, TCC vs UAC model differ);
     // we tuck it next to Privacy where it semantically belongs.
-    case home, voice, output, pill, rules, shortcut, history, integrations,
-         privacy, permissions, license, about, advanced
+    case home, voice, output, providers, pill, rules, shortcut, history,
+         integrations, privacy, permissions, license, about, advanced
 
     var id: String { rawValue }
 
@@ -28,6 +28,7 @@ enum MacSettingsTab: String, CaseIterable, Identifiable {
         case .home:         return "Home"
         case .voice:        return "Voice input"
         case .output:       return "Output"
+        case .providers:    return "Providers & keys"
         case .rules:        return "App rules"
         case .history:      return "Recordings"
         case .integrations: return "Integrations"
@@ -37,7 +38,7 @@ enum MacSettingsTab: String, CaseIterable, Identifiable {
         case .privacy:      return "Privacy & data"
         case .license:      return "License"
         case .about:        return "About"
-        case .advanced:     return "Advanced"
+        case .advanced:     return "Debug"
         }
     }
 
@@ -46,10 +47,11 @@ enum MacSettingsTab: String, CaseIterable, Identifiable {
         case .home:         return "Get a quick read on Dimmy and jump to what you need."
         case .voice:        return "How Dimmy hears and transcribes your voice."
         case .output:       return "How Dimmy rewrites and delivers your dictation."
+        case .providers:    return "One card per AI provider, one key per provider."
         case .rules:        return "Auto-switch the rewrite style based on the focused app."
-        case .history:      return "Past dictations — click a row to see Raw / Enhanced and replay audio."
+        case .history:      return "Past dictations, click a row to see Raw / Enhanced and replay audio."
         case .integrations: return "Push your meeting recaps into the tools you already use."
-        case .pill:         return "The floating pill — where it lives and how it looks."
+        case .pill:         return "The floating pill, where it lives and how it looks."
         case .shortcut:     return "The hotkey that starts and stops recording."
         case .permissions:  return "macOS access Dimmy needs to record and paste."
         case .privacy:      return "What leaves your machine, and what doesn't."
@@ -65,6 +67,7 @@ enum MacSettingsTab: String, CaseIterable, Identifiable {
         case .home:         return "house.fill"
         case .voice:        return "mic.fill"
         case .output:       return "text.bubble.fill"
+        case .providers:    return "key.horizontal.fill"
         case .rules:        return "rectangle.3.group.fill"
         case .history:      return "clock.arrow.circlepath"
         case .integrations: return "link"
@@ -83,6 +86,7 @@ enum MacSettingsTab: String, CaseIterable, Identifiable {
         case .home:         return Color(red: 0.04, green: 0.52, blue: 1.00)
         case .voice:        return Color(red: 1.00, green: 0.22, blue: 0.37)
         case .output:       return Color(red: 1.00, green: 0.80, blue: 0.00)
+        case .providers:    return Color(red: 0.48, green: 0.55, blue: 1.00)
         case .rules:        return Color(red: 0.20, green: 0.78, blue: 0.35)
         case .history:      return Color(red: 0.34, green: 0.61, blue: 0.99)
         case .integrations: return Color(red: 0.20, green: 0.20, blue: 0.20)  // Notion-mark black
@@ -115,7 +119,7 @@ struct MacSettingsContainerView: View {
     @State private var savedPulseTask: Task<Void, Never>?
 
     /// Chevrons walk the visible sidebar order (filtered by Advanced + search).
-    /// Disabled at the edges — no wraparound, matches macOS Settings.app.
+    /// Disabled at the edges, no wraparound, matches macOS Settings.app.
     private var canGoBack: Bool {
         guard let i = filteredTabs.firstIndex(of: current) else { return false }
         return i > 0
@@ -126,10 +130,24 @@ struct MacSettingsContainerView: View {
     }
 
     /// Visible tabs filtered by search + Advanced toggle.
+    ///
+    /// Per docs/dev/settings-map.md (the user-filled Simple/Advanced
+    /// matrix) and Win SettingsWindow.xaml nav definition:
+    /// - Always visible (Simple): home, voice, output, shortcut,
+    ///   license, privacy, about, permissions
+    /// - Behind Advanced toggle: pill, rules, history (Recordings),
+    ///   integrations, advanced (Debug)
+    /// - .providers will land here once MacProvidersPage exists.
+    private static let advancedOnlyTabs: Set<MacSettingsTab> = [
+        .pill, .rules, .history, .integrations, .advanced
+    ]
+
     private var filteredTabs: [MacSettingsTab] {
         let q = search.trimmingCharacters(in: .whitespaces).lowercased()
         return MacSettingsTab.allCases.filter { tab in
-            if tab == .advanced && !appState.showAdvanced { return false }
+            if Self.advancedOnlyTabs.contains(tab) && !appState.showAdvanced {
+                return false
+            }
             if q.isEmpty { return true }
             return tab.label.lowercased().contains(q)
         }
@@ -148,7 +166,7 @@ struct MacSettingsContainerView: View {
             if !newValue && current == .advanced { goTo(.home) }
         }
         .onReceive(NotificationCenter.default.publisher(for: .dimmyOpenLicenseTab)) { _ in
-            // AppDelegate posts this after dimmy:// activation succeeds —
+            // AppDelegate posts this after dimmy:// activation succeeds , 
             // bring the user to the License page so they see the result.
             goTo(.license)
         }
@@ -194,7 +212,7 @@ struct MacSettingsContainerView: View {
 
             Divider().opacity(0.5)
 
-            // Staging watermark — visible only on builds with
+            // Staging watermark, visible only on builds with
             // DIMMY_BUILD_FLAVOR=staging. Mirror of the Win sidebar
             // banner (SettingsWindow.xaml::StagingBanner). The yellow
             // stripe + warning glyph is intentional: a tester running
@@ -282,7 +300,7 @@ struct MacSettingsContainerView: View {
                                    : Color.clear)
             )
             .overlay(
-                // Soft inset highlight when active — matches Tahoe nav-active.
+                // Soft inset highlight when active, matches Tahoe nav-active.
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .strokeBorder(Color.white.opacity(isActive ? 0.6 : 0),
                                   lineWidth: 0.5)
@@ -382,6 +400,7 @@ struct MacSettingsContainerView: View {
         case .home:        MacHomePage(appState: appState, onTabChange: goTo)
         case .voice:       MacVoicePage(appState: appState)
         case .output:      MacOutputPage(appState: appState)
+        case .providers:   MacProvidersPage(appState: appState)
         case .rules:       MacRulesPage(appState: appState)
         case .history:     HistorySettingsView(appState: appState)
                               .frame(minHeight: 480)
@@ -434,11 +453,11 @@ struct MacSettingsContainerView: View {
     }
 
     private var providerStatusText: String {
-        // Mirrors design: "● Listening — groq whisper". Falls back to
+        // Mirrors design: "● Listening, groq whisper". Falls back to
         // model name when provider isn't recognised (custom endpoint).
         let provider = appState.sttProvider.displayName
         let model = appState.apiModel
-        return "\(provider) — \(model.split(separator: "-").first.map(String.init) ?? model)"
+        return "\(provider), \(model.split(separator: "-").first.map(String.init) ?? model)"
             .lowercased()
     }
 }

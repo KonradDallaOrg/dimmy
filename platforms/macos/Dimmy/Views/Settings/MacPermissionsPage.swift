@@ -1,7 +1,7 @@
 import AVFoundation
 import SwiftUI
 
-// Permissions — mirrors the onboarding step's logic but rendered in the
+// Permissions, mirrors the onboarding step's logic but rendered in the
 // Tahoe Settings shell so users can review/grant access at any time
 // without re-running onboarding. PermissionsManager is the source of
 // truth; we just bind to its @Published flags and surface CTAs.
@@ -178,7 +178,7 @@ struct MacPermissionsPage: View {
         }
     }
 
-    // MARK: Diagnostics (Advanced) — exposes raw TCC values so we can tell
+    // MARK: Diagnostics (Advanced), exposes raw TCC values so we can tell
     // when a "granted" reading is actually noise (e.g. on cloud/RDP Macs
     // without a real audio device, AVCaptureDevice can report .authorized
     // even though TCC has no entry for the bundle).
@@ -241,7 +241,7 @@ struct MacPermissionsPage: View {
         }
     }
 
-    /// Microphone deep link — Privacy & Security → Microphone.
+    /// Microphone deep link, Privacy & Security → Microphone.
     private func openMicSettings() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
             NSWorkspace.shared.open(url)
