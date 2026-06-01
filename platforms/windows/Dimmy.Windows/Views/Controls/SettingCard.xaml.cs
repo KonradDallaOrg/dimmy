@@ -1,3 +1,4 @@
+using System;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Markup;
@@ -79,6 +80,72 @@ public sealed partial class SettingCard : UserControl
             card.DescriptionText.Visibility = string.IsNullOrEmpty(desc)
                 ? Visibility.Collapsed : Visibility.Visible;
         }
+    }
+
+    public static readonly DependencyProperty InfoTipProperty =
+        DependencyProperty.Register(nameof(InfoTip), typeof(string), typeof(SettingCard),
+            new PropertyMetadata(string.Empty, OnInfoTipChanged));
+
+    /// <summary>Longer "why / how" text revealed behind the ⓘ icon — shown on
+    /// hover (tooltip) and click (flyout). Empty hides the icon.</summary>
+    public string InfoTip
+    {
+        get => (string)GetValue(InfoTipProperty);
+        set => SetValue(InfoTipProperty, value);
+    }
+
+    private static void OnInfoTipChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is SettingCard card)
+        {
+            var tip = e.NewValue as string ?? string.Empty;
+            card.InfoFlyoutText.Text = tip;
+            ToolTipService.SetToolTip(card.InfoButton, string.IsNullOrEmpty(tip) ? null : tip);
+            card._hasTip = !string.IsNullOrEmpty(tip);
+            card.UpdateInfoButton();
+        }
+    }
+
+    public static readonly DependencyProperty HelpUrlProperty =
+        DependencyProperty.Register(nameof(HelpUrl), typeof(string), typeof(SettingCard),
+            new PropertyMetadata(string.Empty, OnHelpUrlChanged));
+
+    /// <summary>"Open full guide →" link shown INSIDE the ⓘ click-card. The
+    /// browser opens only when the user clicks that link. Empty hides it.</summary>
+    public string HelpUrl
+    {
+        get => (string)GetValue(HelpUrlProperty);
+        set => SetValue(HelpUrlProperty, value);
+    }
+
+    private bool _hasTip;
+    private bool _hasLink;
+
+    private static void OnHelpUrlChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is SettingCard card)
+        {
+            var url = e.NewValue as string ?? string.Empty;
+            if (!string.IsNullOrEmpty(url) && Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            {
+                card.InfoFlyoutLink.NavigateUri = uri;
+                card.InfoFlyoutLink.Visibility = Visibility.Visible;
+                card._hasLink = true;
+            }
+            else
+            {
+                card.InfoFlyoutLink.Visibility = Visibility.Collapsed;
+                card._hasLink = false;
+            }
+            card.UpdateInfoButton();
+        }
+    }
+
+    /// <summary>Show the ⓘ when there's anything behind it (hover/click text or
+    /// a guide link).</summary>
+    private void UpdateInfoButton()
+    {
+        InfoButton.Visibility = (_hasTip || _hasLink) ? Visibility.Visible : Visibility.Collapsed;
     }
 
     public static readonly DependencyProperty ControlProperty =

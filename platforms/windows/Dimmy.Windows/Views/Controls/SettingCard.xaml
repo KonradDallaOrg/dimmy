@@ -5,22 +5,28 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
   <!--
-    Win11 Settings card pattern — replicates `.scard` from the design bundle.
+    Win11 Settings card pattern.
 
     Layout:
-      [icon 24px] [label                              ] [control]
+      [icon 24px] [label  ⓘ                            ] [control]
                   [description (optional, smaller)  ]
 
-    - Min height 64 px (per design tokens).
-    - Border 1 px hairline, corner radius 4 px.
-    - Background card-bg theme resource.
-    - Icon column fixed width 24 px so cards line up vertically.
+    Progressive disclosure (3 tiers):
+      - Description : one line, scan at a glance.
+      - InfoTip     : the "why / how". HOVER the ⓘ for a tooltip; CLICK the ⓘ
+                      for a small in-app card with the same text.
+      - HelpUrl     : an "Open full guide →" link INSIDE that click card. The
+                      browser only opens when the user clicks the link, never
+                      from the icon itself.
+    The ⓘ appears when InfoTip or HelpUrl is set.
 
-    Public properties (set from XAML or code):
-    - Glyph (string)        — Segoe Fluent codepoint, e.g. "&#xE720;"
-    - Label (string)        — primary line
-    - Description (string)  — secondary line, hidden when empty
-    - Control (object)      — the right-side control (default Content slot)
+    Public properties:
+    - Glyph (string)        Segoe Fluent codepoint, e.g. "&#xE720;"
+    - Label (string)        primary line
+    - Description (string)  secondary line, hidden when empty
+    - InfoTip (string)      hover tooltip + click-card text
+    - HelpUrl (string)      "Open full guide →" link in the click-card
+    - Control (object)      the right-side control (default Content slot)
   -->
 
   <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
@@ -41,18 +47,42 @@
                 Width="24" Height="24"
                 Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
 
-      <!-- Meta: label + optional description -->
+      <!-- Meta: label (+ optional ⓘ) + optional description -->
       <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
-        <TextBlock x:Name="LabelText"
-                   FontSize="14"
-                   Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+        <StackPanel Orientation="Horizontal" Spacing="6">
+          <TextBlock x:Name="LabelText"
+                     FontSize="14" VerticalAlignment="Center"
+                     Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+          <!-- Info affordance. Hover shows a tooltip; click opens an in-app
+               card with the text + an optional "Open full guide →" link. The
+               website only opens from that link, not from the icon. -->
+          <Button x:Name="InfoButton" Visibility="Collapsed"
+                  Background="Transparent" BorderThickness="0"
+                  Padding="0" Width="20" Height="20" CornerRadius="10"
+                  VerticalAlignment="Center">
+            <FontIcon Glyph="&#xE946;" FontSize="13"
+                      Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+            <Button.Flyout>
+              <Flyout>
+                <StackPanel MaxWidth="300" Spacing="10">
+                  <TextBlock x:Name="InfoFlyoutText"
+                             TextWrapping="Wrap" FontSize="13"
+                             Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                  <HyperlinkButton x:Name="InfoFlyoutLink"
+                                   Content="Open full guide →"
+                                   Visibility="Collapsed" Padding="0" />
+                </StackPanel>
+              </Flyout>
+            </Button.Flyout>
+          </Button>
+        </StackPanel>
         <TextBlock x:Name="DescriptionText"
                    FontSize="12"
                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                    TextWrapping="Wrap" />
       </StackPanel>
 
-      <!-- Control column — caller-provided element via Content slot -->
+      <!-- Control column. Caller-provided element via Content slot. -->
       <ContentPresenter Grid.Column="2"
                         x:Name="ControlPresenter"
                         VerticalAlignment="Center" />

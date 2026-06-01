@@ -26,9 +26,9 @@
 | App rules | A-nav | | "Regole per app" |
 | Recordings | A-nav | | "Registrazioni" / "Cronologia" |
 | Integrations | A-nav | | "Integrazioni" |
-| Privacy & data | A-nav | | "Privacy" |
-| About | A-nav | | "Info" |
-| Advanced | A-nav | | "Avanzate" / "Diagnostica" |
+| Privacy & data | A-nav | S | "Privacy" |
+| About | A-nav | S | "Info" |
+| Advanced | A-nav | | "Debug" |
 
 ---
 
@@ -36,12 +36,12 @@
 | Voce | Tipo | Ora | Vuoi | Nome alternativo | Semplif. |
 |---|---|---|---|---|---|
 | Hero "Welcome to Dimmy" | display | S | | — | No |
+| YOUR DICTATION — stats (parole / tempo / risparmio) | display | S | | "Le tue statistiche" | No |
 | MEETING MODE — "Record a meeting" + Open meeting window | azione | S | | "Riunioni" / "Registra una riunione" | Sì (testo card lungo) |
 | TRANSCRIBE A FILE — drop + Pick file | azione | S | | "Trascrivi un file" | No |
 | TRANSCRIBE A FILE — Run recap as meeting | azione | S | | "Genera recap dal file" | No |
-| YOUR DICTATION — stats (parole / tempo / risparmio) | display | S | | "Le tue statistiche" | No |
-| SYSTEM — Theme (Auto/Light/Dark) | radio | S | | "Tema" | No |
-| SYSTEM — Launch at login | toggle | S | | "Avvia all'accesso" | No |
+| SYSTEM — Theme (Auto/Light/Dark) | radio | S | A-sez | "Tema" | No |
+| SYSTEM — Launch at login | toggle | S | A-sez | "Avvia all'accesso" | No |
 
 ## Providers & keys  (nav: S)
 | Voce | Tipo | Ora | Vuoi | Nome alternativo | Semplif. |
@@ -62,13 +62,13 @@
 | SPEECH-TO-TEXT — API key (cloud) | password | S (cond cloud) | | "Chiave STT" | No |
 | SPEECH-TO-TEXT — Custom endpoint URL | text | cond custom | | — | No |
 | SPEECH-TO-TEXT — Custom model | text | cond custom | | — | No |
-| VOCABULARY — Recognition prompt | text | S (cond cloud) | | "Contesto/vocabolario" | No |
+| VOCABULARY — Recognition prompt | text | S (cond cloud) | A-sez | "Contesto/vocabolario" | No |
 | MICROPHONE — Input device | combo | S | | "Microfono" | No |
 | MICROPHONE — Microphone volume | slider | **A-sez** | | "Volume mic" | No |
 | MICROPHONE — Preprocessing | toggle | **A-sez** | | "Pre-elaborazione audio" | No |
 | MICROPHONE — Chunk streaming (Parakeet only) | toggle | **A-sez** | | "Streaming a blocchi" | Sì |
 | MICROPHONE — Live captions | toggle | **A-sez** | | "Sottotitoli live" | No |
-| CUSTOM DICTIONARY — add/list/remove | lista | S | | "Dizionario personale" | No |
+| CUSTOM DICTIONARY — add/list/remove | lista | S | A-sez | "Dizionario personale" | No |
 
 ## Output  (nav: S)
 | Voce | Tipo | Ora | Vuoi | Nome alternativo | Semplif. |
@@ -83,15 +83,15 @@
 | LLM MODE — Custom LLM model | text | cond custom | | — | No |
 | LLM MODE — Use my saved API key | toggle | cond | | "Riusa la chiave salvata" | Sì |
 | LLM MODE — LLM API key | password | cond | | "Chiave LLM" | No |
-| AUTO-DETECT MEETINGS — Detect calls + offer | toggle | S | | "Rileva chiamate" | No |
-| AUTO-DETECT MEETINGS — Excluded apps | lista | S | | "App escluse" | No |
-| MEETINGS — Meetings folder + Reset/Browse | azione | S | | "Cartella riunioni" | No |
+| AUTO-DETECT MEETINGS — Detect calls + offer | toggle | S | A-sez | "Rileva chiamate" | No |
+| AUTO-DETECT MEETINGS — Excluded apps | lista | S | A-sez | "App escluse" | No |
+| MEETINGS — Meetings folder + Reset/Browse | azione | S | A-sez | "Cartella riunioni" | No |
 | MEETING RECAP — Meeting recap model | combo | S | | "Modello del recap" | No |
 | MEETING RECAP — Use Anthropic subscription for recap | toggle | cond | | "Recap con abbonamento Claude" | Sì |
 | MEETING RECAP — Custom recap model id | text | cond | | — | No |
 | MEETING RECAP — Use my saved API key (recap) | toggle | cond | | "Riusa la chiave salvata" | Sì |
 | MEETING RECAP — Recap API key | password | cond | | "Chiave recap" | No |
-| CLIPBOARD — Keep in clipboard history | toggle | S | | "Tieni negli appunti" | No |
+| CLIPBOARD — Keep in clipboard history | toggle | S | A-sez | "Tieni negli appunti" | No |
 | ADVANCED LLM — Tone | combo | **A-sez** | | "Tono" | No |
 | ADVANCED LLM — Translate output to | combo | **A-sez** | | "Traduci l'output" | No |
 | ADVANCED LLM — Custom prompt | text | **A-sez** | | "Prompt personalizzato" | No |
@@ -153,24 +153,24 @@
 | ANTHROPIC SUBSCRIPTION — sign in/test/refresh/wizard | azione | A-nav | | "Abbonamento Claude" | No |
 | CLAUDE DESKTOP (MCP) — connect/disconnect/refresh | azione | A-nav | | "Claude Desktop (MCP)" | No |
 
-## Privacy & data  (nav: **A-nav**)
+## Privacy & data  (nav: **S**) 
 | Voce | Tipo | Ora | Vuoi | Nome alternativo | Semplif. |
 |---|---|---|---|---|---|
-| Privacy promise (card) | display | A-nav | | — | No |
-| TELEMETRY — Send anonymous usage data | toggle | A-nav | | "Dati d'uso anonimi" | No |
-| TELEMETRY — Send crash reports | toggle | A-nav | | "Segnalazioni crash" | No |
-| ANONYMOUS IDENTIFIER — ID + Reset | azione | A-nav | | "ID anonimo" | No |
-| SEND FEEDBACK — Kind / message / email / Send | azione | A-nav | | "Invia feedback" | No |
-| SEND FEEDBACK — Enable & send (cond) | azione | A-nav | | — | No |
-| RESOURCES — Privacy policy / What we collect | link | A-nav | | — | No |
+| Privacy promise (card) | display | A-nav | (display) | — | No |
+| TELEMETRY — Send anonymous usage data | toggle | A-nav | A-sez | "Dati d'uso anonimi" | No |
+| TELEMETRY — Send crash reports | toggle | A-nav | A-sez | "Segnalazioni crash" | No |
+| ANONYMOUS IDENTIFIER — ID + Reset | azione | A-nav | A-sez | "ID anonimo" | No |
+| SEND FEEDBACK — Kind / message / email / Send | azione | A-nav | S | "Invia feedback" | No |
+| SEND FEEDBACK — Enable & send (cond) | azione | A-nav | S | — | No |
+| RESOURCES — Privacy policy / What we collect | link | A-nav | S | — | No |
 
-## About  (nav: **A-nav**)
+## About  (nav: **S**)
 | Voce | Tipo | Ora | Vuoi | Nome alternativo | Semplif. |
 |---|---|---|---|---|---|
-| Hero (versione, logo) | display | A-nav | | — | No |
-| Check for updates / Release notes | azione | A-nav | | "Controlla aggiornamenti" | No |
+| Hero (versione, logo) | display | A-nav | (display) | — | No |
+| Check for updates / Release notes | azione | A-nav | S | "Controlla aggiornamenti" | No |
 | Update channel (Stable / Pre-release) | combo | A-nav (cond) | | "Canale aggiornamenti" | No |
-| RESOURCES — Website / Source code | link | A-nav | | — | No |
+| RESOURCES — Website / Source code | link | A-nav | S | — | No |
 
 ## Advanced (Debug)  (nav: **A-nav**)
 | Voce | Tipo | Ora | Vuoi | Nome alternativo | Semplif. |
