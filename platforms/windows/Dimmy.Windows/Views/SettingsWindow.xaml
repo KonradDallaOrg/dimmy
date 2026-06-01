@@ -39,7 +39,10 @@
         <NavigationViewItem Content="Providers &amp; keys" Tag="providers">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE8D7;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
-        <NavigationViewItem Content="Pill overlay" Tag="pill">
+        <!-- Pill overlay is cosmetic tuning (position, border, waveform,
+             visibility) — Advanced-gated; the pill works fine out of the box. -->
+        <NavigationViewItem Content="Pill overlay" Tag="pill"
+                            Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE7B5;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
         <!-- App rules is power-user territory (per-app style overrides) —
@@ -51,7 +54,10 @@
         <NavigationViewItem Content="Shortcut" Tag="shortcut">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE765;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
-        <NavigationViewItem Content="Recordings" Tag="history">
+        <!-- Recordings is history review, not a setting you need to work —
+             Advanced-gated. -->
+        <NavigationViewItem Content="Recordings" Tag="history"
+                            Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE7B8;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
         <!-- Integrations (Notion / Claude subscription / MCP) are opt-in
@@ -69,7 +75,10 @@
         <NavigationViewItem Content="License" Tag="license">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE192;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
-        <NavigationViewItem Content="About" Tag="about">
+        <!-- About is version / updates / release notes — informational, not a
+             daily setting. Updates still auto-check in the background. Advanced. -->
+        <NavigationViewItem Content="About" Tag="about"
+                            Visibility="{Binding IsAdvanced, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
           <NavigationViewItem.Icon><FontIcon Glyph="&#xE946;" /></NavigationViewItem.Icon>
         </NavigationViewItem>
         <NavigationViewItem Content="Advanced" Tag="advanced"
