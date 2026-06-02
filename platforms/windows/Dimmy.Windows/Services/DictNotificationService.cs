@@ -45,6 +45,15 @@ public static class DictNotificationService
              "Dimmy was upgraded in the background and is ready to use.");
     }
 
+    /// <summary>The command-mode hotkey couldn't bind (another app owns the
+    /// combo). Tell the user to pick a different one instead of failing
+    /// silently.</summary>
+    public static void ShowHotkeyConflict(string combo)
+    {
+        Show("Shortcut unavailable",
+             $"“{combo}” is already used by another app. Pick a different command mode shortcut.");
+    }
+
     private static void Show(string title, string body)
     {
         try

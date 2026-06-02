@@ -25,6 +25,22 @@ public sealed partial class ShortcutRecorder : UserControl
         set => SetValue(ShortcutProperty, value);
     }
 
+    /// <summary>When true, only accept combos that bind via Win32
+    /// RegisterHotKey — a modifier PLUS a real key. Modifier-only combos
+    /// (Ctrl+Shift) and unmappable keys are rejected with a hint. Set this
+    /// for the dictionary + command hotkeys (RegisterHotKey-based); the main
+    /// dictation hotkey leaves it false because it runs on the Rust hook,
+    /// which also accepts two-modifier combos like Win+Alt.</summary>
+    public static readonly DependencyProperty RequireKeyProperty =
+        DependencyProperty.Register(nameof(RequireKey), typeof(bool),
+            typeof(ShortcutRecorder), new PropertyMetadata(false));
+
+    public bool RequireKey
+    {
+        get => (bool)GetValue(RequireKeyProperty);
+        set => SetValue(RequireKeyProperty, value);
+    }
+
     public event EventHandler<string>? ShortcutChanged;
 
     public ShortcutRecorder()
@@ -48,9 +64,12 @@ public sealed partial class ShortcutRecorder : UserControl
         }
         else
         {
-            DisplayText.Text = Shortcut;
+            // Empty is a valid state for optional hotkeys (e.g. the command
+            // hotkey is opt-in) — show a placeholder rather than a blank box.
+            var empty = string.IsNullOrWhiteSpace(Shortcut);
+            DisplayText.Text = empty ? "Not set" : Shortcut;
             RecorderBorder.Background = (Brush)Application.Current.Resources["CardBackgroundFillColorDefaultBrush"];
-            DisplayText.FontSize = 24;
+            DisplayText.FontSize = empty ? 16 : 24;
         }
     }
 
@@ -97,21 +116,45 @@ public sealed partial class ShortcutRecorder : UserControl
             }
         }
 
-        // Validate: need at least 1 modifier + 1 non-modifier key, OR 2+ modifiers, OR F-key
-        int modCount = parts.Count(p => p is "Win" or "Ctrl" or "Alt" or "Shift");
-        int nonModCount = parts.Count - modCount;
-        bool hasFKey = _pressedKeys.Any(k => k is >= VirtualKey.F1 and <= VirtualKey.F24);
-        bool valid = (modCount >= 1 && nonModCount >= 1) || modCount >= 2 || hasFKey;
+        var candidate = string.Join("+", parts);
 
-        if (valid && parts.Count > 0)
+        bool valid;
+        if (RequireKey)
         {
-            Shortcut = string.Join("+", parts);
-            ShortcutChanged?.Invoke(this, Shortcut);
+            // RegisterHotKey-based hotkeys (dict + command): the combo must
+            // parse to a modifier + a real, mappable key. This rejects the
+            // two-modifier combos the OS hook would accept (Ctrl+Shift) and
+            // any key whose name doesn't map to a VK (shows up as a number).
+            valid = parts.Count > 0
+                    && Services.DictHotkeyParser.TryParse(candidate, out _, out _);
+        }
+        else
+        {
+            int modCount = parts.Count(p => p is "Win" or "Ctrl" or "Alt" or "Shift");
+            int nonModCount = parts.Count - modCount;
+            bool hasFKey = _pressedKeys.Any(k => k is >= VirtualKey.F1 and <= VirtualKey.F24);
+            valid = parts.Count > 0
+                    && ((modCount >= 1 && nonModCount >= 1) || modCount >= 2 || hasFKey);
         }
 
         _isRecording = false;
         _pressedKeys.Clear();
-        UpdateDisplay();
+
+        if (valid)
+        {
+            Shortcut = candidate;
+            ShortcutChanged?.Invoke(this, Shortcut);
+            UpdateDisplay();
+        }
+        else
+        {
+            // Keep the previous Shortcut; show a one-line hint instead of the
+            // junk combo so the user knows to add a real key.
+            DisplayText.Text = "Use a modifier + a key";
+            DisplayText.FontSize = 16;
+            RecorderBorder.Background =
+                (Brush)Application.Current.Resources["CardBackgroundFillColorDefaultBrush"];
+        }
         e.Handled = true;
     }
 }

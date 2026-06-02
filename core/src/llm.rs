@@ -72,6 +72,40 @@ SPOKEN:\n[SPOKEN]\n{spoken}\n[/SPOKEN]",
     )
 }
 
+/// Command-mode prompt for the NO-SELECTION case: the user invoked command
+/// mode with nothing selected, so the spoken words are an instruction to
+/// GENERATE text that gets INSERTED at the cursor (not a transform of an
+/// existing selection). Same hard "output only the text" contract as the
+/// transform prompt so the host can paste it straight in.
+pub fn build_command_generate_prompt(spoken: &str) -> String {
+    assert!(
+        !spoken.is_empty(),
+        "build_command_generate_prompt: empty spoken"
+    );
+    format!(
+        "\
+You are a text-generation engine inside a dictation app. The user has placed their cursor in an \
+application (nothing is selected) and SPOKEN out loud. Your job is to produce the text that should \
+be INSERTED at the cursor.\n\n\
+Decide which case applies:\n\
+CASE A — SPOKEN is an INSTRUCTION to produce something (e.g. \"write a polite decline to this \
+meeting\", \"draft a tweet about our launch\", \"give me three subject line ideas\", \"a haiku \
+about rain\"). → Output the requested content, ready to paste.\n\
+CASE B — SPOKEN is literal CONTENT the user dictated to insert as-is (e.g. \"the quick brown fox\"). \
+→ Output SPOKEN, lightly cleaned up (capitalization + punctuation only), nothing else.\n\n\
+ABSOLUTE RULES — violating any is a critical failure:\n\
+1. Output ONLY the resulting text. Nothing before it, nothing after it. No quotes, no markdown \
+fences, no preamble like \"Sure\" or \"Here is\".\n\
+2. NEVER converse and NEVER add commentary about what you produced. You generate insertable text; \
+you do not chat.\n\
+3. When unsure between CASE A and CASE B, treat SPOKEN as an INSTRUCTION only if it clearly asks \
+you to produce or draft something; otherwise output it as literal content.\n\
+4. Keep the user's language unless the instruction explicitly asks for another one.\n\n\
+SPOKEN:\n[SPOKEN]\n{spoken}\n[/SPOKEN]",
+        spoken = spoken,
+    )
+}
+
 // ── LlmStyle enum ────────────────────────────────────────────────────
 
 /// What the LLM does with the text. Exhaustive — adding a variant forces
@@ -980,8 +1014,9 @@ mod tests {
     #[test]
     #[should_panic(expected = "empty selection")]
     fn command_transform_prompt_rejects_empty_selection() {
-        // Command Mode must never fire without a selection — the host
-        // gates on this, but the core asserts it too (negative space).
+        // The TRANSFORM prompt is only ever built WITH a selection — the
+        // no-selection case routes to build_command_generate_prompt instead.
+        // The assert guards that contract (negative space).
         let _ = build_command_transform_prompt("", "do something");
     }
 
@@ -989,6 +1024,31 @@ mod tests {
     #[should_panic(expected = "empty spoken")]
     fn command_transform_prompt_rejects_empty_spoken() {
         let _ = build_command_transform_prompt("selected", "");
+    }
+
+    #[test]
+    fn command_generate_prompt_embeds_spoken_verbatim() {
+        let p = build_command_generate_prompt("write a haiku about rain");
+        assert!(p.contains("[SPOKEN]\nwrite a haiku about rain\n[/SPOKEN]"));
+        // No SELECTION block — there's nothing selected in the generate case.
+        assert!(!p.contains("[SELECTION]"));
+    }
+
+    #[test]
+    fn command_generate_prompt_states_both_cases_and_output_only_rule() {
+        let p = build_command_generate_prompt("draft a tweet");
+        // Same dual-case framing (directive vs literal content) + the
+        // output-only contract that makes paste-at-cursor safe.
+        assert!(p.contains("CASE A"), "must keep the directive case");
+        assert!(p.contains("CASE B"), "must keep the literal-content case");
+        assert!(p.to_ascii_lowercase().contains("output only"));
+        assert!(p.to_ascii_lowercase().contains("inserted at the cursor"));
+    }
+
+    #[test]
+    #[should_panic(expected = "empty spoken")]
+    fn command_generate_prompt_rejects_empty_spoken() {
+        let _ = build_command_generate_prompt("");
     }
 
     // ── Claude Code dispatch branch (subscription login) ────────

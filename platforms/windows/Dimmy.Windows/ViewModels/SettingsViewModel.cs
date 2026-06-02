@@ -190,6 +190,10 @@ public partial class SettingsViewModel : ObservableObject
     /// Persisted to UiPreferences.DictHotkey (NOT config.json — it's
     /// a Win-only UI knob). Default Ctrl+Shift+D.</summary>
     [ObservableProperty] private string _dictHotkey = "ctrl+shift+d";
+    /// <summary>Optional dedicated command-mode hotkey (one-shot). EMPTY =
+    /// disabled; command mode still works via the pill-menu toggle. Persisted
+    /// to UiPreferences.CommandHotkey (Win-only UI knob).</summary>
+    [ObservableProperty] private string _commandHotkey = "";
     [ObservableProperty] private string _shortcut = "Win+Alt";
     [ObservableProperty] private string _shortcutMode = "toggle";
     [ObservableProperty] private string? _selectedDevice;
