@@ -307,8 +307,8 @@ struct MacVoicePage: View {
                         MacRow(
                             "API key",
                             description: appState.hasKey
-                                ? "Saved — managed on Providers and keys."
-                                : "Not connected — set it on Providers and keys.",
+                                ? "Saved. Managed in Providers and keys."
+                                : "Not connected. Set it in Providers and keys.",
                             hint: "Keys live in one place: Providers and keys. Connect once there, every page picks it up.",
                             hintURL: URL(string: "https://dimmy.app/help/api-keys"),
                             showsDivider: false
