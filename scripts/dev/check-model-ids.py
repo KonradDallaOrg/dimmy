@@ -102,6 +102,15 @@ def env_key(provider):
 
 
 def http_json(url, headers):
+    # A browser-ish User-Agent is REQUIRED: Groq + Together sit behind
+    # Cloudflare, which 403s the default python-urllib UA ("error code: 1010").
+    # Without this the checker silently can't validate those two providers.
+    headers = dict(headers)
+    headers.setdefault(
+        "User-Agent",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+    headers.setdefault("Accept", "application/json")
     req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=25) as resp:
         return json.loads(resp.read().decode("utf-8"))
@@ -127,9 +136,10 @@ def live_ids(provider, endpoint, auth, key):
                     if isinstance(m, dict):
                         ids.add(m.get("canonical_name") or m.get("name"))
         return {i for i in ids if i}
-    # OpenAI-compatible: bearer token, { "data": [ { "id": ... } ] }
+    # OpenAI-compatible: bearer token. Most return { "data": [ {id} ] };
+    # Together returns a bare top-level list.
     data = http_json(endpoint, {"Authorization": f"Bearer {key}"})
-    arr = data.get("data", data if isinstance(data, list) else [])
+    arr = data if isinstance(data, list) else data.get("data", [])
     return {m["id"] for m in arr if isinstance(m, dict) and "id" in m}
 
 
