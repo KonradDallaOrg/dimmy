@@ -641,16 +641,18 @@ final class HotkeyManager {
             var resolved: String?
             var resolvedRc: Int32 = 0
             if !spoken.isEmpty {
-                if let sel = selection, !sel.isEmpty {
-                    let t = DimmyCore.shared.commandTransform(selection: sel, spoken: spoken)
-                    resolved = t.text
-                    resolvedRc = t.rc
-                } else {
-                    // No selection → behave like plain dictation and paste
-                    // what the user said (least-surprising fallback).
-                    resolved = spoken
-                    resolvedRc = 1
-                }
+                // Pass through whatever was captured — empty string is a
+                // valid selection now. The Rust core's
+                // `dimmy_command_transform` branches at the prompt-build
+                // layer: with selection -> transform/replace; without ->
+                // generate text to insert at the caret. Mirror of Win
+                // App.StopAndCommandTransform after PR #98 (the OPTIONAL
+                // selection contract). Removes the prior "paste raw
+                // spoken text on no selection" Mac fallback.
+                let sel = selection ?? ""
+                let t = DimmyCore.shared.commandTransform(selection: sel, spoken: spoken)
+                resolved = t.text
+                resolvedRc = t.rc
             }
             let wasEmpty = spoken.isEmpty
             let finalText = resolved
