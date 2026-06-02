@@ -438,27 +438,31 @@ fn command_transform_rejects_empty_and_whitespace_only_inputs() {
     let buf_ptr = buf.as_mut_ptr() as *mut c_char;
     let len = buf.len() as c_int;
 
-    // Empty selection.
+    // Empty selection is NO LONGER invalid input: it routes to the
+    // generate-and-insert path (spoken words = a generation instruction). So
+    // it must NOT short-circuit to -1; it proceeds to LLM dispatch and fails
+    // downstream in the test env (no key / no network) with a different code.
     let empty = CString::new("").unwrap();
-    let spoken = CString::new("make it formal").unwrap();
+    let spoken = CString::new("write a haiku about rain").unwrap();
     let n1 = unsafe { dimmy_command_transform(empty.as_ptr(), spoken.as_ptr(), buf_ptr, len) };
-    assert_eq!(
+    assert_ne!(
         n1, -1,
-        "empty selection must short-circuit to -1; got {}",
+        "empty selection must route to the generate path, not be rejected as invalid input; got {}",
         n1
     );
 
-    // Whitespace-only selection (tabs, spaces, newlines).
+    // Whitespace-only selection collapses to None → also the generate path
+    // (the host's selection-capture probe returns whitespace when nothing
+    // was selected).
     let ws_sel = CString::new("   \n\t  ").unwrap();
     let n2 = unsafe { dimmy_command_transform(ws_sel.as_ptr(), spoken.as_ptr(), buf_ptr, len) };
-    assert_eq!(
+    assert_ne!(
         n2, -1,
-        "whitespace-only selection must short-circuit to -1 (the host's selection-capture probe \
-         returns whitespace when nothing was selected); got {}",
+        "whitespace-only selection must collapse to the generate path, not -1; got {}",
         n2
     );
 
-    // Empty spoken instruction.
+    // Empty spoken instruction — still invalid: there's nothing to act on.
     let sel = CString::new("Some content").unwrap();
     let empty_spk = CString::new("").unwrap();
     let n3 = unsafe { dimmy_command_transform(sel.as_ptr(), empty_spk.as_ptr(), buf_ptr, len) };

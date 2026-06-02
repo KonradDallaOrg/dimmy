@@ -150,6 +150,15 @@ public partial class AppViewModel : ObservableObject
     /// transforms the selection (on).</summary>
     [ObservableProperty] private bool _commandMode;
 
+    /// <summary>Transient one-shot command flag, set ONLY while a recording
+    /// started by the dedicated command hotkey is in flight. Independent of
+    /// <see cref="CommandMode"/> (the sticky menu toggle): the pill shows its
+    /// amber command dot when EITHER is set, and the stop routes to the
+    /// command transform when either is set, but the one-shot clears itself
+    /// after the command completes so we revert to normal output — without
+    /// flipping the persistent menu toggle.</summary>
+    [ObservableProperty] private bool _commandOneShot;
+
     /// <summary>If true, pressing the global hotkey while the pill is
     /// hidden re-shows it. If false, the pill stays hidden — recording
     /// status is shown only via the taskbar overlay icon. Default true

@@ -2799,16 +2799,18 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
 /// Command Mode: transform (or replace) the user's currently-selected
 /// text using their spoken instruction. The host captures the selection
 /// at hotkey-press and the transcript after STT, then calls this with
-/// both. We build a single constrained prompt (see
-/// `llm::build_command_transform_prompt`) that lets the model decide
-/// transform-vs-replace in one call — no host-side heuristic, no extra
+/// both. The selection is OPTIONAL: with one we build a transform/replace
+/// prompt (`llm::build_command_transform_prompt`); without one we build a
+/// generate-and-insert prompt (`llm::build_command_generate_prompt`) so the
+/// spoken words become content inserted at the cursor. Either way the model
+/// decides the sub-case in one call — no host-side heuristic, no extra
 /// round-trip. Dispatches through the DICTATION LLM config (fast path),
 /// NOT the recap config: command mode is a dictation-adjacent action.
 ///
 /// Return-code contract:
 /// ```text
 /// >0  bytes written to out_buf (success)
-/// -1  invalid input (null ptr, bad UTF-8, empty selection or spoken)
+/// -1  invalid input (null ptr, bad UTF-8, empty spoken — selection may be empty)
 /// -2  LLM dispatch failed (network / API error)
 /// -3  no LLM API key configured (cloud, non-subscription)
 /// -4  local mode but the model file is not on disk
@@ -2828,16 +2830,23 @@ pub unsafe extern "C" fn dimmy_command_transform(
     if selection_ptr.is_null() || spoken_ptr.is_null() || out_buf.is_null() || buf_len <= 0 {
         return -1;
     }
+    // Selection is OPTIONAL. With a selection → transform/replace it. Without
+    // one → the spoken words are a generation instruction whose result gets
+    // inserted at the cursor. Empty/whitespace selection collapses to None.
     let selection = match CStr::from_ptr(selection_ptr).to_str() {
-        Ok(s) if !s.trim().is_empty() => s.to_string(),
-        _ => return -1,
+        Ok(s) if !s.trim().is_empty() => Some(s.to_string()),
+        Ok(_) => None,
+        Err(_) => return -1,
     };
     let spoken = match CStr::from_ptr(spoken_ptr).to_str() {
         Ok(s) if !s.trim().is_empty() => s.to_string(),
         _ => return -1,
     };
 
-    let prompt = crate::llm::build_command_transform_prompt(&selection, &spoken);
+    let prompt = match selection {
+        Some(ref sel) => crate::llm::build_command_transform_prompt(sel, &spoken),
+        None => crate::llm::build_command_generate_prompt(&spoken),
+    };
 
     let st = state();
     emit_event("status", r#"{"state":"processing"}"#);

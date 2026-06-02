@@ -214,33 +214,60 @@ public sealed partial class SettingsWindow : Window
             var prefs = Services.UiPreferences.Load();
             ViewModel.DictHotkey = string.IsNullOrEmpty(prefs.DictHotkey)
                 ? "ctrl+shift+d" : prefs.DictHotkey;
+            // Coerce a stale / unbindable saved combo to empty so the
+            // recorder shows "Not set" rather than a combo that never
+            // registers (e.g. a modifier-only value from before RequireKey).
+            var savedCmd = prefs.CommandHotkey ?? "";
+            ViewModel.CommandHotkey =
+                Services.DictHotkeyParser.TryParse(savedCmd, out _, out _) ? savedCmd : "";
         }
         catch { }
 
-        // Persist DictHotkey changes + re-register the global hotkey
-        // on the App's DictHotkeyService so the new combo binds
-        // without a restart.
+        // Persist DictHotkey / CommandHotkey changes + re-register the global
+        // hotkey on the App's services so the new combo binds without a
+        // restart.
         ViewModel.PropertyChanged += (_, e) =>
         {
-            if (e.PropertyName != nameof(ViewModel.DictHotkey)) return;
             if (!_loaded) return;
             try
             {
-                var prefs = Services.UiPreferences.Load();
-                prefs.DictHotkey = ViewModel.DictHotkey;
-                prefs.Save();
-                App.Instance?.ReregisterDictHotkey(ViewModel.DictHotkey);
-                App.Log($"dict hotkey updated to '{ViewModel.DictHotkey}'", "Dict");
+                if (e.PropertyName == nameof(ViewModel.DictHotkey))
+                {
+                    var prefs = Services.UiPreferences.Load();
+                    prefs.DictHotkey = ViewModel.DictHotkey;
+                    prefs.Save();
+                    App.Instance?.ReregisterDictHotkey(ViewModel.DictHotkey);
+                    App.Log($"dict hotkey updated to '{ViewModel.DictHotkey}'", "Dict");
+                }
+                else if (e.PropertyName == nameof(ViewModel.CommandHotkey))
+                {
+                    var prefs = Services.UiPreferences.Load();
+                    prefs.CommandHotkey = ViewModel.CommandHotkey ?? "";
+                    prefs.Save();
+                    App.Instance?.ReregisterCommandHotkey(ViewModel.CommandHotkey ?? "");
+                    App.Log($"command hotkey updated to '{ViewModel.CommandHotkey}'", "Hotkey");
+                }
             }
             catch (Exception ex)
             {
-                App.Log($"DictHotkey save exc: {ex.Message}", "Dict");
+                App.Log($"Hotkey save exc: {ex.Message}", "Hotkey");
             }
         };
 
         RefreshMeetingFolderDisplay();
 
         _loaded = true;
+        // Now that selections are established + _loaded is true, run one auth
+        // refresh so the provider/model pickers get filtered to the connected
+        // providers (RebuildCombo no-ops while loading).
+        RefreshAuthIntegrationStatus();
+    }
+
+    /// <summary>Disable the optional command-mode hotkey. Empties the combo
+    /// → the PropertyChanged handler persists "" and unregisters it.</summary>
+    private void CommandHotkeyClear_Click(object sender, RoutedEventArgs e)
+    {
+        ViewModel.CommandHotkey = "";
     }
 
     /// File extensions accepted by `dimmy_transcribe_file`. WAV is the
@@ -1714,20 +1741,17 @@ public sealed partial class SettingsWindow : Window
             ViewModel.LlmUseSameKey = false;
             App.Log("[Auth] coerced llm_use_same_key=false (no upstream key for LLM vendor)", "Auth");
         }
-        // Use the LLM-specific path flag so an Anthropic + subscription LLM
-        // hides BOTH the "use saved key" toggle and the api-key input,
-        // regardless of Recap configuration. Bug burned 2026-05-18: with the
-        // legacy OR'd `keyPathLive`, the LLM key surfaces stayed visible if
-        // Recap was still on api-key, contradicting the "subscription
-        // bypasses keys" intent.
-        LlmUseSameKeyCard.Visibility = (llmKeyPathLive && hasUpstreamKey)
-            ? Visibility.Visible : Visibility.Collapsed;
-        // LLM API key input: visible when the key path is live AND the
-        // toggle is OFF (the dispatcher needs an LLM-scope key). When the
-        // toggle is hidden (no upstream key OR subscription on), the
-        // coercion above flips LlmUseSameKey=false → input appears so the
-        // user can type a key. Under subscription the entire block hides.
-        LlmApiKeyCard.Visibility = (llmKeyPathLive && !ViewModel.LlmUseSameKey)
+        // The "use my saved key" inheritance toggle is gone: keys now live
+        // ONLY in the Providers & keys page, so there's no second place to
+        // reuse a key FROM. The dispatcher still reads Llm(vendor) then
+        // Stt(vendor) at call time (llm_use_same_key stays true), so a key
+        // saved in Providers is picked up automatically.
+        LlmUseSameKeyCard.Visibility = Visibility.Collapsed;
+        // Inline LLM key input is for the Custom endpoint ONLY (catalog
+        // providers are keyed from Providers & keys). Still hidden under
+        // subscription (llmKeyPathLive == false).
+        var isLlmCustom = string.Equals(llmVendor, "custom", StringComparison.OrdinalIgnoreCase);
+        LlmApiKeyCard.Visibility = (llmKeyPathLive && isLlmCustom)
             ? Visibility.Visible : Visibility.Collapsed;
         // Surface the green ✓ when a key for the LLM vendor already
         // exists in Llm-scope (drives `HasLlmKey` binding on the
@@ -1797,19 +1821,18 @@ public sealed partial class SettingsWindow : Window
         //   differs from the dictation vendor AND auth != subscription.
         UpdateRecapKeyCardVisibility(llmUrl);
 
-        // Per-vendor filter of the recap-model picker is INTENTIONALLY
-        // dropped: the user picks any model (claude / gpt / gemini),
-        // the dispatcher derives the recap vendor from the model id
-        // and pulls the matching per-vendor key from the keystore.
-        // The conditional "Recap API key" card below the picker
-        // collects the key if the vendor differs from dictation.
-        //
-        // The subscription toggle gate above already pinned
-        // recapVendor → "anthropic" when subscription is forced, so
-        // the toggle visibility math doesn't need any cross-vendor
-        // coercion either.
-        _ = recapVendor; // retained for future use if we re-introduce
-                         // any vendor-conditional UI here
+        // Filter the cloud STT + LLM provider pickers down to the providers
+        // the user actually has a key for (keys live in Providers & keys now).
+        // Custom is always offered (inline URL+key); Anthropic stays offered
+        // when the Claude CLI subscription is connected (keyless path).
+        FilterCloudProviderPickers(integrationReady);
+        FilterRecapModelPicker(integrationReady);
+
+        // The recap picker IS filtered now (FilterRecapModelPicker above) to
+        // the vendors the user connected — Auto/Custom/local always stay,
+        // Anthropic stays under subscription. The dispatcher still derives the
+        // recap vendor from the model id and pulls its key from the keystore.
+        _ = recapVendor; // retained for the subscription gate math above
     }
 
     /// <summary>Map a URL to a vendor family tag for filtering the
@@ -1881,6 +1904,95 @@ public sealed partial class SettingsWindow : Window
     /// endpoint, no upstream key" from "matches anthropic" etc.
     /// Used by the LLM section to look up `_sttKeyByProvider` and
     /// `_llmKeyByProvider` per the chosen LLM URL.
+    /// <summary>Trim the cloud STT + LLM provider pickers to providers the user
+    /// actually has a key for. A vendor counts as connected when it has a key in
+    /// ANY scope (STT or LLM) — the same provider API key works for all of that
+    /// vendor's capabilities, so a Groq key saved for speech also unlocks Groq's
+    /// rewrite + recap models. Custom is always offered; Anthropic stays under
+    /// the Claude CLI subscription; the selected item is never removed.</summary>
+    private void FilterCloudProviderPickers(bool integrationReady)
+    {
+        RebuildCombo(ProviderComboBox, item =>
+        {
+            var v = ((item.Tag as string) ?? "").Split('-')[0].ToLowerInvariant();
+            return v == "custom" || HasAnyKeyForVendor(v);
+        });
+        RebuildCombo(LlmProviderComboBox, item =>
+        {
+            var v = ((item.Tag as string) ?? "").Split('-')[0].ToLowerInvariant();
+            return v == "custom" || HasAnyKeyForVendor(v)
+                   || (v == "anthropic" && integrationReady);
+        });
+    }
+
+    /// <summary>Trim the recap-model picker the same way. Recap tags are model
+    /// IDs (claude-opus-4-7, gpt-5, gemini-3.1-pro), so the vendor is derived via
+    /// RecapVendorFromModel. Auto, Custom, and local models are always kept.</summary>
+    private void FilterRecapModelPicker(bool integrationReady)
+    {
+        RebuildCombo(RecapModelComboBox, item =>
+        {
+            var tag = (item.Tag as string) ?? "";
+            if (tag.Length == 0 || tag == "__custom__"
+                || tag.StartsWith("local:", StringComparison.Ordinal))
+                return true; // Auto / custom / local LLM need no cloud key
+            var v = RecapVendorFromModel(tag, "");
+            return HasAnyKeyForVendor(v) || (v == "anthropic" && integrationReady);
+        });
+    }
+
+    // SINGLE source of truth = the LIVE keystore snapshot cached by
+    // CacheProviderKeyFlags (dimmy_get_config_json). The ViewModel's
+    // _sttHasKeyByProvider is populated from config.json which does NOT carry
+    // the has_*_key flags (Rust strips them on save) → it's all-false and must
+    // NOT drive this filter. The Providers & keys page is routed through the
+    // same _sttKeyByProvider/_llmKeyByProvider below, so the two never
+    // disagree. "Has a key in ANY scope" because the same provider key works
+    // for all of that vendor's capabilities.
+    private bool HasAnyKeyForVendor(string vendor)
+        => (_sttKeyByProvider.TryGetValue(vendor, out var s) && s)
+           || (_llmKeyByProvider.TryGetValue(vendor, out var l) && l);
+
+    // Master (full, ordered) item set per filtered combo, snapshotted once
+    // before any item is removed, so the filter can add items back when the
+    // key set changes. Keyed by the combo instance.
+    private readonly System.Collections.Generic.Dictionary<ComboBox,
+        System.Collections.Generic.List<ComboBoxItem>> _comboMasters = new();
+    private bool _rebuildingCombos;
+
+    /// <summary>Filter a static ComboBox by REMOVING items rather than
+    /// collapsing them — collapsed ComboBox items wreck the dropdown's scroll
+    /// measurement (the "jumpy scroll"). Idempotent + cheap: no-ops when the
+    /// surviving set is unchanged, so the frequent auth refreshes don't churn
+    /// the dropdown. Skips before load (selections must be set first), never
+    /// drops the current selection, and guards against the re-entrant
+    /// SelectionChanged that Items.Clear() raises.</summary>
+    private void RebuildCombo(ComboBox? combo, Func<ComboBoxItem, bool> keep)
+    {
+        if (combo == null || !_loaded || _rebuildingCombos) return;
+        if (!_comboMasters.TryGetValue(combo, out var master))
+        {
+            master = combo.Items.OfType<ComboBoxItem>().ToList();
+            _comboMasters[combo] = master;
+        }
+        var selected = combo.SelectedItem as ComboBoxItem;
+        var wanted = master
+            .Where(it => keep(it) || ReferenceEquals(it, selected))
+            .ToList();
+        if (combo.Items.Count == wanted.Count
+            && combo.Items.Cast<object>().SequenceEqual(wanted.Cast<object>()))
+            return; // nothing changed — don't touch the dropdown
+        try
+        {
+            _rebuildingCombos = true;
+            combo.Items.Clear();
+            foreach (var it in wanted) combo.Items.Add(it);
+            if (selected != null && combo.Items.Contains(selected))
+                combo.SelectedItem = selected;
+        }
+        finally { _rebuildingCombos = false; }
+    }
+
     private static string VendorTagFromAnyUrl(string url)
     {
         if (string.IsNullOrEmpty(url)) return "";
@@ -2111,6 +2223,29 @@ public sealed partial class SettingsWindow : Window
     // CacheProviderKeyFlags() on Settings load.
     private readonly System.Collections.Generic.Dictionary<string, bool> _sttKeyByProvider = new(StringComparer.OrdinalIgnoreCase);
     private readonly System.Collections.Generic.Dictionary<string, bool> _llmKeyByProvider = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Re-read the live keystore key flags from the FFI and refresh
+    /// the provider/model-picker filters. Called after a Connect/Remove on the
+    /// Providers page so both the Connected pills and the dropdowns reflect the
+    /// change immediately (no relaunch). Also invalidates the combo masters so
+    /// a newly-connected provider's items come back.</summary>
+    private void RefreshKeyFlagsFromFfi()
+    {
+        try
+        {
+            var ffiJson = DimmyNative.ReadBuffer(DimmyNative.dimmy_get_config_json, 16384);
+            if (string.IsNullOrEmpty(ffiJson)) return;
+            using var doc = System.Text.Json.JsonDocument.Parse(ffiJson);
+            _sttKeyByProvider.Clear();
+            _llmKeyByProvider.Clear();
+            CacheProviderKeyFlags(doc.RootElement);
+            if (_loaded) RefreshAuthIntegrationStatus(); // re-filters the pickers
+        }
+        catch (Exception ex)
+        {
+            App.Log($"RefreshKeyFlagsFromFfi: {ex.Message}", "Providers");
+        }
+    }
 
     private void CacheProviderKeyFlags(System.Text.Json.JsonElement r)
     {
@@ -2598,9 +2733,10 @@ public sealed partial class SettingsWindow : Window
             var preset = SettingsViewModel.ProviderPresets.FirstOrDefault(p =>
                 p.Name.ToLowerInvariant() == tag);
 
-            if (preset != null && !string.IsNullOrEmpty(preset.Url))
+            var isCustom = preset == null || string.IsNullOrEmpty(preset.Url);
+            if (!isCustom)
             {
-                ViewModel.ApiUrl = preset.Url;
+                ViewModel.ApiUrl = preset!.Url;
                 ViewModel.ApiModel = preset.DefaultModel;
                 // Hide custom fields for known presets
                 CustomUrlBox.Visibility = Visibility.Collapsed;
@@ -2612,6 +2748,10 @@ public sealed partial class SettingsWindow : Window
                 CustomUrlBox.Visibility = Visibility.Visible;
                 CustomModelBox.Visibility = Visibility.Visible;
             }
+            // The inline STT key field is for the Custom endpoint ONLY —
+            // catalog providers are keyed from the Providers & keys page.
+            if (SttApiKeyCard != null)
+                SttApiKeyCard.Visibility = isCustom ? Visibility.Visible : Visibility.Collapsed;
             // Refresh the green-check badge for the newly-selected provider.
             // Without this, switching to a provider with a saved key still
             // showed "no key" until the user closed + reopened Settings.
@@ -3973,55 +4113,14 @@ public sealed partial class SettingsWindow : Window
             catch { /* keep all booleans false on parse / FFI errors */ }
         }
 
-        var hasUpstreamKey = hasLlmScopeKey || hasSttScopeKey;
+        _ = hasLlmScopeKey | hasSttScopeKey; // upstream presence no longer gates UI here
 
-        // ─── Subscription branch — hides all key UI ─────────────
-        if (subscriptionActive)
-        {
-            RecapUseSameKeyCard.Visibility = Visibility.Collapsed;
-            RecapKeyCard.Visibility = Visibility.Collapsed;
-            return;
-        }
-
-        // ─── Recap vendor unknown (Auto / Local / Custom) ───────
-        // No way to derive a URL or a key — inherits the entire LLM
-        // dispatch path. Hide all recap-specific key UI.
-        if (string.IsNullOrEmpty(recapVendor))
-        {
-            RecapUseSameKeyCard.Visibility = Visibility.Collapsed;
-            RecapKeyCard.Visibility = Visibility.Collapsed;
-            return;
-        }
-
-        // ─── Recap vendor known (same OR different from dictation)
-        // ALWAYS show the toggle when an upstream key exists for this
-        // vendor, including the same-vendor case — the user might
-        // want a separate Recap-scope key (e.g. different billing
-        // account on the same vendor). Toggle ON = reuse upstream,
-        // OFF = type a dedicated Recap key. When no upstream key
-        // exists, hide the toggle + show the input directly.
-        if (hasUpstreamKey)
-        {
-            // Show the toggle so the user can opt out of inheriting.
-            RecapUseSameKeyCard.Visibility = Visibility.Visible;
-            // Key card shows when the user has explicitly opted OUT.
-            RecapKeyCard.Visibility = ViewModel.RecapUseSameKey
-                ? Visibility.Collapsed : Visibility.Visible;
-        }
-        else
-        {
-            // No upstream key for this vendor — toggle is meaningless,
-            // hide it AND coerce the underlying value to false so a
-            // stale `true` from a previous config doesn't keep the
-            // key card hidden (would lock the user out).
-            RecapUseSameKeyCard.Visibility = Visibility.Collapsed;
-            if (ViewModel.RecapUseSameKey)
-            {
-                ViewModel.RecapUseSameKey = false;
-                App.Log("[Auth] coerced recap_use_same_key=false (no upstream key for vendor)", "Auth");
-            }
-            RecapKeyCard.Visibility = Visibility.Visible;
-        }
+        // Recap keys come from the Providers & keys page (recap scope) or the
+        // subscription path — there's no inline recap key field or inheritance
+        // toggle anymore. The dispatcher derives the recap vendor from the
+        // model and pulls its recap/llm-scope key from the keystore.
+        RecapUseSameKeyCard.Visibility = Visibility.Collapsed;
+        RecapKeyCard.Visibility = Visibility.Collapsed;
 
         // Update the bound `HasRecapKey` so the PasswordBox shows the
         // ✓ badge + "Already saved · paste to replace" placeholder

@@ -45,6 +45,15 @@ public partial class App : Application
         catch (Exception ex) { Log($"ReregisterDictHotkey exc: {ex.Message}", "Hotkey"); }
     }
 
+    /// <summary>Re-bind the optional dedicated command-mode hotkey after the
+    /// user edits it in Settings. An empty combo unregisters it. No-op until
+    /// the service exists.</summary>
+    public void ReregisterCommandHotkey(string combo)
+    {
+        try { _commandHotkey?.Register(combo); }
+        catch (Exception ex) { Log($"ReregisterCommandHotkey exc: {ex.Message}", "Hotkey"); }
+    }
+
     private PillWindow? _pillWindow;
     private CaptionWindow? _captionWindow;
     private MeetingWindow? _meetingWindow;
@@ -57,6 +66,7 @@ public partial class App : Application
     private UiPreferences _uiPrefs = new();
     private DispatcherQueue? _dispatcherQueue;
     private DictHotkeyService? _dictHotkey;
+    private CommandHotkeyService? _commandHotkey;
     private CallNudgeWindow? _callNudgeWindow;
     private Services.CallDetectionService? _callDetection;
 
@@ -499,6 +509,81 @@ public partial class App : Application
         {
             Log($"DictHotkey start failed: {ex.Message}", "Hotkey");
         }
+
+        // Optional dedicated command-mode hotkey (one-shot). Empty by
+        // default → Register no-ops and nothing is bound; the user opts in
+        // from Settings → Shortcut.
+        try
+        {
+            _commandHotkey = new CommandHotkeyService();
+            _commandHotkey.Triggered += OnCommandHotkeyTriggered;
+            _commandHotkey.RegistrationFailed += combo =>
+                RunOnUI(() => Services.DictNotificationService.ShowHotkeyConflict(combo));
+            _commandHotkey.Register(_uiPrefs.CommandHotkey);
+        }
+        catch (Exception ex)
+        {
+            Log($"CommandHotkey start failed: {ex.Message}", "Hotkey");
+        }
+    }
+
+    /// <summary>Dedicated command-hotkey handler — fires on the pump thread,
+    /// marshals to the UI dispatcher. TOGGLE semantics (RegisterHotKey is
+    /// key-down only): from Idle it starts a ONE-SHOT command recording
+    /// (CommandOneShot routes the stop to the transform/generate path and
+    /// paints the pill amber); pressed again while recording it stops. The
+    /// one-shot clears itself in StopAndCommandTransform, so we revert to
+    /// normal output afterwards regardless of the sticky menu toggle.</summary>
+    private void OnCommandHotkeyTriggered()
+    {
+        _dispatcherQueue?.TryEnqueue(async () =>
+        {
+            try
+            {
+                var state = _appViewModel.CurrentState;
+                if (state == AppState.Idle && !_stopInProgress)
+                {
+                    CaptureAndPushAppContext();
+                    _appViewModel.SuppressRecordingStarted = false;
+                    _appViewModel.CommandOneShot = true;
+                    var rc = DimmyNative.dimmy_start_recording();
+                    if (rc == -1)
+                    {
+                        _appViewModel.CommandOneShot = false;
+                        _appViewModel.SetError("No API key configured");
+                    }
+                    else if (rc == -7)
+                    {
+                        _appViewModel.CommandOneShot = false;
+                        PttLog("Command hotkey suppressed: meeting recording active (rc=-7)");
+                    }
+                    else if (rc < 0)
+                    {
+                        _appViewModel.CommandOneShot = false;
+                        _appViewModel.SetError($"Recording failed ({rc})");
+                    }
+                    else
+                    {
+                        PttLog("Command hotkey: one-shot recording started");
+                        _appViewModel.SetState(AppState.Recording);
+                    }
+                }
+                else if (state == AppState.Recording && !_stopInProgress)
+                {
+                    _appViewModel.SuppressRecordingStarted = true;
+                    PttLog("Command hotkey: stopping → command transform");
+                    await StopAndProcess();
+                }
+                else
+                {
+                    PttLog($"Command hotkey ignored (state={state}, stopInProgress={_stopInProgress})");
+                }
+            }
+            catch (Exception ex)
+            {
+                PttLog($"Command hotkey handler exc: {ex.Message}");
+            }
+        });
     }
 
     /// <summary>Add-to-dictionary handler — fires on the DictHotkey
@@ -1307,9 +1392,11 @@ public partial class App : Application
         try
         {
             // Command Mode branch: instead of dictating, transform the
-            // user's selected text with what they just spoke. Reuses the
-            // same hotkey — the pill-menu toggle decides the mode.
-            if (_appViewModel.CommandMode)
+            // user's selected text with what they just spoke (or generate +
+            // insert when nothing is selected). Two ways in: the sticky
+            // pill-menu toggle (CommandMode) OR a one-shot fired by the
+            // dedicated command hotkey (CommandOneShot).
+            if (_appViewModel.CommandMode || _appViewModel.CommandOneShot)
             {
                 await StopAndCommandTransform();
                 return;
@@ -1431,12 +1518,12 @@ public partial class App : Application
             }
 
             // Re-assert foreground (the transform round-trip can take
-            // seconds; focus may have drifted again) then paste.
+            // seconds; focus may have drifted again) then paste. With a
+            // selection the paste REPLACES it; with no selection there's
+            // nothing highlighted so the same paste INSERTS the generated
+            // text at the cursor — the behaviour the user expects for both.
             await RestoreTargetForegroundAsync();
-            if (result.IsPlainFallback)
-                PttLog("CommandMode: no selection — pasting spoken text as dictation");
-            else
-                PttLog($"CommandMode: pasting transformed text ({result.Text!.Length} chars)");
+            PttLog($"CommandMode: pasting result ({result.Text!.Length} chars)");
             await TextInjectionService.PasteText(result.Text!, _appViewModel.KeepInClipboard);
             _appViewModel.SetState(AppState.Completing);
             _targetContext = null;
@@ -1445,6 +1532,13 @@ public partial class App : Application
         {
             PttLog($"CommandMode: EXCEPTION {ex.GetType().Name}: {ex.Message}");
             _appViewModel.SetError(ex.Message);
+        }
+        finally
+        {
+            // A one-shot (dedicated-hotkey) command always reverts to normal
+            // output afterwards. The sticky menu toggle (CommandMode) is
+            // left untouched, so it stays on across commands as intended.
+            _appViewModel.CommandOneShot = false;
         }
     }
 
@@ -1961,6 +2055,7 @@ public partial class App : Application
 
         _hotkeyService?.Dispose();
         _dictHotkey?.Dispose();
+        _commandHotkey?.Dispose();
         _trayService?.Dispose();
         _commandPipe?.Dispose();
         _appViewModel.PropertyChanged -= OnAppViewModelPropertyChangedForTaskbar;
