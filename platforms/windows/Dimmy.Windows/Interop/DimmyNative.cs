@@ -399,6 +399,23 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_hotkey_take_event();
 
+    // Optional dedicated command-mode hotkey — runs on the SAME Rust hook,
+    // so it inherits toggle/PTT + every combo (incl. modifier-only like
+    // Win+Alt). Empty combo disables it.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void dimmy_hotkey_set_command(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string combo);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_hotkey_take_command_event();
+
+    // 1 if the two combos conflict (one is a subset of the other) — used to
+    // reject a command hotkey that collides with the dictation/dict hotkey.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_hotkey_combos_conflict(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string a,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string b);
+
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern void dimmy_hotkey_start_recording();
 

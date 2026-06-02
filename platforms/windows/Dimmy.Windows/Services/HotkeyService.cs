@@ -21,7 +21,15 @@ public class HotkeyService : IDisposable
     public event Action? HotkeyPressed;
     public event Action? HotkeyReleased;
 
-    /// <summary>Whether PTT mode is active. Set by the caller before Register.</summary>
+    /// <summary>Dedicated command-mode hotkey edges (optional, opt-in). Same
+    /// Rust hook as the dictation hotkey, so it honours <see cref="PttMode"/>
+    /// identically: in toggle mode only Pressed fires (press=start,
+    /// press=stop); in PTT mode Pressed starts and Released stops.</summary>
+    public event Action? CommandHotkeyPressed;
+    public event Action? CommandHotkeyReleased;
+
+    /// <summary>Whether PTT mode is active. Set by the caller before Register.
+    /// Drives BOTH the dictation and the command hotkey release semantics.</summary>
     public bool PttMode { get; set; }
 
     private static readonly string LogPath = Path.Combine(
@@ -61,6 +69,17 @@ public class HotkeyService : IDisposable
         _pollThread.Start();
     }
 
+    /// <summary>Set (or clear) the optional dedicated command-mode shortcut on
+    /// the same Rust hook. Empty/whitespace disables it. Safe to call before
+    /// or after <see cref="Register"/> — the poll loop reads its events the
+    /// moment they appear.</summary>
+    public void SetCommandShortcut(string? combo)
+    {
+        var c = combo ?? "";
+        DimmyNative.dimmy_hotkey_set_command(c);
+        Log($"SetCommandShortcut(\"{c}\") via Rust FFI");
+    }
+
     private void StopPolling()
     {
         _polling = false;
@@ -83,6 +102,20 @@ public class HotkeyService : IDisposable
                 Log($"EVENT: released (PttMode={PttMode})");
                 if (PttMode)
                     _dispatcher.TryEnqueue(() => HotkeyReleased?.Invoke());
+            }
+
+            // Command-mode hotkey edges (same hook, same PTT/toggle rules).
+            int cev = DimmyNative.dimmy_hotkey_take_command_event();
+            if (cev == 1)
+            {
+                Log($"CMD EVENT: pressed (PttMode={PttMode})");
+                _dispatcher.TryEnqueue(() => CommandHotkeyPressed?.Invoke());
+            }
+            else if (cev == 2)
+            {
+                Log($"CMD EVENT: released (PttMode={PttMode})");
+                if (PttMode)
+                    _dispatcher.TryEnqueue(() => CommandHotkeyReleased?.Invoke());
             }
             Thread.Sleep(10);
         }

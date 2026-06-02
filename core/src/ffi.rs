@@ -4535,7 +4535,45 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
     let use_kr = st.use_keyring.lock().map(|k| *k).unwrap_or(false);
     let recap_same_key = st.recap_use_same_key.lock().map(|b| *b).unwrap_or(true);
     let (effective_url, effective_key) = match recap_vendor_derived {
-        None => (api_url.clone(), api_key.clone()),
+        None => {
+            // "Pick best" / no explicit recap model → inherit the dictation
+            // provider URL + key. The in-memory dictation key can be empty
+            // even when the provider IS configured: the key is saved to the
+            // keystore by the Providers page, but the in-memory llm_api_key
+            // slot only gets populated when a dictation LLM rewrite runs. A
+            // user who never triggers dictation rewrite (or uses a different
+            // STT vendor) hits an empty in-memory key here and the recap
+            // dies with -2 "configure a key" despite a perfectly good saved
+            // key. Fall back to the keystore for the dictation vendor (Llm
+            // scope, then Stt) so Pick-best recap authenticates like every
+            // other branch already does. Burned 2026-06-02: Groq LLM +
+            // Pick-best recap returned -2 with a saved Groq key.
+            let key = if !api_key.is_empty() {
+                api_key.clone()
+            } else {
+                crate::load_key_with_store(
+                    &st.key_store,
+                    crate::provider::KeyringScope::Llm(dictation_vendor),
+                    use_kr,
+                )
+                .filter(|k| !k.is_empty())
+                .or_else(|| {
+                    crate::load_key_with_store(
+                        &st.key_store,
+                        crate::provider::KeyringScope::Stt(dictation_vendor),
+                        use_kr,
+                    )
+                })
+                .unwrap_or_default()
+            };
+            log(&format!(
+                "[LlmRaw] recap pick-best (inherit {}) — in_mem_key={} resolved_key={}",
+                dictation_vendor.as_str(),
+                !api_key.is_empty(),
+                !key.is_empty()
+            ));
+            (api_url.clone(), key)
+        }
         Some(vendor) if vendor == dictation_vendor => {
             // Same vendor as dictation. Toggle picks: reuse dictation
             // key (default) or load a dedicated `Recap(vendor)` key.
@@ -4719,6 +4757,10 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
 ///   effective recap provider.
 /// - -7 429 rate-limit — too many calls, retry later.
 /// - -8 network / DNS — couldn't reach the endpoint.
+/// - -9 413 payload too large — the recap prompt exceeds the model's
+///   context window or the plan's per-request / per-minute token limit
+///   (common on Groq free tier). UI should suggest a larger-context
+///   model or a higher-tier provider.
 fn categorize_llm_error_to_rc(err: &crate::error::LlmError) -> c_int {
     use crate::error::LlmError;
     match err {
@@ -4726,6 +4768,7 @@ fn categorize_llm_error_to_rc(err: &crate::error::LlmError) -> c_int {
             match *status {
                 401 | 403 => -6,
                 429 => -7,
+                413 => -9, // payload / context / tokens-per-minute too large
                 404 => {
                     // Model-not-found is the specific case we care
                     // about most. Anthropic 404 bodies contain
@@ -5333,6 +5376,53 @@ pub unsafe extern "C" fn dimmy_hotkey_set(combo_ptr: *const c_char) {
     if let Ok(combo) = CStr::from_ptr(combo_ptr).to_str() {
         crate::hotkey::set_shortcut(combo);
         crate::log(&format!("[Hotkey] set_shortcut(\"{}\")", combo));
+    }
+}
+
+/// Set (or clear) the optional dedicated command-mode shortcut. This runs on
+/// the SAME low-level keyboard hook as the dictation shortcut, so it supports
+/// the identical combo grammar (modifier-only like "Win+Alt", modifier+key,
+/// 2-modifiers+key) AND both toggle + push-to-talk semantics. A null/empty/
+/// unparseable combo DISABLES the command hotkey.
+///
+/// # Safety
+/// `combo_ptr` must be null or a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_hotkey_set_command(combo_ptr: *const c_char) {
+    if combo_ptr.is_null() {
+        crate::hotkey::set_command_shortcut("");
+        crate::log("[Hotkey] set_command_shortcut(disabled)");
+        return;
+    }
+    if let Ok(combo) = CStr::from_ptr(combo_ptr).to_str() {
+        crate::hotkey::set_command_shortcut(combo);
+        crate::log(&format!("[Hotkey] set_command_shortcut(\"{}\")", combo));
+    }
+}
+
+/// Returns 1 if the two combos conflict (one is a subset of the other, so
+/// pressing one would also trigger the other), else 0. Used by the host to
+/// reject a command hotkey that collides with the dictation / dictionary
+/// hotkey before binding it. A null/empty (disabled) combo never conflicts.
+///
+/// # Safety
+/// `a` and `b` must each be null or a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_hotkey_combos_conflict(a: *const c_char, b: *const c_char) -> c_int {
+    let sa = if a.is_null() {
+        String::new()
+    } else {
+        CStr::from_ptr(a).to_string_lossy().into_owned()
+    };
+    let sb = if b.is_null() {
+        String::new()
+    } else {
+        CStr::from_ptr(b).to_string_lossy().into_owned()
+    };
+    if crate::hotkey::combos_conflict(&sa, &sb) {
+        1
+    } else {
+        0
     }
 }
 
@@ -6106,6 +6196,15 @@ pub extern "C" fn dimmy_hotkey_take_event() -> c_int {
         crate::telemetry::track(crate::telemetry::Event::FeatureHotkeyTriggered);
     }
     ev as c_int
+}
+
+/// Poll for command-mode hotkey events (the optional dedicated shortcut).
+/// Returns 0=none, 1=pressed, 2=released — same edges as
+/// `dimmy_hotkey_take_event`, but for the command binding. Returns 0 forever
+/// while the command hotkey is unconfigured.
+#[no_mangle]
+pub extern "C" fn dimmy_hotkey_take_command_event() -> c_int {
+    crate::hotkey::take_command_event() as c_int
 }
 
 /// Start recording mode for shortcut capture.

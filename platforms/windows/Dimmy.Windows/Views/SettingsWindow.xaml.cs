@@ -214,12 +214,9 @@ public sealed partial class SettingsWindow : Window
             var prefs = Services.UiPreferences.Load();
             ViewModel.DictHotkey = string.IsNullOrEmpty(prefs.DictHotkey)
                 ? "ctrl+shift+d" : prefs.DictHotkey;
-            // Coerce a stale / unbindable saved combo to empty so the
-            // recorder shows "Not set" rather than a combo that never
-            // registers (e.g. a modifier-only value from before RequireKey).
-            var savedCmd = prefs.CommandHotkey ?? "";
-            ViewModel.CommandHotkey =
-                Services.DictHotkeyParser.TryParse(savedCmd, out _, out _) ? savedCmd : "";
+            // The command hotkey now runs on the Rust hook (like dictation),
+            // so modifier-only combos (Win+Alt) are valid — load it verbatim.
+            ViewModel.CommandHotkey = prefs.CommandHotkey ?? "";
         }
         catch { }
 
@@ -241,11 +238,25 @@ public sealed partial class SettingsWindow : Window
                 }
                 else if (e.PropertyName == nameof(ViewModel.CommandHotkey))
                 {
+                    var cmd = ViewModel.CommandHotkey ?? "";
+                    // Reject a command combo that overlaps the dictation or
+                    // dictionary shortcut — pressing it would trigger both on
+                    // the shared hook. Clearing to "" re-enters this handler
+                    // with an empty combo (never conflicts) → persists disabled.
+                    if (!string.IsNullOrWhiteSpace(cmd)
+                        && (Interop.DimmyNative.dimmy_hotkey_combos_conflict(cmd, ViewModel.Shortcut ?? "") != 0
+                            || Interop.DimmyNative.dimmy_hotkey_combos_conflict(cmd, ViewModel.DictHotkey ?? "") != 0))
+                    {
+                        App.Log($"command hotkey '{cmd}' overlaps dictation/dict — rejecting", "Hotkey");
+                        Services.DictNotificationService.ShowHotkeyConflict(cmd);
+                        ViewModel.CommandHotkey = "";
+                        return;
+                    }
                     var prefs = Services.UiPreferences.Load();
-                    prefs.CommandHotkey = ViewModel.CommandHotkey ?? "";
+                    prefs.CommandHotkey = cmd;
                     prefs.Save();
-                    App.Instance?.ReregisterCommandHotkey(ViewModel.CommandHotkey ?? "");
-                    App.Log($"command hotkey updated to '{ViewModel.CommandHotkey}'", "Hotkey");
+                    App.Instance?.ReregisterCommandHotkey(cmd);
+                    App.Log($"command hotkey updated to '{cmd}'", "Hotkey");
                 }
             }
             catch (Exception ex)

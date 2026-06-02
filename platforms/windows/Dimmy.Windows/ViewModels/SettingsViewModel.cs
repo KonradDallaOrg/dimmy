@@ -665,6 +665,16 @@ public partial class SettingsViewModel : ObservableObject
                 || rusk.ValueKind != System.Text.Json.JsonValueKind.False;
             RecapModelOverride = r.TryGetProperty("recap_model_override", out var rmo)
                 ? rmo.GetString() ?? "" : "";
+            // Migrate stale Gemini recap ids saved by older builds — the bare
+            // "gemini-3.1-pro" 404s ("model not found"); the valid id carries
+            // the -preview suffix. Mirrors the LlmApiModel migration above.
+            RecapModelOverride = RecapModelOverride switch
+            {
+                "gemini-3.1-pro" => "gemini-3.1-pro-preview",
+                "gemini-3-1-pro" => "gemini-3.1-pro-preview",
+                "gemini-3-pro" => "gemini-3-pro-preview",
+                _ => RecapModelOverride,
+            };
             MeetingStoragePath = r.TryGetProperty("meeting_storage_path", out var msp)
                 ? msp.GetString() ?? "" : "";
             // Notion target + auto-send flag round-trip through config.

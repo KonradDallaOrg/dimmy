@@ -850,12 +850,12 @@
               </controls:SettingCard>
               <controls:SettingCard Glyph="&#xE945;"
                                     Label="Command mode shortcut"
-                                    InfoTip="Optional. A dedicated key that runs ONE command (transform the selected text, or generate and insert when nothing is selected) and then goes back to normal dictation. Leave it unset to use command mode only from the pill menu, where it stays on until you turn it off."
+                                    InfoTip="Optional. A dedicated shortcut that runs ONE command (transform the selected text, or generate and insert when nothing is selected) and then goes back to normal dictation. It follows the same Push-to-Talk or Toggle mode as your dictation shortcut. Leave it unset to use command mode only from the pill menu, where it stays on until you turn it off."
                                     HelpUrl="https://dimmy.app/help/hotkey-change">
                 <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
                   <Button Content="Clear" Click="CommandHotkeyClear_Click"
                           VerticalAlignment="Center" />
-                  <controls:ShortcutRecorder Shortcut="{Binding CommandHotkey, Mode=TwoWay}" RequireKey="True" />
+                  <controls:ShortcutRecorder Shortcut="{Binding CommandHotkey, Mode=TwoWay}" />
                 </StackPanel>
               </controls:SettingCard>
 
