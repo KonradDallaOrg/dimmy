@@ -1,0 +1,128 @@
+{
+  "schema": 1,
+  "generated": "2026-06-02",
+  "note": "Single source of truth for the cloud models Dimmy offers per provider. Today the apps still hardcode these in several places (Win SettingsViewModel/ProviderCatalog/SettingsWindow.xaml, Mac AppState/RecapModel/ProviderCatalog); this file is the canonical list they will be migrated to read. Validate it against each provider's live /models endpoint with scripts/dev/check-model-ids.py before a release. 'tasks' drives which picker shows a model: stt = Voice input, llm = dictation rewrite, recap = meeting recap.",
+  "providers": [
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "llm_url": "https://api.openai.com/v1/chat/completions",
+      "stt_url": "https://api.openai.com/v1/audio/transcriptions",
+      "models_endpoint": "https://api.openai.com/v1/models",
+      "auth": "bearer",
+      "models": [
+        { "id": "gpt-5.5", "label": "GPT-5.5", "tasks": ["llm", "recap"], "tier": "top" },
+        { "id": "gpt-5.4-mini", "label": "GPT-5.4 mini", "tasks": ["llm", "recap"], "tier": "fast" },
+        { "id": "gpt-5.4-nano", "label": "GPT-5.4 nano", "tasks": ["llm", "recap"], "tier": "fastest" },
+        { "id": "gpt-5.1", "label": "GPT-5.1", "tasks": ["llm", "recap"] },
+        { "id": "gpt-5", "label": "GPT-5", "tasks": ["llm", "recap"] },
+        { "id": "gpt-5-mini", "label": "GPT-5 mini", "tasks": ["llm", "recap"] },
+        { "id": "gpt-5-nano", "label": "GPT-5 nano", "tasks": ["recap"] },
+        { "id": "gpt-4o", "label": "GPT-4o", "tasks": ["llm", "recap"] },
+        { "id": "gpt-4o-mini", "label": "GPT-4o mini", "tasks": ["llm", "recap"] },
+        { "id": "o3", "label": "o3 (reasoning)", "tasks": ["recap"] },
+        { "id": "o3-mini", "label": "o3 mini", "tasks": ["recap"] },
+        { "id": "whisper-1", "label": "Whisper", "tasks": ["stt"] },
+        { "id": "gpt-4o-transcribe", "label": "GPT-4o transcribe", "tasks": ["stt"] },
+        { "id": "gpt-4o-mini-transcribe", "label": "GPT-4o mini transcribe", "tasks": ["stt"] }
+      ]
+    },
+    {
+      "id": "anthropic",
+      "name": "Anthropic",
+      "llm_url": "https://api.anthropic.com/v1/messages",
+      "stt_url": "",
+      "models_endpoint": "https://api.anthropic.com/v1/models",
+      "auth": "anthropic",
+      "models": [
+        { "id": "claude-opus-4-8", "label": "Claude Opus 4.8", "tasks": ["llm", "recap"], "tier": "top" },
+        { "id": "claude-opus-4-7", "label": "Claude Opus 4.7", "tasks": ["llm", "recap"] },
+        { "id": "claude-sonnet-4-6", "label": "Claude Sonnet 4.6", "tasks": ["llm", "recap"], "tier": "balanced" },
+        { "id": "claude-haiku-4-5-20251001", "label": "Claude Haiku 4.5", "tasks": ["llm", "recap"], "tier": "fast" }
+      ]
+    },
+    {
+      "id": "gemini",
+      "name": "Google Gemini",
+      "llm_url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+      "stt_url": "https://generativelanguage.googleapis.com/v1beta/models",
+      "models_endpoint": "https://generativelanguage.googleapis.com/v1beta/models",
+      "auth": "gemini",
+      "models": [
+        { "id": "gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro", "tasks": ["llm", "recap"], "tier": "top" },
+        { "id": "gemini-3.1-flash-lite", "label": "Gemini 3.1 Flash Lite", "tasks": ["stt", "llm", "recap"], "tier": "fast" },
+        { "id": "gemini-3-pro-preview", "label": "Gemini 3 Pro", "tasks": ["llm", "recap"] },
+        { "id": "gemini-3-flash-preview", "label": "Gemini 3 Flash", "tasks": ["stt", "llm", "recap"] },
+        { "id": "gemini-2.5-pro", "label": "Gemini 2.5 Pro", "tasks": ["llm", "recap"] },
+        { "id": "gemini-2.5-flash", "label": "Gemini 2.5 Flash", "tasks": ["stt", "llm", "recap"] }
+      ]
+    },
+    {
+      "id": "groq",
+      "name": "Groq",
+      "llm_url": "https://api.groq.com/openai/v1/chat/completions",
+      "stt_url": "https://api.groq.com/openai/v1/audio/transcriptions",
+      "models_endpoint": "https://api.groq.com/openai/v1/models",
+      "auth": "bearer",
+      "models": [
+        { "id": "llama-3.3-70b-versatile", "label": "Llama 3.3 70B", "tasks": ["llm", "recap"], "tier": "top" },
+        { "id": "openai/gpt-oss-120b", "label": "GPT-OSS 120B", "tasks": ["llm", "recap"] },
+        { "id": "meta-llama/llama-4-scout-17b-16e-instruct", "label": "Llama 4 Scout 17B", "tasks": ["llm", "recap"] },
+        { "id": "llama-3.1-8b-instant", "label": "Llama 3.1 8B Instant", "tasks": ["llm", "recap"], "tier": "fastest" },
+        { "id": "qwen/qwen3-32b", "label": "Qwen3 32B", "tasks": ["llm", "recap"] },
+        { "id": "whisper-large-v3-turbo", "label": "Whisper Large v3 Turbo", "tasks": ["stt"] },
+        { "id": "whisper-large-v3", "label": "Whisper Large v3", "tasks": ["stt"] }
+      ]
+    },
+    {
+      "id": "deepgram",
+      "name": "Deepgram",
+      "llm_url": "",
+      "stt_url": "https://api.deepgram.com/v1/listen",
+      "models_endpoint": "https://api.deepgram.com/v1/models",
+      "auth": "deepgram",
+      "models": [
+        { "id": "nova-3", "label": "Nova 3", "tasks": ["stt"], "tier": "top" },
+        { "id": "nova-2", "label": "Nova 2", "tasks": ["stt"] }
+      ]
+    },
+    {
+      "id": "openrouter",
+      "name": "OpenRouter",
+      "llm_url": "https://openrouter.ai/api/v1/chat/completions",
+      "stt_url": "",
+      "models_endpoint": "https://openrouter.ai/api/v1/models",
+      "auth": "bearer",
+      "models": [
+        { "id": "meta-llama/llama-3.3-70b-instruct:free", "label": "Llama 3.3 70B (free)", "tasks": ["llm", "recap"] },
+        { "id": "deepseek/deepseek-r1:free", "label": "DeepSeek R1 (free)", "tasks": ["llm", "recap"] }
+      ]
+    },
+    {
+      "id": "together",
+      "name": "Together",
+      "llm_url": "https://api.together.xyz/v1/chat/completions",
+      "stt_url": "https://api.together.xyz/v1/audio/transcriptions",
+      "models_endpoint": "https://api.together.xyz/v1/models",
+      "auth": "bearer",
+      "models": [
+        { "id": "meta-llama/Llama-3.3-70B-Instruct-Turbo", "label": "Llama 3.3 70B Turbo", "tasks": ["llm", "recap"] },
+        { "id": "Qwen/Qwen2.5-7B-Instruct-Turbo", "label": "Qwen 2.5 7B Turbo", "tasks": ["llm", "recap"] },
+        { "id": "nvidia/parakeet-tdt-0.6b-v3", "label": "Parakeet TDT v3", "tasks": ["stt"] },
+        { "id": "openai/whisper-large-v3", "label": "Whisper Large v3", "tasks": ["stt"] }
+      ]
+    },
+    {
+      "id": "fireworks",
+      "name": "Fireworks",
+      "llm_url": "https://api.fireworks.ai/inference/v1/chat/completions",
+      "stt_url": "https://audio-turbo.api.fireworks.ai/v1/audio/transcriptions",
+      "models_endpoint": "https://api.fireworks.ai/inference/v1/models",
+      "auth": "bearer",
+      "models": [
+        { "id": "accounts/fireworks/models/kimi-k2p6", "label": "Kimi K2", "tasks": ["llm", "recap"] },
+        { "id": "whisper-v3-turbo", "label": "Whisper v3 Turbo", "tasks": ["stt"] }
+      ]
+    }
+  ]
+}
