@@ -465,8 +465,72 @@ enum SelectionCaptureFlow {
 
     private static let probeSentinel = "__DIMMY_CMD_PROBE_v1__"
 
+    /// Public entry point. Tries the Accessibility API first (instant,
+    /// no clipboard pollution, no synthetic keystroke); falls back to a
+    /// synthetic Cmd+C round-trip when the focused element doesn't
+    /// expose `kAXSelectedTextAttribute` (e.g. Electron app, browser
+    /// web content, app without AX). Same Accessibility permission
+    /// the existing CGEventTap path already requires — no new TCC
+    /// prompt.
     @MainActor
     static func capture() async -> String? {
+        if let viaAX = captureViaAccessibility() {
+            NSLog("[CmdMode] AX path captured \(viaAX.count) chars")
+            return viaAX
+        }
+        return await captureViaSyntheticCopy()
+    }
+
+    /// Read the focused element's selected text directly via the AX
+    /// tree. No clipboard, no keystroke, microseconds instead of 500
+    /// ms. Returns nil for:
+    ///   - AX call failure (no focused element, attribute unsupported)
+    ///   - empty selection (caller wants nil for "no selection")
+    ///   - password fields (AX deliberately refuses)
+    /// Callers fall back to `captureViaSyntheticCopy` on nil.
+    private static func captureViaAccessibility() -> String? {
+        let systemWide = AXUIElementCreateSystemWide()
+        var focused: CFTypeRef?
+        let focusErr = AXUIElementCopyAttributeValue(
+            systemWide,
+            kAXFocusedUIElementAttribute as CFString,
+            &focused
+        )
+        guard focusErr == .success, let raw = focused else { return nil }
+        // The attribute contract guarantees AXUIElement here; defensive
+        // CFTypeID check in case a buggy app returns something else
+        // (would crash the force-cast otherwise).
+        guard CFGetTypeID(raw) == AXUIElementGetTypeID() else { return nil }
+        let element = raw as! AXUIElement
+
+        var selected: CFTypeRef?
+        let selErr = AXUIElementCopyAttributeValue(
+            element,
+            kAXSelectedTextAttribute as CFString,
+            &selected
+        )
+        guard selErr == .success else { return nil }
+        return normalizeCapturedText(selected as? String)
+    }
+
+    /// Normalize a raw captured string into the contract the caller
+    /// expects: nil for "no usable selection" (nil input, empty string,
+    /// or whitespace-only); the ORIGINAL string verbatim otherwise so
+    /// the user's exact selection survives downstream. Pure, no side
+    /// effects, no AX — directly unit-testable.
+    static func normalizeCapturedText(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        if raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return nil
+        }
+        return raw
+    }
+
+    /// Legacy fallback: synthesize Cmd+C, wait for pasteboard.changeCount
+    /// to bump, restore the previous clipboard. Same path that shipped
+    /// before the AX-first refactor; used when AX returns nil.
+    @MainActor
+    private static func captureViaSyntheticCopy() async -> String? {
         let pb = NSPasteboard.general
         let previousText = pb.string(forType: .string)
 
@@ -498,9 +562,8 @@ enum SelectionCaptureFlow {
             restorePasteboard(previousText)
             return nil
         }
-        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         restorePasteboard(previousText)
-        return text.isEmpty ? nil : text
+        return normalizeCapturedText(raw)
     }
 
     private static func synthesizeCmdC() {
