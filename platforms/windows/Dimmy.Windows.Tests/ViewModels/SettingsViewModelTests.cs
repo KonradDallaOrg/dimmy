@@ -326,7 +326,7 @@ public class SettingsViewModelTests
               "llm_api_url": "https://api.anthropic.com/v1/messages",
               "llm_api_model": "claude-opus-4-7",
               "llm_auth_method": "subscription",
-              "recap_model_override": "gemini-3.1-pro",
+              "recap_model_override": "gemini-3.1-pro-preview",
               "language": "it"
             }
             """;
@@ -334,7 +334,7 @@ public class SettingsViewModelTests
         vm.LoadFromJson(src);
         // VM has the values internally:
         Assert.Equal("https://api.anthropic.com/v1/messages", vm.LlmApiUrl);
-        Assert.Equal("gemini-3.1-pro", vm.RecapModelOverride);
+        Assert.Equal("gemini-3.1-pro-preview", vm.RecapModelOverride);
         // But default ToJson() OMITS them — Rust core preserves disk state.
         var json = vm.ToJson();
         Assert.DoesNotContain("llm_api_url", json);
@@ -683,7 +683,7 @@ public class SettingsViewModelTests
     [InlineData("claude-opus-4-7")]
     [InlineData("claude-sonnet-4-6")]
     [InlineData("claude-haiku-4-5-20251001")]
-    [InlineData("gemini-3.1-pro")]
+    [InlineData("gemini-3.1-pro-preview")]
     [InlineData("gemini-2.5-pro")]
     [InlineData("gemini-2.5-flash")]
     [InlineData("gpt-5")]
@@ -701,6 +701,22 @@ public class SettingsViewModelTests
         var vm2 = new SettingsViewModel();
         vm2.LoadFromJson(json);
         Assert.Equal(modelId, vm2.RecapModelOverride);
+    }
+
+    [Theory]
+    [InlineData("gemini-3.1-pro", "gemini-3.1-pro-preview")]
+    [InlineData("gemini-3-1-pro", "gemini-3.1-pro-preview")]
+    [InlineData("gemini-3-pro", "gemini-3-pro-preview")]
+    [InlineData("gpt-5", "gpt-5")] // valid ids pass through untouched
+    [InlineData("gemini-3.1-pro-preview", "gemini-3.1-pro-preview")]
+    public void LoadFromJson_migrates_stale_gemini_recap_ids(string stored, string expected)
+    {
+        // Older builds saved bare Gemini ids ("gemini-3.1-pro") that 404 on
+        // the live endpoint ("models/gemini-3.1-pro is not found"). LoadFromJson
+        // migrates them to the valid -preview form so the recap call resolves.
+        var vm = new SettingsViewModel();
+        vm.LoadFromJson($"{{\"recap_model_override\":\"{stored}\"}}");
+        Assert.Equal(expected, vm.RecapModelOverride);
     }
 
     // ── Audio-source dead config field (always-mix architecture) ──
@@ -757,6 +773,7 @@ public class SettingsViewModelTests
     [InlineData(-6, "key")]
     [InlineData(-7, "rate")]
     [InlineData(-8, "Network")]
+    [InlineData(-9, "too large")]
     public void RecapRcToUserMessage_named_categories_have_text(int rc, string keyword)
     {
         var msg = Dimmy.Windows.Helpers.MeetingRecapHelpers

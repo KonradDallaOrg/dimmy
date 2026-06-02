@@ -906,10 +906,16 @@ pub async fn process_raw_prompt(
     if !status.is_success() {
         let mut body = response.text().await.unwrap_or_default();
         body.truncate(200); // never leak full error body (key/PII)
-        return Err(crate::error::LlmError::Network(format!(
-            "{}: {}",
-            status, body
-        )));
+                            // Preserve the STRUCTURED status so the caller can categorise it
+                            // (404 model-not-found, 401/403 auth, 429 rate, 413 too-large, …).
+                            // Previously every non-2xx collapsed into LlmError::Network, so the
+                            // UI showed "Network error. Check your connection." for a 404 wrong
+                            // model id or a 413 payload-too-large — completely misleading.
+                            // Burned 2026-06-02 (Groq 413 + Gemini 404 both surfaced as network).
+        return Err(crate::error::LlmError::Api {
+            status: status.as_u16(),
+            body,
+        });
     }
 
     if is_anthropic {
