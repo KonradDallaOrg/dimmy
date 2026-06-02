@@ -222,13 +222,15 @@ struct MacVoicePage: View {
                 }
 
                 if appState.sttMode == "cloud" {
+                    let availablePresets = appState.availableSttPresets()
+                    let hasOnlyCustom = availablePresets.count == 1 && availablePresets.first?.provider == .custom
                     MacRow(
                         "Provider",
-                        hint: "The model you pick sets where your audio is sent. Free options are marked.",
+                        hint: "Only providers you've connected on Providers and keys are shown. Pick the model that suits your language and speed needs.",
                         hintURL: URL(string: "https://dimmy.app/help/cloud-providers")
                     ) {
                         Picker("", selection: sttPresetBinding) {
-                            ForEach(SttPreset.presets) { preset in
+                            ForEach(availablePresets) { preset in
                                 Label {
                                     Text(preset.displayName)
                                 } icon: {
@@ -249,32 +251,86 @@ struct MacVoicePage: View {
                         .frame(width: 320)
                     }
 
-                    MacRow(
-                        "API key",
-                        description: "Encrypted locally.",
-                        hint: "Stored encrypted on this device with AES-256. The provider only ever receives your audio and this key, nothing else.",
-                        hintURL: URL(string: "https://dimmy.app/help/api-keys"),
-                        showsDivider: showKeyField
-                    ) {
-                        if appState.hasKey {
-                            HStack(spacing: 4) {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(.green)
-                                Text("Saved")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundStyle(.green)
+                    if hasOnlyCustom {
+                        MacRow(
+                            "",
+                            description: "No cloud STT providers connected yet.",
+                            showsDivider: true
+                        ) {
+                            Button("Open Providers and keys") {
+                                NotificationCenter.default.post(
+                                    name: .dimmyNavigateSettingsTab,
+                                    object: nil,
+                                    userInfo: ["tab": "providers"]
+                                )
                             }
+                            .controlSize(.small)
                         }
-                        Button(appState.hasKey ? (showKeyField ? "Cancel" : "Replace...")
-                                               : (showKeyField ? "Cancel" : "Add key...")) {
-                            showKeyField.toggle()
-                            if !showKeyField { apiKeyInput = "" }
-                        }
-                        .controlSize(.small)
                     }
 
-                    if showKeyField {
-                        apiKeyEntryRow
+                    // Custom keeps the inline key field (it's the only
+                    // STT preset whose URL is also user-supplied — the
+                    // Providers and keys page has no Custom card).
+                    // Every other provider routes through the Providers
+                    // and keys page: one source of truth, single FFI
+                    // refresh on save. Mirror of Win
+                    // ProviderCatalog.IsKeyableHere == false for custom.
+                    let currentPresetIsCustom = appState.apiUrl.isEmpty
+                    if currentPresetIsCustom {
+                        MacRow(
+                            "API key",
+                            description: "Encrypted locally.",
+                            hint: "Stored encrypted on this device with AES-256. The provider only ever receives your audio and this key, nothing else.",
+                            hintURL: URL(string: "https://dimmy.app/help/api-keys"),
+                            showsDivider: showKeyField
+                        ) {
+                            if appState.hasKey {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(.green)
+                                    Text("Saved")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundStyle(.green)
+                                }
+                            }
+                            Button(appState.hasKey ? (showKeyField ? "Cancel" : "Replace...")
+                                                   : (showKeyField ? "Cancel" : "Add key...")) {
+                                showKeyField.toggle()
+                                if !showKeyField { apiKeyInput = "" }
+                            }
+                            .controlSize(.small)
+                        }
+                        if showKeyField {
+                            apiKeyEntryRow
+                        }
+                    } else {
+                        MacRow(
+                            "API key",
+                            description: appState.hasKey
+                                ? "Saved. Managed in Providers and keys."
+                                : "Not connected. Set it in Providers and keys.",
+                            hint: "Keys live in one place: Providers and keys. Connect once there, every page picks it up.",
+                            hintURL: URL(string: "https://dimmy.app/help/api-keys"),
+                            showsDivider: false
+                        ) {
+                            if appState.hasKey {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(.green)
+                                    Text("Saved")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundStyle(.green)
+                                }
+                            }
+                            Button("Manage on Providers and keys") {
+                                NotificationCenter.default.post(
+                                    name: .dimmyNavigateSettingsTab,
+                                    object: nil,
+                                    userInfo: ["tab": "providers"]
+                                )
+                            }
+                            .controlSize(.small)
+                        }
                     }
                 } else {
                     MacRow(

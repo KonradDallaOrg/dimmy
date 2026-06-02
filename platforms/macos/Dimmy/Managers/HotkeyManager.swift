@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import Carbon
+import Combine
 import CoreGraphics
 import Darwin
 
@@ -60,6 +61,17 @@ final class HotkeyManager {
 
     private var appState: AppState?
 
+    // Carbon hotkey registration for the dedicated one-shot Command-Mode
+    // shortcut (`AppState.commandHotkey`). Kept separate from the
+    // dictation CGEventTap (flagsChanged) because it's a modifier+key
+    // chord, not modifier-only. Mirrors the pattern in
+    // DictHotkeyManager.installCarbonHotKey. Carbon-registered hotkeys
+    // are consumed system-wide by the registering process so the focused
+    // app never sees the combo.
+    private var commandCarbonHotKeyRef: EventHotKeyRef?
+    private var commandCarbonEventHandler: EventHandlerRef?
+    private var lastCommandHotkey: HotkeyCombo?
+
     private init() {
         hkLog("[HotkeyManager] singleton init")
     }
@@ -95,7 +107,20 @@ final class HotkeyManager {
                 }
             }
         }
+
+        // Register the dedicated Command-Mode hotkey (if the user has
+        // set one) and re-register whenever it changes. Event-driven via
+        // Combine sink on the @Published commandHotkey, no polling.
+        installCommandCarbonHotKey(for: appState.commandHotkey)
+        appState.$commandHotkey
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] newValue in
+                self?.installCommandCarbonHotKey(for: newValue)
+            }
+            .store(in: &cancellables)
     }
+
+    private var cancellables = Set<AnyCancellable>()
 
     func stop() {
         stopAmplitudePolling()
@@ -106,7 +131,146 @@ final class HotkeyManager {
             NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
         }
         wakeObserver = nil
+        uninstallCommandCarbonHotKey()
+        cancellables.removeAll()
         appState?.hotkeyStatus = .uninstalled
+    }
+
+    // MARK: - Dedicated Command-Mode hotkey
+
+    /// Carbon bitmask for the modifier set of a `HotkeyCombo`. Carbon
+    /// uses its own constants (`cmdKey`, `shiftKey`, …) distinct from
+    /// NSEvent.ModifierFlags. Matches DictHotkeyManager.carbonModifiers.
+    private func carbonModifiers(_ combo: HotkeyCombo) -> UInt32 {
+        var m: UInt32 = 0
+        if combo.command { m |= UInt32(cmdKey) }
+        if combo.shift   { m |= UInt32(shiftKey) }
+        if combo.option  { m |= UInt32(optionKey) }
+        if combo.control { m |= UInt32(controlKey) }
+        return m
+    }
+
+    /// Register (or re-register) the global Carbon hotkey for the
+    /// dedicated one-shot Command-Mode shortcut. Idempotent: tears
+    /// down any previous registration first. Nil combo = uninstall and
+    /// leave nothing registered.
+    private func installCommandCarbonHotKey(for combo: HotkeyCombo?) {
+        if lastCommandHotkey == combo { return }
+        uninstallCommandCarbonHotKey()
+        lastCommandHotkey = combo
+
+        guard let combo else { return }
+        let mods = carbonModifiers(combo)
+        guard mods != 0 else {
+            hkLog("[CmdHotkey] refusing to register modifier-less combo")
+            return
+        }
+
+        // 'DIMC' = "Dimmy Command". Distinct from DictHotkeyManager's
+        // 'DIMD' so the two handlers never see each other's events.
+        let signature: OSType = 0x44494D43
+        let hotKeyID = EventHotKeyID(signature: signature, id: 3)
+
+        var ref: EventHotKeyRef?
+        let regStatus = RegisterEventHotKey(
+            UInt32(combo.keyCode),
+            mods,
+            hotKeyID,
+            GetApplicationEventTarget(),
+            0,
+            &ref
+        )
+        guard regStatus == noErr, let ref = ref else {
+            hkLog("[CmdHotkey] RegisterEventHotKey failed status=\(regStatus) — combo may collide with system shortcut")
+            return
+        }
+        self.commandCarbonHotKeyRef = ref
+
+        var eventType = EventTypeSpec(
+            eventClass: OSType(kEventClassKeyboard),
+            eventKind: UInt32(kEventHotKeyPressed)
+        )
+        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+        let handler: EventHandlerUPP = { (_, eventRef, userData) -> OSStatus in
+            guard let userData = userData, let eventRef = eventRef else { return noErr }
+            // Inspect the event so we only react to our signature/id
+            // pair — a defensive guard in case the application target
+            // ever multiplexes hotkeys we didn't register.
+            var hkID = EventHotKeyID()
+            let getStatus = GetEventParameter(
+                eventRef,
+                EventParamName(kEventParamDirectObject),
+                EventParamName(typeEventHotKeyID),
+                nil,
+                MemoryLayout<EventHotKeyID>.size,
+                nil,
+                &hkID
+            )
+            guard getStatus == noErr, hkID.signature == 0x44494D43, hkID.id == 3 else {
+                return noErr
+            }
+            let manager = Unmanaged<HotkeyManager>.fromOpaque(userData).takeUnretainedValue()
+            Task { @MainActor in manager.handleCommandCarbonHotKey() }
+            return noErr
+        }
+
+        var handlerRef: EventHandlerRef?
+        let installStatus = InstallEventHandler(
+            GetApplicationEventTarget(),
+            handler,
+            1,
+            &eventType,
+            selfPtr,
+            &handlerRef
+        )
+        if installStatus == noErr {
+            self.commandCarbonEventHandler = handlerRef
+            hkLog("[CmdHotkey] registered \(combo.displayString)")
+        } else {
+            hkLog("[CmdHotkey] InstallEventHandler failed status=\(installStatus)")
+            UnregisterEventHotKey(ref)
+            self.commandCarbonHotKeyRef = nil
+        }
+    }
+
+    private func uninstallCommandCarbonHotKey() {
+        if let ref = commandCarbonHotKeyRef {
+            UnregisterEventHotKey(ref)
+            commandCarbonHotKeyRef = nil
+        }
+        if let h = commandCarbonEventHandler {
+            RemoveEventHandler(h)
+            commandCarbonEventHandler = nil
+        }
+    }
+
+    /// Fires on the dedicated Command-Mode hotkey. Flips
+    /// `oneShotCommandPending` so the next stop-and-paste cycle goes
+    /// through `stopAndCommandTransform`. Mirrors the dictation hotkey
+    /// "press starts or stops" semantics in handlePress, but always
+    /// toggle-style (Carbon hotkeys have no release event). Suppressed
+    /// while a meeting recording owns the cpal buffer — same gate as
+    /// the dictation hotkey.
+    @MainActor
+    private func handleCommandCarbonHotKey() {
+        guard let appState else { return }
+        if DimmyCore.shared.meetingIsActive {
+            hkLog("[CmdHotkey] suppressed — meeting active")
+            return
+        }
+        if case .recording = appState.recordingState {
+            // Mid-recording press → finish + command-transform. The
+            // flag drives stopRecordingIfNeeded down the command branch
+            // even if `commandMode` (sticky) is off.
+            appState.oneShotCommandPending = true
+            stopRecordingIfNeeded()
+        } else {
+            // Idle press → start a fresh recording in one-shot command
+            // mode. Always .toggle: Carbon press has no release event
+            // so PTT semantics can't apply.
+            appState.oneShotCommandPending = true
+            startRecording(mode: .toggle)
+        }
     }
 
     private func startAccessibilityPolling() {
@@ -281,6 +445,13 @@ final class HotkeyManager {
         DimmyCore.shared.setAppContext(bundleId: bundleId)
         currentRecordingBundleId = bundleId
         recordingStartedAt = Date()
+        // Snapshot the running app reference too: Command Mode's
+        // LLM call can take several seconds, during which the user
+        // may Cmd+Tab. We restore foreground twice (before Cmd+C and
+        // before paste) so the synthetic copy + paste always land on
+        // the originally-targeted app. Mirrors Win
+        // RestoreTargetForegroundAsync in App.xaml.cs.
+        recordingTargetApp = NSWorkspace.shared.frontmostApplication
 
         let result = DimmyCore.shared.startRecording()
         if result == 0 {
@@ -294,11 +465,15 @@ final class HotkeyManager {
             DimmyCore.shared.clearAppContext()
             currentRecordingBundleId = ""
             recordingStartedAt = nil
+            recordingTargetApp = nil
+            appState.oneShotCommandPending = false
         } else if result == -2 {
             print("[HotkeyManager] startRecording failed: already recording")
             DimmyCore.shared.clearAppContext()
             currentRecordingBundleId = ""
             recordingStartedAt = nil
+            recordingTargetApp = nil
+            appState.oneShotCommandPending = false
         } else if result == -7 {
             // Meeting active — race with the pre-flight meetingIsActive
             // gate above. Silent no-op: don't pull the user out of their
@@ -307,6 +482,8 @@ final class HotkeyManager {
             DimmyCore.shared.clearAppContext()
             currentRecordingBundleId = ""
             recordingStartedAt = nil
+            recordingTargetApp = nil
+            appState.oneShotCommandPending = false
         }
     }
 
@@ -317,6 +494,11 @@ final class HotkeyManager {
     /// gate (Phase 6.4) — only fire when the dictation ran long enough
     /// to be worth summarising.
     private var recordingStartedAt: Date?
+    /// Frontmost running-application reference captured at hotkey-down.
+    /// Used by Command Mode to restore foreground twice (before the
+    /// synthetic Cmd+C and before the paste) so a focus drift during
+    /// the LLM call doesn't send the result to the wrong app.
+    private var recordingTargetApp: NSRunningApplication?
 
     private func stopRecordingIfNeeded() {
         guard let appState else { return }
@@ -329,10 +511,12 @@ final class HotkeyManager {
         recordingStartedAt = nil
 
         // Command Mode branch: transform the user's selected text with the
-        // spoken instruction instead of dictating. Same hotkey; the
-        // status-bar/pill toggle decides the mode. Mirror of Win's
-        // App.StopAndProcess command branch.
-        if appState.commandMode {
+        // spoken instruction instead of dictating. Triggered by EITHER
+        // the sticky menu toggle (`commandMode`) OR the one-shot
+        // dedicated command hotkey (`oneShotCommandPending`).
+        // stopAndCommandTransform clears `oneShotCommandPending` itself
+        // at the end of the cycle.
+        if appState.commandMode || appState.oneShotCommandPending {
             Task { @MainActor in await self.stopAndCommandTransform() }
             return
         }
@@ -433,6 +617,14 @@ final class HotkeyManager {
     private func stopAndCommandTransform() async {
         guard let appState else { return }
 
+        let target = recordingTargetApp
+
+        // Restore foreground BEFORE the synthetic Cmd+C — by now the
+        // pill window may be the key window (waveform animation
+        // tap-target) and the keystroke would land on it. Mirror of
+        // Win RestoreTargetForegroundAsync before SelectionCaptureService.
+        await restoreForeground(target)
+
         // Grab the selection while the target app still has focus
         // (synthetic Cmd+C round-trip; nil when nothing is selected).
         let selection = await SelectionCaptureFlow.capture()
@@ -449,16 +641,18 @@ final class HotkeyManager {
             var resolved: String?
             var resolvedRc: Int32 = 0
             if !spoken.isEmpty {
-                if let sel = selection, !sel.isEmpty {
-                    let t = DimmyCore.shared.commandTransform(selection: sel, spoken: spoken)
-                    resolved = t.text
-                    resolvedRc = t.rc
-                } else {
-                    // No selection → behave like plain dictation and paste
-                    // what the user said (least-surprising fallback).
-                    resolved = spoken
-                    resolvedRc = 1
-                }
+                // Pass through whatever was captured — empty string is a
+                // valid selection now. The Rust core's
+                // `dimmy_command_transform` branches at the prompt-build
+                // layer: with selection -> transform/replace; without ->
+                // generate text to insert at the caret. Mirror of Win
+                // App.StopAndCommandTransform after PR #98 (the OPTIONAL
+                // selection contract). Removes the prior "paste raw
+                // spoken text on no selection" Mac fallback.
+                let sel = selection ?? ""
+                let t = DimmyCore.shared.commandTransform(selection: sel, spoken: spoken)
+                resolved = t.text
+                resolvedRc = t.rc
             }
             let wasEmpty = spoken.isEmpty
             let finalText = resolved
@@ -466,31 +660,66 @@ final class HotkeyManager {
 
             DispatchQueue.main.async { [weak self] in
                 guard let self, let appState = self.appState else { return }
+                // One-shot dedicated-hotkey flag clears here regardless of
+                // outcome — the cycle is over. The sticky menu toggle is
+                // untouched (it stays as the user set it).
+                appState.oneShotCommandPending = false
                 if wasEmpty {
                     appState.recordingState = .idle
+                    self.recordingTargetApp = nil
                     return
                 }
                 guard let text = finalText, !text.isEmpty else {
-                    // rc -3 = no LLM key; other negatives = dispatch error.
-                    NSLog("[CmdMode] transform failed rc=\(finalRc)")
+                    if finalRc == -3 {
+                        DictToastWindow.show(
+                            kind: .error,
+                            title: "Command Mode needs an LLM key",
+                            body: "Open Settings → Providers & keys and connect a provider."
+                        )
+                    } else {
+                        NSLog("[CmdMode] transform failed rc=\(finalRc)")
+                    }
                     appState.recordingState = .idle
+                    self.recordingTargetApp = nil
                     return
                 }
                 appState.lastTranscript = text
                 appState.recordingState = .completing
-                if !appState.keepInClipboard {
-                    TextInjector.shared.injectText(text)
-                } else {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(text, forType: .string)
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                    if case .completing = appState.recordingState {
-                        appState.recordingState = .idle
+                // Second foreground restore — the LLM round-trip may have
+                // taken seconds and the user could have switched apps.
+                // Mirror of the second Win RestoreTargetForegroundAsync.
+                Task { @MainActor in
+                    await self.restoreForeground(target)
+                    if !appState.keepInClipboard {
+                        TextInjector.shared.injectText(text)
+                    } else {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(text, forType: .string)
+                    }
+                    self.recordingTargetApp = nil
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                        if case .completing = appState.recordingState {
+                            appState.recordingState = .idle
+                        }
                     }
                 }
             }
         }
+    }
+
+    /// Bring the originally-targeted app back to the foreground if it has
+    /// drifted. No-op when nil (no recording target captured) or when the
+    /// target is already frontmost. Waits ~80 ms so AppKit's main-runloop
+    /// foreground switch lands before the next synthetic keystroke. Same
+    /// pattern as Win RestoreTargetForegroundAsync.
+    @MainActor
+    private func restoreForeground(_ target: NSRunningApplication?) async {
+        guard let target, !target.isTerminated else { return }
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier == target.processIdentifier {
+            return
+        }
+        target.activate(options: [.activateIgnoringOtherApps])
+        try? await Task.sleep(nanoseconds: 80_000_000)
     }
 
     // MARK: - Phase 6.4 — auto-recap
