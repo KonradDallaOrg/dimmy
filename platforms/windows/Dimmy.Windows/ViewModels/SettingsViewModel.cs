@@ -77,6 +77,9 @@ public partial class SettingsViewModel : ObservableObject
         new("Groq-Llama8bInstant", "https://api.groq.com/openai/v1/chat/completions", "llama-3.1-8b-instant"),
         new("Groq-Qwen3-32b", "https://api.groq.com/openai/v1/chat/completions", "qwen/qwen3-32b"),
         // ── OpenAI ─────────────────────────────────────────────
+        new("OpenAI-GPT55", "https://api.openai.com/v1/chat/completions", "gpt-5.5"),
+        new("OpenAI-GPT54-Mini", "https://api.openai.com/v1/chat/completions", "gpt-5.4-mini"),
+        new("OpenAI-GPT54-Nano", "https://api.openai.com/v1/chat/completions", "gpt-5.4-nano"),
         new("OpenAI", "https://api.openai.com/v1/chat/completions", "gpt-5-mini"),
         new("OpenAI-GPT5", "https://api.openai.com/v1/chat/completions", "gpt-5"),
         new("OpenAI-GPT51", "https://api.openai.com/v1/chat/completions", "gpt-5.1"),
@@ -101,7 +104,8 @@ public partial class SettingsViewModel : ObservableObject
         // ── Anthropic ──────────────────────────────────────────
         new("Anthropic", "https://api.anthropic.com/v1/messages", "claude-haiku-4-5-20251001"),
         new("Anthropic-Sonnet", "https://api.anthropic.com/v1/messages", "claude-sonnet-4-6"),
-        new("Anthropic-Opus", "https://api.anthropic.com/v1/messages", "claude-opus-4-7"),
+        new("Anthropic-Opus", "https://api.anthropic.com/v1/messages", "claude-opus-4-8"),
+        new("Anthropic-Opus-4.7", "https://api.anthropic.com/v1/messages", "claude-opus-4-7"),
         // The dedicated "Claude-Code" preset is gone — the same
         // routing now lives behind the Authentication radio group
         // in the Anthropic provider card (Subscription instead of

@@ -317,17 +317,22 @@ private struct DictHotkeyRecorderSheet: View {
     }
 }
 
-/// Capture sheet for the dedicated one-shot Command-Mode hotkey.
-/// Validation matches `DictHotkeyRecorderSheet` (≥1 modifier + A-Z
-/// letter), with one extra check: the captured combo must not collide
-/// with the dictation hotkey or the Add-to-dictionary hotkey. Mac mirror
-/// of the conflict guard the user's spec called out — if a conflict is
-/// detected we keep `lastError` set and refuse the bind so the user
-/// can pick again without leaving the sheet.
+/// Capture sheet for the dedicated one-shot Command-Mode hotkey. The
+/// command hotkey runs on the same CGEventTap as the dictation chord
+/// (post-PR), so it accepts the same grammar Win does:
+///   - modifier-only (e.g. ⌃⌥)         → fires on `.flagsChanged`
+///   - modifier + key (e.g. ⌃⇧X)       → fires on `.keyDown`
+///
+/// Two-mod combos like ⌃⌥ are now valid (they couldn't be on the old
+/// Carbon path because Carbon requires a non-modifier key). Conflict
+/// detection goes through the Rust `dimmy_hotkey_combos_conflict` FFI —
+/// shared subset-rule with Win so e.g. a `cmd+space` command hotkey is
+/// rejected when the dictation shortcut is `cmd+space+x`.
 private struct CommandHotkeyRecorderSheet: View {
     @ObservedObject var appState: AppState
     @Binding var isPresented: Bool
-    @State private var monitor: Any?
+    @State private var keyDownMonitor: Any?
+    @State private var flagsMonitor: Any?
     @State private var lastError: String?
     @State private var captured: HotkeyCombo?
 
@@ -341,7 +346,7 @@ private struct CommandHotkeyRecorderSheet: View {
                     .keyboardShortcut(.cancelAction)
             }
 
-            Text("Press a combination, at least one modifier plus a letter. This hotkey triggers Command Mode for the NEXT dictation only.")
+            Text("Press a combination: a letter with at least one modifier, or two modifiers (e.g. ⌃⌥). This hotkey triggers Command Mode for the NEXT dictation only. It follows the Push-to-talk vs Toggle behaviour you set above.")
                 .font(.system(size: 12))
                 .foregroundStyle(Color.macTextSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -394,27 +399,48 @@ private struct CommandHotkeyRecorderSheet: View {
             }
         }
         .padding(20)
-        .onAppear { installMonitor() }
-        .onDisappear { removeMonitor() }
+        .onAppear {
+            installKeyDownMonitor()
+            installFlagsMonitor()
+        }
+        .onDisappear {
+            removeMonitors()
+        }
     }
 
-    private func installMonitor() {
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { (event: NSEvent) -> NSEvent? in
+    private func installKeyDownMonitor() {
+        keyDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { (event: NSEvent) -> NSEvent? in
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             let modCount = [
                 flags.contains(.control), flags.contains(.option),
                 flags.contains(.command), flags.contains(.shift),
             ].filter { $0 }.count
             if modCount == 0 {
-                lastError = "Add at least one modifier"
+                lastError = "Add at least one modifier or two modifiers"
                 captured = nil
                 return nil
             }
-            guard let chars = event.charactersIgnoringModifiers?.uppercased(),
-                  let letter = chars.first, letter.isLetter else {
-                lastError = "Use a letter (A-Z)"
+            // The mod+key path requires a recognised non-modifier key.
+            // Letters / digits / function keys / common specials are all
+            // valid (the Rust grammar covers them). We use the kVK→name
+            // helper to validate — anything `macKeyCodeRustName` doesn't
+            // know is rejected so the persisted combo can be passed to
+            // the Rust conflict check without surprises.
+            guard let rustName = HotkeyCombo.macKeyCodeRustName(event.keyCode) else {
+                lastError = "Unsupported key. Try a letter, number, or function key."
                 captured = nil
                 return nil
+            }
+            // Display glyph: prefer the keyChar from charactersIgnoringModifiers
+            // for letters / digits / punctuation; fall back to the rust grammar
+            // name (uppercased) for specials like Space / Enter.
+            let display: String
+            if let chars = event.charactersIgnoringModifiers, !chars.isEmpty,
+               chars.unicodeScalars.first.map({ $0.value < 0x80 }) ?? false,
+               chars.first?.isLetter == true || chars.first?.isNumber == true {
+                display = chars.uppercased()
+            } else {
+                display = rustName.uppercased()
             }
             let combo = HotkeyCombo(
                 control: flags.contains(.control),
@@ -422,26 +448,83 @@ private struct CommandHotkeyRecorderSheet: View {
                 command: flags.contains(.command),
                 shift: flags.contains(.shift),
                 keyCode: event.keyCode,
-                keyChar: String(letter)
+                keyChar: display
             )
-            // Conflict detection: the dedicated command hotkey must not
-            // collide with the Add-to-dictionary hotkey. The main
-            // dictation hotkey is modifier-only so a key-bearing combo
-            // can never collide with it. Win parity: the recorder
-            // rejects collisions inline rather than silently saving.
-            if combo == appState.dictHotkey {
-                lastError = "This combo is already the Add-to-dictionary hotkey. Pick another."
-                captured = nil
-                return nil
-            }
-            lastError = nil
-            captured = combo
+            tryCommit(combo)
             return nil
         }
     }
 
-    private func removeMonitor() {
-        if let m = monitor { NSEvent.removeMonitor(m) }
-        monitor = nil
+    /// Watch the modifier-only path: while the user holds 2+ modifiers
+    /// (and nothing else), preview that combo as "captured". The user
+    /// confirms with Done; pressing a non-modifier key promotes it to
+    /// the mod+key path via `installKeyDownMonitor` above.
+    private func installFlagsMonitor() {
+        flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { (event: NSEvent) -> NSEvent? in
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            let modCount = [
+                flags.contains(.control), flags.contains(.option),
+                flags.contains(.command), flags.contains(.shift),
+            ].filter { $0 }.count
+            // A single modifier alone is too easy to fire by accident.
+            // Two modifiers held simultaneously is the documented Win
+            // grammar (e.g. Win+Alt), so accept ≥2. Single mod with a
+            // key is handled by the keyDown path above.
+            if modCount >= 2 {
+                let combo = HotkeyCombo(
+                    control: flags.contains(.control),
+                    option: flags.contains(.option),
+                    command: flags.contains(.command),
+                    shift: flags.contains(.shift),
+                    keyCode: nil,
+                    keyChar: ""
+                )
+                tryCommit(combo)
+            }
+            return event
+        }
+    }
+
+    /// Run the cross-platform conflict check against the dictation chord
+    /// and dictionary hotkey via the Rust FFI. Translates each combo to
+    /// the Rust grammar (`cmd+shift+d`, `cmd+opt`, …). Stays in the
+    /// sheet on conflict so the user can pick again without dismissing.
+    private func tryCommit(_ combo: HotkeyCombo) {
+        let cmdGrammar = combo.rustGrammar
+        // Defensive: the recorder above should already guarantee a
+        // non-empty rustGrammar (we reject 0-mod and unknown keys).
+        guard !cmdGrammar.isEmpty else {
+            lastError = "Combo is empty"
+            captured = nil
+            return
+        }
+
+        let dictGrammar = appState.dictHotkey.rustGrammar
+        if !dictGrammar.isEmpty,
+           DimmyCore.shared.hotkeyCombosConflict(cmdGrammar, dictGrammar) {
+            lastError = "This combo overlaps the Add-to-dictionary hotkey. Pick another."
+            captured = nil
+            return
+        }
+        // Main dictation chord is the modifier-only shortcut managed by
+        // `appState.shortcut`. It's also a HotkeyCombo grammar candidate
+        // — translate via the ModifierShortcut helper.
+        let mainGrammar = appState.shortcut.rustGrammar
+        if !mainGrammar.isEmpty,
+           DimmyCore.shared.hotkeyCombosConflict(cmdGrammar, mainGrammar) {
+            lastError = "This combo overlaps the dictation hotkey. Pick another."
+            captured = nil
+            return
+        }
+
+        lastError = nil
+        captured = combo
+    }
+
+    private func removeMonitors() {
+        if let m = keyDownMonitor { NSEvent.removeMonitor(m) }
+        if let m = flagsMonitor { NSEvent.removeMonitor(m) }
+        keyDownMonitor = nil
+        flagsMonitor = nil
     }
 }

@@ -244,30 +244,47 @@ struct LlmPreset: Identifiable, Hashable {
         LlmPreset(id: "groq-llama4-scout", displayName: "Groq \u{00B7} llama-4-scout-17b (MoE, balanced)", apiUrl: "https://api.groq.com/openai/v1/chat/completions", model: "meta-llama/llama-4-scout-17b-16e-instruct"),
         LlmPreset(id: "groq-llama8b-instant", displayName: "Groq \u{00B7} llama-3.1-8b instant (fastest)", apiUrl: "https://api.groq.com/openai/v1/chat/completions", model: "llama-3.1-8b-instant"),
         LlmPreset(id: "groq-qwen3-32b", displayName: "Groq \u{00B7} qwen3-32b (multilingual)", apiUrl: "https://api.groq.com/openai/v1/chat/completions", model: "qwen/qwen3-32b"),
-        // OpenAI tier (May 2026): gpt-5 family on same chat-completions
-        // endpoint — drop-in. Default = mini for speed+cost.
+        // OpenAI tier (June 2026): gpt-5.5 (Apr 2026) is the current
+        // flagship + gpt-5.4 family. All gpt-5.x stay on the same
+        // /v1/chat/completions endpoint with the existing JSON shape —
+        // drop-in, same call site as gpt-4o. Default mini for speed+cost.
         // ── OpenAI ─────────────────────────────────────────────
-        LlmPreset(id: "openai-gpt5-mini", displayName: "OpenAI \u{00B7} gpt-5-mini (fast + cheap)", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-5-mini"),
-        LlmPreset(id: "openai-gpt5", displayName: "OpenAI \u{00B7} gpt-5 (top)", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-5"),
-        LlmPreset(id: "openai-gpt51", displayName: "OpenAI \u{00B7} gpt-5.1 (latest)", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-5.1"),
+        LlmPreset(id: "openai-gpt55", displayName: "OpenAI \u{00B7} gpt-5.5 (best)", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-5.5"),
+        LlmPreset(id: "openai-gpt54-mini", displayName: "OpenAI \u{00B7} gpt-5.4-mini (fast)", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-5.4-mini"),
+        LlmPreset(id: "openai-gpt54-nano", displayName: "OpenAI \u{00B7} gpt-5.4-nano (fastest)", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-5.4-nano"),
+        LlmPreset(id: "openai-gpt5-mini", displayName: "OpenAI \u{00B7} gpt-5-mini", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-5-mini"),
+        LlmPreset(id: "openai-gpt5", displayName: "OpenAI \u{00B7} gpt-5", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-5"),
+        LlmPreset(id: "openai-gpt51", displayName: "OpenAI \u{00B7} gpt-5.1", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-5.1"),
         LlmPreset(id: "openai-4o-mini", displayName: "OpenAI \u{00B7} gpt-4o-mini (legacy)", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-4o-mini"),
         LlmPreset(id: "openrouter-llama70b", displayName: "OpenRouter \u{00B7} llama-3.3-70b (free)", apiUrl: "https://openrouter.ai/api/v1/chat/completions", model: "meta-llama/llama-3.3-70b-instruct:free"),
         LlmPreset(id: "openrouter-deepseek", displayName: "OpenRouter \u{00B7} DeepSeek R1 (free)", apiUrl: "https://openrouter.ai/api/v1/chat/completions", model: "deepseek/deepseek-r1:free"),
-        // Gemini 3.1 preview line (May 2026) — same generateContent endpoint.
+        // Gemini 3.1 preview line (May 2026) — newest, plus stable
+        // 3.0 / 2.5 fallbacks. All on the OpenAI-compatible chat
+        // completions endpoint Google ships. The 3.x preview ids stay
+        // `-preview` suffixed because the bare `gemini-3.1-pro` 404s
+        // (Google publishes them as preview channel only).
         // ── Gemini (preview = newest, stable = production) ─────
-        LlmPreset(id: "gemini-3-pro", displayName: "Gemini \u{00B7} gemini-3-pro-preview (top, new)", apiUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-3-pro-preview"),
-        LlmPreset(id: "gemini-3-flash", displayName: "Gemini \u{00B7} gemini-3-flash-preview (fast, new)", apiUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-3-flash-preview"),
+        LlmPreset(id: "gemini-31-pro", displayName: "Gemini \u{00B7} gemini-3.1-pro-preview (newest top)", apiUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-3.1-pro-preview"),
+        LlmPreset(id: "gemini-31-flash", displayName: "Gemini \u{00B7} gemini-3.1-flash-lite (newest fast)", apiUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-3.1-flash-lite"),
+        LlmPreset(id: "gemini-3-pro", displayName: "Gemini \u{00B7} gemini-3-pro-preview", apiUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-3-pro-preview"),
+        LlmPreset(id: "gemini-3-flash", displayName: "Gemini \u{00B7} gemini-3-flash-preview", apiUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-3-flash-preview"),
         LlmPreset(id: "gemini-2.5-pro", displayName: "Gemini \u{00B7} gemini-2.5-pro (stable top)", apiUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-2.5-pro"),
         LlmPreset(id: "gemini-2.5-flash", displayName: "Gemini \u{00B7} gemini-2.5-flash (stable fast)", apiUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-2.5-flash"),
         // ── Anthropic ──────────────────────────────────────────
+        // Opus 4.8 (May 2026) is the current flagship; same adaptive-
+        // thinking call shape as 4.7 so the Rust dispatcher routes it
+        // correctly via `anthropic_uses_adaptive_thinking`. Opus 4.7
+        // stays as an explicit pick for users who want to pin a
+        // specific older release.
         LlmPreset(id: "anthropic-haiku", displayName: "Anthropic \u{00B7} claude-haiku-4.5", apiUrl: "https://api.anthropic.com/v1/messages", model: "claude-haiku-4-5-20251001"),
         LlmPreset(id: "anthropic-sonnet", displayName: "Anthropic \u{00B7} claude-sonnet-4.6", apiUrl: "https://api.anthropic.com/v1/messages", model: "claude-sonnet-4-6"),
-        LlmPreset(id: "anthropic-opus", displayName: "Anthropic \u{00B7} claude-opus-4.7 (top)", apiUrl: "https://api.anthropic.com/v1/messages", model: "claude-opus-4-7"),
+        LlmPreset(id: "anthropic-opus-48", displayName: "Anthropic \u{00B7} claude-opus-4.8 (top)", apiUrl: "https://api.anthropic.com/v1/messages", model: "claude-opus-4-8"),
+        LlmPreset(id: "anthropic-opus", displayName: "Anthropic \u{00B7} claude-opus-4.7", apiUrl: "https://api.anthropic.com/v1/messages", model: "claude-opus-4-7"),
         // Claude Code (subscription) — synthetic provider using
         // user's Pro/Team/Max plan via the local `claude` CLI. No
         // API key needed; auth handled by `claude login` browser
         // flow. See core/src/claude_code.rs.
-        LlmPreset(id: "claude-code", displayName: "Claude Code (subscription — Pro/Team/Max)", apiUrl: "claude-code://default", model: "claude-opus-4-7"),
+        LlmPreset(id: "claude-code", displayName: "Claude Code (subscription — Pro/Team/Max)", apiUrl: "claude-code://default", model: "claude-opus-4-8"),
         // Phase 1 cloud expansion (2026-05-04, sensible model picks for filler-removal/smart-format)
         LlmPreset(id: "fireworks-kimi", displayName: "Fireworks \u{00B7} kimi-k2", apiUrl: "https://api.fireworks.ai/inference/v1/chat/completions", model: "accounts/fireworks/models/kimi-k2p6"),
         LlmPreset(id: "together-llama70b", displayName: "Together \u{00B7} llama-3.3-70b", apiUrl: "https://api.together.xyz/v1/chat/completions", model: "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
@@ -481,6 +498,24 @@ struct ModifierShortcut: Equatable {
         return count >= 2
     }
 
+    /// Translate this shortcut into the Rust hotkey grammar consumed by
+    /// `dimmy_hotkey_combos_conflict`. The Rust parser accepts
+    /// `cmd|win`, `opt|alt`, `ctrl`, `shift` for modifiers. The `fn`
+    /// (function) modifier has no Rust grammar token — fn-only shortcuts
+    /// return `""` so the conflict check sees them as "no opinion" and
+    /// the command hotkey is free to claim any combo.
+    var rustGrammar: String {
+        var parts: [String] = []
+        if control { parts.append("ctrl") }
+        if option { parts.append("opt") }
+        if command { parts.append("cmd") }
+        if shift { parts.append("shift") }
+        // Need ≥2 tokens for the Rust parser to accept the input; a single
+        // mod alone is not a valid grammar form.
+        guard parts.count >= 2 else { return "" }
+        return parts.joined(separator: "+")
+    }
+
     static let fnOnly = ModifierShortcut(fn: true, control: false, option: false, command: false, shift: false)
     static let controlOption = ModifierShortcut(fn: false, control: true, option: true, command: false, shift: false)
     static let `default` = fnOnly
@@ -513,24 +548,29 @@ struct ModifierShortcut: Equatable {
     }
 }
 
-/// Modifier+key chord — distinct from `ModifierShortcut` (which is
-/// modifier-only). Used by the user-dictionary "add to dict" hotkey
-/// (Cmd+Shift+D by default). The Win side persists the equivalent
-/// combo as a "ctrl+shift+d"-style string in UiPreferences; on Mac we
-/// keep the structured form because the modifier set is mostly fixed
-/// (we only let the user pick the LETTER and toggle modifiers in
-/// Settings, not arbitrary key codes).
+/// Modifier+(optional) key chord. Used by:
+/// - Add-to-dictionary hotkey (Cmd+Shift+D default) — always mod+key
+/// - Dedicated one-shot Command-Mode hotkey — mod+key OR modifier-only
+///
+/// Modifier-only mode is signalled by `keyCode == nil` (`keyChar`
+/// empty), mirroring the Win-side support for chords like Win+Alt that
+/// the new Rust-hook command shortcut also accepts. The Win side
+/// persists the equivalent string as `ctrl+shift+d` / `cmd+opt`; on Mac
+/// we keep a structured form locally and emit the Win-style string only
+/// when calling into the Rust hotkey grammar (`rustGrammar`).
 struct HotkeyCombo: Equatable {
     var control: Bool
     var option: Bool
     var command: Bool
     var shift: Bool
-    /// macOS virtual key code for the non-modifier key. Letters: A=0,
-    /// S=1, D=2, F=3, …  See HIToolbox/Events.h kVK_ANSI_* constants.
-    var keyCode: UInt16
-    /// Display character for the keyCode (uppercase letter). Stored
-    /// separately so we don't have to maintain a keyCode→char table
-    /// inside View code — the keypad recorder writes both on capture.
+    /// macOS virtual key code for the non-modifier key, when present.
+    /// Letters: A=0, S=1, D=2, F=3, …  See HIToolbox/Events.h
+    /// kVK_ANSI_* constants. `nil` = modifier-only combo (no key).
+    var keyCode: UInt16?
+    /// Display character for `keyCode` (uppercase letter / glyph). Empty
+    /// when `keyCode` is nil. Stored separately so we don't have to
+    /// maintain a keyCode→char table inside View code — the recorder
+    /// writes both on capture.
     var keyChar: String
 
     var displayParts: [String] {
@@ -545,17 +585,126 @@ struct HotkeyCombo: Equatable {
 
     var displayString: String { displayParts.joined(separator: "") }
 
-    /// Match a keyDown event against this combo. CGEvent flag masks vs
-    /// NSEvent.ModifierFlags — we receive NSEvent here from the event
-    /// tap wrapper. Strict equality on each modifier so e.g. Cmd+Shift
-    /// doesn't accidentally match plain Cmd+D.
+    /// True when the combo has no non-modifier key (e.g. Win+Alt =
+    /// Cmd+Option). Modifier-only combos activate on `.flagsChanged`
+    /// only; mod+key combos require an additional `.keyDown` matching
+    /// the `keyCode`.
+    var isModifierOnly: Bool { keyCode == nil }
+
+    /// Number of modifiers required by the combo. Used by the recorder
+    /// to validate "at least one modifier" before saving.
+    var modifierCount: Int {
+        [control, option, command, shift].filter { $0 }.count
+    }
+
+    /// Match a keyDown event against this combo. Modifier-only combos
+    /// never match a keyDown — the caller (`DictHotkeyManager`) handles
+    /// only mod+key hotkeys via this path.
     func matches(flags: NSEvent.ModifierFlags, keyCode kc: UInt16) -> Bool {
+        guard let code = keyCode else { return false }
         let f = flags.intersection(.deviceIndependentFlagsMask)
-        return kc == keyCode
+        return kc == code
             && f.contains(.control) == control
             && f.contains(.option) == option
             && f.contains(.command) == command
             && f.contains(.shift) == shift
+    }
+
+    /// Translate this combo into the Rust hotkey grammar consumed by
+    /// `dimmy_hotkey_set_command` / `dimmy_hotkey_combos_conflict`. The
+    /// Rust parser is platform-agnostic: it accepts `cmd|win`, `opt|alt`,
+    /// `ctrl`, `shift` for modifiers and letter / function / special
+    /// names for keys. Examples:
+    ///   `Cmd+Shift+D`   → `"cmd+shift+d"`
+    ///   `Cmd+Opt`       → `"cmd+opt"`         (modifier-only)
+    ///   `Ctrl+Shift+F5` → `"ctrl+shift+f5"`
+    /// Returns `""` for an "empty" combo (no modifiers and no key) so
+    /// the Rust side treats it as disabled.
+    var rustGrammar: String {
+        var parts: [String] = []
+        if control { parts.append("ctrl") }
+        if option { parts.append("opt") }
+        if command { parts.append("cmd") }
+        if shift { parts.append("shift") }
+        if let code = keyCode, let name = Self.macKeyCodeRustName(code) {
+            parts.append(name)
+        }
+        if parts.isEmpty { return "" }
+        // The Rust parser requires at least one '+' — a single token
+        // would parse as empty / unrecognised. With at least 2 parts
+        // (mod + key) or 2 mods, the join below always contains '+'.
+        if parts.count == 1 {
+            // Single modifier alone is invalid (the recorder rejects
+            // 0-mod combos and the Rust parser needs 2 mods OR 1 mod +
+            // key). Emit empty to signal "disabled".
+            return ""
+        }
+        return parts.joined(separator: "+")
+    }
+
+    /// Mac kVK_* virtual key code → Rust hotkey grammar key name. Covers
+    /// the same set the Rust `name_to_vk` parser accepts: A-Z, 0-9,
+    /// F1-F12, Space/Tab/Enter/Esc/Backspace, numpad. Returns nil for
+    /// unmapped codes (the recorder rejects unrecognised keys before
+    /// saving, so unmapped paths shouldn't be reached at runtime).
+    static func macKeyCodeRustName(_ code: UInt16) -> String? {
+        switch Int(code) {
+        case 0x00: return "a"
+        case 0x01: return "s"
+        case 0x02: return "d"
+        case 0x03: return "f"
+        case 0x04: return "h"
+        case 0x05: return "g"
+        case 0x06: return "z"
+        case 0x07: return "x"
+        case 0x08: return "c"
+        case 0x09: return "v"
+        case 0x0B: return "b"
+        case 0x0C: return "q"
+        case 0x0D: return "w"
+        case 0x0E: return "e"
+        case 0x0F: return "r"
+        case 0x10: return "y"
+        case 0x11: return "t"
+        case 0x12: return "1"
+        case 0x13: return "2"
+        case 0x14: return "3"
+        case 0x15: return "4"
+        case 0x16: return "6"
+        case 0x17: return "5"
+        case 0x18: return "="
+        case 0x19: return "9"
+        case 0x1A: return "7"
+        case 0x1C: return "8"
+        case 0x1D: return "0"
+        case 0x1F: return "o"
+        case 0x20: return "u"
+        case 0x22: return "i"
+        case 0x23: return "p"
+        case 0x25: return "l"
+        case 0x26: return "j"
+        case 0x28: return "k"
+        case 0x2D: return "n"
+        case 0x2E: return "m"
+        case 0x24: return "enter"
+        case 0x30: return "tab"
+        case 0x31: return "space"
+        case 0x33: return "backspace"
+        case 0x35: return "esc"
+        case 0x7A: return "f1"
+        case 0x78: return "f2"
+        case 0x63: return "f3"
+        case 0x76: return "f4"
+        case 0x60: return "f5"
+        case 0x61: return "f6"
+        case 0x62: return "f7"
+        case 0x64: return "f8"
+        case 0x65: return "f9"
+        case 0x6D: return "f10"
+        case 0x67: return "f11"
+        case 0x6F: return "f12"
+        default: return nil
+        }
     }
 
     /// Mac default = ⌘⇧D — mirrors Win's Ctrl+Shift+D combo for
@@ -566,18 +715,20 @@ struct HotkeyCombo: Equatable {
         keyCode: 0x02, keyChar: "D"
     )
 
-    /// Compact string form for UserDefaults round-trip. Mirrors Win's
-    /// "ctrl+shift+d" persistence grammar so config files are
-    /// human-inspectable on both platforms. Format:
-    /// `[ctrl+][opt+][cmd+][shift+]<keyCode hex>:<keyChar>`. The keyCode
-    /// is the source of truth on read-back; keyChar is for display only.
+    /// Compact string form for UserDefaults round-trip. Two shapes:
+    ///   - mod+key   : `cmd+shift+02:D`
+    ///   - mod-only  : `cmd+opt` (no trailing `<hex>:<char>` token)
+    /// On decode, the absence of a `:`-bearing trailing token signals
+    /// the modifier-only case.
     var encoded: String {
         var parts: [String] = []
         if control { parts.append("ctrl") }
         if option { parts.append("opt") }
         if command { parts.append("cmd") }
         if shift { parts.append("shift") }
-        parts.append(String(format: "%02x:%@", keyCode, keyChar))
+        if let code = keyCode {
+            parts.append(String(format: "%02x:%@", code, keyChar))
+        }
         return parts.joined(separator: "+")
     }
 
@@ -585,7 +736,8 @@ struct HotkeyCombo: Equatable {
 
 extension HotkeyCombo {
     /// Inverse of `encoded`. Returns nil for malformed input; callers
-    /// should fall back to `defaultDictHotkey` in that case.
+    /// should fall back to `defaultDictHotkey` (dict path) or `nil`
+    /// (command path) in that case.
     ///
     /// Lives in an extension so Swift still synthesises the implicit
     /// memberwise initialiser (`HotkeyCombo(control:option:...)`) on
@@ -594,19 +746,37 @@ extension HotkeyCombo {
     /// `defaultDictHotkey` (the existing memberwise call site).
     init?(encoded: String) {
         let tokens = encoded.split(separator: "+").map(String.init)
-        guard let last = tokens.last, let colon = last.firstIndex(of: ":") else { return nil }
-        let hex = String(last[..<colon])
-        let char = String(last[last.index(after: colon)...])
-        guard let kc = UInt16(hex, radix: 16) else { return nil }
-        let mods = Set(tokens.dropLast())
-        self.init(
-            control: mods.contains("ctrl"),
-            option: mods.contains("opt"),
-            command: mods.contains("cmd"),
-            shift: mods.contains("shift"),
-            keyCode: kc,
-            keyChar: char
-        )
+        if tokens.isEmpty { return nil }
+        // Detect mod-key vs mod-only by checking the trailing token for `:`.
+        if let last = tokens.last, last.contains(":") {
+            guard let colon = last.firstIndex(of: ":") else { return nil }
+            let hex = String(last[..<colon])
+            let char = String(last[last.index(after: colon)...])
+            guard let kc = UInt16(hex, radix: 16) else { return nil }
+            let mods = Set(tokens.dropLast())
+            self.init(
+                control: mods.contains("ctrl"),
+                option: mods.contains("opt"),
+                command: mods.contains("cmd"),
+                shift: mods.contains("shift"),
+                keyCode: kc,
+                keyChar: char
+            )
+        } else {
+            let mods = Set(tokens)
+            // Require ≥1 known modifier name; otherwise treat as invalid
+            // so a stray "foo" string doesn't yield an all-false combo.
+            let known = ["ctrl", "opt", "cmd", "shift"]
+            guard mods.contains(where: { known.contains($0) }) else { return nil }
+            self.init(
+                control: mods.contains("ctrl"),
+                option: mods.contains("opt"),
+                command: mods.contains("cmd"),
+                shift: mods.contains("shift"),
+                keyCode: nil,
+                keyChar: ""
+            )
+        }
     }
 }
 
@@ -1394,15 +1564,17 @@ final class AppState: ObservableObject {
     }
 
     /// Recap-model curated options the user can actually use right now.
-    /// `auto` and `local` always survive (auto resolves at call-time;
-    /// local uses bundled Gemma, no key). Cloud branches need a key
-    /// EITHER under the recap scope OR the LLM scope (`recapUseSameKey`
-    /// fallback). Anthropic also survives when Claude Code subscription
-    /// is connected.
+    /// `local` always survives (bundled Gemma, no key); `custom` always
+    /// survives (user-supplied id). `auto` survives only when at least
+    /// one LLM-capable provider is connected — otherwise Auto would
+    /// silently resolve to nothing and the recap call would fail. When
+    /// Auto is filtered out, the picker shows a "Select model" prompt
+    /// in its place (see `recapPickerNeedsSelectPrompt`).
     func availableRecapModels() -> [RecapModelOption] {
         RecapModelOption.curated.filter { opt in
             switch opt.provider {
-            case .auto, .local, .custom: return true
+            case .auto: return hasAnyLlmCapableKey
+            case .local, .custom: return true
             case .anthropic:
                 return recapKeyByVendor["anthropic"] == true
                     || llmKeyByVendor["anthropic"] == true
@@ -1417,6 +1589,27 @@ final class AppState: ObservableObject {
                     || hasOpenaiKey
             }
         }
+    }
+
+    /// True when at least one provider that can run an LLM recap is
+    /// connected (any scope, or Claude Code subscription). Drives the
+    /// Auto / Select placeholder choice in `availableRecapModels` +
+    /// `recapPickerNeedsSelectPrompt`.
+    var hasAnyLlmCapableKey: Bool {
+        if claudeCodeReady { return true }
+        if llmKeyByVendor.values.contains(true) { return true }
+        if recapKeyByVendor.values.contains(true) { return true }
+        return hasOpenaiKey || hasGeminiKey || hasGroqKey
+            || hasOpenrouterKey || hasFireworksKey || hasTogetherKey
+    }
+
+    /// True when the recap picker should render a "Select model" prompt
+    /// in place of the (filtered-out) Auto row. Triggered when the user
+    /// has no LLM-capable provider AND no explicit override yet, so the
+    /// picker doesn't silently leave them on a path that always fails.
+    var recapPickerNeedsSelectPrompt: Bool {
+        !hasAnyLlmCapableKey
+            && recapModelOverride.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func sttProviderTag(forUrl url: String) -> String {

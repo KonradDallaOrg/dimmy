@@ -183,6 +183,14 @@ final class DictHotkeyManager {
             NSLog("[Dict/Carbon] refusing to register modifier-less hotkey — would intercept normal typing")
             return
         }
+        // The dict hotkey grammar (Settings) requires a letter, but the
+        // shared HotkeyCombo now also models modifier-only chords used by
+        // the command hotkey. Defensive guard: never attempt to register
+        // a key-less dict combo through Carbon.
+        guard let keyCode = combo.keyCode else {
+            NSLog("[Dict/Carbon] refusing to register key-less combo")
+            return
+        }
 
         // EventHotKeyID: signature is an arbitrary 4-char code unique
         // per app; id is per-hotkey within the app. We only have one
@@ -192,7 +200,7 @@ final class DictHotkeyManager {
 
         var ref: EventHotKeyRef?
         let regStatus = RegisterEventHotKey(
-            UInt32(combo.keyCode),
+            UInt32(keyCode),
             mods,
             hotKeyID,
             GetApplicationEventTarget(),

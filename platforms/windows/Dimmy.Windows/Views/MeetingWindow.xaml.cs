@@ -1458,9 +1458,9 @@ public sealed partial class MeetingWindow : Window
                                && e.ValueKind == System.Text.Json.JsonValueKind.True);
 
             if (Has("has_anthropic_llm_key", "has_anthropic_recap_key"))
-                return "claude-opus-4-7";
+                return "claude-opus-4-8";
             if (Has("has_openai_key", "has_openai_llm_key", "has_openai_recap_key"))
-                return "gpt-5";
+                return "gpt-5.5";
             if (Has("has_gemini_key", "has_gemini_llm_key", "has_gemini_recap_key"))
                 return "gemini-3.1-pro-preview";
 

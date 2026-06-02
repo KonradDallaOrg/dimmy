@@ -61,16 +61,18 @@ final class HotkeyManager {
 
     private var appState: AppState?
 
-    // Carbon hotkey registration for the dedicated one-shot Command-Mode
-    // shortcut (`AppState.commandHotkey`). Kept separate from the
-    // dictation CGEventTap (flagsChanged) because it's a modifier+key
-    // chord, not modifier-only. Mirrors the pattern in
-    // DictHotkeyManager.installCarbonHotKey. Carbon-registered hotkeys
-    // are consumed system-wide by the registering process so the focused
-    // app never sees the combo.
-    private var commandCarbonHotKeyRef: EventHotKeyRef?
-    private var commandCarbonEventHandler: EventHandlerRef?
-    private var lastCommandHotkey: HotkeyCombo?
+    // Dedicated Command-Mode hotkey runs on the SAME CGEventTap as the
+    // dictation modifier-only shortcut — the tap mask now covers
+    // .flagsChanged + .keyDown + .keyUp so a single hook sees both
+    // modifier-only chords (e.g. ⌃⌥) AND modifier+key chords (e.g.
+    // ⌃⇧X) AND the matching releases. The pattern mirrors the Win-side
+    // refactor that moved the command hotkey off `RegisterHotKey` (which
+    // is key-down-only, can't do PTT, can't do modifier-only) onto the
+    // Rust low-level keyboard hook. Carbon `RegisterEventHotKey` had the
+    // same limitations on Mac; this replaces it with a Swift state
+    // machine that honours `appState.preferredMode` (toggle vs PTT).
+    private let commandComboState = CommandComboState()
+    private var commandLastPressTime: Date?
 
     private init() {
         hkLog("[HotkeyManager] singleton init")
@@ -108,14 +110,17 @@ final class HotkeyManager {
             }
         }
 
-        // Register the dedicated Command-Mode hotkey (if the user has
-        // set one) and re-register whenever it changes. Event-driven via
-        // Combine sink on the @Published commandHotkey, no polling.
-        installCommandCarbonHotKey(for: appState.commandHotkey)
+        // Seed the command-combo state machine with the current binding
+        // (if any) and refresh whenever the user changes it. The state
+        // machine itself drives press/release detection from the same
+        // CGEventTap callback that handles dictation — no Carbon hotkey,
+        // no polling.
+        commandComboState.setCombo(appState.commandHotkey)
         appState.$commandHotkey
             .receive(on: DispatchQueue.main)
             .sink { [weak self] newValue in
-                self?.installCommandCarbonHotKey(for: newValue)
+                self?.commandComboState.setCombo(newValue)
+                hkLog("[CmdHotkey] state machine rebound to \(newValue?.displayString ?? "<nil>")")
             }
             .store(in: &cancellables)
     }
@@ -131,146 +136,68 @@ final class HotkeyManager {
             NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
         }
         wakeObserver = nil
-        uninstallCommandCarbonHotKey()
+        commandComboState.reset()
         cancellables.removeAll()
         appState?.hotkeyStatus = .uninstalled
     }
 
     // MARK: - Dedicated Command-Mode hotkey
 
-    /// Carbon bitmask for the modifier set of a `HotkeyCombo`. Carbon
-    /// uses its own constants (`cmdKey`, `shiftKey`, …) distinct from
-    /// NSEvent.ModifierFlags. Matches DictHotkeyManager.carbonModifiers.
-    private func carbonModifiers(_ combo: HotkeyCombo) -> UInt32 {
-        var m: UInt32 = 0
-        if combo.command { m |= UInt32(cmdKey) }
-        if combo.shift   { m |= UInt32(shiftKey) }
-        if combo.option  { m |= UInt32(optionKey) }
-        if combo.control { m |= UInt32(controlKey) }
-        return m
-    }
-
-    /// Register (or re-register) the global Carbon hotkey for the
-    /// dedicated one-shot Command-Mode shortcut. Idempotent: tears
-    /// down any previous registration first. Nil combo = uninstall and
-    /// leave nothing registered.
-    private func installCommandCarbonHotKey(for combo: HotkeyCombo?) {
-        if lastCommandHotkey == combo { return }
-        uninstallCommandCarbonHotKey()
-        lastCommandHotkey = combo
-
-        guard let combo else { return }
-        let mods = carbonModifiers(combo)
-        guard mods != 0 else {
-            hkLog("[CmdHotkey] refusing to register modifier-less combo")
-            return
-        }
-
-        // 'DIMC' = "Dimmy Command". Distinct from DictHotkeyManager's
-        // 'DIMD' so the two handlers never see each other's events.
-        let signature: OSType = 0x44494D43
-        let hotKeyID = EventHotKeyID(signature: signature, id: 3)
-
-        var ref: EventHotKeyRef?
-        let regStatus = RegisterEventHotKey(
-            UInt32(combo.keyCode),
-            mods,
-            hotKeyID,
-            GetApplicationEventTarget(),
-            0,
-            &ref
-        )
-        guard regStatus == noErr, let ref = ref else {
-            hkLog("[CmdHotkey] RegisterEventHotKey failed status=\(regStatus) — combo may collide with system shortcut")
-            return
-        }
-        self.commandCarbonHotKeyRef = ref
-
-        var eventType = EventTypeSpec(
-            eventClass: OSType(kEventClassKeyboard),
-            eventKind: UInt32(kEventHotKeyPressed)
-        )
-        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
-        let handler: EventHandlerUPP = { (_, eventRef, userData) -> OSStatus in
-            guard let userData = userData, let eventRef = eventRef else { return noErr }
-            // Inspect the event so we only react to our signature/id
-            // pair — a defensive guard in case the application target
-            // ever multiplexes hotkeys we didn't register.
-            var hkID = EventHotKeyID()
-            let getStatus = GetEventParameter(
-                eventRef,
-                EventParamName(kEventParamDirectObject),
-                EventParamName(typeEventHotKeyID),
-                nil,
-                MemoryLayout<EventHotKeyID>.size,
-                nil,
-                &hkID
-            )
-            guard getStatus == noErr, hkID.signature == 0x44494D43, hkID.id == 3 else {
-                return noErr
-            }
-            let manager = Unmanaged<HotkeyManager>.fromOpaque(userData).takeUnretainedValue()
-            Task { @MainActor in manager.handleCommandCarbonHotKey() }
-            return noErr
-        }
-
-        var handlerRef: EventHandlerRef?
-        let installStatus = InstallEventHandler(
-            GetApplicationEventTarget(),
-            handler,
-            1,
-            &eventType,
-            selfPtr,
-            &handlerRef
-        )
-        if installStatus == noErr {
-            self.commandCarbonEventHandler = handlerRef
-            hkLog("[CmdHotkey] registered \(combo.displayString)")
-        } else {
-            hkLog("[CmdHotkey] InstallEventHandler failed status=\(installStatus)")
-            UnregisterEventHotKey(ref)
-            self.commandCarbonHotKeyRef = nil
-        }
-    }
-
-    private func uninstallCommandCarbonHotKey() {
-        if let ref = commandCarbonHotKeyRef {
-            UnregisterEventHotKey(ref)
-            commandCarbonHotKeyRef = nil
-        }
-        if let h = commandCarbonEventHandler {
-            RemoveEventHandler(h)
-            commandCarbonEventHandler = nil
-        }
-    }
-
-    /// Fires on the dedicated Command-Mode hotkey. Flips
-    /// `oneShotCommandPending` so the next stop-and-paste cycle goes
-    /// through `stopAndCommandTransform`. Mirrors the dictation hotkey
-    /// "press starts or stops" semantics in handlePress, but always
-    /// toggle-style (Carbon hotkeys have no release event). Suppressed
-    /// while a meeting recording owns the cpal buffer — same gate as
-    /// the dictation hotkey.
+    /// Press handler for the dedicated Command-Mode hotkey. Mirrors the
+    /// dictation `handlePress` but always sets `oneShotCommandPending`
+    /// so the next stop-and-paste cycle goes through
+    /// `stopAndCommandTransform`. Honours `appState.preferredMode` —
+    /// the command hotkey shares the dictation Toggle vs Push-to-Talk
+    /// behaviour, exactly like Win's command hotkey shares Win's
+    /// `ShortcutMode`. Suppressed while a meeting recording owns the
+    /// cpal buffer (same gate as the dictation hotkey).
     @MainActor
-    private func handleCommandCarbonHotKey() {
+    private func handleCommandPress() {
         guard let appState else { return }
         if DimmyCore.shared.meetingIsActive {
             hkLog("[CmdHotkey] suppressed — meeting active")
             return
         }
+        commandLastPressTime = Date()
+
+        // Already-recording press → finish + command-transform regardless
+        // of which mode started the recording. The one-shot flag drives
+        // stopRecordingIfNeeded down the command branch even if
+        // `commandMode` (sticky) is off.
         if case .recording = appState.recordingState {
-            // Mid-recording press → finish + command-transform. The
-            // flag drives stopRecordingIfNeeded down the command branch
-            // even if `commandMode` (sticky) is off.
             appState.oneShotCommandPending = true
             stopRecordingIfNeeded()
-        } else {
-            // Idle press → start a fresh recording in one-shot command
-            // mode. Always .toggle: Carbon press has no release event
-            // so PTT semantics can't apply.
-            appState.oneShotCommandPending = true
-            startRecording(mode: .toggle)
+            return
         }
+
+        // Idle press → start a fresh recording in one-shot command mode.
+        // Mode comes from `preferredMode`: Push-to-Talk records while the
+        // chord is held; Toggle keeps it on until the next press.
+        appState.oneShotCommandPending = true
+        let mode: RecordingMode = appState.preferredMode == .toggle ? .toggle : .pushToTalk
+        startRecording(mode: mode)
+    }
+
+    /// Release handler for the dedicated Command-Mode hotkey. Only
+    /// meaningful in Push-to-Talk: stops the recording when the chord
+    /// is released, with a minimum-hold guard so a stray tap doesn't
+    /// transcribe accidental noise. Mirror of dictation `handleRelease`.
+    @MainActor
+    private func handleCommandRelease() {
+        guard let appState else { return }
+        guard case .recording(.pushToTalk) = appState.recordingState else { return }
+        if let pressTime = commandLastPressTime,
+           Date().timeIntervalSince(pressTime) < minimumHoldDuration {
+            // Too short — cancel, don't transcribe (and don't fire the
+            // command-transform path either: oneShotCommandPending was
+            // set on press; cancelRecording clears it via stopRecording
+            // → idle, but we need to clear it explicitly to keep state
+            // tidy when the user releases too fast).
+            appState.oneShotCommandPending = false
+            cancelRecording()
+            return
+        }
+        stopRecordingIfNeeded()
     }
 
     private func startAccessibilityPolling() {
@@ -303,7 +230,16 @@ final class HotkeyManager {
     // MARK: - CGEventTap (active, consumes events globally)
 
     private func installEventTap() -> Bool {
+        // Mask covers three event types so the SAME tap can drive:
+        //   • dictation (modifier-only chord, .flagsChanged)
+        //   • command hotkey modifier-only chord (.flagsChanged)
+        //   • command hotkey mod+key chord activation (.keyDown)
+        //   • command hotkey mod+key chord release (.keyUp)
+        // This mirrors the Win-side single-hook design and replaces the
+        // Carbon `RegisterEventHotKey` path for the command hotkey.
         let mask: CGEventMask = (1 << CGEventType.flagsChanged.rawValue)
+            | (1 << CGEventType.keyDown.rawValue)
+            | (1 << CGEventType.keyUp.rawValue)
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
 
         let callback: CGEventTapCallBack = { _, type, event, userInfo in
@@ -319,15 +255,33 @@ final class HotkeyManager {
                 return Unmanaged.passUnretained(event)
             }
 
-            guard type == .flagsChanged else { return Unmanaged.passUnretained(event) }
-            hkLog("[HotkeyManager] TAP callback fired, rawFlags=0x\(String(event.flags.rawValue, radix: 16))")
+            switch type {
+            case .flagsChanged:
+                hkLog("[HotkeyManager] TAP flagsChanged, rawFlags=0x\(String(event.flags.rawValue, radix: 16))")
+                let flags = NSEvent.ModifierFlags(cgFlags: event.flags)
+                let shouldConsume = MainActor.assumeIsolated {
+                    manager.handleFlagsAll(flags)
+                }
+                return shouldConsume ? nil : Unmanaged.passUnretained(event)
 
-            let flags = NSEvent.ModifierFlags(cgFlags: event.flags)
-            // CGEventTap callback runs on the main runloop thread (tap attached to main runloop).
-            let shouldConsume = MainActor.assumeIsolated {
-                manager.handleFlags(flags)
+            case .keyDown:
+                let flags = NSEvent.ModifierFlags(cgFlags: event.flags)
+                let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+                let shouldConsume = MainActor.assumeIsolated {
+                    manager.handleCommandKeyDown(keyCode: keyCode, flags: flags)
+                }
+                return shouldConsume ? nil : Unmanaged.passUnretained(event)
+
+            case .keyUp:
+                let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+                let shouldConsume = MainActor.assumeIsolated {
+                    manager.handleCommandKeyUp(keyCode: keyCode)
+                }
+                return shouldConsume ? nil : Unmanaged.passUnretained(event)
+
+            default:
+                return Unmanaged.passUnretained(event)
             }
-            return shouldConsume ? nil : Unmanaged.passUnretained(event)
         }
 
         // .cgSessionEventTap runs at login-session level (no root required, only Accessibility).
@@ -361,6 +315,60 @@ final class HotkeyManager {
         }
         eventTap = nil
         runLoopSource = nil
+    }
+
+    /// Top-level flagsChanged dispatcher. Forwards the event to BOTH the
+    /// dictation handler (which owns the modifier-only dictation chord)
+    /// AND the command-combo state machine (which needs to see modifier
+    /// transitions for modifier-only command chords AND to release a
+    /// mod+key chord when its modifiers drop). Consumes the event when
+    /// EITHER consumer wants to (a fired command chord should never
+    /// leak its modifier flag flip to the focused app, same as
+    /// dictation).
+    @discardableResult
+    private func handleFlagsAll(_ rawFlags: NSEvent.ModifierFlags) -> Bool {
+        let dictConsume = handleFlags(rawFlags)
+        let cmdEvent = commandComboState.processFlags(rawFlags)
+        let cmdConsume = dispatchCommandEvent(cmdEvent)
+        return dictConsume || cmdConsume
+    }
+
+    /// keyDown handler — feeds the command-combo state machine. Only the
+    /// command hotkey listens on keyDown; the dictation chord is
+    /// modifier-only and never fires here. Consumed when the chord
+    /// activates so the focused app never sees the letter (e.g. an X in
+    /// a text field while the user holds ⌃⇧X).
+    @discardableResult
+    private func handleCommandKeyDown(keyCode: UInt16, flags: NSEvent.ModifierFlags) -> Bool {
+        let event = commandComboState.processKeyDown(keyCode: keyCode, flags: flags)
+        return dispatchCommandEvent(event)
+    }
+
+    /// keyUp handler — also for the command-combo state machine. Fires
+    /// the release branch for Push-to-Talk command hotkeys whose
+    /// non-modifier key is being lifted while the modifiers are still
+    /// held. Consumes the event on release for symmetry with keyDown
+    /// consumption so a downstream app can't see half of the chord.
+    @discardableResult
+    private func handleCommandKeyUp(keyCode: UInt16) -> Bool {
+        let event = commandComboState.processKeyUp(keyCode: keyCode)
+        return dispatchCommandEvent(event)
+    }
+
+    /// Map a `CommandComboState` event onto the press/release handlers
+    /// and return whether the OS event should be consumed.
+    @discardableResult
+    private func dispatchCommandEvent(_ event: CommandComboState.Event) -> Bool {
+        switch event {
+        case .none:
+            return false
+        case .pressed:
+            handleCommandPress()
+            return true
+        case .released:
+            handleCommandRelease()
+            return true
+        }
     }
 
     /// Returns true if the event should be consumed (i.e. not forwarded to other apps).
@@ -835,4 +843,154 @@ final class HotkeyManager {
 
         appState.waveformLevels = levels
     }
+}
+
+// MARK: - CommandComboState
+
+/// Swift port of the Win `Binding` state machine for the dedicated
+/// Command-Mode hotkey. Tracks whether the configured `combo` is
+/// currently active (all required keys held), driven by the three
+/// `CGEventTap` callbacks: `.flagsChanged`, `.keyDown`, `.keyUp`.
+///
+/// Models both supported combo shapes the Rust hook accepts:
+///   - modifier-only (e.g. ⌃⌥, ⌘⌥): activation = all modifiers held;
+///     release = any modifier dropped. Driven entirely by flagsChanged.
+///   - modifier+key (e.g. ⌃⇧X): activation = modifiers held AND keyDown
+///     matches; release = matching keyUp OR any modifier dropped. Driven
+///     by keyDown/keyUp + flagsChanged for the modifier-drop branch.
+///
+/// Mirrors the Rust `Binding::process` semantics: the binding fires on
+/// the FIRST transition into "all keys held" and is idempotent during
+/// hold (auto-repeats are ignored — the OS sends repeated keyDowns).
+///
+/// Pure-state — does NOT touch AppState / DimmyCore. The owning
+/// `HotkeyManager` consumes the returned `Event` and runs the press /
+/// release business logic. Lives at file scope so it's directly
+/// unit-testable without spinning up the CGEventTap.
+final class CommandComboState {
+    enum Event {
+        case none
+        case pressed
+        case released
+    }
+
+    private var combo: HotkeyCombo?
+    private var active: Bool = false
+    /// When activation is mod+key, the matched keyCode. Used to scope
+    /// the keyUp release path to the same physical key.
+    private var heldKey: UInt16?
+
+    /// Update the bound combo. Resets internal state — a re-bind while
+    /// the prior combo was active means the old physical keys can no
+    /// longer release the new combo, so we drop the active flag rather
+    /// than risk a stuck "pressed" state.
+    func setCombo(_ combo: HotkeyCombo?) {
+        self.combo = combo
+        self.active = false
+        self.heldKey = nil
+    }
+
+    /// Tear down: drop any in-flight activation. Called from
+    /// `HotkeyManager.stop()` so a future `start()` starts clean.
+    func reset() {
+        active = false
+        heldKey = nil
+    }
+
+    /// Process a `.flagsChanged` event. Returns:
+    ///   - `.pressed`  : a modifier-only combo just became active
+    ///   - `.released` : any active combo lost a required modifier (mod-
+    ///                   only deactivation OR mod+key bailing because the
+    ///                   user lifted Shift mid-chord)
+    ///   - `.none`     : no transition
+    ///
+    /// `MainActor`-isolated by the calling tap callback, so concurrent
+    /// updates aren't a concern.
+    func processFlags(_ rawFlags: NSEvent.ModifierFlags) -> Event {
+        guard let combo else { return .none }
+        let flags = rawFlags.intersection(.deviceIndependentFlagsMask)
+        let modsHeld = modifiersMatch(combo: combo, flags: flags)
+
+        if combo.isModifierOnly {
+            // Modifier-only combo: STRICT equality on the modifier set.
+            // We don't fire on "supersets" because the user might be
+            // holding ⌃⌥ during a normal ⌃⌥⇧A chord — we should NOT
+            // start a recording for "⌃⌥" in that scenario.
+            let strictMatch = modsHeld && modifierCount(flags) == combo.modifierCount
+            if strictMatch && !active {
+                active = true
+                return .pressed
+            }
+            if !strictMatch && active {
+                active = false
+                return .released
+            }
+            return .none
+        }
+
+        // Mod+key combo: flagsChanged only matters for the bail-out case
+        // where the user releases a modifier while the chord is active.
+        // Activation itself fires in processKeyDown.
+        if active && !modsHeld {
+            active = false
+            heldKey = nil
+            return .released
+        }
+        return .none
+    }
+
+    /// Process a `.keyDown` event. Returns `.pressed` for the first
+    /// keyDown that satisfies the configured mod+key chord (mods held +
+    /// key matches), `.none` otherwise. Auto-repeats are ignored —
+    /// `active` is already true, so the if-guard short-circuits.
+    func processKeyDown(keyCode: UInt16, flags: NSEvent.ModifierFlags) -> Event {
+        guard let combo else { return .none }
+        if combo.isModifierOnly { return .none }
+        if active { return .none }
+        guard combo.keyCode == keyCode else { return .none }
+        let masked = flags.intersection(.deviceIndependentFlagsMask)
+        guard modifiersMatch(combo: combo, flags: masked) else { return .none }
+        // For mod+key we require strict equality on the modifier mask —
+        // a chord like ⌃⇧X should NOT fire while the user holds
+        // ⌃⇧⌘X (which is presumably some OS / app shortcut).
+        guard modifierCount(masked) == combo.modifierCount else { return .none }
+        active = true
+        heldKey = keyCode
+        return .pressed
+    }
+
+    /// Process a `.keyUp` event. Returns `.released` when the lifted
+    /// key matches the one that activated the chord; `.none` otherwise.
+    func processKeyUp(keyCode: UInt16) -> Event {
+        guard let combo, !combo.isModifierOnly else { return .none }
+        guard active, heldKey == keyCode else { return .none }
+        active = false
+        heldKey = nil
+        return .released
+    }
+
+    // MARK: - Helpers (internal for unit tests)
+
+    func modifiersMatch(combo: HotkeyCombo, flags: NSEvent.ModifierFlags) -> Bool {
+        let masked = flags.intersection(.deviceIndependentFlagsMask)
+        if combo.control && !masked.contains(.control) { return false }
+        if combo.option && !masked.contains(.option) { return false }
+        if combo.command && !masked.contains(.command) { return false }
+        if combo.shift && !masked.contains(.shift) { return false }
+        return true
+    }
+
+    func modifierCount(_ flags: NSEvent.ModifierFlags) -> Int {
+        var n = 0
+        if flags.contains(.control) { n += 1 }
+        if flags.contains(.option) { n += 1 }
+        if flags.contains(.command) { n += 1 }
+        if flags.contains(.shift) { n += 1 }
+        return n
+    }
+
+    // Test-only inspection — keeps the unit suite oblivious to the
+    // `active` private without weakening encapsulation in production
+    // code. `nonisolated` so XCTest can call it from outside @MainActor.
+    var isActiveForTesting: Bool { active }
 }
