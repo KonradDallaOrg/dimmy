@@ -4757,6 +4757,10 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
 ///   effective recap provider.
 /// - -7 429 rate-limit — too many calls, retry later.
 /// - -8 network / DNS — couldn't reach the endpoint.
+/// - -9 413 payload too large — the recap prompt exceeds the model's
+///   context window or the plan's per-request / per-minute token limit
+///   (common on Groq free tier). UI should suggest a larger-context
+///   model or a higher-tier provider.
 fn categorize_llm_error_to_rc(err: &crate::error::LlmError) -> c_int {
     use crate::error::LlmError;
     match err {
@@ -4764,6 +4768,7 @@ fn categorize_llm_error_to_rc(err: &crate::error::LlmError) -> c_int {
             match *status {
                 401 | 403 => -6,
                 429 => -7,
+                413 => -9, // payload / context / tokens-per-minute too large
                 404 => {
                     // Model-not-found is the specific case we care
                     // about most. Anthropic 404 bodies contain
