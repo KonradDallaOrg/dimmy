@@ -685,8 +685,14 @@ fn gemini_wants_thinking(model_lc: &str) -> bool {
 /// use the budget_tokens form. Detect by model id so a config pinning
 /// a specific older model still works.
 fn anthropic_uses_adaptive_thinking(model_lc: &str) -> bool {
+    // Opus 4.7+ and Sonnet 5+ require thinking.type=adaptive and REJECT the
+    // legacy budget_tokens form. Opus 4.8 (per the Anthropic model docs:
+    // extended thinking = No, adaptive thinking = Yes) MUST be here or the
+    // recap/rewrite call 400s with the wrong thinking shape.
     model_lc.contains("opus-4-7")
         || model_lc.contains("opus-4.7")
+        || model_lc.contains("opus-4-8")
+        || model_lc.contains("opus-4.8")
         || model_lc.contains("sonnet-5")
         || model_lc.contains("sonnet-6") // future-proof
 }
@@ -1476,6 +1482,7 @@ mod tests {
     #[test]
     fn anthropic_thinking_dispatch_flagship_models() {
         // All flagship reasoning-tier models opt into extended thinking.
+        assert!(anthropic_wants_thinking("claude-opus-4-8"));
         assert!(anthropic_wants_thinking("claude-opus-4-7"));
         assert!(anthropic_wants_thinking("claude-opus-4-5"));
         assert!(anthropic_wants_thinking("claude-opus-3-5"));
@@ -1495,9 +1502,11 @@ mod tests {
 
     #[test]
     fn anthropic_adaptive_thinking_only_for_new_models() {
-        // Opus 4.7 + Sonnet 5+ require thinking.type=adaptive
+        // Opus 4.7 / 4.8 + Sonnet 5+ require thinking.type=adaptive
         assert!(anthropic_uses_adaptive_thinking("claude-opus-4-7"));
         assert!(anthropic_uses_adaptive_thinking("claude-opus-4.7"));
+        assert!(anthropic_uses_adaptive_thinking("claude-opus-4-8"));
+        assert!(anthropic_uses_adaptive_thinking("claude-opus-4.8"));
         assert!(anthropic_uses_adaptive_thinking("claude-sonnet-5"));
         assert!(anthropic_uses_adaptive_thinking("claude-sonnet-6")); // future
                                                                       // Older models keep the budget_tokens form
