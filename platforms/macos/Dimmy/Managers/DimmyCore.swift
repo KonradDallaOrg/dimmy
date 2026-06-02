@@ -289,6 +289,22 @@ final class DimmyCore {
         return (String(cString: buffer), rc)
     }
 
+    // MARK: - Hotkey grammar (cross-platform conflict detection)
+
+    /// Returns `true` if two combos conflict per the Rust hotkey grammar
+    /// — i.e. one keyset is a subset of the other so pressing the bigger
+    /// one would also fire the smaller one. Used by the command hotkey
+    /// recorder to reject a combo overlapping with the dictation or
+    /// dictionary shortcut. Empty / unparseable strings never conflict
+    /// (a disabled binding can't collide with anything).
+    func hotkeyCombosConflict(_ a: String, _ b: String) -> Bool {
+        a.withCString { ap in
+            b.withCString { bp in
+                dimmy_hotkey_combos_conflict(ap, bp) != 0
+            }
+        }
+    }
+
     // MARK: - Stats
 
     /// Update cumulative stats.

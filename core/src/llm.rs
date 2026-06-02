@@ -679,11 +679,16 @@ fn gemini_wants_thinking(model_lc: &str) -> bool {
     model_lc.contains("pro") || model_lc.starts_with("gemini-3")
 }
 
-/// Anthropic API split: Opus 4.7 / Sonnet 5+ removed extended-thinking
+/// Anthropic API split: Opus 4.7+ / Sonnet 5+ removed extended-thinking
 /// budgets. They require `thinking.type=adaptive` + `output_config.effort`
 /// and reject `temperature/top_p/top_k`. Older Opus 4.x / Sonnet 4 still
 /// use the budget_tokens form. Detect by model id so a config pinning
 /// a specific older model still works.
+///
+/// Opus 4.8 (May 2026) keeps the adaptive-only contract and defaults
+/// `effort=high`. New Opus point releases land roughly every 2-3 months;
+/// add their id token here as they ship — the file-pinned alternative
+/// (e.g. matching by date prefix) would still need a manual bump.
 fn anthropic_uses_adaptive_thinking(model_lc: &str) -> bool {
     // Opus 4.7+ and Sonnet 5+ require thinking.type=adaptive and REJECT the
     // legacy budget_tokens form. Opus 4.8 (per the Anthropic model docs:

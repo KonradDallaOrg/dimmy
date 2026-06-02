@@ -42,7 +42,6 @@ final class RecapModelTests: XCTestCase {
         XCTAssertTrue(ids.contains("gpt-5.4-mini"))
         XCTAssertTrue(ids.contains("gpt-5.4-nano"))
         XCTAssertTrue(ids.contains("gpt-5"))
-        XCTAssertTrue(ids.contains("gpt-4o"))
     }
 
     func testEveryCuratedOptionHasNonEmptyLabel() {

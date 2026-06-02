@@ -17,30 +17,63 @@ import Foundation
 // back to the auto-detect-from-URL heuristic.
 
 func pickRecapModel() -> String {
-    do {
-        // Path comes from DimmyCore.shared.configDirURL so the staging
-        // flavor (`dimmy-staging/`) is honoured. Hardcoding "dimmy"
-        // here would make staging builds read a stale prod config —
-        // same class of bug as the Win app_rules wipe (2026-05-12).
-        guard let cfgURL = DimmyCore.shared.configDirURL?
-            .appendingPathComponent("config.json")
-        else { return "" }
-        let data = try Data(contentsOf: cfgURL)
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return ""
-        }
-        if let override = json["recap_model_override"] as? String,
-           !override.trimmingCharacters(in: .whitespaces).isEmpty,
-           override != RecapModelOption.autoKey {
-            return override
-        }
-        guard let url = json["llm_api_url"] as? String else { return "" }
-        let lower = url.lowercased()
-        if lower.contains("anthropic.com") { return "claude-opus-4-8" }
-        if lower.contains("googleapis.com") { return "gemini-2.5-pro" }
-        return ""
-    } catch {
-        return ""
+    // Order of precedence (mirrors Win MeetingWindow.PickRecapModel):
+    //   1. Explicit `recap_model_override` — with stale Gemini id
+    //      migration so an old saved value doesn't 404 at recap time.
+    //   2. Auto: walk the user's connected providers (LLM scope OR
+    //      Recap scope OR keystore booleans) and pick the best flagship
+    //      among them: Anthropic Opus > OpenAI GPT-5 > Gemini 3.1 Pro
+    //      Preview. The Win side reaches the SAME hierarchy via
+    //      `dimmy_get_config_json` flags — Mac reads them off the same
+    //      FFI snapshot here.
+    //   3. Empty — Rust falls back to `llm_api_model` (whatever the
+    //      user's dictation model is). Honest errors then guide if the
+    //      tier can't handle the recap size.
+    //
+    // CRITICAL: the `has_<vendor>_*key` flags live in the LIVE FFI
+    // snapshot (`dimmy_get_config_json`), NOT in the config.json FILE
+    // — the Rust core computes them and strips them on save. Reading
+    // the file directly (the old behaviour) would see all-false and
+    // Auto would pick nothing. Mirror of the Win fix (eefd3b49).
+    let snapshot = DimmyCore.shared.getConfig() ?? [:]
+
+    if let override = snapshot["recap_model_override"] as? String,
+       !override.trimmingCharacters(in: .whitespaces).isEmpty,
+       override != RecapModelOption.autoKey {
+        return migrateRecapModelId(override.trimmingCharacters(in: .whitespaces))
+    }
+
+    func boolFlag(_ key: String) -> Bool {
+        (snapshot[key] as? Bool) == true
+    }
+
+    if boolFlag("has_anthropic_llm_key") || boolFlag("has_anthropic_recap_key") {
+        return "claude-opus-4-8"
+    }
+    if boolFlag("has_openai_key") || boolFlag("has_openai_llm_key") || boolFlag("has_openai_recap_key") {
+        return "gpt-5.5"
+    }
+    if boolFlag("has_gemini_key") || boolFlag("has_gemini_llm_key") || boolFlag("has_gemini_recap_key") {
+        return "gemini-3.1-pro-preview"
+    }
+    // No premium provider connected → return empty so the Rust core
+    // uses the user's `llm_api_model`. With no LLM at all the call
+    // fails with an honest error, which is preferable to a silent
+    // success of a path that was always going to fail.
+    return ""
+}
+
+/// Migrate stale recap model ids saved by older builds to their current
+/// valid form. Mirror of the Win `MigrateRecapModelId`. Same fix as the
+/// `LlmApiModel` migration: the recap dropdown switched the Gemini Pro
+/// id to the `-preview` suffix, so a config that still carries the
+/// bare id 404s with "models/gemini-3.1-pro is not found".
+func migrateRecapModelId(_ id: String) -> String {
+    switch id {
+    case "gemini-3.1-pro":   return "gemini-3.1-pro-preview"
+    case "gemini-3-1-pro":   return "gemini-3.1-pro-preview"
+    case "gemini-3-pro":     return "gemini-3-pro-preview"
+    default: return id
     }
 }
 
@@ -73,22 +106,35 @@ struct RecapModelOption: Identifiable, Equatable {
     static let curated: [RecapModelOption] = [
         .init(id: autoKey, label: "Auto (match LLM provider)", provider: .auto),
 
-        .init(id: "claude-opus-4-8",   label: "Anthropic — Claude Opus 4.8 (best)",   provider: .anthropic),
-        .init(id: "claude-opus-4-7",   label: "Anthropic — Claude Opus 4.7",          provider: .anthropic),
+        // Anthropic. Opus 4.8 is the current flagship (May 2026) and
+        // is API-compatible with the 4.7 adaptive-thinking path; 4.7
+        // remains callable for users pinned to it. Sonnet 4.6 and
+        // Haiku 4.5 are still the current Sonnet / Haiku tier — no
+        // newer point release exists at the time of this curation.
+        .init(id: "claude-opus-4-8",   label: "Anthropic — Claude Opus 4.8 (best)",     provider: .anthropic),
+        .init(id: "claude-opus-4-7",   label: "Anthropic — Claude Opus 4.7",            provider: .anthropic),
         .init(id: "claude-sonnet-4-6", label: "Anthropic — Claude Sonnet 4.6 (balanced)", provider: .anthropic),
-        .init(id: "claude-haiku-4-5",  label: "Anthropic — Claude Haiku 4.5 (fast)",  provider: .anthropic),
+        .init(id: "claude-haiku-4-5",  label: "Anthropic — Claude Haiku 4.5 (fast)",    provider: .anthropic),
 
-        .init(id: "gemini-3.1-pro",   label: "Google — Gemini 3.1 Pro (best)",   provider: .gemini),
-        .init(id: "gemini-3.1-flash", label: "Google — Gemini 3.1 Flash (fast)", provider: .gemini),
-        .init(id: "gemini-2.5-pro",   label: "Google — Gemini 2.5 Pro",          provider: .gemini),
-        .init(id: "gemini-2.5-flash", label: "Google — Gemini 2.5 Flash",        provider: .gemini),
+        // Gemini 3.1 ships as preview-channel only — the bare `gemini-3.1-pro`
+        // string 404s with "models/gemini-3.1-pro is not found"; the working
+        // id is `-preview` suffixed. `migrateRecapModelId` covers stale
+        // saved configs but the dropdown itself must save the right id.
+        .init(id: "gemini-3.1-pro-preview",   label: "Google — Gemini 3.1 Pro (newest top)",   provider: .gemini),
+        .init(id: "gemini-3.1-flash-lite",    label: "Google — Gemini 3.1 Flash (newest fast)", provider: .gemini),
+        .init(id: "gemini-3-pro-preview",     label: "Google — Gemini 3 Pro",                  provider: .gemini),
+        .init(id: "gemini-2.5-pro",           label: "Google — Gemini 2.5 Pro (stable)",       provider: .gemini),
+        .init(id: "gemini-2.5-flash",         label: "Google — Gemini 2.5 Flash (stable fast)", provider: .gemini),
 
-        .init(id: "gpt-5.5",      label: "OpenAI — GPT-5.5 (latest top)",   provider: .openai),
-        .init(id: "gpt-5.4-mini", label: "OpenAI — GPT-5.4 mini (fast)",    provider: .openai),
-        .init(id: "gpt-5.4-nano", label: "OpenAI — GPT-5.4 nano (fastest)", provider: .openai),
-        .init(id: "gpt-5",      label: "OpenAI — GPT-5",                 provider: .openai),
-        .init(id: "gpt-5-mini", label: "OpenAI — GPT-5 mini (fast + cheap)", provider: .openai),
-        .init(id: "gpt-4o",     label: "OpenAI — GPT-4o",                provider: .openai),
+        // OpenAI. GPT-5.5 (Apr 2026) is the flagship; the 5.4 line ships
+        // only as mini / nano (no plain gpt-5.4 — that id 404s, same class
+        // as the bare Gemini ids). Legacy gpt-5 / gpt-5-mini stay callable
+        // for back-compat. Drop-in on the existing /v1/chat/completions path.
+        .init(id: "gpt-5.5",      label: "OpenAI — GPT-5.5 (best)",            provider: .openai),
+        .init(id: "gpt-5.4-mini", label: "OpenAI — GPT-5.4 mini (fast)",      provider: .openai),
+        .init(id: "gpt-5.4-nano", label: "OpenAI — GPT-5.4 nano (fastest)",   provider: .openai),
+        .init(id: "gpt-5",        label: "OpenAI — GPT-5",                     provider: .openai),
+        .init(id: "gpt-5-mini",   label: "OpenAI — GPT-5 mini",                provider: .openai),
 
         // Local Gemma — on-device via llama.cpp Metal. No network, no
         // API key, transcript never leaves the Mac. Quality is below
