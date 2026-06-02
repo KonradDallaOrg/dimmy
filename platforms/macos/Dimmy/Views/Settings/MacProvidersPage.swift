@@ -31,6 +31,10 @@ struct MacProvidersPage: View {
     @State private var revealedKeyField: String? = nil
     @State private var inFlight: Set<String> = []
     @State private var statusMessages: [String: (text: String, isError: Bool)] = [:]
+    /// Per-provider expanded state. Drives the DisclosureGroup binding so
+    /// the entire header HStack is a tap target — not just the small
+    /// 12pt chevron the default DisclosureGroup ships with.
+    @State private var expandedIds: Set<String> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -54,11 +58,34 @@ struct MacProvidersPage: View {
 
     @ViewBuilder
     private func providerCard(_ p: ProviderInfo) -> some View {
-        DisclosureGroup {
+        // Bind expansion to `expandedIds` so we can drive it from a tap
+        // gesture on the WHOLE header HStack — not just the small
+        // built-in chevron. `contentShape(Rectangle())` ensures the
+        // entire HStack area (including the empty space next to the
+        // status pill) is hit-targetable. `withAnimation` keeps the
+        // expand/collapse curve identical to the default chevron-driven
+        // DisclosureGroup.
+        let isExpanded = Binding<Bool>(
+            get: { expandedIds.contains(p.id) },
+            set: { newValue in
+                if newValue { expandedIds.insert(p.id) } else { expandedIds.remove(p.id) }
+            }
+        )
+        DisclosureGroup(isExpanded: isExpanded) {
             cardBody(p)
                 .padding(.top, 6)
         } label: {
             cardHeader(p)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    withAnimation {
+                        if expandedIds.contains(p.id) {
+                            expandedIds.remove(p.id)
+                        } else {
+                            expandedIds.insert(p.id)
+                        }
+                    }
+                }
         }
         .padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14))
         .background(
