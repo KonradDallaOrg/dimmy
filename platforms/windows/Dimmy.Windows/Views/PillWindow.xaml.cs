@@ -1294,6 +1294,14 @@ public sealed partial class PillWindow : Window
                 {
                     App.Log($"Pill Stop: recap failed: {result.Error}", "Pill");
                     _vm.SetError(result.Error ?? "Recap failed");
+                    // CRITICAL: the MeetingWindow was flipped to Processing
+                    // ("Wrapping up…") by the meeting_state event. On a recap
+                    // failure it must still leave Processing, otherwise it
+                    // hangs there forever. Route it to the Done view showing
+                    // the transcript + audio that DID succeed; the recap can
+                    // be regenerated from there. Burned 2026-06-02 (Groq
+                    // Pick-best recap -2 left the window stuck in Wrapping up).
+                    if (!string.IsNullOrEmpty(dir)) App.Instance?.NotifyMeetingRecapSaved(dir);
                 }
                 else
                 {
