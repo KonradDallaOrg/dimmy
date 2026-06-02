@@ -73,16 +73,39 @@ follows whichever is set for dictation).
 7. **Clear**: the Clear button disables the command hotkey (back to
    pill-menu-only command mode).
 
-## Mac parity (TODO, not in this branch)
+## Mac parity (TODO, not in this branch) — bigger than "wiring"
 
-The shared core already drives both bindings on the macOS `CGEventTap`
-(`DICT.process` + `CMD.process` in `tap_callback`). Mac just needs to:
+IMPORTANT: Mac does NOT use the Rust keyboard hook for hotkeys at all. The
+Rust `hotkey.rs` macOS `CGEventTap` (and my `CMD.process` addition to it)
+is effectively dead code on Mac — no Swift file calls `dimmy_hotkey_*`. Mac
+has its own native stack in `platforms/macos/Dimmy/Managers/HotkeyManager.swift`:
 
-- call `dimmy_hotkey_set_command` from the Mac settings when the user sets
-  a command combo (mirror of `SetCommandShortcut`),
-- poll `dimmy_hotkey_take_command_event` alongside `dimmy_hotkey_take_event`
-  in the Mac hotkey poller, routing pressed/released to the command
-  start/stop with the same `commandOneShot` flag,
-- use `dimmy_hotkey_combos_conflict` to reject overlapping combos.
+- **Dictation** = a Swift `CGEventTap` listening to `.flagsChanged` only, so
+  the Mac dictation shortcut is modifier-only (e.g. Ctrl+Option). Toggle +
+  PTT are already handled in Swift (`handlePress` / `handleRelease`).
+- **Command hotkey** = Carbon `RegisterEventHotKey` (`installCommandCarbonHotKey`),
+  which — exactly like Win's old `RegisterHotKey` — is key-DOWN only, so it
+  is toggle-only and can't do PTT or modifier-only combos. The code comment
+  states this directly.
 
-No Rust changes needed on the Mac side; it is purely Swift wiring.
+So Mac is in the same "before" state Win was. To reach parity the Mac
+command hotkey must move OFF Carbon ONTO the existing Swift `CGEventTap`,
+mirroring this branch's design but in Swift:
+
+1. Extend the tap mask from `.flagsChanged` only to also include `.keyDown`
+   + `.keyUp` (needed to see a modifier+key command combo AND its release).
+2. Add a Swift command-combo state machine (mirror of `handleFlags` /
+   `handlePress` / `handleRelease`) that fires press/release for the command
+   combo and honours `appState.preferredMode` (toggle vs PTT), setting
+   `oneShotCommandPending`.
+3. Delete the Carbon command-hotkey path (`installCommandCarbonHotKey` etc.).
+4. Reject overlapping combos. `dimmy_hotkey_combos_conflict` IS reusable on
+   Mac (cross-platform FFI). The `set_command` / `take_command_event` FFIs
+   are NOT useful on Mac (Mac never polls the Rust hook).
+
+Simpler than Win in one way: no Start-Menu / synthetic-release suppression
+needed (that's a Windows shell problem; the tap just returns nil to consume).
+Harder in another: the Mac dictation tap is flagsChanged-only today, so
+adding keyDown/keyUp + a release-aware command state machine is real work,
+not a few lines of wiring. The generate-or-transform stop path is already
+done on Mac (`stopAndCommandTransform` passes `selection ?? ""`).
