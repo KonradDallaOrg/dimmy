@@ -39,6 +39,7 @@
 		AA000702 /* RecapModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000702 /* RecapModelTests.swift */; };
 		AA000703 /* MeetingHistoryRowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000703 /* MeetingHistoryRowTests.swift */; };
 		AA000704 /* AppStateRecapModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000704 /* AppStateRecapModelTests.swift */; };
+		AA00070A /* AppStateProviderFilterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00070A /* AppStateProviderFilterTests.swift */; };
 		AA000705 /* MeetingAmplitudeAGCTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000705 /* MeetingAmplitudeAGCTests.swift */; };
 		AA000706 /* MarkdownBlockParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000706 /* MarkdownBlockParserTests.swift */; };
 		AA000707 /* CallDetectionCandidateSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000707 /* CallDetectionCandidateSelectionTests.swift */; };
@@ -166,6 +167,7 @@
 		AB000702 /* RecapModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecapModelTests.swift; sourceTree = "<group>"; };
 		AB000703 /* MeetingHistoryRowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingHistoryRowTests.swift; sourceTree = "<group>"; };
 		AB000704 /* AppStateRecapModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateRecapModelTests.swift; sourceTree = "<group>"; };
+		AB00070A /* AppStateProviderFilterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateProviderFilterTests.swift; sourceTree = "<group>"; };
 		AB000705 /* MeetingAmplitudeAGCTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAmplitudeAGCTests.swift; sourceTree = "<group>"; };
 		AB000706 /* MarkdownBlockParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownBlockParserTests.swift; sourceTree = "<group>"; };
 		AB000707 /* CallDetectionCandidateSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallDetectionCandidateSelectionTests.swift; sourceTree = "<group>"; };
@@ -286,6 +288,7 @@
 				AB000702 /* RecapModelTests.swift */,
 				AB000703 /* MeetingHistoryRowTests.swift */,
 				AB000704 /* AppStateRecapModelTests.swift */,
+				AB00070A /* AppStateProviderFilterTests.swift */,
 				AB000705 /* MeetingAmplitudeAGCTests.swift */,
 				AB000706 /* MarkdownBlockParserTests.swift */,
 				AB000707 /* CallDetectionCandidateSelectionTests.swift */,
@@ -768,6 +771,7 @@
 				AA000702 /* RecapModelTests.swift in Sources */,
 				AA000703 /* MeetingHistoryRowTests.swift in Sources */,
 				AA000704 /* AppStateRecapModelTests.swift in Sources */,
+				AA00070A /* AppStateProviderFilterTests.swift in Sources */,
 				AA000705 /* MeetingAmplitudeAGCTests.swift in Sources */,
 				AA000706 /* MarkdownBlockParserTests.swift in Sources */,
 				AA000707 /* CallDetectionCandidateSelectionTests.swift in Sources */,

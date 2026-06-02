@@ -327,12 +327,17 @@ struct PillView: View {
 
     /// Always-visible style indicator. When the rewrite is off it stays as
     /// a hollow ring so the user has a hit target to scroll back into a
-    /// non-off style. Scroll cycles `llm_style`.
+    /// non-off style. Scroll cycles `llm_style`. In Command Mode the dot
+    /// is forced to amber regardless of the rewrite style — a distinct
+    /// "you're about to act on a selection, not dictate" cue (mirrors
+    /// Win PillWindow.xaml.cs RefreshStyleDot).
     private var styleDot: some View {
-        let active = appState.llmEnabled && appState.llmStyleEnum != .off
-        let color = active ? appState.llmStyleEnum.color : Color.secondary.opacity(0.5)
-        // Visible dot 8 pt, hit area 22 pt — enough buffer to land a
-        // scroll without bloating the collapsed pill.
+        let inCommandMode = appState.commandMode || appState.oneShotCommandPending
+        let styleActive = appState.llmEnabled && appState.llmStyleEnum != .off
+        let active = inCommandMode || styleActive
+        let color: Color = inCommandMode
+            ? Color(red: 1.0, green: 0x9F / 255.0, blue: 0x0A / 255.0)
+            : (styleActive ? appState.llmStyleEnum.color : Color.secondary.opacity(0.5))
         return Circle()
             .fill(active ? color : Color.clear)
             .overlay(
@@ -344,7 +349,7 @@ struct PillView: View {
             .overlay(
                 ScrollWheelCatcher { delta in cycleStyle(delta: delta) }
             )
-            .help(currentStyleDisplayName)
+            .help(inCommandMode ? "Command mode (edit selection)" : currentStyleDisplayName)
     }
 
     /// Translate-to indicator visible only when the pill is expanded.

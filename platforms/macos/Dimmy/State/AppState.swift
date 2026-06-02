@@ -946,6 +946,14 @@ final class AppState: ObservableObject {
     /// Win's `AppViewModel.CommandMode`.
     @Published var commandMode: Bool = false
 
+    /// One-shot Command Mode: set true when the user fires the dedicated
+    /// command hotkey. Lives orthogonal to `commandMode` (the sticky
+    /// menu toggle) so menu-flipped users and hotkey-flipped users
+    /// never block each other. Cleared at the end of the next
+    /// `stopAndCommandTransform` cycle. The pill amber + every
+    /// "is command mode active" gate reads `commandMode || oneShotCommandPending`.
+    @Published var oneShotCommandPending: Bool = false
+
     // MARK: - Stats
 
     @Published var statsTotalWords: UInt64 = 0
@@ -1032,6 +1040,24 @@ final class AppState: ObservableObject {
         didSet { UserDefaults.standard.set(dictHotkey.encoded, forKey: "dictHotkeyEncoded") }
     }
 
+    /// Dedicated one-shot Command-Mode hotkey. Nil = not configured;
+    /// HotkeyManager registers a Carbon hotkey only when this is set
+    /// AND the combo is valid. Pressing it flips
+    /// `oneShotCommandPending = true` and starts a recording cycle —
+    /// the next stop transforms the selection (or paste-falls-back to
+    /// the spoken text), then clears the flag. The sticky `commandMode`
+    /// menu toggle is independent and never auto-cleared by this path.
+    /// Mac-only knob; persisted to UserDefaults like `dictHotkey`.
+    @Published var commandHotkey: HotkeyCombo? = nil {
+        didSet {
+            if let h = commandHotkey {
+                UserDefaults.standard.set(h.encoded, forKey: "commandHotkeyEncoded")
+            } else {
+                UserDefaults.standard.removeObject(forKey: "commandHotkeyEncoded")
+            }
+        }
+    }
+
     // MARK: - App rules (foreground-app overrides)
 
     /// User-curated rules evaluated top-down at hotkey-down. Persisted
@@ -1099,6 +1125,10 @@ final class AppState: ObservableObject {
         if let saved = UserDefaults.standard.string(forKey: "dictHotkeyEncoded"),
            let combo = HotkeyCombo(encoded: saved) {
             self.dictHotkey = combo
+        }
+        if let saved = UserDefaults.standard.string(forKey: "commandHotkeyEncoded"),
+           let combo = HotkeyCombo(encoded: saved) {
+            self.commandHotkey = combo
         }
         self.buyerEmail = UserDefaults.standard.string(forKey: "buyerEmail")
     }
@@ -1331,6 +1361,61 @@ final class AppState: ObservableObject {
         case "custom": return hasCustomKey
         case "local": return true       // on-device, no key needed
         default: return false
+        }
+    }
+
+    /// STT presets the user can actually use right now — those whose
+    /// provider has a key saved in ANY scope (STT, LLM or Recap) plus
+    /// `.custom` (always shown so the user can paste URL + key inline).
+    /// Uses `hasAnyKeyForProvider` instead of per-scope STT booleans so
+    /// a user who set up a provider for rewrite (LLM scope) also sees
+    /// it as a valid STT choice — same key works on the provider's
+    /// audio endpoint, the dispatcher reuses it. Win parity:
+    /// SettingsViewModel.HasAnyKeyForProvider.
+    func availableSttPresets() -> [SttPreset] {
+        SttPreset.presets.filter { preset in
+            if preset.provider == .custom { return true }
+            return hasAnyKeyForProvider(preset.provider.rawValue)
+        }
+    }
+
+    /// LLM presets the user can actually use right now. Always includes
+    /// `custom` (URL + key inline) and `claude-code` (subscription via
+    /// local `claude` CLI, no API key). Other presets accept ANY scope:
+    /// a key saved for STT counts for LLM too — same provider key works
+    /// on both audio and chat endpoints. Win parity:
+    /// SettingsViewModel.HasAnyKeyForProvider.
+    func availableLlmPresets() -> [LlmPreset] {
+        LlmPreset.presets.filter { preset in
+            if preset.id == "custom" { return true }
+            if preset.id == "claude-code" { return true }
+            return hasAnyKeyForProvider(llmProviderTag(forUrl: preset.apiUrl))
+        }
+    }
+
+    /// Recap-model curated options the user can actually use right now.
+    /// `auto` and `local` always survive (auto resolves at call-time;
+    /// local uses bundled Gemma, no key). Cloud branches need a key
+    /// EITHER under the recap scope OR the LLM scope (`recapUseSameKey`
+    /// fallback). Anthropic also survives when Claude Code subscription
+    /// is connected.
+    func availableRecapModels() -> [RecapModelOption] {
+        RecapModelOption.curated.filter { opt in
+            switch opt.provider {
+            case .auto, .local, .custom: return true
+            case .anthropic:
+                return recapKeyByVendor["anthropic"] == true
+                    || llmKeyByVendor["anthropic"] == true
+                    || claudeCodeReady
+            case .gemini:
+                return recapKeyByVendor["gemini"] == true
+                    || llmKeyByVendor["gemini"] == true
+                    || hasGeminiKey
+            case .openai:
+                return recapKeyByVendor["openai"] == true
+                    || llmKeyByVendor["openai"] == true
+                    || hasOpenaiKey
+            }
         }
     }
 

@@ -24,12 +24,14 @@ final class DictToastWindow {
         case added
         case alreadyPresent
         case workflowHint   // user pressed combo without re-copying
+        case error          // command-mode failed (no LLM key, etc.)
 
         var symbolName: String {
             switch self {
             case .added:          return "checkmark.circle.fill"
             case .alreadyPresent: return "info.circle.fill"
             case .workflowHint:   return "hand.point.up.left.fill"
+            case .error:          return "exclamationmark.triangle.fill"
             }
         }
 
@@ -41,6 +43,7 @@ final class DictToastWindow {
             case .added:          return .green
             case .alreadyPresent: return .blue
             case .workflowHint:   return .orange
+            case .error:          return .red
             }
         }
     }

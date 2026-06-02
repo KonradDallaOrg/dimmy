@@ -396,7 +396,7 @@ struct MacOutputPage: View {
                             persistConfig()
                         }
                     )) {
-                        ForEach(RecapModelOption.curated) { opt in
+                        ForEach(appState.availableRecapModels()) { opt in
                             Label {
                                 Text(displayLabel(for: opt))
                             } icon: {
@@ -504,33 +504,71 @@ struct MacOutputPage: View {
                 // via `dimmy_save_llm_provider_key("recap", vendor, key)`.
                 // Win parity: SettingsWindow.xaml.cs:3795-3823.
                 if recapKeyFieldShouldShow {
-                    MacRow(
-                        "Recap API key",
-                        description: "Encrypted locally.",
-                        hint: "Stored encrypted on this device with AES-256. Used only for the recap call.",
-                        hintURL: URL(string: "https://dimmy.app/help/api-keys"),
-                        showsDivider: showRecapKeyField
-                    ) {
-                        if recapKeyAlreadySaved {
-                            HStack(spacing: 4) {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(.green)
-                                Text("Saved")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundStyle(.green)
+                    // Known-vendor recap keys go through Providers and
+                    // keys (one source of truth). Only fall back to the
+                    // inline SecureField for unknown / Custom recap
+                    // vendors, which have no card on Providers.
+                    let recapVendorInCatalog = [
+                        "anthropic", "gemini", "openai",
+                        "groq", "fireworks", "together", "openrouter",
+                    ].contains(recapProviderTag)
+                    if recapVendorInCatalog {
+                        MacRow(
+                            "Recap API key",
+                            description: recapKeyAlreadySaved
+                                ? "Saved — managed on Providers and keys."
+                                : "Not connected — set it on Providers and keys.",
+                            hint: "Keys live in one place: Providers and keys. Connect once there, the recap call picks it up.",
+                            hintURL: URL(string: "https://dimmy.app/help/api-keys"),
+                            showsDivider: false
+                        ) {
+                            if recapKeyAlreadySaved {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(.green)
+                                    Text("Saved")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundStyle(.green)
+                                }
                             }
+                            Button("Manage on Providers and keys") {
+                                NotificationCenter.default.post(
+                                    name: .dimmyNavigateSettingsTab,
+                                    object: nil,
+                                    userInfo: ["tab": "providers"]
+                                )
+                            }
+                            .controlSize(.small)
                         }
-                        Button(recapKeyAlreadySaved
-                               ? (showRecapKeyField ? "Cancel" : "Replace...")
-                               : (showRecapKeyField ? "Cancel" : "Add key...")) {
-                            showRecapKeyField.toggle()
-                            if !showRecapKeyField { recapKeyInput = "" }
+                    } else {
+                        MacRow(
+                            "Recap API key",
+                            description: "Encrypted locally.",
+                            hint: "Stored encrypted on this device with AES-256. Used only for the recap call.",
+                            hintURL: URL(string: "https://dimmy.app/help/api-keys"),
+                            showsDivider: showRecapKeyField
+                        ) {
+                            if recapKeyAlreadySaved {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(.green)
+                                    Text("Saved")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundStyle(.green)
+                                }
+                            }
+                            Button(recapKeyAlreadySaved
+                                   ? (showRecapKeyField ? "Cancel" : "Replace...")
+                                   : (showRecapKeyField ? "Cancel" : "Add key...")) {
+                                showRecapKeyField.toggle()
+                                if !showRecapKeyField { recapKeyInput = "" }
+                            }
+                            .controlSize(.small)
                         }
-                        .controlSize(.small)
-                    }
 
-                    if showRecapKeyField {
-                        recapKeyEntryRow
+                        if showRecapKeyField {
+                            recapKeyEntryRow
+                        }
                     }
                 }
             }
@@ -609,13 +647,20 @@ struct MacOutputPage: View {
                 }
 
                 if appState.llmMode == "cloud" {
+                    let availableLlmPresets = appState.availableLlmPresets()
+                    // "Only Custom + Claude Code subscription" = the user
+                    // has connected no cloud API keys at all. Surface a
+                    // jump-to-Providers row so they don't get stuck.
+                    let hasOnlyAlwaysAvailable = availableLlmPresets.allSatisfy {
+                        $0.id == "custom" || $0.id == "claude-code"
+                    }
                     MacRow(
                         "Provider",
-                        hint: "The model you pick sets where your transcript is sent. Free options are marked.",
+                        hint: "Only providers you've connected on Providers and keys are shown. Claude Code subscription and Custom are always available.",
                         hintURL: URL(string: "https://dimmy.app/help/cloud-providers")
                     ) {
                         Picker("", selection: llmPresetBinding) {
-                            ForEach(LlmPreset.presets) { preset in
+                            ForEach(availableLlmPresets) { preset in
                                 Label {
                                     Text(preset.displayName)
                                 } icon: {
@@ -640,6 +685,23 @@ struct MacOutputPage: View {
                         }
                         .labelsHidden()
                         .frame(width: 320)
+                    }
+
+                    if hasOnlyAlwaysAvailable {
+                        MacRow(
+                            "",
+                            description: "No cloud LLM providers connected yet.",
+                            showsDivider: true
+                        ) {
+                            Button("Open Providers and keys") {
+                                NotificationCenter.default.post(
+                                    name: .dimmyNavigateSettingsTab,
+                                    object: nil,
+                                    userInfo: ["tab": "providers"]
+                                )
+                            }
+                            .controlSize(.small)
+                        }
                     }
 
                     // Anthropic-only: Authentication picker. The user
@@ -742,32 +804,62 @@ struct MacOutputPage: View {
                         }
 
                         if !sameKeyShouldShow || !appState.llmUseSameKey {
-                            MacRow(
-                                "LLM API key",
-                                description: "Encrypted locally.",
-                                hint: "Stored encrypted on this device with AES-256. The provider only ever receives your transcript and this key, nothing else.",
-                                hintURL: URL(string: "https://dimmy.app/help/api-keys"),
-                                showsDivider: showLlmKeyField
-                            ) {
-                                if appState.hasLlmKey {
-                                    HStack(spacing: 4) {
-                                        Image(systemName: "checkmark.circle.fill")
-                                            .foregroundStyle(.green)
-                                        Text("Saved")
-                                            .font(.system(size: 12, weight: .medium))
-                                            .foregroundStyle(.green)
+                            let currentLlmIsCustom = appState.llmApiUrl.isEmpty
+                            if currentLlmIsCustom {
+                                MacRow(
+                                    "LLM API key",
+                                    description: "Encrypted locally.",
+                                    hint: "Stored encrypted on this device with AES-256. The provider only ever receives your transcript and this key, nothing else.",
+                                    hintURL: URL(string: "https://dimmy.app/help/api-keys"),
+                                    showsDivider: showLlmKeyField
+                                ) {
+                                    if appState.hasLlmKey {
+                                        HStack(spacing: 4) {
+                                            Image(systemName: "checkmark.circle.fill")
+                                                .foregroundStyle(.green)
+                                            Text("Saved")
+                                                .font(.system(size: 12, weight: .medium))
+                                                .foregroundStyle(.green)
+                                        }
                                     }
+                                    Button(appState.hasLlmKey ? (showLlmKeyField ? "Cancel" : "Replace...")
+                                                              : (showLlmKeyField ? "Cancel" : "Add key...")) {
+                                        showLlmKeyField.toggle()
+                                        if !showLlmKeyField { llmKeyInput = "" }
+                                    }
+                                    .controlSize(.small)
                                 }
-                                Button(appState.hasLlmKey ? (showLlmKeyField ? "Cancel" : "Replace...")
-                                                          : (showLlmKeyField ? "Cancel" : "Add key...")) {
-                                    showLlmKeyField.toggle()
-                                    if !showLlmKeyField { llmKeyInput = "" }
+                                if showLlmKeyField {
+                                    llmKeyEntryRow
                                 }
-                                .controlSize(.small)
-                            }
-
-                            if showLlmKeyField {
-                                llmKeyEntryRow
+                            } else {
+                                MacRow(
+                                    "LLM API key",
+                                    description: appState.hasLlmKey
+                                        ? "Saved — managed on Providers and keys."
+                                        : "Not connected — set it on Providers and keys.",
+                                    hint: "Keys live in one place: Providers and keys. Connect once there, every page picks it up.",
+                                    hintURL: URL(string: "https://dimmy.app/help/api-keys"),
+                                    showsDivider: false
+                                ) {
+                                    if appState.hasLlmKey {
+                                        HStack(spacing: 4) {
+                                            Image(systemName: "checkmark.circle.fill")
+                                                .foregroundStyle(.green)
+                                            Text("Saved")
+                                                .font(.system(size: 12, weight: .medium))
+                                                .foregroundStyle(.green)
+                                        }
+                                    }
+                                    Button("Manage on Providers and keys") {
+                                        NotificationCenter.default.post(
+                                            name: .dimmyNavigateSettingsTab,
+                                            object: nil,
+                                            userInfo: ["tab": "providers"]
+                                        )
+                                    }
+                                    .controlSize(.small)
+                                }
                             }
                         }
                     }
