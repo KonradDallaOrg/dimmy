@@ -32,30 +32,59 @@ from pathlib import Path
 
 CATALOG = Path(__file__).resolve().parents[2] / "assets" / "model-catalog.json"
 
-# Which env var(s) carry each provider's key. First non-empty wins.
+# Which env var(s) carry each provider's key — both the conventional
+# `*_API_KEY` names and the repo `.env` convention (`*_KEY`). First non-empty
+# wins. The repo `.env` (if present) is auto-loaded so the script just works.
 ENV_KEYS = {
-    "openai": ["OPENAI_API_KEY"],
-    "anthropic": ["ANTHROPIC_API_KEY"],
-    "gemini": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
-    "groq": ["GROQ_API_KEY"],
-    "deepgram": ["DEEPGRAM_API_KEY"],
-    "openrouter": ["OPENROUTER_API_KEY"],
-    "together": ["TOGETHER_API_KEY"],
-    "fireworks": ["FIREWORKS_API_KEY"],
+    "openai": ["OPENAI_API_KEY", "OPENAI_KEY"],
+    "anthropic": ["ANTHROPIC_API_KEY", "ANTHROPIC_KEY"],
+    "gemini": ["GEMINI_API_KEY", "GOOGLE_API_KEY", "GEMINI_KEY"],
+    "groq": ["GROQ_API_KEY", "GROQ_KEY"],
+    "deepgram": ["DEEPGRAM_API_KEY", "DEEPGRAM_KEY"],
+    "openrouter": ["OPENROUTER_API_KEY", "OPENROUTER_KEY"],
+    "together": ["TOGETHER_API_KEY", "TOGETHER_KEY"],
+    "fireworks": ["FIREWORKS_API_KEY", "FIREWORKS_KEY"],
 }
 
+
+def load_dotenv():
+    """Best-effort load of the repo-root .env into os.environ (does NOT
+    override already-set vars). Single-line `KEY=value` / `export KEY=value`,
+    optional surrounding quotes, `#` comments. Multi-line / malformed lines
+    are skipped — we only need the single-line provider keys."""
+    env_path = Path(__file__).resolve().parents[2] / ".env"
+    if not env_path.exists():
+        return
+    for raw in env_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):]
+        name, _, value = line.partition("=")
+        name = name.strip()
+        value = value.strip().strip('"').strip("'")
+        if name and value:
+            os.environ.setdefault(name, value)
+
 # Notable-new patterns: which live ids are worth suggesting as additions
-# (so the report isn't flooded with every legacy / fine-tuned model).
+# (current-generation TEXT models only, so the report isn't flooded with
+# legacy / fine-tuned / non-text variants).
 NOTABLE = {
-    "openai": re.compile(r"^(gpt-[0-9]|o[0-9])"),
-    "anthropic": re.compile(r"^claude-(opus|sonnet|haiku)"),
-    "gemini": re.compile(r"^gemini-[0-9]"),
-    "groq": re.compile(r"."),
-    "deepgram": re.compile(r"^nova"),
-    "openrouter": re.compile(r"x^"),   # too many; suggestions off
+    "openai": re.compile(r"^gpt-5(\.|-|$)"),
+    "anthropic": re.compile(r"^claude-(opus|sonnet|haiku)-(4-[6-9]|[5-9])"),
+    "gemini": re.compile(r"^gemini-3(\.|-|$)"),
+    "groq": re.compile(r"^(llama|qwen|deepseek|gpt-oss|moonshot|kimi)"),
+    "deepgram": re.compile(r"x^"),     # too granular; suggestions off
+    "openrouter": re.compile(r"x^"),
     "together": re.compile(r"x^"),
     "fireworks": re.compile(r"x^"),
 }
+
+# Substrings marking a non-text modality / niche variant we never surface as
+# a chat / recap candidate.
+NON_TEXT = ("image", "-tts", "tts-", "audio", "computer-use", "embedding",
+            "embed", "-search", "moderation", "realtime", "-vision", "dall-e")
 
 if sys.stdout.isatty() and os.environ.get("NO_COLOR") is None:
     GREEN, RED, YELL, DIM, RST = (
@@ -104,6 +133,15 @@ def live_ids(provider, endpoint, auth, key):
     return {m["id"] for m in arr if isinstance(m, dict) and "id" in m}
 
 
+def is_live(cid, live):
+    """A catalog id counts as live if it's listed verbatim OR it's the short
+    alias of a granular live id (e.g. Deepgram `nova-3` -> `nova-3-general`,
+    where the API accepts the short form even though /models lists variants)."""
+    if cid in live:
+        return True
+    return any(lid.startswith(cid + "-") for lid in live)
+
+
 def suggest(catalog_id, live):
     """Best-effort 'did you mean' for a stale id — live ids that share a stem."""
     stem = catalog_id.split("/")[-1][:8].lower()
@@ -112,6 +150,7 @@ def suggest(catalog_id, live):
 
 
 def main():
+    load_dotenv()
     catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
     any_stale = False
     checked = 0
@@ -119,7 +158,6 @@ def main():
     for prov in catalog["providers"]:
         pid = prov["id"]
         endpoint = prov.get("models_endpoint")
-        catalog_ids = [m["id"] for m in prov["models"]]
         key = env_key(pid)
 
         print(f"\n{prov['name']} ({pid})")
@@ -141,23 +179,37 @@ def main():
             continue
 
         checked += 1
-        ok = [c for c in catalog_ids if c in live]
-        stale = [c for c in catalog_ids if c not in live]
-        notable = NOTABLE.get(pid, re.compile(r"x^"))
-        new = sorted(l for l in live
-                     if notable.search(l) and l not in catalog_ids)
+        models = prov["models"]
+        # Hard-check LLM / recap ids (these 404 at runtime when wrong — the
+        # bugs we keep hitting). Soft-check STT-only ids: some providers accept
+        # short aliases not in /models (Deepgram) or serve STT on a different
+        # endpoint (Fireworks/Together audio), so a miss there is informational.
+        def is_hard(m):
+            return "llm" in m["tasks"] or "recap" in m["tasks"]
 
-        print(f"  {GREEN}OK: {len(ok)}/{len(catalog_ids)}{RST}  "
+        hard_stale = [m["id"] for m in models if is_hard(m) and not is_live(m["id"], live)]
+        soft_miss = [m["id"] for m in models if not is_hard(m) and not is_live(m["id"], live)]
+        ok_n = len(models) - len(hard_stale) - len(soft_miss)
+
+        notable = NOTABLE.get(pid, re.compile(r"x^"))
+        cat_ids = {m["id"] for m in models}
+        new = sorted(l for l in live
+                     if notable.search(l) and l not in cat_ids
+                     and not any(x in l for x in NON_TEXT))
+
+        print(f"  {GREEN}OK: {ok_n}/{len(models)}{RST}  "
               f"{DIM}(live models: {len(live)}){RST}")
-        for c in stale:
+        for cid in hard_stale:
             any_stale = True
-            hint = suggest(c, live)
+            hint = suggest(cid, live)
             tail = f"  {DIM}did you mean: {', '.join(hint)}{RST}" if hint else ""
-            print(f"  {RED}STALE  {c}{RST}{tail}")
-        for n in new[:15]:
+            print(f"  {RED}STALE  {cid}{RST}{tail}  {DIM}(llm/recap — remove){RST}")
+        for cid in soft_miss:
+            print(f"  {YELL}stt?   {cid}{RST}  {DIM}not in /models — verify the STT alias/endpoint{RST}")
+        for n in new[:12]:
             print(f"  {YELL}NEW?   {n}{RST}")
-        if len(new) > 15:
-            print(f"  {DIM}...and {len(new) - 15} more new candidates{RST}")
+        if len(new) > 12:
+            print(f"  {DIM}...and {len(new) - 12} more{RST}")
 
     print()
     if checked == 0:
