@@ -247,6 +247,9 @@ struct LlmPreset: Identifiable, Hashable {
         // OpenAI tier (May 2026): gpt-5 family on same chat-completions
         // endpoint — drop-in. Default = mini for speed+cost.
         // ── OpenAI ─────────────────────────────────────────────
+        LlmPreset(id: "openai-gpt55", displayName: "OpenAI \u{00B7} gpt-5.5 (latest top)", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-5.5"),
+        LlmPreset(id: "openai-gpt54-mini", displayName: "OpenAI \u{00B7} gpt-5.4-mini (fast)", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-5.4-mini"),
+        LlmPreset(id: "openai-gpt54-nano", displayName: "OpenAI \u{00B7} gpt-5.4-nano (fastest)", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-5.4-nano"),
         LlmPreset(id: "openai-gpt5-mini", displayName: "OpenAI \u{00B7} gpt-5-mini (fast + cheap)", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-5-mini"),
         LlmPreset(id: "openai-gpt5", displayName: "OpenAI \u{00B7} gpt-5 (top)", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-5"),
         LlmPreset(id: "openai-gpt51", displayName: "OpenAI \u{00B7} gpt-5.1 (latest)", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-5.1"),
@@ -262,7 +265,8 @@ struct LlmPreset: Identifiable, Hashable {
         // ── Anthropic ──────────────────────────────────────────
         LlmPreset(id: "anthropic-haiku", displayName: "Anthropic \u{00B7} claude-haiku-4.5", apiUrl: "https://api.anthropic.com/v1/messages", model: "claude-haiku-4-5-20251001"),
         LlmPreset(id: "anthropic-sonnet", displayName: "Anthropic \u{00B7} claude-sonnet-4.6", apiUrl: "https://api.anthropic.com/v1/messages", model: "claude-sonnet-4-6"),
-        LlmPreset(id: "anthropic-opus", displayName: "Anthropic \u{00B7} claude-opus-4.7 (top)", apiUrl: "https://api.anthropic.com/v1/messages", model: "claude-opus-4-7"),
+        LlmPreset(id: "anthropic-opus", displayName: "Anthropic \u{00B7} claude-opus-4.8 (top)", apiUrl: "https://api.anthropic.com/v1/messages", model: "claude-opus-4-8"),
+        LlmPreset(id: "anthropic-opus-47", displayName: "Anthropic \u{00B7} claude-opus-4.7", apiUrl: "https://api.anthropic.com/v1/messages", model: "claude-opus-4-7"),
         // Claude Code (subscription) — synthetic provider using
         // user's Pro/Team/Max plan via the local `claude` CLI. No
         // API key needed; auth handled by `claude login` browser

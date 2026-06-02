@@ -23,6 +23,7 @@ final class RecapModelTests: XCTestCase {
 
     func testCuratedListIncludesExpectedAnthropicModels() {
         let ids = RecapModelOption.curated.map(\.id)
+        XCTAssertTrue(ids.contains("claude-opus-4-8"))
         XCTAssertTrue(ids.contains("claude-opus-4-7"))
         XCTAssertTrue(ids.contains("claude-sonnet-4-6"))
         XCTAssertTrue(ids.contains("claude-haiku-4-5"))
@@ -37,6 +38,9 @@ final class RecapModelTests: XCTestCase {
 
     func testCuratedListIncludesExpectedOpenaiModels() {
         let ids = RecapModelOption.curated.map(\.id)
+        XCTAssertTrue(ids.contains("gpt-5.5"))
+        XCTAssertTrue(ids.contains("gpt-5.4-mini"))
+        XCTAssertTrue(ids.contains("gpt-5.4-nano"))
         XCTAssertTrue(ids.contains("gpt-5"))
         XCTAssertTrue(ids.contains("gpt-4o"))
     }

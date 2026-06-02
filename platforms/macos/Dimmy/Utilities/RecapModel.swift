@@ -36,7 +36,7 @@ func pickRecapModel() -> String {
         }
         guard let url = json["llm_api_url"] as? String else { return "" }
         let lower = url.lowercased()
-        if lower.contains("anthropic.com") { return "claude-opus-4-7" }
+        if lower.contains("anthropic.com") { return "claude-opus-4-8" }
         if lower.contains("googleapis.com") { return "gemini-2.5-pro" }
         return ""
     } catch {
@@ -73,7 +73,8 @@ struct RecapModelOption: Identifiable, Equatable {
     static let curated: [RecapModelOption] = [
         .init(id: autoKey, label: "Auto (match LLM provider)", provider: .auto),
 
-        .init(id: "claude-opus-4-7",   label: "Anthropic — Claude Opus 4.7 (best)",   provider: .anthropic),
+        .init(id: "claude-opus-4-8",   label: "Anthropic — Claude Opus 4.8 (best)",   provider: .anthropic),
+        .init(id: "claude-opus-4-7",   label: "Anthropic — Claude Opus 4.7",          provider: .anthropic),
         .init(id: "claude-sonnet-4-6", label: "Anthropic — Claude Sonnet 4.6 (balanced)", provider: .anthropic),
         .init(id: "claude-haiku-4-5",  label: "Anthropic — Claude Haiku 4.5 (fast)",  provider: .anthropic),
 
@@ -82,7 +83,10 @@ struct RecapModelOption: Identifiable, Equatable {
         .init(id: "gemini-2.5-pro",   label: "Google — Gemini 2.5 Pro",          provider: .gemini),
         .init(id: "gemini-2.5-flash", label: "Google — Gemini 2.5 Flash",        provider: .gemini),
 
-        .init(id: "gpt-5",      label: "OpenAI — GPT-5 (best)",          provider: .openai),
+        .init(id: "gpt-5.5",      label: "OpenAI — GPT-5.5 (latest top)",   provider: .openai),
+        .init(id: "gpt-5.4-mini", label: "OpenAI — GPT-5.4 mini (fast)",    provider: .openai),
+        .init(id: "gpt-5.4-nano", label: "OpenAI — GPT-5.4 nano (fastest)", provider: .openai),
+        .init(id: "gpt-5",      label: "OpenAI — GPT-5",                 provider: .openai),
         .init(id: "gpt-5-mini", label: "OpenAI — GPT-5 mini (fast + cheap)", provider: .openai),
         .init(id: "gpt-4o",     label: "OpenAI — GPT-4o",                provider: .openai),
 

@@ -3934,21 +3934,25 @@ public sealed partial class SettingsWindow : Window
     /// update both this array AND the XAML.
     private static readonly string[] _recapModelKnownTags = new[]
     {
-        "",                              //  0  Auto
-        "claude-opus-4-7",               //  1
-        "claude-sonnet-4-6",             //  2
-        "claude-haiku-4-5-20251001",     //  3
-        "gemini-3.1-pro",                //  4
-        "gemini-2.5-pro",                //  5
-        "gemini-3.1-flash",              //  6
-        "gemini-2.5-flash",              //  7
-        "gpt-5",                         //  8
-        "gpt-5-mini",                    //  9
-        "gpt-5-nano",                    // 10  (added 2026-05-13)
-        "gpt-4o",                        // 11
-        "gpt-4o-mini",                   // 12  (added 2026-05-13)
-        "o3",                            // 13  (added 2026-05-13)
-        "o3-mini",                       // 14  (added 2026-05-13)
+        "",                              //  Auto
+        "claude-opus-4-8",               //  (added 2026-06-02)
+        "claude-opus-4-7",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5-20251001",
+        "gemini-3.1-pro",
+        "gemini-2.5-pro",
+        "gemini-3.1-flash",
+        "gemini-2.5-flash",
+        "gpt-5.5",                       //  (added 2026-06-02)
+        "gpt-5.4-mini",                  //  (added 2026-06-02)
+        "gpt-5.4-nano",                  //  (added 2026-06-02)
+        "gpt-5",
+        "gpt-5-mini",
+        "gpt-5-nano",
+        "gpt-4o",
+        "gpt-4o-mini",
+        "o3",
+        "o3-mini",
     };
 
     /// Snap the recap-model picker + custom textbox to whatever the
