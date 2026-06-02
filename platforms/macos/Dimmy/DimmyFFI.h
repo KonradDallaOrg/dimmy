@@ -619,4 +619,16 @@ int32_t dimmy_call_signal_response(const char * _Nullable app_id,
 /// -2 buf too small.
 int32_t dimmy_call_detector_state(char * _Nonnull out_buf, int32_t buf_len);
 
+/// Returns 1 if the two combos conflict (one is a subset of the other
+/// so pressing one would also fire the other), else 0. A null / empty /
+/// unparseable combo never conflicts. Used by the Mac command-hotkey
+/// recorder to reject overlap with the dictation or dictionary
+/// shortcut before saving. The combo grammar matches the Rust
+/// `parse_combo` parser: tokens separated by `+`, modifiers
+/// `ctrl|shift|cmd|win|opt|alt`, non-modifier keys by name
+/// (`a`-`z`, `0`-`9`, `f1`-`f12`, `space`, `tab`, `enter`, `esc`,
+/// `backspace`, `num0`-`num9`). Examples: `"cmd+shift+d"`, `"cmd+opt"`.
+int32_t dimmy_hotkey_combos_conflict(const char * _Nullable a,
+                                     const char * _Nullable b);
+
 #endif /* DimmyFFI_h */

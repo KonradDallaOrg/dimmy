@@ -297,33 +297,25 @@ struct MacOutputPage: View {
         return !r.isEmpty && r != "local"
     }
 
-    /// Should we surface the "Use same key as <vendor>" toggle for the
-    /// recap section? Visible when:
-    ///   - recap vendor is known (cloud, not Auto/Local)
-    ///   - subscription path is NOT active (then no key needed at all)
-    ///   - an upstream key for this vendor exists in LLM scope or
-    ///     STT scope (otherwise the toggle has nothing to reuse, we
-    ///     show the key field directly instead)
-    ///
-    /// Note the toggle ALSO appears when the recap vendor matches the
-    /// LLM vendor, user reported they couldn't enter a dedicated
-    /// recap key when recap was same-vendor as LLM. Win parity: the
-    /// matrix in `UpdateRecapKeyCardVisibility` is gated on "upstream
-    /// key exists", not on "vendor mismatch".
-    private var recapUseSameKeyToggleShouldShow: Bool {
-        recapVendorKnown
-            && !recapSubscriptionActive
-            && recapUpstreamKeyAvailable
-    }
-
-    /// Should we show the Recap API key entry row? Visible when:
-    ///   - recap vendor is known + subscription inactive
-    ///   - AND either no upstream to reuse, or user toggled "same key" OFF
-    /// Mirrors Win behaviour for both same-vendor and cross-vendor cases.
+    /// Show the Recap API key entry row only for vendors NOT served by
+    /// the Providers & keys page (Custom / unknown). For catalog vendors
+    /// the Providers page is the single source of truth — it writes the
+    /// key into BOTH `Llm(vendor)` and `Recap(vendor)` keystore scopes
+    /// at once, so there's nothing for a per-recap-vendor key field to
+    /// add. The legacy "Use same key as <vendor>" toggle was removed
+    /// because it switched between two scopes that always hold the same
+    /// value post-PR-99 (vestigial / confusing). Anthropic still gets
+    /// its own subscription toggle above — that one swaps the auth
+    /// METHOD (api_key vs Claude CLI subscription), a different choice.
     private var recapKeyFieldShouldShow: Bool {
         guard recapVendorKnown, !recapSubscriptionActive else { return false }
-        if !recapUpstreamKeyAvailable { return true }
-        return !appState.recapUseSameKey
+        // Catalog vendors → Providers page handles the key, no inline
+        // entry needed here.
+        let catalog: Set<String> = [
+            "anthropic", "openai", "gemini",
+            "groq", "fireworks", "together", "openrouter",
+        ]
+        return !catalog.contains(recapProviderTag)
     }
 
     /// Persist the recap-vendor's key via the dedicated FFI. Vendor
@@ -366,6 +358,17 @@ struct MacOutputPage: View {
         return m.isEmpty ? "your dictation LLM (not yet configured)" : m
     }
 
+    /// Description text shown under the Recap model row. Shifts wording
+    /// based on whether Auto is meaningful right now: with a connected
+    /// LLM provider we tell the user what Auto resolves to; with no key
+    /// at all we tell them WHY Auto is gone and what to do next.
+    private var recapPickerDescription: String {
+        if appState.recapPickerNeedsSelectPrompt {
+            return "Connect a provider on the Providers and keys page, or pick a model below."
+        }
+        return "Auto inherits \(autoResolutionLabel)."
+    }
+
     /// Annotate the "Auto" row in the dropdown with the actual model id
     /// it will dispatch to right now, so the user sees what's going to
     /// run without having to read the description below.
@@ -384,7 +387,7 @@ struct MacOutputPage: View {
             MacTile {
                 MacRow(
                     "Recap model",
-                    description: "Auto inherits \(autoResolutionLabel).",
+                    description: recapPickerDescription,
                     hint: "Picks the model that summarises long dictations and meetings. Auto follows your dictation LLM.",
                     hintURL: URL(string: "https://dimmy.app/help/use-meeting-recaps"),
                     showsDivider: false
@@ -396,6 +399,19 @@ struct MacOutputPage: View {
                             persistConfig()
                         }
                     )) {
+                        // Honest placeholder when no LLM provider is
+                        // connected. Auto would silently fail in that
+                        // state, so the picker prompts the user to pick
+                        // something concrete (Local Gemma, or a Custom id
+                        // they want to try). Tag matches the current
+                        // value of `recap_model_override` (empty string)
+                        // so SwiftUI's selection-binding contract holds:
+                        // the picker renders the placeholder as the
+                        // current row until the user makes a choice.
+                        if appState.recapPickerNeedsSelectPrompt {
+                            Label("Select a model...", systemImage: "questionmark.circle")
+                                .tag("")
+                        }
                         ForEach(appState.availableRecapModels()) { opt in
                             Label {
                                 Text(displayLabel(for: opt))
@@ -443,7 +459,7 @@ struct MacOutputPage: View {
                         "Use Anthropic subscription for recap",
                         hint: "Sends the recap through your local Claude CLI instead of an API key. Dictation rewrite keeps its own auth method.",
                         hintURL: URL(string: "https://dimmy.app/help/integrations-claude-cli"),
-                        showsDivider: recapUseSameKeyToggleShouldShow || recapKeyFieldShouldShow
+                        showsDivider: recapKeyFieldShouldShow
                     ) {
                         Toggle("", isOn: Binding(
                             // Recap auth is independent of dictation
@@ -469,106 +485,43 @@ struct MacOutputPage: View {
                     }
                 }
 
-                // Key reuse toggle for the recap call. Appears whenever
-                // an upstream key for the recap vendor is already in
-                // the keystore (LLM-scope or STT-scope), same-vendor
-                // case too (LLM = Anthropic + Recap = Anthropic). Default
-                // ON; user can flip it OFF to force a dedicated
-                // Recap-scope key below. Win parity:
-                // SettingsWindow.xaml.cs:3744-3750.
-                if recapUseSameKeyToggleShouldShow {
-                    MacRow(
-                        "Use same key as \(recapProviderTag.capitalized)",
-                        hint: "Reuse the \(recapProviderTag.capitalized) key you already saved. Turn off to enter a dedicated recap key for the same vendor.",
-                        hintURL: URL(string: "https://dimmy.app/help/api-keys"),
-                        showsDivider: recapKeyFieldShouldShow || !appState.recapUseSameKey
-                    ) {
-                        Toggle("", isOn: Binding(
-                            get: { appState.recapUseSameKey },
-                            set: { newValue in
-                                appState.recapUseSameKey = newValue
-                                persistConfig()
-                            }
-                        ))
-                        .toggleStyle(.switch)
-                        .labelsHidden()
-                    }
-                }
-
-                // Dedicated Recap-scope API key. Visible whenever the
-                // recap vendor is known AND (no upstream key exists,
-                // OR the user toggled "use same key" OFF above). The
-                // user CAN store a separate recap key even when same-
-                // vendor as the LLM, useful for splitting billing or
-                // routing recap through a different sub-account. Writes
-                // via `dimmy_save_llm_provider_key("recap", vendor, key)`.
-                // Win parity: SettingsWindow.xaml.cs:3795-3823.
+                // Dedicated Recap-scope API key for vendors NOT in the
+                // Providers & keys catalog (Custom / unknown). Catalog
+                // vendors are handled via `recapKeyFieldShouldShow` which
+                // returns false for them — the user pastes the key once
+                // in Providers and it's written into BOTH `Llm(vendor)`
+                // and `Recap(vendor)` scopes, so there's nothing to add
+                // here. The "Use same key as <vendor>" toggle that used
+                // to live between these blocks was removed post-PR-99
+                // because the two scopes always hold the same value,
+                // making the toggle a no-op that confused users.
                 if recapKeyFieldShouldShow {
-                    // Known-vendor recap keys go through Providers and
-                    // keys (one source of truth). Only fall back to the
-                    // inline SecureField for unknown / Custom recap
-                    // vendors, which have no card on Providers.
-                    let recapVendorInCatalog = [
-                        "anthropic", "gemini", "openai",
-                        "groq", "fireworks", "together", "openrouter",
-                    ].contains(recapProviderTag)
-                    if recapVendorInCatalog {
-                        MacRow(
-                            "Recap API key",
-                            description: recapKeyAlreadySaved
-                                ? "Saved. Managed in Providers and keys."
-                                : "Not connected. Set it in Providers and keys.",
-                            hint: "Keys live in one place: Providers and keys. Connect once there, the recap call picks it up.",
-                            hintURL: URL(string: "https://dimmy.app/help/api-keys"),
-                            showsDivider: false
-                        ) {
-                            if recapKeyAlreadySaved {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundStyle(.green)
-                                    Text("Saved")
-                                        .font(.system(size: 12, weight: .medium))
-                                        .foregroundStyle(.green)
-                                }
+                    MacRow(
+                        "Recap API key",
+                        description: "Encrypted locally.",
+                        hint: "Stored encrypted on this device with AES-256. Used only for the recap call.",
+                        hintURL: URL(string: "https://dimmy.app/help/api-keys"),
+                        showsDivider: showRecapKeyField
+                    ) {
+                        if recapKeyAlreadySaved {
+                            HStack(spacing: 4) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                                Text("Saved")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(.green)
                             }
-                            Button("Manage on Providers and keys") {
-                                NotificationCenter.default.post(
-                                    name: .dimmyNavigateSettingsTab,
-                                    object: nil,
-                                    userInfo: ["tab": "providers"]
-                                )
-                            }
-                            .controlSize(.small)
                         }
-                    } else {
-                        MacRow(
-                            "Recap API key",
-                            description: "Encrypted locally.",
-                            hint: "Stored encrypted on this device with AES-256. Used only for the recap call.",
-                            hintURL: URL(string: "https://dimmy.app/help/api-keys"),
-                            showsDivider: showRecapKeyField
-                        ) {
-                            if recapKeyAlreadySaved {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundStyle(.green)
-                                    Text("Saved")
-                                        .font(.system(size: 12, weight: .medium))
-                                        .foregroundStyle(.green)
-                                }
-                            }
-                            Button(recapKeyAlreadySaved
-                                   ? (showRecapKeyField ? "Cancel" : "Replace...")
-                                   : (showRecapKeyField ? "Cancel" : "Add key...")) {
-                                showRecapKeyField.toggle()
-                                if !showRecapKeyField { recapKeyInput = "" }
-                            }
-                            .controlSize(.small)
+                        Button(recapKeyAlreadySaved
+                               ? (showRecapKeyField ? "Cancel" : "Replace...")
+                               : (showRecapKeyField ? "Cancel" : "Add key...")) {
+                            showRecapKeyField.toggle()
+                            if !showRecapKeyField { recapKeyInput = "" }
                         }
-
-                        if showRecapKeyField {
-                            recapKeyEntryRow
-                        }
+                        .controlSize(.small)
+                    }
+                    if showRecapKeyField {
+                        recapKeyEntryRow
                     }
                 }
             }
