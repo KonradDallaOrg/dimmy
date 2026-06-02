@@ -1422,30 +1422,51 @@ public sealed partial class MeetingWindow : Window
     private static string PickRecapModel()
     {
         // Order of precedence:
-        //   1. user override from Settings (recap_model_override field)
-        //   2. provider-default flagship reasoning model based on llm_api_url
-        //   3. empty (Rust falls back to llm_api_model from config)
+        //   1. explicit user override (recap_model_override), with a stale-id
+        //      migration so old saved Gemini ids still resolve.
+        //   2. "Auto" → the best reasoning model among the providers the user
+        //      actually has a key for, using the CURATED, valid model ids from
+        //      the recap dropdown. Quality order: Anthropic Opus > OpenAI
+        //      GPT-5 > Gemini Pro.
+        //   3. empty → Rust falls back to llm_api_model (the user's own
+        //      dictation model on their own provider).
+        //
+        // CRITICAL: the has_<vendor>_*key flags only exist in the LIVE FFI
+        // snapshot (dimmy_get_config_json), NOT in the config.json FILE — the
+        // Rust core computes them and strips them on save. Reading the file
+        // would see all-false and Auto would never pick a premium model.
         try
         {
-            var cfgPath = Path.Combine(Services.BuildInfo.ConfigDirPath, "config.json");
-            if (!File.Exists(cfgPath)) return "";
-            using var doc = JsonDocument.Parse(File.ReadAllText(cfgPath));
-            // 1. User override
-            if (doc.RootElement.TryGetProperty("recap_model_override", out var ovEl))
+            var buf = new byte[1 << 14];
+            int n = Interop.DimmyNative.dimmy_get_config_json(buf, buf.Length);
+            if (n <= 0) return "";
+            using var doc = JsonDocument.Parse(System.Text.Encoding.UTF8.GetString(buf, 0, n));
+            var root = doc.RootElement;
+
+            // 1. Explicit override (migrate stale ids).
+            if (root.TryGetProperty("recap_model_override", out var ovEl))
             {
                 var ov = ovEl.GetString();
                 if (!string.IsNullOrWhiteSpace(ov))
-                    return ov.Trim();
+                    return MigrateRecapModelId(ov.Trim());
             }
-            // 2. Provider-default flagship reasoning model (May 2026)
-            if (!doc.RootElement.TryGetProperty("llm_api_url", out var urlEl)) return "";
-            var url = urlEl.GetString() ?? "";
-            if (url.Contains("anthropic.com", StringComparison.OrdinalIgnoreCase))
+
+            // 2. Auto: best model among the user's connected providers. A
+            //    provider counts as connected if a key exists in ANY scope.
+            bool Has(params string[] flags) =>
+                flags.Any(f => root.TryGetProperty(f, out var e)
+                               && e.ValueKind == System.Text.Json.JsonValueKind.True);
+
+            if (Has("has_anthropic_llm_key", "has_anthropic_recap_key"))
                 return "claude-opus-4-7";
-            if (url.Contains("googleapis.com", StringComparison.OrdinalIgnoreCase))
-                return "gemini-3-1-pro";
-            if (url.Contains("openai.com", StringComparison.OrdinalIgnoreCase))
+            if (Has("has_openai_key", "has_openai_llm_key", "has_openai_recap_key"))
                 return "gpt-5";
+            if (Has("has_gemini_key", "has_gemini_llm_key", "has_gemini_recap_key"))
+                return "gemini-3.1-pro-preview";
+
+            // 3. Only a non-premium provider (e.g. Groq) → empty, so Rust uses
+            //    the user's configured llm_api_model. Honest errors now guide
+            //    the user if that model/tier can't handle the recap size.
             return "";
         }
         catch
@@ -1453,6 +1474,19 @@ public sealed partial class MeetingWindow : Window
             return "";
         }
     }
+
+    /// Migrate stale recap model ids saved by older builds to their current
+    /// valid form. The recap dropdown switched the Gemini Pro id to the
+    /// `-preview` suffix; a config that still carries the bare id 404s
+    /// ("models/gemini-3.1-pro is not found"). Mirror of the LlmApiModel
+    /// migration in SettingsViewModel.LoadFromJson.
+    private static string MigrateRecapModelId(string id) => id switch
+    {
+        "gemini-3.1-pro" => "gemini-3.1-pro-preview",
+        "gemini-3-1-pro" => "gemini-3.1-pro-preview",
+        "gemini-3-pro" => "gemini-3-pro-preview",
+        _ => id,
+    };
 
     // BuildStructuredRecapPrompt + ParseStructuredRecap moved to
     // Helpers/MeetingRecapHelpers.cs so the pure prompt + parser are
