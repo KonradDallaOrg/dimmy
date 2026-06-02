@@ -46,11 +46,13 @@ public partial class App : Application
     }
 
     /// <summary>Re-bind the optional dedicated command-mode hotkey after the
-    /// user edits it in Settings. An empty combo unregisters it. No-op until
-    /// the service exists.</summary>
+    /// user edits it in Settings. An empty combo disables it. Runs on the same
+    /// Rust low-level hook as the dictation hotkey (so it supports toggle +
+    /// PTT and every combo incl. modifier-only). No-op until the service
+    /// exists.</summary>
     public void ReregisterCommandHotkey(string combo)
     {
-        try { _commandHotkey?.Register(combo); }
+        try { _hotkeyService?.SetCommandShortcut(combo); }
         catch (Exception ex) { Log($"ReregisterCommandHotkey exc: {ex.Message}", "Hotkey"); }
     }
 
@@ -66,7 +68,6 @@ public partial class App : Application
     private UiPreferences _uiPrefs = new();
     private DispatcherQueue? _dispatcherQueue;
     private DictHotkeyService? _dictHotkey;
-    private CommandHotkeyService? _commandHotkey;
     private CallNudgeWindow? _callNudgeWindow;
     private Services.CallDetectionService? _callDetection;
 
@@ -85,6 +86,9 @@ public partial class App : Application
     private volatile bool _stopInProgress;
     // Toggle debounce: ignore presses within 300ms of last action
     private long _lastToggleMs;
+    // Separate debounce for the command hotkey so a recent dictation toggle
+    // can't swallow a command press (and vice versa).
+    private long _lastCommandToggleMs;
 
     private static readonly string PttLogPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "dimmy", "ptt.log");
@@ -362,8 +366,13 @@ public partial class App : Application
         _hotkeyService = new HotkeyService(_dispatcherQueue!);
         _hotkeyService.HotkeyPressed += OnHotkeyPressed;
         _hotkeyService.HotkeyReleased += OnHotkeyReleased;
+        _hotkeyService.CommandHotkeyPressed += OnCommandHotkeyPressed;
+        _hotkeyService.CommandHotkeyReleased += OnCommandHotkeyReleased;
         _hotkeyService.PttMode = _appViewModel.ShortcutMode == "hold";
         _hotkeyService.Register(_appViewModel.Shortcut);
+        // Optional dedicated command-mode hotkey (empty = disabled). Runs on
+        // the same hook, so it inherits toggle/PTT + every combo.
+        _hotkeyService.SetCommandShortcut(_uiPrefs.CommandHotkey);
     }
 
     private void StartNormalMode()
@@ -510,78 +519,153 @@ public partial class App : Application
             Log($"DictHotkey start failed: {ex.Message}", "Hotkey");
         }
 
-        // Optional dedicated command-mode hotkey (one-shot). Empty by
-        // default → Register no-ops and nothing is bound; the user opts in
-        // from Settings → Shortcut.
-        try
-        {
-            _commandHotkey = new CommandHotkeyService();
-            _commandHotkey.Triggered += OnCommandHotkeyTriggered;
-            _commandHotkey.RegistrationFailed += combo =>
-                RunOnUI(() => Services.DictNotificationService.ShowHotkeyConflict(combo));
-            _commandHotkey.Register(_uiPrefs.CommandHotkey);
-        }
-        catch (Exception ex)
-        {
-            Log($"CommandHotkey start failed: {ex.Message}", "Hotkey");
-        }
+        // The dedicated command-mode hotkey is wired in ShowPillAndHotkey
+        // (CommandHotkeyPressed/Released on the shared Rust hook) + bound via
+        // SetCommandShortcut. No separate OS hotkey object — it lives on the
+        // same low-level hook as dictation, so it inherits toggle/PTT + every
+        // combo (incl. modifier-only like Win+Alt).
     }
 
-    /// <summary>Dedicated command-hotkey handler — fires on the pump thread,
-    /// marshals to the UI dispatcher. TOGGLE semantics (RegisterHotKey is
-    /// key-down only): from Idle it starts a ONE-SHOT command recording
-    /// (CommandOneShot routes the stop to the transform/generate path and
-    /// paints the pill amber); pressed again while recording it stops. The
-    /// one-shot clears itself in StopAndCommandTransform, so we revert to
-    /// normal output afterwards regardless of the sticky menu toggle.</summary>
-    private void OnCommandHotkeyTriggered()
+    /// <summary>Command-mode hotkey PRESS — mirror of <see cref="OnHotkeyPressed"/>
+    /// but flags the recording as a ONE-SHOT command (CommandOneShot routes the
+    /// stop to the transform/generate path and paints the pill amber; it
+    /// self-clears in StopAndCommandTransform). Honours the SAME ShortcutMode
+    /// as dictation: in PTT mode this press starts and the release stops; in
+    /// toggle mode this press starts and the next press stops.</summary>
+    private void OnCommandHotkeyPressed()
     {
         _dispatcherQueue?.TryEnqueue(async () =>
         {
             try
             {
-                var state = _appViewModel.CurrentState;
-                if (state == AppState.Idle && !_stopInProgress)
+                if (DimmyNative.dimmy_meeting_is_active() != 0)
                 {
-                    CaptureAndPushAppContext();
-                    _appViewModel.SuppressRecordingStarted = false;
-                    _appViewModel.CommandOneShot = true;
-                    var rc = DimmyNative.dimmy_start_recording();
-                    if (rc == -1)
-                    {
-                        _appViewModel.CommandOneShot = false;
-                        _appViewModel.SetError("No API key configured");
-                    }
-                    else if (rc == -7)
-                    {
-                        _appViewModel.CommandOneShot = false;
-                        PttLog("Command hotkey suppressed: meeting recording active (rc=-7)");
-                    }
-                    else if (rc < 0)
-                    {
-                        _appViewModel.CommandOneShot = false;
-                        _appViewModel.SetError($"Recording failed ({rc})");
-                    }
-                    else
-                    {
-                        PttLog("Command hotkey: one-shot recording started");
-                        _appViewModel.SetState(AppState.Recording);
-                    }
+                    PttLog("command hotkey ignored — meeting recording in progress");
+                    return;
                 }
-                else if (state == AppState.Recording && !_stopInProgress)
+
+                if (!IsPillVisible() && _appViewModel.PillShowOnHotkey)
+                    ShowPill();
+
+                if (_appViewModel.ShortcutMode == "hold")
                 {
-                    _appViewModel.SuppressRecordingStarted = true;
-                    PttLog("Command hotkey: stopping → command transform");
-                    await StopAndProcess();
+                    // PTT: press starts a one-shot command recording.
+                    if (!_appViewModel.IsBusy && !_pttStarted)
+                    {
+                        CaptureAndPushAppContext();
+                        _pendingStop = false;
+                        _pttStarted = true;
+                        _appViewModel.SuppressRecordingStarted = false;
+                        _appViewModel.CommandOneShot = true;
+                        PttLog("Command hotkey (PTT): starting recording...");
+                        var result = DimmyNative.dimmy_start_recording();
+                        if (result == -1)
+                        {
+                            _pttStarted = false;
+                            _appViewModel.CommandOneShot = false;
+                            _appViewModel.SetError("No API key configured");
+                        }
+                        else if (result == -7)
+                        {
+                            _pttStarted = false;
+                            _appViewModel.CommandOneShot = false;
+                            PttLog("Command hotkey suppressed: meeting recording active (rc=-7)");
+                        }
+                        else if (result < 0)
+                        {
+                            _pttStarted = false;
+                            _appViewModel.CommandOneShot = false;
+                            _appViewModel.SetError($"Recording failed ({result})");
+                        }
+                        else if (_pendingStop)
+                        {
+                            PttLog("Command hotkey (PTT): pending stop after start — stopping");
+                            _pttStarted = false;
+                            await StopAndProcess();
+                        }
+                        else
+                        {
+                            PttLog("Command hotkey (PTT): recording started OK");
+                        }
+                    }
                 }
                 else
                 {
-                    PttLog($"Command hotkey ignored (state={state}, stopInProgress={_stopInProgress})");
+                    // Toggle: press toggles the command recording on/off.
+                    var now = Environment.TickCount64;
+                    if (now - _lastCommandToggleMs < 300)
+                    {
+                        PttLog($"Command toggle debounce: {now - _lastCommandToggleMs}ms < 300ms, ignoring");
+                        return;
+                    }
+                    _lastCommandToggleMs = now;
+
+                    if (_appViewModel.IsRecording && !_stopInProgress)
+                    {
+                        _appViewModel.SuppressRecordingStarted = true;
+                        PttLog("Command hotkey (toggle): stopping → command transform");
+                        await StopAndProcess();
+                    }
+                    else if (!_appViewModel.IsBusy && !_stopInProgress)
+                    {
+                        CaptureAndPushAppContext();
+                        _appViewModel.SuppressRecordingStarted = false;
+                        _appViewModel.CommandOneShot = true;
+                        var result = DimmyNative.dimmy_start_recording();
+                        if (result == -1)
+                        {
+                            _appViewModel.CommandOneShot = false;
+                            _appViewModel.SetError("No API key configured");
+                        }
+                        else if (result == -7)
+                        {
+                            _appViewModel.CommandOneShot = false;
+                            PttLog("Command toggle suppressed: meeting recording active (rc=-7)");
+                        }
+                        else if (result == -2)
+                        {
+                            PttLog("Command toggle race: start returned -2 (already recording) — treating as stop");
+                            await StopAndProcess();
+                        }
+                        else if (result < 0)
+                        {
+                            _appViewModel.CommandOneShot = false;
+                            _appViewModel.SetError($"Recording failed ({result})");
+                        }
+                        else
+                        {
+                            PttLog("Command hotkey (toggle): one-shot recording started");
+                            _appViewModel.SetState(AppState.Recording);
+                        }
+                    }
                 }
             }
             catch (Exception ex)
             {
-                PttLog($"Command hotkey handler exc: {ex.Message}");
+                PttLog($"Command hotkey press handler exc: {ex.Message}");
+            }
+        });
+    }
+
+    /// <summary>Command-mode hotkey RELEASE — only delivered in PTT mode
+    /// (HotkeyService gates Released on PttMode). Mirror of
+    /// <see cref="OnHotkeyReleased"/>: ends the held command recording and
+    /// routes the stop to the transform/generate path via the still-set
+    /// CommandOneShot flag.</summary>
+    private void OnCommandHotkeyReleased()
+    {
+        _pendingStop = true;
+        _pttStarted = false;
+        PttLog("Command key released — enqueueing stop");
+        _dispatcherQueue?.TryEnqueue(async () =>
+        {
+            _appViewModel.SuppressRecordingStarted = true;
+            PttLog($"Command release handler executing, state={_appViewModel.CurrentState}");
+            await StopAndProcess();
+            if (_appViewModel.CurrentState == AppState.Recording)
+            {
+                PttLog("Command release: force-resetting to Idle");
+                _appViewModel.SetState(AppState.Idle);
             }
         });
     }
@@ -2055,7 +2139,6 @@ public partial class App : Application
 
         _hotkeyService?.Dispose();
         _dictHotkey?.Dispose();
-        _commandHotkey?.Dispose();
         _trayService?.Dispose();
         _commandPipe?.Dispose();
         _appViewModel.PropertyChanged -= OnAppViewModelPropertyChangedForTaskbar;

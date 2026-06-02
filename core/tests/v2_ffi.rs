@@ -39,7 +39,8 @@ use dimmy_lib::ffi::{
     dimmy_claude_code_status, dimmy_clear_app_context, dimmy_command_transform,
     dimmy_get_active_mic_sample_rate, dimmy_get_config_json, dimmy_get_loopback_amplitude,
     dimmy_history_save, dimmy_history_update_audio, dimmy_history_update_enhanced,
-    dimmy_history_update_word_timestamps, dimmy_init, dimmy_llm_call_raw, dimmy_meeting_is_active,
+    dimmy_history_update_word_timestamps, dimmy_hotkey_combos_conflict, dimmy_hotkey_set_command,
+    dimmy_hotkey_take_command_event, dimmy_init, dimmy_llm_call_raw, dimmy_meeting_is_active,
     dimmy_meeting_save_post_process, dimmy_push_loopback_audio, dimmy_set_app_context,
     dimmy_set_config_json, dimmy_set_loopback_sample_rate, dimmy_transcribe_file,
     dimmy_user_dict_add, dimmy_user_dict_list_json, dimmy_user_dict_remove,
@@ -1320,4 +1321,53 @@ fn call_meeting_started_external_round_trip() {
         rc, 0,
         "no active meeting → NoChange even when armed (rc=3 path is unit-tested)"
     );
+}
+
+// ── Command-mode hotkey FFI (dedicated shortcut on the shared Rust hook) ──
+//
+// The dedicated command hotkey runs on the SAME low-level keyboard hook as
+// dictation, so it inherits toggle/PTT + every combo (incl. modifier-only).
+// The hook itself can't run in this offline harness (no OS message pump), so
+// we guard the FFI boundary only: set the combo, confirm the event mailbox is
+// drained (0 with no synthetic key events), clear it, and check the
+// conflict-detection helper the host uses before binding.
+#[test]
+#[serial]
+fn hotkey_command_set_take_and_conflict_round_trip() {
+    ensure_init();
+
+    // Configure a modifier-only command combo (RegisterHotKey could never
+    // bind this; the Rust hook can).
+    let combo = CString::new("win+alt").unwrap();
+    unsafe { dimmy_hotkey_set_command(combo.as_ptr()) };
+    // No physical key events in this harness → mailbox stays empty.
+    assert_eq!(dimmy_hotkey_take_command_event(), 0);
+
+    // Empty / null disables it (never panics).
+    let empty = CString::new("").unwrap();
+    unsafe { dimmy_hotkey_set_command(empty.as_ptr()) };
+    unsafe { dimmy_hotkey_set_command(std::ptr::null()) };
+    assert_eq!(dimmy_hotkey_take_command_event(), 0);
+
+    // Conflict helper: subset / equal → 1, distinct → 0, disabled → 0.
+    let ctrl_space = CString::new("ctrl+space").unwrap();
+    let ctrl_shift_space = CString::new("ctrl+shift+space").unwrap();
+    let win_alt = CString::new("win+alt").unwrap();
+    unsafe {
+        assert_eq!(
+            dimmy_hotkey_combos_conflict(ctrl_space.as_ptr(), ctrl_shift_space.as_ptr()),
+            1,
+            "subset conflicts"
+        );
+        assert_eq!(
+            dimmy_hotkey_combos_conflict(ctrl_space.as_ptr(), win_alt.as_ptr()),
+            0,
+            "distinct combos do not conflict"
+        );
+        assert_eq!(
+            dimmy_hotkey_combos_conflict(std::ptr::null(), ctrl_space.as_ptr()),
+            0,
+            "disabled (null) never conflicts"
+        );
+    }
 }

@@ -15,11 +15,185 @@ const EVENT_NONE: u8 = 0;
 const EVENT_PRESSED: u8 = 1;
 const EVENT_RELEASED: u8 = 2;
 
-static KEY1_DOWN: AtomicBool = AtomicBool::new(false);
-static KEY2_DOWN: AtomicBool = AtomicBool::new(false);
-static KEY3_DOWN: AtomicBool = AtomicBool::new(false);
-static COMBO_ACTIVE: AtomicBool = AtomicBool::new(false);
-static HOTKEY_EVENT: AtomicU8 = AtomicU8::new(EVENT_NONE);
+/// Result of feeding one physical key event to a binding's state machine.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum Transition {
+    None,
+    Pressed,
+    Released,
+}
+
+/// One hotkey binding: a configured combo (up to 2 modifier groups + 1
+/// optional non-modifier key) plus the live press state and a one-slot event
+/// mailbox. Two independent instances run on the SAME keyboard hook: `DICT`
+/// (the dictation shortcut) and `CMD` (the optional dedicated command-mode
+/// shortcut). The matching logic is the original single-combo state machine,
+/// just parameterised over `self` so the two bindings can never interfere —
+/// separate codes, separate down-flags, separate event slots.
+struct Binding {
+    /// Packed L/R VK codes for modifier group 1 (0 = unconfigured).
+    key1_codes: AtomicU32,
+    /// Packed L/R VK codes for modifier group 2 (0 = single-modifier combo).
+    key2_codes: AtomicU32,
+    /// Non-modifier key VK code (0 = modifier-only combo).
+    key3_code: AtomicU32,
+    key1_down: AtomicBool,
+    key2_down: AtomicBool,
+    key3_down: AtomicBool,
+    combo_active: AtomicBool,
+    /// Latest unread event: 0=none, 1=pressed, 2=released.
+    event: AtomicU8,
+}
+
+impl Binding {
+    const fn new() -> Self {
+        Binding {
+            key1_codes: AtomicU32::new(0),
+            key2_codes: AtomicU32::new(0),
+            key3_code: AtomicU32::new(0),
+            key1_down: AtomicBool::new(false),
+            key2_down: AtomicBool::new(false),
+            key3_down: AtomicBool::new(false),
+            combo_active: AtomicBool::new(false),
+            event: AtomicU8::new(EVENT_NONE),
+        }
+    }
+
+    /// Install a parsed combo, resetting all live state. `k1 == 0 && k3 == 0`
+    /// means "unconfigured" — the binding then ignores every event.
+    fn set_codes(&self, k1: u32, k2: u32, k3: u32) {
+        self.key1_codes.store(k1, Ordering::SeqCst);
+        self.key2_codes.store(k2, Ordering::SeqCst);
+        self.key3_code.store(k3, Ordering::SeqCst);
+        self.key1_down.store(false, Ordering::SeqCst);
+        self.key2_down.store(false, Ordering::SeqCst);
+        self.key3_down.store(false, Ordering::SeqCst);
+        self.combo_active.store(false, Ordering::SeqCst);
+    }
+
+    /// Disable the binding (the optional command hotkey when the user clears
+    /// it). Also drains any pending event.
+    fn clear(&self) {
+        self.set_codes(0, 0, 0);
+        self.event.store(EVENT_NONE, Ordering::SeqCst);
+    }
+
+    fn matches_key(&self, vk: u32) -> bool {
+        let k1 = self.key1_codes.load(Ordering::SeqCst);
+        let k2 = self.key2_codes.load(Ordering::SeqCst);
+        let k3 = self.key3_code.load(Ordering::SeqCst);
+        matches_key_group(vk, k1) || matches_key_group(vk, k2) || (k3 != 0 && vk == k3)
+    }
+
+    /// True once every key of this combo is physically up.
+    fn all_released(&self) -> bool {
+        !self.key1_down.load(Ordering::SeqCst)
+            && !self.key2_down.load(Ordering::SeqCst)
+            && !self.key3_down.load(Ordering::SeqCst)
+    }
+
+    fn take_event(&self) -> u8 {
+        self.event.swap(EVENT_NONE, Ordering::SeqCst)
+    }
+
+    /// Feed one physical key event. Updates the down-flags + `combo_active`,
+    /// writes the event mailbox on a transition, and returns that transition
+    /// so the platform hook can drive modifier-suppression. Pure logic, no
+    /// platform calls — unit-testable on every OS.
+    fn process(&self, vk: u32, is_down: bool, is_up: bool) -> Transition {
+        let k1 = self.key1_codes.load(Ordering::SeqCst);
+        let k2 = self.key2_codes.load(Ordering::SeqCst);
+        let k3 = self.key3_code.load(Ordering::SeqCst);
+
+        // Unconfigured binding ignores everything.
+        if k1 == 0 && k3 == 0 {
+            return Transition::None;
+        }
+
+        if k3 == 0 {
+            // ── 2-modifier combo ──
+            if matches_key_group(vk, k1) {
+                if is_down {
+                    self.key1_down.store(true, Ordering::SeqCst);
+                    if self.key2_down.load(Ordering::SeqCst)
+                        && !self.combo_active.swap(true, Ordering::SeqCst)
+                    {
+                        self.event.store(EVENT_PRESSED, Ordering::SeqCst);
+                        return Transition::Pressed;
+                    }
+                } else if is_up {
+                    self.key1_down.store(false, Ordering::SeqCst);
+                    if self.combo_active.swap(false, Ordering::SeqCst) {
+                        self.event.store(EVENT_RELEASED, Ordering::SeqCst);
+                        return Transition::Released;
+                    }
+                }
+            } else if matches_key_group(vk, k2) {
+                if is_down {
+                    self.key2_down.store(true, Ordering::SeqCst);
+                    if self.key1_down.load(Ordering::SeqCst)
+                        && !self.combo_active.swap(true, Ordering::SeqCst)
+                    {
+                        self.event.store(EVENT_PRESSED, Ordering::SeqCst);
+                        return Transition::Pressed;
+                    }
+                } else if is_up {
+                    self.key2_down.store(false, Ordering::SeqCst);
+                    if self.combo_active.swap(false, Ordering::SeqCst) {
+                        self.event.store(EVENT_RELEASED, Ordering::SeqCst);
+                        return Transition::Released;
+                    }
+                }
+            }
+            Transition::None
+        } else {
+            // ── (1 or 2 modifiers) + 1-key combo ──
+            let mut changed = false;
+            if matches_key_group(vk, k1) {
+                if is_down {
+                    self.key1_down.store(true, Ordering::SeqCst);
+                } else if is_up {
+                    self.key1_down.store(false, Ordering::SeqCst);
+                }
+                changed = true;
+            } else if matches_key_group(vk, k2) {
+                if is_down {
+                    self.key2_down.store(true, Ordering::SeqCst);
+                } else if is_up {
+                    self.key2_down.store(false, Ordering::SeqCst);
+                }
+                changed = true;
+            } else if vk == k3 {
+                if is_down {
+                    self.key3_down.store(true, Ordering::SeqCst);
+                } else if is_up {
+                    self.key3_down.store(false, Ordering::SeqCst);
+                }
+                changed = true;
+            }
+
+            if changed {
+                let all = self.key1_down.load(Ordering::SeqCst)
+                    && (k2 == 0 || self.key2_down.load(Ordering::SeqCst))
+                    && self.key3_down.load(Ordering::SeqCst);
+                if all && !self.combo_active.swap(true, Ordering::SeqCst) {
+                    self.event.store(EVENT_PRESSED, Ordering::SeqCst);
+                    return Transition::Pressed;
+                } else if !all && self.combo_active.swap(false, Ordering::SeqCst) {
+                    self.event.store(EVENT_RELEASED, Ordering::SeqCst);
+                    return Transition::Released;
+                }
+            }
+            Transition::None
+        }
+    }
+}
+
+/// The dictation shortcut binding (always configured; falls back to a
+/// platform default if an unparseable combo is set).
+static DICT: Binding = Binding::new();
+/// The optional dedicated command-mode shortcut binding (empty = disabled).
+static CMD: Binding = Binding::new();
 
 /// When `true`, the LL keyboard hook consumes (returns 1 for) every event
 /// matching the configured shortcut keys, instead of forwarding to the OS
@@ -34,12 +208,6 @@ static HOTKEY_EVENT: AtomicU8 = AtomicU8::new(EVENT_NONE);
 /// hijack the input stream that our subsequent synthetic Ctrl+V would
 /// then collide with. Event-driven, no timing.
 static MODIFIER_SUPPRESS: AtomicBool = AtomicBool::new(false);
-
-/// Modifier group 1 and 2 (packed L/R VK codes).
-static KEY1_CODES: AtomicU32 = AtomicU32::new(0);
-static KEY2_CODES: AtomicU32 = AtomicU32::new(0);
-/// Non-modifier key VK code (0 = 2-mod-only combo).
-static KEY3_CODE: AtomicU32 = AtomicU32::new(0);
 
 /// Recording mode flag.
 static RECORDING: AtomicBool = AtomicBool::new(false);
@@ -237,31 +405,28 @@ fn matches_key_group(vk: u32, packed: u32) -> bool {
     vk == left || (right != 0 && vk == right)
 }
 
-/// Set the shortcut combo from a string like "Win+Alt", "Alt+X", or "Ctrl+Shift+Space".
+/// Parse a combo string into `(key1_packed, key2_packed, key3_vk)`. Returns
+/// `None` for empty / separator-less / unrecognised combos.
 ///
 /// Supported formats (case insensitive):
 /// - 2 modifiers: "Win+Alt", "Ctrl+Shift"
 /// - 1 modifier + 1 key: "Alt+X", "Ctrl+Space"
 /// - 2 modifiers + 1 key: "Ctrl+Shift+X", "Win+Alt+N"
-pub fn set_shortcut(combo: &str) {
-    assert!(!combo.is_empty(), "shortcut combo must not be empty");
-    assert!(
-        combo.contains('+'),
-        "shortcut must contain '+' separator: {}",
-        combo
-    );
-
-    // Normalize to lowercase for matching
+fn parse_combo(combo: &str) -> Option<(u32, u32, u32)> {
+    if combo.is_empty() || !combo.contains('+') {
+        return None;
+    }
     let lower = combo.to_ascii_lowercase();
     let parts: Vec<&str> = lower.split('+').map(|s| s.trim()).collect();
 
-    // Classify each part as modifier group or VK key
     let mut groups: Vec<u8> = Vec::new();
     let mut vk: u32 = 0;
     for part in &parts {
         let g = name_to_group(part);
         if g != 0 {
-            groups.push(g);
+            if !groups.contains(&g) {
+                groups.push(g);
+            }
         } else {
             let k = name_to_vk(part);
             if k != 0 {
@@ -272,43 +437,100 @@ pub fn set_shortcut(combo: &str) {
 
     if groups.len() == 2 {
         // 2 modifiers (+ optional key)
-        KEY1_CODES.store(group_to_packed(groups[0]), Ordering::SeqCst);
-        KEY2_CODES.store(group_to_packed(groups[1]), Ordering::SeqCst);
-        KEY3_CODE.store(vk, Ordering::SeqCst);
-        KEY3_DOWN.store(false, Ordering::SeqCst);
-        return;
+        Some((group_to_packed(groups[0]), group_to_packed(groups[1]), vk))
+    } else if groups.len() == 1 && vk != 0 {
+        // 1 modifier + 1 key: modifier in KEY1, KEY2 unused, key in KEY3.
+        Some((group_to_packed(groups[0]), 0, vk))
+    } else {
+        None
     }
+}
 
-    if groups.len() == 1 && vk != 0 {
-        // 1 modifier + 1 key: use the modifier as both KEY1 and KEY2
-        // so the hook fires when this single modifier + key are both down.
-        // We store the modifier in KEY1, VK=0 in KEY2 (unused), and the key in KEY3.
-        KEY1_CODES.store(group_to_packed(groups[0]), Ordering::SeqCst);
-        KEY2_CODES.store(0, Ordering::SeqCst);
-        KEY3_CODE.store(vk, Ordering::SeqCst);
-        KEY3_DOWN.store(false, Ordering::SeqCst);
-        return;
-    }
+/// Set the dictation shortcut combo. An unrecognised combo falls back to the
+/// platform default so the dictation hotkey is never left unbound.
+pub fn set_shortcut(combo: &str) {
+    assert!(!combo.is_empty(), "shortcut combo must not be empty");
+    assert!(
+        combo.contains('+'),
+        "shortcut must contain '+' separator: {}",
+        combo
+    );
 
-    // Fallback: cmd+option+D on macOS, win+alt on Windows/Linux
-    KEY1_CODES.store(group_to_packed(GROUP_WIN), Ordering::SeqCst);
-    KEY2_CODES.store(group_to_packed(GROUP_ALT), Ordering::SeqCst);
-    #[cfg(target_os = "macos")]
-    {
-        KEY3_CODE.store(name_to_vk("d"), Ordering::SeqCst);
+    match parse_combo(combo) {
+        Some((k1, k2, k3)) => DICT.set_codes(k1, k2, k3),
+        None => {
+            // Fallback: cmd+option+D on macOS, win+alt on Windows/Linux.
+            #[cfg(target_os = "macos")]
+            DICT.set_codes(
+                group_to_packed(GROUP_WIN),
+                group_to_packed(GROUP_ALT),
+                name_to_vk("d"),
+            );
+            #[cfg(not(target_os = "macos"))]
+            DICT.set_codes(group_to_packed(GROUP_WIN), group_to_packed(GROUP_ALT), 0);
+        }
     }
-    #[cfg(not(target_os = "macos"))]
-    {
-        KEY3_CODE.store(0, Ordering::SeqCst);
+}
+
+/// Set (or clear) the optional dedicated command-mode shortcut. An empty or
+/// unparseable combo DISABLES the command hotkey (the binding is cleared and
+/// ignores all events) — unlike the dictation hotkey it never falls back to a
+/// default, because "no command hotkey" is a valid, opt-in state.
+pub fn set_command_shortcut(combo: &str) {
+    match parse_combo(combo) {
+        Some((k1, k2, k3)) => CMD.set_codes(k1, k2, k3),
+        None => CMD.clear(),
     }
-    KEY3_DOWN.store(false, Ordering::SeqCst);
+}
+
+/// Tagged keyset of a combo for conflict detection: each modifier group and
+/// the non-modifier key become distinct tokens. `None` for empty/unparseable.
+fn combo_keyset(combo: &str) -> Option<Vec<u32>> {
+    if combo.is_empty() || !combo.contains('+') {
+        return None;
+    }
+    let lower = combo.to_ascii_lowercase();
+    let mut set: Vec<u32> = Vec::new();
+    for part in lower.split('+').map(|s| s.trim()) {
+        let g = name_to_group(part);
+        if g != 0 {
+            let tok = 0x0100_0000 | g as u32;
+            if !set.contains(&tok) {
+                set.push(tok);
+            }
+        } else {
+            let k = name_to_vk(part);
+            if k != 0 && !set.contains(&k) {
+                set.push(k);
+            }
+        }
+    }
+    if set.is_empty() {
+        None
+    } else {
+        Some(set)
+    }
+}
+
+/// Two combos conflict when pressing one necessarily activates the other —
+/// i.e. one combo's keyset is a subset of the other's. A combo fires whenever
+/// ALL its keys are held (extra keys don't block it), so a subset like
+/// "Ctrl+Space" vs "Ctrl+Shift+Space" would double-trigger. Equal combos are
+/// mutual subsets. An empty/unparseable (disabled) combo never conflicts.
+pub fn combos_conflict(a: &str, b: &str) -> bool {
+    match (combo_keyset(a), combo_keyset(b)) {
+        (Some(sa), Some(sb)) => {
+            sa.iter().all(|k| sb.contains(k)) || sb.iter().all(|k| sa.contains(k))
+        }
+        _ => false,
+    }
 }
 
 /// Get the human-readable label for the current shortcut.
 pub fn current_label() -> String {
-    let k1 = KEY1_CODES.load(Ordering::SeqCst);
-    let k2 = KEY2_CODES.load(Ordering::SeqCst);
-    let k3 = KEY3_CODE.load(Ordering::SeqCst);
+    let k1 = DICT.key1_codes.load(Ordering::SeqCst);
+    let k2 = DICT.key2_codes.load(Ordering::SeqCst);
+    let k3 = DICT.key3_code.load(Ordering::SeqCst);
     let g1 = vk_to_group(k1 >> 16);
     let g2 = vk_to_group(k2 >> 16);
     if k3 != 0 {
@@ -403,9 +625,15 @@ pub fn is_recording() -> bool {
     RECORDING.load(Ordering::SeqCst)
 }
 
-/// Take the latest hotkey event: 0=none, 1=pressed, 2=released.
+/// Take the latest dictation hotkey event: 0=none, 1=pressed, 2=released.
 pub fn take_event() -> u8 {
-    HOTKEY_EVENT.swap(EVENT_NONE, Ordering::SeqCst)
+    DICT.take_event()
+}
+
+/// Take the latest command hotkey event: 0=none, 1=pressed, 2=released.
+/// Returns 0 forever while the command hotkey is unconfigured.
+pub fn take_command_event() -> u8 {
+    CMD.take_event()
 }
 
 /// Install the global keyboard hook.
@@ -589,10 +817,10 @@ mod platform {
     /// Windows shell classifies the upcoming synthetic Win UP as
     /// "released-after-chord" instead of "solo Win press-release". See
     /// VK_NONAME doc comment for the full incident note.
-    fn emit_synthetic_combo_release() {
-        let k1 = KEY1_CODES.load(Ordering::SeqCst);
-        let k2 = KEY2_CODES.load(Ordering::SeqCst);
-        let k3 = KEY3_CODE.load(Ordering::SeqCst);
+    fn emit_synthetic_combo_release(b: &Binding) {
+        let k1 = b.key1_codes.load(Ordering::SeqCst);
+        let k2 = b.key2_codes.load(Ordering::SeqCst);
+        let k3 = b.key3_code.load(Ordering::SeqCst);
 
         let win_packed = pack_keys(VK_LWIN, VK_RWIN);
         if k1 == win_packed || k2 == win_packed {
@@ -752,100 +980,33 @@ mod platform {
             };
         }
 
-        let k1 = KEY1_CODES.load(Ordering::SeqCst);
-        let k2 = KEY2_CODES.load(Ordering::SeqCst);
-        let k3 = KEY3_CODE.load(Ordering::SeqCst);
-
-        let is_combo_key =
-            matches_key_group(vk, k1) || matches_key_group(vk, k2) || (k3 != 0 && vk == k3);
-
-        if k3 == 0 {
-            // ── 2-modifier combo ──
-            if matches_key_group(vk, k1) {
-                if is_down {
-                    KEY1_DOWN.store(true, Ordering::SeqCst);
-                    if KEY2_DOWN.load(Ordering::SeqCst)
-                        && !COMBO_ACTIVE.swap(true, Ordering::SeqCst)
-                    {
-                        HOTKEY_EVENT.store(EVENT_PRESSED, Ordering::SeqCst);
-                        MODIFIER_SUPPRESS.store(true, Ordering::SeqCst);
-                        emit_synthetic_combo_release();
-                    }
-                } else if is_up {
-                    KEY1_DOWN.store(false, Ordering::SeqCst);
-                    if COMBO_ACTIVE.swap(false, Ordering::SeqCst) {
-                        HOTKEY_EVENT.store(EVENT_RELEASED, Ordering::SeqCst);
-                    }
-                    if !KEY1_DOWN.load(Ordering::SeqCst) && !KEY2_DOWN.load(Ordering::SeqCst) {
-                        MODIFIER_SUPPRESS.store(false, Ordering::SeqCst);
-                    }
-                }
-            } else if matches_key_group(vk, k2) {
-                if is_down {
-                    KEY2_DOWN.store(true, Ordering::SeqCst);
-                    if KEY1_DOWN.load(Ordering::SeqCst)
-                        && !COMBO_ACTIVE.swap(true, Ordering::SeqCst)
-                    {
-                        HOTKEY_EVENT.store(EVENT_PRESSED, Ordering::SeqCst);
-                        MODIFIER_SUPPRESS.store(true, Ordering::SeqCst);
-                        emit_synthetic_combo_release();
-                    }
-                } else if is_up {
-                    KEY2_DOWN.store(false, Ordering::SeqCst);
-                    if COMBO_ACTIVE.swap(false, Ordering::SeqCst) {
-                        HOTKEY_EVENT.store(EVENT_RELEASED, Ordering::SeqCst);
-                    }
-                    if !KEY1_DOWN.load(Ordering::SeqCst) && !KEY2_DOWN.load(Ordering::SeqCst) {
-                        MODIFIER_SUPPRESS.store(false, Ordering::SeqCst);
-                    }
-                }
-            }
-        } else {
-            // ── 2-modifier + 1-key combo ──
-            let mut changed = false;
-            if matches_key_group(vk, k1) {
-                if is_down {
-                    KEY1_DOWN.store(true, Ordering::SeqCst);
-                } else if is_up {
-                    KEY1_DOWN.store(false, Ordering::SeqCst);
-                }
-                changed = true;
-            } else if matches_key_group(vk, k2) {
-                if is_down {
-                    KEY2_DOWN.store(true, Ordering::SeqCst);
-                } else if is_up {
-                    KEY2_DOWN.store(false, Ordering::SeqCst);
-                }
-                changed = true;
-            } else if vk == k3 {
-                if is_down {
-                    KEY3_DOWN.store(true, Ordering::SeqCst);
-                } else if is_up {
-                    KEY3_DOWN.store(false, Ordering::SeqCst);
-                }
-                changed = true;
-            }
-
-            if changed {
-                let all = KEY1_DOWN.load(Ordering::SeqCst)
-                    && (k2 == 0 || KEY2_DOWN.load(Ordering::SeqCst))
-                    && KEY3_DOWN.load(Ordering::SeqCst);
-                if all && !COMBO_ACTIVE.swap(true, Ordering::SeqCst) {
-                    HOTKEY_EVENT.store(EVENT_PRESSED, Ordering::SeqCst);
-                    MODIFIER_SUPPRESS.store(true, Ordering::SeqCst);
-                    emit_synthetic_combo_release();
-                } else if !all && COMBO_ACTIVE.swap(false, Ordering::SeqCst) {
-                    HOTKEY_EVENT.store(EVENT_RELEASED, Ordering::SeqCst);
-                }
-                if !KEY1_DOWN.load(Ordering::SeqCst)
-                    && !KEY2_DOWN.load(Ordering::SeqCst)
-                    && !KEY3_DOWN.load(Ordering::SeqCst)
-                {
-                    MODIFIER_SUPPRESS.store(false, Ordering::SeqCst);
-                }
-            }
+        // Feed the event to BOTH bindings. Each keeps its own state and fires
+        // its own event mailbox, so the dictation + command hotkeys can never
+        // interfere. On a fresh activation, flush the kernel modifier state +
+        // arm suppression for THAT binding's keys (the synthetic-release +
+        // Start-Menu chord-buster, identical to the single-combo behaviour).
+        if DICT.process(vk, is_down, is_up) == Transition::Pressed {
+            MODIFIER_SUPPRESS.store(true, Ordering::SeqCst);
+            emit_synthetic_combo_release(&DICT);
+        }
+        if CMD.process(vk, is_down, is_up) == Transition::Pressed {
+            MODIFIER_SUPPRESS.store(true, Ordering::SeqCst);
+            emit_synthetic_combo_release(&CMD);
         }
 
+        // Clear suppression only once NEITHER combo is active AND every
+        // shortcut key of both bindings is physically up — so the trailing
+        // modifier-up that ends a hold is suppressed too (no orphan Win/Alt
+        // up reaching the shell).
+        if !DICT.combo_active.load(Ordering::SeqCst)
+            && !CMD.combo_active.load(Ordering::SeqCst)
+            && DICT.all_released()
+            && CMD.all_released()
+        {
+            MODIFIER_SUPPRESS.store(false, Ordering::SeqCst);
+        }
+
+        let is_combo_key = DICT.matches_key(vk) || CMD.matches_key(vk);
         if is_combo_key && MODIFIER_SUPPRESS.load(Ordering::SeqCst) {
             return 1;
         }
@@ -1141,80 +1302,12 @@ mod platform {
             return event;
         }
 
-        // Skip hotkey detection while recording a new shortcut
+        // Skip hotkey detection while recording a new shortcut. Listen-only
+        // tap → just update both bindings' state + event mailboxes (no
+        // suppression; macOS can't consume the event here).
         if !RECORDING.load(Ordering::SeqCst) {
-            let k1 = KEY1_CODES.load(Ordering::SeqCst);
-            let k2 = KEY2_CODES.load(Ordering::SeqCst);
-            let k3 = KEY3_CODE.load(Ordering::SeqCst);
-
-            if k3 == 0 {
-                // ── 2-modifier combo ──
-                if matches_key_group(vk, k1) {
-                    if is_down {
-                        KEY1_DOWN.store(true, Ordering::SeqCst);
-                        if KEY2_DOWN.load(Ordering::SeqCst)
-                            && !COMBO_ACTIVE.swap(true, Ordering::SeqCst)
-                        {
-                            HOTKEY_EVENT.store(EVENT_PRESSED, Ordering::SeqCst);
-                        }
-                    } else if is_up {
-                        KEY1_DOWN.store(false, Ordering::SeqCst);
-                        if COMBO_ACTIVE.swap(false, Ordering::SeqCst) {
-                            HOTKEY_EVENT.store(EVENT_RELEASED, Ordering::SeqCst);
-                        }
-                    }
-                } else if matches_key_group(vk, k2) {
-                    if is_down {
-                        KEY2_DOWN.store(true, Ordering::SeqCst);
-                        if KEY1_DOWN.load(Ordering::SeqCst)
-                            && !COMBO_ACTIVE.swap(true, Ordering::SeqCst)
-                        {
-                            HOTKEY_EVENT.store(EVENT_PRESSED, Ordering::SeqCst);
-                        }
-                    } else if is_up {
-                        KEY2_DOWN.store(false, Ordering::SeqCst);
-                        if COMBO_ACTIVE.swap(false, Ordering::SeqCst) {
-                            HOTKEY_EVENT.store(EVENT_RELEASED, Ordering::SeqCst);
-                        }
-                    }
-                }
-            } else {
-                // ── 2-modifier + 1-key combo ──
-                let mut changed = false;
-                if matches_key_group(vk, k1) {
-                    if is_down {
-                        KEY1_DOWN.store(true, Ordering::SeqCst);
-                    } else if is_up {
-                        KEY1_DOWN.store(false, Ordering::SeqCst);
-                    }
-                    changed = true;
-                } else if matches_key_group(vk, k2) {
-                    if is_down {
-                        KEY2_DOWN.store(true, Ordering::SeqCst);
-                    } else if is_up {
-                        KEY2_DOWN.store(false, Ordering::SeqCst);
-                    }
-                    changed = true;
-                } else if vk == k3 {
-                    if is_down {
-                        KEY3_DOWN.store(true, Ordering::SeqCst);
-                    } else if is_up {
-                        KEY3_DOWN.store(false, Ordering::SeqCst);
-                    }
-                    changed = true;
-                }
-
-                if changed {
-                    let all = KEY1_DOWN.load(Ordering::SeqCst)
-                        && (k2 == 0 || KEY2_DOWN.load(Ordering::SeqCst))
-                        && KEY3_DOWN.load(Ordering::SeqCst);
-                    if all && !COMBO_ACTIVE.swap(true, Ordering::SeqCst) {
-                        HOTKEY_EVENT.store(EVENT_PRESSED, Ordering::SeqCst);
-                    } else if !all && COMBO_ACTIVE.swap(false, Ordering::SeqCst) {
-                        HOTKEY_EVENT.store(EVENT_RELEASED, Ordering::SeqCst);
-                    }
-                }
-            }
+            DICT.process(vk, is_down, is_up);
+            CMD.process(vk, is_down, is_up);
         }
 
         event
@@ -1319,12 +1412,12 @@ mod platform {
 mod tests {
     use super::*;
 
-    // Helper: read back the stored key config after set_shortcut.
+    // Helper: read back the stored DICT key config after set_shortcut.
     fn stored_keys() -> (u32, u32, u32) {
         (
-            KEY1_CODES.load(Ordering::SeqCst),
-            KEY2_CODES.load(Ordering::SeqCst),
-            KEY3_CODE.load(Ordering::SeqCst),
+            DICT.key1_codes.load(Ordering::SeqCst),
+            DICT.key2_codes.load(Ordering::SeqCst),
+            DICT.key3_code.load(Ordering::SeqCst),
         )
     }
 
@@ -1451,6 +1544,107 @@ mod tests {
             label.contains("Ctrl") || label.contains("ctrl"),
             "label should contain Ctrl: {}",
             label
+        );
+    }
+
+    // ── Binding state-machine (cross-platform pure logic) ──────────────
+
+    #[test]
+    fn binding_two_modifier_press_then_release() {
+        let b = Binding::new();
+        b.set_codes(group_to_packed(GROUP_CTRL), group_to_packed(GROUP_SHIFT), 0);
+        // Ctrl down → not yet; Shift down → PRESSED.
+        assert_eq!(b.process(VK_LCONTROL, true, false), Transition::None);
+        assert_eq!(b.process(VK_LSHIFT, true, false), Transition::Pressed);
+        assert_eq!(b.take_event(), EVENT_PRESSED);
+        // Shift up → RELEASED; Ctrl up → nothing more.
+        assert_eq!(b.process(VK_LSHIFT, false, true), Transition::Released);
+        assert_eq!(b.take_event(), EVENT_RELEASED);
+        assert_eq!(b.process(VK_LCONTROL, false, true), Transition::None);
+        assert!(b.all_released());
+    }
+
+    #[test]
+    fn binding_modifier_plus_key_press_then_release() {
+        let b = Binding::new();
+        b.set_codes(group_to_packed(GROUP_CTRL), 0, name_to_vk("space"));
+        assert_eq!(b.process(VK_LCONTROL, true, false), Transition::None);
+        assert_eq!(b.process(0x20, true, false), Transition::Pressed);
+        assert_eq!(b.process(0x20, false, true), Transition::Released);
+        assert!(!b.all_released(), "Ctrl still held");
+        assert_eq!(b.process(VK_LCONTROL, false, true), Transition::None);
+        assert!(b.all_released());
+    }
+
+    #[test]
+    fn binding_unconfigured_ignores_all_events() {
+        let b = Binding::new();
+        assert_eq!(b.process(VK_LCONTROL, true, false), Transition::None);
+        assert_eq!(b.process(0x41, true, false), Transition::None);
+        assert!(b.all_released());
+        assert!(!b.matches_key(VK_LCONTROL));
+    }
+
+    #[test]
+    fn binding_pressed_is_idempotent_on_repeat_down() {
+        // Auto-repeat keydowns must not re-fire PRESSED.
+        let b = Binding::new();
+        b.set_codes(group_to_packed(GROUP_WIN), group_to_packed(GROUP_ALT), 0);
+        assert_eq!(b.process(VK_LWIN, true, false), Transition::None);
+        assert_eq!(b.process(VK_LMENU, true, false), Transition::Pressed);
+        // Repeat downs while held → no new transition.
+        assert_eq!(b.process(VK_LWIN, true, false), Transition::None);
+        assert_eq!(b.process(VK_LMENU, true, false), Transition::None);
+    }
+
+    #[test]
+    fn command_shortcut_set_clear_and_independent_of_dict() {
+        set_shortcut("ctrl+space");
+        set_command_shortcut("win+alt");
+        // DICT untouched.
+        assert_eq!(
+            DICT.key1_codes.load(Ordering::SeqCst),
+            group_to_packed(GROUP_CTRL)
+        );
+        assert_eq!(DICT.key3_code.load(Ordering::SeqCst), 0x20);
+        // CMD holds win+alt.
+        assert_eq!(
+            CMD.key1_codes.load(Ordering::SeqCst),
+            group_to_packed(GROUP_WIN)
+        );
+        assert_eq!(
+            CMD.key2_codes.load(Ordering::SeqCst),
+            group_to_packed(GROUP_ALT)
+        );
+        assert_eq!(CMD.key3_code.load(Ordering::SeqCst), 0);
+        // Empty clears CMD only.
+        set_command_shortcut("");
+        assert_eq!(CMD.key1_codes.load(Ordering::SeqCst), 0);
+        assert_eq!(CMD.key3_code.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            DICT.key1_codes.load(Ordering::SeqCst),
+            group_to_packed(GROUP_CTRL),
+            "clearing CMD must not touch DICT"
+        );
+    }
+
+    #[test]
+    fn combos_conflict_subset_equal_distinct() {
+        assert!(combos_conflict("ctrl+space", "ctrl+space"), "equal");
+        assert!(combos_conflict("ctrl+space", "ctrl+shift+space"), "subset");
+        assert!(combos_conflict("win+alt", "win+alt+n"), "subset");
+        assert!(!combos_conflict("ctrl+space", "win+alt"), "distinct");
+        assert!(
+            !combos_conflict("ctrl+shift", "ctrl+alt"),
+            "share only ctrl, neither subset"
+        );
+        assert!(
+            !combos_conflict("", "ctrl+space"),
+            "disabled never conflicts"
+        );
+        assert!(
+            !combos_conflict("ctrl+space", ""),
+            "disabled never conflicts"
         );
     }
 }

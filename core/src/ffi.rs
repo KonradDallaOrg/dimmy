@@ -5336,6 +5336,53 @@ pub unsafe extern "C" fn dimmy_hotkey_set(combo_ptr: *const c_char) {
     }
 }
 
+/// Set (or clear) the optional dedicated command-mode shortcut. This runs on
+/// the SAME low-level keyboard hook as the dictation shortcut, so it supports
+/// the identical combo grammar (modifier-only like "Win+Alt", modifier+key,
+/// 2-modifiers+key) AND both toggle + push-to-talk semantics. A null/empty/
+/// unparseable combo DISABLES the command hotkey.
+///
+/// # Safety
+/// `combo_ptr` must be null or a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_hotkey_set_command(combo_ptr: *const c_char) {
+    if combo_ptr.is_null() {
+        crate::hotkey::set_command_shortcut("");
+        crate::log("[Hotkey] set_command_shortcut(disabled)");
+        return;
+    }
+    if let Ok(combo) = CStr::from_ptr(combo_ptr).to_str() {
+        crate::hotkey::set_command_shortcut(combo);
+        crate::log(&format!("[Hotkey] set_command_shortcut(\"{}\")", combo));
+    }
+}
+
+/// Returns 1 if the two combos conflict (one is a subset of the other, so
+/// pressing one would also trigger the other), else 0. Used by the host to
+/// reject a command hotkey that collides with the dictation / dictionary
+/// hotkey before binding it. A null/empty (disabled) combo never conflicts.
+///
+/// # Safety
+/// `a` and `b` must each be null or a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_hotkey_combos_conflict(a: *const c_char, b: *const c_char) -> c_int {
+    let sa = if a.is_null() {
+        String::new()
+    } else {
+        CStr::from_ptr(a).to_string_lossy().into_owned()
+    };
+    let sb = if b.is_null() {
+        String::new()
+    } else {
+        CStr::from_ptr(b).to_string_lossy().into_owned()
+    };
+    if crate::hotkey::combos_conflict(&sa, &sb) {
+        1
+    } else {
+        0
+    }
+}
+
 /// Snapshot the foreground app at hotkey-down. Called by the platform layer
 /// (C# / Swift / GTK) before recording begins; the LLM post-process step
 /// reads this snapshot when applying `app_rules`. Pass empty/null strings
@@ -6106,6 +6153,15 @@ pub extern "C" fn dimmy_hotkey_take_event() -> c_int {
         crate::telemetry::track(crate::telemetry::Event::FeatureHotkeyTriggered);
     }
     ev as c_int
+}
+
+/// Poll for command-mode hotkey events (the optional dedicated shortcut).
+/// Returns 0=none, 1=pressed, 2=released — same edges as
+/// `dimmy_hotkey_take_event`, but for the command binding. Returns 0 forever
+/// while the command hotkey is unconfigured.
+#[no_mangle]
+pub extern "C" fn dimmy_hotkey_take_command_event() -> c_int {
+    crate::hotkey::take_command_event() as c_int
 }
 
 /// Start recording mode for shortcut capture.
