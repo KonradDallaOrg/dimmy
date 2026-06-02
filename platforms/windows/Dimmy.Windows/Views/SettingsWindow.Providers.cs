@@ -78,9 +78,15 @@ public sealed partial class SettingsWindow
     /// truthful, connection-driven signal. The UiPreferences mirror is only a
     /// transient fallback for the brief window after a Connect click, before the
     /// VM re-reads the per-vendor key flags. On-device is always ready.</summary>
+    // Connected = a key exists in the LIVE keystore (FFI truth), via the same
+    // _sttKeyByProvider/_llmKeyByProvider cache the model-picker filter uses,
+    // so this page and the dropdowns never disagree. NOT ViewModel.HasAnyKey*
+    // (that's populated from config.json, which doesn't carry the has_*_key
+    // flags → all-false). The ConnectedProviders mirror stays as a transient
+    // fallback for the instant right after Connect.
     private bool IsProviderConnected(string id) =>
         id == "local"
-        || (ViewModel?.HasAnyKeyForProvider(id) ?? false)
+        || HasAnyKeyForVendor(id)
         || UiPreferences.Load().ConnectedProviders.Contains(id);
 
     // ── Card construction ────────────────────────────────────────────────
@@ -325,6 +331,8 @@ public sealed partial class SettingsWindow
         {
             App.Log($"[Providers] connect {p.Id} failed rc={worst}", "Providers");
         }
+        RefreshKeyFlagsFromFfi(); // re-read the live keystore so the Connected
+                                  // state + the model-picker filters update now
         BuildProviderCards();
     }
 
@@ -334,6 +342,7 @@ public sealed partial class SettingsWindow
         if (p.Llm) { SaveProviderKey("llm", p.Id, ""); SaveProviderKey("recap", p.Id, ""); }
         MarkConnected(p.Id, false);
         App.Log($"[Providers] removed {p.Id}", "Providers");
+        RefreshKeyFlagsFromFfi();
         BuildProviderCards();
     }
 

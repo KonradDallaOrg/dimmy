@@ -214,7 +214,12 @@ public sealed partial class SettingsWindow : Window
             var prefs = Services.UiPreferences.Load();
             ViewModel.DictHotkey = string.IsNullOrEmpty(prefs.DictHotkey)
                 ? "ctrl+shift+d" : prefs.DictHotkey;
-            ViewModel.CommandHotkey = prefs.CommandHotkey ?? "";
+            // Coerce a stale / unbindable saved combo to empty so the
+            // recorder shows "Not set" rather than a combo that never
+            // registers (e.g. a modifier-only value from before RequireKey).
+            var savedCmd = prefs.CommandHotkey ?? "";
+            ViewModel.CommandHotkey =
+                Services.DictHotkeyParser.TryParse(savedCmd, out _, out _) ? savedCmd : "";
         }
         catch { }
 
@@ -252,6 +257,10 @@ public sealed partial class SettingsWindow : Window
         RefreshMeetingFolderDisplay();
 
         _loaded = true;
+        // Now that selections are established + _loaded is true, run one auth
+        // refresh so the provider/model pickers get filtered to the connected
+        // providers (RebuildCombo no-ops while loading).
+        RefreshAuthIntegrationStatus();
     }
 
     /// <summary>Disable the optional command-mode hotkey. Empties the combo
@@ -1817,20 +1826,13 @@ public sealed partial class SettingsWindow : Window
         // Custom is always offered (inline URL+key); Anthropic stays offered
         // when the Claude CLI subscription is connected (keyless path).
         FilterCloudProviderPickers(integrationReady);
+        FilterRecapModelPicker(integrationReady);
 
-        // Per-vendor filter of the recap-model picker is INTENTIONALLY
-        // dropped: the user picks any model (claude / gpt / gemini),
-        // the dispatcher derives the recap vendor from the model id
-        // and pulls the matching per-vendor key from the keystore.
-        // The conditional "Recap API key" card below the picker
-        // collects the key if the vendor differs from dictation.
-        //
-        // The subscription toggle gate above already pinned
-        // recapVendor → "anthropic" when subscription is forced, so
-        // the toggle visibility math doesn't need any cross-vendor
-        // coercion either.
-        _ = recapVendor; // retained for future use if we re-introduce
-                         // any vendor-conditional UI here
+        // The recap picker IS filtered now (FilterRecapModelPicker above) to
+        // the vendors the user connected — Auto/Custom/local always stay,
+        // Anthropic stays under subscription. The dispatcher still derives the
+        // recap vendor from the model id and pulls its key from the keystore.
+        _ = recapVendor; // retained for the subscription gate math above
     }
 
     /// <summary>Map a URL to a vendor family tag for filtering the
@@ -1902,34 +1904,93 @@ public sealed partial class SettingsWindow : Window
     /// endpoint, no upstream key" from "matches anthropic" etc.
     /// Used by the LLM section to look up `_sttKeyByProvider` and
     /// `_llmKeyByProvider` per the chosen LLM URL.
-    /// <summary>Hide cloud-provider combo items whose vendor has no saved
-    /// key, so the picker only offers providers you can actually use. Custom
-    /// is always kept (it carries its own inline URL+key); Anthropic is kept
-    /// when the subscription integration is live; the currently-selected item
-    /// is never hidden (so the box never goes blank on a legacy config).</summary>
+    /// <summary>Trim the cloud STT + LLM provider pickers to providers the user
+    /// actually has a key for. A vendor counts as connected when it has a key in
+    /// ANY scope (STT or LLM) — the same provider API key works for all of that
+    /// vendor's capabilities, so a Groq key saved for speech also unlocks Groq's
+    /// rewrite + recap models. Custom is always offered; Anthropic stays under
+    /// the Claude CLI subscription; the selected item is never removed.</summary>
     private void FilterCloudProviderPickers(bool integrationReady)
     {
-        FilterComboByKeys(ProviderComboBox, _sttKeyByProvider, anthropicSubReady: false);
-        FilterComboByKeys(LlmProviderComboBox, _llmKeyByProvider, anthropicSubReady: integrationReady);
+        RebuildCombo(ProviderComboBox, item =>
+        {
+            var v = ((item.Tag as string) ?? "").Split('-')[0].ToLowerInvariant();
+            return v == "custom" || HasAnyKeyForVendor(v);
+        });
+        RebuildCombo(LlmProviderComboBox, item =>
+        {
+            var v = ((item.Tag as string) ?? "").Split('-')[0].ToLowerInvariant();
+            return v == "custom" || HasAnyKeyForVendor(v)
+                   || (v == "anthropic" && integrationReady);
+        });
     }
 
-    private static void FilterComboByKeys(
-        ComboBox? combo,
-        System.Collections.Generic.Dictionary<string, bool> keyMap,
-        bool anthropicSubReady)
+    /// <summary>Trim the recap-model picker the same way. Recap tags are model
+    /// IDs (claude-opus-4-7, gpt-5, gemini-3.1-pro), so the vendor is derived via
+    /// RecapVendorFromModel. Auto, Custom, and local models are always kept.</summary>
+    private void FilterRecapModelPicker(bool integrationReady)
     {
-        if (combo == null) return;
-        foreach (var obj in combo.Items)
+        RebuildCombo(RecapModelComboBox, item =>
         {
-            if (obj is not ComboBoxItem item || item.Tag is not string tag) continue;
-            // Tags are "<vendor>" or "<vendor>-<model>" (e.g. "groq-v3").
-            var vendor = tag.Split('-')[0].ToLowerInvariant();
-            bool keep = vendor == "custom"
-                        || (keyMap.TryGetValue(vendor, out var has) && has)
-                        || (vendor == "anthropic" && anthropicSubReady)
-                        || ReferenceEquals(item, combo.SelectedItem);
-            item.Visibility = keep ? Visibility.Visible : Visibility.Collapsed;
+            var tag = (item.Tag as string) ?? "";
+            if (tag.Length == 0 || tag == "__custom__"
+                || tag.StartsWith("local:", StringComparison.Ordinal))
+                return true; // Auto / custom / local LLM need no cloud key
+            var v = RecapVendorFromModel(tag, "");
+            return HasAnyKeyForVendor(v) || (v == "anthropic" && integrationReady);
+        });
+    }
+
+    // SINGLE source of truth = the LIVE keystore snapshot cached by
+    // CacheProviderKeyFlags (dimmy_get_config_json). The ViewModel's
+    // _sttHasKeyByProvider is populated from config.json which does NOT carry
+    // the has_*_key flags (Rust strips them on save) → it's all-false and must
+    // NOT drive this filter. The Providers & keys page is routed through the
+    // same _sttKeyByProvider/_llmKeyByProvider below, so the two never
+    // disagree. "Has a key in ANY scope" because the same provider key works
+    // for all of that vendor's capabilities.
+    private bool HasAnyKeyForVendor(string vendor)
+        => (_sttKeyByProvider.TryGetValue(vendor, out var s) && s)
+           || (_llmKeyByProvider.TryGetValue(vendor, out var l) && l);
+
+    // Master (full, ordered) item set per filtered combo, snapshotted once
+    // before any item is removed, so the filter can add items back when the
+    // key set changes. Keyed by the combo instance.
+    private readonly System.Collections.Generic.Dictionary<ComboBox,
+        System.Collections.Generic.List<ComboBoxItem>> _comboMasters = new();
+    private bool _rebuildingCombos;
+
+    /// <summary>Filter a static ComboBox by REMOVING items rather than
+    /// collapsing them — collapsed ComboBox items wreck the dropdown's scroll
+    /// measurement (the "jumpy scroll"). Idempotent + cheap: no-ops when the
+    /// surviving set is unchanged, so the frequent auth refreshes don't churn
+    /// the dropdown. Skips before load (selections must be set first), never
+    /// drops the current selection, and guards against the re-entrant
+    /// SelectionChanged that Items.Clear() raises.</summary>
+    private void RebuildCombo(ComboBox? combo, Func<ComboBoxItem, bool> keep)
+    {
+        if (combo == null || !_loaded || _rebuildingCombos) return;
+        if (!_comboMasters.TryGetValue(combo, out var master))
+        {
+            master = combo.Items.OfType<ComboBoxItem>().ToList();
+            _comboMasters[combo] = master;
         }
+        var selected = combo.SelectedItem as ComboBoxItem;
+        var wanted = master
+            .Where(it => keep(it) || ReferenceEquals(it, selected))
+            .ToList();
+        if (combo.Items.Count == wanted.Count
+            && combo.Items.Cast<object>().SequenceEqual(wanted.Cast<object>()))
+            return; // nothing changed — don't touch the dropdown
+        try
+        {
+            _rebuildingCombos = true;
+            combo.Items.Clear();
+            foreach (var it in wanted) combo.Items.Add(it);
+            if (selected != null && combo.Items.Contains(selected))
+                combo.SelectedItem = selected;
+        }
+        finally { _rebuildingCombos = false; }
     }
 
     private static string VendorTagFromAnyUrl(string url)
@@ -2162,6 +2223,29 @@ public sealed partial class SettingsWindow : Window
     // CacheProviderKeyFlags() on Settings load.
     private readonly System.Collections.Generic.Dictionary<string, bool> _sttKeyByProvider = new(StringComparer.OrdinalIgnoreCase);
     private readonly System.Collections.Generic.Dictionary<string, bool> _llmKeyByProvider = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Re-read the live keystore key flags from the FFI and refresh
+    /// the provider/model-picker filters. Called after a Connect/Remove on the
+    /// Providers page so both the Connected pills and the dropdowns reflect the
+    /// change immediately (no relaunch). Also invalidates the combo masters so
+    /// a newly-connected provider's items come back.</summary>
+    private void RefreshKeyFlagsFromFfi()
+    {
+        try
+        {
+            var ffiJson = DimmyNative.ReadBuffer(DimmyNative.dimmy_get_config_json, 16384);
+            if (string.IsNullOrEmpty(ffiJson)) return;
+            using var doc = System.Text.Json.JsonDocument.Parse(ffiJson);
+            _sttKeyByProvider.Clear();
+            _llmKeyByProvider.Clear();
+            CacheProviderKeyFlags(doc.RootElement);
+            if (_loaded) RefreshAuthIntegrationStatus(); // re-filters the pickers
+        }
+        catch (Exception ex)
+        {
+            App.Log($"RefreshKeyFlagsFromFfi: {ex.Message}", "Providers");
+        }
+    }
 
     private void CacheProviderKeyFlags(System.Text.Json.JsonElement r)
     {
