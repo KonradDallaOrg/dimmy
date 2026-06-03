@@ -229,6 +229,13 @@ int32_t dimmy_config_dir_name(char * _Nonnull out_buf, int32_t buf_len);
 /// it at runtime. Returns bytes written, or -1.
 int32_t dimmy_meetings_dir(char * _Nonnull out_buf, int32_t buf_len);
 
+/// Embedded model catalog as a JSON string (single source of truth for the
+/// cloud models offered per provider). Returns the TOTAL byte length of the
+/// catalog JSON, always — pass out_buf=NULL to query the length, and if the
+/// return value is >= buf_len the content was truncated (allocate return+1
+/// and call again).
+int32_t dimmy_model_catalog_json(char * _Nullable out_buf, int32_t buf_len);
+
 /// GPU known-bad marker status as JSON. Returns bytes written, or -1.
 int32_t dimmy_gpu_get_status(char * _Nonnull out_buf, int32_t buf_len);
 

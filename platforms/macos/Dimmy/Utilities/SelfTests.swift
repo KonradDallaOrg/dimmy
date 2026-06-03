@@ -74,7 +74,7 @@ enum SelfTests {
 
         // Find test
         let found = SttPreset.find(url: "https://api.groq.com/openai/v1/audio/transcriptions", model: "whisper-large-v3-turbo")
-        assert(found?.id == "groq-whisper-turbo", "SttPreset.find must find groq-whisper-turbo")
+        assert(found?.model == "whisper-large-v3-turbo", "SttPreset.find must resolve the Groq turbo preset")
     }
 
     // MARK: - LLM Presets
@@ -97,7 +97,7 @@ enum SelfTests {
         }
 
         let found = LlmPreset.find(url: "https://api.groq.com/openai/v1/chat/completions", model: "llama-3.3-70b-versatile")
-        assert(found?.id == "groq-llama70b", "LlmPreset.find must find groq-llama70b")
+        assert(found?.model == "llama-3.3-70b-versatile", "LlmPreset.find must resolve the Groq llama preset")
     }
 
     // MARK: - Enum counts must match Rust

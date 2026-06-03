@@ -1101,7 +1101,7 @@ struct MacOutputPage: View {
         Binding(
             get: {
                 LlmPreset.find(url: appState.llmApiUrl, model: appState.llmApiModel)?.id
-                    ?? "groq-llama70b"
+                    ?? "custom"
             },
             set: { newValue in
                 if let preset = LlmPreset.presets.first(where: { $0.id == newValue }) {

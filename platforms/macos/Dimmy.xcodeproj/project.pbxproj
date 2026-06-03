@@ -17,6 +17,7 @@
 		AA000501 /* AppRulesDefaults.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000501 /* AppRulesDefaults.swift */; };
 		AA000502 /* AppContextCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000502 /* AppContextCapture.swift */; };
 		AA000503 /* RecapModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000503 /* RecapModel.swift */; };
+		AA00CA10 /* ModelCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB00CA10 /* ModelCatalog.swift */; };
 		AA000504 /* MeetingWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000504 /* MeetingWindowController.swift */; };
 		AA000505 /* MeetingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000505 /* MeetingView.swift */; };
 		AA000506 /* FileLoadCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000506 /* FileLoadCard.swift */; };
@@ -134,6 +135,7 @@
 		AB000501 /* AppRulesDefaults.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRulesDefaults.swift; sourceTree = "<group>"; };
 		AB000502 /* AppContextCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppContextCapture.swift; sourceTree = "<group>"; };
 		AB000503 /* RecapModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecapModel.swift; sourceTree = "<group>"; };
+		AB00CA10 /* ModelCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelCatalog.swift; sourceTree = "<group>"; };
 		AB000504 /* MeetingWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingWindowController.swift; sourceTree = "<group>"; };
 		AB000505 /* MeetingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingView.swift; sourceTree = "<group>"; };
 		AB000506 /* FileLoadCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileLoadCard.swift; sourceTree = "<group>"; };
@@ -480,6 +482,7 @@
 				AB000041 /* SelfTests.swift */,
 				AB000042 /* RecordingSimulator.swift */,
 				AB000503 /* RecapModel.swift */,
+				AB00CA10 /* ModelCatalog.swift */,
 				AB000508 /* SampleAudioSynth.swift */,
 				AB000509 /* FirstMouseHostingView.swift */,
 				AB00050A /* ProviderTagging.swift */,
@@ -735,6 +738,7 @@
 				AA000501 /* AppRulesDefaults.swift in Sources */,
 				AA000502 /* AppContextCapture.swift in Sources */,
 				AA000503 /* RecapModel.swift in Sources */,
+				AA00CA10 /* ModelCatalog.swift in Sources */,
 				AA000504 /* MeetingWindowController.swift in Sources */,
 				AA000505 /* MeetingView.swift in Sources */,
 				AA000506 /* FileLoadCard.swift in Sources */,

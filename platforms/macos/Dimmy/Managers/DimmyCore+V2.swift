@@ -205,6 +205,25 @@ extension DimmyCore {
         return arr
     }
 
+    // MARK: - Model catalog
+
+    /// The embedded model catalog JSON (single source of truth for cloud
+    /// models per provider). No `isInitialized` guard — the catalog is a
+    /// compile-time constant in the core, available before `dimmy_init`.
+    /// Sizes the buffer to the exact length the core reports so a growing
+    /// catalog is never truncated.
+    func modelCatalogJSON() -> String? {
+        let needed = dimmy_model_catalog_json(nil, 0)
+        guard needed > 0 else { return nil }
+        let cap = Int(needed) + 1
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: cap)
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+        let written = dimmy_model_catalog_json(buffer, Int32(cap))
+        guard written > 0 else { return nil }
+        return String(cString: buffer)
+    }
+
     // MARK: - Raw LLM call
 
     /// Bypass the dictation rewrite wrapper and send a raw prompt to the

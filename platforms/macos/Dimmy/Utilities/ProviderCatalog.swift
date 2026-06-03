@@ -54,6 +54,20 @@ enum ProviderCatalog {
         ProviderModel(name: name, stt: true, llm: true, recap: true)
     }
 
+    /// Cloud providers' model rows are DERIVED from the single-source catalog
+    /// (ModelCatalog) so this reference list can never disagree with the
+    /// actual pickers. Task flags + label come straight from the catalog.
+    private static func cat(_ providerId: String) -> [ProviderModel] {
+        guard let p = ModelCatalog.byId(providerId) else { return [] }
+        return p.models.map { m in
+            ProviderModel(
+                name: ModelCatalog.tierLabel(m),
+                stt: m.tasks.contains("stt"),
+                llm: m.tasks.contains("llm"),
+                recap: m.tasks.contains("recap"))
+        }
+    }
+
     /// Vendors whose LLM/recap key the keystore FFI accepts. Anthropic
     /// and OpenRouter are LLM-only; Deepgram is not here (STT only);
     /// Custom and Local are configured elsewhere.
@@ -125,15 +139,7 @@ enum ProviderCatalog {
             consoleUrl: "https://console.groq.com/keys",
             stt: true, llm: true,
             getKeyHint: "Sign up free, create an API key, paste it here. Free tier is plenty to start.",
-            models: [
-                S("whisper-large-v3-turbo, free"),
-                S("whisper-large-v3, free"),
-                L("llama-3.3-70b, free"),
-                L("gpt-oss-120b, top quality"),
-                L("llama-4-scout-17b, MoE, balanced"),
-                L("llama-3.1-8b, instant"),
-                L("qwen3-32b, multilingual"),
-            ]
+            models: cat("groq")
         ),
 
         ProviderInfo(
@@ -142,22 +148,7 @@ enum ProviderCatalog {
             consoleUrl: "https://platform.openai.com/api-keys",
             stt: true, llm: true,
             getKeyHint: "Create a key on the API keys page (needs a small balance for cloud STT).",
-            models: [
-                S("whisper-1"),
-                S("gpt-4o-transcribe"),
-                S("gpt-4o-mini-transcribe"),
-                L("gpt-5.5, latest"),
-                L("gpt-5.4-mini, fast"),
-                L("gpt-5.4-nano, fastest"),
-                L("gpt-5.1"),
-                L("gpt-5"),
-                L("gpt-5-mini"),
-                L("gpt-5-nano, fastest"),
-                L("gpt-4o, legacy"),
-                L("gpt-4o-mini, legacy"),
-                L("o3, reasoning, deep"),
-                L("o3-mini, reasoning, fast"),
-            ]
+            models: cat("openai")
         ),
 
         ProviderInfo(
@@ -166,12 +157,7 @@ enum ProviderCatalog {
             consoleUrl: "https://console.anthropic.com/settings/keys",
             stt: false, llm: true,
             getKeyHint: "Create a key in the Anthropic console. Best for high-quality rewrite and recap.",
-            models: [
-                L("claude-opus-4.8, top"),
-                L("claude-opus-4.7"),
-                L("claude-sonnet-4.6, balanced"),
-                L("claude-haiku-4.5, fast"),
-            ]
+            models: cat("anthropic")
         ),
 
         ProviderInfo(
@@ -180,14 +166,7 @@ enum ProviderCatalog {
             consoleUrl: "https://aistudio.google.com/apikey",
             stt: true, llm: true,
             getKeyHint: "Get a free key in Google AI Studio, one click, no card required.",
-            models: [
-                L("gemini-3.5-flash, newest fast"),
-                L("gemini-3.1-pro-preview, top"),
-                SLR("gemini-3.1-flash-lite, fast"),
-                SLR("gemini-3-flash-preview"),
-                L("gemini-2.5-pro, stable top"),
-                SLR("gemini-2.5-flash, stable fast"),
-            ]
+            models: cat("gemini")
         ),
 
         ProviderInfo(
@@ -196,10 +175,7 @@ enum ProviderCatalog {
             consoleUrl: "https://console.deepgram.com/",
             stt: true, llm: false,
             getKeyHint: "Create a key in the Deepgram console, fast and accurate speech-to-text.",
-            models: [
-                S("nova-3"),
-                S("nova-2"),
-            ]
+            models: cat("deepgram")
         ),
 
         ProviderInfo(
@@ -208,10 +184,7 @@ enum ProviderCatalog {
             consoleUrl: "https://openrouter.ai/keys",
             stt: false, llm: true,
             getKeyHint: "One key unlocks many models for rewrite and recap. Free tier available.",
-            models: [
-                L("llama-3.3-70b, free"),
-                L("deepseek-r1, free"),
-            ]
+            models: cat("openrouter")
         ),
 
         ProviderInfo(
@@ -220,10 +193,7 @@ enum ProviderCatalog {
             consoleUrl: "https://fireworks.ai/account/api-keys",
             stt: true, llm: true,
             getKeyHint: "Create a key in the Fireworks dashboard.",
-            models: [
-                S("whisper-v3-turbo"),
-                L("kimi-k2"),
-            ]
+            models: cat("fireworks")
         ),
 
         ProviderInfo(
@@ -232,12 +202,7 @@ enum ProviderCatalog {
             consoleUrl: "https://api.together.ai/settings/api-keys",
             stt: true, llm: true,
             getKeyHint: "Create a key in the Together dashboard.",
-            models: [
-                S("parakeet-tdt-0.6b-v3"),
-                S("whisper-large-v3"),
-                L("llama-3.3-70b"),
-                L("qwen-2.5-7b"),
-            ]
+            models: cat("together")
         ),
 
         ProviderInfo(
