@@ -181,30 +181,36 @@ struct SttPreset: Identifiable, Hashable {
         }
     }
 
-    static let presets: [SttPreset] = [
-        SttPreset(id: "groq-whisper-turbo", displayName: "Groq \u{00B7} whisper-large-v3-turbo (free)", provider: .groq, apiUrl: "https://api.groq.com/openai/v1/audio/transcriptions", model: "whisper-large-v3-turbo"),
-        SttPreset(id: "groq-whisper-v3", displayName: "Groq \u{00B7} whisper-large-v3 (free)", provider: .groq, apiUrl: "https://api.groq.com/openai/v1/audio/transcriptions", model: "whisper-large-v3"),
-        // groq-distil-en removed 2026-05-15 — Groq decommissioned
-        // distil-whisper-large-v3-en (HTTP 400 model_decommissioned).
-        // Saved configs migrated by Rust `migrate_decommissioned_models`.
-        SttPreset(id: "openai-whisper1", displayName: "OpenAI \u{00B7} whisper-1", provider: .openai, apiUrl: "https://api.openai.com/v1/audio/transcriptions", model: "whisper-1"),
-        SttPreset(id: "openai-4o-transcribe", displayName: "OpenAI \u{00B7} gpt-4o-transcribe", provider: .openai, apiUrl: "https://api.openai.com/v1/audio/transcriptions", model: "gpt-4o-transcribe"),
-        SttPreset(id: "openai-4o-mini-transcribe", displayName: "OpenAI \u{00B7} gpt-4o-mini-transcribe", provider: .openai, apiUrl: "https://api.openai.com/v1/audio/transcriptions", model: "gpt-4o-mini-transcribe"),
-        SttPreset(id: "deepgram-nova3", displayName: "Deepgram \u{00B7} nova-3", provider: .deepgram, apiUrl: "https://api.deepgram.com/v1/listen", model: "nova-3"),
-        SttPreset(id: "deepgram-nova2", displayName: "Deepgram \u{00B7} nova-2", provider: .deepgram, apiUrl: "https://api.deepgram.com/v1/listen", model: "nova-2"),
-        // Gemini STT — Flash-only (Pro is slower and pricier without
-        // accuracy gain for transcription, user pref 2026-05-15).
-        // Pro stays in LLM dropdown for rewrite + recap. Mirror of
-        // Win STT presets.
-        SttPreset(id: "gemini-3.1-flash-lite", displayName: "Gemini \u{00B7} gemini-3.1-flash-lite (newest fast)", provider: .gemini, apiUrl: "https://generativelanguage.googleapis.com/v1beta/models", model: "gemini-3.1-flash-lite"),
-        SttPreset(id: "gemini-3-flash", displayName: "Gemini \u{00B7} gemini-3-flash-preview", provider: .gemini, apiUrl: "https://generativelanguage.googleapis.com/v1beta/models", model: "gemini-3-flash-preview"),
-        SttPreset(id: "gemini-2.5-flash", displayName: "Gemini \u{00B7} gemini-2.5-flash (stable fast)", provider: .gemini, apiUrl: "https://generativelanguage.googleapis.com/v1beta/models", model: "gemini-2.5-flash"),
-        // Phase 1 cloud expansion (2026-05-04 benchmark drove the model picks)
-        SttPreset(id: "fireworks-whisper-turbo", displayName: "Fireworks \u{00B7} whisper-v3-turbo", provider: .fireworks, apiUrl: "https://audio-turbo.api.fireworks.ai/v1/audio/transcriptions", model: "whisper-v3-turbo"),
-        SttPreset(id: "together-parakeet", displayName: "Together \u{00B7} parakeet-tdt-0.6b-v3", provider: .together, apiUrl: "https://api.together.xyz/v1/audio/transcriptions", model: "nvidia/parakeet-tdt-0.6b-v3"),
-        SttPreset(id: "together-whisper", displayName: "Together \u{00B7} whisper-large-v3", provider: .together, apiUrl: "https://api.together.xyz/v1/audio/transcriptions", model: "openai/whisper-large-v3"),
-        SttPreset(id: "custom", displayName: "Custom endpoint", provider: .custom, apiUrl: "", model: ""),
-    ]
+    // Derived from the single-source model catalog (ModelCatalog, fed by
+    // assets/model-catalog.json over FFI) so a model add/remove touches only
+    // the JSON. Mirror of the Win SettingsViewModel.ProviderPresets. The
+    // trailing Custom entry is kept in code; local models are separate.
+    static let presets: [SttPreset] = buildPresets()
+
+    private static func sttProvider(_ id: String) -> SttProvider {
+        switch id {
+        case "groq": return .groq
+        case "openai": return .openai
+        case "deepgram": return .deepgram
+        case "gemini": return .gemini
+        case "fireworks": return .fireworks
+        case "together": return .together
+        default: return .custom
+        }
+    }
+
+    private static func buildPresets() -> [SttPreset] {
+        var list = ModelCatalog.models(task: "stt").map { pair in
+            SttPreset(
+                id: "\(pair.provider.id)-\(pair.model.id)",
+                displayName: "\(pair.provider.name) \u{00B7} \(pair.model.label)",
+                provider: sttProvider(pair.provider.id),
+                apiUrl: pair.provider.stt_url,
+                model: pair.model.id)
+        }
+        list.append(SttPreset(id: "custom", displayName: "Custom endpoint", provider: .custom, apiUrl: "", model: ""))
+        return list
+    }
 
     static func find(url: String, model: String) -> SttPreset? {
         presets.first { $0.apiUrl == url && $0.model == model }
@@ -233,64 +239,28 @@ struct LlmPreset: Identifiable, Hashable {
         return ""
     }
 
-    static let presets: [LlmPreset] = [
-        // Curated cloud LLM presets — audit done 2026-05-15 against
-        // each provider's live /models endpoint. MIRROR of Win
-        // `LlmProviderPresets` + Linux LLM presets. Adding / removing
-        // here MUST be reflected on both other platforms.
-        // ── Groq (free for moderate use, OpenAI-compatible) ────
-        LlmPreset(id: "groq-llama70b", displayName: "Groq \u{00B7} llama-3.3-70b (free)", apiUrl: "https://api.groq.com/openai/v1/chat/completions", model: "llama-3.3-70b-versatile"),
-        LlmPreset(id: "groq-gpt-oss-120b", displayName: "Groq \u{00B7} gpt-oss-120b (top quality)", apiUrl: "https://api.groq.com/openai/v1/chat/completions", model: "openai/gpt-oss-120b"),
-        LlmPreset(id: "groq-llama4-scout", displayName: "Groq \u{00B7} llama-4-scout-17b (MoE, balanced)", apiUrl: "https://api.groq.com/openai/v1/chat/completions", model: "meta-llama/llama-4-scout-17b-16e-instruct"),
-        LlmPreset(id: "groq-llama8b-instant", displayName: "Groq \u{00B7} llama-3.1-8b instant (fastest)", apiUrl: "https://api.groq.com/openai/v1/chat/completions", model: "llama-3.1-8b-instant"),
-        LlmPreset(id: "groq-qwen3-32b", displayName: "Groq \u{00B7} qwen3-32b (multilingual)", apiUrl: "https://api.groq.com/openai/v1/chat/completions", model: "qwen/qwen3-32b"),
-        // OpenAI tier (June 2026): gpt-5.5 (Apr 2026) is the current
-        // flagship + gpt-5.4 family. All gpt-5.x stay on the same
-        // /v1/chat/completions endpoint with the existing JSON shape —
-        // drop-in, same call site as gpt-4o. Default mini for speed+cost.
-        // ── OpenAI ─────────────────────────────────────────────
-        LlmPreset(id: "openai-gpt55", displayName: "OpenAI \u{00B7} gpt-5.5 (best)", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-5.5"),
-        LlmPreset(id: "openai-gpt54-mini", displayName: "OpenAI \u{00B7} gpt-5.4-mini (fast)", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-5.4-mini"),
-        LlmPreset(id: "openai-gpt54-nano", displayName: "OpenAI \u{00B7} gpt-5.4-nano (fastest)", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-5.4-nano"),
-        LlmPreset(id: "openai-gpt5-mini", displayName: "OpenAI \u{00B7} gpt-5-mini", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-5-mini"),
-        LlmPreset(id: "openai-gpt5", displayName: "OpenAI \u{00B7} gpt-5", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-5"),
-        LlmPreset(id: "openai-gpt51", displayName: "OpenAI \u{00B7} gpt-5.1", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-5.1"),
-        LlmPreset(id: "openai-4o-mini", displayName: "OpenAI \u{00B7} gpt-4o-mini (legacy)", apiUrl: "https://api.openai.com/v1/chat/completions", model: "gpt-4o-mini"),
-        LlmPreset(id: "openrouter-llama70b", displayName: "OpenRouter \u{00B7} llama-3.3-70b (free)", apiUrl: "https://openrouter.ai/api/v1/chat/completions", model: "meta-llama/llama-3.3-70b-instruct:free"),
-        LlmPreset(id: "openrouter-deepseek", displayName: "OpenRouter \u{00B7} DeepSeek R1 (free)", apiUrl: "https://openrouter.ai/api/v1/chat/completions", model: "deepseek/deepseek-r1:free"),
-        // Gemini 3.1 preview line (May 2026) — newest, plus stable
-        // 3.0 / 2.5 fallbacks. All on the OpenAI-compatible chat
-        // completions endpoint Google ships. The 3.x preview ids stay
-        // `-preview` suffixed because the bare `gemini-3.1-pro` 404s
-        // (Google publishes them as preview channel only).
-        // ── Gemini (preview = newest, stable = production) ─────
-        LlmPreset(id: "gemini-35-flash", displayName: "Gemini \u{00B7} gemini-3.5-flash (newest fast)", apiUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-3.5-flash"),
-        LlmPreset(id: "gemini-31-pro", displayName: "Gemini \u{00B7} gemini-3.1-pro-preview (top)", apiUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-3.1-pro-preview"),
-        LlmPreset(id: "gemini-31-flash", displayName: "Gemini \u{00B7} gemini-3.1-flash-lite (fast)", apiUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-3.1-flash-lite"),
-        LlmPreset(id: "gemini-3-flash", displayName: "Gemini \u{00B7} gemini-3-flash-preview", apiUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-3-flash-preview"),
-        LlmPreset(id: "gemini-2.5-pro", displayName: "Gemini \u{00B7} gemini-2.5-pro (stable top)", apiUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-2.5-pro"),
-        LlmPreset(id: "gemini-2.5-flash", displayName: "Gemini \u{00B7} gemini-2.5-flash (stable fast)", apiUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-2.5-flash"),
-        // ── Anthropic ──────────────────────────────────────────
-        // Opus 4.8 (May 2026) is the current flagship; same adaptive-
-        // thinking call shape as 4.7 so the Rust dispatcher routes it
-        // correctly via `anthropic_uses_adaptive_thinking`. Opus 4.7
-        // stays as an explicit pick for users who want to pin a
-        // specific older release.
-        LlmPreset(id: "anthropic-haiku", displayName: "Anthropic \u{00B7} claude-haiku-4.5", apiUrl: "https://api.anthropic.com/v1/messages", model: "claude-haiku-4-5-20251001"),
-        LlmPreset(id: "anthropic-sonnet", displayName: "Anthropic \u{00B7} claude-sonnet-4.6", apiUrl: "https://api.anthropic.com/v1/messages", model: "claude-sonnet-4-6"),
-        LlmPreset(id: "anthropic-opus-48", displayName: "Anthropic \u{00B7} claude-opus-4.8 (top)", apiUrl: "https://api.anthropic.com/v1/messages", model: "claude-opus-4-8"),
-        LlmPreset(id: "anthropic-opus", displayName: "Anthropic \u{00B7} claude-opus-4.7", apiUrl: "https://api.anthropic.com/v1/messages", model: "claude-opus-4-7"),
-        // Claude Code (subscription) — synthetic provider using
-        // user's Pro/Team/Max plan via the local `claude` CLI. No
-        // API key needed; auth handled by `claude login` browser
-        // flow. See core/src/claude_code.rs.
-        LlmPreset(id: "claude-code", displayName: "Claude Code (subscription — Pro/Team/Max)", apiUrl: "claude-code://default", model: "claude-opus-4-8"),
-        // Phase 1 cloud expansion (2026-05-04, sensible model picks for filler-removal/smart-format)
-        LlmPreset(id: "fireworks-kimi", displayName: "Fireworks \u{00B7} kimi-k2", apiUrl: "https://api.fireworks.ai/inference/v1/chat/completions", model: "accounts/fireworks/models/kimi-k2p6"),
-        LlmPreset(id: "together-llama70b", displayName: "Together \u{00B7} llama-3.3-70b", apiUrl: "https://api.together.xyz/v1/chat/completions", model: "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
-        LlmPreset(id: "together-qwen", displayName: "Together \u{00B7} qwen-2.5-7b", apiUrl: "https://api.together.xyz/v1/chat/completions", model: "Qwen/Qwen2.5-7B-Instruct-Turbo"),
-        LlmPreset(id: "custom", displayName: "Custom endpoint", apiUrl: "", model: ""),
-    ]
+    // Derived from the single-source model catalog (ModelCatalog, fed by
+    // assets/model-catalog.json over FFI) so a model add/remove touches only
+    // the JSON. Mirror of the Win SettingsViewModel.LlmProviderPresets. The
+    // Claude Code subscription synthetic + Custom are kept in code (not API
+    // models); local models are injected separately.
+    static let presets: [LlmPreset] = buildPresets()
+
+    private static func buildPresets() -> [LlmPreset] {
+        var list = ModelCatalog.models(task: "llm").map { pair in
+            LlmPreset(
+                id: "\(pair.provider.id)-\(pair.model.id)",
+                displayName: "\(pair.provider.name) \u{00B7} \(pair.model.label)",
+                apiUrl: pair.provider.llm_url,
+                model: pair.model.id)
+        }
+        // Claude Code subscription — synthetic provider using the user's
+        // Pro/Team/Max plan via the local `claude` CLI. No API key; auth via
+        // `claude login`. Not an API model, so kept in code.
+        list.append(LlmPreset(id: "claude-code", displayName: "Claude Code (subscription, Pro/Team/Max)", apiUrl: "claude-code://default", model: "claude-opus-4-8"))
+        list.append(LlmPreset(id: "custom", displayName: "Custom endpoint", apiUrl: "", model: ""))
+        return list
+    }
 
     static func find(url: String, model: String) -> LlmPreset? {
         presets.first { $0.apiUrl == url && $0.model == model }

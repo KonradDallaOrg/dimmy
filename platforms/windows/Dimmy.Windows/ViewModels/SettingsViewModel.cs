@@ -4,6 +4,7 @@ using System.Collections.ObjectModel;
 using System.Linq;
 using System.Text.Json;
 using CommunityToolkit.Mvvm.ComponentModel;
+using Dimmy.Windows.Services;
 
 namespace Dimmy.Windows.ViewModels;
 
@@ -32,91 +33,26 @@ public partial class SettingsViewModel : ObservableObject
         catch { }
     }
 
-    public static readonly List<ProviderPreset> ProviderPresets =
-    [
-        new("Groq", "https://api.groq.com/openai/v1/audio/transcriptions", "whisper-large-v3-turbo"),
-        new("Groq-v3", "https://api.groq.com/openai/v1/audio/transcriptions", "whisper-large-v3"),
-        // "Groq-Distil" (distil-whisper-large-v3-en) removed
-        // 2026-05-15 — decommissioned by Groq, returns
-        // HTTP 400 model_decommissioned. Migration in
-        // SettingsViewModel.LoadFromJson coerces saved
-        // configs to whisper-large-v3-turbo.
-        new("OpenAI", "https://api.openai.com/v1/audio/transcriptions", "whisper-1"),
-        new("OpenAI-4o", "https://api.openai.com/v1/audio/transcriptions", "gpt-4o-transcribe"),
-        new("OpenAI-4o-mini", "https://api.openai.com/v1/audio/transcriptions", "gpt-4o-mini-transcribe"),
-        new("Deepgram", "https://api.deepgram.com/v1/listen", "nova-3"),
-        new("Deepgram-Nova2", "https://api.deepgram.com/v1/listen", "nova-2"),
-        // Gemini STT — Flash variants only. Pro models are slower
-        // and more expensive than Flash without meaningful accuracy
-        // gain for transcription; the user explicitly preferred fast
-        // STT tier 2026-05-15. Pro stays available for LLM rewrite
-        // + recap (interactive vs background workloads).
-        new("Gemini-3.1-Flash-Lite", "https://generativelanguage.googleapis.com/v1beta/models", "gemini-3.1-flash-lite"),
-        new("Gemini-3-Flash", "https://generativelanguage.googleapis.com/v1beta/models", "gemini-3-flash-preview"),
-        new("Gemini-2.5-Flash", "https://generativelanguage.googleapis.com/v1beta/models", "gemini-2.5-flash"),
-        // Legacy "Gemini" alias for back-compat → stable 2.5-flash.
-        new("Gemini", "https://generativelanguage.googleapis.com/v1beta/models", "gemini-2.5-flash"),
-        // Phase 1 cloud expansion (2026-05-04 benchmark drove the model picks)
-        new("Fireworks", "https://audio-turbo.api.fireworks.ai/v1/audio/transcriptions", "whisper-v3-turbo"),
-        new("Together-Parakeet", "https://api.together.xyz/v1/audio/transcriptions", "nvidia/parakeet-tdt-0.6b-v3"),
-        new("Together-Whisper", "https://api.together.xyz/v1/audio/transcriptions", "openai/whisper-large-v3"),
-        new("Custom", "", ""),
-    ];
+    // STT + LLM provider presets are now DERIVED from the single-source
+    // model catalog embedded in the Rust core (assets/model-catalog.json,
+    // read via ModelCatalog). The synthetic preset Name doubles as the
+    // ComboBox item Tag — the pickers in SettingsWindow.xaml.cs build their
+    // items from the SAME ModelCatalog entries, so Tag and Name line up by
+    // construction. A model add/remove now touches ONLY the JSON, never these
+    // lists. Mac reads the same embedded bytes. Local models are injected
+    // separately at picker-build time.
+    public static readonly List<ProviderPreset> ProviderPresets = BuildPresets(ModelCatalog.SttEntries());
 
-    public static readonly List<ProviderPreset> LlmProviderPresets =
-    [
-        // Curated cloud LLM presets — audit done 2026-05-15 against
-        // each provider's live /models endpoint. Mirrored 1:1 on
-        // Mac `LlmPreset.presets` + Linux LLM presets. Adding /
-        // removing here MUST be reflected on both other platforms.
-        //
-        // ── Groq (free for moderate use, OpenAI-compatible) ────
-        new("Groq", "https://api.groq.com/openai/v1/chat/completions", "llama-3.3-70b-versatile"),
-        new("Groq-GptOss120b", "https://api.groq.com/openai/v1/chat/completions", "openai/gpt-oss-120b"),
-        new("Groq-Llama4Scout", "https://api.groq.com/openai/v1/chat/completions", "meta-llama/llama-4-scout-17b-16e-instruct"),
-        new("Groq-Llama8bInstant", "https://api.groq.com/openai/v1/chat/completions", "llama-3.1-8b-instant"),
-        new("Groq-Qwen3-32b", "https://api.groq.com/openai/v1/chat/completions", "qwen/qwen3-32b"),
-        // ── OpenAI ─────────────────────────────────────────────
-        new("OpenAI-GPT55", "https://api.openai.com/v1/chat/completions", "gpt-5.5"),
-        new("OpenAI-GPT54-Mini", "https://api.openai.com/v1/chat/completions", "gpt-5.4-mini"),
-        new("OpenAI-GPT54-Nano", "https://api.openai.com/v1/chat/completions", "gpt-5.4-nano"),
-        new("OpenAI", "https://api.openai.com/v1/chat/completions", "gpt-5-mini"),
-        new("OpenAI-GPT5", "https://api.openai.com/v1/chat/completions", "gpt-5"),
-        new("OpenAI-GPT51", "https://api.openai.com/v1/chat/completions", "gpt-5.1"),
-        new("OpenAI-4o-mini", "https://api.openai.com/v1/chat/completions", "gpt-4o-mini"),
-        // ── OpenRouter (free tiers for testing) ────────────────
-        new("OpenRouter", "https://openrouter.ai/api/v1/chat/completions", "meta-llama/llama-3.3-70b-instruct:free"),
-        new("OpenRouter-Deepseek", "https://openrouter.ai/api/v1/chat/completions", "deepseek/deepseek-r1:free"),
-        // ── Gemini (full live-API spread, audit 2026-05-15) ────
-        // 3.1 generation: only `-preview` and `-lite` variants exist.
-        // 3 generation: only `-preview` variants exist.
-        // 2.5 generation: plain names work (stable production tier).
-        new("Gemini-3.5-Flash", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-3.5-flash"),
-        new("Gemini-3.1-Pro", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-3.1-pro-preview"),
-        new("Gemini-3.1-Flash-Lite", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-3.1-flash-lite"),
-        new("Gemini-3-Flash", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-3-flash-preview"),
-        new("Gemini-2.5-Pro", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-2.5-pro"),
-        new("Gemini-2.5-Flash", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-2.5-flash"),
-        // Legacy "Gemini" alias for saved configs — falls to the
-        // stable 2.5-flash tier. Older "Gemini-3.1-Pro" / -Flash
-        // references in configs are migrated at load time.
-        new("Gemini", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-2.5-flash"),
-        // ── Anthropic ──────────────────────────────────────────
-        new("Anthropic", "https://api.anthropic.com/v1/messages", "claude-haiku-4-5-20251001"),
-        new("Anthropic-Sonnet", "https://api.anthropic.com/v1/messages", "claude-sonnet-4-6"),
-        new("Anthropic-Opus", "https://api.anthropic.com/v1/messages", "claude-opus-4-8"),
-        new("Anthropic-Opus-4.7", "https://api.anthropic.com/v1/messages", "claude-opus-4-7"),
-        // The dedicated "Claude-Code" preset is gone — the same
-        // routing now lives behind the Authentication radio group
-        // in the Anthropic provider card (Subscription instead of
-        // API key). Configs that still ship the legacy
-        // claude-code://default URL are migrated in LoadConfig.
-        // Phase 1 cloud expansion (2026-05-04, sensible model picks for filler-removal/smart-format)
-        new("Fireworks", "https://api.fireworks.ai/inference/v1/chat/completions", "accounts/fireworks/models/kimi-k2p6"),
-        new("Together-Llama", "https://api.together.xyz/v1/chat/completions", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
-        new("Together-Qwen", "https://api.together.xyz/v1/chat/completions", "Qwen/Qwen2.5-7B-Instruct-Turbo"),
-        new("Custom", "", ""),
-    ];
+    public static readonly List<ProviderPreset> LlmProviderPresets = BuildPresets(ModelCatalog.LlmEntries());
+
+    static List<ProviderPreset> BuildPresets(IReadOnlyList<PickerEntry> entries)
+    {
+        var list = entries.Select(e => new ProviderPreset(e.Name, e.Url, e.Model)).ToList();
+        // "Custom" lets the user type a free-form URL + model; its lowercased
+        // Name ("custom") is the sentinel the SelectionChanged handlers match.
+        list.Add(new ProviderPreset("Custom", "", ""));
+        return list;
+    }
 
     public static readonly List<KeyValuePair<string, string>> Languages =
     [

@@ -41,9 +41,9 @@ use dimmy_lib::ffi::{
     dimmy_history_save, dimmy_history_update_audio, dimmy_history_update_enhanced,
     dimmy_history_update_word_timestamps, dimmy_hotkey_combos_conflict, dimmy_hotkey_set_command,
     dimmy_hotkey_take_command_event, dimmy_init, dimmy_llm_call_raw, dimmy_meeting_is_active,
-    dimmy_meeting_save_post_process, dimmy_push_loopback_audio, dimmy_set_app_context,
-    dimmy_set_config_json, dimmy_set_loopback_sample_rate, dimmy_transcribe_file,
-    dimmy_user_dict_add, dimmy_user_dict_list_json, dimmy_user_dict_remove,
+    dimmy_meeting_save_post_process, dimmy_model_catalog_json, dimmy_push_loopback_audio,
+    dimmy_set_app_context, dimmy_set_config_json, dimmy_set_loopback_sample_rate,
+    dimmy_transcribe_file, dimmy_user_dict_add, dimmy_user_dict_list_json, dimmy_user_dict_remove,
 };
 
 // ── Fixture wiring (lifted from ffi_e2e to stay self-contained) ──────
@@ -1397,6 +1397,43 @@ fn call_meeting_started_external_round_trip() {
 // we guard the FFI boundary only: set the combo, confirm the event mailbox is
 // drained (0 with no synthetic key events), clear it, and check the
 // conflict-detection helper the host uses before binding.
+#[test]
+#[serial]
+fn model_catalog_json_length_query_and_write_round_trip() {
+    // Length-query mode: null buffer returns the full byte length.
+    let needed = dimmy_model_catalog_json(std::ptr::null_mut(), 0);
+    assert!(needed > 0, "catalog length must be positive");
+
+    // Too-small buffer: still reports the full length so the host can resize.
+    let mut tiny = vec![0u8; 8];
+    let reported = dimmy_model_catalog_json(tiny.as_mut_ptr() as *mut c_char, tiny.len() as c_int);
+    assert_eq!(
+        reported, needed,
+        "length is reported regardless of buffer size"
+    );
+
+    // Correctly-sized buffer: full JSON, parses, has the providers we expect.
+    let mut buf = vec![0u8; (needed + 1) as usize];
+    let written = dimmy_model_catalog_json(buf.as_mut_ptr() as *mut c_char, buf.len() as c_int);
+    assert_eq!(written, needed);
+    let json = unsafe { CStr::from_ptr(buf.as_ptr() as *const c_char) }
+        .to_str()
+        .expect("catalog is valid UTF-8");
+    let v: serde_json::Value = serde_json::from_str(json).expect("catalog parses as JSON");
+    assert_eq!(v["schema"], 2);
+    let providers = v["providers"].as_array().expect("providers array");
+    assert!(
+        providers.iter().any(|p| p["id"] == "openai"),
+        "catalog must include the openai provider"
+    );
+    assert!(
+        providers
+            .iter()
+            .all(|p| !p["icon"].as_str().unwrap_or("").is_empty()),
+        "every provider must carry an icon"
+    );
+}
+
 #[test]
 #[serial]
 fn hotkey_command_set_take_and_conflict_round_trip() {

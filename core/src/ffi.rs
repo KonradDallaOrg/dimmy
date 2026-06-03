@@ -4851,6 +4851,26 @@ pub extern "C" fn dimmy_meetings_dir(out_buf: *mut c_char, buf_len: c_int) -> c_
     }
 }
 
+/// Get the embedded model catalog as a JSON string (the single source of
+/// truth for the cloud models offered per provider — see
+/// [`crate::catalog`]). Every host UI builds its model/provider pickers
+/// from this so Windows and macOS cannot diverge.
+///
+/// Contract: returns the *total* byte length of the catalog JSON, always
+/// (independent of `buf_len`). Pass `out_buf = null` to query the length
+/// without writing. If the return value is `>= buf_len` the buffer was too
+/// small and the written content is truncated — allocate `(return + 1)`
+/// bytes and call again.
+#[no_mangle]
+pub extern "C" fn dimmy_model_catalog_json(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    let json = crate::catalog::MODEL_CATALOG_JSON;
+    let needed = json.len() as c_int;
+    if !out_buf.is_null() && buf_len > 0 {
+        write_to_buf(json, out_buf, buf_len);
+    }
+    needed
+}
+
 /// Check if recording is active. Returns 1=yes, 0=no.
 #[no_mangle]
 pub extern "C" fn dimmy_is_recording() -> c_int {

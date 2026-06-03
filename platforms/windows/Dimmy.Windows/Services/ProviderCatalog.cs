@@ -78,10 +78,27 @@ public static class ProviderCatalog
     /// (stt). Custom (arbitrary endpoint) and On-device are not.</summary>
     public static bool IsKeyableHere(this ProviderInfo p) => p.KeySaveScopes().Count > 0;
 
-    // Capability shorthands for readable model tables below.
+    // Capability shorthands for the local/custom rows, which aren't in the
+    // single-source catalog (local models have download/bundle semantics;
+    // custom is a free-form endpoint).
     private static ProviderModel S(string name) => new(name, true, false, false);   // speech
     private static ProviderModel L(string name) => new(name, false, true, true);    // rewrite + recap
     private static ProviderModel SLR(string name) => new(name, true, true, true);   // all three
+
+    // Cloud providers' model rows are DERIVED from the single-source catalog so
+    // this reference list can never disagree with the actual pickers. The
+    // task flags come straight from the catalog; the label gets the tier as a
+    // short qualifier when present.
+    private static IReadOnlyList<ProviderModel> Cat(string providerId)
+    {
+        var p = ModelCatalog.ById(providerId);
+        if (p == null) return Array.Empty<ProviderModel>();
+        return p.Models.Select(m => new ProviderModel(
+            string.IsNullOrEmpty(m.Tier) ? m.Label : $"{m.Label} · {m.Tier}",
+            m.Tasks.Contains("stt"),
+            m.Tasks.Contains("llm"),
+            m.Tasks.Contains("recap"))).ToList();
+    }
 
     public static IReadOnlyList<ProviderInfo> All { get; } = new[]
     {
@@ -113,99 +130,42 @@ public static class ProviderCatalog
         new ProviderInfo("groq", "Groq", "Gq", "#F55036", "https://console.groq.com/keys",
             true, true,
             "Sign up free, create an API key, paste it here. Free tier is plenty to start.",
-            new[]
-            {
-                S("whisper-large-v3-turbo · free"),
-                S("whisper-large-v3 · free"),
-                L("llama-3.3-70b · free"),
-                L("gpt-oss-120b · top quality"),
-                L("llama-4-scout-17b · MoE, balanced"),
-                L("llama-3.1-8b · instant"),
-                L("qwen3-32b · multilingual"),
-            }),
+            Cat("groq")),
 
         new ProviderInfo("openai", "OpenAI", "Ai", "#10A37F", "https://platform.openai.com/api-keys",
             true, true,
             "Create a key on the API keys page (needs a small balance for cloud STT).",
-            new[]
-            {
-                S("whisper-1"),
-                S("gpt-4o-transcribe"),
-                S("gpt-4o-mini-transcribe"),
-                L("gpt-5.5 · latest top"),
-                L("gpt-5.4-mini · fast"),
-                L("gpt-5.4-nano · fastest"),
-                L("gpt-5.1"),
-                L("gpt-5"),
-                L("gpt-5-mini · cheap"),
-                L("gpt-5-nano"),
-                L("gpt-4o"),
-                L("gpt-4o-mini · legacy"),
-                L("o3 · reasoning, deep"),
-                L("o3-mini · reasoning, fast"),
-            }),
+            Cat("openai")),
 
         new ProviderInfo("anthropic", "Anthropic", "An", "#D4A27F", "https://console.anthropic.com/settings/keys",
             false, true,
             "Create a key in the Anthropic console. Best for high-quality rewrite & recap.",
-            new[]
-            {
-                L("claude-opus-4.8 · top"),
-                L("claude-opus-4.7"),
-                L("claude-sonnet-4.6 · balanced"),
-                L("claude-haiku-4.5 · fast"),
-            }),
+            Cat("anthropic")),
 
         new ProviderInfo("gemini", "Google Gemini", "Ge", "#4285F4", "https://aistudio.google.com/apikey",
             true, true,
             "Get a free key in Google AI Studio — one click, no card required.",
-            new[]
-            {
-                L("gemini-3.5-flash · newest fast"),
-                L("gemini-3.1-pro-preview · top"),
-                SLR("gemini-3.1-flash-lite · fast"),
-                SLR("gemini-3-flash-preview"),
-                L("gemini-2.5-pro · stable top"),
-                SLR("gemini-2.5-flash · stable fast"),
-            }),
+            Cat("gemini")),
 
         new ProviderInfo("deepgram", "Deepgram", "Dg", "#13EF93", "https://console.deepgram.com/",
             true, false,
             "Create a key in the Deepgram console — fast, accurate speech-to-text.",
-            new[]
-            {
-                S("nova-3"),
-                S("nova-2"),
-            }),
+            Cat("deepgram")),
 
         new ProviderInfo("openrouter", "OpenRouter", "Or", "#6566F1", "https://openrouter.ai/keys",
             false, true,
             "One key unlocks many models for rewrite & recap. Free tier available.",
-            new[]
-            {
-                L("llama-3.3-70b · free"),
-                L("deepseek-r1 · free"),
-            }),
+            Cat("openrouter")),
 
         new ProviderInfo("fireworks", "Fireworks", "Fw", "#6B2FFF", "https://fireworks.ai/account/api-keys",
             true, true,
             "Create a key in the Fireworks dashboard.",
-            new[]
-            {
-                S("whisper-v3-turbo"),
-                L("kimi-k2"),
-            }),
+            Cat("fireworks")),
 
         new ProviderInfo("together", "Together AI", "Tg", "#0F6FFF", "https://api.together.ai/settings/api-keys",
             true, true,
             "Create a key in the Together dashboard.",
-            new[]
-            {
-                S("parakeet-tdt-0.6b-v3"),
-                S("whisper-large-v3"),
-                L("llama-3.3-70b"),
-                L("qwen-2.5-7b"),
-            }),
+            Cat("together")),
 
         new ProviderInfo("custom", "Custom (OpenAI-compatible)", "Cu", "#9AA0AC", "",
             true, true,

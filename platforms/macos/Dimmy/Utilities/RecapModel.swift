@@ -98,59 +98,50 @@ struct RecapModelOption: Identifiable, Equatable {
     /// a future version stores the empty string differently.
     static let autoKey = ""
 
-    /// User-curated list. Order matters — same as Win.
-    /// Local options carry a `local:` prefix in their id so the Rust
-    /// FFI (`dimmy_llm_call_raw`) can distinguish from cloud model
-    /// names. Cloud options stay bare-string for backward compatibility
-    /// with existing `recap_model_override` values.
-    static let curated: [RecapModelOption] = [
-        .init(id: autoKey, label: "Auto (match LLM provider)", provider: .auto),
+    /// User-curated list, DERIVED from the single-source model catalog
+    /// (ModelCatalog, fed by assets/model-catalog.json). Auto + every cloud
+    /// recap model (catalog 'recap' task = Anthropic/OpenAI/Gemini, the only
+    /// vendors recap dispatch can route by model id) + the on-device Gemma
+    /// options (kept in code). A model add/remove touches only the JSON;
+    /// Windows builds the same list from the same bytes.
+    /// Local options carry a `local:` prefix so the Rust FFI
+    /// (`dimmy_llm_call_raw`) can distinguish them from cloud model names.
+    static let curated: [RecapModelOption] = buildCurated()
 
-        // Anthropic. Opus 4.8 is the current flagship (May 2026) and
-        // is API-compatible with the 4.7 adaptive-thinking path; 4.7
-        // remains callable for users pinned to it. Sonnet 4.6 and
-        // Haiku 4.5 are still the current Sonnet / Haiku tier — no
-        // newer point release exists at the time of this curation.
-        .init(id: "claude-opus-4-8",   label: "Anthropic — Claude Opus 4.8 (best)",     provider: .anthropic),
-        .init(id: "claude-opus-4-7",   label: "Anthropic — Claude Opus 4.7",            provider: .anthropic),
-        .init(id: "claude-sonnet-4-6", label: "Anthropic — Claude Sonnet 4.6 (balanced)", provider: .anthropic),
-        .init(id: "claude-haiku-4-5",  label: "Anthropic — Claude Haiku 4.5 (fast)",    provider: .anthropic),
+    private static func recapProvider(_ id: String) -> Provider {
+        switch id {
+        case "anthropic": return .anthropic
+        case "openai": return .openai
+        case "gemini": return .gemini
+        default: return .custom
+        }
+    }
 
-        // Gemini 3.1 ships as preview-channel only — the bare `gemini-3.1-pro`
-        // string 404s with "models/gemini-3.1-pro is not found"; the working
-        // id is `-preview` suffixed. `migrateRecapModelId` covers stale
-        // saved configs but the dropdown itself must save the right id.
-        .init(id: "gemini-3.5-flash",         label: "Google — Gemini 3.5 Flash (newest)",     provider: .gemini),
-        .init(id: "gemini-3.1-pro-preview",   label: "Google — Gemini 3.1 Pro (top)",          provider: .gemini),
-        .init(id: "gemini-3.1-flash-lite",    label: "Google — Gemini 3.1 Flash (fast)",       provider: .gemini),
-        .init(id: "gemini-2.5-pro",           label: "Google — Gemini 2.5 Pro (stable)",       provider: .gemini),
-        .init(id: "gemini-2.5-flash",         label: "Google — Gemini 2.5 Flash (stable fast)", provider: .gemini),
-
-        // OpenAI. GPT-5.5 (Apr 2026) is the flagship; the 5.4 line ships
-        // only as mini / nano (no plain gpt-5.4 — that id 404s, same class
-        // as the bare Gemini ids). Legacy gpt-5 / gpt-5-mini stay callable
-        // for back-compat. Drop-in on the existing /v1/chat/completions path.
-        .init(id: "gpt-5.5",      label: "OpenAI — GPT-5.5 (best)",            provider: .openai),
-        .init(id: "gpt-5.4-mini", label: "OpenAI — GPT-5.4 mini (fast)",      provider: .openai),
-        .init(id: "gpt-5.4-nano", label: "OpenAI — GPT-5.4 nano (fastest)",   provider: .openai),
-        .init(id: "gpt-5",        label: "OpenAI — GPT-5",                     provider: .openai),
-        .init(id: "gpt-5-mini",   label: "OpenAI — GPT-5 mini",                provider: .openai),
-
-        // Local Gemma — on-device via llama.cpp Metal. No network, no
-        // API key, transcript never leaves the Mac. Quality is below
-        // flagship cloud models but adequate for personal meeting
-        // recaps. Recap latency on M-series ~30-90 s for typical
-        // 5-10k char transcripts.
-        .init(id: "local:gemma-4-E4B-it-Q4_K_M.gguf",
-              label: "Local — Gemma 4 E4B Q4 (best local, ~6GB VRAM)",
-              provider: .local),
-        .init(id: "local:gemma-4-E2B-it-Q4_K_M.gguf",
-              label: "Local — Gemma 4 E2B Q4 (fast, 4GB VRAM)",
-              provider: .local),
-        .init(id: "local:gemma-4-E4B-it-Q8_0.gguf",
-              label: "Local — Gemma 4 E4B Q8 (max quality, 10GB+ VRAM)",
-              provider: .local),
-    ]
+    private static func buildCurated() -> [RecapModelOption] {
+        var list: [RecapModelOption] = [
+            .init(id: autoKey, label: "Auto (match LLM provider)", provider: .auto)
+        ]
+        list += ModelCatalog.models(task: "recap").map { pair in
+            RecapModelOption(
+                id: pair.model.id,
+                label: ModelCatalog.tierLabel(pair.model),
+                provider: recapProvider(pair.provider.id))
+        }
+        // On-device Gemma recap — runs via llama.cpp Metal, no network, no
+        // key, transcript never leaves the Mac. Not catalog/API models.
+        list += [
+            .init(id: "local:gemma-4-E4B-it-Q4_K_M.gguf",
+                  label: "Local Gemma 4 E4B Q4 (best local, ~6GB VRAM)",
+                  provider: .local),
+            .init(id: "local:gemma-4-E2B-it-Q4_K_M.gguf",
+                  label: "Local Gemma 4 E2B Q4 (fast, 4GB VRAM)",
+                  provider: .local),
+            .init(id: "local:gemma-4-E4B-it-Q8_0.gguf",
+                  label: "Local Gemma 4 E4B Q8 (max quality, 10GB+ VRAM)",
+                  provider: .local),
+        ]
+        return list
+    }
 
     /// Find the curated option for a given config value, or fall through
     /// to the Custom branch (id = the raw value, label = the value).
