@@ -1046,12 +1046,20 @@
                         <TextBlock Text="OpenRouter · DeepSeek R1 (free)" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
+                    <ComboBoxItem Tag="gemini-3.5-flash">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Image Width="16" Height="16">
+                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
+                        </Image>
+                        <TextBlock Text="Gemini · 3.5-flash (newest fast)" VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </ComboBoxItem>
                     <ComboBoxItem Tag="gemini-3.1-pro">
                       <StackPanel Orientation="Horizontal" Spacing="8">
                         <Image Width="16" Height="16">
                           <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
                         </Image>
-                        <TextBlock Text="Gemini · 3.1-pro-preview (newest top)" VerticalAlignment="Center"/>
+                        <TextBlock Text="Gemini · 3.1-pro-preview (top)" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
                     <ComboBoxItem Tag="gemini-3.1-flash-lite">
@@ -1059,15 +1067,7 @@
                         <Image Width="16" Height="16">
                           <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
                         </Image>
-                        <TextBlock Text="Gemini · 3.1-flash-lite (newest fast)" VerticalAlignment="Center"/>
-                      </StackPanel>
-                    </ComboBoxItem>
-                    <ComboBoxItem Tag="gemini-3-pro">
-                      <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Image Width="16" Height="16">
-                          <Image.Source><SvgImageSource UriSource="ms-appx:///Assets/Providers/gemini.svg"/></Image.Source>
-                        </Image>
-                        <TextBlock Text="Gemini · 3-pro-preview" VerticalAlignment="Center"/>
+                        <TextBlock Text="Gemini · 3.1-flash-lite (fast)" VerticalAlignment="Center"/>
                       </StackPanel>
                     </ComboBoxItem>
                     <ComboBoxItem Tag="gemini-3-flash">
