@@ -66,7 +66,6 @@
       "auth": "bearer",
       "models": [
         { "id": "llama-3.3-70b-versatile", "label": "Llama 3.3 70B", "tasks": ["llm", "recap"], "tier": "top" },
-        { "id": "groq/compound", "label": "Groq Compound (agentic)", "tasks": ["llm", "recap"] },
         { "id": "openai/gpt-oss-120b", "label": "GPT-OSS 120B", "tasks": ["llm", "recap"] },
         { "id": "meta-llama/llama-4-scout-17b-16e-instruct", "label": "Llama 4 Scout 17B", "tasks": ["llm", "recap"] },
         { "id": "llama-3.1-8b-instant", "label": "Llama 3.1 8B Instant", "tasks": ["llm", "recap"], "tier": "fastest" },

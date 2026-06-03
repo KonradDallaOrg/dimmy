@@ -161,9 +161,9 @@ public static class ProviderCatalog
             "Get a free key in Google AI Studio — one click, no card required.",
             new[]
             {
-                L("gemini-3.1-pro-preview · newest top"),
-                SLR("gemini-3.1-flash-lite · newest fast"),
-                L("gemini-3-pro-preview"),
+                L("gemini-3.5-flash · newest fast"),
+                L("gemini-3.1-pro-preview · top"),
+                SLR("gemini-3.1-flash-lite · fast"),
                 SLR("gemini-3-flash-preview"),
                 L("gemini-2.5-pro · stable top"),
                 SLR("gemini-2.5-flash · stable fast"),

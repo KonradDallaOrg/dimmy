@@ -120,9 +120,9 @@ struct RecapModelOption: Identifiable, Equatable {
         // string 404s with "models/gemini-3.1-pro is not found"; the working
         // id is `-preview` suffixed. `migrateRecapModelId` covers stale
         // saved configs but the dropdown itself must save the right id.
-        .init(id: "gemini-3.1-pro-preview",   label: "Google — Gemini 3.1 Pro (newest top)",   provider: .gemini),
-        .init(id: "gemini-3.1-flash-lite",    label: "Google — Gemini 3.1 Flash (newest fast)", provider: .gemini),
-        .init(id: "gemini-3-pro-preview",     label: "Google — Gemini 3 Pro",                  provider: .gemini),
+        .init(id: "gemini-3.5-flash",         label: "Google — Gemini 3.5 Flash (newest)",     provider: .gemini),
+        .init(id: "gemini-3.1-pro-preview",   label: "Google — Gemini 3.1 Pro (top)",          provider: .gemini),
+        .init(id: "gemini-3.1-flash-lite",    label: "Google — Gemini 3.1 Flash (fast)",       provider: .gemini),
         .init(id: "gemini-2.5-pro",           label: "Google — Gemini 2.5 Pro (stable)",       provider: .gemini),
         .init(id: "gemini-2.5-flash",         label: "Google — Gemini 2.5 Flash (stable fast)", provider: .gemini),
 

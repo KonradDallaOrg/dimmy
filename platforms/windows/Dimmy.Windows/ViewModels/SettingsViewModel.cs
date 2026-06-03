@@ -91,9 +91,9 @@ public partial class SettingsViewModel : ObservableObject
         // 3.1 generation: only `-preview` and `-lite` variants exist.
         // 3 generation: only `-preview` variants exist.
         // 2.5 generation: plain names work (stable production tier).
+        new("Gemini-3.5-Flash", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-3.5-flash"),
         new("Gemini-3.1-Pro", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-3.1-pro-preview"),
         new("Gemini-3.1-Flash-Lite", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-3.1-flash-lite"),
-        new("Gemini-3-Pro", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-3-pro-preview"),
         new("Gemini-3-Flash", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-3-flash-preview"),
         new("Gemini-2.5-Pro", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-2.5-pro"),
         new("Gemini-2.5-Flash", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-2.5-flash"),
