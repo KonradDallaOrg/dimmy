@@ -2249,9 +2249,26 @@ pub unsafe extern "C" fn dimmy_push_loopback_audio(
     }
     let slice = std::slice::from_raw_parts(samples, count as usize);
     let vec: Vec<f32> = slice.iter().map(|&s| s.clamp(-1.0, 1.0)).collect();
+    // Pass the validated source rate down to the worker so it can rebuild
+    // its LinearResampler iff the rate changed (BT renegotiation / output
+    // device swap mid-meeting). 0 means "no info" — the worker reads the
+    // override stashed by set_loopback_sample_rate as a fallback.
+    let src_rate_for_worker: u32 = if sample_rate > 0 {
+        let r = sample_rate as u32;
+        if (8_000..=192_000).contains(&r) {
+            r
+        } else {
+            0
+        }
+    } else {
+        0
+    };
     let st = state();
     match st.audio_tx.lock() {
-        Ok(tx) => match tx.send(crate::audio::AudioCommand::PushLoopback(vec)) {
+        Ok(tx) => match tx.send(crate::audio::AudioCommand::PushLoopback(
+            vec,
+            src_rate_for_worker,
+        )) {
             Ok(_) => 0,
             Err(_) => -1,
         },
