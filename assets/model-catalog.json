@@ -1,11 +1,12 @@
 {
-  "schema": 1,
-  "generated": "2026-06-02",
-  "note": "Single source of truth for the cloud models Dimmy offers per provider. Today the apps still hardcode these in several places (Win SettingsViewModel/ProviderCatalog/SettingsWindow.xaml, Mac AppState/RecapModel/ProviderCatalog); this file is the canonical list they will be migrated to read. Validate it against each provider's live /models endpoint with scripts/dev/check-model-ids.py before a release. 'tasks' drives which picker shows a model: stt = Voice input, llm = dictation rewrite, recap = meeting recap.",
+  "schema": 2,
+  "generated": "2026-06-03",
+  "note": "Single source of truth for the cloud models Dimmy offers per provider. Embedded into the Rust core via include_str! and served to every host UI through the dimmy_model_catalog_json() FFI — Windows (System.Text.Json) and macOS (Codable) read the SAME compiled bytes, so they cannot diverge. Validate it against each provider's live /models endpoint with scripts/dev/check-model-ids.py before a release. Fields: provider 'icon' = svg asset name (Assets/Providers/<icon>.svg on Win, provider-<icon> on Mac); 'llm_url'/'stt_url' = the per-task endpoint a selected model resolves to; per-model 'tasks' drives which picker shows it (stt = Voice input, llm = dictation rewrite, recap = meeting recap); 'tier' (top/balanced/fast/fastest) drives ordering + the Auto-pick default. Local models (Whisper/Parakeet/Gemma/Phi) are NOT here — they have download/bundle/feature-flag semantics and stay in host code, injected alongside this list.",
   "providers": [
     {
       "id": "openai",
       "name": "OpenAI",
+      "icon": "openai",
       "llm_url": "https://api.openai.com/v1/chat/completions",
       "stt_url": "https://api.openai.com/v1/audio/transcriptions",
       "models_endpoint": "https://api.openai.com/v1/models",
@@ -30,6 +31,7 @@
     {
       "id": "anthropic",
       "name": "Anthropic",
+      "icon": "anthropic",
       "llm_url": "https://api.anthropic.com/v1/messages",
       "stt_url": "",
       "models_endpoint": "https://api.anthropic.com/v1/models",
@@ -44,6 +46,7 @@
     {
       "id": "gemini",
       "name": "Google Gemini",
+      "icon": "gemini",
       "llm_url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
       "stt_url": "https://generativelanguage.googleapis.com/v1beta/models",
       "models_endpoint": "https://generativelanguage.googleapis.com/v1beta/models",
@@ -60,6 +63,7 @@
     {
       "id": "groq",
       "name": "Groq",
+      "icon": "groq",
       "llm_url": "https://api.groq.com/openai/v1/chat/completions",
       "stt_url": "https://api.groq.com/openai/v1/audio/transcriptions",
       "models_endpoint": "https://api.groq.com/openai/v1/models",
@@ -77,6 +81,7 @@
     {
       "id": "deepgram",
       "name": "Deepgram",
+      "icon": "deepgram",
       "llm_url": "",
       "stt_url": "https://api.deepgram.com/v1/listen",
       "models_endpoint": "https://api.deepgram.com/v1/models",
@@ -89,6 +94,7 @@
     {
       "id": "openrouter",
       "name": "OpenRouter",
+      "icon": "openrouter",
       "llm_url": "https://openrouter.ai/api/v1/chat/completions",
       "stt_url": "",
       "models_endpoint": "https://openrouter.ai/api/v1/models",
@@ -101,6 +107,7 @@
     {
       "id": "together",
       "name": "Together",
+      "icon": "together",
       "llm_url": "https://api.together.xyz/v1/chat/completions",
       "stt_url": "https://api.together.xyz/v1/audio/transcriptions",
       "models_endpoint": "https://api.together.xyz/v1/models",
@@ -115,6 +122,7 @@
     {
       "id": "fireworks",
       "name": "Fireworks",
+      "icon": "fireworks",
       "llm_url": "https://api.fireworks.ai/inference/v1/chat/completions",
       "stt_url": "https://audio-turbo.api.fireworks.ai/v1/audio/transcriptions",
       "models_endpoint": "https://api.fireworks.ai/inference/v1/models",

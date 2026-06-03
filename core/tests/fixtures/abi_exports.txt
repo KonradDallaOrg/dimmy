@@ -81,6 +81,7 @@ dimmy_meeting_save_post_process
 dimmy_meeting_start
 dimmy_meeting_stop
 dimmy_meetings_dir
+dimmy_model_catalog_json
 dimmy_model_exists
 dimmy_notion_has_token
 dimmy_notion_search

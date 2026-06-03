@@ -9,6 +9,7 @@ pub mod app_rules;
 pub mod audio;
 pub mod autostart;
 pub mod call_detector;
+pub mod catalog;
 pub mod chunked_stt;
 pub mod claude_code;
 pub mod claude_desktop;
