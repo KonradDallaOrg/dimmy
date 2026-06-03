@@ -231,9 +231,22 @@ pub enum AudioCommand {
     },
     Stop,
     /// Push externally-captured loopback samples (macOS/Linux ScreenCaptureKit
-    /// path). The worker appends to audio_buffer_secondary AND aec_ref_ring,
-    /// mirroring what the Windows cpal loopback callback does.
-    PushLoopback(Vec<f32>),
+    /// or Core Audio tap path). The worker resamples to MEETING_CANONICAL_RATE
+    /// when `source_rate != MEETING_CANONICAL_RATE` and appends to
+    /// audio_buffer_secondary AND aec_ref_ring at the canonical rate — same
+    /// invariant the Windows cpal loopback callback enforces via its own
+    /// LinearResampler.
+    ///
+    /// `source_rate == 0` means the caller doesn't know; the worker falls
+    /// back to the override published via `dimmy_set_loopback_sample_rate` /
+    /// `LOOPBACK_SAMPLE_RATE_OVERRIDE`, then to MEETING_CANONICAL_RATE
+    /// (passthrough). Pre-fix, this variant carried no rate hint and the
+    /// handler pushed samples raw — when the macOS tap delivered at any rate
+    /// other than 48 kHz the secondary buffer grew at the wrong cadence,
+    /// audio_system.ogg/wav got a 48 kHz header on non-48 kHz samples, the
+    /// AEC ref ring drained 480-sample frames at the wrong wall-clock rate,
+    /// and the mix track's per-sample align broke.
+    PushLoopback(Vec<f32>, u32),
 }
 
 /// List available input device names.
@@ -312,6 +325,29 @@ pub fn spawn_audio_thread(
             // meeting. Resampler state in the new callback is created
             // fresh; new samples are appended in coherent time order.
             let mut is_recovery_start = false;
+
+            // Loopback resampler state. The external push path delivers
+            // samples at whatever rate the macOS tap / ScreenCaptureKit /
+            // Linux pulse handed us; we resample to MEETING_CANONICAL_RATE
+            // here so audio_buffer_secondary and aec_ref_ring always grow
+            // at the same cadence as the (already-canonicalised) primary
+            // mic buffer. Without this, the meeting worker's
+            // align_secondary invariant + per-sample mix walk against
+            // mis-rated samples and produce wrong-speed playback or
+            // silence-padded gaps. Identity (passthrough) when
+            // source_rate == MEETING_CANONICAL_RATE; rebuilt fresh on each
+            // source-rate change (device swap, BT renegotiation).
+            let mut loopback_resampler: Option<LinearResampler> = None;
+            let mut loopback_last_src_rate: u32 = 0;
+
+            // Diagnostic counters for the periodic [Audio/loopback] tick.
+            // Cumulative input + output sample counts let "is the tap even
+            // delivering?" and "did the resampler do its job?" be answered
+            // from dimmy.log alone, without a debugger or core dump.
+            let mut loopback_diag_last_log = std::time::Instant::now();
+            let mut loopback_diag_in_samples: u64 = 0;
+            let mut loopback_diag_out_samples: u64 = 0;
+            let mut loopback_diag_pushes: u64 = 0;
 
             // Event loop: wait for commands, with a 1 s timeout that
             // doubles as the heartbeat for device-change auto-recovery.
@@ -704,16 +740,109 @@ pub fn spawn_audio_thread(
                         // value from a prior meeting.
                         LOOPBACK_SAMPLE_RATE_OVERRIDE.store(0, Ordering::Relaxed);
                     }
-                    AudioCommand::PushLoopback(samples) => {
+                    AudioCommand::PushLoopback(samples, source_rate_hint) => {
+                        // Decide the effective source rate. Hint from the FFI
+                        // wins (carried per-push from the macOS tap's
+                        // negotiated format). When 0, fall back to whatever
+                        // dimmy_set_loopback_sample_rate stashed in the
+                        // override. When that's also 0 (no info at all),
+                        // treat as canonical (passthrough) — same as the
+                        // pre-resample behaviour so we never WORSEN a
+                        // missing-rate caller.
+                        let mut effective_src_rate = if source_rate_hint > 0 {
+                            source_rate_hint
+                        } else {
+                            LOOPBACK_SAMPLE_RATE_OVERRIDE.load(Ordering::Relaxed)
+                        };
+                        if !(8_000..=192_000).contains(&effective_src_rate) {
+                            effective_src_rate = MEETING_CANONICAL_RATE;
+                        }
+
+                        // Rebuild the resampler iff the source rate changed
+                        // (first push of this meeting, or a mid-meeting BT /
+                        // output-device renegotiation). Identity case
+                        // (src == canonical) leaves it None — zero allocation,
+                        // zero filter state to clear.
+                        if effective_src_rate != loopback_last_src_rate {
+                            loopback_last_src_rate = effective_src_rate;
+                            loopback_resampler = if effective_src_rate != MEETING_CANONICAL_RATE {
+                                crate::log(&format!(
+                                    "[Audio/loopback] resampler rebuilt: {} Hz → {} Hz (canonical)",
+                                    effective_src_rate, MEETING_CANONICAL_RATE
+                                ));
+                                Some(LinearResampler::new(
+                                    effective_src_rate,
+                                    MEETING_CANONICAL_RATE,
+                                ))
+                            } else {
+                                crate::log(
+                                    "[Audio/loopback] source rate matches canonical 48 kHz — passthrough",
+                                );
+                                None
+                            };
+                        }
+
+                        let in_len = samples.len();
+                        // Resample (or passthrough) into a single owned Vec
+                        // before grabbing either lock so the critical
+                        // sections stay small (callbacks competing for the
+                        // same mutex are a known hotspot).
+                        let canonical: Vec<f32> = if let Some(ref mut r) = loopback_resampler {
+                            let mut out = Vec::with_capacity(
+                                in_len.saturating_mul(MEETING_CANONICAL_RATE as usize)
+                                    / effective_src_rate.max(1) as usize
+                                    + 4,
+                            );
+                            r.process(&samples, &mut out);
+                            out
+                        } else {
+                            samples
+                        };
+                        let out_len = canonical.len();
+
                         if let Ok(mut b) = buffer_secondary.lock() {
-                            for &s in &samples {
+                            for &s in &canonical {
                                 b.push(s.clamp(-1.0, 1.0));
                             }
                         }
                         if let Ok(mut r) = aec_ref_ring.lock() {
-                            for &s in &samples {
+                            for &s in &canonical {
                                 r.push(s.clamp(-1.0, 1.0));
                             }
+                        }
+
+                        // Periodic 5 s diagnostic so the colleague's
+                        // "doesn't record system audio" report can be
+                        // diagnosed from dimmy.log:
+                        //   - in_samples 0 → tap is denied / never fires
+                        //     (macOS audio-capture TCC grant missing)
+                        //   - in_samples > 0 but out_samples ≈ in/3 → tap
+                        //     at 16 kHz, resampler upsampled to 48 kHz
+                        //     (expected on BT-HFP outputs)
+                        //   - secondary buffer length lags primary by more
+                        //     than a chunk window → align_secondary is
+                        //     zero-padding because pushes stopped (tap died
+                        //     mid-meeting)
+                        loopback_diag_in_samples += in_len as u64;
+                        loopback_diag_out_samples += out_len as u64;
+                        loopback_diag_pushes += 1;
+                        if loopback_diag_last_log.elapsed() >= std::time::Duration::from_secs(5) {
+                            let sec_len = buffer_secondary.lock().map(|b| b.len()).unwrap_or(0);
+                            let ref_len = aec_ref_ring.lock().map(|r| r.len()).unwrap_or(0);
+                            crate::log(&format!(
+                                "[Audio/loopback] 5s tick: pushes={} in_samples={} out_samples={} src_rate={} dst_rate={} secondary_buf_len={} aec_ref_len={}",
+                                loopback_diag_pushes,
+                                loopback_diag_in_samples,
+                                loopback_diag_out_samples,
+                                effective_src_rate,
+                                MEETING_CANONICAL_RATE,
+                                sec_len,
+                                ref_len,
+                            ));
+                            loopback_diag_last_log = std::time::Instant::now();
+                            loopback_diag_in_samples = 0;
+                            loopback_diag_out_samples = 0;
+                            loopback_diag_pushes = 0;
                         }
                     }
                 }

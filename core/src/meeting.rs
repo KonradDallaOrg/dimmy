@@ -716,6 +716,20 @@ fn worker_loop(
     let mut was_paused = false;
     let mut pause_started_at: Option<Instant> = None;
 
+    // Periodic diagnostic tick. Every 5 s log the state machine's view
+    // of the worker:
+    //   - elapsed (worker wall-clock)
+    //   - primary_len / secondary_len (raw buffer sizes the worker sees)
+    //   - clock_decided / clock_on_secondary (mic-presence latch)
+    //   - samples_written / last_processed (how far the WAV writer and
+    //     STT chunker have advanced)
+    // Crucial when the user reports "meeting recorded nothing": a
+    // primary_len stuck at 0 means the cpal mic callback never fired
+    // (permission / device / sample-format) or the AEC worker never
+    // drained a mic frame; a secondary_len stuck at 0 means the macOS
+    // tap / SCKit fallback never pushed (audio-capture grant missing).
+    let mut diag_last_log = Instant::now();
+
     loop {
         let cancelled = cancel.load(Ordering::SeqCst);
         thread::sleep(POLL_INTERVAL);
@@ -724,6 +738,32 @@ fn worker_loop(
         // the loopback buffer up to the mic buffer's length, so
         // every WAV cursor we maintain sees a time-coherent pair.
         align_secondary(&audio_buffer, &audio_buffer_secondary);
+
+        // Periodic 5 s diagnostic. Cheap (two locks, one log line), and
+        // worth its weight when the user files "meeting recorded nothing"
+        // — primary_len stuck at 0 finger-prints a dead mic stream;
+        // secondary_len stuck at 0 finger-prints a denied tap; both
+        // growing but samples_written stuck finger-prints a pause-state
+        // bug.
+        if diag_last_log.elapsed() >= Duration::from_secs(5) {
+            let p_len = audio_buffer.lock().map(|b| b.len()).unwrap_or(0);
+            let s_len = audio_buffer_secondary.lock().map(|b| b.len()).unwrap_or(0);
+            let elapsed = started.elapsed().as_secs_f64();
+            crate::log(&format!(
+                "[Meeting/diag] elapsed={:.1}s primary_len={} secondary_len={} clock_decided={} clock_on_secondary={} samples_written={} last_processed={} chunk_count={} paused={} mix_active={}",
+                elapsed,
+                p_len,
+                s_len,
+                clock_decided,
+                clock_on_secondary,
+                samples_written,
+                last_processed,
+                chunk_count,
+                paused.load(Ordering::SeqCst),
+                mix_active,
+            ));
+            diag_last_log = Instant::now();
+        }
 
         // Decide the clock source once (see mic-presence latch above).
         if mix_active && !clock_decided {

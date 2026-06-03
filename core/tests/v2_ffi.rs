@@ -1275,6 +1275,72 @@ fn push_loopback_audio_with_rate_updates_override() {
     assert_eq!(dimmy_set_loopback_sample_rate(0), 0);
 }
 
+// Resample-on-push: when the macOS tap / SCKit fallback delivers at a
+// rate other than MEETING_CANONICAL_RATE (48 kHz), the audio worker must
+// upsample (or downsample) so `audio_buffer_secondary` and `aec_ref_ring`
+// grow at the canonical cadence. Pre-fix the worker pushed raw, so
+// `audio_system.ogg` got a 48 kHz header on non-48 kHz samples — playback
+// ran at the wrong speed and AEC frame-drain skewed.
+//
+// We can't peek at the secondary buffer length from a unit test, but the
+// log line "[Audio/loopback] resampler rebuilt: N Hz → 48000 Hz" + the
+// non-zero loopback amplitude after a brief settle proves the path
+// ran. Amplitude > 0 = at least one sample made it through resample +
+// clamp into the buffer.
+#[test]
+#[serial]
+fn push_loopback_audio_resamples_non_canonical_to_canonical() {
+    ensure_init();
+    assert_eq!(dimmy_set_loopback_sample_rate(0), 0);
+
+    // 100 ms of a 440 Hz tone at 16 kHz = 1600 samples — enough for the
+    // resampler to emit a non-trivial run of canonical-rate samples.
+    let src_rate = 16_000u32;
+    let n = (src_rate as usize) / 10;
+    let samples: Vec<f32> = (0..n)
+        .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / src_rate as f32).sin() * 0.4)
+        .collect();
+
+    let rc = unsafe {
+        dimmy_push_loopback_audio(samples.as_ptr(), samples.len() as i32, src_rate as i32)
+    };
+    assert_eq!(rc, 0, "push must succeed");
+
+    // The worker thread processes the command asynchronously; give it a
+    // moment to drain the channel and run the resample.
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    let amp = unsafe { dimmy_get_loopback_amplitude() };
+    assert!(
+        amp > 0.0,
+        "loopback amplitude must reflect resampled samples (got {amp})"
+    );
+
+    assert_eq!(dimmy_set_loopback_sample_rate(0), 0);
+}
+
+// Same path with the source rate equal to the canonical rate exercises
+// the identity (passthrough) branch — no resampler is built, the samples
+// must still land in the secondary buffer.
+#[test]
+#[serial]
+fn push_loopback_audio_canonical_rate_passthrough() {
+    ensure_init();
+    assert_eq!(dimmy_set_loopback_sample_rate(0), 0);
+    let samples: Vec<f32> = (0..4_800)
+        .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 48_000.0).sin() * 0.4)
+        .collect();
+    let rc = unsafe { dimmy_push_loopback_audio(samples.as_ptr(), samples.len() as i32, 48_000) };
+    assert_eq!(rc, 0);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let amp = unsafe { dimmy_get_loopback_amplitude() };
+    assert!(
+        amp > 0.0,
+        "passthrough must still feed the secondary buffer"
+    );
+    assert_eq!(dimmy_set_loopback_sample_rate(0), 0);
+}
+
 // On non-Windows the fallback when no override is set must follow the
 // primary (mic) rate so SCStream's `audio_system.wav` matches the cpal
 // mic rate (BT-HFP common case: 16 kHz on both). Pre-fix this returned
