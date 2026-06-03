@@ -83,6 +83,10 @@ public sealed partial class SettingsWindow : Window
 
         LoadConfig();
         ViewModel.LoadGpuStatus();
+        // Build the STT + LLM pickers from the single-source catalog BEFORE
+        // syncing the selection to the saved config.
+        PopulateSttProviderPicker();
+        PopulateLlmProviderPicker();
         SyncProviderComboBox();
         SyncLlmProviderComboBox();
         // Reveal/refresh the Claude Code status card if the user's
@@ -94,9 +98,10 @@ public sealed partial class SettingsWindow : Window
         PopulateLocalModels();
         SyncSttMode();
         PopulateLocalLlmModels();
-        // Recap picker sync runs AFTER the local-LLM catalogue loads so
-        // the dynamically-injected "Local · …" recap options already
-        // exist when we snap the selection to a persisted `local:` id.
+        // Build the recap picker (Auto + cloud recap models + custom sentinel)
+        // from the catalog, THEN inject the local "Local · …" options, THEN
+        // snap the selection — so a persisted local: id already exists.
+        PopulateRecapModelPicker();
         PopulateRecapLocalModels();
         SyncRecapModelPicker();
         SyncLlmMode();
@@ -1480,6 +1485,74 @@ public sealed partial class SettingsWindow : Window
     /// <summary>
     /// Sync the Provider ComboBox selection to match the current ApiUrl from config.
     /// </summary>
+    // ── Single-source model pickers ──────────────────────────────────
+    // STT / LLM / recap picker items are built here from the embedded model
+    // catalog (ModelCatalog, fed by assets/model-catalog.json over FFI) so a
+    // model add/remove touches only the JSON. The item Tag is the synthetic
+    // preset Name (STT/LLM) or the bare model id (recap) — exactly what the
+    // existing SelectionChanged + Sync handlers already key on, so the
+    // handler logic is untouched. Mac builds the same lists from the same
+    // bytes. Local models are injected separately (PopulateRecapLocalModels).
+
+    private static StackPanel ProviderItemPanel(string icon, string label)
+    {
+        var sp = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        sp.Children.Add(new Image
+        {
+            Width = 16,
+            Height = 16,
+            Source = new Microsoft.UI.Xaml.Media.Imaging.SvgImageSource(
+                new Uri($"ms-appx:///Assets/Providers/{icon}.svg")),
+        });
+        sp.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center });
+        return sp;
+    }
+
+    private static ComboBoxItem CustomEndpointItem()
+    {
+        var sp = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        sp.Children.Add(new FontIcon { Glyph = "", FontSize = 14, VerticalAlignment = VerticalAlignment.Center });
+        sp.Children.Add(new TextBlock { Text = "Custom endpoint", VerticalAlignment = VerticalAlignment.Center });
+        return new ComboBoxItem { Tag = "custom", Content = sp };
+    }
+
+    private void PopulateSttProviderPicker()
+    {
+        ProviderComboBox.Items.Clear();
+        foreach (var e in ModelCatalog.SttEntries())
+            ProviderComboBox.Items.Add(new ComboBoxItem { Tag = e.Name, Content = ProviderItemPanel(e.Icon, e.Label) });
+        ProviderComboBox.Items.Add(CustomEndpointItem());
+    }
+
+    private void PopulateLlmProviderPicker()
+    {
+        LlmProviderComboBox.Items.Clear();
+        foreach (var e in ModelCatalog.LlmEntries())
+            LlmProviderComboBox.Items.Add(new ComboBoxItem { Tag = e.Name, Content = ProviderItemPanel(e.Icon, e.Label) });
+        LlmProviderComboBox.Items.Add(CustomEndpointItem());
+    }
+
+    private void PopulateRecapModelPicker()
+    {
+        RecapModelComboBox.Items.Clear();
+        RecapModelComboBox.Items.Add(new ComboBoxItem
+        {
+            Tag = "",
+            Content = new TextBlock { Text = "Auto · pick best for your provider", VerticalAlignment = VerticalAlignment.Center },
+        });
+        // Cloud recap models — Anthropic / OpenAI / Gemini only; those are the
+        // vendors recap dispatch can route by model id (Provider::from_model_id).
+        foreach (var r in ModelCatalog.RecapEntries())
+            RecapModelComboBox.Items.Add(new ComboBoxItem { Tag = r.Id, Content = ProviderItemPanel(r.Icon, r.Label) });
+        // Trailing custom sentinel. Local "Local · …" entries are injected just
+        // before it by PopulateRecapLocalModels().
+        RecapModelComboBox.Items.Add(new ComboBoxItem
+        {
+            Tag = "__custom__",
+            Content = new TextBlock { Text = "Custom model id…", VerticalAlignment = VerticalAlignment.Center },
+        });
+    }
+
     private void SyncProviderComboBox()
     {
         // Match by URL + model (multiple presets can share the same URL, e.g. Groq turbo vs v3)
@@ -3926,35 +3999,12 @@ public sealed partial class SettingsWindow : Window
             ViewModel.AudioSource = "mix";
     }
 
-    /// Source-of-truth array of curated recap-model ids. Order MUST
-    /// match the ComboBoxItem order in SettingsWindow.xaml — the
-    /// SyncRecapModelPicker logic uses array index → SelectedIndex
-    /// 1:1. The trailing `__custom__` item is implicit (index =
-    /// _recapModelKnownTags.Length). If you add a curated entry,
-    /// update both this array AND the XAML.
-    private static readonly string[] _recapModelKnownTags = new[]
-    {
-        "",                              //  Auto
-        "claude-opus-4-8",               //  (added 2026-06-02)
-        "claude-opus-4-7",
-        "claude-sonnet-4-6",
-        "claude-haiku-4-5-20251001",
-        "gemini-3.5-flash",             //  (added 2026-06-03)
-        "gemini-3.1-pro",
-        "gemini-2.5-pro",
-        "gemini-3.1-flash",
-        "gemini-2.5-flash",
-        "gpt-5.5",                       //  (added 2026-06-02)
-        "gpt-5.4-mini",                  //  (added 2026-06-02)
-        "gpt-5.4-nano",                  //  (added 2026-06-02)
-        "gpt-5",
-        "gpt-5-mini",
-        "gpt-5-nano",
-        "gpt-4o",
-        "gpt-4o-mini",
-        "o3",
-        "o3-mini",
-    };
+    /// Curated recap-model ids ("" Auto + every cloud recap model), derived
+    /// from the single-source catalog (ModelCatalog). Used to tell a curated
+    /// pick from a free-form custom id. A model add/remove touches only
+    /// assets/model-catalog.json; this and the picker follow automatically.
+    private static readonly string[] _recapModelKnownTags =
+        ModelCatalog.RecapKnownTags().ToArray();
 
     /// Snap the recap-model picker + custom textbox to whatever the
     /// view-model currently holds. Called once after config load.

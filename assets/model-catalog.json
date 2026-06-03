@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "generated": "2026-06-03",
-  "note": "Single source of truth for the cloud models Dimmy offers per provider. Embedded into the Rust core via include_str! and served to every host UI through the dimmy_model_catalog_json() FFI — Windows (System.Text.Json) and macOS (Codable) read the SAME compiled bytes, so they cannot diverge. Validate it against each provider's live /models endpoint with scripts/dev/check-model-ids.py before a release. Fields: provider 'icon' = svg asset name (Assets/Providers/<icon>.svg on Win, provider-<icon> on Mac); 'llm_url'/'stt_url' = the per-task endpoint a selected model resolves to; per-model 'tasks' drives which picker shows it (stt = Voice input, llm = dictation rewrite, recap = meeting recap); 'tier' (top/balanced/fast/fastest) drives ordering + the Auto-pick default. Local models (Whisper/Parakeet/Gemma/Phi) are NOT here — they have download/bundle/feature-flag semantics and stay in host code, injected alongside this list.",
+  "note": "Single source of truth for the cloud models Dimmy offers per provider. Embedded into the Rust core via include_str! and served to every host UI through the dimmy_model_catalog_json() FFI — Windows (System.Text.Json) and macOS (Codable) read the SAME compiled bytes, so they cannot diverge. Validate it against each provider's live /models endpoint with scripts/dev/check-model-ids.py before a release. Fields: provider 'icon' = svg asset name (Assets/Providers/<icon>.svg on Win, provider-<icon> on Mac); 'llm_url'/'stt_url' = the per-task endpoint a selected model resolves to; per-model 'tasks' drives which picker shows it (stt = Voice input, llm = dictation rewrite, recap = meeting recap). NOTE: 'recap' is only valid on Anthropic/OpenAI/Gemini models — recap dispatch derives the endpoint from the model id via Provider::from_model_id, which recognises only claude-*/gpt-*/o-series/gemini-* prefixes. A recap tag on any other provider (groq/together/openrouter/fireworks) would mis-route to the dictation endpoint, so those carry 'llm' only. 'tier' (top/balanced/fast/fastest) drives ordering + the Auto-pick default. Local models (Whisper/Parakeet/Gemma/Phi) are NOT here — they have download/bundle/feature-flag semantics and stay in host code, injected alongside this list.",
   "providers": [
     {
       "id": "openai",
@@ -69,11 +69,11 @@
       "models_endpoint": "https://api.groq.com/openai/v1/models",
       "auth": "bearer",
       "models": [
-        { "id": "llama-3.3-70b-versatile", "label": "Llama 3.3 70B", "tasks": ["llm", "recap"], "tier": "top" },
-        { "id": "openai/gpt-oss-120b", "label": "GPT-OSS 120B", "tasks": ["llm", "recap"] },
-        { "id": "meta-llama/llama-4-scout-17b-16e-instruct", "label": "Llama 4 Scout 17B", "tasks": ["llm", "recap"] },
-        { "id": "llama-3.1-8b-instant", "label": "Llama 3.1 8B Instant", "tasks": ["llm", "recap"], "tier": "fastest" },
-        { "id": "qwen/qwen3-32b", "label": "Qwen3 32B", "tasks": ["llm", "recap"] },
+        { "id": "llama-3.3-70b-versatile", "label": "Llama 3.3 70B", "tasks": ["llm"], "tier": "top" },
+        { "id": "openai/gpt-oss-120b", "label": "GPT-OSS 120B", "tasks": ["llm"] },
+        { "id": "meta-llama/llama-4-scout-17b-16e-instruct", "label": "Llama 4 Scout 17B", "tasks": ["llm"] },
+        { "id": "llama-3.1-8b-instant", "label": "Llama 3.1 8B Instant", "tasks": ["llm"], "tier": "fastest" },
+        { "id": "qwen/qwen3-32b", "label": "Qwen3 32B", "tasks": ["llm"] },
         { "id": "whisper-large-v3-turbo", "label": "Whisper Large v3 Turbo", "tasks": ["stt"] },
         { "id": "whisper-large-v3", "label": "Whisper Large v3", "tasks": ["stt"] }
       ]
@@ -100,8 +100,8 @@
       "models_endpoint": "https://openrouter.ai/api/v1/models",
       "auth": "bearer",
       "models": [
-        { "id": "meta-llama/llama-3.3-70b-instruct:free", "label": "Llama 3.3 70B (free)", "tasks": ["llm", "recap"] },
-        { "id": "deepseek/deepseek-r1:free", "label": "DeepSeek R1 (free)", "tasks": ["llm", "recap"] }
+        { "id": "meta-llama/llama-3.3-70b-instruct:free", "label": "Llama 3.3 70B (free)", "tasks": ["llm"] },
+        { "id": "deepseek/deepseek-r1:free", "label": "DeepSeek R1 (free)", "tasks": ["llm"] }
       ]
     },
     {
@@ -113,8 +113,8 @@
       "models_endpoint": "https://api.together.xyz/v1/models",
       "auth": "bearer",
       "models": [
-        { "id": "meta-llama/Llama-3.3-70B-Instruct-Turbo", "label": "Llama 3.3 70B Turbo", "tasks": ["llm", "recap"] },
-        { "id": "Qwen/Qwen2.5-7B-Instruct-Turbo", "label": "Qwen 2.5 7B Turbo", "tasks": ["llm", "recap"] },
+        { "id": "meta-llama/Llama-3.3-70B-Instruct-Turbo", "label": "Llama 3.3 70B Turbo", "tasks": ["llm"] },
+        { "id": "Qwen/Qwen2.5-7B-Instruct-Turbo", "label": "Qwen 2.5 7B Turbo", "tasks": ["llm"] },
         { "id": "nvidia/parakeet-tdt-0.6b-v3", "label": "Parakeet TDT v3", "tasks": ["stt"] },
         { "id": "openai/whisper-large-v3", "label": "Whisper Large v3", "tasks": ["stt"] }
       ]
@@ -128,7 +128,7 @@
       "models_endpoint": "https://api.fireworks.ai/inference/v1/models",
       "auth": "bearer",
       "models": [
-        { "id": "accounts/fireworks/models/kimi-k2p6", "label": "Kimi K2", "tasks": ["llm", "recap"] },
+        { "id": "accounts/fireworks/models/kimi-k2p6", "label": "Kimi K2", "tasks": ["llm"] },
         { "id": "whisper-v3-turbo", "label": "Whisper v3 Turbo", "tasks": ["stt"] }
       ]
     }

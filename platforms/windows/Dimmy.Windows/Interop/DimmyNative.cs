@@ -114,6 +114,10 @@ public static class DimmyNative
     public static extern int dimmy_set_config_json(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string json);
 
+    // ── Model catalog (single source of truth for cloud models) ──────
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_model_catalog_json(byte[]? outBuf, int bufLen);
+
     // ── GPU diagnostics ──────────────────────────────────────────────
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_gpu_get_status(byte[] outBuf, int bufLen);
@@ -480,6 +484,19 @@ public static class DimmyNative
 
     // ── Local LLM helpers ───────────────────────────────────────
     public static string? ListLocalLlmModels() => ReadBuffer(dimmy_list_llm_models);
+
+    /// <summary>Read the embedded model catalog JSON. Unlike <see cref="ReadBuffer"/>
+    /// this sizes the buffer to the exact length the core reports, so a growing
+    /// catalog can never be silently truncated.</summary>
+    public static string? ModelCatalogJson()
+    {
+        int needed = dimmy_model_catalog_json(null, 0);
+        if (needed <= 0) return null;
+        var buf = new byte[needed + 1];
+        int written = dimmy_model_catalog_json(buf, buf.Length);
+        if (written < 0) return null;
+        return System.Text.Encoding.UTF8.GetString(buf, 0, System.Math.Min(written, needed));
+    }
 
     // ── History helpers ──────────────────────────────────────────
     public static string? HistoryRecent(int limit) =>
