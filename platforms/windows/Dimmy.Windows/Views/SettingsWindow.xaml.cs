@@ -3939,6 +3939,7 @@ public sealed partial class SettingsWindow : Window
         "claude-opus-4-7",
         "claude-sonnet-4-6",
         "claude-haiku-4-5-20251001",
+        "gemini-3.5-flash",             //  (added 2026-06-03)
         "gemini-3.1-pro",
         "gemini-2.5-pro",
         "gemini-3.1-flash",

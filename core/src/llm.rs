@@ -594,15 +594,25 @@ pub async fn process_text(
             .send()
             .await?
     } else {
-        let body = serde_json::json!({
-            "model": model,
-            "temperature": 0.3,
-            "max_tokens": max_tokens,
-            "messages": [
-                { "role": "system", "content": system_prompt },
-                { "role": "user", "content": user_message },
-            ],
-        });
+        let msgs = serde_json::json!([
+            { "role": "system", "content": system_prompt },
+            { "role": "user", "content": user_message },
+        ]);
+        let body = if openai_reasoning_shape(api_url, &model.to_ascii_lowercase()) {
+            // gpt-5 / o-series: max_completion_tokens, no temperature.
+            serde_json::json!({
+                "model": model,
+                "max_completion_tokens": max_tokens,
+                "messages": msgs,
+            })
+        } else {
+            serde_json::json!({
+                "model": model,
+                "temperature": 0.3,
+                "max_tokens": max_tokens,
+                "messages": msgs,
+            })
+        };
         client
             .post(api_url)
             .header("Authorization", format!("Bearer {}", api_key))
@@ -700,6 +710,23 @@ fn anthropic_uses_adaptive_thinking(model_lc: &str) -> bool {
         || model_lc.contains("opus-4.8")
         || model_lc.contains("sonnet-5")
         || model_lc.contains("sonnet-6") // future-proof
+}
+
+/// OpenAI's gpt-5 / o-series reasoning models reject the classic chat body:
+/// they want `max_completion_tokens` (NOT `max_tokens`) and reject a custom
+/// `temperature` (only the default is accepted). Detect by host AND model id
+/// so the OpenAI-COMPATIBLE proxies (Groq, Gemini-OAI, Together, Fireworks)
+/// keep the classic `temperature` + `max_tokens` shape — they accept it fine.
+///
+/// Burned 2026-06-03: every OpenAI gpt-5.x recap/rewrite 400'd with
+/// "Unsupported parameter: 'max_tokens' is not supported with this model.
+/// Use 'max_completion_tokens' instead." (verified live against the API).
+fn openai_reasoning_shape(api_url: &str, model_lc: &str) -> bool {
+    api_url.contains("api.openai.com")
+        && (model_lc.starts_with("gpt-5")
+            || model_lc.starts_with("o1")
+            || model_lc.starts_with("o3")
+            || model_lc.starts_with("o4"))
 }
 
 pub async fn process_raw_prompt(
@@ -896,14 +923,25 @@ pub async fn process_raw_prompt(
             .await?
     } else {
         // OpenAI-compatible (Groq, OpenAI, Together, Gemini-OAI proxy, ...).
-        let body = serde_json::json!({
-            "model": model,
-            "temperature": 0.3,
-            "max_tokens": max_tokens,
-            "messages": [
-                { "role": "user", "content": user_prompt },
-            ],
-        });
+        let body = if openai_reasoning_shape(api_url, &model_lc) {
+            // gpt-5 / o-series: max_completion_tokens, no temperature.
+            serde_json::json!({
+                "model": model,
+                "max_completion_tokens": max_tokens,
+                "messages": [
+                    { "role": "user", "content": user_prompt },
+                ],
+            })
+        } else {
+            serde_json::json!({
+                "model": model,
+                "temperature": 0.3,
+                "max_tokens": max_tokens,
+                "messages": [
+                    { "role": "user", "content": user_prompt },
+                ],
+            })
+        };
         client
             .post(api_url)
             .header("Authorization", format!("Bearer {api_key}"))
@@ -999,6 +1037,30 @@ pub async fn process_raw_prompt(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn openai_reasoning_shape_only_openai_gpt5_and_o_series() {
+        let oai = "https://api.openai.com/v1/chat/completions";
+        // OpenAI gpt-5 / o-series → new shape (max_completion_tokens, no temp).
+        assert!(openai_reasoning_shape(oai, "gpt-5.5"));
+        assert!(openai_reasoning_shape(oai, "gpt-5.4-mini"));
+        assert!(openai_reasoning_shape(oai, "gpt-5.4-nano"));
+        assert!(openai_reasoning_shape(oai, "o3"));
+        assert!(openai_reasoning_shape(oai, "o1-mini"));
+        // Older OpenAI keeps the classic shape.
+        assert!(!openai_reasoning_shape(oai, "gpt-4o"));
+        assert!(!openai_reasoning_shape(oai, "gpt-4o-mini"));
+        // OpenAI-COMPATIBLE proxies keep the classic shape even for gpt-5-ish
+        // ids — they accept temperature + max_tokens.
+        assert!(!openai_reasoning_shape(
+            "https://api.groq.com/openai/v1/chat/completions",
+            "openai/gpt-oss-120b"
+        ));
+        assert!(!openai_reasoning_shape(
+            "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+            "gemini-3.5-flash"
+        ));
+    }
 
     // ── Command Mode prompt ─────────────────────────────────────
 

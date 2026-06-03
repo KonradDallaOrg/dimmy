@@ -264,9 +264,9 @@ struct LlmPreset: Identifiable, Hashable {
         // `-preview` suffixed because the bare `gemini-3.1-pro` 404s
         // (Google publishes them as preview channel only).
         // ── Gemini (preview = newest, stable = production) ─────
-        LlmPreset(id: "gemini-31-pro", displayName: "Gemini \u{00B7} gemini-3.1-pro-preview (newest top)", apiUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-3.1-pro-preview"),
-        LlmPreset(id: "gemini-31-flash", displayName: "Gemini \u{00B7} gemini-3.1-flash-lite (newest fast)", apiUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-3.1-flash-lite"),
-        LlmPreset(id: "gemini-3-pro", displayName: "Gemini \u{00B7} gemini-3-pro-preview", apiUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-3-pro-preview"),
+        LlmPreset(id: "gemini-35-flash", displayName: "Gemini \u{00B7} gemini-3.5-flash (newest fast)", apiUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-3.5-flash"),
+        LlmPreset(id: "gemini-31-pro", displayName: "Gemini \u{00B7} gemini-3.1-pro-preview (top)", apiUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-3.1-pro-preview"),
+        LlmPreset(id: "gemini-31-flash", displayName: "Gemini \u{00B7} gemini-3.1-flash-lite (fast)", apiUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-3.1-flash-lite"),
         LlmPreset(id: "gemini-3-flash", displayName: "Gemini \u{00B7} gemini-3-flash-preview", apiUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-3-flash-preview"),
         LlmPreset(id: "gemini-2.5-pro", displayName: "Gemini \u{00B7} gemini-2.5-pro (stable top)", apiUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-2.5-pro"),
         LlmPreset(id: "gemini-2.5-flash", displayName: "Gemini \u{00B7} gemini-2.5-flash (stable fast)", apiUrl: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-2.5-flash"),
