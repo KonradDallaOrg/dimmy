@@ -92,7 +92,7 @@ final class SystemAudioProcessTap {
             // rescanAndRebuildIfNeeded). The caller (SystemAudioCaptureService)
             // treats .deferred as success and holds onto the instance.
             NSLog("[SystemAudio/tap] no audio-active processes at start() — deferred (rescan will promote)")
-            startRescanTimer()
+            startRescan()
             return .deferred
         }
         NSLog("[SystemAudio/tap] tapping %d audio-active process(es)", activeObjects.count)
@@ -214,51 +214,168 @@ final class SystemAudioProcessTap {
 
         running = true
         NSLog("[SystemAudio/tap] started rate=%d ch=%d", rate, channels)
-        startRescanTimer()
+        startRescan()
         return .live
     }
 
     func stop() {
-        stopRescanTimer()
+        stopRescan()
         guard running else { return }
         teardown()
         running = false
         NSLog("[SystemAudio/tap] stopped")
     }
 
-    // MARK: - Rescan timer
+    // MARK: - Rescan (event-driven HAL listeners + safety backstop)
 
-    /// Re-enumerate audio-active processes every 3 s; rebuild the tap when
-    /// the active set changes. Cheap: same-PID-set tick is two property
-    /// reads + a Set equality. Different-set tick is a full teardown +
-    /// re-start (~50 ms; no audible artifact because the mic chain is on
-    /// a separate cpal stream).
+    /// Watch the audio-active process set and rebuild the tap when it
+    /// changes. Event-driven primary path: two `AudioObjectAddProperty-`
+    /// `ListenerBlock` subscriptions notify us in real time
+    /// (latency ~5-20 ms instead of the historical 3 s polling tick):
     ///
-    /// Trade-off: a brand-new audio-producing app takes up to 3 s to be
-    /// added to the capture set. We accept that latency rather than
-    /// poll faster — the IO-proc-fire pattern means audio doesn't
-    /// disappear, it just isn't recorded for those 3 s. For meeting use
-    /// (Zoom / Meet / Teams launched once at meeting start) this is a
-    /// one-off cost paid before the user joins.
+    ///   1. `kAudioObjectSystemObject` /
+    ///      `kAudioHardwarePropertyProcessObjectList` — fires whenever a
+    ///      process registers or de-registers with coreaudiod (any app
+    ///      opens its first audio stream or closes its last one).
+    ///   2. Each `AudioProcess` object /
+    ///      `kAudioProcessPropertyIsRunning` — fires when that process
+    ///      starts or stops producing audio output.
     ///
-    /// The timer is scheduled on `ioQueue` — the same serial queue the
-    /// IO proc handler fires on — so the rescan handler is naturally
-    /// serialized against IO proc events. Teardown + restart from inside
-    /// the rescan handler is safe on the same queue.
-    private var rescanTimer: DispatchSourceTimer?
+    /// Both callbacks converge on `rescanAndRebuildIfNeeded()`, whose
+    /// `Set == currentTapPidSet` guard makes double-fire harmless. The
+    /// per-process subscriptions are refreshed every time the system
+    /// listener fires (new objects subscribed, vanished objects pruned).
+    ///
+    /// 30 s `DispatchSourceTimer` backstop runs in parallel — it's
+    /// idempotent with the listeners (same Set-equality guard) so a
+    /// missed event (HAL bugs, transient registration failure) is
+    /// silently recovered within 30 s instead of stranding us. Cost is
+    /// one HAL list read + per-process flag reads, ~2 ms every 30 s.
+    ///
+    /// Both the listener queue and the backstop queue are `ioQueue` —
+    /// the same serial queue the IO proc handler fires on — so all
+    /// rescan-related work is naturally serialized against IO proc
+    /// events. Listener-state mutations go through `listenerLock` so
+    /// `start()` / `stop()` from main and the listener block on ioQueue
+    /// don't race on the dictionary.
+    private var processListListener: AudioObjectPropertyListenerBlock?
+    private var perProcessListeners: [AudioObjectID: AudioObjectPropertyListenerBlock] = [:]
+    private var rescanBackstop: DispatchSourceTimer?
+    private let listenerLock = NSLock()
 
-    private func startRescanTimer() {
-        rescanTimer?.cancel()
-        let timer = DispatchSource.makeTimerSource(queue: ioQueue)
-        timer.schedule(deadline: .now() + 3.0, repeating: 3.0)
-        timer.setEventHandler { [weak self] in self?.rescanAndRebuildIfNeeded() }
-        timer.resume()
-        rescanTimer = timer
+    private func startRescan() {
+        // Idempotent: rescan handler runs `_ = start()` to rebuild the
+        // tap, which re-enters `startRescan()`. Listeners survive tap
+        // rebuilds (they're on the system object + process objects,
+        // not on the tap), so the re-entry must be a no-op.
+        listenerLock.lock()
+        let alreadyArmed = processListListener != nil
+        listenerLock.unlock()
+        if alreadyArmed { return }
+
+        var sysAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyProcessObjectList,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        let sysBlock: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            self?.handleProcessListChanged()
+        }
+        let st = AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject), &sysAddr, ioQueue, sysBlock)
+        if st == noErr {
+            listenerLock.lock()
+            processListListener = sysBlock
+            listenerLock.unlock()
+            NSLog("[SystemAudio/tap] event listener armed on ProcessObjectList")
+        } else {
+            NSLog("[SystemAudio/tap] AddPropertyListener(ProcessObjectList) failed: %d — backstop polling only", st)
+        }
+
+        refreshPerProcessListeners()
+
+        let backstop = DispatchSource.makeTimerSource(queue: ioQueue)
+        backstop.schedule(deadline: .now() + 30.0, repeating: 30.0)
+        backstop.setEventHandler { [weak self] in self?.rescanAndRebuildIfNeeded() }
+        backstop.resume()
+        rescanBackstop = backstop
     }
 
-    private func stopRescanTimer() {
-        rescanTimer?.cancel()
-        rescanTimer = nil
+    private func stopRescan() {
+        listenerLock.lock()
+        let oldSys = processListListener
+        let oldPerProcess = perProcessListeners
+        processListListener = nil
+        perProcessListeners.removeAll()
+        listenerLock.unlock()
+
+        if let block = oldSys {
+            var sysAddr = AudioObjectPropertyAddress(
+                mSelector: kAudioHardwarePropertyProcessObjectList,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain)
+            _ = AudioObjectRemovePropertyListenerBlock(
+                AudioObjectID(kAudioObjectSystemObject), &sysAddr, ioQueue, block)
+        }
+        for (obj, block) in oldPerProcess {
+            var addr = AudioObjectPropertyAddress(
+                mSelector: kAudioProcessPropertyIsRunning,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain)
+            _ = AudioObjectRemovePropertyListenerBlock(obj, &addr, ioQueue, block)
+        }
+        rescanBackstop?.cancel()
+        rescanBackstop = nil
+    }
+
+    /// System listener handler — runs on ioQueue. Refresh per-process
+    /// subscriptions (new processes appeared or old ones vanished),
+    /// then re-check the rescan condition. Both steps are cheap and
+    /// idempotent.
+    private func handleProcessListChanged() {
+        refreshPerProcessListeners()
+        rescanAndRebuildIfNeeded()
+    }
+
+    /// Subscribe to `kAudioProcessPropertyIsRunning` for every audio
+    /// process the HAL knows about (minus our own), and unsubscribe
+    /// from objects that have vanished. Called from `startRescan` on
+    /// initial setup and from the system listener every time the
+    /// process list changes.
+    private func refreshPerProcessListeners() {
+        let allObjects = Set(Self.allAudioProcessObjects())
+        let selfPid = ProcessInfo.processInfo.processIdentifier
+
+        listenerLock.lock()
+        // Drop listeners for processes that have vanished.
+        let gone = perProcessListeners.keys.filter { !allObjects.contains($0) }
+        for obj in gone {
+            if let block = perProcessListeners[obj] {
+                var addr = AudioObjectPropertyAddress(
+                    mSelector: kAudioProcessPropertyIsRunning,
+                    mScope: kAudioObjectPropertyScopeGlobal,
+                    mElement: kAudioObjectPropertyElementMain)
+                _ = AudioObjectRemovePropertyListenerBlock(obj, &addr, ioQueue, block)
+            }
+            perProcessListeners.removeValue(forKey: obj)
+        }
+
+        // Subscribe to new ones (skip self — Dimmy's own output
+        // is irrelevant for the tap and would self-trigger rebuilds).
+        for obj in allObjects where perProcessListeners[obj] == nil {
+            if Self.pid(forAudioObject: obj) == selfPid { continue }
+            var addr = AudioObjectPropertyAddress(
+                mSelector: kAudioProcessPropertyIsRunning,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain)
+            let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+                self?.rescanAndRebuildIfNeeded()
+            }
+            let st = AudioObjectAddPropertyListenerBlock(obj, &addr, ioQueue, block)
+            if st == noErr {
+                perProcessListeners[obj] = block
+            }
+        }
+        listenerLock.unlock()
     }
 
     private func rescanAndRebuildIfNeeded() {
