@@ -253,7 +253,8 @@ struct MacInfoButton: View {
                 }
             }
             .padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14))
-            .frame(maxWidth: 320, alignment: .leading)
+            .frame(width: 320, alignment: .topLeading)
+            .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
