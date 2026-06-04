@@ -274,7 +274,107 @@ final class SystemAudioProcessTap {
         return (err == noErr && object != AudioObjectID(kAudioObjectUnknown)) ? object : nil
     }
 
+    /// Enumerate every audio process object the HAL knows about. Returns
+    /// AudioObjectIDs (not PIDs) usable directly in
+    /// `CATapDescription(monoMixdownOfProcesses:)`.
+    ///
+    /// Each entry is a process that has at least one IO context registered
+    /// with coreaudiod (currently or in the recent past). To narrow further
+    /// to "actively producing output", check `kAudioProcessPropertyIsRunning`
+    /// per object — see `audioActiveProcessObjects(excludingSelf:)`. To
+    /// narrow to "currently capturing input", check the input-side property
+    /// from CallDetectionManager — same HAL list, different per-object filter.
+    static func allAudioProcessObjects() -> [AudioObjectID] {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyProcessObjectList,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        var err = AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size)
+        guard err == noErr, size > 0 else { return [] }
+        let count = Int(size) / MemoryLayout<AudioObjectID>.size
+        var ids = [AudioObjectID](repeating: 0, count: count)
+        err = ids.withUnsafeMutableBufferPointer { buf -> OSStatus in
+            AudioObjectGetPropertyData(
+                AudioObjectID(kAudioObjectSystemObject), &address,
+                0, nil, &size, buf.baseAddress!)
+        }
+        guard err == noErr else { return [] }
+        return ids
+    }
+
+    /// Read the `pid_t` for an audio process object.
+    static func pid(forAudioObject obj: AudioObjectID) -> pid_t? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioProcessPropertyPID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var pid: pid_t = -1
+        var size = UInt32(MemoryLayout<pid_t>.size)
+        let err = AudioObjectGetPropertyData(obj, &address, 0, nil, &size, &pid)
+        return (err == noErr && pid > 0) ? pid : nil
+    }
+
+    /// True when the process is currently producing audio (has an active
+    /// IO context on the OUTPUT side). False otherwise — including processes
+    /// that have an audio object but aren't actively playing. Used to prune
+    /// the tap list to the apps we actually want to capture.
+    static func isOutputRunning(_ obj: AudioObjectID) -> Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioProcessPropertyIsRunning,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var value: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        let err = AudioObjectGetPropertyData(obj, &address, 0, nil, &size, &value)
+        return err == noErr && value != 0
+    }
+
+    /// Build the tap input list: every audio-active process EXCEPT Dimmy
+    /// itself. Returned as AudioObjectIDs ready for
+    /// `CATapDescription(monoMixdownOfProcesses:)`.
+    ///
+    /// Empty result means no app is currently producing audio. The caller
+    /// should treat this as "no-op for now" (don't create a tap) and re-poll
+    /// later — the periodic re-enumerate tick in `start()` will pick up the
+    /// first audio-producing app within ~3 s.
+    static func audioActiveProcessObjects(excludingSelf selfPid: pid_t) -> [AudioObjectID] {
+        let all = allAudioProcessObjects()
+        return all.filter { obj in
+            guard let p = pid(forAudioObject: obj), p != selfPid else { return false }
+            return isOutputRunning(obj)
+        }
+    }
+
+    /// PIDs of processes currently producing audio OUTPUT (not capturing
+    /// input). Mirror of `CallDetectionManager.inputRunningPids()` but on
+    /// the render side, sharing the same HAL enumeration. Powers two
+    /// features: per-process tap input selection (this file) and
+    /// known-call-app output-side presence detection (CallDetectionManager).
+    static func outputRunningPids() -> Set<pid_t> {
+        var result = Set<pid_t>()
+        for obj in allAudioProcessObjects() where isOutputRunning(obj) {
+            if let p = pid(forAudioObject: obj) { result.insert(p) }
+        }
+        return result
+    }
+
     // MARK: - Diagnostics
+
+    /// Diagnostic (`DIMMY_TAP_PROBE_ENUM=1`): log the current audio-active
+    /// process set. Sanity-checks the enumeration helper without
+    /// instantiating a tap. Useful before reproducing the Tahoe regression
+    /// to confirm the HAL returns a non-empty list with the expected PIDs.
+    static func runEnumerationProbe() {
+        let selfPid = ProcessInfo.processInfo.processIdentifier
+        let objs = audioActiveProcessObjects(excludingSelf: selfPid)
+        NSLog("[EnumProbe] selfPid=%d active_audio_processes=%d", selfPid, objs.count)
+        for obj in objs {
+            let p = pid(forAudioObject: obj) ?? -1
+            NSLog("[EnumProbe]   audioObjectID=%u pid=%d", obj, p)
+        }
+    }
 
     /// Env-gated probe (`DIMMY_TAP_PROBE=1`): start a tap for ~2 s, then log
     /// how many samples and what peak amplitude arrived before tearing down.
