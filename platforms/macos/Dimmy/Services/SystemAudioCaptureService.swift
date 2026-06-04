@@ -28,14 +28,27 @@ final class SystemAudioCaptureService: NSObject {
     private var processTap: AnyObject?
     private override init() {}
 
-    /// Whether system audio is actually flowing. For the tap path this is
-    /// false until its IO proc fires — which never happens without the
-    /// audio-recording grant, so the meeting can warn instead of silently
-    /// recording mic-only. The SCStream path reports true once started
-    /// (its own start() already fails closed on denial).
+    /// Whether the system-audio path is healthy. Three cases for the tap
+    /// path:
+    ///
+    /// - IO proc has fired (`hasReceivedAudio == true`) → audio is flowing,
+    ///   return true.
+    /// - Tap is in deferred state (`currentTapPidSet.isEmpty`, i.e. no audio
+    ///   source was active at start and the rescan timer hasn't promoted
+    ///   anything yet) → there's nothing to capture *and* no TCC denial
+    ///   to flag; return true so the meeting permission banner doesn't
+    ///   falsely fire when the user starts recording before opening their
+    ///   videoconf app.
+    /// - Tap has sources (`currentTapPidSet` non-empty) but IO proc has
+    ///   not fired → likely missing AudioCapture grant; return false so
+    ///   the banner can warn.
+    ///
+    /// The SCStream path returns true once started (its own start()
+    /// already fails closed on denial).
     var isCapturingSystemAudio: Bool {
         if #available(macOS 14.4, *), let tap = processTap as? SystemAudioProcessTap {
-            return tap.hasReceivedAudio
+            if tap.hasReceivedAudio { return true }
+            return tap.currentTapPidSet.isEmpty
         }
         return stream != nil
     }
@@ -115,27 +128,35 @@ final class SystemAudioCaptureService: NSObject {
             tap.onSamples = { ptr, count, rate in
                 _ = dimmy_push_loopback_audio(ptr, Int32(count), rate)
             }
-            if tap.start() {
-                // Wait up to 800 ms for the IO proc to deliver any frame.
-                // Apple's working tap fires within ~50 ms; 800 ms leaves a
-                // generous margin for cold start and still keeps the
-                // Tahoe-fallback dead-air bounded.
-                try? await Task.sleep(nanoseconds: 800_000_000)
-                if tap.hasReceivedAudio {
-                    processTap = tap
-                    isRunning = true
-                    UserDefaults.standard.removeObject(
-                        forKey: Self.tapSilentEnvDefaultsKey)
-                    NSLog("[SystemAudio] capture via Core Audio process tap")
-                    return true
-                }
-                tap.stop()
+            // Per-process tap StartOutcome dispatch:
+            //   .live     → tap is recording, keep it
+            //   .deferred → no audio source yet; rescan timer will promote
+            //               the moment one appears (~3 s latency). Keep
+            //               the tap instance — falling through to SCKit
+            //               here would defeat the per-process design.
+            //   .failed   → HAL error or denied grant. Cache the env so
+            //               next meetings skip the tap instantly, fall
+            //               through to SCStream.
+            switch tap.start() {
+            case .live:
+                processTap = tap
+                isRunning = true
+                UserDefaults.standard.removeObject(
+                    forKey: Self.tapSilentEnvDefaultsKey)
+                NSLog("[SystemAudio] capture via Core Audio process tap")
+                return true
+            case .deferred:
+                processTap = tap
+                isRunning = true
+                UserDefaults.standard.removeObject(
+                    forKey: Self.tapSilentEnvDefaultsKey)
+                NSLog("[SystemAudio] tap deferred (no audio source yet) — rescan will promote when audio appears")
+                return true
+            case .failed:
                 UserDefaults.standard.set(
                     currentEnv, forKey: Self.tapSilentEnvDefaultsKey)
-                NSLog("[SystemAudio] tap created but IO proc never fired (likely Tahoe ad-hoc + missing AudioCapture grant) — cached env=%@ → ScreenCaptureKit fallback",
+                NSLog("[SystemAudio] tap creation failed — cached env=%@ → ScreenCaptureKit fallback",
                     currentEnv)
-            } else {
-                NSLog("[SystemAudio] process tap unavailable → ScreenCaptureKit fallback")
             }
         } else if skipTapDueToCache {
             NSLog("[SystemAudio] skipping process tap (env=%@ previously silent) → ScreenCaptureKit fallback",

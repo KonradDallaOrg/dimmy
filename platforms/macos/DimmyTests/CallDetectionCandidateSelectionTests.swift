@@ -86,4 +86,74 @@ final class CallDetectionCandidateSelectionTests: XCTestCase {
             pids: [42], selfPid: 42, resolve: resolve)
         XCTAssertNil(pick)
     }
+
+    // MARK: - Output-side gated resolver (Task 5 unification)
+    //
+    // `scanRunningProcesses` falls back to the output-side audio process
+    // list when no input-side candidate is present, then runs the SAME
+    // `firstCallCandidate` over it with `resolveKnownCallApp` (which
+    // returns nil for non-whitelist bundles). These tests pin that gating
+    // logic at the candidate-picker level so a future "loosen the
+    // whitelist" change can't quietly start nudging for Spotify.
+
+    /// Output-side resolver that only resolves bundles in a fixed
+    /// whitelist — analogous to the production `resolveKnownCallApp`,
+    /// but hermetic (no NSRunningApplication / AppKit).
+    private func makeGatedResolver(_ whitelist: Set<String>) -> (pid_t) -> String? {
+        // Maps every pid to a fixed bundle id derived from the pid for
+        // determinism; the gate then only lets through whitelist hits.
+        return { pid in
+            let fakeBundle = "app.\(pid)"
+            return whitelist.contains(fakeBundle) ? fakeBundle : nil
+        }
+    }
+
+    func testOutputResolverGatesNonWhitelist() {
+        // Real-world output-side mix: Spotify + an unknown game playing
+        // audio output, plus Zoom in a call. Only Zoom (whitelist hit)
+        // becomes a candidate; the music apps stay invisible to the
+        // nudge path.
+        let resolve = makeGatedResolver(["app.200"])
+        let pick = CallDetectionManager.firstCallCandidate(
+            pids: [100, 150, 200], selfPid: 1, resolve: resolve)
+        XCTAssertEqual(pick?.0, 200)
+        XCTAssertEqual(pick?.1, "app.200")
+    }
+
+    func testOutputResolverEmptyWhitelistMeansNil() {
+        // Spotify + YouTube tab + Apple Music all producing audio output,
+        // none on the whitelist. The gated resolver must return nil for
+        // every pid → picker returns nil → no nudge. The previous "music
+        // playing causes a Record-now nudge" UX regression we're guarding
+        // against.
+        let resolve = makeGatedResolver([])
+        let pick = CallDetectionManager.firstCallCandidate(
+            pids: [100, 150, 200], selfPid: 1, resolve: resolve)
+        XCTAssertNil(pick)
+    }
+
+    func testOutputResolverPicksLowestWhitelistPid() {
+        // Zoom AND Teams both producing audio output (peer calls in
+        // both — multi-call scenario). Pick deterministically: lowest
+        // whitelist-resolved pid wins, matching the input-side ordering.
+        // Without explicit sorting the test would flake.
+        let resolve = makeGatedResolver(["app.50", "app.300"])
+        let pick = CallDetectionManager.firstCallCandidate(
+            pids: [300, 50, 100, 200], selfPid: 1, resolve: resolve)
+        XCTAssertEqual(pick?.0, 50)
+        XCTAssertEqual(pick?.1, "app.50")
+    }
+
+    func testOutputResolverHonoursSelfPidExclusion() {
+        // Belt-and-braces: even if Dimmy's own bundle ever ended up in
+        // the whitelist by accident, the selfPid filter in
+        // firstCallCandidate would still skip it. Catches the regression
+        // where a future maintainer adds "com.dimmy" to bundleWhitelist
+        // for some debug purpose.
+        let resolve = makeGatedResolver(["app.42", "app.100"])
+        let pick = CallDetectionManager.firstCallCandidate(
+            pids: [42, 100], selfPid: 42, resolve: resolve)
+        XCTAssertEqual(pick?.0, 100)
+        XCTAssertEqual(pick?.1, "app.100")
+    }
 }

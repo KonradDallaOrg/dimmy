@@ -38,6 +38,13 @@ final class SystemAudioProcessTap {
     private var channelCount: Int = 1
     private var running = false
 
+    /// PID set the current tap was built from. Used by the re-enumerate
+    /// tick to detect "the active-audio process set changed, rebuild the
+    /// tap" without paying for a teardown when nothing changed. Also
+    /// exposed (read-only) for diagnostics and for CallDetectionManager
+    /// to read the currently-captured set as a presence signal.
+    private(set) var currentTapPidSet: Set<pid_t> = []
+
     /// Latched true the first time the IO proc fires. When the audio-
     /// recording grant is missing the tap is created but its IO proc never
     /// runs, so this stays false — that's how the meeting tells "ungranted"
@@ -49,23 +56,48 @@ final class SystemAudioProcessTap {
     private let ioQueue = DispatchQueue(
         label: "dimmy.systemaudio.tap.io", qos: .userInteractive)
 
+    /// Outcome of a `start()` attempt.
+    ///
+    /// - `.live`: the tap is recording — IO proc is firing, samples flow.
+    /// - `.deferred`: no audio source was active at start; the rescan timer
+    ///   will pick up the first source within ~3 s and self-promote to
+    ///   `.live`. The caller should keep the instance alive — falling back
+    ///   to SCKit here would defeat the per-process design.
+    /// - `.failed`: HAL error — caller should fall back to SCStream.
+    enum StartOutcome { case live, deferred, failed }
+
     /// Create the tap + aggregate device + IO proc and start pulling audio.
-    /// Returns false on any HAL failure so the caller can fall back to
-    /// ScreenCaptureKit. Idempotent: a second call while running is a no-op.
-    func start() -> Bool {
-        guard !running else { return true }
+    /// Idempotent: a second call while running is a no-op (returns `.live`).
+    ///
+    /// `.deferred` is NOT a failure — the instance is kept hot and the
+    /// rescan timer will promote it the moment an audio source appears.
+    /// Only `.failed` should trigger SCStream fallback.
+    @discardableResult
+    func start() -> StartOutcome {
+        guard !running else { return .live }
 
-        // Exclude Dimmy's own output from the global tap — mirror of
-        // SCStream's `excludesCurrentProcessAudio = true`. If translation
-        // fails we still build the tap (capturing self is harmless: AEC
-        // already cancels our own playback, and Dimmy produces no audio
-        // during a meeting).
-        var excluded: [AudioObjectID] = []
-        if let selfObj = Self.processObject(for: ProcessInfo.processInfo.processIdentifier) {
-            excluded = [selfObj]
+        // Per-process tap (Tahoe workaround): enumerate every audio-active
+        // process except Dimmy itself, then build a mono mixdown of their
+        // outputs. The historic global `monoGlobalTapButExcludeProcesses`
+        // variant silently delivers zero-amplitude buffers on macOS 26.x
+        // — verified by 6-config aggregate probe 2026-06-04: every variant
+        // returned peak=0.0000. The per-process variant on the same
+        // machine returned peak=0.0900 (real audio).
+        let selfPid = ProcessInfo.processInfo.processIdentifier
+        let activeObjects = Self.audioActiveProcessObjects(excludingSelf: selfPid)
+        guard !activeObjects.isEmpty else {
+            // No app is currently producing audio. Don't create a dead tap;
+            // keep the rescan timer alive so we self-recover the moment
+            // audio appears (.deferred → .live promotion in
+            // rescanAndRebuildIfNeeded). The caller (SystemAudioCaptureService)
+            // treats .deferred as success and holds onto the instance.
+            NSLog("[SystemAudio/tap] no audio-active processes at start() — deferred (rescan will promote)")
+            startRescan()
+            return .deferred
         }
+        NSLog("[SystemAudio/tap] tapping %d audio-active process(es)", activeObjects.count)
 
-        let description = CATapDescription(monoGlobalTapButExcludeProcesses: excluded)
+        let description = CATapDescription(monoMixdownOfProcesses: activeObjects)
         description.uuid = UUID()
         description.name = "Dimmy System Audio"
         description.muteBehavior = .unmuted
@@ -76,14 +108,15 @@ final class SystemAudioProcessTap {
         var err = AudioHardwareCreateProcessTap(description, &newTap)
         guard err == noErr, newTap != AudioObjectID(kAudioObjectUnknown) else {
             NSLog("[SystemAudio/tap] AudioHardwareCreateProcessTap failed: %d", err)
-            return false
+            return .failed
         }
         tapID = newTap
+        currentTapPidSet = Set(activeObjects.compactMap { Self.pid(forAudioObject: $0) })
 
         guard let asbd = Self.readTapFormat(tapID) else {
             NSLog("[SystemAudio/tap] could not read tap stream format")
             teardown()
-            return false
+            return .failed
         }
         sampleRate = asbd.mSampleRate > 0 ? Int32(asbd.mSampleRate) : 48_000
         channelCount = asbd.mChannelsPerFrame > 0 ? Int(asbd.mChannelsPerFrame) : 1
@@ -137,7 +170,7 @@ final class SystemAudioProcessTap {
         guard err == noErr, newAggregate != AudioObjectID(kAudioObjectUnknown) else {
             NSLog("[SystemAudio/tap] AudioHardwareCreateAggregateDevice failed: %d", err)
             teardown()
-            return false
+            return .failed
         }
         aggregateID = newAggregate
 
@@ -168,7 +201,7 @@ final class SystemAudioProcessTap {
         guard err == noErr, let procID = newProcID else {
             NSLog("[SystemAudio/tap] AudioDeviceCreateIOProcIDWithBlock failed: %d", err)
             teardown()
-            return false
+            return .failed
         }
         ioProcID = procID
 
@@ -176,19 +209,202 @@ final class SystemAudioProcessTap {
         guard err == noErr else {
             NSLog("[SystemAudio/tap] AudioDeviceStart failed: %d", err)
             teardown()
-            return false
+            return .failed
         }
 
         running = true
         NSLog("[SystemAudio/tap] started rate=%d ch=%d", rate, channels)
-        return true
+        startRescan()
+        return .live
     }
 
     func stop() {
+        stopRescan()
         guard running else { return }
         teardown()
         running = false
         NSLog("[SystemAudio/tap] stopped")
+    }
+
+    // MARK: - Rescan (event-driven HAL listeners + safety backstop)
+
+    /// Watch the audio-active process set and rebuild the tap when it
+    /// changes. Event-driven primary path: two `AudioObjectAddProperty-`
+    /// `ListenerBlock` subscriptions notify us in real time
+    /// (latency ~5-20 ms instead of the historical 3 s polling tick):
+    ///
+    ///   1. `kAudioObjectSystemObject` /
+    ///      `kAudioHardwarePropertyProcessObjectList` — fires whenever a
+    ///      process registers or de-registers with coreaudiod (any app
+    ///      opens its first audio stream or closes its last one).
+    ///   2. Each `AudioProcess` object /
+    ///      `kAudioProcessPropertyIsRunning` — fires when that process
+    ///      starts or stops producing audio output.
+    ///
+    /// Both callbacks converge on `rescanAndRebuildIfNeeded()`, whose
+    /// `Set == currentTapPidSet` guard makes double-fire harmless. The
+    /// per-process subscriptions are refreshed every time the system
+    /// listener fires (new objects subscribed, vanished objects pruned).
+    ///
+    /// 30 s `DispatchSourceTimer` backstop runs in parallel — it's
+    /// idempotent with the listeners (same Set-equality guard) so a
+    /// missed event (HAL bugs, transient registration failure) is
+    /// silently recovered within 30 s instead of stranding us. Cost is
+    /// one HAL list read + per-process flag reads, ~2 ms every 30 s.
+    ///
+    /// Both the listener queue and the backstop queue are `ioQueue` —
+    /// the same serial queue the IO proc handler fires on — so all
+    /// rescan-related work is naturally serialized against IO proc
+    /// events. Listener-state mutations go through `listenerLock` so
+    /// `start()` / `stop()` from main and the listener block on ioQueue
+    /// don't race on the dictionary.
+    private var processListListener: AudioObjectPropertyListenerBlock?
+    private var perProcessListeners: [AudioObjectID: AudioObjectPropertyListenerBlock] = [:]
+    private var rescanBackstop: DispatchSourceTimer?
+    private let listenerLock = NSLock()
+
+    private func startRescan() {
+        // Idempotent: rescan handler runs `_ = start()` to rebuild the
+        // tap, which re-enters `startRescan()`. Listeners survive tap
+        // rebuilds (they're on the system object + process objects,
+        // not on the tap), so the re-entry must be a no-op.
+        listenerLock.lock()
+        let alreadyArmed = processListListener != nil
+        listenerLock.unlock()
+        if alreadyArmed { return }
+
+        var sysAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyProcessObjectList,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        let sysBlock: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            self?.handleProcessListChanged()
+        }
+        let st = AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject), &sysAddr, ioQueue, sysBlock)
+        if st == noErr {
+            listenerLock.lock()
+            processListListener = sysBlock
+            listenerLock.unlock()
+            NSLog("[SystemAudio/tap] event listener armed on ProcessObjectList")
+        } else {
+            NSLog("[SystemAudio/tap] AddPropertyListener(ProcessObjectList) failed: %d — backstop polling only", st)
+        }
+
+        refreshPerProcessListeners()
+
+        let backstop = DispatchSource.makeTimerSource(queue: ioQueue)
+        backstop.schedule(deadline: .now() + 30.0, repeating: 30.0)
+        backstop.setEventHandler { [weak self] in self?.rescanAndRebuildIfNeeded() }
+        backstop.resume()
+        rescanBackstop = backstop
+    }
+
+    private func stopRescan() {
+        listenerLock.lock()
+        let oldSys = processListListener
+        let oldPerProcess = perProcessListeners
+        processListListener = nil
+        perProcessListeners.removeAll()
+        listenerLock.unlock()
+
+        if let block = oldSys {
+            var sysAddr = AudioObjectPropertyAddress(
+                mSelector: kAudioHardwarePropertyProcessObjectList,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain)
+            _ = AudioObjectRemovePropertyListenerBlock(
+                AudioObjectID(kAudioObjectSystemObject), &sysAddr, ioQueue, block)
+        }
+        for (obj, block) in oldPerProcess {
+            var addr = AudioObjectPropertyAddress(
+                mSelector: kAudioProcessPropertyIsRunning,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain)
+            _ = AudioObjectRemovePropertyListenerBlock(obj, &addr, ioQueue, block)
+        }
+        rescanBackstop?.cancel()
+        rescanBackstop = nil
+    }
+
+    /// System listener handler — runs on ioQueue. Refresh per-process
+    /// subscriptions (new processes appeared or old ones vanished),
+    /// then re-check the rescan condition. Both steps are cheap and
+    /// idempotent.
+    private func handleProcessListChanged() {
+        refreshPerProcessListeners()
+        rescanAndRebuildIfNeeded()
+    }
+
+    /// Subscribe to `kAudioProcessPropertyIsRunning` for every audio
+    /// process the HAL knows about (minus our own), and unsubscribe
+    /// from objects that have vanished. Called from `startRescan` on
+    /// initial setup and from the system listener every time the
+    /// process list changes.
+    private func refreshPerProcessListeners() {
+        let allObjects = Set(Self.allAudioProcessObjects())
+        let selfPid = ProcessInfo.processInfo.processIdentifier
+
+        listenerLock.lock()
+        // Drop listeners for processes that have vanished.
+        let gone = perProcessListeners.keys.filter { !allObjects.contains($0) }
+        for obj in gone {
+            if let block = perProcessListeners[obj] {
+                var addr = AudioObjectPropertyAddress(
+                    mSelector: kAudioProcessPropertyIsRunning,
+                    mScope: kAudioObjectPropertyScopeGlobal,
+                    mElement: kAudioObjectPropertyElementMain)
+                _ = AudioObjectRemovePropertyListenerBlock(obj, &addr, ioQueue, block)
+            }
+            perProcessListeners.removeValue(forKey: obj)
+        }
+
+        // Subscribe to new ones (skip self — Dimmy's own output
+        // is irrelevant for the tap and would self-trigger rebuilds).
+        for obj in allObjects where perProcessListeners[obj] == nil {
+            if Self.pid(forAudioObject: obj) == selfPid { continue }
+            var addr = AudioObjectPropertyAddress(
+                mSelector: kAudioProcessPropertyIsRunning,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain)
+            let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+                self?.rescanAndRebuildIfNeeded()
+            }
+            let st = AudioObjectAddPropertyListenerBlock(obj, &addr, ioQueue, block)
+            if st == noErr {
+                perProcessListeners[obj] = block
+            }
+        }
+        listenerLock.unlock()
+    }
+
+    private func rescanAndRebuildIfNeeded() {
+        let selfPid = ProcessInfo.processInfo.processIdentifier
+        let activeObjects = Self.audioActiveProcessObjects(excludingSelf: selfPid)
+        let newPidSet = Set(activeObjects.compactMap { Self.pid(forAudioObject: $0) })
+
+        if running {
+            // Live tap: only rebuild when the active set actually changes.
+            // Same-set tick costs one HAL list read + per-process flag +
+            // Set equality — cheap enough to do at 3 s cadence forever.
+            guard newPidSet != currentTapPidSet else { return }
+            NSLog("[SystemAudio/tap] audio-active PID set changed (was %d, now %d) — rebuilding tap",
+                  currentTapPidSet.count, newPidSet.count)
+            let savedHandler = onSamples
+            teardown()
+            running = false
+            onSamples = savedHandler
+            _ = start()
+        } else {
+            // Deferred state: no tap created yet (no audio source at start).
+            // Wait for ANY audio source, then promote to live. Avoids the
+            // false-positive SCKit fallback when the user starts a meeting
+            // before opening their videoconf app.
+            guard !activeObjects.isEmpty else { return }
+            NSLog("[SystemAudio/tap] audio now active (%d source(s)) — promoting deferred tap to live",
+                  activeObjects.count)
+            _ = start()
+        }
     }
 
     /// Sample count in the first buffer of an IO proc's input list.
@@ -241,6 +457,7 @@ final class SystemAudioProcessTap {
     // MARK: - Teardown
 
     private func teardown() {
+        currentTapPidSet = []
         if let procID = ioProcID, aggregateID != AudioObjectID(kAudioObjectUnknown) {
             AudioDeviceStop(aggregateID, procID)
             AudioDeviceDestroyIOProcID(aggregateID, procID)
@@ -260,7 +477,7 @@ final class SystemAudioProcessTap {
 
     /// Translate a pid to its CoreAudio process object id (needed for the
     /// tap's exclude list). nil if the pid has no audio process object.
-    private static func processObject(for pid: pid_t) -> AudioObjectID? {
+    fileprivate static func processObject(for pid: pid_t) -> AudioObjectID? {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyTranslatePIDToProcessObject,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -274,7 +491,107 @@ final class SystemAudioProcessTap {
         return (err == noErr && object != AudioObjectID(kAudioObjectUnknown)) ? object : nil
     }
 
+    /// Enumerate every audio process object the HAL knows about. Returns
+    /// AudioObjectIDs (not PIDs) usable directly in
+    /// `CATapDescription(monoMixdownOfProcesses:)`.
+    ///
+    /// Each entry is a process that has at least one IO context registered
+    /// with coreaudiod (currently or in the recent past). To narrow further
+    /// to "actively producing output", check `kAudioProcessPropertyIsRunning`
+    /// per object — see `audioActiveProcessObjects(excludingSelf:)`. To
+    /// narrow to "currently capturing input", check the input-side property
+    /// from CallDetectionManager — same HAL list, different per-object filter.
+    static func allAudioProcessObjects() -> [AudioObjectID] {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyProcessObjectList,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        var err = AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size)
+        guard err == noErr, size > 0 else { return [] }
+        let count = Int(size) / MemoryLayout<AudioObjectID>.size
+        var ids = [AudioObjectID](repeating: 0, count: count)
+        err = ids.withUnsafeMutableBufferPointer { buf -> OSStatus in
+            AudioObjectGetPropertyData(
+                AudioObjectID(kAudioObjectSystemObject), &address,
+                0, nil, &size, buf.baseAddress!)
+        }
+        guard err == noErr else { return [] }
+        return ids
+    }
+
+    /// Read the `pid_t` for an audio process object.
+    static func pid(forAudioObject obj: AudioObjectID) -> pid_t? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioProcessPropertyPID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var pid: pid_t = -1
+        var size = UInt32(MemoryLayout<pid_t>.size)
+        let err = AudioObjectGetPropertyData(obj, &address, 0, nil, &size, &pid)
+        return (err == noErr && pid > 0) ? pid : nil
+    }
+
+    /// True when the process is currently producing audio (has an active
+    /// IO context on the OUTPUT side). False otherwise — including processes
+    /// that have an audio object but aren't actively playing. Used to prune
+    /// the tap list to the apps we actually want to capture.
+    static func isOutputRunning(_ obj: AudioObjectID) -> Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioProcessPropertyIsRunning,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var value: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        let err = AudioObjectGetPropertyData(obj, &address, 0, nil, &size, &value)
+        return err == noErr && value != 0
+    }
+
+    /// Build the tap input list: every audio-active process EXCEPT Dimmy
+    /// itself. Returned as AudioObjectIDs ready for
+    /// `CATapDescription(monoMixdownOfProcesses:)`.
+    ///
+    /// Empty result means no app is currently producing audio. The caller
+    /// should treat this as "no-op for now" (don't create a tap) and re-poll
+    /// later — the periodic re-enumerate tick in `start()` will pick up the
+    /// first audio-producing app within ~3 s.
+    static func audioActiveProcessObjects(excludingSelf selfPid: pid_t) -> [AudioObjectID] {
+        let all = allAudioProcessObjects()
+        return all.filter { obj in
+            guard let p = pid(forAudioObject: obj), p != selfPid else { return false }
+            return isOutputRunning(obj)
+        }
+    }
+
+    /// PIDs of processes currently producing audio OUTPUT (not capturing
+    /// input). Mirror of `CallDetectionManager.inputRunningPids()` but on
+    /// the render side, sharing the same HAL enumeration. Powers two
+    /// features: per-process tap input selection (this file) and
+    /// known-call-app output-side presence detection (CallDetectionManager).
+    static func outputRunningPids() -> Set<pid_t> {
+        var result = Set<pid_t>()
+        for obj in allAudioProcessObjects() where isOutputRunning(obj) {
+            if let p = pid(forAudioObject: obj) { result.insert(p) }
+        }
+        return result
+    }
+
     // MARK: - Diagnostics
+
+    /// Diagnostic (`DIMMY_TAP_PROBE_ENUM=1`): log the current audio-active
+    /// process set. Sanity-checks the enumeration helper without
+    /// instantiating a tap. Useful before reproducing the Tahoe regression
+    /// to confirm the HAL returns a non-empty list with the expected PIDs.
+    static func runEnumerationProbe() {
+        let selfPid = ProcessInfo.processInfo.processIdentifier
+        let objs = audioActiveProcessObjects(excludingSelf: selfPid)
+        NSLog("[EnumProbe] selfPid=%d active_audio_processes=%d", selfPid, objs.count)
+        for obj in objs {
+            let p = pid(forAudioObject: obj) ?? -1
+            NSLog("[EnumProbe]   audioObjectID=%u pid=%d", obj, p)
+        }
+    }
 
     /// Env-gated probe (`DIMMY_TAP_PROBE=1`): start a tap for ~2 s, then log
     /// how many samples and what peak amplitude arrived before tearing down.
@@ -295,9 +612,14 @@ final class SystemAudioProcessTap {
             if p > counters.peak { counters.peak = p }
         }
         NSLog("[SystemAudio/probe] starting 2 s tap probe — play some audio now")
-        guard tap.start() else {
+        switch tap.start() {
+        case .failed:
             NSLog("[SystemAudio/probe] FAILED to start tap")
             return
+        case .deferred:
+            NSLog("[SystemAudio/probe] tap deferred (no audio source) — start audio and the rescan tick will promote")
+        case .live:
+            break
         }
         // Single-threaded diagnostic: the deferred stop runs strictly after
         // start, so opting these captures out of Sendable checking is safe.
@@ -493,6 +815,106 @@ final class SystemAudioProcessTap {
 
         NSLog("[ProbeMulti] %@ DONE outputUID=%@ nStreams=%d samples=%d peak=%.4f rate=%d",
               label, outputUID ?? "<none>", nStreams, counter.n, counter.p, rate)
+    }
+
+    /// Per-process probe (`DIMMY_TAP_PROBE_PID=<pid>`): build a tap that
+    /// captures ONLY the audio output of the target pid (e.g. Chrome with
+    /// a YouTube tab, Zoom call window). Runs ~5 s, logs sample count and
+    /// peak amplitude. Disambiguates "Tahoe regression hits global tap only"
+    /// (per-process works → switch to per-process path) from "Tahoe
+    /// regression hits all taps" (per-process also peak=0 → no tap fix
+    /// possible, must move to SCKit or another mechanism).
+    static func runPerProcessProbe(pid: pid_t) {
+        NSLog("[ProcessProbe] starting per-process tap for pid=%d — play audio in that app NOW", pid)
+        guard let obj = processObject(for: pid) else {
+            NSLog("[ProcessProbe] FAIL: pid=%d has no audio process object", pid)
+            return
+        }
+        NSLog("[ProcessProbe] pid=%d → audioObjectID=%u", pid, obj)
+
+        let description = CATapDescription(monoMixdownOfProcesses: [obj])
+        description.uuid = UUID()
+        description.name = "Probe-PerProcess-\(pid)"
+        description.muteBehavior = .unmuted
+        description.isPrivate = true
+        description.isExclusive = false
+
+        var tapID = AudioObjectID(kAudioObjectUnknown)
+        var err = AudioHardwareCreateProcessTap(description, &tapID)
+        guard err == noErr, tapID != AudioObjectID(kAudioObjectUnknown) else {
+            NSLog("[ProcessProbe] CreateTap FAIL err=%d", err)
+            return
+        }
+        defer { AudioHardwareDestroyProcessTap(tapID) }
+
+        guard let asbd = readTapFormat(tapID) else {
+            NSLog("[ProcessProbe] readTapFormat FAIL")
+            return
+        }
+        let rate = asbd.mSampleRate > 0 ? Int32(asbd.mSampleRate) : 48_000
+
+        let aggregateUID = UUID().uuidString
+        let outputUID = defaultOutputDeviceUID()
+        var dict: [String: Any] = [
+            kAudioAggregateDeviceNameKey: "Probe-PerProcess-Agg-\(pid)",
+            kAudioAggregateDeviceUIDKey: aggregateUID,
+            kAudioAggregateDeviceIsPrivateKey: true,
+            kAudioAggregateDeviceIsStackedKey: false,
+            kAudioAggregateDeviceTapAutoStartKey: false,
+            kAudioAggregateDeviceTapListKey: [[
+                kAudioSubTapDriftCompensationKey: true,
+                kAudioSubTapUIDKey: description.uuid.uuidString,
+            ]],
+        ]
+        if let outputUID {
+            dict[kAudioAggregateDeviceMainSubDeviceKey] = outputUID
+            dict[kAudioAggregateDeviceSubDeviceListKey] = [[kAudioSubDeviceUIDKey: outputUID]]
+        }
+
+        var aggregateID = AudioObjectID(kAudioObjectUnknown)
+        err = AudioHardwareCreateAggregateDevice(dict as CFDictionary, &aggregateID)
+        guard err == noErr, aggregateID != AudioObjectID(kAudioObjectUnknown) else {
+            NSLog("[ProcessProbe] CreateAggregate FAIL err=%d", err)
+            return
+        }
+        defer { AudioHardwareDestroyAggregateDevice(aggregateID) }
+
+        final class C { var n = 0; var p: Float = 0 }
+        let counter = C()
+        nonisolated(unsafe) let unsafeCounter = counter
+
+        var procID: AudioDeviceIOProcID?
+        let queue = DispatchQueue(label: "probe.pp", qos: .userInteractive)
+        err = AudioDeviceCreateIOProcIDWithBlock(&procID, aggregateID, queue) { _, inInput, _, _, _ in
+            let abl = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inInput))
+            guard let buf = abl.first, let data = buf.mData else { return }
+            let count = Int(buf.mDataByteSize) / MemoryLayout<Float>.size
+            unsafeCounter.n += count
+            let fs = data.assumingMemoryBound(to: Float.self)
+            var pk: Float = 0
+            for i in 0..<count { pk = max(pk, abs(fs[i])) }
+            if pk > unsafeCounter.p { unsafeCounter.p = pk }
+        }
+        guard err == noErr, let procID else {
+            NSLog("[ProcessProbe] CreateIOProc FAIL err=%d", err)
+            return
+        }
+        defer {
+            AudioDeviceStop(aggregateID, procID)
+            AudioDeviceDestroyIOProcID(aggregateID, procID)
+        }
+
+        err = AudioDeviceStart(aggregateID, procID)
+        if err != noErr {
+            NSLog("[ProcessProbe] AudioDeviceStart FAIL err=%d", err)
+            return
+        }
+
+        NSLog("[ProcessProbe] tap running 5 s — play audio NOW in pid=%d", pid)
+        Thread.sleep(forTimeInterval: 5.0)
+
+        NSLog("[ProcessProbe] DONE pid=%d audioObjectID=%u samples=%d peak=%.4f rate=%d",
+              pid, obj, counter.n, counter.p, rate)
     }
 
     /// `kAudioHardwarePropertyDefaultOutputDevice` (vs DefaultSystemOutput).
