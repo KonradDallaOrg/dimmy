@@ -1879,14 +1879,12 @@ mod tests {
 mod device_rate_tests {
     use super::*;
 
+    /// Single test rather than two — the two ran in parallel by default
+    /// and raced on the shared atomic.
     #[test]
-    fn device_rate_zero_when_idle() {
+    fn device_rate_store_load_round_trip() {
         ACTIVE_MIC_DEVICE_RATE.store(0, Ordering::Relaxed);
         assert_eq!(active_mic_device_rate(), 0);
-    }
-
-    #[test]
-    fn device_rate_round_trip() {
         ACTIVE_MIC_DEVICE_RATE.store(16_000, Ordering::Relaxed);
         assert_eq!(active_mic_device_rate(), 16_000);
         ACTIVE_MIC_DEVICE_RATE.store(0, Ordering::Relaxed);
