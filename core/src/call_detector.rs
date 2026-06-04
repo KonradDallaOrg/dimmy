@@ -126,6 +126,17 @@ pub struct CallDetectorState {
     /// Suppression deadline for stop suggestions after KeepRecording.
     /// Set as `now + stop_keep_cooldown_secs` on KeepRecording.
     stop_suggestion_until: Option<i64>,
+    /// True while the host is deterministically watching a meeting-origin
+    /// process (a detected call app). When set, the SILENCE heuristic
+    /// (`check_stop_suggestion`, fed by mic/sys amplitude) is suppressed:
+    /// the authoritative stop signal is `signal_call_session_ended`, fired
+    /// when that process actually goes away. Without this, a real call with
+    /// quiet stretches (everyone listening / muted) trips the both-sides-
+    /// silent threshold every cooldown and re-nags "the call ended" — the
+    /// 15-popups-in-one-meeting bug. Hosts with no trackable origin (a
+    /// meeting without a detected call app) leave this false and the silence
+    /// backstop stays active as the only stop signal.
+    has_tracked_origin: bool,
 }
 
 impl CallDetectorState {
@@ -157,6 +168,7 @@ impl CallDetectorState {
             sys_signaling_enabled: false,
             stop_suggestion_emitted: false,
             stop_suggestion_until: None,
+            has_tracked_origin: false,
         }
     }
 
@@ -282,6 +294,13 @@ impl CallDetectorState {
     /// signaling is enabled) have been silent past their thresholds.
     fn check_stop_suggestion(&mut self, is_meeting_active: bool, now: i64) -> CallSignalOutcome {
         if !self.recording_active_from_us || !is_meeting_active || self.stop_suggestion_emitted {
+            return CallSignalOutcome::NoChange;
+        }
+        // When a meeting-origin process is being watched deterministically,
+        // the silence heuristic is the wrong authority: a quiet stretch in a
+        // live call isn't the call ending. Defer entirely to
+        // `signal_call_session_ended` (fires when the process goes away).
+        if self.has_tracked_origin {
             return CallSignalOutcome::NoChange;
         }
         if let Some(until) = self.stop_suggestion_until {
@@ -511,6 +530,17 @@ impl CallDetectorState {
         self.sys_inactive_since = None;
         self.stop_suggestion_emitted = false;
         self.stop_suggestion_until = None;
+        self.has_tracked_origin = false;
+    }
+
+    /// Host tells the detector whether it is deterministically watching a
+    /// meeting-origin process (a detected call app). While true, the silence
+    /// heuristic is suppressed and only `signal_call_session_ended` (the
+    /// process-gone signal) can stop-suggest — see `has_tracked_origin`. Set
+    /// true when the host binds/adopts an origin pid, false when it clears it
+    /// or the meeting ends. Idempotent.
+    pub fn set_tracked_origin(&mut self, tracked: bool) {
+        self.has_tracked_origin = tracked;
     }
 
     /// A meeting was started OUTSIDE the "Record now" nudge — i.e. manually
@@ -682,6 +712,44 @@ mod tests {
         assert_eq!(
             out,
             CallSignalOutcome::Suppressed(SuppressionReason::Debouncing)
+        );
+    }
+
+    #[test]
+    fn tracked_origin_suppresses_silence_stop_suggestion() {
+        // The 15-popups bug: a live call with a quiet stretch trips the
+        // both-sides-silent threshold. While the host is watching the call's
+        // origin pid deterministically, the silence heuristic must stay quiet
+        // — only the process-gone signal (`signal_call_session_ended`) decides.
+        let mut s = fresh();
+        s.meeting_started_external();
+        s.set_tracked_origin(true);
+        s.signal(false, None, true, 1000); // mic goes quiet
+        let out = s.signal(false, None, true, 1010); // 10 s > 5 s threshold
+        assert_eq!(
+            out,
+            CallSignalOutcome::NoChange,
+            "silence must not stop-suggest while a meeting-origin pid is tracked"
+        );
+        // The deterministic path is still free to fire.
+        let ended = s.signal_call_session_ended(true, 1011);
+        assert!(
+            matches!(ended, CallSignalOutcome::StopSuggested { .. }),
+            "process-gone signal must still stop-suggest, got {ended:?}"
+        );
+    }
+
+    #[test]
+    fn without_tracked_origin_silence_still_stop_suggests() {
+        // No detectable call app → the silence backstop is the only stop
+        // signal and must keep working exactly as before.
+        let mut s = fresh();
+        s.meeting_started_external();
+        s.signal(false, None, true, 1000);
+        let out = s.signal(false, None, true, 1010);
+        assert!(
+            matches!(out, CallSignalOutcome::StopSuggested { .. }),
+            "silence backstop must fire when no origin pid is tracked, got {out:?}"
         );
     }
 

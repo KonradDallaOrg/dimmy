@@ -7642,6 +7642,21 @@ pub unsafe extern "C" fn dimmy_call_signal_sys(sys_active: c_int, app_id: *const
     }
 }
 
+/// Tell the detector whether the host is deterministically watching a
+/// meeting-origin process (a detected call app). While set to 1, the
+/// silence-based stop-suggestion is suppressed and only
+/// `dimmy_call_signal_session_ended` decides when to offer "stop recording" —
+/// this stops the silence heuristic from re-nagging "the call ended" on a
+/// live call's quiet stretches (the 15-popups-per-meeting bug). Pass 1 when
+/// binding/adopting an origin pid, 0 when clearing it. `dimmy_meeting_stop`
+/// also clears it via `meeting_stopped()`. Returns 0.
+#[no_mangle]
+pub extern "C" fn dimmy_call_set_tracked_origin(tracked: c_int) -> c_int {
+    let mut g = call_detector_lock();
+    g.set_tracked_origin(tracked != 0);
+    0
+}
+
 /// Authoritative "call ended" signal — host has positive evidence
 /// the originating WASAPI session disappeared from the active
 /// capture-session set. Bypasses the amplitude-based silence

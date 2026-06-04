@@ -598,6 +598,15 @@ int32_t dimmy_call_signal_session_ended(void);
 /// returns 1.
 int32_t dimmy_call_meeting_started_external(void);
 
+/// Tell the detector whether the host is deterministically watching a
+/// meeting-origin process (a detected call app). While `tracked` is 1 the
+/// silence-based stop-suggestion is suppressed and only
+/// `dimmy_call_signal_session_ended` decides when to offer "stop recording" —
+/// this stops the silence heuristic from re-nagging "the call ended" on a
+/// live call's quiet stretches. Pass 1 when binding/adopting an origin pid,
+/// 0 when clearing it. `dimmy_meeting_stop` also clears it. Returns 0.
+int32_t dimmy_call_set_tracked_origin(int32_t tracked);
+
 /// Compute a peak-summary JSON `{peaks:[f32;bucket_count], duration_secs}`
 /// from any audio file the Rust loader can decode (WAV via hound, m4a
 /// / mp3 / aac / flac / ogg via Symphonia). Same role as the in-Swift
