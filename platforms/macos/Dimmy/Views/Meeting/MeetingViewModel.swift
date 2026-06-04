@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import AppKit
+import AVFoundation
 import Combine
 
 // MARK: - MeetingViewModel
@@ -342,6 +343,11 @@ final class MeetingViewModel: ObservableObject {
 
     func start() {
         guard !isWorking, phase == .idle || phase == .done else { return }
+        // Recording-consent gate (mandatory). A meeting captures system audio
+        // = other people, so we confirm consent and announce before recording.
+        // Cancelling aborts the start. Mirror of Win MeetingWindow.Start_Click.
+        let lang = Locale.current.language.languageCode?.identifier ?? "en"
+        guard MeetingConsentFlow.confirmAndAnnounce(lang: lang) else { return }
         // Flush any unsaved notes from the previous Done view before
         // we wipe the buffer, matches the LostFocus save on Win.
         saveNotes()
@@ -1242,5 +1248,58 @@ struct MeetingHistoryRow: Identifiable, Equatable {
         let timeParts = timeRaw.split(separator: "-")
         guard timeParts.count >= 2 else { return name }
         return "\(date) \(timeParts[0]):\(timeParts[1])"
+    }
+}
+
+/// Mandatory recording-consent gate for meeting start. Mirror of the Windows
+/// ConsentFlow: notice text + audit log come from the shared Rust core so every
+/// platform says the same thing. The spoken notice reaches the user and anyone
+/// in the same room; REMOTE participants only hear it if the user is unmuted,
+/// so the pasteboard copy is the reliable channel for them. TTS / clipboard are
+/// best-effort and never block the meeting.
+@MainActor
+enum MeetingConsentFlow {
+    // Held statically so speech isn't cut off when the call returns.
+    private static let synthesizer = AVSpeechSynthesizer()
+
+    /// Shows the confirmation modal; on accept speaks + copies the announcement
+    /// and logs each step. Returns true if the meeting may start. Main thread.
+    static func confirmAndAnnounce(lang: String) -> Bool {
+        let modal = DimmyCore.shared.consentText(kind: "modal", lang: lang)
+            ?? "You are about to record audio that may include other people. Confirm you have informed all participants and obtained their consent."
+        let announcement = DimmyCore.shared.consentText(kind: "announcement", lang: lang)
+            ?? "Quick note: this meeting is being recorded and transcribed for note-taking."
+
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Recording notice"
+        alert.informativeText = modal + "\n\n\u{201C}" + announcement + "\u{201D}"
+        alert.addButton(withTitle: "I have consent, start")
+        alert.addButton(withTitle: "Cancel")
+        // Highlight Cancel (the second button) so Enter doesn't blow past the gate.
+        if alert.buttons.count > 1 {
+            alert.window.defaultButtonCell = alert.buttons[1].cell as? NSButtonCell
+        }
+
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            DimmyCore.shared.consentLogEvent(kind: "declined", lang: lang)
+            return false
+        }
+        DimmyCore.shared.consentLogEvent(kind: "confirmed", lang: lang)
+
+        // Chat message for participants (reliable channel for remotes).
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(announcement, forType: .string)
+        DimmyCore.shared.consentLogEvent(kind: "chat_copied", lang: lang)
+
+        // Speak it (reaches remotes only if the user is unmuted).
+        let utterance = AVSpeechUtterance(string: announcement)
+        if let voice = AVSpeechSynthesisVoice(language: lang) {
+            utterance.voice = voice
+        }
+        synthesizer.speak(utterance)
+        DimmyCore.shared.consentLogEvent(kind: "announced", lang: lang)
+        return true
     }
 }

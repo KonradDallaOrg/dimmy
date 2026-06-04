@@ -4834,6 +4834,83 @@ pub extern "C" fn dimmy_build_flavor(out_buf: *mut c_char, buf_len: c_int) -> c_
     write_to_buf(crate::build_flavor(), out_buf, buf_len)
 }
 
+/// Recording-consent notice text (see [`crate::consent`]). `kind` = "modal"
+/// (the confirmation shown to the recorder before a meeting starts) or
+/// "announcement" (spoken via the host TTS + pasted into the call chat for the
+/// participants). `lang` is a BCP-47-ish tag; unsupported tags fall back to
+/// English. The announcement's storage clause is made accurate to the current
+/// config: it says the recording stays on-device unless STT or LLM is cloud,
+/// in which case it discloses external processing. Returns bytes written, -1
+/// on bad args.
+///
+/// # Safety
+/// `kind_ptr` and `lang_ptr` must be valid null-terminated UTF-8 C strings;
+/// `out_buf` must be writable for `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_consent_text(
+    kind_ptr: *const c_char,
+    lang_ptr: *const c_char,
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if kind_ptr.is_null() || lang_ptr.is_null() {
+        return -1;
+    }
+    let kind = match CStr::from_ptr(kind_ptr).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let lang = CStr::from_ptr(lang_ptr).to_str().unwrap_or("en");
+    let text = match kind {
+        "modal" => crate::consent::modal_text(lang),
+        "announcement" => {
+            let st = state();
+            let stt_cloud = st
+                .stt_mode
+                .lock()
+                .map(|m| m.eq_ignore_ascii_case("cloud"))
+                .unwrap_or(false);
+            let llm_cloud = st
+                .llm_mode
+                .lock()
+                .map(|m| m.eq_ignore_ascii_case("cloud"))
+                .unwrap_or(false);
+            crate::consent::announcement_text(lang, stt_cloud || llm_cloud)
+        }
+        _ => return -1,
+    };
+    write_to_buf(&text, out_buf, buf_len)
+}
+
+/// Append a recording-consent event to the local audit log
+/// (`<config_dir>/consent.jsonl`). `kind` is the host's event tag:
+/// "confirmed" / "declined" / "announced" / "chat_copied". `lang` (may be
+/// null) records which notice language was used. Returns 0, -1 on bad args.
+///
+/// # Safety
+/// `kind_ptr` must be a valid null-terminated UTF-8 C string; `lang_ptr` may
+/// be null or a valid null-terminated UTF-8 C string.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_consent_log_event(
+    kind_ptr: *const c_char,
+    lang_ptr: *const c_char,
+) -> c_int {
+    if kind_ptr.is_null() {
+        return -1;
+    }
+    let kind = match CStr::from_ptr(kind_ptr).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let lang = if lang_ptr.is_null() {
+        "en"
+    } else {
+        CStr::from_ptr(lang_ptr).to_str().unwrap_or("en")
+    };
+    crate::consent::append_event(kind, lang);
+    0
+}
+
 /// Get the per-install config-dir name as embedded at build time via
 /// `DIMMY_CONFIG_NAMESPACE` (default `dimmy`). Native UIs MUST use this
 /// instead of deriving the path from the build flavor — since 2026-05-16

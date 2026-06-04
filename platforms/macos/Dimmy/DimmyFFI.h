@@ -236,6 +236,20 @@ int32_t dimmy_meetings_dir(char * _Nonnull out_buf, int32_t buf_len);
 /// and call again).
 int32_t dimmy_model_catalog_json(char * _Nullable out_buf, int32_t buf_len);
 
+/// Recording-consent notice text (shared across platforms). `kind` is
+/// "modal" (pre-record confirmation shown to the recorder) or "announcement"
+/// (spoken via TTS + pasted in the call chat for the participants; the
+/// announcement discloses local vs cloud processing based on current config).
+/// `lang` is a BCP-47-ish tag (e.g. "en", "it-IT"); unsupported tags fall back
+/// to English. Returns bytes written, or -1 on null buffer / bad kind.
+int32_t dimmy_consent_text(const char * _Nonnull kind, const char * _Nonnull lang,
+                           char * _Nonnull out_buf, int32_t buf_len);
+
+/// Append a consent event to the local append-only audit log
+/// (<configdir>/consent.jsonl). `kind` is the event tag the host emits:
+/// "confirmed", "declined", "announced", "chat_copied". Returns 0, or -1.
+int32_t dimmy_consent_log_event(const char * _Nonnull kind, const char * _Nullable lang);
+
 /// GPU known-bad marker status as JSON. Returns bytes written, or -1.
 int32_t dimmy_gpu_get_status(char * _Nonnull out_buf, int32_t buf_len);
 

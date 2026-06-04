@@ -224,6 +224,37 @@ extension DimmyCore {
         return String(cString: buffer)
     }
 
+    // MARK: - Recording consent
+
+    /// Recording-consent notice text from the shared core. `kind` is "modal"
+    /// (recorder confirmation) or "announcement" (TTS + chat message for the
+    /// participants). `lang` is a BCP-47-ish tag; unsupported tags fall back to
+    /// English in the core. No `isInitialized` guard for "modal" (pure), but
+    /// "announcement" reads the live STT/LLM mode so call after init.
+    func consentText(kind: String, lang: String) -> String? {
+        let cap = 4096
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: cap)
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+        let written = kind.withCString { k in
+            lang.withCString { l in
+                dimmy_consent_text(k, l, buffer, Int32(cap))
+            }
+        }
+        guard written > 0 else { return nil }
+        return String(cString: buffer)
+    }
+
+    /// Append a consent event ("confirmed" / "declined" / "announced" /
+    /// "chat_copied") to the local audit log. Best-effort.
+    func consentLogEvent(kind: String, lang: String) {
+        _ = kind.withCString { k in
+            lang.withCString { l in
+                dimmy_consent_log_event(k, l)
+            }
+        }
+    }
+
     // MARK: - Raw LLM call
 
     /// Bypass the dictation rewrite wrapper and send a raw prompt to the

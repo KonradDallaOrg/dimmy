@@ -1878,7 +1878,7 @@ public partial class App : Application
     /// Mirrors MeetingWindow.Start_Click's happy path but doesn't
     /// require the window to be open already — closes the loop
     /// between detection and recording with a single user click.
-    private void StartMeetingFromCallDetect()
+    private async void StartMeetingFromCallDetect()
     {
         try
         {
@@ -1891,17 +1891,27 @@ public partial class App : Application
                 OpenMeetingWindow();
                 return;
             }
-            var buf = new byte[256];
-            int rc = DimmyNative.dimmy_meeting_start(buf, buf.Length);
-            if (rc <= 0)
+
+            // Open the window and route the start THROUGH its own Start flow.
+            // The window owns a valid XamlRoot (once loaded) for the mandatory
+            // consent modal AND does all the recording UI wiring (state flip,
+            // polling, app-context). Starting the meeting in the core directly
+            // from here left the just-opened window stuck on idle. Wait for the
+            // XamlRoot to go live first (null right after Activate).
+            OpenMeetingWindow();
+            if (_meetingWindow == null)
             {
-                Log($"StartMeetingFromCallDetect: dimmy_meeting_start rc={rc}", "CallDetect");
+                Log("StartMeetingFromCallDetect: no meeting window", "CallDetect");
                 return;
             }
-            Log("StartMeetingFromCallDetect: meeting started, opening window", "CallDetect");
-            // Call-detect-started meetings recap by default (the nudge
-            // itself offers "Record + recap"). No checkbox is involved here.
-            if (_appViewModel != null) _appViewModel.MeetingGenerateRecap = true;
+            await _meetingWindow.EnsureDialogRootAsync();
+            bool started = await _meetingWindow.StartFromCallDetectAsync();
+            if (!started)
+            {
+                Log("StartMeetingFromCallDetect: not started (declined or failed)", "CallDetect");
+                return;
+            }
+            Log("StartMeetingFromCallDetect: meeting started via window", "CallDetect");
             // Bind the originating WASAPI session id so the
             // CallDetectionService meeting-tick can stop the meeting
             // the moment the call ends — no amplitude-based silence

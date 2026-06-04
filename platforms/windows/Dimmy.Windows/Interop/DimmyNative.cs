@@ -118,6 +118,27 @@ public static class DimmyNative
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_model_catalog_json(byte[]? outBuf, int bufLen);
 
+    // ── Recording-consent notices ────────────────────────────────────
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_consent_text(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string kind,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string lang,
+        byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_consent_log_event(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string kind,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? lang);
+
+    /// <summary>Localized recording-consent text. kind = "modal" | "announcement".</summary>
+    public static string? ConsentText(string kind, string lang) =>
+        ReadBuffer((buf, len) => dimmy_consent_text(kind, lang, buf, len), 4096);
+
+    /// <summary>Append a consent event to the local audit log. kind = "confirmed" /
+    /// "declined" / "announced" / "chat_copied".</summary>
+    public static void ConsentLogEvent(string kind, string? lang) =>
+        dimmy_consent_log_event(kind, lang);
+
     // ── GPU diagnostics ──────────────────────────────────────────────
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_gpu_get_status(byte[] outBuf, int bufLen);
