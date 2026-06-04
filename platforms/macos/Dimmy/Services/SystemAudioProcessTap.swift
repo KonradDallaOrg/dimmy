@@ -260,7 +260,7 @@ final class SystemAudioProcessTap {
 
     /// Translate a pid to its CoreAudio process object id (needed for the
     /// tap's exclude list). nil if the pid has no audio process object.
-    private static func processObject(for pid: pid_t) -> AudioObjectID? {
+    fileprivate static func processObject(for pid: pid_t) -> AudioObjectID? {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyTranslatePIDToProcessObject,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -493,6 +493,106 @@ final class SystemAudioProcessTap {
 
         NSLog("[ProbeMulti] %@ DONE outputUID=%@ nStreams=%d samples=%d peak=%.4f rate=%d",
               label, outputUID ?? "<none>", nStreams, counter.n, counter.p, rate)
+    }
+
+    /// Per-process probe (`DIMMY_TAP_PROBE_PID=<pid>`): build a tap that
+    /// captures ONLY the audio output of the target pid (e.g. Chrome with
+    /// a YouTube tab, Zoom call window). Runs ~5 s, logs sample count and
+    /// peak amplitude. Disambiguates "Tahoe regression hits global tap only"
+    /// (per-process works → switch to per-process path) from "Tahoe
+    /// regression hits all taps" (per-process also peak=0 → no tap fix
+    /// possible, must move to SCKit or another mechanism).
+    static func runPerProcessProbe(pid: pid_t) {
+        NSLog("[ProcessProbe] starting per-process tap for pid=%d — play audio in that app NOW", pid)
+        guard let obj = processObject(for: pid) else {
+            NSLog("[ProcessProbe] FAIL: pid=%d has no audio process object", pid)
+            return
+        }
+        NSLog("[ProcessProbe] pid=%d → audioObjectID=%u", pid, obj)
+
+        let description = CATapDescription(monoMixdownOfProcesses: [obj])
+        description.uuid = UUID()
+        description.name = "Probe-PerProcess-\(pid)"
+        description.muteBehavior = .unmuted
+        description.isPrivate = true
+        description.isExclusive = false
+
+        var tapID = AudioObjectID(kAudioObjectUnknown)
+        var err = AudioHardwareCreateProcessTap(description, &tapID)
+        guard err == noErr, tapID != AudioObjectID(kAudioObjectUnknown) else {
+            NSLog("[ProcessProbe] CreateTap FAIL err=%d", err)
+            return
+        }
+        defer { AudioHardwareDestroyProcessTap(tapID) }
+
+        guard let asbd = readTapFormat(tapID) else {
+            NSLog("[ProcessProbe] readTapFormat FAIL")
+            return
+        }
+        let rate = asbd.mSampleRate > 0 ? Int32(asbd.mSampleRate) : 48_000
+
+        let aggregateUID = UUID().uuidString
+        let outputUID = defaultOutputDeviceUID()
+        var dict: [String: Any] = [
+            kAudioAggregateDeviceNameKey: "Probe-PerProcess-Agg-\(pid)",
+            kAudioAggregateDeviceUIDKey: aggregateUID,
+            kAudioAggregateDeviceIsPrivateKey: true,
+            kAudioAggregateDeviceIsStackedKey: false,
+            kAudioAggregateDeviceTapAutoStartKey: false,
+            kAudioAggregateDeviceTapListKey: [[
+                kAudioSubTapDriftCompensationKey: true,
+                kAudioSubTapUIDKey: description.uuid.uuidString,
+            ]],
+        ]
+        if let outputUID {
+            dict[kAudioAggregateDeviceMainSubDeviceKey] = outputUID
+            dict[kAudioAggregateDeviceSubDeviceListKey] = [[kAudioSubDeviceUIDKey: outputUID]]
+        }
+
+        var aggregateID = AudioObjectID(kAudioObjectUnknown)
+        err = AudioHardwareCreateAggregateDevice(dict as CFDictionary, &aggregateID)
+        guard err == noErr, aggregateID != AudioObjectID(kAudioObjectUnknown) else {
+            NSLog("[ProcessProbe] CreateAggregate FAIL err=%d", err)
+            return
+        }
+        defer { AudioHardwareDestroyAggregateDevice(aggregateID) }
+
+        final class C { var n = 0; var p: Float = 0 }
+        let counter = C()
+        nonisolated(unsafe) let unsafeCounter = counter
+
+        var procID: AudioDeviceIOProcID?
+        let queue = DispatchQueue(label: "probe.pp", qos: .userInteractive)
+        err = AudioDeviceCreateIOProcIDWithBlock(&procID, aggregateID, queue) { _, inInput, _, _, _ in
+            let abl = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inInput))
+            guard let buf = abl.first, let data = buf.mData else { return }
+            let count = Int(buf.mDataByteSize) / MemoryLayout<Float>.size
+            unsafeCounter.n += count
+            let fs = data.assumingMemoryBound(to: Float.self)
+            var pk: Float = 0
+            for i in 0..<count { pk = max(pk, abs(fs[i])) }
+            if pk > unsafeCounter.p { unsafeCounter.p = pk }
+        }
+        guard err == noErr, let procID else {
+            NSLog("[ProcessProbe] CreateIOProc FAIL err=%d", err)
+            return
+        }
+        defer {
+            AudioDeviceStop(aggregateID, procID)
+            AudioDeviceDestroyIOProcID(aggregateID, procID)
+        }
+
+        err = AudioDeviceStart(aggregateID, procID)
+        if err != noErr {
+            NSLog("[ProcessProbe] AudioDeviceStart FAIL err=%d", err)
+            return
+        }
+
+        NSLog("[ProcessProbe] tap running 5 s — play audio NOW in pid=%d", pid)
+        Thread.sleep(forTimeInterval: 5.0)
+
+        NSLog("[ProcessProbe] DONE pid=%d audioObjectID=%u samples=%d peak=%.4f rate=%d",
+              pid, obj, counter.n, counter.p, rate)
     }
 
     /// `kAudioHardwarePropertyDefaultOutputDevice` (vs DefaultSystemOutput).
