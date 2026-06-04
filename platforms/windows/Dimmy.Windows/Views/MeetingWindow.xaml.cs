@@ -286,6 +286,31 @@ public sealed partial class MeetingWindow : Window
     /// this window. Null until the window's content is in the visual tree.
     public XamlRoot? DialogRoot => this.Content?.XamlRoot;
 
+    /// Awaitable variant: resolves once the window content is loaded and its
+    /// XamlRoot is live. The call-detect path opens this window and immediately
+    /// wants to show the consent dialog — right after Activate() the XamlRoot
+    /// isn't established yet, so a ContentDialog.ShowAsync would throw and the
+    /// consent gate would wrongly read as "declined". Wait for Loaded first.
+    public async Task<XamlRoot?> EnsureDialogRootAsync()
+    {
+        if (this.Content is not FrameworkElement fe) return this.Content?.XamlRoot;
+        if (fe.IsLoaded && fe.XamlRoot != null) return fe.XamlRoot;
+        var tcs = new TaskCompletionSource<XamlRoot?>();
+        RoutedEventHandler? handler = null;
+        handler = (_, __) =>
+        {
+            fe.Loaded -= handler;
+            tcs.TrySetResult(fe.XamlRoot);
+        };
+        fe.Loaded += handler;
+        if (fe.IsLoaded)
+        {
+            fe.Loaded -= handler;
+            return fe.XamlRoot;
+        }
+        return await tcs.Task;
+    }
+
     private async void Start_Click(object sender, RoutedEventArgs e)
     {
         StartBtn.IsEnabled = false;

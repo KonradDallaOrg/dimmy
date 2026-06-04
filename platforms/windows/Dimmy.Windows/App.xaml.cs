@@ -1894,10 +1894,14 @@ public partial class App : Application
 
             // Open the window first so the consent gate has a XamlRoot to
             // anchor to. Recording-consent is mandatory on every start path —
-            // the call-detect auto-start is no exception.
+            // the call-detect auto-start is no exception. Wait for the window's
+            // XamlRoot to go live (right after Activate it's null, which would
+            // make ShowAsync throw and the gate read as a false "declined" —
+            // then the detector re-emits the nudge: the "double notification").
             OpenMeetingWindow();
+            var root = _meetingWindow != null ? await _meetingWindow.EnsureDialogRootAsync() : null;
             var lang = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
-            if (!await Services.ConsentFlow.ConfirmAndAnnounceAsync(_meetingWindow?.DialogRoot, lang))
+            if (!await Services.ConsentFlow.ConfirmAndAnnounceAsync(root, lang))
             {
                 Log("StartMeetingFromCallDetect: consent declined, not starting", "CallDetect");
                 return;
