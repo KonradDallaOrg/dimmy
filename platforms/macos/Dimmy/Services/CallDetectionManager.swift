@@ -277,6 +277,10 @@ final class CallDetectionManager {
         sessionEndedSignaled = false
         sessionEndedConfirmTimer?.cancel()
         sessionEndedConfirmTimer = nil
+        // Suppress the Rust silence backstop iff we actually bound a process to
+        // watch — otherwise (no candidate pid) keep the backstop as the only
+        // stop signal. Watching a real pid is the deterministic authority.
+        _ = dimmy_call_set_tracked_origin(meetingOriginPid != 0 ? 1 : 0)
         print("[CallDetect] meeting origin bound pid=\(meetingOriginPid) app=\(meetingOriginApp ?? "<none>")")
     }
 
@@ -286,6 +290,8 @@ final class CallDetectionManager {
         sessionEndedSignaled = false
         sessionEndedConfirmTimer?.cancel()
         sessionEndedConfirmTimer = nil
+        // No tracked process → re-enable the silence backstop.
+        _ = dimmy_call_set_tracked_origin(0)
     }
 
     // MARK: - Event handlers
@@ -477,6 +483,9 @@ final class CallDetectionManager {
                     self.sessionEndedConfirmTimer?.cancel()
                     self.sessionEndedConfirmTimer = nil
                     _ = DimmyCore.shared.callMeetingStartedExternal()
+                    // Now watching a real process deterministically → suppress
+                    // the Rust silence backstop (the 15-popups bug).
+                    _ = dimmy_call_set_tracked_origin(1)
                     print("[CallDetect] adopted call origin mid-meeting pid=\(originPid) app=\(appId)")
                 }
             }

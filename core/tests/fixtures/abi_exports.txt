@@ -6,6 +6,7 @@ dimmy_autostart_set_enabled
 dimmy_build_flavor
 dimmy_call_detector_state
 dimmy_call_meeting_started_external
+dimmy_call_set_tracked_origin
 dimmy_call_signal
 dimmy_call_signal_response
 dimmy_call_signal_session_ended
