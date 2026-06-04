@@ -199,14 +199,66 @@ final class SystemAudioProcessTap {
 
         running = true
         NSLog("[SystemAudio/tap] started rate=%d ch=%d", rate, channels)
+        startRescanTimer()
         return true
     }
 
     func stop() {
+        stopRescanTimer()
         guard running else { return }
         teardown()
         running = false
         NSLog("[SystemAudio/tap] stopped")
+    }
+
+    // MARK: - Rescan timer
+
+    /// Re-enumerate audio-active processes every 3 s; rebuild the tap when
+    /// the active set changes. Cheap: same-PID-set tick is two property
+    /// reads + a Set equality. Different-set tick is a full teardown +
+    /// re-start (~50 ms; no audible artifact because the mic chain is on
+    /// a separate cpal stream).
+    ///
+    /// Trade-off: a brand-new audio-producing app takes up to 3 s to be
+    /// added to the capture set. We accept that latency rather than
+    /// poll faster — the IO-proc-fire pattern means audio doesn't
+    /// disappear, it just isn't recorded for those 3 s. For meeting use
+    /// (Zoom / Meet / Teams launched once at meeting start) this is a
+    /// one-off cost paid before the user joins.
+    ///
+    /// The timer is scheduled on `ioQueue` — the same serial queue the
+    /// IO proc handler fires on — so the rescan handler is naturally
+    /// serialized against IO proc events. Teardown + restart from inside
+    /// the rescan handler is safe on the same queue.
+    private var rescanTimer: DispatchSourceTimer?
+
+    private func startRescanTimer() {
+        rescanTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: ioQueue)
+        timer.schedule(deadline: .now() + 3.0, repeating: 3.0)
+        timer.setEventHandler { [weak self] in self?.rescanAndRebuildIfNeeded() }
+        timer.resume()
+        rescanTimer = timer
+    }
+
+    private func stopRescanTimer() {
+        rescanTimer?.cancel()
+        rescanTimer = nil
+    }
+
+    private func rescanAndRebuildIfNeeded() {
+        guard running else { return }
+        let selfPid = ProcessInfo.processInfo.processIdentifier
+        let activeObjects = Self.audioActiveProcessObjects(excludingSelf: selfPid)
+        let newPidSet = Set(activeObjects.compactMap { Self.pid(forAudioObject: $0) })
+        guard newPidSet != currentTapPidSet else { return }
+        NSLog("[SystemAudio/tap] audio-active PID set changed (was %d, now %d) — rebuilding tap",
+              currentTapPidSet.count, newPidSet.count)
+        let savedHandler = onSamples
+        teardown()
+        running = false
+        onSamples = savedHandler
+        _ = start()
     }
 
     /// Sample count in the first buffer of an IO proc's input list.
