@@ -56,11 +56,25 @@ final class SystemAudioProcessTap {
     private let ioQueue = DispatchQueue(
         label: "dimmy.systemaudio.tap.io", qos: .userInteractive)
 
+    /// Outcome of a `start()` attempt.
+    ///
+    /// - `.live`: the tap is recording — IO proc is firing, samples flow.
+    /// - `.deferred`: no audio source was active at start; the rescan timer
+    ///   will pick up the first source within ~3 s and self-promote to
+    ///   `.live`. The caller should keep the instance alive — falling back
+    ///   to SCKit here would defeat the per-process design.
+    /// - `.failed`: HAL error — caller should fall back to SCStream.
+    enum StartOutcome { case live, deferred, failed }
+
     /// Create the tap + aggregate device + IO proc and start pulling audio.
-    /// Returns false on any HAL failure so the caller can fall back to
-    /// ScreenCaptureKit. Idempotent: a second call while running is a no-op.
-    func start() -> Bool {
-        guard !running else { return true }
+    /// Idempotent: a second call while running is a no-op (returns `.live`).
+    ///
+    /// `.deferred` is NOT a failure — the instance is kept hot and the
+    /// rescan timer will promote it the moment an audio source appears.
+    /// Only `.failed` should trigger SCStream fallback.
+    @discardableResult
+    func start() -> StartOutcome {
+        guard !running else { return .live }
 
         // Per-process tap (Tahoe workaround): enumerate every audio-active
         // process except Dimmy itself, then build a mono mixdown of their
@@ -73,12 +87,13 @@ final class SystemAudioProcessTap {
         let activeObjects = Self.audioActiveProcessObjects(excludingSelf: selfPid)
         guard !activeObjects.isEmpty else {
             // No app is currently producing audio. Don't create a dead tap;
-            // a follow-up commit wires the rescan timer + deferred state so
-            // we self-recover the moment audio appears. For this commit
-            // (pure global→per-process swap) we still bail out — Task 3
-            // adds the timer, Task 4 adds the .deferred outcome.
-            NSLog("[SystemAudio/tap] no audio-active processes at start() — deferring tap creation")
-            return false
+            // keep the rescan timer alive so we self-recover the moment
+            // audio appears (.deferred → .live promotion in
+            // rescanAndRebuildIfNeeded). The caller (SystemAudioCaptureService)
+            // treats .deferred as success and holds onto the instance.
+            NSLog("[SystemAudio/tap] no audio-active processes at start() — deferred (rescan will promote)")
+            startRescanTimer()
+            return .deferred
         }
         NSLog("[SystemAudio/tap] tapping %d audio-active process(es)", activeObjects.count)
 
@@ -93,7 +108,7 @@ final class SystemAudioProcessTap {
         var err = AudioHardwareCreateProcessTap(description, &newTap)
         guard err == noErr, newTap != AudioObjectID(kAudioObjectUnknown) else {
             NSLog("[SystemAudio/tap] AudioHardwareCreateProcessTap failed: %d", err)
-            return false
+            return .failed
         }
         tapID = newTap
         currentTapPidSet = Set(activeObjects.compactMap { Self.pid(forAudioObject: $0) })
@@ -101,7 +116,7 @@ final class SystemAudioProcessTap {
         guard let asbd = Self.readTapFormat(tapID) else {
             NSLog("[SystemAudio/tap] could not read tap stream format")
             teardown()
-            return false
+            return .failed
         }
         sampleRate = asbd.mSampleRate > 0 ? Int32(asbd.mSampleRate) : 48_000
         channelCount = asbd.mChannelsPerFrame > 0 ? Int(asbd.mChannelsPerFrame) : 1
@@ -155,7 +170,7 @@ final class SystemAudioProcessTap {
         guard err == noErr, newAggregate != AudioObjectID(kAudioObjectUnknown) else {
             NSLog("[SystemAudio/tap] AudioHardwareCreateAggregateDevice failed: %d", err)
             teardown()
-            return false
+            return .failed
         }
         aggregateID = newAggregate
 
@@ -186,7 +201,7 @@ final class SystemAudioProcessTap {
         guard err == noErr, let procID = newProcID else {
             NSLog("[SystemAudio/tap] AudioDeviceCreateIOProcIDWithBlock failed: %d", err)
             teardown()
-            return false
+            return .failed
         }
         ioProcID = procID
 
@@ -194,13 +209,13 @@ final class SystemAudioProcessTap {
         guard err == noErr else {
             NSLog("[SystemAudio/tap] AudioDeviceStart failed: %d", err)
             teardown()
-            return false
+            return .failed
         }
 
         running = true
         NSLog("[SystemAudio/tap] started rate=%d ch=%d", rate, channels)
         startRescanTimer()
-        return true
+        return .live
     }
 
     func stop() {
@@ -247,18 +262,32 @@ final class SystemAudioProcessTap {
     }
 
     private func rescanAndRebuildIfNeeded() {
-        guard running else { return }
         let selfPid = ProcessInfo.processInfo.processIdentifier
         let activeObjects = Self.audioActiveProcessObjects(excludingSelf: selfPid)
         let newPidSet = Set(activeObjects.compactMap { Self.pid(forAudioObject: $0) })
-        guard newPidSet != currentTapPidSet else { return }
-        NSLog("[SystemAudio/tap] audio-active PID set changed (was %d, now %d) — rebuilding tap",
-              currentTapPidSet.count, newPidSet.count)
-        let savedHandler = onSamples
-        teardown()
-        running = false
-        onSamples = savedHandler
-        _ = start()
+
+        if running {
+            // Live tap: only rebuild when the active set actually changes.
+            // Same-set tick costs one HAL list read + per-process flag +
+            // Set equality — cheap enough to do at 3 s cadence forever.
+            guard newPidSet != currentTapPidSet else { return }
+            NSLog("[SystemAudio/tap] audio-active PID set changed (was %d, now %d) — rebuilding tap",
+                  currentTapPidSet.count, newPidSet.count)
+            let savedHandler = onSamples
+            teardown()
+            running = false
+            onSamples = savedHandler
+            _ = start()
+        } else {
+            // Deferred state: no tap created yet (no audio source at start).
+            // Wait for ANY audio source, then promote to live. Avoids the
+            // false-positive SCKit fallback when the user starts a meeting
+            // before opening their videoconf app.
+            guard !activeObjects.isEmpty else { return }
+            NSLog("[SystemAudio/tap] audio now active (%d source(s)) — promoting deferred tap to live",
+                  activeObjects.count)
+            _ = start()
+        }
     }
 
     /// Sample count in the first buffer of an IO proc's input list.
@@ -466,9 +495,14 @@ final class SystemAudioProcessTap {
             if p > counters.peak { counters.peak = p }
         }
         NSLog("[SystemAudio/probe] starting 2 s tap probe — play some audio now")
-        guard tap.start() else {
+        switch tap.start() {
+        case .failed:
             NSLog("[SystemAudio/probe] FAILED to start tap")
             return
+        case .deferred:
+            NSLog("[SystemAudio/probe] tap deferred (no audio source) — start audio and the rescan tick will promote")
+        case .live:
+            break
         }
         // Single-threaded diagnostic: the deferred stop runs strictly after
         // start, so opting these captures out of Sendable checking is safe.
