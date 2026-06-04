@@ -8,17 +8,23 @@ import Foundation
 ///
 /// Two modes per tick:
 ///
-///   • **Pre-meeting (generic discovery)**: enumerate the processes that
-///     currently hold the mic (macOS 14.4+, `kAudioProcessPropertyIs-`
-///     `RunningInput`) and treat ANY non-system app that owns input as a
-///     call candidate — NOT just a hardcoded VoIP list. So Google Meet /
-///     Slack huddle in a browser, Telegram, WhatsApp, Whereby, FaceTime,
-///     future voice modes, etc. all trigger a nudge out of the box; the
-///     `bundleWhitelist` is now only a cosmetic map to canonical ids for
-///     the well-known apps, and `systemBundleIgnore` keeps Apple's mic
-///     grabbers (Control Center, Siri) from nudging. On 14.0-14.3 we fall
-///     back to device-level `kAudioDevicePropertyDeviceIsRunningSome-`
-///     `where` (no attribution, `app=nil`).
+///   • **Pre-meeting (generic-input + known-output discovery)**:
+///     - Enumerate processes currently holding the mic
+///       (`kAudioProcessPropertyIsRunningInput`, 14.4+). Generic
+///       discovery: any non-system app owning input is a call candidate
+///       (Google Meet / Slack huddle / Telegram / WhatsApp / Whereby /
+///       FaceTime all trigger a nudge out of the box).
+///     - When no input-side candidate is present, enumerate processes
+///       producing audio OUTPUT (`kAudioProcessPropertyIsRunning`, 14.4+)
+///       and pick the first one matching `bundleWhitelist`. This catches
+///       the "joined Zoom muted" case where the user's mic isn't open but
+///       the peer's audio is flowing. The whitelist gate is mandatory
+///       here — generic discovery on the output side would nudge for
+///       Spotify / YouTube / Apple Music, which is wrong UX.
+///     - `systemBundleIgnore` keeps Apple's mic grabbers (Control Center,
+///       Siri) from nudging on either side. On 14.0-14.3 we fall back to
+///       device-level `kAudioDevicePropertyDeviceIsRunningSomewhere` (no
+///       attribution, `app=nil`).
 ///
 ///   • **Meeting active**: poll amplitude (`dimmy_get_amplitude()` +
 ///     `dimmy_get_loopback_amplitude()`) against the 0.02 floor so the
@@ -213,7 +219,7 @@ final class CallDetectionManager {
         if scanInFlight { return }
         scanInFlight = true
         Self.scanQueue.async { [weak self] in
-            let (micActive, appId, originPid) = Self.scanRunningInputProcesses()
+            let (micActive, appId, originPid) = Self.scanRunningProcesses()
             _ = DimmyCore.shared.callSignalMic(active: micActive, appId: appId)
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -252,10 +258,17 @@ final class CallDetectionManager {
         lastSysActive = sysActive
     }
 
-    /// Deterministic stop: is the meeting-origin process still holding the
-    /// mic? When it's been gone for ~2 checks (≈2 s), signal session-ended.
-    /// Runs the CoreAudio probe off-main; the one-shot guard + Rust state
-    /// machine prevent double stop-suggestions vs the silence backstop.
+    /// Deterministic stop: is the meeting-origin process still alive on
+    /// EITHER side (mic input or audio output)? When it's been gone from
+    /// both for ~2 checks (≈2 s), signal session-ended. Runs the CoreAudio
+    /// probe off-main; the one-shot guard + Rust state machine prevent
+    /// double stop-suggestions vs the silence backstop.
+    ///
+    /// Checking both sides matters because the origin may have been
+    /// bound via output-side detection ("joined Zoom muted" case). Such a
+    /// PID never appears in `inputRunningPids` even while the call is
+    /// alive — watching only input would fire a false session_ended the
+    /// first tick after origin bind.
     private func sessionEndedCheckTick() {
         if sessionCheckInFlight { return }
         guard meetingOriginPid != 0, !sessionEndedSignaled else { return }
@@ -265,6 +278,7 @@ final class CallDetectionManager {
             var stillRunning = true
             if #available(macOS 14.4, *) {
                 stillRunning = Self.inputRunningPids().contains(originPid)
+                    || SystemAudioProcessTap.outputRunningPids().contains(originPid)
             }
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -287,7 +301,7 @@ final class CallDetectionManager {
     /// Adopt a call as the meeting origin WHILE a meeting is already
     /// active — for a manually-started meeting (pill / window) where no
     /// "Record now" nudge ran so `markMeetingOrigin()` was never called.
-    /// Reuses the same `scanRunningInputProcesses()` discovery as the
+    /// Reuses the same `scanRunningProcesses()` discovery as the
     /// pre-meeting tick (excludes self pid + system bundles). On adoption
     /// arms the Rust state machine via `callMeetingStartedExternal()` so
     /// `signal_session_ended` will fire when the call closes — without
@@ -299,7 +313,7 @@ final class CallDetectionManager {
         guard meetingOriginPid == 0, !sessionEndedSignaled else { return }
         adoptInFlight = true
         Self.scanQueue.async { [weak self] in
-            let (active, appId, originPid) = Self.scanRunningInputProcesses()
+            let (active, appId, originPid) = Self.scanRunningProcesses()
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.adoptInFlight = false
@@ -324,13 +338,34 @@ final class CallDetectionManager {
     // MARK: - CoreAudio enumeration (callable from any queue)
 
     /// Returns (any_call_app_active, app_id_or_nil, origin_pid). On 14.4+
-    /// the first non-system app holding the mic is the candidate; on
-    /// 14.0-14.3 we only know "some input device is running" (app=nil).
-    nonisolated private static func scanRunningInputProcesses() -> (Bool, String?, pid_t) {
+    /// the first non-system app holding the mic is the candidate; if none,
+    /// the first known-call-app producing audio output wins (catches the
+    /// "joined Zoom muted" case where the user's mic isn't open but the
+    /// peer's audio is flowing). On 14.0-14.3 we only know "some input
+    /// device is running" (app=nil).
+    ///
+    /// Input over output is deliberate: input is the stronger signal
+    /// (recording a user's mic is unambiguously a call action), output
+    /// only fires for a curated bundleWhitelist set to avoid Spotify /
+    /// YouTube nudges. Tested in `CallDetectionCandidateSelectionTests`
+    /// — the gated resolver returns nil for non-whitelist bundles so the
+    /// `firstCallCandidate` picker skips them.
+    nonisolated private static func scanRunningProcesses() -> (Bool, String?, pid_t) {
         if #available(macOS 14.4, *) {
             let selfPid = ProcessInfo.processInfo.processIdentifier
+            // Input side: generic discovery.
+            let inputPids = inputRunningPids()
             if let (pid, appId) = firstCallCandidate(
-                pids: inputRunningPids(), selfPid: selfPid, resolve: resolveAppId
+                pids: inputPids, selfPid: selfPid, resolve: resolveAppId
+            ) {
+                return (true, appId, pid)
+            }
+            // Output side: known-call-app gated. Reuses the shared HAL
+            // enumeration from SystemAudioProcessTap so call-detect and
+            // per-process tap input selection see the same world.
+            let outputPids = SystemAudioProcessTap.outputRunningPids()
+            if let (pid, appId) = firstCallCandidate(
+                pids: outputPids, selfPid: selfPid, resolve: resolveKnownCallApp
             ) {
                 return (true, appId, pid)
             }
@@ -361,7 +396,7 @@ final class CallDetectionManager {
     /// label + cooldown/exclusion key, or nil if the process is a system
     /// mic grabber / has no app bundle (daemon). Lowercased for stable
     /// keying (the nudge UI Title-cases unknown ids for display).
-    nonisolated private static func resolveAppId(_ pid: pid_t) -> String? {
+    nonisolated static func resolveAppId(_ pid: pid_t) -> String? {
         guard let app = NSRunningApplication(processIdentifier: pid),
               let bundleId = app.bundleIdentifier?.lowercased(), !bundleId.isEmpty
         else { return nil }
@@ -376,6 +411,28 @@ final class CallDetectionManager {
             return name.lowercased()
         }
         return bundleId.split(separator: ".").last.map(String.init)
+    }
+
+    /// Strict variant of `resolveAppId`: returns the canonical id ONLY
+    /// when the bundle matches the curated `bundleWhitelist` (Zoom,
+    /// Teams, Meet/Slack, Discord, Webex, …). Used by the OUTPUT-side
+    /// branch of `scanRunningProcesses`: generic discovery on output
+    /// would nudge for Spotify / YouTube / Music, which is a UX bug.
+    /// The whitelist is the same cosmetic-mapping table the input-side
+    /// uses for display labels — single source of truth for "is this a
+    /// known meeting app".
+    nonisolated static func resolveKnownCallApp(_ pid: pid_t) -> String? {
+        guard let app = NSRunningApplication(processIdentifier: pid),
+              let bundleId = app.bundleIdentifier?.lowercased(), !bundleId.isEmpty
+        else { return nil }
+        for ignore in systemBundleIgnore {
+            let lower = ignore.lowercased()
+            if bundleId == lower || bundleId.hasPrefix(lower) { return nil }
+        }
+        for (prefix, canonical) in bundleWhitelist where bundleId.hasPrefix(prefix.lowercased()) {
+            return canonical
+        }
+        return nil
     }
 
     /// All pids (incl. system) currently running audio input. macOS 14.4+.
