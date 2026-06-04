@@ -1878,7 +1878,7 @@ public partial class App : Application
     /// Mirrors MeetingWindow.Start_Click's happy path but doesn't
     /// require the window to be open already — closes the loop
     /// between detection and recording with a single user click.
-    private void StartMeetingFromCallDetect()
+    private async void StartMeetingFromCallDetect()
     {
         try
         {
@@ -1891,6 +1891,18 @@ public partial class App : Application
                 OpenMeetingWindow();
                 return;
             }
+
+            // Open the window first so the consent gate has a XamlRoot to
+            // anchor to. Recording-consent is mandatory on every start path —
+            // the call-detect auto-start is no exception.
+            OpenMeetingWindow();
+            var lang = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+            if (!await Services.ConsentFlow.ConfirmAndAnnounceAsync(_meetingWindow?.DialogRoot, lang))
+            {
+                Log("StartMeetingFromCallDetect: consent declined, not starting", "CallDetect");
+                return;
+            }
+
             var buf = new byte[256];
             int rc = DimmyNative.dimmy_meeting_start(buf, buf.Length);
             if (rc <= 0)

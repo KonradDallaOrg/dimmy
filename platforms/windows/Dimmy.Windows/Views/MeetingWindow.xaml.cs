@@ -12,6 +12,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
 using Dimmy.Windows.Helpers;
 using Dimmy.Windows.Interop;
+using Dimmy.Windows.Services;
 
 namespace Dimmy.Windows.Views;
 
@@ -281,11 +282,25 @@ public sealed partial class MeetingWindow : Window
 
     // ── Lifecycle ─────────────────────────────────────────────────
 
+    /// XamlRoot for hosting modal dialogs (e.g. the consent gate) anchored to
+    /// this window. Null until the window's content is in the visual tree.
+    public XamlRoot? DialogRoot => this.Content?.XamlRoot;
+
     private async void Start_Click(object sender, RoutedEventArgs e)
     {
         StartBtn.IsEnabled = false;
         try
         {
+            // Recording-consent gate (mandatory). A meeting captures system
+            // audio = other people, so we confirm consent and announce before
+            // a single sample is recorded. If the user cancels, abort the start.
+            var lang = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+            if (!await ConsentFlow.ConfirmAndAnnounceAsync(this.Content?.XamlRoot, lang))
+            {
+                StartBtn.IsEnabled = true;
+                return;
+            }
+
             // Capture the recap choice NOW (start time) into a shared flag so
             // EVERY stop path honours it — the checkbox lives only in this
             // window and the meeting lifecycle is decoupled (window can close,
