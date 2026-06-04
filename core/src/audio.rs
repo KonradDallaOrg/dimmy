@@ -151,6 +151,21 @@ pub fn active_mic_sample_rate() -> u32 {
     ACTIVE_MIC_SAMPLE_RATE.load(Ordering::Relaxed)
 }
 
+/// Device-native sample rate of the live cpal mic stream (Hz), or 0
+/// when no recording is in flight. Distinct from `ACTIVE_MIC_SAMPLE_RATE`
+/// which always returns the canonical post-resample rate (48 kHz). On
+/// BT-HFP routes the device rate is 16 kHz; on built-in mic / USB-class
+/// audio it's typically 44.1 / 48 kHz. macOS SystemAudioCaptureService
+/// needs the device rate to configure SCStream at the actual wire rate
+/// — otherwise SCKit either resamples internally (delivering upsampled
+/// garbage tagged as 48 kHz) or forces the audio HAL to renegotiate.
+static ACTIVE_MIC_DEVICE_RATE: AtomicU32 = AtomicU32::new(0);
+
+/// Read the device-native mic rate, or 0 when no recording is live.
+pub fn active_mic_device_rate() -> u32 {
+    ACTIVE_MIC_DEVICE_RATE.load(Ordering::Relaxed)
+}
+
 /// Externally-supplied sample rate for the macOS / Linux loopback
 /// push path (`dimmy_push_loopback_audio`). On Windows the secondary
 /// stream is driven by cpal so its rate is read directly from the
@@ -501,6 +516,7 @@ pub fn spawn_audio_thread(
                         // Realtek 48 k → USB headset 44.1 k → …) safe:
                         // the WAV writer + STT both see a stable rate.
                         ACTIVE_MIC_SAMPLE_RATE.store(MEETING_CANONICAL_RATE, Ordering::Relaxed);
+                        ACTIVE_MIC_DEVICE_RATE.store(primary_actual_sr, Ordering::Relaxed);
                         crate::log(&format!(
                             "[Audio] Primary cpal config: device_sr={} ch={} → canonical_sr={} (resample={})",
                             primary_actual_sr,
@@ -734,6 +750,7 @@ pub fn spawn_audio_thread(
                         // (e.g. SystemAudioCaptureService on Mac)
                         // know there is no active mic to match.
                         ACTIVE_MIC_SAMPLE_RATE.store(0, Ordering::Relaxed);
+                        ACTIVE_MIC_DEVICE_RATE.store(0, Ordering::Relaxed);
                         // And clear the externally-supplied loopback
                         // rate so the next recording re-probes from a
                         // clean slate instead of inheriting a stale
@@ -1855,5 +1872,24 @@ mod tests {
         };
         let chunks = audio.split_at_silence(1);
         assert_eq!(chunks.iter().map(|c| c.samples.len()).sum::<usize>(), 100);
+    }
+}
+
+#[cfg(test)]
+mod device_rate_tests {
+    use super::*;
+
+    #[test]
+    fn device_rate_zero_when_idle() {
+        ACTIVE_MIC_DEVICE_RATE.store(0, Ordering::Relaxed);
+        assert_eq!(active_mic_device_rate(), 0);
+    }
+
+    #[test]
+    fn device_rate_round_trip() {
+        ACTIVE_MIC_DEVICE_RATE.store(16_000, Ordering::Relaxed);
+        assert_eq!(active_mic_device_rate(), 16_000);
+        ACTIVE_MIC_DEVICE_RATE.store(0, Ordering::Relaxed);
+        assert_eq!(active_mic_device_rate(), 0);
     }
 }
