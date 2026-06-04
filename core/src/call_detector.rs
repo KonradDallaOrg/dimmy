@@ -49,6 +49,10 @@ pub enum SuppressionReason {
     Cooldown(String),
     MeetingActive,
     Debouncing,
+    /// User already accepted "record now" for this call and the host is
+    /// starting the meeting (which can take seconds while a consent modal
+    /// is up). Suppress re-detection in that gap. Cleared by meeting_stopped().
+    RecordingAccepted,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -424,6 +428,15 @@ impl CallDetectorState {
         if is_meeting_active {
             return CallSignalOutcome::Suppressed(SuppressionReason::MeetingActive);
         }
+        // Already accepted "record now": the host is bringing up the meeting
+        // (consent modal, window open) — that can take several seconds during
+        // which the meeting isn't active yet. Without this guard the detector
+        // re-crosses the activity threshold and emits a SECOND call_detected
+        // nudge before recording begins. recording_active_from_us is cleared
+        // by meeting_stopped(), re-arming detection for the next call.
+        if self.recording_active_from_us {
+            return CallSignalOutcome::Suppressed(SuppressionReason::RecordingAccepted);
+        }
         if let Some(real) = &self.current_app {
             if self.excluded.contains(real) {
                 return CallSignalOutcome::Suppressed(SuppressionReason::Excluded(real.clone()));
@@ -701,17 +714,28 @@ mod tests {
     }
 
     #[test]
-    fn record_response_record_now_resets_state() {
+    fn record_now_suppresses_redetection_until_meeting_stopped() {
         let mut s = fresh();
         s.signal(true, Some("teams".into()), false, 1000);
         s.signal(true, Some("teams".into()), false, 1005); // Detected
         s.record_response(Some("teams".into()), NudgeResponse::RecordNow, 1006);
-        // After Record now, mic still active but state is reset so a
-        // *new* session needs a *new* debounce window.
-        let out = s.signal(true, Some("teams".into()), false, 1007);
+        // The host is bringing up the meeting (consent modal up): the meeting
+        // is not active yet, but we already accepted. No matter how long the
+        // modal stays up, the detector must NOT emit a second call_detected —
+        // that was the "double notification" the consent gate exposed.
+        let out = s.signal(true, Some("teams".into()), false, 1100);
         assert_eq!(
             out,
-            CallSignalOutcome::Suppressed(SuppressionReason::Debouncing)
+            CallSignalOutcome::Suppressed(SuppressionReason::RecordingAccepted)
+        );
+        // After the meeting ends, detection re-arms for a fresh call
+        // (min_active_secs = 5, so a full debounce window must elapse again).
+        s.meeting_stopped();
+        s.signal(true, Some("teams".into()), false, 2000);
+        let out2 = s.signal(true, Some("teams".into()), false, 2010);
+        assert!(
+            matches!(out2, CallSignalOutcome::Detected { .. }),
+            "detection must re-arm after the meeting stops, got {out2:?}"
         );
     }
 

@@ -313,6 +313,19 @@ public sealed partial class MeetingWindow : Window
 
     private async void Start_Click(object sender, RoutedEventArgs e)
     {
+        await BeginStartAsync(fromCallDetect: false);
+    }
+
+    /// Public entry for the call-detect "Record now" path. Runs the SAME
+    /// consent + start + UI wiring as the in-window Start button (so the window
+    /// actually flips to Recording), but forces recap on. Returns true if a
+    /// meeting is now recording. Centralising start here is what fixes the
+    /// call-detect path leaving the window idle: App used to start the meeting
+    /// in the core directly, bypassing all this wiring.
+    public Task<bool> StartFromCallDetectAsync() => BeginStartAsync(fromCallDetect: true);
+
+    private async Task<bool> BeginStartAsync(bool fromCallDetect)
+    {
         StartBtn.IsEnabled = false;
         try
         {
@@ -323,16 +336,17 @@ public sealed partial class MeetingWindow : Window
             if (!await ConsentFlow.ConfirmAndAnnounceAsync(this.Content?.XamlRoot, lang))
             {
                 StartBtn.IsEnabled = true;
-                return;
+                return false;
             }
 
             // Capture the recap choice NOW (start time) into a shared flag so
             // EVERY stop path honours it — the checkbox lives only in this
             // window and the meeting lifecycle is decoupled (window can close,
             // pill/popup stop independently), so the live checkbox isn't
-            // reachable from those paths.
+            // reachable from those paths. Call-detect starts force recap on.
             if (App.Instance?.AppViewModel != null)
-                App.Instance.AppViewModel.MeetingGenerateRecap = GenerateRecapCheck.IsChecked == true;
+                App.Instance.AppViewModel.MeetingGenerateRecap =
+                    fromCallDetect || GenerateRecapCheck.IsChecked == true;
             var buf = new byte[256];
             int rc = DimmyNative.dimmy_meeting_start(buf, buf.Length);
             if (rc <= 0)
@@ -356,11 +370,11 @@ public sealed partial class MeetingWindow : Window
                     StartPolling();
                     StartAmplitudePoll();
                     ShowToast("Re-attached to an ongoing recording.");
-                    return;
+                    return true;
                 }
                 ShowToast("Could not start the meeting. Check the log.");
                 StartBtn.IsEnabled = true;
-                return;
+                return false;
             }
             var id = System.Text.Encoding.UTF8.GetString(buf, 0, rc);
             _startedAt = DateTime.UtcNow;
@@ -405,13 +419,14 @@ public sealed partial class MeetingWindow : Window
             StartPolling();
             StartAmplitudePoll();
             App.Log($"meeting started: {id}", "Meeting");
+            return true;
         }
         catch (Exception ex)
         {
             App.Log($"meeting start exc: {ex}", "Meeting");
             StartBtn.IsEnabled = true;
+            return false;
         }
-        await Task.CompletedTask;
     }
 
     private async void Stop_Click(object sender, RoutedEventArgs e)

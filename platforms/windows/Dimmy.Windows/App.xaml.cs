@@ -1892,32 +1892,26 @@ public partial class App : Application
                 return;
             }
 
-            // Open the window first so the consent gate has a XamlRoot to
-            // anchor to. Recording-consent is mandatory on every start path —
-            // the call-detect auto-start is no exception. Wait for the window's
-            // XamlRoot to go live (right after Activate it's null, which would
-            // make ShowAsync throw and the gate read as a false "declined" —
-            // then the detector re-emits the nudge: the "double notification").
+            // Open the window and route the start THROUGH its own Start flow.
+            // The window owns a valid XamlRoot (once loaded) for the mandatory
+            // consent modal AND does all the recording UI wiring (state flip,
+            // polling, app-context). Starting the meeting in the core directly
+            // from here left the just-opened window stuck on idle. Wait for the
+            // XamlRoot to go live first (null right after Activate).
             OpenMeetingWindow();
-            var root = _meetingWindow != null ? await _meetingWindow.EnsureDialogRootAsync() : null;
-            var lang = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
-            if (!await Services.ConsentFlow.ConfirmAndAnnounceAsync(root, lang))
+            if (_meetingWindow == null)
             {
-                Log("StartMeetingFromCallDetect: consent declined, not starting", "CallDetect");
+                Log("StartMeetingFromCallDetect: no meeting window", "CallDetect");
                 return;
             }
-
-            var buf = new byte[256];
-            int rc = DimmyNative.dimmy_meeting_start(buf, buf.Length);
-            if (rc <= 0)
+            await _meetingWindow.EnsureDialogRootAsync();
+            bool started = await _meetingWindow.StartFromCallDetectAsync();
+            if (!started)
             {
-                Log($"StartMeetingFromCallDetect: dimmy_meeting_start rc={rc}", "CallDetect");
+                Log("StartMeetingFromCallDetect: not started (declined or failed)", "CallDetect");
                 return;
             }
-            Log("StartMeetingFromCallDetect: meeting started, opening window", "CallDetect");
-            // Call-detect-started meetings recap by default (the nudge
-            // itself offers "Record + recap"). No checkbox is involved here.
-            if (_appViewModel != null) _appViewModel.MeetingGenerateRecap = true;
+            Log("StartMeetingFromCallDetect: meeting started via window", "CallDetect");
             // Bind the originating WASAPI session id so the
             // CallDetectionService meeting-tick can stop the meeting
             // the moment the call ends — no amplitude-based silence
