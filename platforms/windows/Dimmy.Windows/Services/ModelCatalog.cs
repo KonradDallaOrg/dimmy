@@ -57,22 +57,26 @@ public static class ModelCatalog
 
     static ModelCatalog()
     {
-        var json = DimmyNative.ModelCatalogJson();
         CatalogRoot? root = null;
-        if (!string.IsNullOrEmpty(json))
+        try
         {
-            try
+            // The FFI call must be inside the try too: in a unit-test host (or
+            // any process where dimmy_lib isn't on the load path) the P/Invoke
+            // throws DllNotFoundException, and since this runs from
+            // SettingsViewModel's static initializer it would otherwise take
+            // down every test that merely touches the view-model. Degrade to
+            // an empty catalog instead — the picker shows only its Custom
+            // fallback, which is visible rather than a crash. In the real app
+            // the DLL is always loaded, so this path is test/edge only.
+            var json = DimmyNative.ModelCatalogJson();
+            if (!string.IsNullOrEmpty(json))
             {
                 root = JsonSerializer.Deserialize<CatalogRoot>(json);
             }
-            catch
-            {
-                // A parse failure is a real bug (the Rust catalog unit test
-                // would have caught a malformed catalog), not something to
-                // paper over — leave Providers empty so it's visible rather
-                // than silently serving a stale hardcoded list.
-                root = null;
-            }
+        }
+        catch
+        {
+            root = null;
         }
         Providers = root?.Providers ?? new List<CatalogProvider>();
     }
