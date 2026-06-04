@@ -2192,6 +2192,17 @@ pub extern "C" fn dimmy_get_active_mic_sample_rate() -> c_int {
     crate::audio::active_mic_sample_rate() as c_int
 }
 
+/// Device-native sample rate of the live cpal mic (Hz), or 0 when no
+/// recording is in flight. Distinct from
+/// `dimmy_get_active_mic_sample_rate` which returns the canonical
+/// post-resample rate (48 kHz). macOS SystemAudioCaptureService uses
+/// this to size SCStream at the actual wire rate (e.g. 16 kHz on
+/// BT-HFP), so SCKit doesn't deliver upsampled garbage tagged 48 kHz.
+#[no_mangle]
+pub extern "C" fn dimmy_get_active_mic_device_rate() -> c_int {
+    crate::audio::active_mic_device_rate() as c_int
+}
+
 /// Probe the sample rate cpal WOULD open the configured mic at,
 /// without actually opening a stream. Reads `default_input_config()`
 /// on the user-selected device (or system default if none picked).

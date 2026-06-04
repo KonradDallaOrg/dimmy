@@ -342,6 +342,12 @@ int32_t dimmy_push_loopback_audio(const float * _Nonnull samples, int32_t count,
 /// audio HAL renegotiation during meetings).
 int32_t dimmy_get_active_mic_sample_rate(void);
 
+/// Device-native sample rate of the cpal mic (Hz), or 0 when no recording
+/// is in flight. Use this in preference to `dimmy_get_active_mic_sample_rate`
+/// when sizing an external loopback path (e.g. SCStream) so the wire rate
+/// matches the mic's actual rate — not the canonical post-resample 48 kHz.
+int32_t dimmy_get_active_mic_device_rate(void);
+
 /// Probed sample rate cpal would open the configured mic at (no stream
 /// opened). Use this when `dimmy_get_active_mic_sample_rate` returns 0
 /// because cpal hasn't started yet — typical for macOS SCStream config

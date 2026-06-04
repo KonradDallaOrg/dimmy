@@ -40,20 +40,28 @@ final class SystemAudioCaptureService: NSObject {
         return stream != nil
     }
 
-    /// Sample rate SCStream will be (or is currently) configured at.
     /// Mirrors the cpal mic rate when one is live; falls back through
-    /// a cpal probe (no stream opened) and finally to 48 kHz so we
-    /// always pick a rate before SCStream is created.
+    /// a cpal probe (no stream opened) and finally to 48 kHz.
     ///
     /// Resolution order:
-    ///   1. `dimmy_get_active_mic_sample_rate()` — the rate the live
-    ///      cpal stream is actually running at.
-    ///   2. `dimmy_probe_primary_sample_rate()` — what cpal would open
+    ///   1. `dimmy_get_active_mic_device_rate()` — device-native rate
+    ///      of the live cpal stream (e.g. 16 kHz on BT-HFP). This is
+    ///      the wire rate SCStream must match to avoid SCKit either
+    ///      upsampling internally or forcing HAL renegotiation.
+    ///   2. `dimmy_get_active_mic_sample_rate()` — canonical
+    ///      post-resample rate (always 48 kHz when live). Fallback
+    ///      while the device-rate atomic is being populated.
+    ///   3. `dimmy_probe_primary_sample_rate()` — what cpal would open
     ///      the selected mic at; closes the race where SCStream starts
     ///      before the cpal Start command has been serviced.
-    ///   3. Hardcoded 48 000 Hz when no input device is available
+    ///   4. Hardcoded 48 000 Hz when no input device is available
     ///      (SCStream still needs some rate).
     static func plannedSampleRate() -> Int {
+        // Device-native rate first (e.g. 16 kHz on BT-HFP). Falls back to
+        // the canonical post-resample rate, then to the cpal probe, then
+        // to a hardcoded 48 kHz when no input device is configured.
+        let device = Int(dimmy_get_active_mic_device_rate())
+        if device > 0 { return device }
         let active = Int(dimmy_get_active_mic_sample_rate())
         if active > 0 { return active }
         let probed = Int(dimmy_probe_primary_sample_rate())

@@ -31,6 +31,7 @@ dimmy_cycle_llm_tone
 dimmy_decode_audio_to_wav
 dimmy_download_llm_model
 dimmy_download_model
+dimmy_get_active_mic_device_rate
 dimmy_get_active_mic_sample_rate
 dimmy_get_amplitude
 dimmy_get_config_json

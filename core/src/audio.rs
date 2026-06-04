@@ -151,6 +151,21 @@ pub fn active_mic_sample_rate() -> u32 {
     ACTIVE_MIC_SAMPLE_RATE.load(Ordering::Relaxed)
 }
 
+/// Device-native sample rate of the live cpal mic stream (Hz), or 0
+/// when no recording is in flight. Distinct from `ACTIVE_MIC_SAMPLE_RATE`
+/// which always returns the canonical post-resample rate (48 kHz). On
+/// BT-HFP routes the device rate is 16 kHz; on built-in mic / USB-class
+/// audio it's typically 44.1 / 48 kHz. macOS SystemAudioCaptureService
+/// needs the device rate to configure SCStream at the actual wire rate
+/// — otherwise SCKit either resamples internally (delivering upsampled
+/// garbage tagged as 48 kHz) or forces the audio HAL to renegotiate.
+static ACTIVE_MIC_DEVICE_RATE: AtomicU32 = AtomicU32::new(0);
+
+/// Read the device-native mic rate, or 0 when no recording is live.
+pub fn active_mic_device_rate() -> u32 {
+    ACTIVE_MIC_DEVICE_RATE.load(Ordering::Relaxed)
+}
+
 /// Externally-supplied sample rate for the macOS / Linux loopback
 /// push path (`dimmy_push_loopback_audio`). On Windows the secondary
 /// stream is driven by cpal so its rate is read directly from the
@@ -348,6 +363,7 @@ pub fn spawn_audio_thread(
             let mut loopback_diag_in_samples: u64 = 0;
             let mut loopback_diag_out_samples: u64 = 0;
             let mut loopback_diag_pushes: u64 = 0;
+            let mut loopback_diag_peak_abs: f32 = 0.0;
 
             // Event loop: wait for commands, with a 1 s timeout that
             // doubles as the heartbeat for device-change auto-recovery.
@@ -501,6 +517,7 @@ pub fn spawn_audio_thread(
                         // Realtek 48 k → USB headset 44.1 k → …) safe:
                         // the WAV writer + STT both see a stable rate.
                         ACTIVE_MIC_SAMPLE_RATE.store(MEETING_CANONICAL_RATE, Ordering::Relaxed);
+                        ACTIVE_MIC_DEVICE_RATE.store(primary_actual_sr, Ordering::Relaxed);
                         crate::log(&format!(
                             "[Audio] Primary cpal config: device_sr={} ch={} → canonical_sr={} (resample={})",
                             primary_actual_sr,
@@ -734,6 +751,7 @@ pub fn spawn_audio_thread(
                         // (e.g. SystemAudioCaptureService on Mac)
                         // know there is no active mic to match.
                         ACTIVE_MIC_SAMPLE_RATE.store(0, Ordering::Relaxed);
+                        ACTIVE_MIC_DEVICE_RATE.store(0, Ordering::Relaxed);
                         // And clear the externally-supplied loopback
                         // rate so the next recording re-probes from a
                         // clean slate instead of inheriting a stale
@@ -826,16 +844,24 @@ pub fn spawn_audio_thread(
                         loopback_diag_in_samples += in_len as u64;
                         loopback_diag_out_samples += out_len as u64;
                         loopback_diag_pushes += 1;
+                        if !canonical.is_empty() {
+                            let push_peak =
+                                canonical.iter().map(|s| s.abs()).fold(0.0_f32, f32::max);
+                            if push_peak > loopback_diag_peak_abs {
+                                loopback_diag_peak_abs = push_peak;
+                            }
+                        }
                         if loopback_diag_last_log.elapsed() >= std::time::Duration::from_secs(5) {
                             let sec_len = buffer_secondary.lock().map(|b| b.len()).unwrap_or(0);
                             let ref_len = aec_ref_ring.lock().map(|r| r.len()).unwrap_or(0);
                             crate::log(&format!(
-                                "[Audio/loopback] 5s tick: pushes={} in_samples={} out_samples={} src_rate={} dst_rate={} secondary_buf_len={} aec_ref_len={}",
+                                "[Audio/loopback] 5s tick: pushes={} in_samples={} out_samples={} src_rate={} dst_rate={} peak_abs={:.4} secondary_buf_len={} aec_ref_len={}",
                                 loopback_diag_pushes,
                                 loopback_diag_in_samples,
                                 loopback_diag_out_samples,
                                 effective_src_rate,
                                 MEETING_CANONICAL_RATE,
+                                loopback_diag_peak_abs,
                                 sec_len,
                                 ref_len,
                             ));
@@ -843,6 +869,7 @@ pub fn spawn_audio_thread(
                             loopback_diag_in_samples = 0;
                             loopback_diag_out_samples = 0;
                             loopback_diag_pushes = 0;
+                            loopback_diag_peak_abs = 0.0;
                         }
                     }
                 }
@@ -1855,5 +1882,44 @@ mod tests {
         };
         let chunks = audio.split_at_silence(1);
         assert_eq!(chunks.iter().map(|c| c.samples.len()).sum::<usize>(), 100);
+    }
+}
+
+#[cfg(test)]
+mod device_rate_tests {
+    use super::*;
+
+    /// Single test rather than two — the two ran in parallel by default
+    /// and raced on the shared atomic.
+    #[test]
+    fn device_rate_store_load_round_trip() {
+        ACTIVE_MIC_DEVICE_RATE.store(0, Ordering::Relaxed);
+        assert_eq!(active_mic_device_rate(), 0);
+        ACTIVE_MIC_DEVICE_RATE.store(16_000, Ordering::Relaxed);
+        assert_eq!(active_mic_device_rate(), 16_000);
+        ACTIVE_MIC_DEVICE_RATE.store(0, Ordering::Relaxed);
+        assert_eq!(active_mic_device_rate(), 0);
+    }
+}
+
+#[cfg(test)]
+mod diag_tests {
+    /// Mirrors the inline peak-tracking expression inside the
+    /// PushLoopback arm. Guards the f32::abs / fold pattern against
+    /// regression.
+    fn peak_for(samples: &[f32]) -> f32 {
+        samples.iter().map(|s| s.abs()).fold(0.0_f32, f32::max)
+    }
+
+    #[test]
+    fn peak_zero_for_all_zero_buffer() {
+        let zeros = vec![0.0_f32; 4800];
+        assert_eq!(peak_for(&zeros), 0.0);
+    }
+
+    #[test]
+    fn peak_tracks_max_abs() {
+        let samples = [0.0_f32, -0.3, 0.1, -0.95, 0.2];
+        assert!((peak_for(&samples) - 0.95).abs() < f32::EPSILON);
     }
 }
