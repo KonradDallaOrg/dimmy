@@ -27,6 +27,8 @@ dimmy_clear_app_context
 dimmy_command_transform
 dimmy_compute_audio_peaks
 dimmy_config_dir_name
+dimmy_consent_log_event
+dimmy_consent_text
 dimmy_cycle_llm_style
 dimmy_cycle_llm_tone
 dimmy_decode_audio_to_wav

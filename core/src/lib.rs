@@ -13,6 +13,7 @@ pub mod catalog;
 pub mod chunked_stt;
 pub mod claude_code;
 pub mod claude_desktop;
+pub mod consent;
 pub mod dfn;
 #[cfg(feature = "local-dfn")]
 pub mod dfn3;
