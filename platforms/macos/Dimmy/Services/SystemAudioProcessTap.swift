@@ -45,6 +45,18 @@ final class SystemAudioProcessTap {
     /// to read the currently-captured set as a presence signal.
     private(set) var currentTapPidSet: Set<pid_t> = []
 
+    /// Default-output UID the aggregate device was anchored to at build
+    /// time. The aggregate carries the tap and uses this device as its
+    /// clock anchor + sub-device (set at lines ~159-162 below). When
+    /// macOS flips the default output mid-meeting (BT headphones
+    /// connect/disconnect, wired unplug/replug, Sound prefs change), the
+    /// aggregate keeps pointing at the stale device and the tap silently
+    /// delivers silence — same root cause as the Windows WASAPI loopback
+    /// bug fixed in 80540e3. Compared against the live default in
+    /// `rescanAndRebuildIfNeeded` to trigger a rebuild on change.
+    /// nil while deferred or torn down.
+    private(set) var builtOutputUID: String?
+
     /// Latched true the first time the IO proc fires. When the audio-
     /// recording grant is missing the tap is created but its IO proc never
     /// runs, so this stays false — that's how the meeting tells "ungranted"
@@ -133,6 +145,7 @@ final class SystemAudioProcessTap {
         // untouched) and drift-compensate the tap against that clock; this
         // is the configuration Apple's own tap sample uses.
         let outputUID = Self.defaultOutputDeviceUID()
+        builtOutputUID = outputUID
         NSLog("[SystemAudio/tap] tap format rate=%d ch=%d; clock anchor outputUID=%@",
               sampleRate, channelCount, outputUID ?? "<none>")
         let aggregateUID = UUID().uuidString
@@ -260,6 +273,12 @@ final class SystemAudioProcessTap {
     /// don't race on the dictionary.
     private var processListListener: AudioObjectPropertyListenerBlock?
     private var perProcessListeners: [AudioObjectID: AudioObjectPropertyListenerBlock] = [:]
+    /// Listener on `kAudioHardwarePropertyDefaultOutputDevice`. Fires when
+    /// macOS flips the default output (BT (dis)connect, wired unplug/replug,
+    /// Sound prefs change). The handler funnels to `rescanAndRebuildIfNeeded`
+    /// which rebuilds the tap+aggregate against the new default — same
+    /// machinery as the PID-set rebuild. See `builtOutputUID` doc above.
+    private var defaultOutputListener: AudioObjectPropertyListenerBlock?
     private var rescanBackstop: DispatchSourceTimer?
     private let listenerLock = NSLock()
 
@@ -293,6 +312,28 @@ final class SystemAudioProcessTap {
 
         refreshPerProcessListeners()
 
+        // Default-output listener: rebuild when macOS flips the default output
+        // mid-tap, so the aggregate's clock anchor follows the new device
+        // instead of capturing silence from a stale endpoint. Win parity with
+        // 80540e3 (loopback follows default output on device change).
+        var defaultOutAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        let defaultOutBlock: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            self?.rescanAndRebuildIfNeeded()
+        }
+        let stDef = AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject), &defaultOutAddr, ioQueue, defaultOutBlock)
+        if stDef == noErr {
+            listenerLock.lock()
+            defaultOutputListener = defaultOutBlock
+            listenerLock.unlock()
+            NSLog("[SystemAudio/tap] event listener armed on DefaultOutputDevice")
+        } else {
+            NSLog("[SystemAudio/tap] AddPropertyListener(DefaultOutputDevice) failed: %d — backstop polling only", stDef)
+        }
+
         let backstop = DispatchSource.makeTimerSource(queue: ioQueue)
         backstop.schedule(deadline: .now() + 30.0, repeating: 30.0)
         backstop.setEventHandler { [weak self] in self?.rescanAndRebuildIfNeeded() }
@@ -304,8 +345,10 @@ final class SystemAudioProcessTap {
         listenerLock.lock()
         let oldSys = processListListener
         let oldPerProcess = perProcessListeners
+        let oldDefaultOut = defaultOutputListener
         processListListener = nil
         perProcessListeners.removeAll()
+        defaultOutputListener = nil
         listenerLock.unlock()
 
         if let block = oldSys {
@@ -322,6 +365,14 @@ final class SystemAudioProcessTap {
                 mScope: kAudioObjectPropertyScopeGlobal,
                 mElement: kAudioObjectPropertyElementMain)
             _ = AudioObjectRemovePropertyListenerBlock(obj, &addr, ioQueue, block)
+        }
+        if let block = oldDefaultOut {
+            var defaultOutAddr = AudioObjectPropertyAddress(
+                mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain)
+            _ = AudioObjectRemovePropertyListenerBlock(
+                AudioObjectID(kAudioObjectSystemObject), &defaultOutAddr, ioQueue, block)
         }
         rescanBackstop?.cancel()
         rescanBackstop = nil
@@ -378,18 +429,43 @@ final class SystemAudioProcessTap {
         listenerLock.unlock()
     }
 
+    /// Pure decision: does a default-output change warrant a tap rebuild?
+    /// Win parity with `loopback_should_follow_default` (audio.rs). Same
+    /// intent: only rebuild when we have a known current default that
+    /// differs from the one the aggregate was anchored to. If the system
+    /// currently has no default output (rare transient state mid-unplug),
+    /// suppress to avoid thrashing — the next listener fire will catch
+    /// the new default and trigger the rebuild then.
+    static func shouldRebuildForOutputChange(
+        builtUID: String?, currentUID: String?
+    ) -> Bool {
+        guard let current = currentUID else { return false }
+        return current != builtUID
+    }
+
     private func rescanAndRebuildIfNeeded() {
         let selfPid = ProcessInfo.processInfo.processIdentifier
         let activeObjects = Self.audioActiveProcessObjects(excludingSelf: selfPid)
         let newPidSet = Set(activeObjects.compactMap { Self.pid(forAudioObject: $0) })
 
         if running {
-            // Live tap: only rebuild when the active set actually changes.
-            // Same-set tick costs one HAL list read + per-process flag +
-            // Set equality — cheap enough to do at 3 s cadence forever.
-            guard newPidSet != currentTapPidSet else { return }
-            NSLog("[SystemAudio/tap] audio-active PID set changed (was %d, now %d) — rebuilding tap",
-                  currentTapPidSet.count, newPidSet.count)
+            // Live tap: rebuild when EITHER the active PID set or the default
+            // output device has changed. Same-state tick costs one HAL list
+            // read + per-process flag + Set equality + UID string compare —
+            // cheap enough to do at 30 s backstop cadence forever.
+            let currentOutputUID = Self.defaultOutputDeviceUID()
+            let outputChanged = Self.shouldRebuildForOutputChange(
+                builtUID: builtOutputUID, currentUID: currentOutputUID)
+            let pidSetChanged = newPidSet != currentTapPidSet
+            guard pidSetChanged || outputChanged else { return }
+            if outputChanged {
+                NSLog("[SystemAudio/tap] default output changed (%@ -> %@) — rebuilding tap",
+                      builtOutputUID ?? "<none>", currentOutputUID ?? "<none>")
+            }
+            if pidSetChanged {
+                NSLog("[SystemAudio/tap] audio-active PID set changed (was %d, now %d) — rebuilding tap",
+                      currentTapPidSet.count, newPidSet.count)
+            }
             let savedHandler = onSamples
             teardown()
             running = false
@@ -399,7 +475,9 @@ final class SystemAudioProcessTap {
             // Deferred state: no tap created yet (no audio source at start).
             // Wait for ANY audio source, then promote to live. Avoids the
             // false-positive SCKit fallback when the user starts a meeting
-            // before opening their videoconf app.
+            // before opening their videoconf app. Default-output changes
+            // while deferred are no-ops — `start()` reads the live default
+            // when it eventually fires.
             guard !activeObjects.isEmpty else { return }
             NSLog("[SystemAudio/tap] audio now active (%d source(s)) — promoting deferred tap to live",
                   activeObjects.count)
@@ -458,6 +536,7 @@ final class SystemAudioProcessTap {
 
     private func teardown() {
         currentTapPidSet = []
+        builtOutputUID = nil
         if let procID = ioProcID, aggregateID != AudioObjectID(kAudioObjectUnknown) {
             AudioDeviceStop(aggregateID, procID)
             AudioDeviceDestroyIOProcID(aggregateID, procID)
