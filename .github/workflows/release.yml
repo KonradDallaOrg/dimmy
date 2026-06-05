@@ -409,13 +409,26 @@ jobs:
           xcrun stapler staple "$APP_PATH"
           xcrun stapler validate "$APP_PATH"
 
-      - name: Generate DMG background (SVG → Retina PNG)
+      - name: Generate DMG background (multi-rep TIFF: 1× + 2× Retina)
         run: |
           brew install librsvg
-          # 2× of the 660×400 Finder window so the arrow + label render
-          # crisp on Retina (otherwise macOS upscales a 1× PNG and it
-          # looks pixelated — see staging-auto-update.yml for context).
-          rsvg-convert -w 1320 -h 800 platforms/macos/dmg-assets/dmg-background.svg -o platforms/macos/dmg-assets/dmg-background.png
+          # Render both 1× (660×400, matches the Finder window size) and
+          # 2× (1320×800, Retina) PNGs, pack them into a single multi-rep
+          # TIFF via tiffutil. Finder picks the correct rep at display
+          # time based on backing-store scale — crisp on Retina, sharp on
+          # non-Retina, no quadrant crop.
+          #
+          # Previously we shipped a single 2× PNG as --background, but
+          # without the @2x naming convention or a multi-rep container
+          # Finder treats the 1320×800 source as 1× native and shows only
+          # the top-left quadrant inside the 660×400 window → the drag
+          # arrow + label drop off-screen (reported on 2026-06-05).
+          rsvg-convert -w 660  -h 400 platforms/macos/dmg-assets/dmg-background.svg -o platforms/macos/dmg-assets/dmg-background.png
+          rsvg-convert -w 1320 -h 800 platforms/macos/dmg-assets/dmg-background.svg -o platforms/macos/dmg-assets/dmg-background@2x.png
+          tiffutil -cathidpicheck \
+            platforms/macos/dmg-assets/dmg-background.png \
+            platforms/macos/dmg-assets/dmg-background@2x.png \
+            -out platforms/macos/dmg-assets/dmg-background.tiff
 
       - name: Create DMG
         working-directory: platforms/macos
@@ -433,7 +446,7 @@ jobs:
           ln -sf /Applications build/dmg-contents/Applications
           create-dmg \
             --volname "Dimmy" \
-            --background "dmg-assets/dmg-background.png" \
+            --background "dmg-assets/dmg-background.tiff" \
             --window-pos 200 120 \
             --window-size 660 400 \
             --icon-size 128 \
