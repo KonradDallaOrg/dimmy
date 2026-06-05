@@ -330,6 +330,14 @@ pub fn spawn_audio_thread(
             // reset to `None` on explicit Stop so a stray dead-flag
             // can't reopen a stream the user no longer wants.
             let mut last_start_params: Option<(Option<String>, AudioSource)> = None;
+            // Name of the output device the WASAPI loopback is currently bound
+            // to (the default output at the last Start). The 1 s heartbeat
+            // compares this to the live default output; if they diverge (user
+            // replugged headphones → default flipped) we rebind the loopback so
+            // system audio follows the real output instead of capturing silence
+            // on the stale device. `None` when no loopback is active (Mic-only,
+            // or before the first Start) and on every non-Windows platform.
+            let mut bound_loopback_name: Option<String> = None;
             // True when the next AudioCommand::Start came from the
             // auto-recovery branch (not from a fresh user request).
             // The Start body must NOT clear the buffers in that case:
@@ -372,15 +380,40 @@ pub fn spawn_audio_thread(
                     Ok(c) => c,
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     Err(mpsc::RecvTimeoutError::Timeout) => {
-                        if AUDIO_STREAM_DEAD.load(Ordering::Relaxed) {
+                        let dead = AUDIO_STREAM_DEAD.load(Ordering::Relaxed);
+                        // Default-output-follow (Windows): cpal raises no error
+                        // when the default output merely CHANGES (the old device
+                        // is still alive, just no longer default), so the
+                        // dead-flag path can't catch a replug. Compare the live
+                        // default output to the device the loopback is bound to.
+                        let default_changed = if !dead {
+                            match last_start_params {
+                                Some((_, src)) if bound_loopback_name.is_some() => {
+                                    loopback_should_follow_default(
+                                        src,
+                                        bound_loopback_name.as_deref(),
+                                        current_default_output_name(&host).as_deref(),
+                                    )
+                                }
+                                _ => false,
+                            }
+                        } else {
+                            false
+                        };
+                        if dead || default_changed {
                             if let Some((ref dn, src)) = last_start_params {
+                                let trigger = if dead {
+                                    "stream_dead"
+                                } else {
+                                    "default_output_changed"
+                                };
                                 crate::log(&format!(
-                                    "[Audio] device-change auto-recovery: restarting streams (device={:?} source={:?}) — preserving buffers",
-                                    dn, src
+                                    "[Audio] device-change auto-recovery: restarting streams (device={:?} source={:?} trigger={}) — preserving buffers",
+                                    dn, src, trigger
                                 ));
                                 crate::ffi::emit_event(
                                     "audio.device_change_recovery",
-                                    r#"{"trigger":"stream_dead"}"#,
+                                    &format!(r#"{{"trigger":"{}"}}"#, trigger),
                                 );
                                 streams.clear();
                                 AUDIO_STREAM_DEAD.store(false, Ordering::Relaxed);
@@ -424,6 +457,10 @@ pub fn spawn_audio_thread(
                             } else {
                                 None
                             };
+                        // Remember which output device backs the loopback so the
+                        // heartbeat can notice a mid-meeting default-output change
+                        // (replug) and rebind. None when no loopback is in play.
+                        bound_loopback_name = system_device.as_ref().and_then(|d| d.name().ok());
 
                         // For Mix, both must succeed; if system fails we degrade to
                         // mic-only with a log line so the user still gets SOMETHING.
@@ -746,6 +783,7 @@ pub fn spawn_audio_thread(
                         // the recording back up after the user (or the
                         // meeting worker) explicitly asked us to halt.
                         last_start_params = None;
+                        bound_loopback_name = None;
                         AUDIO_STREAM_DEAD.store(false, Ordering::Relaxed);
                         // Clear the published mic rate so callers
                         // (e.g. SystemAudioCaptureService on Mac)
@@ -927,6 +965,48 @@ fn resolve_loopback_device(host: &cpal::Host) -> Option<cpal::Device> {
 fn resolve_loopback_device(_host: &cpal::Host) -> Option<cpal::Device> {
     crate::log("[Audio] Loopback not yet implemented on this platform");
     None
+}
+
+/// Name of the current system default OUTPUT device, used to detect a
+/// mid-meeting default change (e.g. the user replugs headphones and Windows
+/// flips the default back to them). Windows-only: the loopback follows the
+/// default output. On other platforms loopback comes from an external push
+/// path (no cpal default-output device), so this is always `None` and the
+/// follow logic is a no-op.
+#[cfg(target_os = "windows")]
+fn current_default_output_name(host: &cpal::Host) -> Option<String> {
+    host.default_output_device().and_then(|d| d.name().ok())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn current_default_output_name(_host: &cpal::Host) -> Option<String> {
+    None
+}
+
+/// Decide whether the audio thread should restart streams to FOLLOW a system
+/// default-output change (the Windows loopback-follow path). Pure so it can be
+/// unit-tested without cpal.
+///
+/// The WASAPI loopback is bound to whatever was the default output when the
+/// meeting started. If the user unplugs/replugs an output device mid-meeting,
+/// Windows can flip the default to a DIFFERENT endpoint while the old loopback
+/// stream stays alive (no cpal error) capturing silence. We detect that here:
+/// when system audio is wanted and the live default output no longer matches
+/// the device the loopback is bound to, the caller rebinds via the normal
+/// device-change recovery. Only fires when BOTH names are known and differ, so
+/// a transient "no default output" tick can't thrash the streams.
+fn loopback_should_follow_default(
+    source: AudioSource,
+    bound_loopback_name: Option<&str>,
+    current_default_output: Option<&str>,
+) -> bool {
+    if !matches!(source, AudioSource::System | AudioSource::Mix) {
+        return false;
+    }
+    match (bound_loopback_name, current_default_output) {
+        (Some(bound), Some(current)) => bound != current,
+        _ => false,
+    }
 }
 
 /// Build a SECOND input stream that writes into the SAME shared
@@ -1547,6 +1627,55 @@ pub fn encode_wav(samples: &[f32], sample_rate: u32) -> Result<Vec<u8>, crate::e
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn loopback_follows_default_when_output_changes_mid_meeting() {
+        // The exact failure from the field: meeting on "Cuffie (HD 350BT)",
+        // user unplugs/replugs, Windows flips the default to the Realtek
+        // speakers, the loopback stays on the headphones (or vice-versa) and
+        // records silence. With Mix/System we must rebind.
+        assert!(loopback_should_follow_default(
+            AudioSource::Mix,
+            Some("Cuffie (HD 350BT)"),
+            Some("Altoparlanti (2- Realtek(R) Audio)"),
+        ));
+        assert!(loopback_should_follow_default(
+            AudioSource::System,
+            Some("Altoparlanti (2- Realtek(R) Audio)"),
+            Some("Cuffie (HD 350BT)"),
+        ));
+    }
+
+    #[test]
+    fn loopback_does_not_follow_when_default_unchanged() {
+        assert!(!loopback_should_follow_default(
+            AudioSource::Mix,
+            Some("Cuffie (HD 350BT)"),
+            Some("Cuffie (HD 350BT)"),
+        ));
+    }
+
+    #[test]
+    fn loopback_follow_is_noop_for_mic_only_or_unknown_names() {
+        // Mic-only never has a loopback to follow.
+        assert!(!loopback_should_follow_default(
+            AudioSource::Mic,
+            Some("Cuffie (HD 350BT)"),
+            Some("Altoparlanti (2- Realtek(R) Audio)"),
+        ));
+        // A transient "no default output" tick (None) must not thrash streams.
+        assert!(!loopback_should_follow_default(
+            AudioSource::Mix,
+            Some("Cuffie (HD 350BT)"),
+            None,
+        ));
+        // No loopback bound yet → nothing to follow.
+        assert!(!loopback_should_follow_default(
+            AudioSource::Mix,
+            None,
+            Some("Cuffie (HD 350BT)"),
+        ));
+    }
 
     #[test]
     fn encode_wav_produces_valid_header() {
