@@ -378,12 +378,19 @@ jobs:
           xcrun stapler staple "$APP_PATH"
           xcrun stapler validate "$APP_PATH"
 
-      - name: Generate DMG background (SVG → Retina PNG)
+      - name: Generate DMG background (multi-rep TIFF: 1× + 2× Retina)
         run: |
           brew install librsvg
-          # 2× of the 660×400 Finder window so the arrow + label render
-          # crisp on Retina (see staging-auto-update.yml for context).
-          rsvg-convert -w 1320 -h 800 platforms/macos/dmg-assets/dmg-background.svg -o platforms/macos/dmg-assets/dmg-background.png
+          # See release.yml for the why — single 2× PNG was treated as
+          # 1× native by Finder and only the top-left quadrant rendered
+          # inside the 660×400 window. Multi-rep TIFF lets Finder pick
+          # the right rep at display time.
+          rsvg-convert -w 660  -h 400 platforms/macos/dmg-assets/dmg-background.svg -o platforms/macos/dmg-assets/dmg-background.png
+          rsvg-convert -w 1320 -h 800 platforms/macos/dmg-assets/dmg-background.svg -o platforms/macos/dmg-assets/dmg-background@2x.png
+          tiffutil -cathidpicheck \
+            platforms/macos/dmg-assets/dmg-background.png \
+            platforms/macos/dmg-assets/dmg-background@2x.png \
+            -out platforms/macos/dmg-assets/dmg-background.tiff
 
       - name: Create DMG
         working-directory: platforms/macos
@@ -406,7 +413,7 @@ jobs:
           ln -sf /Applications build/dmg-contents/Applications
           create-dmg \
             --volname "Dimmy Staging" \
-            --background "dmg-assets/dmg-background.png" \
+            --background "dmg-assets/dmg-background.tiff" \
             --window-pos 200 120 \
             --window-size 660 400 \
             --icon-size 128 \
