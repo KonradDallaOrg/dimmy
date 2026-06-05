@@ -378,53 +378,12 @@ pub fn build_local_system_prompt(
     prompt
 }
 
-/// Build the full prompt for local LLM inference.
-/// Uses Gemma turn format with thinking mode disabled via `<|/think|>`.
-pub fn build_local_prompt(system_prompt: &str, user_text: &str) -> String {
-    assert!(
-        !user_text.is_empty(),
-        "user text must not be empty for local LLM"
-    );
-
-    // Detect input language for reinforcement — but skip if translating
-    let translating = system_prompt.contains("Translate");
-    let lang_hint = if translating {
-        "" // Don't fight the translation instruction
-    } else if user_text.contains('è')
-        || user_text.contains('ò')
-        || user_text.contains('à')
-        || user_text.contains('ù')
-        || user_text.contains("cioè")
-        || user_text.contains("perché")
-    {
-        "Rispondi SOLO in italiano."
-    } else {
-        "IMPORTANT: Respond in the EXACT SAME language as the input text. Do NOT translate."
-    };
-
-    let prompt = format!(
-        "<start_of_turn>user\n\
-         {system} {lang} Output ONLY the result, nothing else.\n\n\
-         {text}\n\
-         <end_of_turn>\n<start_of_turn>model\n<|/think|>\n",
-        system = system_prompt,
-        lang = lang_hint,
-        text = user_text
-    );
-
-    // Negative space: ensure we never trigger thinking mode
-    assert!(
-        !prompt.contains("<think>"),
-        "prompt must not contain thinking tags"
-    );
-    assert!(
-        prompt.len() < 15_000,
-        "prompt is unreasonably long: {} chars",
-        prompt.len()
-    );
-
-    prompt
-}
+// Note: local inference no longer hand-rolls a prompt string. The real
+// path (see the inference fn below) builds messages and calls the GGUF's
+// embedded `apply_chat_template`, which emits the correct per-family turn
+// format (`<start_of_turn>` for Gemma 4, `<|im_start|>` for Phi-4, ...).
+// The old `build_local_prompt` carried a Qwen-specific `<|/think|>` marker
+// that did not match what we send and was removed 2026-06-06.
 
 // ── LLM inference cache ─────────────────────────────────────────
 //
@@ -1006,53 +965,10 @@ mod tests {
     }
 
     // ── Prompt tests ────────────────────────────────────────────
-
-    #[test]
-    fn prompt_no_thinking_tags() {
-        let prompt = build_local_prompt("Fix grammar.", "ciao come stai");
-        assert!(
-            !prompt.contains("<think>"),
-            "prompt must not contain thinking tags"
-        );
-        assert!(
-            !prompt.contains("</think>"),
-            "prompt must not contain closing thinking tags"
-        );
-    }
-
-    #[test]
-    fn prompt_has_turn_markers() {
-        let prompt = build_local_prompt("Fix grammar.", "test text");
-        assert!(
-            prompt.contains("<start_of_turn>user"),
-            "prompt must contain user turn marker"
-        );
-        assert!(
-            prompt.contains("<start_of_turn>model"),
-            "prompt must contain model turn marker"
-        );
-        assert!(
-            prompt.contains("<end_of_turn>"),
-            "prompt must contain end turn marker"
-        );
-    }
-
-    #[test]
-    fn prompt_includes_system_and_user() {
-        let prompt = build_local_prompt("Fix all errors.", "il mio testo");
-        assert!(
-            prompt.contains("Fix all errors."),
-            "prompt must contain system prompt"
-        );
-        assert!(
-            prompt.contains("il mio testo"),
-            "prompt must contain user text"
-        );
-        assert!(
-            prompt.contains("Output ONLY"),
-            "prompt must contain output instruction"
-        );
-    }
+    // The per-turn template is now produced by the GGUF's embedded
+    // `apply_chat_template` at inference time, so there is no hand-rolled
+    // prompt string left to unit-test here. The system-prompt builder
+    // (used as the `system` message) is still covered below.
 
     #[test]
     fn local_preamble_is_short_and_direct() {
