@@ -409,7 +409,7 @@ jobs:
           xcrun stapler staple "$APP_PATH"
           xcrun stapler validate "$APP_PATH"
 
-      - name: Generate DMG background (multi-rep TIFF: 1× + 2× Retina)
+      - name: "Generate DMG background (multi-rep TIFF: 1x + 2x Retina)"
         run: |
           brew install librsvg
           # Render both 1× (660×400, matches the Finder window size) and

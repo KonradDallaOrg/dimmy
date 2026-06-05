@@ -378,7 +378,7 @@ jobs:
           xcrun stapler staple "$APP_PATH"
           xcrun stapler validate "$APP_PATH"
 
-      - name: Generate DMG background (multi-rep TIFF: 1× + 2× Retina)
+      - name: "Generate DMG background (multi-rep TIFF: 1x + 2x Retina)"
         run: |
           brew install librsvg
           # See release.yml for the why — single 2× PNG was treated as
