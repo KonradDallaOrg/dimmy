@@ -212,6 +212,21 @@ public partial class AppViewModel : ObservableObject
     /// hide the CaptionWindow and to keep its text in sync.
     public event Action<string, bool>? SttChunkReceived;
 
+    /// Raised when a realtime streaming dictation session (Deepgram) emits
+    /// a STABLE finalised segment that is safe to inject at the cursor.
+    /// Args: (segmentText). Only fires for `engine == "deepgram"` chunks
+    /// with a non-empty delta — interim previews carry an empty delta and
+    /// are shown only in the live caption, never injected. The host types
+    /// each segment at the cursor as the user speaks.
+    public event Action<string>? StreamingSegmentFinalized;
+
+    /// True once the current dictation session has produced at least one
+    /// streaming (Deepgram) chunk. The host uses this to SUPPRESS the
+    /// final clipboard paste at stop — the segments were already injected
+    /// live, so pasting the whole transcript again would duplicate it.
+    /// Reset by the host when a new recording starts.
+    public bool StreamingDictationActive { get; set; }
+
     /// Raised on every `meeting_chunk` event from the Rust core —
     /// fired exactly once per chunk processed by the meeting worker
     /// (~ every 15 s, matching the chunked-STT cadence). Lets
@@ -273,8 +288,22 @@ public partial class AppViewModel : ObservableObject
                     {
                         var cumulative = payload.GetProperty("cumulative").GetString() ?? "";
                         var isFinal = payload.GetProperty("is_final").GetBoolean();
+                        var engine = payload.TryGetProperty("engine", out var en)
+                            ? (en.GetString() ?? "")
+                            : "";
+                        var delta = payload.TryGetProperty("delta", out var dl)
+                            ? (dl.GetString() ?? "")
+                            : "";
                         LiveCaptionText = cumulative;
                         SttChunkReceived?.Invoke(cumulative, isFinal);
+                        // Realtime streaming: the delta is a STABLE segment.
+                        // Mark the session and inject it at the cursor.
+                        if (engine == "deepgram")
+                        {
+                            StreamingDictationActive = true;
+                            if (!string.IsNullOrEmpty(delta))
+                                StreamingSegmentFinalized?.Invoke(delta);
+                        }
                     }
                     break;
                 case "file_transcribe_progress":
@@ -286,6 +315,10 @@ public partial class AppViewModel : ObservableObject
                     }
                     break;
                 case "recording_started":
+                    // New session — clear the streaming flag so a prior
+                    // streaming dictation doesn't suppress this session's
+                    // paste if it turns out to be a non-streaming one.
+                    StreamingDictationActive = false;
                     if (SuppressRecordingStarted)
                     {
                         SuppressRecordingStarted = false;

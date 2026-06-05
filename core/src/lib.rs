@@ -14,6 +14,7 @@ pub mod chunked_stt;
 pub mod claude_code;
 pub mod claude_desktop;
 pub mod consent;
+pub mod deepgram_stream;
 pub mod dfn;
 #[cfg(feature = "local-dfn")]
 pub mod dfn3;
@@ -492,6 +493,12 @@ pub struct AppConfig {
     /// matters less than turnaround time or cost.
     pub recap_model_override: String,
     pub chunk_streaming_enabled: bool,
+    /// When true, dictation streams audio to a realtime WebSocket STT
+    /// backend (Deepgram) and finalised segments are injected at the
+    /// cursor as you speak, instead of one batch transcription at stop.
+    /// Requires a Deepgram STT key. Orthogonal to `stt_mode` — it takes
+    /// over the dictation capture path when enabled and a key is present.
+    pub streaming_dictation: bool,
     pub preprocessing_enabled: bool,
     pub audio_debug_enabled: bool,
     /// When true, forward `[ggml DEBUG]` lines to dimmy.log. Default false:
@@ -662,6 +669,7 @@ impl Default for AppConfig {
             recap_use_same_key: true,
             recap_model_override: String::new(),
             chunk_streaming_enabled: false,
+            streaming_dictation: false,
             preprocessing_enabled: true,
             audio_debug_enabled: false,
             ggml_debug_logging: false,
@@ -780,6 +788,7 @@ pub fn save_config_file(cfg: &AppConfig) {
             "recap_use_same_key": cfg.recap_use_same_key,
             "recap_model_override": cfg.recap_model_override,
             "chunk_streaming_enabled": cfg.chunk_streaming_enabled,
+            "streaming_dictation": cfg.streaming_dictation,
             "preprocessing_enabled": cfg.preprocessing_enabled,
             "audio_debug_enabled": cfg.audio_debug_enabled,
             "ggml_debug_logging": cfg.ggml_debug_logging,
@@ -919,6 +928,9 @@ pub fn load_config_file() -> AppConfig {
                     chunk_streaming_enabled: v["chunk_streaming_enabled"]
                         .as_bool()
                         .unwrap_or(defaults.chunk_streaming_enabled),
+                    streaming_dictation: v["streaming_dictation"]
+                        .as_bool()
+                        .unwrap_or(defaults.streaming_dictation),
                     preprocessing_enabled: v["preprocessing_enabled"]
                         .as_bool()
                         .unwrap_or(defaults.preprocessing_enabled),
@@ -1314,6 +1326,7 @@ pub struct AppState {
     pub llm_api_key: Mutex<Option<String>>,
     pub llm_log_enabled: Mutex<bool>,
     pub chunk_streaming_enabled: Mutex<bool>,
+    pub streaming_dictation: Mutex<bool>,
     pub preprocessing_enabled: Mutex<bool>,
     pub audio_debug_enabled: Mutex<bool>,
     pub ggml_debug_logging: Mutex<bool>,
@@ -1458,6 +1471,7 @@ impl AppState {
             llm_api_key: Mutex::new(stored_llm_key),
             llm_log_enabled: Mutex::new(file_cfg.llm_log_enabled),
             chunk_streaming_enabled: Mutex::new(file_cfg.chunk_streaming_enabled),
+            streaming_dictation: Mutex::new(file_cfg.streaming_dictation),
             preprocessing_enabled: Mutex::new(file_cfg.preprocessing_enabled),
             audio_debug_enabled: Mutex::new(file_cfg.audio_debug_enabled),
             ggml_debug_logging: Mutex::new(file_cfg.ggml_debug_logging),
@@ -1587,6 +1601,10 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         .chunk_streaming_enabled
         .lock()
         .map_err(|e| e.to_string())?;
+    let streaming_dictation = *state
+        .streaming_dictation
+        .lock()
+        .map_err(|e| e.to_string())?;
     let preprocessing_enabled = *state
         .preprocessing_enabled
         .lock()
@@ -1673,6 +1691,7 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
         recap_use_same_key,
         recap_model_override,
         chunk_streaming_enabled,
+        streaming_dictation,
         preprocessing_enabled,
         audio_debug_enabled,
         ggml_debug_logging,

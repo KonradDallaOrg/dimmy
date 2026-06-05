@@ -1217,7 +1217,12 @@ public sealed partial class PillWindow : Window
 
             var result = await Services.TranscriptionService.StopAndProcessAsync();
             if (result.IsSuccess)
-                await TextInjectionService.PasteText(result.Text!, _vm.KeepInClipboard);
+            {
+                // Streaming dictation already injected each segment at the
+                // cursor live — skip the final paste to avoid duplication.
+                if (!_vm.StreamingDictationActive)
+                    await TextInjectionService.PasteText(result.Text!, _vm.KeepInClipboard);
+            }
             else if (result.IsTimeout)
                 _vm.SetError(result.Error!);
             else

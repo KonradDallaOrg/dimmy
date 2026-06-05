@@ -24,6 +24,13 @@ static EVENT_CALLBACK: Mutex<Option<extern "C" fn(*const c_char)>> = Mutex::new(
 /// Taken out by `dimmy_stop_recording` to drain the final cumulative.
 static CHUNKED: Mutex<Option<crate::chunked_stt::ChunkedTranscriber>> = Mutex::new(None);
 
+/// Active realtime streaming dictation session (Deepgram WebSocket), if any.
+/// Mutually exclusive with CHUNKED — when `streaming_dictation` is on and a
+/// Deepgram key is present, this engine takes over the dictation capture
+/// path. Taken out by `dimmy_stop_recording` to drain the final transcript,
+/// same contract as CHUNKED.
+static STREAMING: Mutex<Option<crate::deepgram_stream::DeepgramStreamer>> = Mutex::new(None);
+
 /// Active meeting-mode session, if any. Independent of CHUNKED — the
 /// meeting flow runs its own audio capture (started via
 /// `dimmy_meeting_start`, NOT via the dictation hotkey).
@@ -298,6 +305,7 @@ fn dimmy_init_inner() -> c_int {
         llm_log_enabled: Mutex::new(file_cfg.llm_log_enabled),
         recap_model_override: Mutex::new(file_cfg.recap_model_override),
         chunk_streaming_enabled: Mutex::new(file_cfg.chunk_streaming_enabled),
+        streaming_dictation: Mutex::new(file_cfg.streaming_dictation),
         preprocessing_enabled: Mutex::new(file_cfg.preprocessing_enabled),
         audio_debug_enabled: Mutex::new(file_cfg.audio_debug_enabled),
         ggml_debug_logging: Mutex::new(file_cfg.ggml_debug_logging),
@@ -615,9 +623,59 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
         })
     });
 
+    // Realtime streaming dictation (Deepgram WebSocket). Takes priority
+    // over the chunked local path: when `streaming_dictation` is on AND a
+    // Deepgram STT key is present, audio is streamed live and finalised
+    // segments are emitted as `stt_chunk` events (engine="deepgram") so
+    // the host can inject each stable segment at the cursor as you speak.
+    let streaming_on = st.streaming_dictation.lock().map(|b| *b).unwrap_or(false);
+    let use_kr = st.use_keyring.lock().map(|k| *k).unwrap_or(false);
+    let dg_key = if streaming_on {
+        crate::load_key_with_store(&st.key_store, KeyringScope::Stt(Provider::Deepgram), use_kr)
+    } else {
+        None
+    };
+    let streaming_active = streaming_on && dg_key.is_some();
+    if streaming_active {
+        if let Ok(mut b) = st.audio_buffer.lock() {
+            b.clear();
+        }
+        let language = st.language.lock().map(|l| l.clone()).unwrap_or_default();
+        let prompt_base = st.prompt.lock().map(|p| p.clone()).unwrap_or_default();
+        let user_dict = st.user_dict.lock().map(|d| d.clone()).unwrap_or_default();
+        let keyterms = crate::compose_stt_prompt(&prompt_base, &user_dict);
+        let on_chunk: Arc<crate::deepgram_stream::StreamCallback> =
+            Arc::new(|delta: &str, cumulative: &str, is_final: bool| {
+                let payload = serde_json::json!({
+                    "delta": delta,
+                    "cumulative": cumulative,
+                    "is_final": is_final,
+                    "engine": "deepgram",
+                })
+                .to_string();
+                emit_event("stt_chunk", &payload);
+            });
+        let streamer = crate::deepgram_stream::DeepgramStreamer::start(
+            st.audio_buffer.clone(),
+            crate::audio::MEETING_CANONICAL_RATE,
+            dg_key.unwrap_or_default(),
+            language,
+            // Empty base => default wss://api.deepgram.com/v1/listen; the
+            // streamer's compose_deepgram_ws_url appends model + params.
+            String::new(),
+            keyterms,
+            on_chunk,
+        );
+        if let Ok(mut slot) = STREAMING.lock() {
+            *slot = Some(streamer);
+        }
+        log("[StartRec] deepgram streaming dictation spawned");
+    }
+
     // Spawn the realtime chunked transcriber when the user has it
     // turned on AND the active local backend is Parakeet. Whisper.cpp
     // is too slow per-chunk to keep up; only Parakeet earns this path.
+    // Skipped entirely when streaming dictation already owns the capture.
     let chunked_on = st
         .chunk_streaming_enabled
         .lock()
@@ -628,7 +686,7 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
         .lock()
         .map(|b| b.as_str() == "parakeet")
         .unwrap_or(false);
-    if is_local && chunked_on && backend_parakeet {
+    if !streaming_active && is_local && chunked_on && backend_parakeet {
         // Clear any zombie buffer from a previous run so the worker
         // doesn't transcribe stale audio. The audio thread will
         // refill from the new stream.
@@ -749,6 +807,21 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
             ct.stop()
         });
 
+    // Drain the Deepgram streaming session, if any. Same pre-clear timing
+    // rationale as the chunked worker: stop() flushes the trailing audio
+    // to the socket and waits for the final results before returning, so
+    // the buffer must still be intact. The returned text is the canonical
+    // transcript for history; segments were already injected at the cursor
+    // live, so the host suppresses the final paste for streaming sessions.
+    let streaming_final = STREAMING
+        .lock()
+        .ok()
+        .and_then(|mut slot| slot.take())
+        .map(|s| {
+            log("[StopRec] draining deepgram streaming worker (pre-clear)");
+            s.stop()
+        });
+
     // Get audio buffer
     let buffer = match st.audio_buffer.lock() {
         Ok(mut b) => {
@@ -826,9 +899,11 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
         .unwrap_or_else(|_| "whisper".to_string());
     let api_url = st.api_url.lock().map(|u| u.clone()).unwrap_or_default();
     let api_model = st.api_model.lock().map(|m| m.clone()).unwrap_or_default();
-    // API key is only required for cloud mode
+    // API key is only required for cloud mode. A streaming session carries
+    // its own Deepgram key and already produced the transcript, so don't
+    // short-circuit it on the selected-provider key being absent.
     let api_key = st.api_key.lock().ok().and_then(|k| k.clone());
-    if stt_mode == "cloud" && api_key.is_none() {
+    if stt_mode == "cloud" && api_key.is_none() && streaming_final.is_none() {
         return write_to_buf("", out_buf, buf_len);
     }
     let language = st.language.lock().map(|l| l.clone()).unwrap_or_default();
@@ -899,7 +974,14 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
     let transcribe_start = std::time::Instant::now();
     // The chunked transcriber was already drained above (before the
     // audio buffer was cleared) so we just consume its result here.
-    let transcript = if let Some(cumulative) = chunked_final {
+    let transcript = if let Some(cumulative) = streaming_final {
+        // Deepgram streaming already produced the full transcript live.
+        if cumulative.trim().is_empty() {
+            Err(crate::error::TranscribeError::Empty)
+        } else {
+            Ok(cumulative)
+        }
+    } else if let Some(cumulative) = chunked_final {
         if cumulative.trim().is_empty() {
             Err(crate::error::TranscribeError::Empty)
         } else {
@@ -1324,6 +1406,7 @@ pub extern "C" fn dimmy_get_config_json(out_buf: *mut c_char, buf_len: c_int) ->
         "llm_log_enabled": *st.llm_log_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "recap_model_override": st.recap_model_override.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         "chunk_streaming_enabled": *st.chunk_streaming_enabled.lock().unwrap_or_else(|e| e.into_inner()),
+        "streaming_dictation": *st.streaming_dictation.lock().unwrap_or_else(|e| e.into_inner()),
         "preprocessing_enabled": *st.preprocessing_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "audio_debug_enabled": *st.audio_debug_enabled.lock().unwrap_or_else(|e| e.into_inner()),
         "ggml_debug_logging": *st.ggml_debug_logging.lock().unwrap_or_else(|e| e.into_inner()),
@@ -1723,6 +1806,11 @@ pub unsafe extern "C" fn dimmy_set_config_json(json_ptr: *const c_char) -> c_int
     }
     if let Some(b) = v["chunk_streaming_enabled"].as_bool() {
         if let Ok(mut c) = st.chunk_streaming_enabled.lock() {
+            *c = b;
+        }
+    }
+    if let Some(b) = v["streaming_dictation"].as_bool() {
+        if let Ok(mut c) = st.streaming_dictation.lock() {
             *c = b;
         }
     }
@@ -8223,6 +8311,7 @@ mod tests {
                 llm_log_enabled: Mutex::new(false),
                 recap_model_override: Mutex::new(String::new()),
                 chunk_streaming_enabled: Mutex::new(false),
+                streaming_dictation: Mutex::new(false),
                 preprocessing_enabled: Mutex::new(true),
                 audio_debug_enabled: Mutex::new(false),
                 ggml_debug_logging: Mutex::new(false),
