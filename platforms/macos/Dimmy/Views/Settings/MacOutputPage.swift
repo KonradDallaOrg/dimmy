@@ -840,6 +840,9 @@ struct MacOutputPage: View {
                             Text("Gemma 4 E4B Q3 · 4.1 GB").tag("gemma-4-E4B-it-Q3_K_M.gguf")
                             Text("Gemma 4 E4B Q4 · 5.0 GB · recommended").tag("gemma-4-E4B-it-Q4_K_M.gguf")
                             Text("Gemma 4 E4B Q8 · 8.2 GB · max quality").tag("gemma-4-E4B-it-Q8_0.gguf")
+                            // Gemma 4 12B dense, bigger and heavier
+                            Text("Gemma 4 12B Q4 · 7.1 GB · best quality").tag("gemma-4-12b-it-Q4_K_M.gguf")
+                            Text("Gemma 4 12B Q2 · 4.7 GB · compact").tag("gemma-4-12b-it-UD-Q2_K_XL.gguf")
                             // Phi-4 Mini, multilingual fallback
                             Text("Phi-4 Mini Q4 · 2.5 GB").tag("phi-4-mini-instruct-q4_k_m.gguf")
                         }

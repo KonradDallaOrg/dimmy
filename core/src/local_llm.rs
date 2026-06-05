@@ -66,6 +66,21 @@ pub const AVAILABLE_LLM_MODELS: &[LlmModel] = &[
         description: "Maximum quality, needs 10GB+ VRAM (8B params, high precision)",
         url: Some("https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q8_0.gguf"),
     },
+    // ── Gemma 4 12B dense (Google, Apache 2.0) — bigger, heavier ─
+    LlmModel {
+        name: "Gemma 4 12B Q4",
+        filename: "gemma-4-12b-it-Q4_K_M.gguf",
+        size_mb: 7120,
+        description: "12B dense, the best-quality Gemma 4. Wants about 9GB VRAM. On a 4GB card Vulkan spills to CPU and recap runs several times slower.",
+        url: Some("https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/main/gemma-4-12b-it-Q4_K_M.gguf"),
+    },
+    LlmModel {
+        name: "Gemma 4 12B Q2 (compact)",
+        filename: "gemma-4-12b-it-UD-Q2_K_XL.gguf",
+        size_mb: 4660,
+        description: "12B at 2-bit (Unsloth Dynamic). The closest the 12B gets to a 4GB card, still spills some to CPU. Lower precision than Q4.",
+        url: Some("https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/main/gemma-4-12b-it-UD-Q2_K_XL.gguf"),
+    },
     // ── Phi-4 (Microsoft, MIT license) ──────────────────────────
     LlmModel {
         name: "Phi-4 Mini Q4",
