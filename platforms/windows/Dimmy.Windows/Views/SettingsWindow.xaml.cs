@@ -1442,6 +1442,7 @@ public sealed partial class SettingsWindow : Window
         ViewModel.PillShowOnStartup = uiPrefs.PillShowOnStartup;
         ViewModel.PillShowOnHotkey = uiPrefs.PillShowOnHotkey;
         ViewModel.ShowTaskbarIcon = uiPrefs.ShowTaskbarIcon;
+        ViewModel.TrayIconAlwaysVisible = uiPrefs.TrayIconAlwaysVisible;
         // Theme lives in UiPreferences, not config.json — see
         // UiPreferences.Theme docstring for the bug history. Override
         // any value LoadFromJson may have produced (which would always

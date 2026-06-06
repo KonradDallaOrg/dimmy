@@ -338,6 +338,11 @@ public partial class SettingsViewModel : ObservableObject
     /// `ui_prefs.json`. Default true.</summary>
     [ObservableProperty] private bool _showTaskbarIcon = true;
 
+    /// <summary>Pin the system-tray icon to the Win11 always-visible
+    /// notification area (next to wifi / volume / clock). Persisted in
+    /// `ui_prefs.json`. Default false (opt-in).</summary>
+    [ObservableProperty] private bool _trayIconAlwaysVisible;
+
     // Telemetry — runtime-only for now (no persistence in config.json yet).
     // Initialised from DimmyNative state on viewmodel load; the on-change
     // partials forward toggles to the Rust core. Persistence is a separate

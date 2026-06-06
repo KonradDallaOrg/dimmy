@@ -154,6 +154,11 @@ public partial class AppViewModel : ObservableObject
     /// UiPreferences. Default true.</summary>
     [ObservableProperty] private bool _showTaskbarIcon = true;
 
+    /// Mirrors UiPreferences.TrayIconAlwaysVisible. When true, App pins the
+    /// system-tray icon to the Win11 always-visible area (IsPromoted). Default
+    /// false (opt-in).
+    [ObservableProperty] private bool _trayIconAlwaysVisible;
+
     /// <summary>Command Mode: when true, the next recording transforms
     /// the user's CURRENTLY-SELECTED text using what they speak as the
     /// instruction (e.g. select a paragraph, hold the hotkey, say "make
