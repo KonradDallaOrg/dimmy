@@ -2087,14 +2087,15 @@
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                   </Grid.RowDefinitions>
-                  <!-- Icon source is set in code-behind by
-                       RefreshMcpCard via ClaudeIconExtractor (extracts
-                       the real MSIX brand mark from the installed
-                       Claude package). NO fallback SVG — better empty
-                       than hand-drawn approximation. -->
+                  <!-- Bundled Anthropic/Claude brand mark as the default so
+                       the row always shows an icon, even without Claude
+                       Desktop installed. RefreshMcpCard upgrades this to the
+                       real MSIX brand mark via ClaudeIconExtractor when the
+                       Claude package IS present. -->
                   <Image x:Name="McpProviderIcon" Grid.Column="0" Grid.Row="0" Grid.RowSpan="2"
                          Width="40" Height="40"
-                         VerticalAlignment="Top"/>
+                         VerticalAlignment="Top"
+                         Source="{ThemeResource AnthropicMarkSource}"/>
                   <StackPanel Grid.Column="1" Grid.Row="0" VerticalAlignment="Center" Spacing="2">
                     <TextBlock Text="Claude Desktop" FontSize="16" FontWeight="SemiBold" />
                     <TextBlock x:Name="McpStatusText"
