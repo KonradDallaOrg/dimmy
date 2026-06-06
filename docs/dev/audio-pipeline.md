@@ -256,3 +256,53 @@ See `core/src/aec.rs` for the implementation. Headline:
 `max(mic, sys)` on the taskbar progress bar. So the bar reacts to
 remote-participant audio even when the local mic is silent — the
 free VU meter that's visible when the pill is hidden.
+
+## Voice processing chain: what is applied, and when
+
+Capture is ALWAYS in Mix mode (`ffi.rs` forces `AudioSource::Mix`), so the
+mic always runs through the AEC worker (`aec.rs`), whose output is the shared
+"cleaned mic" buffer used by every consumer. Wave glyphs below are stylised:
+`∿`=voice, `····`=background noise, `▂▂`=low rumble, `▁▁`=quiet, `██`=too loud.
+
+```
+ ┌─ SOURCES (always captured in "Mix mode") ────────────────────────────────┐
+ │   MIC (voice + room noise)                  SYSTEM loopback (PC audio)    │
+ │   ∿∿∿ ···· ▂▂                               ∿∿∿                          │
+ └──────┬───────────────────────────────────────────┬──────────────────────┘
+        │ mic_ring                                   │ ref_ring + RAW copy
+        ▼                                            │  (buffer_secondary)
+ ╔══ AEC WORKER (always ON while recording, aec.rs) ═════════════╗
+ ║                              echo reference ◄──────────────────╨─ (system)
+ ║ (1) DENOISE NN  RNNoise (nnnoiseless)   toggle DENOISE_ENABLED (def ON)
+ ║       ∿∿ ····  ->  ∿∿        [DeepFilterNet3 if `local-dfn`, deferred]
+ ║ (2) HIGH-PASS   cut below ~80 Hz (rumble/pop)    ▂▂∿∿ -> ∿∿
+ ║ (3) AEC3        subtract speaker echo from mic (ref = system loopback)
+ ║ (4) NS          WebRTC noise suppression (residual)
+ ║ (5) AGC2        auto gain to target level        ▁▁->▅▅ ; ██->▆▆
+ ╚════════════════════════════════╤══════════════════════════════╝
+                                  ▼
+                       ┌──────────────────────┐
+                       │  "CLEANED MIC" buffer │  (common output of 1-5)
+                       └───┬───────────────┬───┘
+        ┌──────────────────┘               └──────────────────┐
+        ▼ LIVE (while speaking)                                ▼ AT STOP (dictation)
+   REALTIME / CHUNKED / DEEPGRAM                    (6) PREPROCESS  toggle (def ON)
+   reads buffer ~every 3 s                              high-pass + VAD (trim
+   NO extra filtering                                   silence) + AGC (dagc)
+        │                                                    │
+        ▼                                                    ▼
+   text typed live at cursor                          STT -> final text
+
+ MEETING : CLEANED MIC(1-5) + RAW system  ->  MIX (soft-limit) + 3 tracks
+           (NO step 6 — meeting writes raw buffers; that is why toggling
+            "preprocessing" does not change meeting audio)
+ FILE LOAD: no capture  ->  high-pass ONLY (no AGC, protects long files)  -> STT
+```
+
+Net effect on normal dictation: two noise suppressors (1 RNNoise + 4 WebRTC
+NS) and two AGC stages (5 AGC2 + 6 dagc), plus two high-passes. Steps 1-5 are
+unconditional (Mix mode); step 6 is dictation-only and gated by
+`preprocessing_enabled`. The WebRTC chain (2-3-4-5) is NOT individually
+toggleable; only DENOISE (1) and PREPROCESSING (6) are user toggles. If voice
+ever sounds over-processed/pumped, the suspects in order are AGC2 (5), then
+dagc (6), then the two NS stages.
