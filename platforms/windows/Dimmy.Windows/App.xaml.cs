@@ -149,6 +149,7 @@ public partial class App : Application
         _appViewModel.PillShowOnStartup = settings.PillShowOnStartup;
         _appViewModel.PillShowOnHotkey = settings.PillShowOnHotkey;
         _appViewModel.ShowTaskbarIcon = settings.ShowTaskbarIcon;
+        _appViewModel.TrayIconAlwaysVisible = settings.TrayIconAlwaysVisible;
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
@@ -309,6 +310,7 @@ public partial class App : Application
             _appViewModel.PillShowOnHotkey = _uiPrefs.PillShowOnHotkey;
             _appViewModel.PillShowOnStartup = _uiPrefs.PillShowOnStartup;
             _appViewModel.ShowTaskbarIcon = _uiPrefs.ShowTaskbarIcon;
+            _appViewModel.TrayIconAlwaysVisible = _uiPrefs.TrayIconAlwaysVisible;
             _appViewModel.Theme = _uiPrefs.Theme;
             _appViewModel.PropertyChanged += OnUiPrefsRelevantPropertyChanged;
 
@@ -400,6 +402,12 @@ public partial class App : Application
         {
             var hwnd = WindowHelper.GetHwnd(_pillWindow);
             _trayService.Initialize(hwnd);
+
+            // Opt-in only: pin the tray icon to the always-visible area if the
+            // user asked for it. We never demote on a default-off startup so a
+            // manual Windows pin is left untouched.
+            if (_uiPrefs.TrayIconAlwaysVisible)
+                _trayService.SetPromoted(true);
 
             // Wire WinUI 3 context menu from pill window
             var pill = _pillWindow as Views.PillWindow;
@@ -1072,11 +1080,13 @@ public partial class App : Application
     {
         if (e.PropertyName != nameof(AppViewModel.PillShowOnHotkey)
             && e.PropertyName != nameof(AppViewModel.PillShowOnStartup)
-            && e.PropertyName != nameof(AppViewModel.ShowTaskbarIcon))
+            && e.PropertyName != nameof(AppViewModel.ShowTaskbarIcon)
+            && e.PropertyName != nameof(AppViewModel.TrayIconAlwaysVisible))
             return;
         _uiPrefs.PillShowOnHotkey = _appViewModel.PillShowOnHotkey;
         _uiPrefs.PillShowOnStartup = _appViewModel.PillShowOnStartup;
         _uiPrefs.ShowTaskbarIcon = _appViewModel.ShowTaskbarIcon;
+        _uiPrefs.TrayIconAlwaysVisible = _appViewModel.TrayIconAlwaysVisible;
         _uiPrefs.Save();
 
         // Live-apply the taskbar-anchor visibility on toggle. The window
@@ -1085,6 +1095,12 @@ public partial class App : Application
         // and amplitude overlay disappear. Toggling back re-activates.
         if (e.PropertyName == nameof(AppViewModel.ShowTaskbarIcon))
             ApplyTaskbarAnchorVisibility();
+
+        // Live-apply the tray pin. Both directions on an explicit toggle:
+        // turning it off demotes (the user chose to unpin), which differs
+        // from the default-off startup that leaves manual pins alone.
+        if (e.PropertyName == nameof(AppViewModel.TrayIconAlwaysVisible))
+            _trayService?.SetPromoted(_appViewModel.TrayIconAlwaysVisible);
     }
 
     /// <summary>Show or hide the TaskbarAnchorWindow per the current

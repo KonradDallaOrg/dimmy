@@ -90,6 +90,15 @@ public sealed class UiPreferences
     /// Win-only UI knob, hence here and not in config.json.</summary>
     public string CommandHotkey { get; set; } = "";
 
+    /// <summary>If true, Dimmy pins its system-tray icon to the always-visible
+    /// notification area (next to wifi / volume / clock) by setting IsPromoted
+    /// on its Win11 NotifyIconSettings entry, so the user doesn't have to drag
+    /// it out of the overflow flyout manually. Default false — opt-in, and we
+    /// never demote on a default-off startup so a manual Windows pin is left
+    /// alone. Best-effort: the registry surface is unsupported and may need
+    /// re-applying after some Windows updates.</summary>
+    public bool TrayIconAlwaysVisible { get; set; } = false;
+
     private static string PrefsPath
     {
         get

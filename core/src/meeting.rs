@@ -125,15 +125,26 @@ impl TrackSink {
             let ogg_path = dir.join(format!("{base}.ogg"));
             match File::create(&ogg_path) {
                 Ok(f) => match vorbis_rs::VorbisEncoderBuilder::new(rate, mono, f) {
-                    Ok(mut builder) => match builder.build() {
-                        Ok(enc) => return Ok(TrackSink::Ogg(Box::new(enc))),
-                        Err(e) => {
-                            crate::log(&format!(
-                                "[Meeting] vorbis build {base}.ogg failed: {e}; using WAV"
-                            ));
-                            let _ = std::fs::remove_file(&ogg_path);
+                    Ok(mut builder) => {
+                        // Default quality (0.5, ~80 kbit/s) rolls off highs and
+                        // adds warble — inaudible on speech, but it makes the
+                        // meeting loopback (music / system audio) sound muffled
+                        // next to the source. Bump to 0.8 for faithful tracks.
+                        builder.bitrate_management_strategy(
+                            vorbis_rs::VorbisBitrateManagementStrategy::QualityVbr {
+                                target_quality: 0.8,
+                            },
+                        );
+                        match builder.build() {
+                            Ok(enc) => return Ok(TrackSink::Ogg(Box::new(enc))),
+                            Err(e) => {
+                                crate::log(&format!(
+                                    "[Meeting] vorbis build {base}.ogg failed: {e}; using WAV"
+                                ));
+                                let _ = std::fs::remove_file(&ogg_path);
+                            }
                         }
-                    },
+                    }
                     Err(e) => {
                         crate::log(&format!(
                             "[Meeting] vorbis init {base}.ogg failed: {e}; using WAV"
@@ -455,9 +466,26 @@ fn no_mic_detected(primary_len: usize, secondary_len: usize, mic_grace: usize) -
     primary_len == 0 && secondary_len >= mic_grace
 }
 
+/// Soft-knee limiter: linear below ±KNEE, tanh-compressed above so a loud
+/// mic+system overlap rounds off smoothly instead of hard-clipping to ±1.0
+/// (which produces audible clicks / "distorted" peaks on music). Output is
+/// always strictly inside (-1, 1).
+fn soft_clip(x: f32) -> f32 {
+    const KNEE: f32 = 0.8;
+    let a = x.abs();
+    if a <= KNEE {
+        x
+    } else {
+        let over = (a - KNEE) / (1.0 - KNEE);
+        (KNEE + (1.0 - KNEE) * over.tanh()).copysign(x)
+    }
+}
+
 /// Mix two equal-length per-track windows into the meeting's `audio.wav`
-/// stream: `mic[i] + system[i]` clamped to [-1, 1]. Both inputs come from
-/// `slice_or_zeros`, so they're guaranteed equal length.
+/// stream: `mic[i] + system[i]` passed through `soft_clip`. Unity gain on
+/// both tracks (real meetings need full mic voice); the soft limiter only
+/// engages on peaks above the knee, replacing the old hard clamp. Both
+/// inputs come from `slice_or_zeros`, so they're guaranteed equal length.
 fn mix_windows(mic: &[f32], system: &[f32]) -> Vec<f32> {
     assert_eq!(
         mic.len(),
@@ -466,7 +494,7 @@ fn mix_windows(mic: &[f32], system: &[f32]) -> Vec<f32> {
     );
     mic.iter()
         .zip(system.iter())
-        .map(|(&m, &s)| (m + s).clamp(-1.0, 1.0))
+        .map(|(&m, &s)| soft_clip(m + s))
         .collect()
 }
 
@@ -1433,11 +1461,17 @@ mod tests {
     }
 
     #[test]
-    fn mix_windows_sums_and_clamps() {
+    fn mix_windows_soft_limits_peaks_without_hard_clip() {
         let mic = [0.5_f32, -0.5, 0.8, -0.8];
         let sys = [0.25_f32, -0.25, 0.8, -0.8];
-        // 0.8+0.8=1.6 → clamps to 1.0; -1.6 → -1.0.
-        assert_eq!(mix_windows(&mic, &sys), vec![0.75, -0.75, 1.0, -1.0]);
+        let out = mix_windows(&mic, &sys);
+        // Below the knee (0.75): summed and passed through unchanged.
+        assert!((out[0] - 0.75).abs() < 1e-6, "got {}", out[0]);
+        assert!((out[1] + 0.75).abs() < 1e-6, "got {}", out[1]);
+        // Above the knee (raw sum 1.6): soft-limited close to but strictly
+        // below 1.0, NOT hard-clamped to exactly 1.0 (no clipping clicks).
+        assert!(out[2] > 0.95 && out[2] < 1.0, "got {}", out[2]);
+        assert!(out[3] < -0.95 && out[3] > -1.0, "got {}", out[3]);
     }
 
     #[test]

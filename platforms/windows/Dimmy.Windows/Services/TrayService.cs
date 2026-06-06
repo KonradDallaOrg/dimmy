@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Runtime.InteropServices;
 using Dimmy.Windows.ViewModels;
+using Microsoft.Win32;
 
 namespace Dimmy.Windows.Services;
 
@@ -646,6 +647,56 @@ public class TrayService : IDisposable
         nid.szInfo = "";
         nid.szInfoTitle = "";
         return nid;
+    }
+
+    /// <summary>Best-effort: pin (or unpin) Dimmy's tray icon to the Win11
+    /// always-visible notification area by setting `IsPromoted` on its
+    /// `HKCU\Control Panel\NotifyIconSettings` entry. Windows creates that
+    /// entry the first time the icon is shown and keys it by a numeric hash,
+    /// so we match by ExecutablePath (+ our uID=1, no GUID). UNSUPPORTED API
+    /// surface: silently no-ops if the entry isn't there yet or the write
+    /// fails, and retries a few times because the entry can appear a beat
+    /// after Shell_NotifyIcon on a cold first run. Caller should only pass
+    /// `true` when the user opted in — we never demote on a default-off
+    /// startup, so a manual Windows pin is left untouched.</summary>
+    public void SetPromoted(bool promoted)
+    {
+        System.Threading.Tasks.Task.Run(async () =>
+        {
+            for (int attempt = 0; attempt < 5; attempt++)
+            {
+                if (TryWriteIsPromoted(promoted)) return;
+                await System.Threading.Tasks.Task.Delay(1500);
+            }
+        });
+    }
+
+    private static bool TryWriteIsPromoted(bool promoted)
+    {
+        try
+        {
+            var exe = Environment.ProcessPath;
+            if (string.IsNullOrEmpty(exe)) return false;
+            using var root = Registry.CurrentUser.OpenSubKey(
+                @"Control Panel\NotifyIconSettings", writable: true);
+            if (root == null) return false;
+            foreach (var name in root.GetSubKeyNames())
+            {
+                using var sub = root.OpenSubKey(name, writable: true);
+                if (sub?.GetValue("ExecutablePath") is not string path) continue;
+                if (!string.Equals(path, exe, StringComparison.OrdinalIgnoreCase)) continue;
+                // We register a single icon with uID=1 and no GUID; match the
+                // UID so a future second icon never gets flipped by accident.
+                if (sub.GetValue("UID") is int u && u != 1) continue;
+                sub.SetValue("IsPromoted", promoted ? 1 : 0, RegistryValueKind.DWord);
+                return true;
+            }
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     public void Dispose()

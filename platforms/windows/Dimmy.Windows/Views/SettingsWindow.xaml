@@ -469,13 +469,19 @@
                 </controls:SettingCard>
                 <controls:SettingCard Glyph="&#xE946;"
                                       Label="Model status">
-                  <StackPanel Orientation="Horizontal" Spacing="8">
-                    <TextBlock x:Name="LocalModelStatus" Text="Checking..."
-                               FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                               VerticalAlignment="Center" />
-                    <Button x:Name="DownloadModelBtn" Content="Download"
-                            Click="DownloadModel_Click" Visibility="Collapsed" />
-                    <ProgressBar x:Name="DownloadProgress" Width="180"
+                  <!-- Vertical so a long "Downloading file… X / Y (Z%)" status
+                       wraps and the progress bar drops to its own line instead
+                       of pushing the row too wide. -->
+                  <StackPanel Orientation="Vertical" Spacing="6" HorizontalAlignment="Right" MaxWidth="320">
+                    <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                      <TextBlock x:Name="LocalModelStatus" Text="Checking..."
+                                 FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                 TextWrapping="Wrap" TextAlignment="Right"
+                                 VerticalAlignment="Center" />
+                      <Button x:Name="DownloadModelBtn" Content="Download"
+                              Click="DownloadModel_Click" Visibility="Collapsed" />
+                    </StackPanel>
+                    <ProgressBar x:Name="DownloadProgress" HorizontalAlignment="Stretch"
                                  Minimum="0" Maximum="100" Visibility="Collapsed" />
                   </StackPanel>
                 </controls:SettingCard>
@@ -827,14 +833,19 @@
                 </controls:SettingCard>
                 <controls:SettingCard Glyph="&#xE946;"
                                       Label="Local LLM status">
-                  <StackPanel Orientation="Horizontal" Spacing="8">
-                    <TextBlock x:Name="LocalLlmModelStatus" Text="Checking..."
-                               FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                               VerticalAlignment="Center" />
-                    <Button x:Name="DownloadLlmModelBtn" Content="Download"
-                            Click="DownloadLlmModel_Click" Visibility="Collapsed" />
-                    <ProgressBar x:Name="DownloadLlmProgress" IsIndeterminate="True"
-                                 Width="120" Visibility="Collapsed" />
+                  <!-- Vertical: long download status wraps, progress bar on its
+                       own line below (keeps the row from getting too wide). -->
+                  <StackPanel Orientation="Vertical" Spacing="6" HorizontalAlignment="Right" MaxWidth="320">
+                    <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                      <TextBlock x:Name="LocalLlmModelStatus" Text="Checking..."
+                                 FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                 TextWrapping="Wrap" TextAlignment="Right"
+                                 VerticalAlignment="Center" />
+                      <Button x:Name="DownloadLlmModelBtn" Content="Download"
+                              Click="DownloadLlmModel_Click" Visibility="Collapsed" />
+                    </StackPanel>
+                    <ProgressBar x:Name="DownloadLlmProgress" HorizontalAlignment="Stretch"
+                                 Minimum="0" Maximum="100" Visibility="Collapsed" />
                   </StackPanel>
                 </controls:SettingCard>
               </StackPanel>
@@ -1215,6 +1226,14 @@
                                     InfoTip="Adds the icon, a live level bar while recording, and right-click shortcuts. Off keeps Dimmy in the system tray with the hotkey only."
                                     HelpUrl="https://dimmy.app/help/tray-menu">
                 <ToggleSwitch IsOn="{Binding ShowTaskbarIcon, Mode=TwoWay}"
+                              Toggled="PillVisibilityToggle_Toggled"
+                              Style="{StaticResource CompactToggleSwitch}" />
+              </controls:SettingCard>
+              <controls:SettingCard Glyph="&#xE840;"
+                                    Label="Pin icon to the system tray"
+                                    InfoTip="Keeps Dimmy's tray icon always visible next to the clock and volume, so you don't have to drag it out of the overflow flyout. Best-effort: Windows may need it re-applied after some updates."
+                                    HelpUrl="https://dimmy.app/help/tray-menu">
+                <ToggleSwitch IsOn="{Binding TrayIconAlwaysVisible, Mode=TwoWay}"
                               Toggled="PillVisibilityToggle_Toggled"
                               Style="{StaticResource CompactToggleSwitch}" />
               </controls:SettingCard>
@@ -2087,14 +2106,15 @@
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                   </Grid.RowDefinitions>
-                  <!-- Icon source is set in code-behind by
-                       RefreshMcpCard via ClaudeIconExtractor (extracts
-                       the real MSIX brand mark from the installed
-                       Claude package). NO fallback SVG — better empty
-                       than hand-drawn approximation. -->
+                  <!-- Bundled Anthropic/Claude brand mark as the default so
+                       the row always shows an icon, even without Claude
+                       Desktop installed. RefreshMcpCard upgrades this to the
+                       real MSIX brand mark via ClaudeIconExtractor when the
+                       Claude package IS present. -->
                   <Image x:Name="McpProviderIcon" Grid.Column="0" Grid.Row="0" Grid.RowSpan="2"
                          Width="40" Height="40"
-                         VerticalAlignment="Top"/>
+                         VerticalAlignment="Top"
+                         Source="{ThemeResource AnthropicMarkSource}"/>
                   <StackPanel Grid.Column="1" Grid.Row="0" VerticalAlignment="Center" Spacing="2">
                     <TextBlock Text="Claude Desktop" FontSize="16" FontWeight="SemiBold" />
                     <TextBlock x:Name="McpStatusText"

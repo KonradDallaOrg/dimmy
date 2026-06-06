@@ -467,8 +467,22 @@
                   <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                   </Grid.RowDefinitions>
-                  <Border Grid.Row="0" Height="74">
+                  <!-- Playback source: Mix (default), Voice (clean mic), or
+                       System (clean loopback). Shown only when per-track files
+                       exist; lets the user hear the clean system audio instead
+                       of the mic-contaminated mix. -->
+                  <ComboBox x:Name="DoneTrackSelector" Grid.Row="0"
+                            HorizontalAlignment="Right" MinWidth="120"
+                            SelectedIndex="0" Visibility="Collapsed"
+                            ToolTipService.ToolTip="Which audio track to play back"
+                            SelectionChanged="DoneTrackSelector_SelectionChanged">
+                    <ComboBoxItem x:Name="DoneTrackMixItem" Content="Mix"/>
+                    <ComboBoxItem x:Name="DoneTrackVoiceItem" Content="Voice"/>
+                    <ComboBoxItem x:Name="DoneTrackSystemItem" Content="System"/>
+                  </ComboBox>
+                  <Border Grid.Row="1" Height="74">
                     <Canvas x:Name="DoneWaveformCanvas"
                             Background="Transparent"
                             SizeChanged="DoneWaveformCanvas_SizeChanged"
@@ -480,7 +494,7 @@
                        card / window so icons stay readable on Dark mode
                        (no hard Light theme — the card itself follows
                        the system now). -->
-                  <MediaPlayerElement x:Name="DoneAudioPlayer" Grid.Row="1"
+                  <MediaPlayerElement x:Name="DoneAudioPlayer" Grid.Row="2"
                                       AreTransportControlsEnabled="True"
                                       AutoPlay="False"
                                       MinHeight="64">

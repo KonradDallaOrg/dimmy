@@ -953,6 +953,14 @@ public sealed partial class MeetingWindow : Window
     private float[]? _cachedMicPeaks;
     private float[]? _cachedSystemPeaks;
 
+    // Resolved per-track paths for the playback source selector (Mix / Voice
+    // / System). Without headphones the mix carries the AEC/NS/AGC-processed
+    // mic on top of the clean loopback, so the system-only track sounds
+    // cleaner for system-audio content — let the user pick which to hear.
+    private string? _doneMixPath;
+    private string? _doneMicPath;
+    private string? _doneSystemPath;
+
     /// Resolve a meeting audio track to its on-disk file: prefer the
     /// compressed `.ogg` (current format), fall back to legacy `.wav`
     /// (older recordings / WAV-fallback when the Vorbis encoder was
@@ -964,6 +972,27 @@ public sealed partial class MeetingWindow : Window
         var wav = Path.Combine(dir, baseName + ".wav");
         if (File.Exists(wav)) return wav;
         return null;
+    }
+
+    /// Swap the meeting playback source when the user picks Mix / Voice /
+    /// System. The mix carries the processed mic; the system-only track is
+    /// the clean loopback. Resets to the chosen track's start.
+    private void DoneTrackSelector_SelectionChanged(object sender, Microsoft.UI.Xaml.Controls.SelectionChangedEventArgs e)
+    {
+        if (DoneAudioPlayer == null || DoneTrackSelector == null) return;
+        string? path = DoneTrackSelector.SelectedIndex switch
+        {
+            1 => _doneMicPath,
+            2 => _doneSystemPath,
+            _ => _doneMixPath,
+        };
+        if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
+        try
+        {
+            DoneAudioPlayer.Source =
+                global::Windows.Media.Core.MediaSource.CreateFromUri(new Uri(path));
+        }
+        catch { }
     }
 
     private async Task LoadDoneAudioAsync(string dir)
@@ -1023,6 +1052,23 @@ public sealed partial class MeetingWindow : Window
             var micPath = ResolveAudioTrack(dir, "audio_mic");
             var systemPath = ResolveAudioTrack(dir, "audio_system");
             var mixForPeaks = mixPath;
+
+            // Wire the playback-source selector: Mix is always present; expose
+            // Voice/System only when the per-track files exist (Mix-mode
+            // recordings). Default stays Mix; the user can switch to the clean
+            // system-only track for system-audio review.
+            _doneMixPath = mixPath;
+            _doneMicPath = micPath;
+            _doneSystemPath = systemPath;
+            if (DoneTrackVoiceItem != null) DoneTrackVoiceItem.IsEnabled = micPath != null;
+            if (DoneTrackSystemItem != null) DoneTrackSystemItem.IsEnabled = systemPath != null;
+            if (DoneTrackSelector != null)
+            {
+                DoneTrackSelector.SelectedIndex = 0; // Mix
+                DoneTrackSelector.Visibility = (micPath != null || systemPath != null)
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+            }
 
             var micPeaks = micPath != null
                 ? await Task.Run(() => Helpers.WavPeaks.ReadPeaksAny(micPath, buckets))

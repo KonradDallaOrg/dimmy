@@ -74,10 +74,14 @@ public sealed partial class SettingsWindow : Window
         {
             app.AppViewModel.ParakeetDownloadProgress += OnParakeetProgress;
             app.AppViewModel.FileTranscribeProgress += OnFileTranscribeProgress;
+            app.AppViewModel.SttModelDownloadProgress += OnSttModelProgress;
+            app.AppViewModel.LlmModelDownloadProgress += OnLlmModelProgress;
             this.Closed += (_, __) =>
             {
                 app.AppViewModel.ParakeetDownloadProgress -= OnParakeetProgress;
                 app.AppViewModel.FileTranscribeProgress -= OnFileTranscribeProgress;
+                app.AppViewModel.SttModelDownloadProgress -= OnSttModelProgress;
+                app.AppViewModel.LlmModelDownloadProgress -= OnLlmModelProgress;
             };
         }
 
@@ -107,6 +111,14 @@ public sealed partial class SettingsWindow : Window
         SyncLlmMode();
         PopulateStats();
         PopulateVersion();
+
+        // A model download started in a previous Settings session keeps
+        // running on its background thread; restore the in-flight bar so the
+        // user sees progress instead of an idle "Download" button.
+        if (Application.Current is App reopenApp)
+        {
+            RestoreActiveDownloads(reopenApp);
+        }
 
         // Default to Home tab. Without this the NavigationView starts with no
         // selection, so the user sees the Home panel content (Visibility=
@@ -1430,6 +1442,7 @@ public sealed partial class SettingsWindow : Window
         ViewModel.PillShowOnStartup = uiPrefs.PillShowOnStartup;
         ViewModel.PillShowOnHotkey = uiPrefs.PillShowOnHotkey;
         ViewModel.ShowTaskbarIcon = uiPrefs.ShowTaskbarIcon;
+        ViewModel.TrayIconAlwaysVisible = uiPrefs.TrayIconAlwaysVisible;
         // Theme lives in UiPreferences, not config.json — see
         // UiPreferences.Theme docstring for the bug history. Override
         // any value LoadFromJson may have produced (which would always
@@ -2577,6 +2590,83 @@ public sealed partial class SettingsWindow : Window
             $"Downloading... {FormatBytes(downloaded)} / {FormatBytes(total)} ({percent:F0}%)";
     }
 
+    /// Live progress for the Whisper/STT model download (dimmy_download_model).
+    private void OnSttModelProgress(string filename, long downloaded, long total)
+    {
+        DownloadProgress.Visibility = Visibility.Visible;
+        if (total <= 0)
+        {
+            DownloadProgress.IsIndeterminate = true;
+            LocalModelStatus.Text = $"Downloading {filename}… {FormatBytes(downloaded)} so far";
+            return;
+        }
+        DownloadProgress.IsIndeterminate = false;
+        double percent = Math.Min(100, downloaded * 100.0 / total);
+        DownloadProgress.Value = percent;
+        LocalModelStatus.Text =
+            $"Downloading {filename}… {FormatBytes(downloaded)} / {FormatBytes(total)} ({percent:F0}%)";
+    }
+
+    /// Live progress for the local-LLM model download (dimmy_download_llm_model).
+    private void OnLlmModelProgress(string filename, long downloaded, long total)
+    {
+        DownloadLlmProgress.Visibility = Visibility.Visible;
+        if (total <= 0)
+        {
+            DownloadLlmProgress.IsIndeterminate = true;
+            LocalLlmModelStatus.Text = $"Downloading {filename}… {FormatBytes(downloaded)} so far";
+            return;
+        }
+        DownloadLlmProgress.IsIndeterminate = false;
+        double percent = Math.Min(100, downloaded * 100.0 / total);
+        DownloadLlmProgress.Value = percent;
+        LocalLlmModelStatus.Text =
+            $"Downloading {filename}… {FormatBytes(downloaded)} / {FormatBytes(total)} ({percent:F0}%)";
+    }
+
+    /// Re-attach the progress bar to a download already running from a
+    /// previous Settings session (state lives on the singleton AppViewModel).
+    private void RestoreActiveDownloads(App app)
+    {
+        var vm = app.AppViewModel;
+        if (vm.SttModelDownloadActive)
+        {
+            DownloadModelBtn.IsEnabled = false;
+            DownloadModelBtn.Content = "Downloading...";
+            DownloadModelBtn.Visibility = Visibility.Visible;
+            DownloadProgress.Visibility = Visibility.Visible;
+            if (vm.SttModelDownloadPercent < 0)
+            {
+                DownloadProgress.IsIndeterminate = true;
+            }
+            else
+            {
+                DownloadProgress.IsIndeterminate = false;
+                DownloadProgress.Value = vm.SttModelDownloadPercent;
+            }
+            if (!string.IsNullOrEmpty(vm.SttModelDownloadLabel))
+                LocalModelStatus.Text = vm.SttModelDownloadLabel;
+        }
+        if (vm.LlmModelDownloadActive)
+        {
+            DownloadLlmModelBtn.IsEnabled = false;
+            DownloadLlmModelBtn.Content = "Downloading...";
+            DownloadLlmModelBtn.Visibility = Visibility.Visible;
+            DownloadLlmProgress.Visibility = Visibility.Visible;
+            if (vm.LlmModelDownloadPercent < 0)
+            {
+                DownloadLlmProgress.IsIndeterminate = true;
+            }
+            else
+            {
+                DownloadLlmProgress.IsIndeterminate = false;
+                DownloadLlmProgress.Value = vm.LlmModelDownloadPercent;
+            }
+            if (!string.IsNullOrEmpty(vm.LlmModelDownloadLabel))
+                LocalLlmModelStatus.Text = vm.LlmModelDownloadLabel;
+        }
+    }
+
     private static string FormatBytes(long bytes)
     {
         if (bytes >= 1024L * 1024L * 1024L)
@@ -2660,6 +2750,8 @@ public sealed partial class SettingsWindow : Window
         finally
         {
             DownloadProgress.Visibility = Visibility.Collapsed;
+            if (Application.Current is App doneApp)
+                doneApp.AppViewModel.SttModelDownloadActive = false;
         }
     }
 
@@ -2801,6 +2893,8 @@ public sealed partial class SettingsWindow : Window
         finally
         {
             DownloadLlmProgress.Visibility = Visibility.Collapsed;
+            if (Application.Current is App doneApp)
+                doneApp.AppViewModel.LlmModelDownloadActive = false;
         }
     }
 
