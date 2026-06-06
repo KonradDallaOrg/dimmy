@@ -131,10 +131,16 @@ public sealed partial class SettingsWindow : Window
             TintSelectedNavIcon(first);
         }
 
-        // Pulse "Saved" InfoBar on any ViewModel field change (Win11 auto-save
-        // pattern). The Save button still flushes to disk; this is purely
-        // a visual hint that the form is dirty.
-        ViewModel.PropertyChanged += (_, _) => PulseSavedInfoBar();
+        // Win11 auto-save: on ANY ViewModel field change, pulse the "Saved"
+        // hint AND actually persist (debounced) so every setting takes effect
+        // immediately without closing Settings. Before, only a handful of
+        // controls had explicit save handlers and the rest persisted only on
+        // close — so "Saved" pulsed but nothing happened (reported 2026-06-06).
+        ViewModel.PropertyChanged += (_, _) =>
+        {
+            PulseSavedInfoBar();
+            ScheduleAutoSaveConfig();
+        };
 
         // Render waveform + load audio whenever the History selection
         // changes. Hooked here (not in XAML) because rendering needs
@@ -4083,16 +4089,30 @@ public sealed partial class SettingsWindow : Window
         App.Instance?.ApplySettings(ViewModel);
     }
 
-    /// <summary>Persist a plain config bool to the Rust core IMMEDIATELY on
-    /// toggle so it takes effect on the very next dictation without closing
-    /// Settings. The streaming / chunk / live-caption switches are read by
-    /// the Rust core at start_recording, so without this they only applied
-    /// after AutoSaveOnClose — the "Saved" pulse showed but nothing took
-    /// effect (reported 2026-06-06). These are non-gated config fields, so
-    /// default ToJson() is safe (no LLM/Recap-block wipe).</summary>
-    private void LiveConfigToggle_Toggled(object sender, RoutedEventArgs e)
+    /// <summary>Debounced auto-save fired from the global ViewModel
+    /// PropertyChanged hook: persists the whole config snapshot to the Rust
+    /// core ~400 ms after the last edit, so EVERY setting (not just a wired
+    /// few) takes effect immediately and the "Saved" pulse is truthful. Uses
+    /// ToJson() default: the gated LLM/Recap blocks + API keys are omitted on
+    /// purpose (wipe-protection) and still persist only via Save / window
+    /// close, which include those blocks explicitly.</summary>
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _autoSaveTimer;
+
+    private void ScheduleAutoSaveConfig()
     {
         if (!_loaded) return;
+        _autoSaveTimer ??= DispatcherQueue.CreateTimer();
+        _autoSaveTimer.Stop();
+        _autoSaveTimer.Interval = TimeSpan.FromMilliseconds(400);
+        _autoSaveTimer.IsRepeating = false;
+        _autoSaveTimer.Tick -= OnAutoSaveTick;
+        _autoSaveTimer.Tick += OnAutoSaveTick;
+        _autoSaveTimer.Start();
+    }
+
+    private void OnAutoSaveTick(Microsoft.UI.Dispatching.DispatcherQueueTimer sender, object e)
+    {
+        _autoSaveTimer?.Stop();
         try
         {
             DimmyNative.dimmy_set_config_json(ViewModel.ToJson());
@@ -4100,7 +4120,7 @@ public sealed partial class SettingsWindow : Window
         }
         catch (Exception ex)
         {
-            App.Log($"LiveConfigToggle_Toggled persist failed: {ex.Message}", "Settings");
+            App.Log($"auto-save config failed: {ex.Message}", "Settings");
         }
     }
 
