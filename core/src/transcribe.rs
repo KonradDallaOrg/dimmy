@@ -127,7 +127,22 @@ pub async fn transcribe_audio(
 pub fn compose_deepgram_url(api_url: &str, language: &str, prompt: &str) -> String {
     let mut url = api_url.to_string();
     let sep = if url.contains('?') { "&" } else { "?" };
-    if !language.is_empty() {
+    // Nova-3 only accepts `en` or `multi` for the language parameter — a
+    // single non-English code (e.g. `it`, `fr`) returns HTTP 400. Map any
+    // non-English language to `multi` (multilingual code-switching, GA) and
+    // an empty language to `multi` too (nova-3 has no `detect_language`).
+    // Older models (nova-2, enhanced, base) keep per-language codes and the
+    // `detect_language=true` auto path. Burned 2026-06-06: batch dictation
+    // with config language=it 400'd while the WS streaming path (already on
+    // `language=multi`) worked.
+    if url.contains("nova-3") {
+        let lang = if language.eq_ignore_ascii_case("en") {
+            "en"
+        } else {
+            "multi"
+        };
+        url = format!("{}{}language={}", url, sep, lang);
+    } else if !language.is_empty() {
         url = format!("{}{}language={}", url, sep, language);
     } else {
         url = format!("{}{}detect_language=true", url, sep);
@@ -504,10 +519,45 @@ mod tests {
     }
 
     #[test]
-    fn deepgram_url_uses_auto_detect_when_language_empty() {
-        let url = compose_deepgram_url("https://api.deepgram.com/v1/listen?model=nova-3", "", "");
+    fn deepgram_url_uses_auto_detect_when_language_empty_on_older_models() {
+        // detect_language is a nova-2-and-older path; nova-3 has no such param.
+        let url = compose_deepgram_url("https://api.deepgram.com/v1/listen?model=nova-2", "", "");
         assert!(url.contains("&detect_language=true"), "url={}", url);
         assert!(!url.contains("&language="), "url={}", url);
+    }
+
+    #[test]
+    fn deepgram_url_nova3_maps_non_english_language_to_multi() {
+        // Nova-3 rejects single non-English codes (HTTP 400). The configured
+        // `language=it` must become `language=multi`, never `language=it`.
+        let url = compose_deepgram_url("https://api.deepgram.com/v1/listen?model=nova-3", "it", "");
+        assert!(url.contains("&language=multi"), "url={}", url);
+        assert!(!url.contains("language=it"), "url={}", url);
+    }
+
+    #[test]
+    fn deepgram_url_nova3_keeps_english() {
+        // English on nova-3 stays monolingual `en` (highest-accuracy path),
+        // not coerced to multi.
+        let url = compose_deepgram_url("https://api.deepgram.com/v1/listen?model=nova-3", "en", "");
+        assert!(url.contains("&language=en"), "url={}", url);
+        assert!(!url.contains("multi"), "url={}", url);
+    }
+
+    #[test]
+    fn deepgram_url_nova3_empty_language_uses_multi_not_detect() {
+        // nova-3 has no detect_language; empty config language → multi.
+        let url = compose_deepgram_url("https://api.deepgram.com/v1/listen?model=nova-3", "", "");
+        assert!(url.contains("&language=multi"), "url={}", url);
+        assert!(!url.contains("detect_language"), "url={}", url);
+    }
+
+    #[test]
+    fn deepgram_url_nova2_keeps_specific_language() {
+        // Older models still support per-language codes — don't coerce them.
+        let url = compose_deepgram_url("https://api.deepgram.com/v1/listen?model=nova-2", "it", "");
+        assert!(url.contains("&language=it"), "url={}", url);
+        assert!(!url.contains("multi"), "url={}", url);
     }
 
     #[test]
