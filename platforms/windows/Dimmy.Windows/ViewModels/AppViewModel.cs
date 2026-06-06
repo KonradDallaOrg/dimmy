@@ -55,6 +55,20 @@ public partial class AppViewModel : ObservableObject
     /// not show the CaptionWindow even if the chunked engine is on.
     [ObservableProperty] private bool _liveCaptionsEnabled = true;
 
+    // ── Local-model download state ──────────────────────────────────
+    // The download runs on a background thread (Task.Run → FFI) and keeps
+    // going even if the Settings window is closed. The Rust core emits
+    // progress to this singleton view-model, so the latest state survives
+    // navigating away + back: SettingsWindow restores its bar from here on
+    // open and subscribes to the events below for live updates.
+    [ObservableProperty] private bool _sttModelDownloadActive;
+    /// 0-100, or -1 for indeterminate (Content-Length unavailable).
+    [ObservableProperty] private double _sttModelDownloadPercent;
+    [ObservableProperty] private string _sttModelDownloadLabel = "";
+    [ObservableProperty] private bool _llmModelDownloadActive;
+    [ObservableProperty] private double _llmModelDownloadPercent;
+    [ObservableProperty] private string _llmModelDownloadLabel = "";
+
     /// Mirrors the auto-detect toggle from Settings. When false,
     /// App.xaml.cs swallows the `call_detected` event (the Rust state
     /// machine still emits if a race happens; this guard catches the
@@ -207,6 +221,48 @@ public partial class AppViewModel : ObservableObject
     /// that as "indeterminate". Fired on the UI thread.
     public event Action<long, long>? ParakeetDownloadProgress;
 
+    /// Fires on each Whisper/STT model download progress event. Args:
+    /// (filename, downloaded_bytes, total_bytes). `total` is 0 when the
+    /// server gave no Content-Length (treat as indeterminate). UI thread.
+    public event Action<string, long, long>? SttModelDownloadProgress;
+
+    /// Fires on each local-LLM model download progress event. Same args
+    /// shape as <see cref="SttModelDownloadProgress"/>.
+    public event Action<string, long, long>? LlmModelDownloadProgress;
+
+    /// Update the persisted download state. Active flips false once the
+    /// transfer completes (downloaded >= total, total known).
+    private void ApplyDownloadState(string filename, long downloaded, long total, bool isLlm)
+    {
+        bool done = total > 0 && downloaded >= total;
+        bool active = !done;
+        double percent = total > 0 ? Math.Min(100.0, downloaded * 100.0 / total) : -1.0;
+        string label = total > 0
+            ? $"Downloading {filename}… {FormatBytes(downloaded)} / {FormatBytes(total)} ({percent:F0}%)"
+            : $"Downloading {filename}… {FormatBytes(downloaded)}";
+        if (done) label = "";
+
+        if (isLlm)
+        {
+            LlmModelDownloadActive = active;
+            LlmModelDownloadPercent = percent;
+            LlmModelDownloadLabel = label;
+        }
+        else
+        {
+            SttModelDownloadActive = active;
+            SttModelDownloadPercent = percent;
+            SttModelDownloadLabel = label;
+        }
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        if (bytes <= 0) return "0 MB";
+        double mb = bytes / (1024.0 * 1024.0);
+        return mb >= 1024.0 ? $"{mb / 1024.0:F2} GB" : $"{mb:F1} MB";
+    }
+
     /// Fires when the chunked transcriber emits a new chunk. Args:
     /// (cumulative_text, is_final). App.xaml.cs uses this to show /
     /// hide the CaptionWindow and to keep its text in sync.
@@ -283,6 +339,24 @@ public partial class AppViewModel : ObservableObject
                     ParakeetDownloadProgress?.Invoke(
                         payload.GetProperty("downloaded").GetInt64(),
                         payload.GetProperty("total").GetInt64());
+                    break;
+                case "model_download_progress":
+                    {
+                        var fn = payload.GetProperty("filename").GetString() ?? "";
+                        var dl = payload.GetProperty("downloaded").GetInt64();
+                        var tot = payload.GetProperty("total").GetInt64();
+                        ApplyDownloadState(fn, dl, tot, isLlm: false);
+                        SttModelDownloadProgress?.Invoke(fn, dl, tot);
+                    }
+                    break;
+                case "llm_model_download_progress":
+                    {
+                        var fn = payload.GetProperty("filename").GetString() ?? "";
+                        var dl = payload.GetProperty("downloaded").GetInt64();
+                        var tot = payload.GetProperty("total").GetInt64();
+                        ApplyDownloadState(fn, dl, tot, isLlm: true);
+                        LlmModelDownloadProgress?.Invoke(fn, dl, tot);
+                    }
                     break;
                 case "stt_chunk":
                     {
