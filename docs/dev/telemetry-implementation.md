@@ -280,6 +280,8 @@ Licensing      LicenseActivated  LicenseActivationFailed  LicenseRefreshed  Lice
 Meeting        MeetingStarted  MeetingStopped  MeetingPaused  MeetingResumed
                MeetingRecapCompleted  MeetingImportedFromFile
 File load      FileLoadStarted  FileLoadCompleted
+Model download ModelDownloadCompleted
+Consent        ConsentLogged
 Dictionary     UserDictWordAdded  UserDictWordRemoved  UserDictSizeSnapshot
 Notion         NotionConnected  NotionDisconnected  NotionRecapSent
 App rules      AppRulesEvaluated  AppRuleAdded  AppRuleRemoved  AppRuleReordered
@@ -306,14 +308,16 @@ delete them. They must stay in `RESERVED` in `core/tests/telemetry_coverage.rs`.
 
 ### Gaps (TODO — no variant yet; Layer 3 should propose these)
 
-| Feature | Plan | Priority |
-|---|---|---|
-| Streaming + local-stream dictation | reuse `TranscriptionCompleted` + an `engine` prop (`batch`/`deepgram_stream`/`local_stream`); fix `entry_point` (now hardcoded "hotkey") | must |
-| Local model download | new `ModelDownload` event {phase, model_bucket, success, error_category} | must |
-| Recording consent gate | new `ConsentShown` / `ConsentResolved{outcome}` | must |
-| Command mode (generate/transform) | new `CommandInvoked{kind, success}` | nice |
-| Call detection + nudge | new `CallDetected` / `CallNudge{outcome}` | nice |
-| Checkout initiated | new `LicenseCheckoutStarted{tier}` (purchase funnel) | nice |
+| Feature | Plan | Priority | Status |
+|---|---|---|---|
+| Streaming + local-stream dictation | `TranscriptionCompleted` gained an `engine` prop (`batch`/`deepgram_stream`/`local_stream`/`chunked_caption`) | must | DONE 2026-06-07 |
+| Local model download | `ModelDownloadCompleted{kind, success}` on whisper/llm/parakeet fetch | must | DONE 2026-06-07 |
+| Recording consent gate | `ConsentLogged{kind}` from `dimmy_consent_log_event` (shown/accepted/cancelled/...) | must | DONE 2026-06-07 |
+| `entry_point` real value | thread pill/hotkey/meeting source (still hardcoded "hotkey") | nice | TODO |
+| Model download STARTED (abandon rate) | add `ModelDownloadStarted{kind}` | nice | TODO |
+| Command mode (generate/transform) | new `CommandInvoked{kind, success}` | nice | TODO |
+| Call detection + nudge | new `CallDetected` / `CallNudge{outcome}` | nice | TODO |
+| Checkout initiated | new `LicenseCheckoutStarted{tier}` (purchase funnel) | nice | TODO |
 
 Deliberately skipped: per-chunk caption events (high cardinality), audio
 device-change recovery (Sentry/log only), `config.shortcut_changed` (usage is

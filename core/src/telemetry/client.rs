@@ -557,6 +557,7 @@ mod tests {
                     success: true,
                     had_filler_removal: false,
                     had_llm: false,
+                    engine: "batch",
                 },
                 "total_transcriptions",
             ),
@@ -665,6 +666,7 @@ mod tests {
             success: true,
             had_filler_removal: false,
             had_llm: false,
+            engine: "batch",
         };
         let p = build_payload(&e).expect("build");
         let v: serde_json::Value = serde_json::from_str(&p).expect("json");
