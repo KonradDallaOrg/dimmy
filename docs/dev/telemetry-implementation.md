@@ -250,3 +250,95 @@ For local dev: just `cargo build` without secrets. PostHog/Sentry will log `[tel
 6. Update this doc and `PRIVACY.md` if the new event collects a new category of information.
 
 NEVER include user content (transcript text, prompt text, file paths, hostnames, microphone names) in a property. The `looks_like_secret` filter is a safety net, not a substitute for review.
+
+---
+
+## Coverage map (source of truth — Layer 1)
+
+Every `Event` variant lives here with a status, and so do the known gaps. The
+`telemetry_coverage` test (Layer 2) fails if a variant is missing from this
+section, so this table cannot silently drift from the code.
+
+Status legend: `live` = emitted in prod; `reserved` = defined but intentionally
+not wired yet (must stay listed in the test's `RESERVED`); `TODO` = a gap we
+intend to cover (no variant yet — tracked here so Layer 3 proposes it).
+
+### Live variants (emitted)
+
+```
+Lifecycle      AppStarted  AppSessionEnded
+Onboarding     OnboardingStarted  OnboardingStepCompleted  OnboardingCompleted  OnboardingAbandoned
+Config         ConfigSttModeChanged  ConfigCloudProviderChanged  ConfigLlmEnabledChanged
+               ConfigLlmStyleChanged  ConfigPreprocessingChanged  ConfigInputGainChanged
+               ConfigAutostartChanged  ConfigRecapModelChanged
+Transcription  TranscriptionCompleted  TranscriptionFailed  TranscriptionCancelled
+LLM            LlmApplied  LlmFailed
+Perf/GPU       PerfGpuStatus  ErrorGpuCrash
+Feature        FeatureHotkeyTriggered  FeatureApiKeySet
+Licensing      LicenseActivated  LicenseActivationFailed  LicenseRefreshed  LicenseRefreshFailed
+               LicenseScopeDenied  LicenseDeviceDeactivated
+Meeting        MeetingStarted  MeetingStopped  MeetingPaused  MeetingResumed
+               MeetingRecapCompleted  MeetingImportedFromFile
+File load      FileLoadStarted  FileLoadCompleted
+Dictionary     UserDictWordAdded  UserDictWordRemoved  UserDictSizeSnapshot
+Notion         NotionConnected  NotionDisconnected  NotionRecapSent
+App rules      AppRulesEvaluated  AppRuleAdded  AppRuleRemoved  AppRuleReordered
+Pill           PillVisibilityToggled  PillStyleScrolled  PillLanguageScrolled  PillContextMenuOpened
+Update         UpdateChannelChanged  UpdateApplyDeferred
+Permissions    PermissionGranted  PermissionDenied
+Claude Code    ClaudeCodeStatusProbed  ClaudeCodeLoginSpawned  ClaudeCodeLoginCompleted  ClaudeCodeInvocation
+```
+
+`PerfStartupMs` is referenced (not orphaned) but low value — fold into
+`AppStarted.cold_start_ms`.
+
+### Reserved variants (defined, NOT emitted — wire or delete)
+
+```
+AppUpdateCheck  AppUpdateApplied  ConfigShortcutChanged  PerfTranscribeOverheadPct
+ErrorCloudStt  ErrorCloudLlm  ErrorLocalStt  ErrorLocalLlm  ErrorAudioHealth
+```
+
+Errors are NOT lost while these are dead: `transcription.failed` / `llm.failed`
+carry the category to PostHog and the raw message goes to Sentry. These 5
+`Error*` variants are redundant; either wire granular per-surface errors or
+delete them. They must stay in `RESERVED` in `core/tests/telemetry_coverage.rs`.
+
+### Gaps (TODO — no variant yet; Layer 3 should propose these)
+
+| Feature | Plan | Priority |
+|---|---|---|
+| Streaming + local-stream dictation | reuse `TranscriptionCompleted` + an `engine` prop (`batch`/`deepgram_stream`/`local_stream`); fix `entry_point` (now hardcoded "hotkey") | must |
+| Local model download | new `ModelDownload` event {phase, model_bucket, success, error_category} | must |
+| Recording consent gate | new `ConsentShown` / `ConsentResolved{outcome}` | must |
+| Command mode (generate/transform) | new `CommandInvoked{kind, success}` | nice |
+| Call detection + nudge | new `CallDetected` / `CallNudge{outcome}` | nice |
+| Checkout initiated | new `LicenseCheckoutStarted{tier}` (purchase funnel) | nice |
+
+Deliberately skipped: per-chunk caption events (high cardinality), audio
+device-change recovery (Sentry/log only), `config.shortcut_changed` (usage is
+already proven by `FeatureHotkeyTriggered`).
+
+---
+
+## Coverage automation (how this is kept in sync)
+
+Three layers; the goal is to never silently ship a user-facing feature with no
+metric, without over-instrumenting.
+
+- **Layer 1 — this coverage map.** Single source of truth (above). Adding a
+  variant means adding a row here.
+- **Layer 2 — `core/tests/telemetry_coverage.rs` (deterministic, every CI run).**
+  Fails if any `Event` variant is (a) never emitted and not in `RESERVED`, or
+  (b) missing from the coverage map above. So a PR that adds a variant MUST
+  wire an emit (or reserve it) AND document it. No LLM, runs in `cargo test`.
+- **Layer 3 — `/telemetry-audit` skill (judgment, at release).** Diffs commits
+  since the last tag, finds user-facing features (new `dimmy_*` FFI entries,
+  new modules, new config-driven behavior) that lack an event, and PROPOSES
+  events (name + privacy-safe props) for human approval. This catches the
+  "should this have a metric?" question that Layer 2 cannot. Run it before each
+  `staging.N` / `rcN`. See `.claude/skills/telemetry-audit/SKILL.md`.
+
+The division: Layer 2 is mechanical hygiene (no dead/undocumented variants),
+Layer 3 is the judgment call (does a new surface deserve a metric). Together
+they cover dev-time (every PR) and release-time without noise.
