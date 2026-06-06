@@ -2514,14 +2514,11 @@ public sealed partial class SettingsWindow : Window
             if (tag == ParakeetTag)
             {
                 ViewModel.LocalSttBackend = "parakeet";
-                // Auto-enable chunk streaming on the Parakeet switch — chunk
-                // streaming is Parakeet-only at runtime (ffi.rs gates it on
-                // `chunk_streaming_enabled && backend == parakeet`), and the
-                // low-latency live-caption experience it unlocks is the whole
-                // reason to pick Parakeet over Whisper. We set it only on the
-                // explicit user pick, so if they later toggle it off manually
-                // for debugging we respect that until the next time they
-                // re-select Parakeet from the combo.
+                // Auto-enable chunk streaming on the backend switch — the
+                // chunked engine is backend-agnostic now (Parakeet OR whisper)
+                // and the low-latency live-caption experience is the reason to
+                // run a local backend. Set only on the explicit user pick, so
+                // a later manual toggle-off is respected until the next pick.
                 ViewModel.ChunkStreamingEnabled = true;
                 App.Log("→ set LocalSttBackend=parakeet, ChunkStreamingEnabled=true", "Settings");
                 // Keep LocalModel pointing at the previous whisper choice
@@ -2531,7 +2528,12 @@ public sealed partial class SettingsWindow : Window
             {
                 ViewModel.LocalSttBackend = "whisper";
                 ViewModel.LocalModel = tag;
-                App.Log($"→ set LocalSttBackend=whisper, LocalModel={tag}", "Settings");
+                // Mirror the Parakeet convenience: whisper now drives the same
+                // chunked live-caption path (it keeps up only on GPU, but the
+                // user asked for parity). Persisted on close like the Parakeet
+                // branch; the streaming/caption toggles also apply live.
+                ViewModel.ChunkStreamingEnabled = true;
+                App.Log($"→ set LocalSttBackend=whisper, LocalModel={tag}, ChunkStreamingEnabled=true", "Settings");
             }
             CheckModelStatus();
         }
@@ -4079,6 +4081,27 @@ public sealed partial class SettingsWindow : Window
     {
         if (!_loaded) return;
         App.Instance?.ApplySettings(ViewModel);
+    }
+
+    /// <summary>Persist a plain config bool to the Rust core IMMEDIATELY on
+    /// toggle so it takes effect on the very next dictation without closing
+    /// Settings. The streaming / chunk / live-caption switches are read by
+    /// the Rust core at start_recording, so without this they only applied
+    /// after AutoSaveOnClose — the "Saved" pulse showed but nothing took
+    /// effect (reported 2026-06-06). These are non-gated config fields, so
+    /// default ToJson() is safe (no LLM/Recap-block wipe).</summary>
+    private void LiveConfigToggle_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (!_loaded) return;
+        try
+        {
+            DimmyNative.dimmy_set_config_json(ViewModel.ToJson());
+            App.Instance?.ReloadConfig();
+        }
+        catch (Exception ex)
+        {
+            App.Log($"LiveConfigToggle_Toggled persist failed: {ex.Message}", "Settings");
+        }
     }
 
     /// 2026-05-08: AudioSource radio buttons removed from Settings —

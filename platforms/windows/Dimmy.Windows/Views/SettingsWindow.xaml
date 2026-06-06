@@ -622,21 +622,24 @@
                                   Style="{StaticResource CompactToggleSwitch}" />
                   </controls:SettingCard>
                   <controls:SettingCard Glyph="&#xE7F2;"
-                                        Label="Chunk streaming (Parakeet only)"
-                                        InfoTip="Transcribes while you speak, so the final text lands about 700 ms after you release the key instead of waiting for the whole clip. Needs the Parakeet local backend.">
+                                        Label="Accelerate transcription"
+                                        InfoTip="Transcribes in short chunks while you talk instead of all at once when you stop, so the final text is ready almost instantly after you release the key. The text still arrives as one paste at the end, just faster. Parakeet is realtime; whisper needs a GPU to keep up.">
                     <ToggleSwitch IsOn="{Binding ChunkStreamingEnabled, Mode=TwoWay}"
+                                  Toggled="LiveConfigToggle_Toggled"
                                   Style="{StaticResource CompactToggleSwitch}" />
                   </controls:SettingCard>
                   <controls:SettingCard Glyph="&#xE890;"
-                                        Label="Live captions"
-                                        InfoTip="Shows a floating caption while chunk streaming is on. Turn it off to keep the speed without showing text on screen.">
+                                        Label="Live captions (on screen)"
+                                        InfoTip="Shows a floating caption of what you are saying while you speak. Needs Accelerate transcription on. Turn it off to keep the speed without text on screen.">
                     <ToggleSwitch IsOn="{Binding LiveCaptionsEnabled, Mode=TwoWay}"
+                                  Toggled="LiveConfigToggle_Toggled"
                                   Style="{StaticResource CompactToggleSwitch}" />
                   </controls:SettingCard>
                   <controls:SettingCard Glyph="&#xE720;"
-                                        Label="Streaming dictation (Deepgram, realtime)"
-                                        InfoTip="Streams your voice to Deepgram over a live connection and types each finished phrase at the cursor as you speak. Needs a Deepgram key saved in the Providers page. Takes over dictation while it is on.">
+                                        Label="Realtime typing"
+                                        InfoTip="Writes each finished phrase straight into the app as you speak, instead of pasting the whole text when you stop. Uses Deepgram if you saved a Deepgram key (lowest latency, cloud); otherwise your local model (Parakeet is realtime, whisper needs a GPU). Takes over dictation while it is on.">
                     <ToggleSwitch IsOn="{Binding StreamingDictation, Mode=TwoWay}"
+                                  Toggled="LiveConfigToggle_Toggled"
                                   Style="{StaticResource CompactToggleSwitch}" />
                   </controls:SettingCard>
                 </StackPanel>

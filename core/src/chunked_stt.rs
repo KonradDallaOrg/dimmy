@@ -1,11 +1,13 @@
-//! Realtime chunked transcription engine for Parakeet.
+//! Realtime chunked transcription engine (backend-agnostic).
 //!
 //! Spawns a worker thread that, while the audio capture thread is
 //! filling the shared PCM buffer, periodically slices off the most
 //! recent N seconds (+ overlap with the previous chunk), runs them
-//! through `parakeet::transcribe`, dedups the result against the
-//! running cumulative text, and emits a callback so the FFI layer
-//! can fan it out as an event to the native UI.
+//! through a caller-supplied `TranscribeFn` (Parakeet or whisper), dedups
+//! the result against the running cumulative text, and emits a callback so
+//! the FFI layer can fan it out as an event to the native UI. The caller
+//! decides the backend + whether the host injects each delta at the cursor
+//! (typing mode) or only shows it as a live caption.
 //!
 //! Pattern proven on WSL CPU against 272 min of LibriVox/whisper.cpp
 //! audio: 30 s window + 500 ms overlap + last-3-words dedup gave 100 %
@@ -41,6 +43,13 @@ const POLL_INTERVAL: Duration = Duration::from_millis(100);
 ///   the trailing tail after `stop()` was requested.
 pub type ChunkCallback = dyn Fn(&str, &str, bool) + Send + Sync + 'static;
 
+/// Per-chunk transcription function. Input is 16 kHz mono PCM (the worker
+/// downsamples before calling). The caller picks the backend: Parakeet
+/// (`parakeet::transcribe`) or whisper (`local_stt::transcribe_local`),
+/// so this engine is backend-agnostic — it no longer hard-codes Parakeet.
+pub type TranscribeFn =
+    dyn Fn(&[f32]) -> Result<String, crate::error::TranscribeError> + Send + Sync + 'static;
+
 pub struct ChunkedTranscriber {
     cancel: Arc<AtomicBool>,
     final_text: Arc<Mutex<String>>,
@@ -57,6 +66,7 @@ impl ChunkedTranscriber {
         device_sample_rate: u32,
         chunk_secs: f32,
         overlap_ms: u32,
+        transcribe_fn: Arc<TranscribeFn>,
         on_chunk: Arc<ChunkCallback>,
     ) -> Self {
         assert!(chunk_secs > 0.0, "chunk_secs must be positive");
@@ -81,6 +91,7 @@ impl ChunkedTranscriber {
                     overlap_ms,
                     cancel_w,
                     final_w,
+                    transcribe_fn,
                     on_chunk,
                 );
             })
@@ -109,6 +120,7 @@ impl ChunkedTranscriber {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn worker_loop(
     audio_buffer: Arc<Mutex<Vec<f32>>>,
     device_sample_rate: u32,
@@ -116,6 +128,7 @@ fn worker_loop(
     overlap_ms: u32,
     cancel: Arc<AtomicBool>,
     final_text: Arc<Mutex<String>>,
+    transcribe_fn: Arc<TranscribeFn>,
     on_chunk: Arc<ChunkCallback>,
 ) {
     let chunk_samples = (chunk_secs * device_sample_rate as f32) as usize;
@@ -157,11 +170,11 @@ fn worker_loop(
 
         let t0 = Instant::now();
         let pcm_16k = downsample_if_needed(&snapshot, device_sample_rate);
-        let transcribed = match crate::parakeet::transcribe(&pcm_16k) {
+        let transcribed = match transcribe_fn(&pcm_16k) {
             Ok(t) => t,
             Err(e) => {
                 let msg = format!("{}", e);
-                crate::log(&format!("[chunked] parakeet failed on chunk: {msg}"));
+                crate::log(&format!("[chunked] transcribe failed on chunk: {msg}"));
                 last_processed = end;
                 continue;
             }
@@ -204,7 +217,7 @@ fn worker_loop(
 
     if !trailing.is_empty() {
         let pcm_16k = downsample_if_needed(&trailing, device_sample_rate);
-        match crate::parakeet::transcribe(&pcm_16k) {
+        match transcribe_fn(&pcm_16k) {
             Ok(transcribed) => {
                 let delta = dedup_last_3_words(&cumulative, &transcribed);
                 if !delta.is_empty() {
@@ -216,7 +229,7 @@ fn worker_loop(
                 on_chunk(&delta, &cumulative, true);
             }
             Err(e) => {
-                crate::log(&format!("[chunked] parakeet failed on tail: {e}"));
+                crate::log(&format!("[chunked] transcribe failed on tail: {e}"));
                 on_chunk("", &cumulative, true);
             }
         }

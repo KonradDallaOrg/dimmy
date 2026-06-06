@@ -623,19 +623,24 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
         })
     });
 
-    // Realtime streaming dictation (Deepgram WebSocket). Takes priority
-    // over the chunked local path: when `streaming_dictation` is on AND a
-    // Deepgram STT key is present, audio is streamed live and finalised
-    // segments are emitted as `stt_chunk` events (engine="deepgram") so
-    // the host can inject each stable segment at the cursor as you speak.
+    // Realtime streaming dictation. When `streaming_dictation` is on the
+    // host types each finished segment at the cursor as you speak. Engine
+    // choice follows the user's STT mode:
+    //   • cloud STT  → Deepgram WebSocket (lowest latency), if a Deepgram
+    //                  key is saved (engine="deepgram", handled here).
+    //   • local STT  → the chunked local path below drives the typing with
+    //                  whisper/Parakeet (engine="local-stream").
+    // Gating on `!is_local` is load-bearing: a leftover Deepgram key must
+    // NOT hijack streaming when the user picked a LOCAL backend — otherwise
+    // local typing never fires (the "non va" report, 2026-06-06).
     let streaming_on = st.streaming_dictation.lock().map(|b| *b).unwrap_or(false);
     let use_kr = st.use_keyring.lock().map(|k| *k).unwrap_or(false);
-    let dg_key = if streaming_on {
+    let dg_key = if streaming_on && !is_local {
         crate::load_key_with_store(&st.key_store, KeyringScope::Stt(Provider::Deepgram), use_kr)
     } else {
         None
     };
-    let streaming_active = streaming_on && dg_key.is_some();
+    let streaming_active = streaming_on && !is_local && dg_key.is_some();
     if streaming_active {
         if let Ok(mut b) = st.audio_buffer.lock() {
             b.clear();
@@ -672,65 +677,96 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
         log("[StartRec] deepgram streaming dictation spawned");
     }
 
-    // Spawn the realtime chunked transcriber when the user has it
-    // turned on AND the active local backend is Parakeet. Whisper.cpp
-    // is too slow per-chunk to keep up; only Parakeet earns this path.
-    // Skipped entirely when streaming dictation already owns the capture.
+    // Realtime chunked transcriber — backend-agnostic. Two modes:
+    //   • typing  : `streaming_dictation` ON, no Deepgram key, local STT →
+    //               the chunked engine drives live cursor typing
+    //               (engine="local-stream"); the host injects each delta
+    //               and suppresses the final paste, same contract as the
+    //               Deepgram streaming path. Works with whisper OR Parakeet.
+    //   • caption : `chunk_streaming_enabled` ON → live subtitle overlay
+    //               only (engine = backend name); final paste still happens
+    //               (the stop path uses chunked_final as the transcript).
+    // Whisper keeps up only on GPU; Parakeet is realtime on CPU. If a
+    // backend can't keep pace the captions/typing simply lag — no crash.
+    // Skipped entirely when Deepgram streaming already owns the capture.
     let chunked_on = st
         .chunk_streaming_enabled
         .lock()
         .map(|b| *b)
         .unwrap_or(false);
-    let backend_parakeet = st
+    let local_backend = st
         .local_stt_backend
         .lock()
-        .map(|b| b.as_str() == "parakeet")
-        .unwrap_or(false);
-    if !streaming_active && is_local && chunked_on && backend_parakeet {
+        .map(|b| b.clone())
+        .unwrap_or_default();
+    let local_typing = streaming_on && !streaming_active && is_local;
+    let chunked_captions = !streaming_active && !local_typing && is_local && chunked_on;
+    if local_typing || chunked_captions {
         // Clear any zombie buffer from a previous run so the worker
-        // doesn't transcribe stale audio. The audio thread will
-        // refill from the new stream.
+        // doesn't transcribe stale audio. The audio thread refills it.
         if let Ok(mut b) = st.audio_buffer.lock() {
             b.clear();
         }
-        let buffer_arc = st.audio_buffer.clone();
+        // Per-chunk transcriber for the active local backend.
+        let transcribe_fn: Arc<crate::chunked_stt::TranscribeFn> = if local_backend == "parakeet" {
+            Arc::new(|pcm: &[f32]| crate::parakeet::transcribe(pcm))
+        } else {
+            let model_filename = st.local_model.lock().map(|m| m.clone()).unwrap_or_default();
+            let model_path = crate::local_stt::model_path(&model_filename);
+            let language = st.language.lock().map(|l| l.clone()).unwrap_or_default();
+            let prompt_base = st.prompt.lock().map(|p| p.clone()).unwrap_or_default();
+            let user_dict = st.user_dict.lock().map(|d| d.clone()).unwrap_or_default();
+            let prompt = crate::compose_stt_prompt(&prompt_base, &user_dict);
+            Arc::new(move |pcm: &[f32]| {
+                crate::local_stt::transcribe_local(&model_path, pcm, &language, &prompt)
+            })
+        };
+        let engine = if local_typing {
+            "local-stream".to_string()
+        } else {
+            local_backend.clone()
+        };
+        let typing = local_typing;
         let on_chunk: Arc<crate::chunked_stt::ChunkCallback> =
-            Arc::new(|delta: &str, cumulative: &str, is_final: bool| {
+            Arc::new(move |delta: &str, cumulative: &str, is_final: bool| {
+                // Typing mode: prefix a space so cursor-injected segments
+                // don't run together — the chunked delta carries no leading
+                // space (cumulative inserts one between segments).
+                let out_delta = if typing && !delta.is_empty() && cumulative.len() > delta.len() {
+                    format!(" {}", delta)
+                } else {
+                    delta.to_string()
+                };
                 let payload = serde_json::json!({
-                    "delta": delta,
+                    "delta": out_delta,
                     "cumulative": cumulative,
                     "is_final": is_final,
+                    "engine": engine,
                 })
                 .to_string();
                 emit_event("stt_chunk", &payload);
             });
+        // 3 s chunks + 500 ms overlap (chunked_smoke A/B 2026-05-06).
         let transcriber = crate::chunked_stt::ChunkedTranscriber::start(
-            buffer_arc,
+            st.audio_buffer.clone(),
             crate::audio::MEETING_CANONICAL_RATE,
-            // 3 s chunks + 500 ms overlap. Chunk size from the
-            // chunked_smoke A/B 2026-05-06 benchmark (3 s wins cadence
-            // over 5 s without quality regression). Overlap stays at
-            // 500 ms after a 2026-05-10 experiment found that bumping
-            // to 800 ms made boundary duplicates WORSE, not better:
-            // longer overlap means the next chunk's audio starts
-            // further INSIDE the previous chunk's last spoken word,
-            // and Parakeet hallucinates / drops the partial-word lead
-            // token. The anchor `[w_n-2, w_n-1, w_n]` then can't match
-            // because chunk_n+1 starts with `[?, w_n-1, w_n, ...]`,
-            // dedup falls through, and the duplicate ships.
-            // The remaining boundary duplicates are an intrinsic
-            // limitation of word-anchor dedup over chunked Parakeet
-            // — proper fix is fuzzy match / longest common substring,
-            // tracked as future work. Scan window 12 tokens (was 8)
-            // is kept since it has no downside on the failure cases.
             3.0,
             500,
+            transcribe_fn,
             on_chunk,
         );
         if let Ok(mut slot) = CHUNKED.lock() {
             *slot = Some(transcriber);
         }
-        log("[StartRec] chunked-stt worker spawned (3s+500ms+dedup, 12-token scan)");
+        log(&format!(
+            "[StartRec] chunked-stt worker spawned (backend={}, mode={})",
+            local_backend,
+            if typing {
+                "typing/local-stream"
+            } else {
+                "caption"
+            }
+        ));
     }
 
     emit_event("recording_started", "{}");
