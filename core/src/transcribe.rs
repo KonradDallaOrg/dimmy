@@ -38,7 +38,8 @@ pub async fn transcribe_audio(
     // Route to provider-specific path
     match Provider::from_url(api_url) {
         Provider::Deepgram => {
-            return transcribe_audio_deepgram(api_url, api_key, wav_data, language, prompt).await
+            return transcribe_audio_deepgram(api_url, model, api_key, wav_data, language, prompt)
+                .await
         }
         Provider::Gemini => {
             // Gemini transcription is multimodal generateContent with
@@ -118,22 +119,54 @@ pub async fn transcribe_audio(
     Ok(result.text)
 }
 
-/// Compose the full Deepgram request URL given a base `api_url` (which
-/// already carries query params like `?model=nova-3&smart_format=true`),
-/// a `language` code (empty = auto-detect), and a comma-separated
-/// vocabulary biasing `prompt`. Each comma-separated dict term becomes
-/// a separate `&keyterm=<term>` parameter — Deepgram's native API for
-/// vocabulary biasing on Nova-3+ models. Pure function for unit testing.
-pub fn compose_deepgram_url(api_url: &str, language: &str, prompt: &str) -> String {
+/// Compose the full Deepgram request URL from a base `api_url`, the
+/// configured `model` (e.g. `nova-3`), a `language` code (empty =
+/// auto-detect), and a comma-separated vocabulary biasing `prompt`.
+///
+/// Deepgram takes the model as a QUERY param (unlike OpenAI's multipart
+/// form field), and the host stores it in a separate config field — so we
+/// must append `&model=<model>` here. Burned 2026-06-06: the model was
+/// dropped entirely on the Deepgram path (only Gemini threaded it through),
+/// so a bare `api_url` hit Deepgram's default model and every nova-3-only
+/// param (keyterm, multilingual) 400'd.
+///
+/// Each comma-separated dict term becomes a `&keyterm=<term>` param —
+/// Deepgram's native vocabulary biasing, which is nova-3-only, so we emit
+/// keyterms only when the resolved model is nova-3. Pure for unit testing.
+pub fn compose_deepgram_url(api_url: &str, model: &str, language: &str, prompt: &str) -> String {
     let mut url = api_url.to_string();
+
+    // Append the model unless the api_url already pins one.
+    if !model.is_empty() && !url.contains("model=") {
+        let sep = if url.contains('?') { "&" } else { "?" };
+        url = format!("{}{}model={}", url, sep, model);
+    }
+
+    let is_nova3 = url.contains("nova-3");
+
+    // Nova-3 only accepts `en` or `multi` for the language parameter — a
+    // single non-English code (e.g. `it`, `fr`) returns HTTP 400. Map any
+    // non-English language to `multi` (multilingual code-switching, GA) and
+    // an empty language to `multi` too (nova-3 has no `detect_language`).
+    // Older models (nova-2, enhanced, base) keep per-language codes and the
+    // `detect_language=true` auto path.
     let sep = if url.contains('?') { "&" } else { "?" };
-    if !language.is_empty() {
+    if is_nova3 {
+        let lang = if language.eq_ignore_ascii_case("en") {
+            "en"
+        } else {
+            "multi"
+        };
+        url = format!("{}{}language={}", url, sep, lang);
+    } else if !language.is_empty() {
         url = format!("{}{}language={}", url, sep, language);
     } else {
         url = format!("{}{}detect_language=true", url, sep);
     }
 
-    if !prompt.is_empty() {
+    // keyterm is a nova-3-only parameter — sending it on any other model
+    // 400s the request. Only emit it for nova-3.
+    if is_nova3 && !prompt.is_empty() {
         for term in prompt
             .split(',')
             .map(|t| t.trim())
@@ -178,12 +211,13 @@ pub fn compose_gemini_prompt_text(language: &str, prompt: &str) -> String {
 /// The URL should be: https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true
 async fn transcribe_audio_deepgram(
     api_url: &str,
+    model: &str,
     api_key: &str,
     wav_data: &[u8],
     language: &str,
     prompt: &str,
 ) -> Result<String, crate::error::TranscribeError> {
-    let url = compose_deepgram_url(api_url, language, prompt);
+    let url = compose_deepgram_url(api_url, model, language, prompt);
     if !prompt.is_empty() {
         crate::log(&format!(
             "[DictBias] provider=deepgram keyterm_count={} prompt_chars={}",
@@ -206,9 +240,18 @@ async fn transcribe_audio_deepgram(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
+        let scrubbed = Provider::scrub_api_key(&body[..body.len().min(200)], api_key);
+        // Deepgram 4xx bodies are request-parameter errors (e.g. an invalid
+        // `language`/`model`/`keyterm` combo), NOT transcribed content — safe
+        // to log so the failure isn't a silent "HTTP 400".
+        crate::log(&format!(
+            "[STT] deepgram HTTP {} body={}",
+            status.as_u16(),
+            scrubbed
+        ));
         return Err(crate::error::TranscribeError::Api {
             status: status.as_u16(),
-            body: Provider::scrub_api_key(&body[..body.len().min(200)], api_key),
+            body: scrubbed,
         });
     }
 
@@ -498,28 +541,97 @@ mod tests {
 
     #[test]
     fn deepgram_url_appends_language_when_set() {
-        let url = compose_deepgram_url("https://api.deepgram.com/v1/listen?model=nova-3", "en", "");
+        let url = compose_deepgram_url("https://api.deepgram.com/v1/listen", "nova-3", "en", "");
         assert!(url.contains("&language=en"), "url={}", url);
         assert!(!url.contains("detect_language"), "url={}", url);
     }
 
     #[test]
-    fn deepgram_url_uses_auto_detect_when_language_empty() {
-        let url = compose_deepgram_url("https://api.deepgram.com/v1/listen?model=nova-3", "", "");
+    fn deepgram_url_uses_auto_detect_when_language_empty_on_older_models() {
+        // detect_language is a nova-2-and-older path; nova-3 has no such param.
+        let url = compose_deepgram_url("https://api.deepgram.com/v1/listen", "nova-2", "", "");
         assert!(url.contains("&detect_language=true"), "url={}", url);
         assert!(!url.contains("&language="), "url={}", url);
     }
 
     #[test]
+    fn deepgram_url_nova3_maps_non_english_language_to_multi() {
+        // Nova-3 rejects single non-English codes (HTTP 400). The configured
+        // `language=it` must become `language=multi`, never `language=it`.
+        let url = compose_deepgram_url("https://api.deepgram.com/v1/listen", "nova-3", "it", "");
+        assert!(url.contains("&language=multi"), "url={}", url);
+        assert!(!url.contains("language=it"), "url={}", url);
+    }
+
+    #[test]
+    fn deepgram_url_nova3_keeps_english() {
+        // English on nova-3 stays monolingual `en` (highest-accuracy path),
+        // not coerced to multi.
+        let url = compose_deepgram_url("https://api.deepgram.com/v1/listen", "nova-3", "en", "");
+        assert!(url.contains("&language=en"), "url={}", url);
+        assert!(!url.contains("multi"), "url={}", url);
+    }
+
+    #[test]
+    fn deepgram_url_nova3_empty_language_uses_multi_not_detect() {
+        // nova-3 has no detect_language; empty config language → multi.
+        let url = compose_deepgram_url("https://api.deepgram.com/v1/listen", "nova-3", "", "");
+        assert!(url.contains("&language=multi"), "url={}", url);
+        assert!(!url.contains("detect_language"), "url={}", url);
+    }
+
+    #[test]
+    fn deepgram_url_nova2_keeps_specific_language() {
+        // Older models still support per-language codes — don't coerce them.
+        let url = compose_deepgram_url("https://api.deepgram.com/v1/listen", "nova-2", "it", "");
+        assert!(url.contains("&language=it"), "url={}", url);
+        assert!(!url.contains("multi"), "url={}", url);
+    }
+
+    #[test]
     fn deepgram_url_uses_question_mark_when_base_has_no_query() {
-        let url = compose_deepgram_url("https://api.deepgram.com/v1/listen", "en", "");
+        let url = compose_deepgram_url("https://api.deepgram.com/v1/listen", "", "en", "");
         assert!(url.contains("?language=en"), "url={}", url);
+    }
+
+    #[test]
+    fn deepgram_url_appends_model_from_arg_when_absent() {
+        // The host stores the model in a separate config field; a bare
+        // api_url must get `?model=<model>`, otherwise Deepgram uses its
+        // default model and nova-3-only params (keyterm) 400. This is the
+        // 2026-06-06 batch-dictation regression.
+        let url = compose_deepgram_url("https://api.deepgram.com/v1/listen", "nova-3", "it", "API");
+        assert!(url.contains("model=nova-3"), "url={}", url);
+        // model present → nova-3 coercion + keyterm both fire.
+        assert!(url.contains("language=multi"), "url={}", url);
+        assert!(url.contains("keyterm=API"), "url={}", url);
+    }
+
+    #[test]
+    fn deepgram_url_does_not_double_append_model() {
+        // If the api_url already pins a model, don't append a second one.
+        let url = compose_deepgram_url(
+            "https://api.deepgram.com/v1/listen?model=nova-3",
+            "nova-2",
+            "en",
+            "",
+        );
+        assert_eq!(url.matches("model=").count(), 1, "url={}", url);
+        assert!(url.contains("model=nova-3"), "url={}", url);
+    }
+
+    #[test]
+    fn deepgram_url_keyterm_only_on_nova3() {
+        // keyterm is nova-3-only; on nova-2 it must be omitted (it 400s).
+        let url = compose_deepgram_url("https://api.deepgram.com/v1/listen", "nova-2", "it", "API");
+        assert!(!url.contains("keyterm"), "url={}", url);
     }
 
     #[test]
     fn deepgram_url_appends_each_dict_term_as_keyterm() {
         let url = compose_deepgram_url(
-            "https://api.deepgram.com/v1/listen?model=nova-3",
+            "https://api.deepgram.com/v1/listen",
+            "nova-3",
             "en",
             "Velopack, Notion, foobar",
         );
@@ -532,7 +644,8 @@ mod tests {
     #[test]
     fn deepgram_url_escapes_space_ampersand_percent_in_terms() {
         let url = compose_deepgram_url(
-            "https://api.deepgram.com/v1/listen?model=nova-3",
+            "https://api.deepgram.com/v1/listen",
+            "nova-3",
             "",
             "hello world,A&B,50%off",
         );
@@ -557,7 +670,8 @@ mod tests {
     fn deepgram_url_filters_empty_terms_and_trims_whitespace() {
         // Trailing comma + extra spaces — common from textbox edits.
         let url = compose_deepgram_url(
-            "https://api.deepgram.com/v1/listen?model=nova-3",
+            "https://api.deepgram.com/v1/listen",
+            "nova-3",
             "en",
             "  alpha , , beta ,,,",
         );
@@ -571,7 +685,7 @@ mod tests {
 
     #[test]
     fn deepgram_url_empty_prompt_emits_no_keyterm() {
-        let url = compose_deepgram_url("https://api.deepgram.com/v1/listen?model=nova-3", "en", "");
+        let url = compose_deepgram_url("https://api.deepgram.com/v1/listen", "nova-3", "en", "");
         assert!(!url.contains("keyterm"), "url={}", url);
     }
 

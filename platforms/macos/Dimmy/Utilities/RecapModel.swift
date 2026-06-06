@@ -139,6 +139,9 @@ struct RecapModelOption: Identifiable, Equatable {
             .init(id: "local:gemma-4-E4B-it-Q8_0.gguf",
                   label: "Local Gemma 4 E4B Q8 (max quality, 10GB+ VRAM)",
                   provider: .local),
+            .init(id: "local:gemma-4-12b-it-Q4_K_M.gguf",
+                  label: "Local Gemma 4 12B Q4 (top local quality, 9GB+ VRAM)",
+                  provider: .local),
         ]
         return list
     }

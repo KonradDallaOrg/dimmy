@@ -74,6 +74,7 @@ public static class TextInjectionService
     private const ushort VK_CONTROL = 0x11;
     private const ushort VK_V = 0x56;
     private const uint KEYEVENTF_KEYUP = 0x0002;
+    private const uint KEYEVENTF_UNICODE = 0x0004;
 
     // Correct struct layout for SendInput on x64
     [StructLayout(LayoutKind.Sequential)]
@@ -219,6 +220,44 @@ public static class TextInjectionService
             }
         }
     }
+
+    /// <summary>
+    /// Type text directly at the cursor via SendInput with
+    /// KEYEVENTF_UNICODE — no clipboard involved. Used by realtime
+    /// streaming dictation to inject each finalised segment as you speak,
+    /// where the clipboard save/set/restore churn of <see cref="PasteText"/>
+    /// per segment would thrash the user's clipboard and feel laggy.
+    /// Each UTF-16 code unit becomes a down+up Unicode key event (wVk=0,
+    /// wScan=char), which correctly handles surrogate pairs. Synchronous —
+    /// SendInput returns once the events are queued.
+    /// </summary>
+    public static void TypeUnicodeText(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+
+        var inputs = new INPUT[text.Length * 2];
+        int idx = 0;
+        foreach (char c in text)
+        {
+            inputs[idx++] = MakeUnicodeKey(c, keyUp: false);
+            inputs[idx++] = MakeUnicodeKey(c, keyUp: true);
+        }
+        SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+    }
+
+    private static INPUT MakeUnicodeKey(char c, bool keyUp) => new()
+    {
+        type = (uint)INPUT_KEYBOARD,
+        u = new INPUTUNION
+        {
+            ki = new KEYBDINPUT
+            {
+                wVk = 0,
+                wScan = c,
+                dwFlags = KEYEVENTF_UNICODE | (keyUp ? KEYEVENTF_KEYUP : 0),
+            }
+        }
+    };
 
     private static void SetClipboardText(string text)
     {

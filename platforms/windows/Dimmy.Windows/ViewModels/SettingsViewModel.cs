@@ -140,6 +140,7 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private List<string> _devices = [];
     [ObservableProperty] private bool _preprocessingEnabled = true;
     [ObservableProperty] private bool _chunkStreamingEnabled;
+    [ObservableProperty] private bool _streamingDictation;
     [ObservableProperty] private bool _liveCaptionsEnabled = true;
     [ObservableProperty] private bool _callDetectEnabled = true;
     public ObservableCollection<string> CallDetectExcludedApps { get; } = new();
@@ -543,6 +544,7 @@ public partial class SettingsViewModel : ObservableObject
             SelectedDevice = r.TryGetProperty("selected_device", out var dev) ? dev.GetString() : null;
             PreprocessingEnabled = !r.TryGetProperty("preprocessing_enabled", out var pe) || pe.GetBoolean();
             ChunkStreamingEnabled = r.TryGetProperty("chunk_streaming_enabled", out var cs) && cs.GetBoolean();
+            StreamingDictation = r.TryGetProperty("streaming_dictation", out var sd) && sd.GetBoolean();
             LiveCaptionsEnabled = !r.TryGetProperty("live_captions_enabled", out var lce) || lce.GetBoolean();
             CallDetectEnabled = !r.TryGetProperty("call_detect_enabled", out var cde) || cde.GetBoolean();
             CallDetectExcludedApps.Clear();
@@ -745,6 +747,7 @@ public partial class SettingsViewModel : ObservableObject
             ["shortcut_mode"] = ShortcutMode,
             ["preprocessing_enabled"] = PreprocessingEnabled,
             ["chunk_streaming_enabled"] = ChunkStreamingEnabled,
+            ["streaming_dictation"] = StreamingDictation,
             ["live_captions_enabled"] = LiveCaptionsEnabled,
             ["call_detect_enabled"] = CallDetectEnabled,
             ["call_detect_excluded_apps"] = CallDetectExcludedApps.ToList(),

@@ -627,6 +627,12 @@
                     <ToggleSwitch IsOn="{Binding LiveCaptionsEnabled, Mode=TwoWay}"
                                   Style="{StaticResource CompactToggleSwitch}" />
                   </controls:SettingCard>
+                  <controls:SettingCard Glyph="&#xE720;"
+                                        Label="Streaming dictation (Deepgram, realtime)"
+                                        InfoTip="Streams your voice to Deepgram over a live connection and types each finished phrase at the cursor as you speak. Needs a Deepgram key saved in the Providers page. Takes over dictation while it is on.">
+                    <ToggleSwitch IsOn="{Binding StreamingDictation, Mode=TwoWay}"
+                                  Style="{StaticResource CompactToggleSwitch}" />
+                  </controls:SettingCard>
                 </StackPanel>
               </StackPanel>
 

@@ -288,6 +288,12 @@ public partial class App : Application
             // shared AppViewModel.SttChunkReceived hook.
             _appViewModel.SttChunkReceived += OnSttChunkReceived;
 
+            // 2c. Realtime streaming dictation (Deepgram): each finalised
+            // segment is typed at the cursor as the user speaks. The final
+            // paste at stop is suppressed for these sessions (see
+            // StopAndProcess) so the text isn't injected twice.
+            _appViewModel.StreamingSegmentFinalized += OnStreamingSegmentFinalized;
+
             // 3. Load config into ViewModel
             LoadConfigIntoViewModel();
 
@@ -1184,6 +1190,24 @@ public partial class App : Application
         }
     }
 
+    /// <summary>Type one finalised streaming-dictation segment at the
+    /// cursor. Runs on the UI thread (HandleEvent is dispatched there).
+    /// Uses Unicode SendInput rather than clipboard paste so repeated
+    /// per-segment injection doesn't thrash the user's clipboard. A
+    /// trailing space keeps segments separated as they accrue.</summary>
+    private void OnStreamingSegmentFinalized(string segment)
+    {
+        if (string.IsNullOrWhiteSpace(segment)) return;
+        try
+        {
+            TextInjectionService.TypeUnicodeText(segment.TrimEnd() + " ");
+        }
+        catch (Exception ex)
+        {
+            PttLog($"StreamingSegment: inject EXC: {ex.Message}");
+        }
+    }
+
     private void OnNativeEvent(IntPtr jsonPtr)
     {
         try
@@ -1538,8 +1562,19 @@ public partial class App : Application
                 else
                     PttLog($"PASTE pre: foreground unchanged ({prePaste.ToLogString()})");
 
-                PttLog($"StopAndProcess: pasting text ({result.Text!.Length} chars)");
-                await TextInjectionService.PasteText(result.Text!, _appViewModel.KeepInClipboard);
+                // Streaming dictation already typed each segment at the
+                // cursor live, so skip the final paste — pasting the whole
+                // transcript again would duplicate it. The text still flows
+                // to history via the Rust core's normal save path.
+                if (_appViewModel.StreamingDictationActive)
+                {
+                    PttLog($"StopAndProcess: streaming session — segments already injected, skipping final paste ({result.Text!.Length} chars)");
+                }
+                else
+                {
+                    PttLog($"StopAndProcess: pasting text ({result.Text!.Length} chars)");
+                    await TextInjectionService.PasteText(result.Text!, _appViewModel.KeepInClipboard);
+                }
                 // Show completing state (checkmark) AFTER paste — PillWindow timer returns to Idle
                 _appViewModel.SetState(AppState.Completing);
                 _targetContext = null; // consumed

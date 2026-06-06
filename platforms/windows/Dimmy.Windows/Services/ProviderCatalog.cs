@@ -124,6 +124,8 @@ public static class ProviderCatalog
                 L("Gemma 4 E4B Q3 · 4.1 GB"),
                 L("Gemma 4 E4B Q4 · 5.0 GB"),
                 L("Gemma 4 E4B Q8 · 8.2 GB"),
+                L("Gemma 4 12B Q4 · 7.1 GB"),
+                L("Gemma 4 12B Q2 · 4.7 GB"),
                 L("Phi-4 Mini Q4 · 2.5 GB · default"),
             }),
 
