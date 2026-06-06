@@ -375,9 +375,14 @@ public partial class AppViewModel : ObservableObject
                             : "";
                         LiveCaptionText = cumulative;
                         SttChunkReceived?.Invoke(cumulative, isFinal);
-                        // Realtime streaming: the delta is a STABLE segment.
-                        // Mark the session and inject it at the cursor.
-                        if (engine == "deepgram")
+                        // Realtime typing engines emit a STABLE (append-only)
+                        // delta: Deepgram cloud streaming AND the local chunked
+                        // engine in typing mode (engine="local-stream", any
+                        // local backend — Parakeet or whisper). Both inject each
+                        // delta at the cursor and suppress the final paste.
+                        // Plain chunked captions (engine="parakeet"/"whisper")
+                        // fall through to caption display only.
+                        if (engine == "deepgram" || engine == "local-stream")
                         {
                             StreamingDictationActive = true;
                             if (!string.IsNullOrEmpty(delta))
