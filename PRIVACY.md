@@ -36,7 +36,8 @@ You can disable telemetry and crash reporting at any time from **Settings → Pr
   - **word count** (number — never the words themselves),
   - language code (e.g. `en`, `it` — ISO code),
   - whether filler-removal ran (boolean),
-  - whether LLM post-processing ran (boolean).
+  - whether LLM post-processing ran (boolean),
+  - which transcription engine produced it (`batch` one-shot, `deepgram_stream` realtime cloud, `local_stream` realtime local, or `chunked_caption` — **categorical tag only**).
 - `transcription.failed` — provider, error category (e.g. `401`, `timeout`).
 - `transcription.cancelled` — audio duration up to cancel.
 
@@ -58,6 +59,8 @@ We do **not** track changes to: prompt text, custom LLM prompt, microphone devic
 ### Feature usage
 - `feature.hotkey_triggered` — when the global hotkey starts a recording (helps us understand whether users prefer hotkey or button).
 - `feature.api_key_set` — when you save an API key, we log which scope (`stt` / `llm`) and which provider (categorical). **The key value never leaves your computer.**
+- `model.download_completed` — when a local model finishes downloading: which kind (`whisper` / `llm` / `parakeet` — categorical) and whether it succeeded (boolean). Never the model path or filename.
+- `consent.logged` — when the meeting recording-consent gate fires: which kind of consent moment (`shown` / `accepted` / `cancelled` / `announced` / `declined` — categorical). Never the participant names, the spoken announcement, or any meeting content.
 
 ### Claude Code subscription backend
 If you pick the **Claude-Code** provider in Settings (uses your Anthropic Pro / Team / Max plan via the local `claude` CLI instead of an API key):

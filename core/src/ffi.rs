@@ -31,6 +31,11 @@ static CHUNKED: Mutex<Option<crate::chunked_stt::ChunkedTranscriber>> = Mutex::n
 /// same contract as CHUNKED.
 static STREAMING: Mutex<Option<crate::deepgram_stream::DeepgramStreamer>> = Mutex::new(None);
 
+/// Which dictation engine produced the current recording, for the
+/// `transcription.completed` telemetry `engine` prop. Set in start_recording,
+/// read at the stop emit (where the streaming/chunked locals are out of scope).
+static DICTATION_ENGINE: Mutex<&'static str> = Mutex::new("batch");
+
 /// Active meeting-mode session, if any. Independent of CHUNKED — the
 /// meeting flow runs its own audio capture (started via
 /// `dimmy_meeting_start`, NOT via the dictation hotkey).
@@ -701,6 +706,17 @@ pub extern "C" fn dimmy_start_recording() -> c_int {
         .unwrap_or_default();
     let local_typing = streaming_on && !streaming_active && is_local;
     let chunked_captions = !streaming_active && !local_typing && is_local && chunked_on;
+    if let Ok(mut e) = DICTATION_ENGINE.lock() {
+        *e = if streaming_active {
+            "deepgram_stream"
+        } else if local_typing {
+            "local_stream"
+        } else if chunked_captions {
+            "chunked_caption"
+        } else {
+            "batch"
+        };
+    }
     if local_typing || chunked_captions {
         // Clear any zombie buffer from a previous run so the worker
         // doesn't transcribe stale audio. The audio thread refills it.
@@ -1199,6 +1215,7 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
                 success: true,
                 had_filler_removal: filler_enabled,
                 had_llm: llm_enabled_now,
+                engine: DICTATION_ENGINE.lock().map(|e| *e).unwrap_or("batch"),
             });
             TRANSCRIBE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
@@ -5032,6 +5049,17 @@ pub unsafe extern "C" fn dimmy_consent_log_event(
         CStr::from_ptr(lang_ptr).to_str().unwrap_or("en")
     };
     crate::consent::append_event(kind, lang);
+    // Categorical only: coerce the host-provided kind to a known set so no
+    // free-form string ever reaches PostHog.
+    let kind_static = match kind {
+        "shown" => "shown",
+        "accepted" => "accepted",
+        "cancelled" => "cancelled",
+        "announced" => "announced",
+        "declined" => "declined",
+        _ => "other",
+    };
+    crate::telemetry::track(crate::telemetry::Event::ConsentLogged { kind: kind_static });
     0
 }
 
@@ -5143,6 +5171,10 @@ pub unsafe extern "C" fn dimmy_download_model(filename_ptr: *const c_char) -> c_
         },
     ));
 
+    crate::telemetry::track(crate::telemetry::Event::ModelDownloadCompleted {
+        kind: "whisper",
+        success: result.is_ok(),
+    });
     match result {
         Ok(_) => 0,
         Err(e) => {
@@ -5230,6 +5262,10 @@ pub unsafe extern "C" fn dimmy_download_llm_model(filename_ptr: *const c_char) -
         },
     ));
 
+    crate::telemetry::track(crate::telemetry::Event::ModelDownloadCompleted {
+        kind: "llm",
+        success: result.is_ok(),
+    });
     match result {
         Ok(_) => 0,
         Err(e) => {
@@ -5292,6 +5328,10 @@ pub extern "C" fn dimmy_parakeet_download_bundle() -> c_int {
     let result = crate::parakeet::download_active_bundle(|downloaded, total| {
         let payload = format!(r#"{{"downloaded":{},"total":{}}}"#, downloaded, total);
         emit_event("parakeet_bundle_download_progress", &payload);
+    });
+    crate::telemetry::track(crate::telemetry::Event::ModelDownloadCompleted {
+        kind: "parakeet",
+        success: result.is_ok(),
     });
     match result {
         Ok(()) => 0,

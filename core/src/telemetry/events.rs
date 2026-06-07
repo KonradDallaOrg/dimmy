@@ -100,6 +100,23 @@ pub enum Event {
         success: bool,
         had_filler_removal: bool,
         had_llm: bool,
+        /// "batch" | "deepgram_stream" | "local_stream" | "chunked_caption".
+        /// Distinguishes the realtime engines from the post-stop batch path.
+        /// Added 2026-06-07 so streaming/realtime adoption is visible.
+        engine: &'static str,
+    },
+    /// A local model finished downloading (whisper / llm / parakeet bundle).
+    /// `kind` is categorical; `success = false` flags a failed or aborted
+    /// fetch (onboarding drop-off + failure-rate signal).
+    ModelDownloadCompleted {
+        kind: &'static str,
+        success: bool,
+    },
+    /// The recording-consent gate logged a step. `kind` is the categorical
+    /// consent event (shown / accepted / cancelled / announced / declined /
+    /// other) so we can measure drop-off on a mandatory blocking gate.
+    ConsentLogged {
+        kind: &'static str,
     },
     TranscriptionFailed {
         mode: &'static str,
@@ -444,6 +461,8 @@ impl Event {
             Event::TranscriptionCompleted { .. } => "transcription.completed",
             Event::TranscriptionFailed { .. } => "transcription.failed",
             Event::TranscriptionCancelled { .. } => "transcription.cancelled",
+            Event::ModelDownloadCompleted { .. } => "model.download_completed",
+            Event::ConsentLogged { .. } => "consent.logged",
             Event::LlmApplied { .. } => "llm.applied",
             Event::LlmFailed { .. } => "llm.failed",
             Event::PerfStartupMs { .. } => "perf.startup_ms",
@@ -568,6 +587,7 @@ mod tests {
             success: true,
             had_filler_removal: true,
             had_llm: false,
+            engine: "batch",
         };
         let p = e.properties();
         assert_eq!(p["mode"], "cloud");
