@@ -224,11 +224,7 @@ where
     if !resp.status().is_success() {
         let status = resp.status().as_u16();
         let body = resp.text().await.unwrap_or_default();
-        let body_trunc = if body.len() > 200 {
-            &body[..200]
-        } else {
-            &body
-        };
+        let body_trunc = crate::truncate_utf8(&body, 200);
         return Err(LlmError::LocalModel(format!(
             "download failed: HTTP {} — {}",
             status, body_trunc
@@ -666,7 +662,7 @@ mod llm_cache {
         crate::log(&format!(
             "[LocalLLM] Raw output ({} tokens): {:?}",
             n_generated,
-            &output[..output.len().min(200)]
+            crate::truncate_utf8(&output, 200)
         ));
 
         // Post-process: strip ALL remaining special tags from output
@@ -675,7 +671,7 @@ mod llm_cache {
         crate::log(&format!(
             "[LocalLLM] Cleaned output ({} chars): {:?}",
             cleaned.len(),
-            &cleaned[..cleaned.len().min(200)]
+            crate::truncate_utf8(&cleaned, 200)
         ));
 
         Ok(cleaned)

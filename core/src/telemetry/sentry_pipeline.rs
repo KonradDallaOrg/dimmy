@@ -438,7 +438,7 @@ fn redact_prose(s: &str) -> String {
         if trimmed.len() <= 200 {
             trimmed.to_string()
         } else {
-            format!("{}…<truncated>", &trimmed[..200])
+            format!("{}…<truncated>", crate::truncate_utf8(trimmed, 200))
         }
     } else {
         "<redacted: prose content>".to_string()

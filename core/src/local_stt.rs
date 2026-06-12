@@ -177,11 +177,7 @@ where
     if !resp.status().is_success() {
         let status = resp.status().as_u16();
         let body = resp.text().await.unwrap_or_default();
-        let body_trunc = if body.len() > 200 {
-            &body[..200]
-        } else {
-            &body
-        };
+        let body_trunc = crate::truncate_utf8(&body, 200);
         return Err(TranscribeError::LocalModel(format!(
             "download failed: HTTP {} — {}",
             status, body_trunc

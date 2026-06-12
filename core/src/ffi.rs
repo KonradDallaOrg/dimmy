@@ -1340,7 +1340,7 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
             // `transcription.failed` telemetry without the body, so
             // the user had no way to find out why dictation broke.
             let truncated = if err_msg.len() > 300 {
-                format!("{}…", &err_msg[..300])
+                format!("{}…", crate::truncate_utf8(&err_msg, 300))
             } else {
                 err_msg.clone()
             };
@@ -2798,7 +2798,7 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
         ) {
             Ok(enhanced) => {
                 let preview = if enhanced.len() > 120 {
-                    format!("{}...", &enhanced[..120])
+                    format!("{}...", crate::truncate_utf8(&enhanced, 120))
                 } else {
                     enhanced.clone()
                 };
@@ -4669,9 +4669,10 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
             }
             Err(e) => {
                 let msg = format!("{}", e);
-                let mut truncated = msg;
-                truncated.truncate(200);
-                log(&format!("[LlmRaw] local failed: {}", truncated));
+                log(&format!(
+                    "[LlmRaw] local failed: {}",
+                    crate::truncate_utf8(&msg, 200)
+                ));
                 -3
             }
         };
@@ -4895,9 +4896,10 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
             // in dimmy.log for local debugging via the explicit log
             // call below.
             let display_short = format!("{}", e);
-            let mut truncated = display_short;
-            truncated.truncate(200);
-            log(&format!("[LlmRaw] failed: {}", truncated));
+            log(&format!(
+                "[LlmRaw] failed: {}",
+                crate::truncate_utf8(&display_short, 200)
+            ));
 
             // Categorize the error so the UI can render a specific,
             // actionable message instead of a generic "failed". The
