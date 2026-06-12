@@ -10,7 +10,11 @@ public partial class OnboardingViewModel : ObservableObject
 
     [ObservableProperty] private int _currentStep;
     [ObservableProperty] private string _shortcut = "Win+Alt";
-    [ObservableProperty] private string _shortcutMode = "toggle";
+    // Must match the Rust config default ("hold", core/src/lib.rs) AND the
+    // wizard copy ("Hold to dictate, release to paste"): the trial step runs
+    // with the Rust default, so persisting a different mode at Finish breaks
+    // the taught gesture on the next launch.
+    [ObservableProperty] private string _shortcutMode = "hold";
     [ObservableProperty] private bool _isTrialSuccess;
     [ObservableProperty] private string _trialText = "";
     [ObservableProperty] private bool _isRecordingTrial;

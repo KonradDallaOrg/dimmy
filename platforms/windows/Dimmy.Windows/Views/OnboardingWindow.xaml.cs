@@ -520,10 +520,17 @@ public sealed partial class OnboardingWindow : Window
                     });
                     break;
                 case ModelChoice.Cloud:
+                    // Pin the Groq STT endpoint explicitly: the validated key is
+                    // a Groq key, but on a re-run config.json may already point
+                    // api_url/api_model at another provider (Rust merge keeps
+                    // absent keys). Pair must match core/src/lib.rs
+                    // DEFAULT_API_URL / DEFAULT_MODEL.
                     json = JsonSerializer.Serialize(new
                     {
                         stt_mode = "cloud",
                         api_key = ViewModel.GroqApiKey.Trim(),
+                        api_url = "https://api.groq.com/openai/v1/audio/transcriptions",
+                        api_model = "whisper-large-v3-turbo",
                     });
                     break;
                 default:
