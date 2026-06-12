@@ -176,6 +176,7 @@ public sealed partial class OnboardingWindow : Window
         ViewModel.DownloadBytesText = "";
         ViewModel.IsLocalReady = false;
         ViewModel.IsLocalFailed = false;
+        ViewModel.IsLocalOffline = false;
 
         if (tag == ParakeetTag)
         {
@@ -389,7 +390,43 @@ public sealed partial class OnboardingWindow : Window
     private void LocalCard_Tapped(object sender, TappedRoutedEventArgs e)
     {
         ViewModel.Choice = ModelChoice.Local;
-        if (ViewModel.IsLocalFailed) _prefetch.Retry();
+        if (ViewModel.IsLocalRetryable) RetryLocalDownload();
+    }
+
+    /// Restart the download for whichever local model is selected.
+    /// `_prefetch.Retry()` was wrong on both paths: it always re-fetches
+    /// whisper BASE (not the selected file) and is a no-op when the
+    /// service was disposed by a selection change — and it never knew
+    /// about Parakeet at all, so a failed 2.5 GB bundle download left
+    /// the wizard with no working retry. The Rust side resumes partial
+    /// .part files via HTTP Range, so a retry continues where it died.
+    private void RetryLocalDownload()
+    {
+        ViewModel.IsLocalFailed = false;
+        ViewModel.IsLocalOffline = false;
+        ViewModel.IsLocalReady = false;
+        ViewModel.LocalErrorText = "";
+        ViewModel.DownloadPercent = 0;
+        ViewModel.DownloadBytesText = "";
+
+        if (ViewModel.SelectedLocalModelTag == ParakeetTag)
+        {
+            _parakeetDownloadCts?.Cancel();
+            ViewModel.DownloadStatusText = "Starting Parakeet download...";
+            StartParakeetDownload();
+        }
+        else
+        {
+            ViewModel.DownloadStatusText = "Starting download...";
+            try { _prefetch.StateChanged -= Prefetch_StateChanged; } catch { }
+            try { _prefetch.Dispose(); } catch { }
+            _prefetch = new ModelPrefetchService();
+            _prefetch.StateChanged += Prefetch_StateChanged;
+            var tag = string.IsNullOrEmpty(ViewModel.SelectedLocalModelTag)
+                ? ModelPaths.BaseModelFilename
+                : ViewModel.SelectedLocalModelTag;
+            _prefetch.StartFor(tag, WhisperExpectedSize(tag));
+        }
     }
 
     private void CloudCard_Tapped(object sender, TappedRoutedEventArgs e)
@@ -469,6 +506,16 @@ public sealed partial class OnboardingWindow : Window
 
     private void NextStep_Click(object sender, RoutedEventArgs e)
     {
+        // On the choice step a failed/offline local download turns the
+        // Continue button into "Try again" — retry, don't advance.
+        if (ViewModel.CurrentStep == 1 &&
+            ViewModel.Choice == ModelChoice.Local &&
+            ViewModel.IsLocalRetryable)
+        {
+            RetryLocalDownload();
+            return;
+        }
+
         // Capture the step the user is LEAVING — this is the one that's
         // "completed" (they finished it and are advancing). The post-
         // increment ViewModel.CurrentStep change happens below.

@@ -81,10 +81,48 @@ public class OnboardingViewModelTests
     }
 
     [Fact]
-    public void ShortcutMode_DefaultIsToggle()
+    public void ShortcutMode_DefaultIsHold_MatchingRustDefaultAndWizardCopy()
     {
+        // Rust core defaults shortcut_mode to "hold" and the wizard
+        // teaches "Hold to dictate, release to paste". Persisting
+        // "toggle" at Finish silently flipped the taught gesture.
         var vm = new OnboardingViewModel();
-        Assert.Equal("toggle", vm.ShortcutMode);
+        Assert.Equal("hold", vm.ShortcutMode);
+    }
+
+    [Fact]
+    public void ChoiceStepButton_DisabledWhileLocalDownloading()
+    {
+        var vm = new OnboardingViewModel { Choice = ModelChoice.Local };
+        Assert.False(vm.CanAdvanceFromChoiceStep);
+        Assert.Equal("Preparing model...", vm.ChoiceContinueLabel);
+    }
+
+    [Fact]
+    public void ChoiceStepButton_EnabledAsRetryWhenLocalFailed()
+    {
+        var vm = new OnboardingViewModel { Choice = ModelChoice.Local, IsLocalFailed = true };
+        Assert.True(vm.CanAdvanceFromChoiceStep);
+        Assert.True(vm.IsLocalRetryable);
+        Assert.Equal("Try again", vm.ChoiceContinueLabel);
+    }
+
+    [Fact]
+    public void ChoiceStepButton_EnabledAsRetryWhenLocalOffline()
+    {
+        var vm = new OnboardingViewModel { Choice = ModelChoice.Local, IsLocalOffline = true };
+        Assert.True(vm.CanAdvanceFromChoiceStep);
+        Assert.True(vm.IsLocalRetryable);
+        Assert.Equal("Try again", vm.ChoiceContinueLabel);
+    }
+
+    [Fact]
+    public void ChoiceStepButton_EnabledAsContinueWhenLocalReady()
+    {
+        var vm = new OnboardingViewModel { Choice = ModelChoice.Local, IsLocalReady = true };
+        Assert.True(vm.CanAdvanceFromChoiceStep);
+        Assert.False(vm.IsLocalRetryable);
+        Assert.Equal("Continue", vm.ChoiceContinueLabel);
     }
 
     [Fact]

@@ -42,10 +42,12 @@ public partial class OnboardingViewModel : ObservableObject
     private bool _isLocalReady;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanAdvanceFromChoiceStep))]
     [NotifyPropertyChangedFor(nameof(ChoiceContinueLabel))]
     private bool _isLocalFailed;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanAdvanceFromChoiceStep))]
     [NotifyPropertyChangedFor(nameof(ChoiceContinueLabel))]
     private bool _isLocalOffline;
 
@@ -76,14 +78,20 @@ public partial class OnboardingViewModel : ObservableObject
     public bool IsLocalSelected => Choice == ModelChoice.Local;
     public bool IsCloudSelected => Choice == ModelChoice.Cloud;
 
+    /// Enables the choice-step button. Failed/offline count as clickable
+    /// because the button then acts as Retry (NextStep_Click routes the
+    /// click to a fresh download instead of advancing). Without this the
+    /// label said "Try again" on a permanently disabled button.
     public bool CanAdvanceFromChoiceStep =>
-        (Choice == ModelChoice.Local && IsLocalReady) ||
+        (Choice == ModelChoice.Local && (IsLocalReady || IsLocalFailed || IsLocalOffline)) ||
         (Choice == ModelChoice.Cloud && IsCloudReady);
+
+    public bool IsLocalRetryable => IsLocalFailed || IsLocalOffline;
 
     public string ChoiceContinueLabel => Choice switch
     {
         ModelChoice.Local when IsLocalFailed => "Try again",
-        ModelChoice.Local when IsLocalOffline => "Offline",
+        ModelChoice.Local when IsLocalOffline => "Try again",
         ModelChoice.Local when !IsLocalReady => "Preparing model...",
         ModelChoice.Cloud when IsValidatingKey => "Verifying...",
         _ => "Continue",

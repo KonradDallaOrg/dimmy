@@ -134,16 +134,45 @@ pub fn download_bundle(mut progress: impl FnMut(u64, u64)) -> Result<(), Transcr
             }
         }
         let url = format!("{}/{}", HF_BASE, name);
-        let mut resp = client
-            .get(&url)
+
+        // Resume a previous interrupted attempt: for a 2.5 GB bundle a
+        // mid-download network drop is the common case, and restarting
+        // from byte 0 on every retry turns flaky Wi-Fi into a dead end.
+        let tmp = dest.with_extension("part");
+        let resume_from = std::fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0);
+        let mut req = client.get(&url);
+        if resume_from > 0 {
+            req = req.header(reqwest::header::RANGE, format!("bytes={}-", resume_from));
+        }
+        let resp = req
             .send()
-            .map_err(|e| TranscribeError::LocalModel(format!("GET {}: {}", url, e)))?
+            .map_err(|e| TranscribeError::LocalModel(format!("GET {}: {}", url, e)))?;
+        if resume_from > 0 && resp.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
+            // The .part already holds every byte (crash between write
+            // and rename). Promote it instead of 416-looping forever.
+            std::fs::rename(&tmp, &dest)
+                .map_err(|e| TranscribeError::LocalModel(format!("rename {:?}: {}", tmp, e)))?;
+            grand_done = grand_done.saturating_add(resume_from);
+            progress(grand_done, grand_total);
+            continue;
+        }
+        let mut resp = resp
             .error_for_status()
             .map_err(|e| TranscribeError::LocalModel(format!("GET {}: {}", url, e)))?;
 
-        let tmp = dest.with_extension("part");
-        let mut out = std::fs::File::create(&tmp)
-            .map_err(|e| TranscribeError::LocalModel(format!("create {:?}: {}", tmp, e)))?;
+        // Only append when the server honoured the Range request; a
+        // 200 means it sent the whole file again, so start clean.
+        let resuming = resume_from > 0 && resp.status() == reqwest::StatusCode::PARTIAL_CONTENT;
+        let mut out = if resuming {
+            grand_done = grand_done.saturating_add(resume_from);
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&tmp)
+                .map_err(|e| TranscribeError::LocalModel(format!("open {:?}: {}", tmp, e)))?
+        } else {
+            std::fs::File::create(&tmp)
+                .map_err(|e| TranscribeError::LocalModel(format!("create {:?}: {}", tmp, e)))?
+        };
         let mut buf = [0u8; 1 << 16];
         loop {
             use std::io::{Read, Write};
