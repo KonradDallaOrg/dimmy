@@ -725,6 +725,68 @@ public static class DimmyNative
         catch { return ClaudeCodeStatus.NotInstalled; }
     }
 
+    // ── Codex (OpenAI / ChatGPT subscription) CLI ─────────────────
+    //
+    // Use the user's ChatGPT Plus/Pro/Team subscription via the official
+    // `codex` CLI instead of API keys. Mirror of the claude_code surface
+    // above. See `core/src/codex.rs`.
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_codex_status();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_codex_binary_path(byte[] outBuf, int bufLen);
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_codex_spawn_login();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_codex_ping();
+
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_codex_recheck();
+
+    public static ClaudeCodeStatus GetCodexStatus()
+    {
+        try { return (ClaudeCodeStatus)dimmy_codex_status(); }
+        catch { return ClaudeCodeStatus.NotInstalled; }
+    }
+
+    public static string? GetCodexBinaryPath() =>
+        ReadBuffer(dimmy_codex_binary_path, 4096);
+
+    public static bool SpawnCodexLogin()
+    {
+        try { return dimmy_codex_spawn_login() == 0; }
+        catch { return false; }
+    }
+
+    /// <summary>Ping round-trip through `codex exec`. Same return-code
+    /// table as PingClaudeCode.</summary>
+    public static (ClaudeCodePingResult result, int elapsedMs) PingCodex()
+    {
+        int rc;
+        try { rc = dimmy_codex_ping(); }
+        catch { return (ClaudeCodePingResult.UnknownError, 0); }
+        return rc switch
+        {
+            > 0 => (ClaudeCodePingResult.Ok, rc),
+            -1 => (ClaudeCodePingResult.NotInstalled, 0),
+            -2 => (ClaudeCodePingResult.NotLoggedIn, 0),
+            -3 => (ClaudeCodePingResult.SpawnFailed, 0),
+            -4 => (ClaudeCodePingResult.Timeout, 0),
+            -5 => (ClaudeCodePingResult.NonZeroExit, 0),
+            -6 => (ClaudeCodePingResult.InvalidUtf8, 0),
+            _ => (ClaudeCodePingResult.UnknownError, 0),
+        };
+    }
+
+    public static ClaudeCodeStatus RecheckCodex()
+    {
+        try { return (ClaudeCodeStatus)dimmy_codex_recheck(); }
+        catch { return ClaudeCodeStatus.NotInstalled; }
+    }
+
     // ── Claude Desktop MCP bridge ─────────────────────────────────
     //
     // Counterpart to the standalone `dimmy-mcp` binary shipped in the

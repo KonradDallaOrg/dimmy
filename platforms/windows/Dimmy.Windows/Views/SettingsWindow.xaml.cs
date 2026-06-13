@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
@@ -295,6 +295,7 @@ public sealed partial class SettingsWindow : Window
         // refresh so the provider/model pickers get filtered to the connected
         // providers (RebuildCombo no-ops while loading).
         RefreshAuthIntegrationStatus();
+        RefreshCodexIntegrationStatus();
     }
 
     /// <summary>Disable the optional command-mode hotkey. Empties the combo
@@ -2284,6 +2285,202 @@ public sealed partial class SettingsWindow : Window
 
     private void AnthropicIntegrationRefresh_Click(object sender, RoutedEventArgs e)
     {
+        RefreshAuthIntegrationStatus();
+    }
+
+    // ── Integrations → OpenAI (Codex) subscription card ──────────────
+    // Self-contained mirror of the Anthropic card above, driven by the
+    // dimmy_codex_* FFI. No Node wizard — the user installs the Codex
+    // CLI themselves; we just detect + sign in + test.
+
+    private const string CodexProviderUrl = "codex://default";
+    private string? _llmUrlBeforeCodex;
+    private bool _suppressCodexToggle;
+
+    private void RefreshCodexIntegrationStatus()
+    {
+        var status = Interop.DimmyNative.GetCodexStatus();
+        var ready = status == Interop.DimmyNative.ClaudeCodeStatus.Ready;
+        // The "use for recap + rewrite" toggle only makes sense once
+        // signed in. Reflect whether the LLM is currently pointed at codex.
+        CodexUseCard.Visibility = ready ? Visibility.Visible : Visibility.Collapsed;
+        if (ready)
+        {
+            _suppressCodexToggle = true;
+            CodexUseToggle.IsOn = string.Equals(ViewModel.LlmApiUrl, CodexProviderUrl,
+                StringComparison.OrdinalIgnoreCase);
+            _suppressCodexToggle = false;
+        }
+        switch (status)
+        {
+            case Interop.DimmyNative.ClaudeCodeStatus.Ready:
+                var binaryPath = Interop.DimmyNative.GetCodexBinaryPath() ?? "";
+                var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                var shownPath = (!string.IsNullOrEmpty(home)
+                                 && binaryPath.StartsWith(home, StringComparison.OrdinalIgnoreCase))
+                    ? "~" + binaryPath[home.Length..]
+                    : binaryPath;
+                CodexIntegrationStatusText.Text =
+                    $"Connected — using `{shownPath}`. Available for LLM rewrite and meeting recap.";
+                CodexIntegrationStatusGlyph.Glyph = "\uE73E"; // CheckMark
+                CodexIntegrationStatusGlyph.Foreground = (Microsoft.UI.Xaml.Media.Brush)
+                    Application.Current.Resources["SystemFillColorSuccessBrush"];
+                CodexIntegrationDisconnectedActions.Visibility = Visibility.Collapsed;
+                CodexIntegrationConnectedActions.Visibility = Visibility.Visible;
+                CodexIntegrationTestBtn.IsEnabled = true;
+                CodexIntegrationMessageBar.Visibility = Visibility.Collapsed;
+                break;
+            case Interop.DimmyNative.ClaudeCodeStatus.NotLoggedIn:
+                CodexIntegrationStatusText.Text =
+                    "Codex CLI installed but not signed in. Click Sign in to authenticate with ChatGPT.";
+                CodexIntegrationStatusGlyph.Glyph = "\uEA39"; // Info
+                CodexIntegrationStatusGlyph.Foreground = (Microsoft.UI.Xaml.Media.Brush)
+                    Application.Current.Resources["TextFillColorTertiaryBrush"];
+                CodexIntegrationDisconnectedActions.Visibility = Visibility.Visible;
+                CodexIntegrationConnectedActions.Visibility = Visibility.Collapsed;
+                CodexIntegrationSignInBtn.Style =
+                    (Microsoft.UI.Xaml.Style)Application.Current.Resources["AccentButtonStyle"];
+                CodexIntegrationSignInBtn.IsEnabled = true;
+                CodexIntegrationMessageBar.Visibility = Visibility.Collapsed;
+                break;
+            case Interop.DimmyNative.ClaudeCodeStatus.NotInstalled:
+            default:
+                CodexIntegrationStatusText.Text =
+                    "Codex CLI not detected. Install it, then click Refresh.";
+                CodexIntegrationStatusGlyph.Glyph = "\uEA39"; // Info
+                CodexIntegrationStatusGlyph.Foreground = (Microsoft.UI.Xaml.Media.Brush)
+                    Application.Current.Resources["TextFillColorTertiaryBrush"];
+                CodexIntegrationDisconnectedActions.Visibility = Visibility.Visible;
+                CodexIntegrationConnectedActions.Visibility = Visibility.Collapsed;
+                // Binary missing — Sign in would just fail. Keep the button
+                // visible but non-accent, and explain the install in the bar.
+                CodexIntegrationSignInBtn.Style =
+                    (Microsoft.UI.Xaml.Style)Application.Current.Resources["DefaultButtonStyle"];
+                CodexIntegrationSignInBtn.IsEnabled = false;
+                CodexIntegrationMessageText.Text =
+                    "Install the Codex CLI with `npm install -g @openai/codex` (or the native installer), then click Refresh.";
+                CodexIntegrationMessageBar.Visibility = Visibility.Visible;
+                break;
+        }
+    }
+
+    private async void CodexIntegrationSignIn_Click(object sender, RoutedEventArgs e)
+    {
+        CodexIntegrationSignInBtn.IsEnabled = false;
+        CodexIntegrationStatusText.Text =
+            "Launching `codex login` — complete the ChatGPT sign-in in the new terminal window.";
+        try
+        {
+            var ok = Interop.DimmyNative.SpawnCodexLogin();
+            if (!ok)
+            {
+                CodexIntegrationStatusText.Text =
+                    "Could not start `codex login`. Open a terminal and run it manually.";
+                Interop.DimmyNative.TrackEvent("codex.login_completed", new { outcome = "spawn_failed" });
+                return;
+            }
+            for (int i = 0; i < 90; i++)
+            {
+                await System.Threading.Tasks.Task.Delay(2000);
+                if (Interop.DimmyNative.GetCodexStatus() == Interop.DimmyNative.ClaudeCodeStatus.Ready)
+                {
+                    Interop.DimmyNative.TrackEvent("codex.login_completed", new { outcome = "success" });
+                    RefreshCodexIntegrationStatus();
+                    return;
+                }
+            }
+            CodexIntegrationStatusText.Text =
+                "Sign-in not completed in 3 minutes. Click Refresh when ready.";
+            Interop.DimmyNative.TrackEvent("codex.login_completed", new { outcome = "timeout" });
+        }
+        catch (Exception ex)
+        {
+            CodexIntegrationStatusText.Text = $"Sign-in error: {ex.Message}";
+            App.Log($"CodexIntegration sign-in exc: {ex}", "Codex");
+            Interop.DimmyNative.TrackEvent("codex.login_completed", new { outcome = "spawn_failed" });
+        }
+        finally
+        {
+            CodexIntegrationSignInBtn.IsEnabled = true;
+        }
+    }
+
+    private async void CodexIntegrationTest_Click(object sender, RoutedEventArgs e)
+    {
+        CodexIntegrationTestBtn.IsEnabled = false;
+        CodexIntegrationStatusText.Text = "Sending ping…";
+        try
+        {
+            var (result, elapsedMs) = await System.Threading.Tasks.Task.Run(
+                () => Interop.DimmyNative.PingCodex());
+            CodexIntegrationStatusText.Text = result switch
+            {
+                Interop.DimmyNative.ClaudeCodePingResult.Ok =>
+                    $"✓ Connection OK — {elapsedMs} ms round-trip via the local `codex` CLI.",
+                Interop.DimmyNative.ClaudeCodePingResult.NotInstalled =>
+                    "✗ `codex` binary not found. Install the Codex CLI first.",
+                Interop.DimmyNative.ClaudeCodePingResult.NotLoggedIn =>
+                    "✗ Not logged in. Click Sign in to authenticate with ChatGPT.",
+                Interop.DimmyNative.ClaudeCodePingResult.SpawnFailed =>
+                    "✗ Could not spawn the CLI. See dimmy.log.",
+                Interop.DimmyNative.ClaudeCodePingResult.Timeout =>
+                    "✗ Timed out after 30 s — network or rate-limit issue.",
+                Interop.DimmyNative.ClaudeCodePingResult.NonZeroExit =>
+                    "✗ `codex` returned a non-zero exit code. See dimmy.log.",
+                Interop.DimmyNative.ClaudeCodePingResult.InvalidUtf8 =>
+                    "✗ Unexpected output from `codex`. See dimmy.log.",
+                _ => "✗ Unknown error. See dimmy.log.",
+            };
+        }
+        catch (Exception ex)
+        {
+            CodexIntegrationStatusText.Text = $"Test error: {ex.Message}";
+            App.Log($"CodexIntegration test exc: {ex}", "Codex");
+        }
+        finally
+        {
+            CodexIntegrationTestBtn.IsEnabled = true;
+        }
+    }
+
+    private void CodexIntegrationRefresh_Click(object sender, RoutedEventArgs e)
+    {
+        Interop.DimmyNative.RecheckCodex();
+        RefreshCodexIntegrationStatus();
+    }
+
+    // Toggle: route the LLM (rewrite + recap that follows it) through the
+    // codex:// scheme. Reversible — toggling off restores the LLM URL we
+    // saved on the way in. Uses a TARGETED config write because ToJson
+    // omits an empty llm_api_url (if-empty-omit wipe protection), so we
+    // can't clear it through the generic save path.
+    private void CodexUse_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (!_loaded || _suppressCodexToggle) return;
+        string newUrl;
+        if (CodexUseToggle.IsOn)
+        {
+            // Remember the previous provider only if it wasn't already codex.
+            if (!string.Equals(ViewModel.LlmApiUrl, CodexProviderUrl, StringComparison.OrdinalIgnoreCase))
+                _llmUrlBeforeCodex = ViewModel.LlmApiUrl;
+            newUrl = CodexProviderUrl;
+        }
+        else
+        {
+            newUrl = _llmUrlBeforeCodex ?? "";
+        }
+        ViewModel.LlmApiUrl = newUrl;
+        try
+        {
+            var payload = System.Text.Json.JsonSerializer.Serialize(
+                new System.Collections.Generic.Dictionary<string, object?> { ["llm_api_url"] = newUrl });
+            Interop.DimmyNative.dimmy_set_config_json(payload);
+            (Microsoft.UI.Xaml.Application.Current as App)?.ReloadConfig();
+        }
+        catch (Exception ex)
+        {
+            App.Log($"CodexUse toggle persist exc: {ex}", "Codex");
+        }
         RefreshAuthIntegrationStatus();
     }
 

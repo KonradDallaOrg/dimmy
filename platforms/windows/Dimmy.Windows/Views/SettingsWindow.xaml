@@ -2067,6 +2067,124 @@
                 <TextBlock x:Name="AnthropicIntegrationMessageText" FontSize="13" TextWrapping="Wrap" />
               </Border>
 
+              <!-- Group: OPENAI SUBSCRIPTION
+                   The user's ChatGPT Plus / Pro / Team plan, accessed via
+                   the local `codex` CLI. Same shape as the Anthropic card:
+                   once signed in, Output to LLM and Output to Recap can
+                   route through the subscription instead of API keys. -->
+              <StackPanel Orientation="Horizontal" Spacing="6" Margin="2,32,0,8">
+                <TextBlock Text="OPENAI SUBSCRIPTION"
+                           FontSize="12" FontWeight="SemiBold"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           CharacterSpacing="40" VerticalAlignment="Center" />
+                <Button Background="Transparent" BorderThickness="0" Padding="0"
+                        Width="18" Height="18" MinWidth="0" MinHeight="0"
+                        VerticalAlignment="Center" VerticalContentAlignment="Center"
+                        HorizontalContentAlignment="Center"
+                        ToolTipService.ToolTip="Use your ChatGPT Plus, Pro, or Team plan through the local Codex CLI, so no API credit is spent. Dimmy never sees your token. Turn it on under Output once connected.">
+                  <FontIcon Glyph="&#xE946;" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                  <Button.Flyout>
+                    <Flyout>
+                      <StackPanel MaxWidth="300" Spacing="10">
+                        <TextBlock TextWrapping="Wrap" FontSize="13"
+                                   Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                                   Text="Use your ChatGPT plan through the local Codex CLI, so no API credit is spent. Dimmy never sees your token. Install the Codex CLI, sign in with ChatGPT, then turn it on under Output." />
+                        <HyperlinkButton Content="How to install Codex →" Padding="0"
+                                         NavigateUri="https://developers.openai.com/codex/cli" />
+                      </StackPanel>
+                    </Flyout>
+                  </Button.Flyout>
+                </Button>
+              </StackPanel>
+
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="8" Padding="16">
+                <Grid ColumnSpacing="14" RowSpacing="12">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                  </Grid.ColumnDefinitions>
+                  <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                  </Grid.RowDefinitions>
+                  <FontIcon Grid.Column="0" Grid.Row="0" Grid.RowSpan="2"
+                            Glyph="&#xE99A;" FontSize="32" VerticalAlignment="Top"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                  <StackPanel Grid.Column="1" Grid.Row="0" VerticalAlignment="Center" Spacing="2">
+                    <TextBlock Text="ChatGPT (Codex)" FontSize="16" FontWeight="SemiBold" />
+                    <TextBlock x:Name="CodexIntegrationStatusText"
+                               Text="Probing…"
+                               FontSize="13"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               TextWrapping="Wrap"/>
+                  </StackPanel>
+                  <StackPanel Grid.Column="2" Grid.Row="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Top">
+                    <FontIcon x:Name="CodexIntegrationStatusGlyph"
+                              Glyph="&#xEA39;"
+                              FontSize="20"
+                              Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                  </StackPanel>
+                  <!-- DISCONNECTED action row: Sign in (when installed but
+                       not logged in) + Refresh. When the binary is missing
+                       the message bar explains how to install it. -->
+                  <StackPanel x:Name="CodexIntegrationDisconnectedActions"
+                              Grid.Column="1" Grid.ColumnSpan="2" Grid.Row="1"
+                              Orientation="Horizontal" Spacing="8"
+                              Visibility="Collapsed">
+                    <Button x:Name="CodexIntegrationSignInBtn"
+                            Click="CodexIntegrationSignIn_Click">
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xE8A7;" FontSize="14"/>
+                        <TextBlock x:Name="CodexIntegrationSignInLabel" Text="Sign in with ChatGPT"/>
+                      </StackPanel>
+                    </Button>
+                    <Button Content="Refresh" Click="CodexIntegrationRefresh_Click"
+                            ToolTipService.ToolTip="Re-probe the local `codex` CLI install status"/>
+                  </StackPanel>
+                  <!-- CONNECTED action row: Test + Re-sign in + Refresh. -->
+                  <StackPanel x:Name="CodexIntegrationConnectedActions"
+                              Grid.Column="1" Grid.ColumnSpan="2" Grid.Row="1"
+                              Orientation="Horizontal" Spacing="8"
+                              Visibility="Collapsed">
+                    <Button x:Name="CodexIntegrationTestBtn"
+                            Click="CodexIntegrationTest_Click"
+                            ToolTipService.ToolTip="Send a tiny ping prompt through `codex exec` to verify end-to-end (binary + login + ChatGPT)">
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xE945;" FontSize="14"/>
+                        <TextBlock Text="Test connection"/>
+                      </StackPanel>
+                    </Button>
+                    <Button Content="Re-sign in" Click="CodexIntegrationSignIn_Click"
+                            ToolTipService.ToolTip="Re-run the ChatGPT sign-in if your subscription token expired"/>
+                    <Button Content="Refresh" Click="CodexIntegrationRefresh_Click"/>
+                  </StackPanel>
+                </Grid>
+              </Border>
+
+              <Border x:Name="CodexIntegrationMessageBar" Background="{ThemeResource SystemFillColorAttentionBackgroundBrush}"
+                      BorderThickness="0" CornerRadius="6" Padding="12,8"
+                      Margin="0,16,0,0" Visibility="Collapsed">
+                <TextBlock x:Name="CodexIntegrationMessageText" FontSize="13" TextWrapping="Wrap" />
+              </Border>
+
+              <!-- One-tap routing: point the LLM (rewrite + recap that
+                   follows it) at codex://default. Reversible — toggling
+                   off restores the previous LLM provider. Only meaningful
+                   once signed in, so visibility is gated on Ready. -->
+              <controls:SettingCard x:Name="CodexUseCard"
+                                    Glyph="&#xE99A;"
+                                    Label="Use ChatGPT (Codex) for recap and rewrite"
+                                    InfoTip="Routes LLM rewrite and meeting recap through your ChatGPT plan via the local Codex CLI. No API key spent. Turn off to go back to your previous LLM provider."
+                                    Margin="0,8,0,0"
+                                    Visibility="Collapsed">
+                <ToggleSwitch x:Name="CodexUseToggle"
+                              Toggled="CodexUse_Toggled"
+                              Style="{StaticResource CompactToggleSwitch}" />
+              </controls:SettingCard>
+
               <!-- Group: CLAUDE DESKTOP (MCP)
                    Two-way bridge: Claude Desktop reads our meetings +
                    writes recaps back via the dimmy-mcp stdio binary.
