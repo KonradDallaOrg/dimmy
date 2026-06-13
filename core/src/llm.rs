@@ -495,6 +495,50 @@ pub async fn process_text(
         return Ok(text.to_string());
     }
 
+    // Codex (ChatGPT subscription) branch. Two triggers:
+    //   • the explicit codex:// URL scheme, OR
+    //   • auth_method == "subscription" AND the provider is OpenAI — this
+    //     is the Output → LLM "Use ChatGPT subscription" toggle, which
+    //     keeps the real OpenAI url/model and just flips auth_method (so
+    //     the model the user picked is passed to `codex exec -m`).
+    // Must run BEFORE the claude_code check (which also matches
+    // auth_method == "subscription", for Anthropic).
+    let codex_openai_sub =
+        auth_method == "subscription" && crate::provider::Provider::from_url(api_url).is_openai();
+    if crate::codex::is_codex_url(api_url) || codex_openai_sub {
+        let combined = format!(
+            "{}\n\n---\nProcess the following transcription. Output ONLY the transformed text, nothing else.\n\n[TRANSCRIPTION]\n{}\n[/TRANSCRIPTION]",
+            system_prompt, text
+        );
+        let model_owned = model.to_string();
+        let started_at = std::time::Instant::now();
+        let result = tokio::task::spawn_blocking(move || {
+            crate::codex::run_blocking(&combined, &model_owned, std::time::Duration::from_secs(60))
+        })
+        .await
+        .map_err(|e| crate::error::LlmError::Network(format!("codex join: {}", e)))?;
+        let elapsed_ms = started_at.elapsed().as_millis() as u64;
+        let (success, category) = match &result {
+            Ok(_) => (true, "ok"),
+            Err(e) => (false, crate::codex::error_category(e)),
+        };
+        crate::telemetry::track(crate::telemetry::Event::CodexInvocation {
+            kind: "rewrite",
+            processing_ms_bucket: crate::telemetry::sanitize::bucket_processing_ms(elapsed_ms),
+            success,
+            error_category: category,
+        });
+        return result.map_err(|e| match e {
+            crate::codex::CodexError::NotInstalled | crate::codex::CodexError::NotLoggedIn => {
+                crate::error::LlmError::NoApiKey("codex".to_string())
+            }
+            crate::codex::CodexError::Timeout => {
+                crate::error::LlmError::Network("codex timeout".to_string())
+            }
+            _ => crate::error::LlmError::Network("codex error".to_string()),
+        });
+    }
+
     // Subscription branch: route the LLM call through the local
     // `claude` CLI. Two triggers — the explicit `auth_method` flag
     // (preferred, set from the new RadioButton in Settings) OR the
@@ -749,6 +793,52 @@ pub async fn process_raw_prompt(
         max_tokens <= 100_000,
         "process_raw_prompt: max_tokens too large"
     );
+
+    // Codex (ChatGPT subscription) branch — codex:// scheme OR
+    // subscription + OpenAI provider (the Output → Recap toggle). Runs
+    // BEFORE the claude_code check + validate_url (which rejects non-HTTPS).
+    let codex_openai_sub =
+        auth_method == "subscription" && crate::provider::Provider::from_url(api_url).is_openai();
+    if crate::codex::is_codex_url(api_url) || codex_openai_sub {
+        let model_owned = model.to_string();
+        let prompt_owned = user_prompt.to_string();
+        let started_at = std::time::Instant::now();
+        let result = tokio::task::spawn_blocking(move || {
+            crate::codex::run_blocking(
+                &prompt_owned,
+                &model_owned,
+                std::time::Duration::from_secs(600),
+            )
+        })
+        .await
+        .map_err(|e| crate::error::LlmError::Network(format!("codex join: {}", e)))?;
+        let elapsed_ms = started_at.elapsed().as_millis() as u64;
+        let (success, category) = match &result {
+            Ok(_) => (true, "ok"),
+            Err(e) => (false, crate::codex::error_category(e)),
+        };
+        crate::telemetry::track(crate::telemetry::Event::CodexInvocation {
+            kind: "recap",
+            processing_ms_bucket: crate::telemetry::sanitize::bucket_processing_ms(elapsed_ms),
+            success,
+            error_category: category,
+        });
+        return result.map_err(|e| match e {
+            crate::codex::CodexError::NotInstalled | crate::codex::CodexError::NotLoggedIn => {
+                crate::error::LlmError::NoApiKey("codex".to_string())
+            }
+            crate::codex::CodexError::Timeout => {
+                crate::error::LlmError::Network("codex timeout".to_string())
+            }
+            crate::codex::CodexError::Spawn(_) | crate::codex::CodexError::InvalidUtf8 => {
+                crate::error::LlmError::Network("codex spawn failed".to_string())
+            }
+            crate::codex::CodexError::NonZeroExit { code, .. } => crate::error::LlmError::Api {
+                status: code.unsigned_abs() as u16,
+                body: String::new(),
+            },
+        });
+    }
 
     // Subscription branch — dispatch via the local `claude` CLI
     // instead of HTTP. Triggered by either the explicit

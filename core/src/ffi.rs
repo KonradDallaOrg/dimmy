@@ -2862,8 +2862,9 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
     // ~/.claude/credentials.json. The legacy `claude-code://` URL is
     // also a "no API key" signal, kept for back-compat with configs
     // from the first iteration.
-    let is_subscription =
-        auth_method == "subscription" || crate::claude_code::is_claude_code_url(&llm_url);
+    let is_subscription = auth_method == "subscription"
+        || crate::claude_code::is_claude_code_url(&llm_url)
+        || crate::codex::is_codex_url(&llm_url);
 
     // Resolve the dispatch API key. The LLM vendor is derived from
     // `llm_url`; with `use_same_key=true` we try the per-vendor
@@ -3084,8 +3085,9 @@ pub unsafe extern "C" fn dimmy_command_transform(
         .lock()
         .map(|s| s.clone())
         .unwrap_or_else(|_| "api_key".to_string());
-    let is_subscription =
-        auth_method == "subscription" || crate::claude_code::is_claude_code_url(&llm_url);
+    let is_subscription = auth_method == "subscription"
+        || crate::claude_code::is_claude_code_url(&llm_url)
+        || crate::codex::is_codex_url(&llm_url);
 
     let api_key = if is_subscription {
         String::new()
@@ -3921,6 +3923,116 @@ pub extern "C" fn dimmy_claude_code_recheck() -> c_int {
     crate::claude_code::clear_cache();
     let s = crate::claude_code::status();
     s.as_code()
+}
+
+// ── Codex (OpenAI / ChatGPT subscription) CLI bridge ───────────────
+// Direct mirror of the Claude Code FFI above. Same integer contracts so
+// the C# / Swift hosts can share the status-card logic.
+
+/// Probe local Codex state. 0 = ready, 1 = installed-not-logged-in,
+/// 2 = not installed.
+#[no_mangle]
+pub extern "C" fn dimmy_codex_status() -> c_int {
+    let s = crate::codex::status();
+    crate::telemetry::track(crate::telemetry::Event::CodexStatusProbed {
+        status: crate::codex::status_label(&s),
+    });
+    s.as_code()
+}
+
+/// Diagnostic snapshot of the Codex CLI-detection path search.
+/// Returns bytes written, -1 on null buf, -2 on too-small buf.
+///
+/// # Safety
+/// `out_buf` must be a valid writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_codex_diagnostics(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let json = crate::codex::diagnostics_json();
+    if json.len() + 1 > buf_len as usize {
+        return -2;
+    }
+    write_to_buf(&json, out_buf, buf_len)
+}
+
+/// Resolved Codex binary path into `out_buf`. Length on success, 0 if
+/// not installed, -1 on invalid args / too-small buffer.
+///
+/// # Safety
+/// `out_buf` must be a valid writable buffer of `buf_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_codex_binary_path(out_buf: *mut c_char, buf_len: c_int) -> c_int {
+    if out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    match crate::codex::detect_binary() {
+        Some(p) => {
+            let s = p.to_string_lossy().to_string();
+            if s.len() + 1 > buf_len as usize {
+                return -1;
+            }
+            write_to_buf(&s, out_buf, buf_len)
+        }
+        None => 0,
+    }
+}
+
+/// Spawn `codex login` so the user authenticates with ChatGPT via
+/// browser. 0 = spawned, -1 = missing binary, -2 = spawn failure.
+#[no_mangle]
+pub extern "C" fn dimmy_codex_spawn_login() -> c_int {
+    match crate::codex::spawn_login() {
+        Ok(()) => 0,
+        Err(crate::codex::CodexError::NotInstalled) => -1,
+        Err(_) => -2,
+    }
+}
+
+/// "Test connection" round-trip through `codex exec`. Returns elapsed
+/// ms on success (> 0). Negative = categorical error:
+///   -1 not installed, -2 not logged in, -3 spawn failure,
+///   -4 timeout, -5 non-zero exit, -6 stdout not UTF-8.
+/// The prompt is hard-coded ("reply with the single word: pong") so no
+/// user content can reach the wire here.
+#[no_mangle]
+pub extern "C" fn dimmy_codex_ping() -> c_int {
+    use crate::codex::{error_category, CodexError};
+    let started = std::time::Instant::now();
+    let result = crate::codex::run_blocking(
+        "reply with the single word: pong",
+        "",
+        std::time::Duration::from_secs(30),
+    );
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    let (success, category) = match &result {
+        Ok(_) => (true, "ok"),
+        Err(e) => (false, error_category(e)),
+    };
+    crate::telemetry::track(crate::telemetry::Event::CodexInvocation {
+        kind: "test",
+        processing_ms_bucket: crate::telemetry::sanitize::bucket_processing_ms(elapsed_ms),
+        success,
+        error_category: category,
+    });
+    match result {
+        Ok(_) => (elapsed_ms.min(i32::MAX as u64) as c_int).max(1),
+        Err(CodexError::NotInstalled) => -1,
+        Err(CodexError::NotLoggedIn) => -2,
+        Err(CodexError::Spawn(_)) => -3,
+        Err(CodexError::Timeout) => -4,
+        Err(CodexError::NonZeroExit { .. }) => -5,
+        Err(CodexError::InvalidUtf8) => -6,
+    }
+}
+
+/// Invalidate the cached Codex binary lookup + return the fresh
+/// `dimmy_codex_status()` code. Used by the Settings "recheck" button.
+#[no_mangle]
+pub extern "C" fn dimmy_codex_recheck() -> c_int {
+    crate::codex::clear_cache();
+    crate::codex::status().as_code()
 }
 
 // ── Claude Desktop MCP bridge ──────────────────────────────────────
@@ -4838,17 +4950,22 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
         let model_is_claude = Provider::from_model_id(&parsed_model)
             .map(|v| v.is_anthropic())
             .unwrap_or(false);
-        if !model_is_claude {
+        // OpenAI + subscription routes through the Codex CLI (ChatGPT
+        // plan), so a non-Claude OpenAI model is fine — don't fall back.
+        let url_is_openai = Provider::from_url(&effective_url).is_openai();
+        if !model_is_claude && !url_is_openai {
             log(&format!(
-                "[LlmRaw] subscription requested but model '{}' is not Claude-family — \
-                 falling back to api_key path (subscription only routes to `claude` CLI)",
+                "[LlmRaw] subscription requested but model '{}' is neither Claude- nor \
+                 OpenAI-family — falling back to api_key path (subscription routes only to \
+                 the `claude` or `codex` CLI)",
                 parsed_model
             ));
             auth_method = "api_key".to_string();
         }
     }
-    let is_subscription =
-        auth_method == "subscription" || crate::claude_code::is_claude_code_url(&effective_url);
+    let is_subscription = auth_method == "subscription"
+        || crate::claude_code::is_claude_code_url(&effective_url)
+        || crate::codex::is_codex_url(&effective_url);
     if !is_subscription && (effective_url.is_empty() || effective_key.is_empty()) {
         log(&format!(
             "[LlmRaw] missing recap URL or key (effective_url={}, key_present={})",

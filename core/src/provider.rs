@@ -175,6 +175,13 @@ impl Provider {
         *self == Self::Anthropic
     }
 
+    /// Whether this is OpenAI proper (api.openai.com). Used to decide that
+    /// an `auth_method == "subscription"` LLM/recap call routes through the
+    /// Codex CLI (ChatGPT plan) rather than the Claude CLI.
+    pub fn is_openai(&self) -> bool {
+        *self == Self::OpenAI
+    }
+
     /// Whether this provider uses the Deepgram raw-body format.
     pub fn is_deepgram(&self) -> bool {
         *self == Self::Deepgram

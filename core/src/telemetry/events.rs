@@ -436,6 +436,33 @@ pub enum Event {
         /// transcript content via the model's complaints).
         error_category: &'static str,
     },
+
+    // ── Codex (OpenAI / ChatGPT subscription) — mirror of the
+    //    ClaudeCode events above. Same categorical-only discipline. ──
+    /// Status probe result from the Codex Settings card.
+    CodexStatusProbed {
+        /// "ready" | "not_logged_in" | "not_installed"
+        status: &'static str,
+    },
+    /// User clicked "Sign in with ChatGPT". Fires when the `codex login`
+    /// subprocess is spawned, regardless of outcome.
+    CodexLoginSpawned,
+    /// Codex login polling loop concluded.
+    CodexLoginCompleted {
+        /// "success" | "timeout" | "spawn_failed"
+        outcome: &'static str,
+    },
+    /// One LLM call via `codex exec` returned.
+    CodexInvocation {
+        /// "rewrite" | "recap" — the LLM dispatch site.
+        kind: &'static str,
+        /// `lt_500` | `500_2000` | `2000_10000` | `10000_60000` | `ge_60000`
+        processing_ms_bucket: &'static str,
+        success: bool,
+        /// "ok" | "not_installed" | "not_logged_in" | "timeout" |
+        /// "spawn" | "exit_nonzero" | "invalid_utf8".
+        error_category: &'static str,
+    },
 }
 
 impl Event {
@@ -513,6 +540,10 @@ impl Event {
             Event::ClaudeCodeLoginSpawned => "claude_code.login_spawned",
             Event::ClaudeCodeLoginCompleted { .. } => "claude_code.login_completed",
             Event::ClaudeCodeInvocation { .. } => "claude_code.invocation",
+            Event::CodexStatusProbed { .. } => "codex.status_probed",
+            Event::CodexLoginSpawned => "codex.login_spawned",
+            Event::CodexLoginCompleted { .. } => "codex.login_completed",
+            Event::CodexInvocation { .. } => "codex.invocation",
         }
     }
 

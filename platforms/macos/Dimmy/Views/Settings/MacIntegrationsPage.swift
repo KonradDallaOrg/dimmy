@@ -13,6 +13,7 @@ struct MacIntegrationsPage: View {
     @State private var statusIsError: Bool = false
     @State private var showDisconnectConfirm: Bool = false
     @State private var showClaudeWizard: Bool = false
+    @State private var showCodexWizard: Bool = false
     @State private var showMcpWizard: Bool = false
     @State private var mcpStatus: DimmyCore.ClaudeDesktopStatus = .empty
     @State private var mcpRefreshTimer: Timer? = nil
@@ -33,6 +34,17 @@ struct MacIntegrationsPage: View {
                 onWizardRequested: { showClaudeWizard = true }
             )
             MacGroupFooter(text: "OAuth token stays with the `claude` CLI in macOS Keychain (or ~/.claude/credentials.json). Dimmy only checks existence, never reads the token.")
+
+            Spacer().frame(height: 24)
+            MacGroupLabel(text: "OpenAI subscription")
+            // Use the user's ChatGPT plan via the local `codex` CLI —
+            // mirror of the Claude Code card above. Dimmy never reads
+            // ~/.codex/auth.json; the CLI owns the token.
+            MacCodexCard(
+                appState: appState,
+                onWizardRequested: { showCodexWizard = true }
+            )
+            MacGroupFooter(text: "Uses your ChatGPT plan through the `codex` CLI, no API key spent. The OAuth token stays with Codex in ~/.codex. Dimmy only checks that you're signed in.")
 
             Spacer().frame(height: 24)
             MacGroupLabel(text: "Notion")
@@ -119,6 +131,26 @@ struct MacIntegrationsPage: View {
                         appState.llmAuthMethod = "subscription"
                         DimmyCore.shared.setConfig(appState.toRustConfig())
                         DimmyCore.shared.trackEvent("claude_code.wizard_completed")
+                    }
+                }
+            )
+        }
+        .sheet(isPresented: $showCodexWizard) {
+            CodexConnectSheet(
+                appState: appState,
+                onClose: {
+                    showCodexWizard = false
+                    _ = DimmyCore.shared.recheckCodex()
+                },
+                onComplete: { ok in
+                    if ok {
+                        // "Close & enable" — point the LLM (rewrite + the
+                        // recap that follows it) at codex://default so the
+                        // integration goes live without a second click.
+                        // Mirror of the card toggle; reversible there.
+                        appState.llmApiUrl = "codex://default"
+                        DimmyCore.shared.setConfig(appState.toRustConfig())
+                        DimmyCore.shared.trackEvent("codex.wizard_completed")
                     }
                 }
             )

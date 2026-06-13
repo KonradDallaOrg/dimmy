@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ChatGPT (Codex) subscription setup wizard.
+
+  Two linear steps, one ContentDialog. Simpler than
+  ClaudeConnectDialog because the Codex CLI is a native binary —
+  there is NO Node.js prerequisite, so the Node step is gone.
+
+  Smart-skip on entry: we probe the codex binary + login state once
+  and start on the FIRST step whose precondition is missing. A
+  machine where the CLI is already installed lands on Step 2.
+
+  Flow:
+    Step 1 — Install Codex CLI → copy install command + open
+                                 terminal + recheck
+    Step 2 — Sign in + test    → spawn `codex login`, poll
+                                 credentials, auto-fire test ping
+-->
+<ContentDialog
+    x:Class="Dimmy.Windows.Views.CodexConnectDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Set up ChatGPT (Codex) subscription"
+    PrimaryButtonText="Next"
+    SecondaryButtonText="Back"
+    CloseButtonText="Cancel"
+    DefaultButton="Primary"
+    PrimaryButtonClick="OnPrimaryClick"
+    SecondaryButtonClick="OnSecondaryClick"
+    CloseButtonClick="OnCloseClick">
+
+  <ContentDialog.Resources>
+    <x:Double x:Key="ContentDialogMaxWidth">580</x:Double>
+    <x:Double x:Key="ContentDialogMinWidth">580</x:Double>
+  </ContentDialog.Resources>
+
+  <Grid RowSpacing="14" MinHeight="380">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+    </Grid.RowDefinitions>
+
+    <!-- Progress dots -->
+    <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="8"
+                HorizontalAlignment="Center" Margin="0,0,0,4">
+      <Ellipse x:Name="Dot1" Width="10" Height="10"
+               Fill="{ThemeResource AccentFillColorDefaultBrush}"/>
+      <Ellipse x:Name="Dot2" Width="10" Height="10"
+               Fill="{ThemeResource ControlStrokeColorDefaultBrush}"/>
+    </StackPanel>
+
+    <Grid Grid.Row="1">
+
+      <!-- Step 1 — Install Codex CLI -->
+      <StackPanel x:Name="Step1Panel" Spacing="12" Visibility="Visible">
+        <TextBlock Text="1 — Install the Codex CLI"
+                   FontSize="18" FontWeight="SemiBold"/>
+        <TextBlock TextWrapping="Wrap" FontSize="13"
+                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                   Text="Codex is OpenAI's command-line tool. Open a terminal, paste the command below, press Enter. If you have Node.js it installs via npm; otherwise grab the native binary from the link below. No Node.js is required for the native installer."/>
+
+        <Border x:Name="CodexStatusBorder"
+                Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                BorderThickness="1" CornerRadius="6" Padding="14">
+          <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+            <FontIcon x:Name="CodexStatusGlyph" FontSize="20"
+                      FontFamily="Segoe Fluent Icons"
+                      Glyph="&#xE9F5;"
+                      Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+            <TextBlock x:Name="CodexStatusText" VerticalAlignment="Center"
+                       FontSize="13" TextWrapping="Wrap"
+                       Text="Checking for the Codex CLI…"/>
+          </StackPanel>
+        </Border>
+
+        <StackPanel x:Name="CodexActionPanel" Visibility="Collapsed" Spacing="10">
+          <Border Background="{ThemeResource ControlAltFillColorTertiaryBrush}"
+                  CornerRadius="4" Padding="12,8,12,8">
+            <TextBlock x:Name="InstallCommandText"
+                       Text="npm install -g @openai/codex"
+                       FontFamily="Consolas, Menlo, monospace"
+                       FontSize="13" TextWrapping="NoWrap"
+                       IsTextSelectionEnabled="True"/>
+          </Border>
+          <StackPanel Orientation="Horizontal" Spacing="10">
+            <Button x:Name="CopyCmdBtn" Content="Copy command"
+                    Click="CopyInstallCommand_Click"
+                    Style="{ThemeResource AccentButtonStyle}"/>
+            <Button x:Name="OpenTerminalBtn" Content="Open PowerShell"
+                    Click="OpenTerminal_Click"/>
+            <Button x:Name="RecheckCodexBtn" Content="Recheck"
+                    Click="RecheckCodex_Click"/>
+          </StackPanel>
+          <HyperlinkButton Content="No Node.js? Get the native installer →"
+                           Padding="0" FontSize="12"
+                           NavigateUri="https://developers.openai.com/codex/cli"/>
+        </StackPanel>
+
+        <TextBlock x:Name="CodexHelpText" TextWrapping="Wrap" FontSize="12"
+                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                   Text="After installing, you may need to restart Dimmy so the new PATH is picked up. If Recheck still shows 'not found', close Dimmy completely and reopen."
+                   Visibility="Collapsed"/>
+      </StackPanel>
+
+      <!-- Step 2 — Sign in + Test -->
+      <StackPanel x:Name="Step2Panel" Spacing="12" Visibility="Collapsed">
+        <TextBlock Text="2 — Sign in with ChatGPT"
+                   FontSize="18" FontWeight="SemiBold"/>
+        <TextBlock TextWrapping="Wrap" FontSize="13"
+                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                   Text="Click Sign in to open a terminal window with the Codex browser sign-in. Log in with your ChatGPT Plus, Pro, Team, Business, or Enterprise plan, then come back — Dimmy detects the login and runs a quick test. (A free ChatGPT account won't work for Codex.)"/>
+
+        <Border x:Name="SignInStatusBorder"
+                Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                BorderThickness="1" CornerRadius="6" Padding="14">
+          <StackPanel Spacing="8">
+            <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+              <FontIcon x:Name="SignInGlyph" FontSize="20"
+                        FontFamily="Segoe Fluent Icons"
+                        Glyph="&#xE9F5;"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+              <TextBlock x:Name="SignInText" VerticalAlignment="Center"
+                         FontSize="13" TextWrapping="Wrap"
+                         Text="Checking sign-in status…"/>
+              <ProgressRing x:Name="SignInRing" Width="16" Height="16"
+                            IsActive="False" Visibility="Collapsed"/>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center"
+                        x:Name="TestStatusRow" Visibility="Collapsed">
+              <FontIcon x:Name="TestGlyph" FontSize="20"
+                        FontFamily="Segoe Fluent Icons"
+                        Glyph="&#xE9F5;"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+              <TextBlock x:Name="TestText" VerticalAlignment="Center"
+                         FontSize="13" TextWrapping="Wrap"
+                         Text="Test connection: waiting…"/>
+              <ProgressRing x:Name="TestRing" Width="16" Height="16"
+                            IsActive="False" Visibility="Collapsed"/>
+            </StackPanel>
+          </StackPanel>
+        </Border>
+
+        <StackPanel x:Name="SignInActionPanel" Orientation="Horizontal" Spacing="10">
+          <Button x:Name="SignInBtn" Content="Sign in"
+                  Click="SignIn_Click"
+                  Style="{ThemeResource AccentButtonStyle}"/>
+          <Button x:Name="RecheckSignInBtn" Content="Recheck"
+                  Click="RecheckSignIn_Click"/>
+          <Button x:Name="RetryTestBtn" Content="Retry test"
+                  Click="RetryTest_Click"
+                  Visibility="Collapsed"/>
+        </StackPanel>
+
+        <Border Background="{ThemeResource ControlAltFillColorTertiaryBrush}"
+                BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                BorderThickness="1" CornerRadius="6" Padding="12,10,12,10"
+                Margin="0,8,0,0">
+          <TextBlock TextWrapping="Wrap" FontSize="11"
+                     Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                     Text="Dimmy launches the Codex CLI as a local subprocess and uses its stored login. Requires an active paid ChatGPT plan. Dimmy never sees your token. Subject to OpenAI's terms of service."/>
+        </Border>
+      </StackPanel>
+
+    </Grid>
+  </Grid>
+</ContentDialog>

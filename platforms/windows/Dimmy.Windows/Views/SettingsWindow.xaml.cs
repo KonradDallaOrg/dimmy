@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
@@ -295,6 +295,7 @@ public sealed partial class SettingsWindow : Window
         // refresh so the provider/model pickers get filtered to the connected
         // providers (RebuildCombo no-ops while loading).
         RefreshAuthIntegrationStatus();
+        RefreshCodexIntegrationStatus();
     }
 
     /// <summary>Disable the optional command-mode hotkey. Empties the combo
@@ -1702,6 +1703,13 @@ public sealed partial class SettingsWindow : Window
         var status = Interop.DimmyNative.GetClaudeCodeStatus();
         var binaryPath = Interop.DimmyNative.GetClaudeCodeBinaryPath() ?? "";
         var integrationReady = status == Interop.DimmyNative.ClaudeCodeStatus.Ready;
+        // OpenAI subscription parallel: the "Use subscription" toggle also
+        // appears for an OpenAI LLM/recap provider when the Codex CLI is
+        // signed in. Same llm/recap_auth_method = "subscription" value; the
+        // Rust dispatch routes OpenAI+subscription to the `codex` CLI and
+        // Anthropic+subscription to the `claude` CLI.
+        var codexReady = Interop.DimmyNative.GetCodexStatus() == Interop.DimmyNative.ClaudeCodeStatus.Ready;
+        var isOpenAI = IsOpenAIUrl(llmUrl);
 
         // Coerce LLM subscription off when the provider is not Anthropic —
         // subscription is Claude Code CLI only (Anthropic-only). Without this
@@ -1712,12 +1720,12 @@ public sealed partial class SettingsWindow : Window
         // way to save a key. Burned 2026-05-18 on the first-time Groq pick
         // from a fresh Anthropic+subscription baseline. Mirror of the recap
         // auth-method coercion below.
-        if (!isAnthropic
+        if (!isAnthropic && !(isOpenAI && codexReady)
             && string.Equals(ViewModel.LlmAuthMethod, "subscription", StringComparison.Ordinal))
         {
             ViewModel.LlmAuthMethod = "api_key";
             App.Log(
-                $"[Auth] coerced llm_auth_method='subscription' → 'api_key' (provider not Anthropic: '{llmUrl}')",
+                $"[Auth] coerced llm_auth_method='subscription' → 'api_key' (provider neither Anthropic nor OpenAI+Codex: '{llmUrl}')",
                 "Auth");
         }
         var llmUseSub = string.Equals(ViewModel.LlmAuthMethod, "subscription",
@@ -1808,8 +1816,11 @@ public sealed partial class SettingsWindow : Window
         // The "Use Anthropic subscription" toggle only makes sense
         // when (a) the LLM provider is Anthropic and (b) the
         // integration is connected. Otherwise hide entirely.
-        LlmUseSubscriptionCard.Visibility = (isAnthropic && integrationReady)
-            ? Visibility.Visible : Visibility.Collapsed;
+        var llmSubShown = (isAnthropic && integrationReady) || (isOpenAI && codexReady);
+        LlmUseSubscriptionCard.Visibility = llmSubShown ? Visibility.Visible : Visibility.Collapsed;
+        LlmUseSubscriptionCard.Label = (isOpenAI && codexReady)
+            ? "Use ChatGPT subscription"
+            : "Use Anthropic subscription";
         LlmUseSubscriptionToggle.IsOn = llmUseSub;
 
         // Same-key toggle visibility — VENDOR-KEYED design (mirror of
@@ -1888,7 +1899,13 @@ public sealed partial class SettingsWindow : Window
         var recapVendorForSubGate = RecapVendorFromModel(ViewModel.RecapModelOverride, llmUrl);
         var recapModelIsAnthropic = string.Equals(
             recapVendorForSubGate, "anthropic", StringComparison.OrdinalIgnoreCase);
-        var canShowRecapSub = integrationReady && recapModelIsAnthropic;
+        var recapModelIsOpenAI = string.Equals(
+            recapVendorForSubGate, "openai", StringComparison.OrdinalIgnoreCase);
+        // Subscription routes recap through the matching CLI: Anthropic
+        // model → claude (needs claude signed in), OpenAI model → codex
+        // (needs codex signed in).
+        var canShowRecapSub = (integrationReady && recapModelIsAnthropic)
+            || (codexReady && recapModelIsOpenAI);
         if (!canShowRecapSub && recapForceSub)
         {
             App.Log(
@@ -1905,6 +1922,9 @@ public sealed partial class SettingsWindow : Window
         }
         RecapUseSubscriptionCard.Visibility = canShowRecapSub
             ? Visibility.Visible : Visibility.Collapsed;
+        RecapUseSubscriptionCard.Label = recapModelIsOpenAI
+            ? "Use ChatGPT subscription for recap"
+            : "Use Anthropic subscription for recap";
         RecapUseSubscriptionToggle.IsOn = recapForceSub;
 
         // The recap model picker shows ALL curated entries (any
@@ -1916,9 +1936,10 @@ public sealed partial class SettingsWindow : Window
         // The chosen recap vendor for the model picker's "current
         // selection coercion" + the conditional Recap-key card is
         // derived from the model id directly.
-        var recapVendor = recapForceSub
-            ? "anthropic"
-            : RecapVendorFromModel(ViewModel.RecapModelOverride, llmUrl);
+        // The recap vendor follows the model in all cases now — under
+        // subscription it can be Anthropic (claude CLI) OR OpenAI (codex
+        // CLI), so we no longer force "anthropic".
+        var recapVendor = recapVendorForSubGate;
         // Refresh the conditional UI for the "different provider" case:
         // - PasswordBox + Save visible only when the model's vendor
         //   differs from the dictation vendor AND auth != subscription.
@@ -1995,6 +2016,15 @@ public sealed partial class SettingsWindow : Window
     {
         return url.Contains("anthropic.com", StringComparison.OrdinalIgnoreCase)
             || url.StartsWith("claude-code://", StringComparison.Ordinal);
+    }
+
+    /// <summary>True iff the URL points at OpenAI proper (api.openai.com)
+    /// or the synthetic `codex://` scheme. Gates the "Use ChatGPT
+    /// subscription" toggle (routes through the local Codex CLI).</summary>
+    private static bool IsOpenAIUrl(string url)
+    {
+        return url.Contains("api.openai.com", StringComparison.OrdinalIgnoreCase)
+            || url.StartsWith("codex://", StringComparison.Ordinal);
     }
 
     /// <summary>True iff STT and LLM URLs map to the same provider
@@ -2284,6 +2314,186 @@ public sealed partial class SettingsWindow : Window
 
     private void AnthropicIntegrationRefresh_Click(object sender, RoutedEventArgs e)
     {
+        RefreshAuthIntegrationStatus();
+    }
+
+    // ── Integrations → OpenAI (Codex) subscription card ──────────────
+    // Self-contained mirror of the Anthropic card above, driven by the
+    // dimmy_codex_* FFI. No Node wizard — the user installs the Codex
+    // CLI themselves; we just detect + sign in + test.
+
+    private void RefreshCodexIntegrationStatus()
+    {
+        var status = Interop.DimmyNative.GetCodexStatus();
+        switch (status)
+        {
+            case Interop.DimmyNative.ClaudeCodeStatus.Ready:
+                var binaryPath = Interop.DimmyNative.GetCodexBinaryPath() ?? "";
+                var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                var shownPath = (!string.IsNullOrEmpty(home)
+                                 && binaryPath.StartsWith(home, StringComparison.OrdinalIgnoreCase))
+                    ? "~" + binaryPath[home.Length..]
+                    : binaryPath;
+                CodexIntegrationStatusText.Text =
+                    $"Connected — using `{shownPath}`. Available for LLM rewrite and meeting recap.";
+                CodexIntegrationStatusGlyph.Glyph = "\uE73E"; // CheckMark
+                CodexIntegrationStatusGlyph.Foreground = (Microsoft.UI.Xaml.Media.Brush)
+                    Application.Current.Resources["SystemFillColorSuccessBrush"];
+                CodexIntegrationDisconnectedActions.Visibility = Visibility.Collapsed;
+                CodexIntegrationConnectedActions.Visibility = Visibility.Visible;
+                CodexIntegrationTestBtn.IsEnabled = true;
+                CodexIntegrationMessageBar.Visibility = Visibility.Collapsed;
+                break;
+            case Interop.DimmyNative.ClaudeCodeStatus.NotLoggedIn:
+                CodexIntegrationStatusText.Text =
+                    "Codex CLI installed but not signed in. Click Sign in to authenticate with ChatGPT.";
+                CodexIntegrationStatusGlyph.Glyph = "\uEA39"; // Info
+                CodexIntegrationStatusGlyph.Foreground = (Microsoft.UI.Xaml.Media.Brush)
+                    Application.Current.Resources["TextFillColorTertiaryBrush"];
+                CodexIntegrationDisconnectedActions.Visibility = Visibility.Visible;
+                CodexIntegrationConnectedActions.Visibility = Visibility.Collapsed;
+                CodexIntegrationWizardBtn.Style =
+                    (Microsoft.UI.Xaml.Style)Application.Current.Resources["DefaultButtonStyle"];
+                CodexIntegrationSignInBtn.Style =
+                    (Microsoft.UI.Xaml.Style)Application.Current.Resources["AccentButtonStyle"];
+                CodexIntegrationSignInBtn.IsEnabled = true;
+                CodexIntegrationMessageBar.Visibility = Visibility.Collapsed;
+                break;
+            case Interop.DimmyNative.ClaudeCodeStatus.NotInstalled:
+            default:
+                CodexIntegrationStatusText.Text =
+                    "Codex CLI not detected. Click Set up wizard for a guided install + sign-in.";
+                CodexIntegrationStatusGlyph.Glyph = "\uEA39"; // Info
+                CodexIntegrationStatusGlyph.Foreground = (Microsoft.UI.Xaml.Media.Brush)
+                    Application.Current.Resources["TextFillColorTertiaryBrush"];
+                CodexIntegrationDisconnectedActions.Visibility = Visibility.Visible;
+                CodexIntegrationConnectedActions.Visibility = Visibility.Collapsed;
+                // Binary missing — the wizard is the right entry point.
+                // Promote it; disable the bare Sign in (it would just fail).
+                CodexIntegrationWizardBtn.Style =
+                    (Microsoft.UI.Xaml.Style)Application.Current.Resources["AccentButtonStyle"];
+                CodexIntegrationSignInBtn.Style =
+                    (Microsoft.UI.Xaml.Style)Application.Current.Resources["DefaultButtonStyle"];
+                CodexIntegrationSignInBtn.IsEnabled = false;
+                CodexIntegrationMessageText.Text =
+                    "Install the Codex CLI with `npm install -g @openai/codex` (or the native installer), then click Refresh — or just use the wizard.";
+                CodexIntegrationMessageBar.Visibility = Visibility.Visible;
+                break;
+        }
+    }
+
+    /// <summary>Open the 2-step Codex setup wizard (install + sign in).
+    /// Smart-skips to the first incomplete step. On a green test it lights
+    /// up the Output subscription toggles, exactly like the Anthropic
+    /// wizard.</summary>
+    private async void CodexIntegrationWizard_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var dialog = new CodexConnectDialog
+            {
+                XamlRoot = this.Content.XamlRoot,
+                RequestedTheme = Helpers.ThemeHelper.ResolvedElementTheme(),
+            };
+            await dialog.ShowAsync();
+            Interop.DimmyNative.RecheckCodex();
+            RefreshCodexIntegrationStatus();
+            RefreshAuthIntegrationStatus();
+            if (dialog.Completed)
+                Interop.DimmyNative.TrackEvent("codex.wizard_completed");
+        }
+        catch (Exception ex)
+        {
+            App.Log($"Codex wizard launch exc: {ex}", "Codex");
+        }
+    }
+
+    private async void CodexIntegrationSignIn_Click(object sender, RoutedEventArgs e)
+    {
+        CodexIntegrationSignInBtn.IsEnabled = false;
+        CodexIntegrationStatusText.Text =
+            "Launching `codex login` — complete the ChatGPT sign-in in the new terminal window.";
+        try
+        {
+            var ok = Interop.DimmyNative.SpawnCodexLogin();
+            if (!ok)
+            {
+                CodexIntegrationStatusText.Text =
+                    "Could not start `codex login`. Open a terminal and run it manually.";
+                Interop.DimmyNative.TrackEvent("codex.login_completed", new { outcome = "spawn_failed" });
+                return;
+            }
+            for (int i = 0; i < 90; i++)
+            {
+                await System.Threading.Tasks.Task.Delay(2000);
+                if (Interop.DimmyNative.GetCodexStatus() == Interop.DimmyNative.ClaudeCodeStatus.Ready)
+                {
+                    Interop.DimmyNative.TrackEvent("codex.login_completed", new { outcome = "success" });
+                    RefreshCodexIntegrationStatus();
+                    RefreshAuthIntegrationStatus(); // light up the Output subscription toggles
+                    return;
+                }
+            }
+            CodexIntegrationStatusText.Text =
+                "Sign-in not completed in 3 minutes. Click Refresh when ready.";
+            Interop.DimmyNative.TrackEvent("codex.login_completed", new { outcome = "timeout" });
+        }
+        catch (Exception ex)
+        {
+            CodexIntegrationStatusText.Text = $"Sign-in error: {ex.Message}";
+            App.Log($"CodexIntegration sign-in exc: {ex}", "Codex");
+            Interop.DimmyNative.TrackEvent("codex.login_completed", new { outcome = "spawn_failed" });
+        }
+        finally
+        {
+            CodexIntegrationSignInBtn.IsEnabled = true;
+        }
+    }
+
+    private async void CodexIntegrationTest_Click(object sender, RoutedEventArgs e)
+    {
+        CodexIntegrationTestBtn.IsEnabled = false;
+        CodexIntegrationStatusText.Text = "Sending ping…";
+        try
+        {
+            var (result, elapsedMs) = await System.Threading.Tasks.Task.Run(
+                () => Interop.DimmyNative.PingCodex());
+            CodexIntegrationStatusText.Text = result switch
+            {
+                Interop.DimmyNative.ClaudeCodePingResult.Ok =>
+                    $"✓ Connection OK — {elapsedMs} ms round-trip via the local `codex` CLI.",
+                Interop.DimmyNative.ClaudeCodePingResult.NotInstalled =>
+                    "✗ `codex` binary not found. Install the Codex CLI first.",
+                Interop.DimmyNative.ClaudeCodePingResult.NotLoggedIn =>
+                    "✗ Not logged in. Click Sign in to authenticate with ChatGPT.",
+                Interop.DimmyNative.ClaudeCodePingResult.SpawnFailed =>
+                    "✗ Could not spawn the CLI. See dimmy.log.",
+                Interop.DimmyNative.ClaudeCodePingResult.Timeout =>
+                    "✗ Timed out after 30 s — network or rate-limit issue.",
+                Interop.DimmyNative.ClaudeCodePingResult.NonZeroExit =>
+                    "✗ `codex` returned a non-zero exit code. See dimmy.log.",
+                Interop.DimmyNative.ClaudeCodePingResult.InvalidUtf8 =>
+                    "✗ Unexpected output from `codex`. See dimmy.log.",
+                _ => "✗ Unknown error. See dimmy.log.",
+            };
+        }
+        catch (Exception ex)
+        {
+            CodexIntegrationStatusText.Text = $"Test error: {ex.Message}";
+            App.Log($"CodexIntegration test exc: {ex}", "Codex");
+        }
+        finally
+        {
+            CodexIntegrationTestBtn.IsEnabled = true;
+        }
+    }
+
+    private void CodexIntegrationRefresh_Click(object sender, RoutedEventArgs e)
+    {
+        Interop.DimmyNative.RecheckCodex();
+        RefreshCodexIntegrationStatus();
+        // The Output subscription toggles depend on codex readiness — keep
+        // them in sync after a recheck.
         RefreshAuthIntegrationStatus();
     }
 
