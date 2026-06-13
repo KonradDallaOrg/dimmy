@@ -16,19 +16,16 @@
 //!      stdout. Codex streams progress to stderr and prints only the
 //!      final message to stdout, so stdout == the response.
 //!
-//! Why the specific exec flags (verified against OpenAI's CLI reference,
+//! Why these exec flags (verified against OpenAI's CLI reference,
 //! 2026-06-13):
-//!   - `exec -`           : read the prompt from stdin (not argv — the
-//!                          transcript can be megabytes and argv has OS
-//!                          length limits + leaks via `ps`).
-//!   - `--skip-git-repo-check` : Codex refuses to run outside a git repo
-//!                          by default. Our recap/rewrite has no repo.
-//!   - `--sandbox read-only`   : Codex is a *coding* agent; this is a
-//!                          pure text task, so deny all file writes +
-//!                          command exec. read-only still lets it answer.
-//!   - `--skip-git-repo-check` + neutral temp cwd → it never touches the
-//!                          user's project.
-//!   - `-m <model>`       : override the model when the caller pins one.
+//! - `exec -`: read the prompt from stdin (not argv — the transcript can
+//!   be megabytes and argv has OS length limits + leaks via `ps`).
+//! - `--skip-git-repo-check`: Codex refuses to run outside a git repo by
+//!   default; our recap/rewrite has no repo.
+//! - `--sandbox read-only`: Codex is a coding agent; this is a pure text
+//!   task, so deny all file writes + command exec. read-only still answers.
+//! - neutral temp cwd: so it never inspects the user's project.
+//! - `-m <model>`: override the model when the caller pins one.
 //!
 //! Privacy + safety (identical posture to claude_code.rs)
 //! ------------------------------------------------------
