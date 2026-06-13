@@ -110,11 +110,13 @@
 		AA000303 /* NotionConnectSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000303 /* NotionConnectSheet.swift */; };
 		AA000304 /* ClaudeConnectSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000304 /* ClaudeConnectSheet.swift */; };
 		AA000305 /* ClaudeDesktopConnectSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000305 /* ClaudeDesktopConnectSheet.swift */; };
+		AA000306 /* CodexConnectSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000306 /* CodexConnectSheet.swift */; };
 		AA000800 /* DictHotkeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000800 /* DictHotkeyManager.swift */; };
 		AA000801 /* DictToastWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000801 /* DictToastWindow.swift */; };
 		AA000900 /* UpdateService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000900 /* UpdateService.swift */; };
 		AA000902 /* FileLoadToMeetingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000902 /* FileLoadToMeetingService.swift */; };
 		AA000903 /* MacClaudeCodeCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000903 /* MacClaudeCodeCard.swift */; };
+		AA000906 /* MacCodexCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000906 /* MacCodexCard.swift */; };
 		AA000904 /* TelemetryBuckets.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000904 /* TelemetryBuckets.swift */; };
 		AA000905 /* SystemAudioCaptureService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000905 /* SystemAudioCaptureService.swift */; };
 		AA001110 /* SystemAudioProcessTap.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB001110 /* SystemAudioProcessTap.swift */; };
@@ -244,6 +246,8 @@
 		AB000303 /* NotionConnectSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotionConnectSheet.swift; sourceTree = "<group>"; };
 		AB000304 /* ClaudeConnectSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeConnectSheet.swift; sourceTree = "<group>"; };
 		AB000305 /* ClaudeDesktopConnectSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeDesktopConnectSheet.swift; sourceTree = "<group>"; };
+		AB000306 /* CodexConnectSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexConnectSheet.swift; sourceTree = "<group>"; };
+		AB000906 /* MacCodexCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCodexCard.swift; sourceTree = "<group>"; };
 		AB000800 /* DictHotkeyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictHotkeyManager.swift; sourceTree = "<group>"; };
 		AB000801 /* DictToastWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictToastWindow.swift; sourceTree = "<group>"; };
 		AB000099 /* Dimmy.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Dimmy.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -474,7 +478,9 @@
 				AB000303 /* NotionConnectSheet.swift */,
 				AB000304 /* ClaudeConnectSheet.swift */,
 				AB000305 /* ClaudeDesktopConnectSheet.swift */,
+				AB000306 /* CodexConnectSheet.swift */,
 				AB000903 /* MacClaudeCodeCard.swift */,
+				AB000906 /* MacCodexCard.swift */,
 			);
 			path = Settings;
 			sourceTree = "<group>";
@@ -736,6 +742,7 @@
 				AA000303 /* NotionConnectSheet.swift in Sources */,
 				AA000304 /* ClaudeConnectSheet.swift in Sources */,
 				AA000305 /* ClaudeDesktopConnectSheet.swift in Sources */,
+				AA000306 /* CodexConnectSheet.swift in Sources */,
 				AA000800 /* DictHotkeyManager.swift in Sources */,
 				AA000801 /* DictToastWindow.swift in Sources */,
 				AA000041 /* SelfTests.swift in Sources */,
@@ -757,6 +764,7 @@
 				AA000900 /* UpdateService.swift in Sources */,
 				AA000902 /* FileLoadToMeetingService.swift in Sources */,
 				AA000903 /* MacClaudeCodeCard.swift in Sources */,
+				AA000906 /* MacCodexCard.swift in Sources */,
 				AA000904 /* TelemetryBuckets.swift in Sources */,
 				AA000602 /* MeetingViewModel.swift in Sources */,
 				AA000603 /* MeetingSidebar.swift in Sources */,
