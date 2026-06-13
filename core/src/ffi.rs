@@ -8059,6 +8059,7 @@ pub unsafe extern "C" fn dimmy_call_detector_state(out: *mut c_char, out_len: c_
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::ffi::c_char;
 
     // ── categorize_llm_error_to_rc tests ─────────────────────────
@@ -8509,6 +8510,7 @@ mod tests {
     // ── dimmy_has_api_key tests ─────────────────────────────────────
 
     #[test]
+    #[serial]
     fn has_api_key_returns_1_when_key_set() {
         ensure_test_state();
         let result = dimmy_has_api_key();
@@ -8518,6 +8520,7 @@ mod tests {
     // ── dimmy_is_recording tests ────────────────────────────────────
 
     #[test]
+    #[serial]
     fn is_recording_returns_0_when_not_recording() {
         ensure_test_state();
         // Ensure not recording
@@ -8528,6 +8531,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn is_recording_returns_1_when_recording() {
         ensure_test_state();
         if let Ok(mut r) = state().recording.lock() {
@@ -8544,6 +8548,7 @@ mod tests {
     // ── dimmy_get_amplitude tests ───────────────────────────────────
 
     #[test]
+    #[serial]
     fn get_amplitude_returns_zero_for_empty_buffer() {
         ensure_test_state();
         if let Ok(mut b) = state().audio_buffer.lock() {
@@ -8554,6 +8559,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn get_amplitude_returns_peak_value() {
         ensure_test_state();
         if let Ok(mut b) = state().audio_buffer.lock() {
@@ -8566,6 +8572,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn get_amplitude_clamps_to_1() {
         ensure_test_state();
         if let Ok(mut b) = state().audio_buffer.lock() {
@@ -8579,6 +8586,7 @@ mod tests {
     // ── dimmy_start_recording tests ─────────────────────────────────
 
     #[test]
+    #[serial]
     fn start_recording_returns_neg2_if_already_recording() {
         ensure_test_state();
         if let Ok(mut r) = state().recording.lock() {
@@ -8593,6 +8601,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn start_recording_returns_neg1_if_no_key_cloud_mode() {
         ensure_test_state();
         // Set cloud mode — API key is required
@@ -8613,6 +8622,7 @@ mod tests {
     // ── dimmy_cancel_recording tests ────────────────────────────────
 
     #[test]
+    #[serial]
     fn cancel_recording_clears_buffer_and_stops() {
         ensure_test_state();
         // Set up as if recording
@@ -8634,6 +8644,7 @@ mod tests {
     // ── dimmy_cycle_llm_style tests ─────────────────────────────────
 
     #[test]
+    #[serial]
     fn cycle_llm_style_forward_wraps_around() {
         ensure_test_state();
         // Set to last style
@@ -8647,6 +8658,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn cycle_llm_style_backward_wraps_around() {
         ensure_test_state();
         let styles = crate::llm::LlmStyle::ALL;
@@ -8665,6 +8677,7 @@ mod tests {
     // ── dimmy_cycle_llm_tone tests ──────────────────────────────────
 
     #[test]
+    #[serial]
     fn cycle_llm_tone_forward_wraps_around() {
         ensure_test_state();
         let tones = crate::llm::LlmTone::ALL;
@@ -8679,6 +8692,7 @@ mod tests {
     // ── dimmy_update_stats tests ────────────────────────────────────
 
     #[test]
+    #[serial]
     fn update_stats_accumulates() {
         ensure_test_state();
         let words_before = *state().stats_total_words.lock().unwrap();
@@ -8696,6 +8710,7 @@ mod tests {
     // ── dimmy_get_config_json tests ─────────────────────────────────
 
     #[test]
+    #[serial]
     fn get_config_json_returns_valid_json() {
         ensure_test_state();
         let mut buf = vec![0u8; 8192];
@@ -8711,6 +8726,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn get_config_json_null_buf_returns_neg1() {
         ensure_test_state();
         let result = dimmy_get_config_json(std::ptr::null_mut(), 100);
@@ -8720,6 +8736,7 @@ mod tests {
     // ── dimmy_set_config_json tests ─────────────────────────────────
 
     #[test]
+    #[serial]
     fn set_config_json_applies_language() {
         ensure_test_state();
         let json = CString::new(r#"{"language":"it"}"#).unwrap();
@@ -8735,6 +8752,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn set_config_json_null_ptr_returns_neg1() {
         ensure_test_state();
         let result = unsafe { dimmy_set_config_json(std::ptr::null()) };
@@ -8742,6 +8760,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn set_config_json_malformed_json_returns_neg1() {
         ensure_test_state();
         let bad = CString::new("not json at all {{{").unwrap();
@@ -8769,6 +8788,7 @@ mod tests {
     const OPENAI_URL: &str = "https://api.openai.com/v1/chat/completions";
 
     #[test]
+    #[serial]
     fn set_config_json_reloads_llm_key_when_provider_url_changes() {
         ensure_test_state();
         // Seed: Anthropic LLM key in keystore, no OpenAI LLM key.
@@ -8799,6 +8819,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn set_config_json_use_same_key_toggle_does_not_delete_stored_llm_key() {
         ensure_test_state();
         // Seed Anthropic key + point state at Anthropic.
@@ -8845,6 +8866,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn set_config_json_switching_providers_preserves_each_key() {
         ensure_test_state();
         state().key_store.replace_cache_for_testing(&[
@@ -8884,6 +8906,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn get_config_json_reports_per_provider_has_llm_keys() {
         ensure_test_state();
         // Seed: only Anthropic LLM has a key.
@@ -8916,6 +8939,7 @@ mod tests {
     // ── dimmy_list_devices_json tests ───────────────────────────────
 
     #[test]
+    #[serial]
     fn list_devices_json_returns_valid_json_array() {
         ensure_test_state();
         let mut buf = vec![0u8; 4096];
@@ -9086,6 +9110,7 @@ mod tests {
     // ── Negative space: invalid input returns error codes ──────────
 
     #[test]
+    #[serial]
     fn update_stats_rejects_negative_words() {
         ensure_test_state();
         let result = dimmy_update_stats(-1, 5.0);
@@ -9093,6 +9118,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn update_stats_rejects_negative_secs() {
         ensure_test_state();
         let result = dimmy_update_stats(0, -1.0);
@@ -9100,6 +9126,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn update_stats_rejects_nan_secs() {
         ensure_test_state();
         let result = dimmy_update_stats(0, f64::NAN);
@@ -9107,6 +9134,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn update_stats_rejects_inf_secs() {
         ensure_test_state();
         let result = dimmy_update_stats(0, f64::INFINITY);
@@ -9114,6 +9142,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn cycle_style_ignores_zero_direction() {
         ensure_test_state();
         let before = *state().llm_style.lock().unwrap();
@@ -9126,6 +9155,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn cycle_tone_ignores_invalid_direction() {
         ensure_test_state();
         let before = *state().llm_tone.lock().unwrap();
@@ -9135,6 +9165,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn get_amplitude_handles_nan_in_buffer() {
         ensure_test_state();
         if let Ok(mut b) = state().audio_buffer.lock() {
@@ -9151,6 +9182,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn get_amplitude_handles_all_nan_buffer() {
         ensure_test_state();
         if let Ok(mut b) = state().audio_buffer.lock() {
@@ -9162,6 +9194,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn stop_recording_rejects_null_buffer() {
         ensure_test_state();
         // Make sure not recording so it doesn't try to actually transcribe
@@ -9173,6 +9206,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn stop_recording_rejects_zero_length() {
         ensure_test_state();
         if let Ok(mut r) = state().recording.lock() {
@@ -9186,6 +9220,7 @@ mod tests {
     // ── dimmy_process_with_llm tests ────────────────────────────────
 
     #[test]
+    #[serial]
     fn process_with_llm_rejects_null_text() {
         ensure_test_state();
         let mut buf = vec![0u8; 1024];
@@ -9200,6 +9235,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn process_with_llm_rejects_null_buffer() {
         ensure_test_state();
         let text = CString::new("hello world").unwrap();
@@ -9208,6 +9244,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn process_with_llm_rejects_zero_buf_len() {
         ensure_test_state();
         let text = CString::new("hello world").unwrap();
@@ -9218,6 +9255,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn process_with_llm_empty_text_returns_empty() {
         ensure_test_state();
         let text = CString::new("").unwrap();
@@ -9233,6 +9271,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn process_with_llm_passthrough_when_disabled() {
         ensure_test_state();
         // Ensure LLM is disabled
@@ -9263,6 +9302,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn process_with_llm_passthrough_when_style_off() {
         ensure_test_state();
         // Enable LLM but set style to Off
@@ -9298,6 +9338,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn process_with_llm_graceful_no_key() {
         ensure_test_state();
         // Enable LLM with a real style but remove the key
@@ -9345,6 +9386,7 @@ mod tests {
     // ── dimmy_check_audio_health tests ────────────────────────────────
 
     #[test]
+    #[serial]
     fn check_audio_health_rejects_null_buffer() {
         ensure_test_state();
         let result = dimmy_check_audio_health(std::ptr::null_mut(), 100);
@@ -9352,6 +9394,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn check_audio_health_returns_valid_json() {
         ensure_test_state();
         let mut buf = vec![0u8; 4096];
@@ -9387,6 +9430,7 @@ mod tests {
     // ── dimmy_shutdown tests ──────────────────────────────────────────
 
     #[test]
+    #[serial]
     fn shutdown_clears_recording_flag() {
         ensure_test_state();
         // Set recording to true, then shutdown should clear it
@@ -9408,6 +9452,7 @@ mod tests {
     //  -1  → internal lock failure (not exercised here)
 
     #[test]
+    #[serial]
     fn meeting_pause_no_op_without_meeting() {
         ensure_test_state();
         // Defensive cleanup in case a prior test left a session.
@@ -9425,6 +9470,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn start_recording_blocked_when_meeting_active() {
         ensure_test_state();
         // Drop any leftover MEETING from prior tests that touched it.
