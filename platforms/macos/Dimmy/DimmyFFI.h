@@ -548,6 +548,15 @@ int32_t dimmy_claude_code_node_status(char * _Nonnull out_buf, int32_t buf_len);
 /// installed it, recheck" buttons.
 int32_t dimmy_claude_code_recheck(void);
 
+/// Codex (OpenAI / ChatGPT subscription) CLI — mirror of the
+/// claude_code surface. 0=ready, 1=installed-not-logged-in, 2=not
+/// installed.
+int32_t dimmy_codex_status(void);
+int32_t dimmy_codex_binary_path(char * _Nonnull out_buf, int32_t buf_len);
+int32_t dimmy_codex_spawn_login(void);
+int32_t dimmy_codex_ping(void);
+int32_t dimmy_codex_recheck(void);
+
 /// Claude Desktop MCP bridge — JSON snapshot:
 ///   {installed, install_path?, extension_path?, config_patched,
 ///    extension_installed, extension_enabled, extension_version?,

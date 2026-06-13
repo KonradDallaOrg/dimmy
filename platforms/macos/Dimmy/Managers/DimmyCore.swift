@@ -582,6 +582,50 @@ final class DimmyCore {
         return ClaudeCodeStatus(rawValue: raw) ?? .notInstalled
     }
 
+    // MARK: - Codex (OpenAI / ChatGPT subscription) CLI
+    // Mirror of the Claude Code methods above, reusing the same
+    // ClaudeCodeStatus + ClaudeCodePingResult enums (identical contracts).
+
+    var codexStatus: ClaudeCodeStatus {
+        ClaudeCodeStatus(rawValue: dimmy_codex_status()) ?? .notInstalled
+    }
+
+    var codexBinaryPath: String? {
+        let bufLen: Int32 = 4096
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+        let written = dimmy_codex_binary_path(buffer, bufLen)
+        guard written > 0 else { return nil }
+        return String(cString: buffer)
+    }
+
+    @discardableResult
+    func spawnCodexLogin() -> Bool {
+        return dimmy_codex_spawn_login() == 0
+    }
+
+    /// Content-free "ping" through `codex exec`. BLOCKING — call from a
+    /// background queue.
+    func pingCodex() -> ClaudeCodePingResult {
+        let rc = dimmy_codex_ping()
+        if rc > 0 { return .ok(elapsedMs: rc) }
+        switch rc {
+        case -1: return .notInstalled
+        case -2: return .notLoggedIn
+        case -3: return .spawnFailed
+        case -4: return .timeout
+        case -5: return .nonZeroExit
+        case -6: return .invalidUtf8
+        default: return .unknownError
+        }
+    }
+
+    @discardableResult
+    func recheckCodex() -> ClaudeCodeStatus {
+        ClaudeCodeStatus(rawValue: dimmy_codex_recheck()) ?? .notInstalled
+    }
+
     // MARK: - Claude Desktop MCP bridge
 
     /// One-shot snapshot of the MCP bridge state. Mirror of the Rust

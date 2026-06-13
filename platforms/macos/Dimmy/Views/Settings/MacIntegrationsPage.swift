@@ -35,6 +35,14 @@ struct MacIntegrationsPage: View {
             MacGroupFooter(text: "OAuth token stays with the `claude` CLI in macOS Keychain (or ~/.claude/credentials.json). Dimmy only checks existence, never reads the token.")
 
             Spacer().frame(height: 24)
+            MacGroupLabel(text: "OpenAI subscription")
+            // Use the user's ChatGPT plan via the local `codex` CLI —
+            // mirror of the Claude Code card above. Dimmy never reads
+            // ~/.codex/auth.json; the CLI owns the token.
+            MacCodexCard(appState: appState)
+            MacGroupFooter(text: "Uses your ChatGPT plan through the `codex` CLI, no API key spent. The OAuth token stays with Codex in ~/.codex. Dimmy only checks that you're signed in.")
+
+            Spacer().frame(height: 24)
             MacGroupLabel(text: "Notion")
 
             // Summary card, current state + action buttons.
