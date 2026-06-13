@@ -1647,6 +1647,13 @@
                 <HyperlinkButton Content="GitHub"
                                  NavigateUri="https://github.com/KonradDallaOrg/dimmy" />
               </controls:SettingCard>
+              <controls:SettingCard Glyph="&#xE8AB;"
+                                    Label="Run setup again"
+                                    InfoTip="Reopen the welcome guide to pick your model, key, and shortcut. Models you already downloaded and keys you already saved are kept, nothing is re-downloaded.">
+                <Button x:Name="RestartOnboardingBtn"
+                        Content="Open setup"
+                        Click="RestartOnboarding_Click" />
+              </controls:SettingCard>
 
             </StackPanel>
 

@@ -24,9 +24,38 @@ struct MacAboutPage: View {
                 updateChannelGroup
             }
 
+            setupGroup
             resourcesGroup
             // "Made with Claude Code" credit removed per Win redesign
             // (commit 4080ff06).
+        }
+    }
+
+    // MARK: Setup
+
+    // Mirror of the Windows About "Run setup again" card. Reopening the
+    // wizard is idempotent: its onAppear re-detects an already-saved key
+    // and already-downloaded models, so nothing is re-downloaded and no
+    // key is asked for twice. We flip `isOnboardingComplete` to false so
+    // the finish step can flip it back to true and trigger the window
+    // close, same handshake the Diagnostics "Reset onboarding" uses.
+    private var setupGroup: some View {
+        Group {
+            MacGroupLabel(text: "Setup")
+            MacTile {
+                MacRow(
+                    "Run setup again",
+                    description: "Pick your model, key, and shortcut. Saved keys and downloaded models are kept.",
+                    icon: "sparkles",
+                    iconBackground: Color(red: 0.04, green: 0.52, blue: 1.00),
+                    showsDivider: false
+                ) {
+                    Button("Open setup") {
+                        appState.isOnboardingComplete = false
+                        AppDelegate.shared?.reopenOnboarding()
+                    }
+                }
+            }
         }
     }
 
