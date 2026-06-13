@@ -176,10 +176,13 @@
             <TextBlock Text="Pick the keys you press to dictate." FontSize="14"
                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                        HorizontalAlignment="Center" />
-            <controls:ShortcutRecorder x:Name="OnboardingShortcutRecorder"
-                                       Shortcut="{Binding Shortcut, Mode=TwoWay}"
-                                       HorizontalAlignment="Center" MinWidth="200" />
-            <TextBlock Text="Click the box, then press your keys." FontSize="12"
+            <ComboBox x:Name="ShortcutCombo" HorizontalAlignment="Center"
+                      MinWidth="200" SelectionChanged="ShortcutCombo_SelectionChanged">
+                <ComboBoxItem Content="Win + Alt" Tag="win+alt" />
+                <ComboBoxItem Content="Ctrl + Alt" Tag="ctrl+alt" />
+                <ComboBoxItem Content="Ctrl + Shift" Tag="ctrl+shift" />
+            </ComboBox>
+            <TextBlock Text="You can fine-tune this later in Settings." FontSize="12"
                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                        HorizontalAlignment="Center" />
             <StackPanel Orientation="Horizontal" Spacing="16" HorizontalAlignment="Center"

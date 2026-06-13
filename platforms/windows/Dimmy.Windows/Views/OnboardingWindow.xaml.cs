@@ -72,6 +72,7 @@ public sealed partial class OnboardingWindow : Window
         }
 
         DetectPriorState();
+        SyncShortcutCombo();
         PopulateOnboardingModelCombo();
         _prefetch.StartBasePrefetch();
         _onboardingLoaded = true;
@@ -308,6 +309,46 @@ public sealed partial class OnboardingWindow : Window
         ViewModel.DownloadPercent = Math.Min(100, downloaded * 100.0 / total);
         ViewModel.DownloadStatusText = "Downloading";
         ViewModel.DownloadBytesText = $"{downloaded / 1024.0 / 1024.0:0} / {total / 1024.0 / 1024.0:0} MB";
+    }
+
+    /// Select the curated combo that matches the wizard's current Shortcut
+    /// (seeded from live config in DetectPriorState). Case-insensitive — the
+    /// Rust hook stores "win+alt" lowercase. If the saved combo isn't one of
+    /// the presets (the user set something custom in Settings), keep it as an
+    /// extra item so finishing onboarding doesn't silently change it.
+    private void SyncShortcutCombo()
+    {
+        if (ShortcutCombo == null) return;
+        var current = (ViewModel.Shortcut ?? "").Trim();
+        foreach (var obj in ShortcutCombo.Items)
+        {
+            if (obj is ComboBoxItem item &&
+                string.Equals((item.Tag as string) ?? "", current, StringComparison.OrdinalIgnoreCase))
+            {
+                ShortcutCombo.SelectedItem = item;
+                return;
+            }
+        }
+        if (!string.IsNullOrWhiteSpace(current))
+        {
+            var custom = new ComboBoxItem { Content = current, Tag = current.ToLowerInvariant() };
+            ShortcutCombo.Items.Insert(0, custom);
+            ShortcutCombo.SelectedItem = custom;
+        }
+        else
+        {
+            ShortcutCombo.SelectedIndex = 0; // Win+Alt
+        }
+    }
+
+    private void ShortcutCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (ViewModel != null &&
+            ShortcutCombo?.SelectedItem is ComboBoxItem item &&
+            item.Tag is string tag && !string.IsNullOrWhiteSpace(tag))
+        {
+            ViewModel.Shortcut = tag;
+        }
     }
 
     private void DetectPriorState()
