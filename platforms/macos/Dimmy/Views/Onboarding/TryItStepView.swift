@@ -8,6 +8,10 @@ struct TryItStepView: View {
     @State private var hasTriedRecording = false
     @State private var showSuccess = false
     @State private var modelReady: Bool = false
+    // Live status shown in the box while there's no result yet, so the hold
+    // visibly works ("Listening...") and the post-release STT round-trip
+    // ("Transcribing...") doesn't look frozen. Mirrors the Windows Try-it.
+    @State private var trialStatus: String = ""
 
     private var needsCloudKey: Bool {
         appState.sttMode == "cloud" && !appState.hasKey
@@ -17,6 +21,12 @@ struct TryItStepView: View {
     }
     private var needsSetup: Bool {
         needsCloudKey || needsLocalModel
+    }
+
+    // Mode-aware verb: PTT is "Hold", toggle is "Press". The old copy was
+    // hardcoded "Hold", which lied in toggle mode.
+    private var verb: String {
+        appState.preferredMode == .pushToTalk ? "Hold" : "Press"
     }
 
     var body: some View {
@@ -38,14 +48,20 @@ struct TryItStepView: View {
                 : DimmyCore.shared.modelExists(appState.localModel)
         }
         .onChange(of: appState.recordingState) { _, newState in
-            if case .completing = newState {
+            // Show the transcript and a result marker, but DON'T auto-jump to
+            // the success screen — the user reads what came out, then advances
+            // with Continue. Auto-skipping on .idle hid the result.
+            switch newState {
+            case .recording:
+                trialStatus = "Listening..."
+            case .transcribing, .processing:
+                trialStatus = "Transcribing..."
+            case .completing:
                 demoText = appState.lastTranscript.isEmpty ? "No speech detected" : appState.lastTranscript
                 hasTriedRecording = true
-            }
-            if case .idle = newState, hasTriedRecording {
-                withAnimation(.spring(response: 0.4)) {
-                    showSuccess = true
-                }
+                trialStatus = ""
+            case .idle:
+                trialStatus = ""
             }
         }
     }
@@ -61,20 +77,33 @@ struct TryItStepView: View {
                 readyView
             }
 
-            Button(action: {
-                withAnimation(.spring(response: 0.4)) { showSuccess = true }
-            }) {
-                Text(needsSetup ? "Finish (I'll set up later)" : "Skip for now")
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
+            if hasTriedRecording && !needsSetup {
+                // The user has seen a transcript and explicitly advances.
+                Button(action: {
+                    withAnimation(.spring(response: 0.4)) { showSuccess = true }
+                }) {
+                    Text("Continue")
+                        .font(.system(size: 14, weight: .semibold))
+                        .frame(maxWidth: 200)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+            } else {
+                Button(action: {
+                    withAnimation(.spring(response: 0.4)) { showSuccess = true }
+                }) {
+                    Text(needsSetup ? "Finish (I'll set up later)" : "Skip for now")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
     }
 
     private var readyView: some View {
         VStack(spacing: 14) {
-            Text("Hold \(appState.shortcut.displayString) and say something")
+            Text("\(verb) \(appState.shortcut.displayString) and say something")
                 .font(.system(size: 14))
                 .foregroundColor(.secondary)
 
@@ -93,13 +122,14 @@ struct TryItStepView: View {
                         .frame(height: 80)
 
                     if demoText.isEmpty {
-                        Text("Waiting for your voice...")
+                        Text(trialStatus.isEmpty ? "Waiting for your voice..." : trialStatus)
                             .font(.system(size: 13))
                             .foregroundColor(Color(nsColor: .tertiaryLabelColor))
                             .padding(10)
                     } else {
                         Text(demoText)
                             .font(.system(size: 13))
+                            .textSelection(.enabled)
                             .padding(10)
                     }
                 }
@@ -107,6 +137,17 @@ struct TryItStepView: View {
                     RoundedRectangle(cornerRadius: 8)
                         .stroke(Color.primary.opacity(0.1), lineWidth: 1)
                 )
+            }
+
+            if hasTriedRecording {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                        .font(.system(size: 14))
+                    Text("Transcribed. Looks right?")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                }
             }
         }
     }
@@ -163,22 +204,31 @@ struct TryItStepView: View {
             Text("You're all set!")
                 .font(.system(size: 24, weight: .bold))
 
-            Text("Dimmy lives in your menu bar.\nHold \(appState.shortcut.displayString) anywhere to dictate.")
+            Text("Dimmy lives in your menu bar.\n\(verb) \(appState.shortcut.displayString) anywhere to dictate.")
                 .font(.system(size: 13))
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
                 .lineSpacing(4)
 
-            Button(action: {
-                appState.showPillIntro = true
-                onComplete()
-            }) {
-                Text("Start Using Dimmy")
-                    .font(.system(size: 14, weight: .semibold))
-                    .frame(maxWidth: 200)
+            HStack(spacing: 12) {
+                Button(action: {
+                    withAnimation(.spring(response: 0.4)) { showSuccess = false }
+                }) {
+                    Text("Back").frame(maxWidth: 90)
+                }
+                .controlSize(.large)
+
+                Button(action: {
+                    appState.showPillIntro = true
+                    onComplete()
+                }) {
+                    Text("Start Using Dimmy")
+                        .font(.system(size: 14, weight: .semibold))
+                        .frame(maxWidth: 200)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
         }
     }
 
