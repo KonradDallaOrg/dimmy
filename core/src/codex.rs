@@ -536,6 +536,7 @@ pub fn spawn_login() -> Result<(), CodexError> {
     }
 
     crate::log("[Codex] login subprocess spawned");
+    crate::telemetry::track(crate::telemetry::Event::CodexLoginSpawned);
     Ok(())
 }
 
