@@ -272,6 +272,18 @@ fn candidate_paths_for(binary: &str) -> Vec<PathBuf> {
     }
     #[cfg(target_os = "windows")]
     {
+        // Native installer (Claude Desktop / `claude` native CLI) drops the
+        // binary in a fixed per-user dir and only touches the registry PATH
+        // (HKCU\Environment) for future shells — invisible to an
+        // already-running Dimmy whose PATH is a launch-time snapshot. Same
+        // class of bug as codex.rs; enumerate the dir directly so a native
+        // install resolves without a restart.
+        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+            let lad = PathBuf::from(&local_app_data);
+            push_variants(&mut paths, lad.join("AnthropicClaude"));
+            push_variants(&mut paths, lad.join("AnthropicClaude").join("bin"));
+            push_variants(&mut paths, lad.join("Programs").join("claude").join("bin"));
+        }
         // npm-global install on Win lives in two possible places
         // depending on whether the user used machine-wide install
         // or per-user `npm config set prefix`.

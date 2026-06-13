@@ -186,7 +186,32 @@ fn candidate_paths() -> Vec<PathBuf> {
     }
     #[cfg(target_os = "windows")]
     {
+        // Native Windows installer (`irm https://chatgpt.com/codex/install.ps1
+        // | iex`) drops codex.exe in a fixed per-user dir and only adds it to
+        // the *user* PATH in the registry (HKCU\Environment) for FUTURE
+        // shells. An already-running Dimmy holds a launch-time PATH snapshot,
+        // so the PATH walk below never sees it — the install looks "missing"
+        // until a full restart that re-inherits the env. Enumerating the fixed
+        // dir directly makes a native install resolve immediately, no restart.
+        // Path verified against install.ps1 (2026-06-13): $defaultVisibleBinDir
+        // = %LOCALAPPDATA%\Programs\OpenAI\Codex\bin, overridable via
+        // $CODEX_INSTALL_DIR (the visible bin dir is a junction to the active
+        // standalone release, so the .exe resolves through it).
+        if let Ok(dir) = std::env::var("CODEX_INSTALL_DIR") {
+            if !dir.trim().is_empty() {
+                push_variants(&mut paths, PathBuf::from(&dir));
+                push_variants(&mut paths, PathBuf::from(&dir).join("bin"));
+            }
+        }
         if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+            push_variants(
+                &mut paths,
+                PathBuf::from(&local_app_data)
+                    .join("Programs")
+                    .join("OpenAI")
+                    .join("Codex")
+                    .join("bin"),
+            );
             push_variants(&mut paths, PathBuf::from(&local_app_data).join("npm"));
         }
         if let Ok(app_data) = std::env::var("APPDATA") {
@@ -265,6 +290,11 @@ fn resolve_binary() -> Option<PathBuf> {
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
+        // Windows has no login-shell fallback. Log the miss (path count
+        // only, no content) so a user's "not detected" report is
+        // debuggable from dimmy.log without a special build. Runs only on a
+        // cold/cleared cache, so it is not spammy.
+        crate::log("[Codex] resolve_binary: no codex binary found in any candidate path");
         None
     }
 }
@@ -692,6 +722,25 @@ mod tests {
         assert!(
             joined.contains(".codex") || std::env::var("CODEX_HOME").is_ok(),
             "candidate_paths must include $CODEX_HOME/bin"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn candidate_paths_includes_native_windows_install_dir() {
+        // The native installer (install.ps1) drops codex.exe under
+        // %LOCALAPPDATA%\Programs\OpenAI\Codex\bin and only writes the
+        // registry PATH, so we MUST enumerate that dir explicitly or a
+        // native install is invisible to an already-running Dimmy.
+        let joined: String = candidate_paths()
+            .iter()
+            .map(|p| p.to_string_lossy().to_lowercase())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            joined.contains("programs\\openai\\codex\\bin")
+                || std::env::var("LOCALAPPDATA").is_err(),
+            "candidate_paths must enumerate the native Windows install dir"
         );
     }
 
