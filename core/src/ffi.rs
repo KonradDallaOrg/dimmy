@@ -102,6 +102,21 @@ fn write_to_buf(s: &str, buf: *mut c_char, buf_len: c_int) -> c_int {
     copy_len as c_int
 }
 
+/// Pick the canonical transcript from the live streaming/chunked workers.
+/// A non-empty result from either is authoritative (its segments were
+/// already typed live). An empty result means the live session FAILED
+/// (WS dropped, auth error, mid-recording network blip) and the caller
+/// must fall back to a batch pass on the still-intact buffered audio —
+/// returning `None` here signals exactly that. Streaming wins over chunked
+/// when both are present (they never both run, but the ordering is fixed
+/// for determinism). Extracted so the work-loss guard has a regression
+/// test: an empty live result must never beat the batch retry.
+fn resolve_live_final(streaming: Option<String>, chunked: Option<String>) -> Option<String> {
+    streaming
+        .filter(|c| !c.trim().is_empty())
+        .or_else(|| chunked.filter(|c| !c.trim().is_empty()))
+}
+
 /// Write 16 kHz mono int16 WAV. Used by the history-audio retention
 /// path. Clamps + scales f32 [-1.0, 1.0] to i16 range with int16
 /// saturation so peaking samples don't wrap around. Returns the
@@ -1026,19 +1041,22 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
     let transcribe_start = std::time::Instant::now();
     // The chunked transcriber was already drained above (before the
     // audio buffer was cleared) so we just consume its result here.
-    let transcript = if let Some(cumulative) = streaming_final {
-        // Deepgram streaming already produced the full transcript live.
-        if cumulative.trim().is_empty() {
-            Err(crate::error::TranscribeError::Empty)
-        } else {
-            Ok(cumulative)
-        }
-    } else if let Some(cumulative) = chunked_final {
-        if cumulative.trim().is_empty() {
-            Err(crate::error::TranscribeError::Empty)
-        } else {
-            Ok(cumulative)
-        }
+    // The streaming (Deepgram) and chunked workers were drained above,
+    // before the audio buffer was cleared. A NON-EMPTY result from either
+    // is canonical — the segments were already typed live, so use it as-is.
+    // An EMPTY result means the live session failed (WS dropped, auth
+    // error, network blip mid-recording): fall through to a batch pass on
+    // the still-intact `processed` audio rather than discarding the whole
+    // recording. The host only suppresses the final paste once at least one
+    // segment was injected live, so a zero-segment failure still gets pasted
+    // from this batch transcript. Work-loss guard, 2026-06-13.
+    let had_live = streaming_final.is_some() || chunked_final.is_some();
+    let live_final = resolve_live_final(streaming_final, chunked_final);
+    if had_live && live_final.is_none() {
+        log("[StopRec] live streaming/chunked transcript was empty — falling back to batch STT on buffered audio (work-loss guard)");
+    }
+    let transcript = if let Some(cumulative) = live_final {
+        Ok(cumulative)
     } else if stt_mode == "local" {
         if local_stt_backend == "parakeet" {
             log("[StopRec] Local STT mode — backend: parakeet (batch)");
@@ -8206,6 +8224,55 @@ mod tests {
         let (provider, model) = parse_recap_override("xyz:something");
         assert_eq!(provider, "cloud");
         assert_eq!(model, "xyz:something");
+    }
+
+    // ── resolve_live_final (work-loss guard) tests ──────────────────
+
+    #[test]
+    fn live_final_uses_nonempty_streaming() {
+        // The happy path: Deepgram streaming produced text live → it wins.
+        let r = resolve_live_final(Some("hello world".into()), None);
+        assert_eq!(r.as_deref(), Some("hello world"));
+    }
+
+    #[test]
+    fn live_final_empty_streaming_falls_back_to_batch() {
+        // Work-loss guard: an empty streaming result (WS dropped / auth
+        // failure) must NOT win — returning None tells the caller to run a
+        // batch pass on the buffered audio instead of discarding it.
+        assert_eq!(resolve_live_final(Some(String::new()), None), None);
+        assert_eq!(resolve_live_final(Some("   ".into()), None), None);
+        assert_eq!(resolve_live_final(Some("\n\t ".into()), None), None);
+    }
+
+    #[test]
+    fn live_final_uses_nonempty_chunked_when_no_streaming() {
+        let r = resolve_live_final(None, Some("chunked text".into()));
+        assert_eq!(r.as_deref(), Some("chunked text"));
+    }
+
+    #[test]
+    fn live_final_empty_chunked_falls_back_to_batch() {
+        assert_eq!(resolve_live_final(None, Some("  ".into())), None);
+    }
+
+    #[test]
+    fn live_final_none_when_no_live_workers() {
+        // No streaming, no chunked — the pure-batch dictation path.
+        assert_eq!(resolve_live_final(None, None), None);
+    }
+
+    #[test]
+    fn live_final_streaming_wins_over_chunked() {
+        // They never both run, but the ordering is fixed for determinism.
+        let r = resolve_live_final(Some("stream".into()), Some("chunk".into()));
+        assert_eq!(r.as_deref(), Some("stream"));
+    }
+
+    #[test]
+    fn live_final_empty_streaming_yields_to_nonempty_chunked() {
+        let r = resolve_live_final(Some(String::new()), Some("chunk".into()));
+        assert_eq!(r.as_deref(), Some("chunk"));
     }
 
     // ── write_to_buf tests ──────────────────────────────────────────
