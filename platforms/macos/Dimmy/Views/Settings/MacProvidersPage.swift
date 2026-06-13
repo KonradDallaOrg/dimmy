@@ -270,6 +270,22 @@ struct MacProvidersPage: View {
                         Divider().background(Color.macRowDivider).opacity(0.5)
                     }
                     HStack(spacing: 8) {
+                        // Leading on-disk indicator. Only fires when
+                        // `localFilename` is set (i.e. the local card) and
+                        // the matching file is present. A subtle dot
+                        // placeholder keeps the rows aligned even when no
+                        // model is downloaded yet.
+                        if let file = model.localFilename {
+                            if isLocallyPresent(file) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                                    .font(.system(size: 11))
+                            } else {
+                                Image(systemName: "circle.dotted")
+                                    .foregroundStyle(Color.macTextSecondary.opacity(0.4))
+                                    .font(.system(size: 11))
+                            }
+                        }
                         Text(model.name)
                             .font(.system(size: 12))
                         Spacer(minLength: 8)
@@ -290,6 +306,20 @@ struct MacProvidersPage: View {
                     .stroke(Color.macControlStroke, lineWidth: 0.5)
             )
         }
+    }
+
+    /// Resolve on-disk presence for a local-provider entry. Whisper
+    /// files go through `dimmy_model_exists`, llama files through
+    /// `dimmy_llm_model_exists`, the Parakeet bundle uses its own FFI
+    /// since it's a directory of CoreML/Fluid blobs not a single file.
+    private func isLocallyPresent(_ filename: String) -> Bool {
+        if filename == "parakeet:fp32" {
+            return DimmyCore.shared.parakeetBundlePresent()
+        }
+        if filename.hasSuffix(".gguf") {
+            return DimmyCore.shared.llmModelExists(filename)
+        }
+        return DimmyCore.shared.modelExists(filename)
     }
 
     private func capabilityBadge(_ text: String, color: Color) -> some View {
