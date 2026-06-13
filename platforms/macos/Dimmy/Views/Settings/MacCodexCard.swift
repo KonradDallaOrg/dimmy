@@ -15,6 +15,10 @@ import SwiftUI
 struct MacCodexCard: View {
     @ObservedObject var appState: AppState
 
+    /// Opens the 2-step setup wizard (install + sign in). Optional so the
+    /// card still works standalone; MacIntegrationsPage passes it.
+    var onWizardRequested: (() -> Void)? = nil
+
     @State private var status: DimmyCore.ClaudeCodeStatus = .notInstalled
     @State private var binaryPath: String? = nil
     @State private var signInRunning: Bool = false
@@ -48,6 +52,26 @@ struct MacCodexCard: View {
                     HStack(spacing: 8) {
                         if signInRunning || testRunning {
                             ProgressView().controlSize(.small).scaleEffect(0.7)
+                        }
+                        if let openWizard = onWizardRequested {
+                            // Promote the wizard when nothing is installed
+                            // yet — it's the guided path past the missing
+                            // binary. (Two concrete buttons rather than a
+                            // type-erased style ternary.)
+                            if status == .notInstalled {
+                                Button(action: openWizard) {
+                                    Label("Set up wizard", systemImage: "wand.and.stars")
+                                }
+                                .controlSize(.small)
+                                .buttonStyle(.borderedProminent)
+                                .help("Guided install + ChatGPT sign-in walkthrough")
+                            } else {
+                                Button(action: openWizard) {
+                                    Label("Set up wizard", systemImage: "wand.and.stars")
+                                }
+                                .controlSize(.small)
+                                .help("Guided install + ChatGPT sign-in walkthrough")
+                            }
                         }
                         Button(action: signIn) {
                             Label(signInLabel, systemImage: "person.badge.key.fill")

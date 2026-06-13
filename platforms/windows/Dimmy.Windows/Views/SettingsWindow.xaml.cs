@@ -2352,6 +2352,8 @@ public sealed partial class SettingsWindow : Window
                     Application.Current.Resources["TextFillColorTertiaryBrush"];
                 CodexIntegrationDisconnectedActions.Visibility = Visibility.Visible;
                 CodexIntegrationConnectedActions.Visibility = Visibility.Collapsed;
+                CodexIntegrationWizardBtn.Style =
+                    (Microsoft.UI.Xaml.Style)Application.Current.Resources["DefaultButtonStyle"];
                 CodexIntegrationSignInBtn.Style =
                     (Microsoft.UI.Xaml.Style)Application.Current.Resources["AccentButtonStyle"];
                 CodexIntegrationSignInBtn.IsEnabled = true;
@@ -2360,21 +2362,49 @@ public sealed partial class SettingsWindow : Window
             case Interop.DimmyNative.ClaudeCodeStatus.NotInstalled:
             default:
                 CodexIntegrationStatusText.Text =
-                    "Codex CLI not detected. Install it, then click Refresh.";
+                    "Codex CLI not detected. Click Set up wizard for a guided install + sign-in.";
                 CodexIntegrationStatusGlyph.Glyph = "\uEA39"; // Info
                 CodexIntegrationStatusGlyph.Foreground = (Microsoft.UI.Xaml.Media.Brush)
                     Application.Current.Resources["TextFillColorTertiaryBrush"];
                 CodexIntegrationDisconnectedActions.Visibility = Visibility.Visible;
                 CodexIntegrationConnectedActions.Visibility = Visibility.Collapsed;
-                // Binary missing — Sign in would just fail. Keep the button
-                // visible but non-accent, and explain the install in the bar.
+                // Binary missing — the wizard is the right entry point.
+                // Promote it; disable the bare Sign in (it would just fail).
+                CodexIntegrationWizardBtn.Style =
+                    (Microsoft.UI.Xaml.Style)Application.Current.Resources["AccentButtonStyle"];
                 CodexIntegrationSignInBtn.Style =
                     (Microsoft.UI.Xaml.Style)Application.Current.Resources["DefaultButtonStyle"];
                 CodexIntegrationSignInBtn.IsEnabled = false;
                 CodexIntegrationMessageText.Text =
-                    "Install the Codex CLI with `npm install -g @openai/codex` (or the native installer), then click Refresh.";
+                    "Install the Codex CLI with `npm install -g @openai/codex` (or the native installer), then click Refresh — or just use the wizard.";
                 CodexIntegrationMessageBar.Visibility = Visibility.Visible;
                 break;
+        }
+    }
+
+    /// <summary>Open the 2-step Codex setup wizard (install + sign in).
+    /// Smart-skips to the first incomplete step. On a green test it lights
+    /// up the Output subscription toggles, exactly like the Anthropic
+    /// wizard.</summary>
+    private async void CodexIntegrationWizard_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var dialog = new CodexConnectDialog
+            {
+                XamlRoot = this.Content.XamlRoot,
+                RequestedTheme = Helpers.ThemeHelper.ResolvedElementTheme(),
+            };
+            await dialog.ShowAsync();
+            Interop.DimmyNative.RecheckCodex();
+            RefreshCodexIntegrationStatus();
+            RefreshAuthIntegrationStatus();
+            if (dialog.Completed)
+                Interop.DimmyNative.TrackEvent("codex.wizard_completed");
+        }
+        catch (Exception ex)
+        {
+            App.Log($"Codex wizard launch exc: {ex}", "Codex");
         }
     }
 
