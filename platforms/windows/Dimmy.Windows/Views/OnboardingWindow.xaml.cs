@@ -312,6 +312,27 @@ public sealed partial class OnboardingWindow : Window
 
     private void DetectPriorState()
     {
+        // Show the shortcut the app is ACTUALLY using, not the wizard's
+        // hardcoded "Win+Alt" default. On a re-run (Settings to "Run setup
+        // again") the live config may be "ctrl+shift" or anything the user
+        // set; without this sync the wizard would display Win+Alt, the
+        // "Try it" step would register the real config shortcut, and the
+        // two wouldn't match (pressing the shown keys did nothing). On a
+        // fresh install AppViewModel already holds the Rust default, so
+        // this is a no-op there.
+        try
+        {
+            var appVm = (Application.Current as App)?.AppViewModel;
+            if (appVm != null)
+            {
+                if (!string.IsNullOrWhiteSpace(appVm.Shortcut))
+                    ViewModel.Shortcut = appVm.Shortcut;
+                if (!string.IsNullOrWhiteSpace(appVm.ShortcutMode))
+                    ViewModel.ShortcutMode = appVm.ShortcutMode;
+            }
+        }
+        catch (Exception ex) { Debug.WriteLine($"[Onboarding] DetectPriorState shortcut: {ex.Message}"); }
+
         try
         {
             var baseFile = ModelPaths.GetModelFilePath(ModelPaths.BaseModelFilename);
@@ -541,6 +562,11 @@ public sealed partial class OnboardingWindow : Window
         // into whatever app has focus + the user sees nothing here).
         if (ViewModel.CurrentStep == 3)
         {
+            // Make the LIVE hotkey match what the wizard shows. ShowPillAndHotkey
+            // registers AppViewModel.Shortcut, which on a re-run is the old saved
+            // value, not what the user just picked / saw on the shortcut step.
+            // Apply first so "Hold {Shortcut} and say something" actually fires.
+            App.Instance?.ApplyOnboardingShortcut(ViewModel.Shortcut, ViewModel.ShortcutMode);
             App.Instance?.ShowPillAndHotkey();
             SubscribeTrialTranscript();
         }

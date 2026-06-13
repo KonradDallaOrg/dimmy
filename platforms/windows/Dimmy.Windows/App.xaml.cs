@@ -350,6 +350,25 @@ public partial class App : Application
         }
     }
 
+    /// <summary>Apply a shortcut + mode chosen in onboarding to the LIVE
+    /// hotkey immediately. ShowPillAndHotkey early-returns when the pill is
+    /// already up (re-run from Settings), so it would never re-register the
+    /// new combo on its own — this does it explicitly. Safe before the
+    /// HotkeyService exists (first run): it just primes the AppViewModel and
+    /// ShowPillAndHotkey registers it when it creates the service.</summary>
+    public void ApplyOnboardingShortcut(string shortcut, string mode)
+    {
+        if (!string.IsNullOrWhiteSpace(shortcut))
+            _appViewModel.Shortcut = shortcut;
+        if (!string.IsNullOrWhiteSpace(mode))
+            _appViewModel.ShortcutMode = mode;
+        if (_hotkeyService != null)
+        {
+            _hotkeyService.PttMode = _appViewModel.ShortcutMode == "hold";
+            _hotkeyService.Register(_appViewModel.Shortcut);
+        }
+    }
+
     /// <summary>Show pill + register hotkey. Safe to call multiple times.</summary>
     public void ShowPillAndHotkey()
     {
