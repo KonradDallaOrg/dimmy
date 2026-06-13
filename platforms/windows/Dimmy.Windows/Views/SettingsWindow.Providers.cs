@@ -276,8 +276,28 @@ public sealed partial class SettingsWindow
     private FrameworkElement BuildModelRow(ProviderModel m)
     {
         var row = new Grid { ColumnSpacing = 10, Padding = new Thickness(12, 9, 12, 9) };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });             // on-disk indicator
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        // Leading on-disk indicator -- only for On-device rows, which carry a
+        // LocalFilename. Green check when the file/bundle is present, a faint
+        // download glyph otherwise, so the list reads which models are already
+        // downloaded at a glance. Mirrors MacProvidersPage + the Voice/Output
+        // pickers. Cloud rows leave LocalFilename null, so no indicator, no shift.
+        if (m.LocalFilename is string file)
+        {
+            bool present = IsLocallyPresent(file);
+            var dot = new FontIcon
+            {
+                Glyph = present ? "" : "", // CheckMark : Download
+                FontSize = 12,
+                Foreground = present ? SolidBrush(OkColor) : ThemeBrush("TextFillColorSecondaryBrush"),
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            Grid.SetColumn(dot, 0);
+            row.Children.Add(dot);
+        }
 
         var name = new TextBlock
         {
@@ -287,7 +307,7 @@ public sealed partial class SettingsWindow
             VerticalAlignment = VerticalAlignment.Center,
             Foreground = ThemeBrush("TextFillColorPrimaryBrush"),
         };
-        Grid.SetColumn(name, 0);
+        Grid.SetColumn(name, 1);
         row.Children.Add(name);
 
         var badges = new StackPanel
@@ -299,9 +319,25 @@ public sealed partial class SettingsWindow
         if (m.Stt) badges.Children.Add(MakeBadge("STT", SttColor));
         if (m.Llm) badges.Children.Add(MakeBadge("LLM", LlmColor));
         if (m.Recap) badges.Children.Add(MakeBadge("Recap", RecapColor));
-        Grid.SetColumn(badges, 1);
+        Grid.SetColumn(badges, 2);
         row.Children.Add(badges);
         return row;
+    }
+
+    /// <summary>On-disk presence for a local-provider model. Whisper files go
+    /// through dimmy_model_exists, llama (.gguf) through dimmy_llm_model_exists,
+    /// the Parakeet bundle through its own FFI (it's a CoreML/ONNX bundle, not a
+    /// single file). Same resolution as MacProvidersPage.isLocallyPresent.</summary>
+    private static bool IsLocallyPresent(string filename)
+    {
+        try
+        {
+            if (filename == "parakeet:fp32") return Interop.DimmyNative.dimmy_parakeet_bundle_present() == 1;
+            if (filename.EndsWith(".gguf", StringComparison.OrdinalIgnoreCase))
+                return Interop.DimmyNative.dimmy_llm_model_exists(filename) == 1;
+            return Interop.DimmyNative.dimmy_model_exists(filename) == 1;
+        }
+        catch { return false; }
     }
 
     // ── Handlers ─────────────────────────────────────────────────────────

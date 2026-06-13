@@ -2651,6 +2651,30 @@ public sealed partial class SettingsWindow : Window
     /// whisper-model filename — distinguished from `*.bin` by prefix.
     private const string ParakeetTag = "parakeet:fp32";
 
+    /// <summary>One local-model picker row. Downloaded entries get a green
+    /// check (mirror of the Mac Voice/Output pickers + the Providers On-device
+    /// card); not-yet-downloaded rows stay plain text so the "already on disk"
+    /// delta reads at a glance. Tag always carries the filename/sentinel for
+    /// SelectionChanged. The check (U+E73E, Segoe Fluent) replaces the old
+    /// "(Ready)" suffix — the size stays in the label only while not
+    /// downloaded.</summary>
+    private static ComboBoxItem MakeLocalModelItem(string label, string tag, bool downloaded)
+    {
+        if (!downloaded)
+            return new ComboBoxItem { Content = label, Tag = tag };
+
+        var panel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+        panel.Children.Add(new FontIcon
+        {
+            Glyph = "", // CheckMark
+            FontSize = 13,
+            Foreground = SolidBrush(OkColor),
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        panel.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center });
+        return new ComboBoxItem { Content = panel, Tag = tag };
+    }
+
     private void PopulateLocalModels()
     {
         App.Log(
@@ -2677,13 +2701,9 @@ public sealed partial class SettingsWindow : Window
 
                 _localModels.Add(new LocalModelInfo(name, filename, sizeMb, desc, downloaded));
 
-                var status = downloaded ? "Ready" : $"{sizeMb}MB";
-                var item = new ComboBoxItem
-                {
-                    Content = $"{name}: {desc} ({status})",
-                    Tag = filename
-                };
-                LocalModelComboBox.Items.Add(item);
+                // Downloaded => green check + name; not downloaded => name + size.
+                var label = downloaded ? $"{name}: {desc}" : $"{name}: {desc} ({sizeMb}MB)";
+                LocalModelComboBox.Items.Add(MakeLocalModelItem(label, filename, downloaded));
 
                 if (ViewModel.LocalSttBackend != "parakeet" && filename == ViewModel.LocalModel)
                     selectedIdx = idx;
@@ -2696,12 +2716,10 @@ public sealed partial class SettingsWindow : Window
             bool parakeetDownloaded = false;
             try { parakeetDownloaded = DimmyNative.dimmy_parakeet_bundle_present() == 1; }
             catch { }
-            var parakeetStatus = parakeetDownloaded ? "Ready" : "2.5GB";
-            LocalModelComboBox.Items.Add(new ComboBoxItem
-            {
-                Content = $"Parakeet TDT v3 FP32: fast, EU-language friendly ({parakeetStatus})",
-                Tag = ParakeetTag,
-            });
+            var parakeetLabel = parakeetDownloaded
+                ? "Parakeet TDT v3 FP32: fast, EU-language friendly"
+                : "Parakeet TDT v3 FP32: fast, EU-language friendly (2.5GB)";
+            LocalModelComboBox.Items.Add(MakeLocalModelItem(parakeetLabel, ParakeetTag, parakeetDownloaded));
             if (ViewModel.LocalSttBackend == "parakeet")
                 selectedIdx = idx;
 
@@ -3022,15 +3040,11 @@ public sealed partial class SettingsWindow : Window
 
                 _localLlmModels.Add(new LocalModelInfo(name, filename, sizeMb, desc, downloaded));
 
-                var status = downloaded ? "Ready" : $"{sizeMb} MB";
-                var item = new ComboBoxItem
-                {
-                    // Concise: name + state only. The long catalogue
-                    // description is not shown in the picker.
-                    Content = $"{name} ({status})",
-                    Tag = filename
-                };
-                LocalLlmModelComboBox.Items.Add(item);
+                // Concise: name + state only. Downloaded => green check + name;
+                // not downloaded => name + size. The long catalogue description
+                // is not shown in the picker.
+                var label = downloaded ? name : $"{name} ({sizeMb} MB)";
+                LocalLlmModelComboBox.Items.Add(MakeLocalModelItem(label, filename, downloaded));
 
                 if (filename == ViewModel.LocalLlmModel)
                     selectedIdx = idx;
