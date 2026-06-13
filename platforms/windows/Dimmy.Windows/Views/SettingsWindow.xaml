@@ -2110,9 +2110,9 @@
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                   </Grid.RowDefinitions>
-                  <FontIcon Grid.Column="0" Grid.Row="0" Grid.RowSpan="2"
-                            Glyph="&#xE99A;" FontSize="32" VerticalAlignment="Top"
-                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                  <Image Grid.Column="0" Grid.Row="0" Grid.RowSpan="2"
+                         Width="36" Height="36" VerticalAlignment="Top"
+                         Source="{ThemeResource OpenAIMarkSource}" />
                   <StackPanel Grid.Column="1" Grid.Row="0" VerticalAlignment="Center" Spacing="2">
                     <TextBlock Text="ChatGPT (Codex)" FontSize="16" FontWeight="SemiBold" />
                     <TextBlock x:Name="CodexIntegrationStatusText"
@@ -2170,20 +2170,9 @@
                 <TextBlock x:Name="CodexIntegrationMessageText" FontSize="13" TextWrapping="Wrap" />
               </Border>
 
-              <!-- One-tap routing: point the LLM (rewrite + recap that
-                   follows it) at codex://default. Reversible — toggling
-                   off restores the previous LLM provider. Only meaningful
-                   once signed in, so visibility is gated on Ready. -->
-              <controls:SettingCard x:Name="CodexUseCard"
-                                    Glyph="&#xE99A;"
-                                    Label="Use ChatGPT (Codex) for recap and rewrite"
-                                    InfoTip="Routes LLM rewrite and meeting recap through your ChatGPT plan via the local Codex CLI. No API key spent. Turn off to go back to your previous LLM provider."
-                                    Margin="0,8,0,0"
-                                    Visibility="Collapsed">
-                <ToggleSwitch x:Name="CodexUseToggle"
-                              Toggled="CodexUse_Toggled"
-                              Style="{StaticResource CompactToggleSwitch}" />
-              </controls:SettingCard>
+              <!-- Once signed in, turn Codex on per-output from
+                   Settings → Output → LLM / Recap ("Use ChatGPT
+                   subscription"), exactly like the Anthropic flow. -->
 
               <!-- Group: CLAUDE DESKTOP (MCP)
                    Two-way bridge: Claude Desktop reads our meetings +

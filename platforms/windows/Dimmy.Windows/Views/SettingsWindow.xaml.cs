@@ -1703,6 +1703,13 @@ public sealed partial class SettingsWindow : Window
         var status = Interop.DimmyNative.GetClaudeCodeStatus();
         var binaryPath = Interop.DimmyNative.GetClaudeCodeBinaryPath() ?? "";
         var integrationReady = status == Interop.DimmyNative.ClaudeCodeStatus.Ready;
+        // OpenAI subscription parallel: the "Use subscription" toggle also
+        // appears for an OpenAI LLM/recap provider when the Codex CLI is
+        // signed in. Same llm/recap_auth_method = "subscription" value; the
+        // Rust dispatch routes OpenAI+subscription to the `codex` CLI and
+        // Anthropic+subscription to the `claude` CLI.
+        var codexReady = Interop.DimmyNative.GetCodexStatus() == Interop.DimmyNative.ClaudeCodeStatus.Ready;
+        var isOpenAI = IsOpenAIUrl(llmUrl);
 
         // Coerce LLM subscription off when the provider is not Anthropic —
         // subscription is Claude Code CLI only (Anthropic-only). Without this
@@ -1713,12 +1720,12 @@ public sealed partial class SettingsWindow : Window
         // way to save a key. Burned 2026-05-18 on the first-time Groq pick
         // from a fresh Anthropic+subscription baseline. Mirror of the recap
         // auth-method coercion below.
-        if (!isAnthropic
+        if (!isAnthropic && !(isOpenAI && codexReady)
             && string.Equals(ViewModel.LlmAuthMethod, "subscription", StringComparison.Ordinal))
         {
             ViewModel.LlmAuthMethod = "api_key";
             App.Log(
-                $"[Auth] coerced llm_auth_method='subscription' → 'api_key' (provider not Anthropic: '{llmUrl}')",
+                $"[Auth] coerced llm_auth_method='subscription' → 'api_key' (provider neither Anthropic nor OpenAI+Codex: '{llmUrl}')",
                 "Auth");
         }
         var llmUseSub = string.Equals(ViewModel.LlmAuthMethod, "subscription",
@@ -1809,8 +1816,11 @@ public sealed partial class SettingsWindow : Window
         // The "Use Anthropic subscription" toggle only makes sense
         // when (a) the LLM provider is Anthropic and (b) the
         // integration is connected. Otherwise hide entirely.
-        LlmUseSubscriptionCard.Visibility = (isAnthropic && integrationReady)
-            ? Visibility.Visible : Visibility.Collapsed;
+        var llmSubShown = (isAnthropic && integrationReady) || (isOpenAI && codexReady);
+        LlmUseSubscriptionCard.Visibility = llmSubShown ? Visibility.Visible : Visibility.Collapsed;
+        LlmUseSubscriptionCard.Label = (isOpenAI && codexReady)
+            ? "Use ChatGPT subscription"
+            : "Use Anthropic subscription";
         LlmUseSubscriptionToggle.IsOn = llmUseSub;
 
         // Same-key toggle visibility — VENDOR-KEYED design (mirror of
@@ -1889,7 +1899,13 @@ public sealed partial class SettingsWindow : Window
         var recapVendorForSubGate = RecapVendorFromModel(ViewModel.RecapModelOverride, llmUrl);
         var recapModelIsAnthropic = string.Equals(
             recapVendorForSubGate, "anthropic", StringComparison.OrdinalIgnoreCase);
-        var canShowRecapSub = integrationReady && recapModelIsAnthropic;
+        var recapModelIsOpenAI = string.Equals(
+            recapVendorForSubGate, "openai", StringComparison.OrdinalIgnoreCase);
+        // Subscription routes recap through the matching CLI: Anthropic
+        // model → claude (needs claude signed in), OpenAI model → codex
+        // (needs codex signed in).
+        var canShowRecapSub = (integrationReady && recapModelIsAnthropic)
+            || (codexReady && recapModelIsOpenAI);
         if (!canShowRecapSub && recapForceSub)
         {
             App.Log(
@@ -1906,6 +1922,9 @@ public sealed partial class SettingsWindow : Window
         }
         RecapUseSubscriptionCard.Visibility = canShowRecapSub
             ? Visibility.Visible : Visibility.Collapsed;
+        RecapUseSubscriptionCard.Label = recapModelIsOpenAI
+            ? "Use ChatGPT subscription for recap"
+            : "Use Anthropic subscription for recap";
         RecapUseSubscriptionToggle.IsOn = recapForceSub;
 
         // The recap model picker shows ALL curated entries (any
@@ -1917,9 +1936,10 @@ public sealed partial class SettingsWindow : Window
         // The chosen recap vendor for the model picker's "current
         // selection coercion" + the conditional Recap-key card is
         // derived from the model id directly.
-        var recapVendor = recapForceSub
-            ? "anthropic"
-            : RecapVendorFromModel(ViewModel.RecapModelOverride, llmUrl);
+        // The recap vendor follows the model in all cases now — under
+        // subscription it can be Anthropic (claude CLI) OR OpenAI (codex
+        // CLI), so we no longer force "anthropic".
+        var recapVendor = recapVendorForSubGate;
         // Refresh the conditional UI for the "different provider" case:
         // - PasswordBox + Save visible only when the model's vendor
         //   differs from the dictation vendor AND auth != subscription.
@@ -1996,6 +2016,15 @@ public sealed partial class SettingsWindow : Window
     {
         return url.Contains("anthropic.com", StringComparison.OrdinalIgnoreCase)
             || url.StartsWith("claude-code://", StringComparison.Ordinal);
+    }
+
+    /// <summary>True iff the URL points at OpenAI proper (api.openai.com)
+    /// or the synthetic `codex://` scheme. Gates the "Use ChatGPT
+    /// subscription" toggle (routes through the local Codex CLI).</summary>
+    private static bool IsOpenAIUrl(string url)
+    {
+        return url.Contains("api.openai.com", StringComparison.OrdinalIgnoreCase)
+            || url.StartsWith("codex://", StringComparison.Ordinal);
     }
 
     /// <summary>True iff STT and LLM URLs map to the same provider
@@ -2293,24 +2322,9 @@ public sealed partial class SettingsWindow : Window
     // dimmy_codex_* FFI. No Node wizard — the user installs the Codex
     // CLI themselves; we just detect + sign in + test.
 
-    private const string CodexProviderUrl = "codex://default";
-    private string? _llmUrlBeforeCodex;
-    private bool _suppressCodexToggle;
-
     private void RefreshCodexIntegrationStatus()
     {
         var status = Interop.DimmyNative.GetCodexStatus();
-        var ready = status == Interop.DimmyNative.ClaudeCodeStatus.Ready;
-        // The "use for recap + rewrite" toggle only makes sense once
-        // signed in. Reflect whether the LLM is currently pointed at codex.
-        CodexUseCard.Visibility = ready ? Visibility.Visible : Visibility.Collapsed;
-        if (ready)
-        {
-            _suppressCodexToggle = true;
-            CodexUseToggle.IsOn = string.Equals(ViewModel.LlmApiUrl, CodexProviderUrl,
-                StringComparison.OrdinalIgnoreCase);
-            _suppressCodexToggle = false;
-        }
         switch (status)
         {
             case Interop.DimmyNative.ClaudeCodeStatus.Ready:
@@ -2386,6 +2400,7 @@ public sealed partial class SettingsWindow : Window
                 {
                     Interop.DimmyNative.TrackEvent("codex.login_completed", new { outcome = "success" });
                     RefreshCodexIntegrationStatus();
+                    RefreshAuthIntegrationStatus(); // light up the Output subscription toggles
                     return;
                 }
             }
@@ -2447,40 +2462,8 @@ public sealed partial class SettingsWindow : Window
     {
         Interop.DimmyNative.RecheckCodex();
         RefreshCodexIntegrationStatus();
-    }
-
-    // Toggle: route the LLM (rewrite + recap that follows it) through the
-    // codex:// scheme. Reversible — toggling off restores the LLM URL we
-    // saved on the way in. Uses a TARGETED config write because ToJson
-    // omits an empty llm_api_url (if-empty-omit wipe protection), so we
-    // can't clear it through the generic save path.
-    private void CodexUse_Toggled(object sender, RoutedEventArgs e)
-    {
-        if (!_loaded || _suppressCodexToggle) return;
-        string newUrl;
-        if (CodexUseToggle.IsOn)
-        {
-            // Remember the previous provider only if it wasn't already codex.
-            if (!string.Equals(ViewModel.LlmApiUrl, CodexProviderUrl, StringComparison.OrdinalIgnoreCase))
-                _llmUrlBeforeCodex = ViewModel.LlmApiUrl;
-            newUrl = CodexProviderUrl;
-        }
-        else
-        {
-            newUrl = _llmUrlBeforeCodex ?? "";
-        }
-        ViewModel.LlmApiUrl = newUrl;
-        try
-        {
-            var payload = System.Text.Json.JsonSerializer.Serialize(
-                new System.Collections.Generic.Dictionary<string, object?> { ["llm_api_url"] = newUrl });
-            Interop.DimmyNative.dimmy_set_config_json(payload);
-            (Microsoft.UI.Xaml.Application.Current as App)?.ReloadConfig();
-        }
-        catch (Exception ex)
-        {
-            App.Log($"CodexUse toggle persist exc: {ex}", "Codex");
-        }
+        // The Output subscription toggles depend on codex readiness — keep
+        // them in sync after a recheck.
         RefreshAuthIntegrationStatus();
     }
 

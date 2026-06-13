@@ -495,11 +495,17 @@ pub async fn process_text(
         return Ok(text.to_string());
     }
 
-    // Codex (ChatGPT subscription) branch — keyed ONLY on the codex://
-    // URL scheme. Must run BEFORE the claude_code check, which also
-    // matches `auth_method == "subscription"` and would otherwise steal
-    // a codex call. Same subprocess-dispatch shape as claude_code.
-    if crate::codex::is_codex_url(api_url) {
+    // Codex (ChatGPT subscription) branch. Two triggers:
+    //   • the explicit codex:// URL scheme, OR
+    //   • auth_method == "subscription" AND the provider is OpenAI — this
+    //     is the Output → LLM "Use ChatGPT subscription" toggle, which
+    //     keeps the real OpenAI url/model and just flips auth_method (so
+    //     the model the user picked is passed to `codex exec -m`).
+    // Must run BEFORE the claude_code check (which also matches
+    // auth_method == "subscription", for Anthropic).
+    let codex_openai_sub =
+        auth_method == "subscription" && crate::provider::Provider::from_url(api_url).is_openai();
+    if crate::codex::is_codex_url(api_url) || codex_openai_sub {
         let combined = format!(
             "{}\n\n---\nProcess the following transcription. Output ONLY the transformed text, nothing else.\n\n[TRANSCRIPTION]\n{}\n[/TRANSCRIPTION]",
             system_prompt, text
@@ -788,10 +794,12 @@ pub async fn process_raw_prompt(
         "process_raw_prompt: max_tokens too large"
     );
 
-    // Codex (ChatGPT subscription) branch — keyed on the codex:// URL
-    // scheme, BEFORE the claude_code check + validate_url (which rejects
-    // non-HTTPS). Same subprocess shape as the recap claude_code path.
-    if crate::codex::is_codex_url(api_url) {
+    // Codex (ChatGPT subscription) branch — codex:// scheme OR
+    // subscription + OpenAI provider (the Output → Recap toggle). Runs
+    // BEFORE the claude_code check + validate_url (which rejects non-HTTPS).
+    let codex_openai_sub =
+        auth_method == "subscription" && crate::provider::Provider::from_url(api_url).is_openai();
+    if crate::codex::is_codex_url(api_url) || codex_openai_sub {
         let model_owned = model.to_string();
         let prompt_owned = user_prompt.to_string();
         let started_at = std::time::Instant::now();

@@ -27,9 +27,15 @@ struct MacCodexCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 14) {
-                Image(systemName: "bubble.left.and.text.bubble.right.fill")
-                    .font(.system(size: 26))
-                    .foregroundStyle(.secondary)
+                // Real OpenAI logomark (Assets/Providers/openai.imageset),
+                // template-rendered so it tints to the label colour in both
+                // light + dark — no invented tile.
+                Image("openai")
+                    .resizable()
+                    .renderingMode(.template)
+                    .scaledToFit()
+                    .foregroundStyle(.primary)
+                    .frame(width: 30, height: 30)
                     .frame(width: 40, height: 40)
 
                 VStack(alignment: .leading, spacing: 6) {

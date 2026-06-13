@@ -4950,10 +4950,14 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
         let model_is_claude = Provider::from_model_id(&parsed_model)
             .map(|v| v.is_anthropic())
             .unwrap_or(false);
-        if !model_is_claude {
+        // OpenAI + subscription routes through the Codex CLI (ChatGPT
+        // plan), so a non-Claude OpenAI model is fine — don't fall back.
+        let url_is_openai = Provider::from_url(&effective_url).is_openai();
+        if !model_is_claude && !url_is_openai {
             log(&format!(
-                "[LlmRaw] subscription requested but model '{}' is not Claude-family — \
-                 falling back to api_key path (subscription only routes to `claude` CLI)",
+                "[LlmRaw] subscription requested but model '{}' is neither Claude- nor \
+                 OpenAI-family — falling back to api_key path (subscription routes only to \
+                 the `claude` or `codex` CLI)",
                 parsed_model
             ));
             auth_method = "api_key".to_string();

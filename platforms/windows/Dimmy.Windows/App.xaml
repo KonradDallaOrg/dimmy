@@ -27,12 +27,16 @@
                                     UriSource="ms-appx:///Assets/notion-mark.svg" />
                     <SvgImageSource x:Key="AnthropicMarkSource"
                                     UriSource="ms-appx:///Assets/Providers/anthropic.svg" />
+                    <SvgImageSource x:Key="OpenAIMarkSource"
+                                    UriSource="ms-appx:///Assets/Providers/openai-mark.svg" />
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Dark">
                     <SvgImageSource x:Key="NotionMarkSource"
                                     UriSource="ms-appx:///Assets/notion-mark-dark.svg" />
                     <SvgImageSource x:Key="AnthropicMarkSource"
                                     UriSource="ms-appx:///Assets/Providers/anthropic-dark.svg" />
+                    <SvgImageSource x:Key="OpenAIMarkSource"
+                                    UriSource="ms-appx:///Assets/Providers/openai-mark-dark.svg" />
 
                     <!-- Lift the three foundational Dark-theme surface
                          colours by ~10/255 (~4%). WinUI's default dark
