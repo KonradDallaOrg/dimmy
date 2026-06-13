@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
@@ -72,7 +73,6 @@ public sealed partial class OnboardingWindow : Window
         }
 
         DetectPriorState();
-        SyncShortcutCombo();
         PopulateOnboardingModelCombo();
         _prefetch.StartBasePrefetch();
         _onboardingLoaded = true;
@@ -311,44 +311,119 @@ public sealed partial class OnboardingWindow : Window
         ViewModel.DownloadBytesText = $"{downloaded / 1024.0 / 1024.0:0} / {total / 1024.0 / 1024.0:0} MB";
     }
 
-    /// Select the curated combo that matches the wizard's current Shortcut
-    /// (seeded from live config in DetectPriorState). Case-insensitive — the
-    /// Rust hook stores "win+alt" lowercase. If the saved combo isn't one of
-    /// the presets (the user set something custom in Settings), keep it as an
-    /// extra item so finishing onboarding doesn't silently change it.
-    private void SyncShortcutCombo()
+    // ── Shortcut capture (free choice) ──────────────────────────────
+    // WinUI key events never see the Windows key (the OS reserves it) and
+    // treat Alt as a system key, so the user couldn't record Win+Alt — the
+    // app default. We poll the PHYSICAL key state via GetAsyncKeyState while
+    // recording, which sees every key including Win+Alt. The user clicks the
+    // box, holds any combo, releases, and that becomes the shortcut.
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int vKey);
+
+    private Microsoft.UI.Xaml.DispatcherTimer? _captureTimer;
+    private bool _capturing;
+    private bool _captureSawKey;
+    private readonly HashSet<string> _captureMods = new();
+    private string? _captureKey;
+
+    private void ShortcutCapture_Tapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)
     {
-        if (ShortcutCombo == null) return;
-        var current = (ViewModel.Shortcut ?? "").Trim();
-        foreach (var obj in ShortcutCombo.Items)
+        if (_capturing) return;
+        _capturing = true;
+        _captureSawKey = false;
+        _captureMods.Clear();
+        _captureKey = null;
+        ShortcutCaptureText.Text = "Press your keys...";
+        _captureTimer = new Microsoft.UI.Xaml.DispatcherTimer
         {
-            if (obj is ComboBoxItem item &&
-                string.Equals((item.Tag as string) ?? "", current, StringComparison.OrdinalIgnoreCase))
-            {
-                ShortcutCombo.SelectedItem = item;
-                return;
-            }
+            Interval = TimeSpan.FromMilliseconds(30)
+        };
+        _captureTimer.Tick += ShortcutCapture_Tick;
+        _captureTimer.Start();
+    }
+
+    private void ShortcutCapture_Tick(object? sender, object e)
+    {
+        static bool Down(int vk) => (GetAsyncKeyState(vk) & 0x8000) != 0;
+
+        var mods = new List<string>();
+        if (Down(0x5B) || Down(0x5C)) mods.Add("win");   // L/R Windows
+        if (Down(0x11)) mods.Add("ctrl");                 // Control
+        if (Down(0x12)) mods.Add("alt");                  // Menu/Alt
+        if (Down(0x10)) mods.Add("shift");                // Shift
+
+        string? key = null;
+        foreach (var (vk, token) in CaptureKeyTokens())
+        {
+            if (Down(vk)) { key = token; break; }
         }
-        if (!string.IsNullOrWhiteSpace(current))
+
+        bool anyDown = mods.Count > 0 || key != null;
+        if (anyDown)
         {
-            var custom = new ComboBoxItem { Content = current, Tag = current.ToLowerInvariant() };
-            ShortcutCombo.Items.Insert(0, custom);
-            ShortcutCombo.SelectedItem = custom;
+            _captureSawKey = true;
+            foreach (var m in mods) _captureMods.Add(m);
+            if (key != null) _captureKey = key;
+            ShortcutCaptureText.Text = BuildCombo(pretty: true);
         }
-        else
+        else if (_captureSawKey)
         {
-            ShortcutCombo.SelectedIndex = 0; // Win+Alt
+            FinishShortcutCapture();
         }
     }
 
-    private void ShortcutCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private void FinishShortcutCapture()
     {
-        if (ViewModel != null &&
-            ShortcutCombo?.SelectedItem is ComboBoxItem item &&
-            item.Tag is string tag && !string.IsNullOrWhiteSpace(tag))
+        _captureTimer?.Stop();
+        _captureTimer = null;
+        _capturing = false;
+
+        int modCount = _captureMods.Count;
+        bool hasKey = _captureKey != null;
+        bool isF = _captureKey is { Length: >= 2 } k && k[0] == 'f' && char.IsDigit(k[1]);
+        // Same acceptance as the Settings recorder: a modifier + a key, OR
+        // two modifiers (Win+Alt, Ctrl+Shift), OR a lone function key.
+        bool valid = (modCount >= 1 && hasKey) || modCount >= 2 || isF;
+
+        if (valid)
         {
-            ViewModel.Shortcut = tag;
+            ViewModel.Shortcut = BuildCombo(pretty: false);
+            ShortcutCaptureText.Text = BuildCombo(pretty: true);
         }
+        else
+        {
+            // Reject junk (a lone modifier / unmappable key); restore display.
+            ShortcutCaptureText.Text = ViewModel.Shortcut;
+        }
+    }
+
+    /// Build the combo string from the captured set. Order is fixed
+    /// (win, ctrl, alt, shift, key) so the same physical combo always
+    /// serializes identically. Lowercase for storage (the Rust hook is
+    /// case-insensitive); pretty-cased for the on-screen label.
+    private string BuildCombo(bool pretty)
+    {
+        var order = new[] { "win", "ctrl", "alt", "shift" };
+        var parts = new List<string>();
+        foreach (var m in order)
+            if (_captureMods.Contains(m))
+                parts.Add(pretty ? Capitalize(m) : m);
+        if (_captureKey != null)
+            parts.Add(pretty ? _captureKey.ToUpperInvariant() : _captureKey);
+        return string.Join(pretty ? "+" : "+", parts);
+    }
+
+    private static string Capitalize(string s) =>
+        s switch { "win" => "Win", "ctrl" => "Ctrl", "alt" => "Alt", "shift" => "Shift", _ => s };
+
+    /// Non-modifier virtual keys we accept as the final key, with the token
+    /// the Rust hook understands. Letters, digits, function keys, Space.
+    private static IEnumerable<(int vk, string token)> CaptureKeyTokens()
+    {
+        for (int vk = 0x41; vk <= 0x5A; vk++) yield return (vk, ((char)vk).ToString().ToLowerInvariant()); // A-Z
+        for (int vk = 0x30; vk <= 0x39; vk++) yield return (vk, ((char)vk).ToString());                    // 0-9
+        for (int i = 1; i <= 12; i++) yield return (0x70 + (i - 1), "f" + i);                               // F1-F12
+        yield return (0x20, "space");
     }
 
     private void DetectPriorState()
@@ -540,6 +615,7 @@ public sealed partial class OnboardingWindow : Window
     // advances away from it OR when the window closes. Stored so the
     // unsubscribe always pairs with the subscribe.
     private Action<string>? _trialTranscriptHandler;
+    private System.ComponentModel.PropertyChangedEventHandler? _trialStateHandler;
 
     private void SubscribeTrialTranscript()
     {
@@ -550,20 +626,60 @@ public sealed partial class OnboardingWindow : Window
         {
             _dq.TryEnqueue(() =>
             {
+                // Show the transcript in the box and mark a result, but DON'T
+                // jump to the success screen — the user reads what came out,
+                // then advances with Continue. Auto-skipping hid the result.
                 ViewModel.TrialText = text;
-                ViewModel.IsTrialSuccess = !string.IsNullOrWhiteSpace(text);
+                ViewModel.TrialHasResult = !string.IsNullOrWhiteSpace(text);
                 ViewModel.IsRecordingTrial = false;
+                ViewModel.TrialStatus = "";
             });
         };
         appVm.TranscriptReady += _trialTranscriptHandler;
+
+        // Live status so the hold visibly works: "Listening..." while the key
+        // is held + recording, "Transcribing..." during the post-release STT
+        // round-trip. Without this the box looks dead for ~2 s and PTT feels
+        // broken even though it captured fine.
+        _trialStateHandler = (s, ev) =>
+        {
+            if (ev.PropertyName != nameof(AppViewModel.CurrentState)) return;
+            _dq.TryEnqueue(() =>
+            {
+                switch (appVm.CurrentState)
+                {
+                    case AppState.Recording:
+                        ViewModel.IsRecordingTrial = true;
+                        ViewModel.TrialStatus = "Listening...";
+                        break;
+                    case AppState.Transcribing:
+                    case AppState.Processing:
+                        ViewModel.IsRecordingTrial = false;
+                        ViewModel.TrialStatus = "Transcribing...";
+                        break;
+                    default:
+                        ViewModel.IsRecordingTrial = false;
+                        if (!ViewModel.TrialHasResult) ViewModel.TrialStatus = "";
+                        break;
+                }
+            });
+        };
+        appVm.PropertyChanged += _trialStateHandler;
     }
 
     private void UnsubscribeTrialTranscript()
     {
-        if (_trialTranscriptHandler == null) return;
         var appVm = App.Instance?.AppViewModel;
-        if (appVm != null) appVm.TranscriptReady -= _trialTranscriptHandler;
-        _trialTranscriptHandler = null;
+        if (_trialTranscriptHandler != null)
+        {
+            if (appVm != null) appVm.TranscriptReady -= _trialTranscriptHandler;
+            _trialTranscriptHandler = null;
+        }
+        if (_trialStateHandler != null)
+        {
+            if (appVm != null) appVm.PropertyChanged -= _trialStateHandler;
+            _trialStateHandler = null;
+        }
     }
 
     private void NextStep_Click(object sender, RoutedEventArgs e)
@@ -661,6 +777,16 @@ public sealed partial class OnboardingWindow : Window
     }
 
     private void PrevStep_Click(object sender, RoutedEventArgs e) => ViewModel.PreviousStep();
+
+    /// Try-it → success screen. The user has read the transcript (or chose to
+    /// Skip) and explicitly advances; we no longer auto-jump on first result.
+    private void TrialContinue_Click(object sender, RoutedEventArgs e)
+        => ViewModel.IsTrialSuccess = true;
+
+    /// Success screen → back to the Try-it form, keeping the transcript shown
+    /// so the user can dictate again before finishing.
+    private void TrialBack_Click(object sender, RoutedEventArgs e)
+        => ViewModel.IsTrialSuccess = false;
 
     private void FinishOnboarding_Click(object sender, RoutedEventArgs e)
     {
