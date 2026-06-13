@@ -28,6 +28,20 @@ struct ProviderModel: Hashable {
     let stt: Bool
     let llm: Bool
     let recap: Bool
+    /// For local (On-device) entries only: the on-disk filename used by
+    /// the Rust core to check presence. The sentinel `parakeet:fp32`
+    /// flags the CoreML/Fluid bundle (checked via
+    /// `dimmy_parakeet_bundle_present`, not `dimmy_*model_exists`).
+    /// Nil for cloud rows — they have no on-device state.
+    let localFilename: String?
+
+    init(name: String, stt: Bool, llm: Bool, recap: Bool, localFilename: String? = nil) {
+        self.name = name
+        self.stt = stt
+        self.llm = llm
+        self.recap = recap
+        self.localFilename = localFilename
+    }
 }
 
 struct ProviderInfo: Hashable {
@@ -44,14 +58,21 @@ struct ProviderInfo: Hashable {
 
 enum ProviderCatalog {
     // Capability shorthands for the model tables.
-    private static func S(_ name: String) -> ProviderModel {
-        ProviderModel(name: name, stt: true, llm: false, recap: false)
+    private static func S(_ name: String, file: String? = nil) -> ProviderModel {
+        ProviderModel(name: name, stt: true, llm: false, recap: false, localFilename: file)
     }
-    private static func L(_ name: String) -> ProviderModel {
-        ProviderModel(name: name, stt: false, llm: true, recap: true)
+    private static func L(_ name: String, file: String? = nil) -> ProviderModel {
+        ProviderModel(name: name, stt: false, llm: true, recap: true, localFilename: file)
     }
     private static func SLR(_ name: String) -> ProviderModel {
         ProviderModel(name: name, stt: true, llm: true, recap: true)
+    }
+    /// On-device Parakeet bundle. Special-cased — not a whisper file,
+    /// presence comes from `dimmy_parakeet_bundle_present`. Sentinel
+    /// matches `ModelDownloadStepView.parakeetTag` so anywhere we treat
+    /// the bundle as a picker tag we use the same constant.
+    private static func P(_ name: String) -> ProviderModel {
+        ProviderModel(name: name, stt: true, llm: false, recap: false, localFilename: "parakeet:fp32")
     }
 
     /// Cloud providers' model rows are DERIVED from the single-source catalog
@@ -113,23 +134,27 @@ enum ProviderCatalog {
             accentHex: "#7C8CFF", consoleUrl: "",
             stt: true, llm: true,
             getKeyHint: "No key needed, runs fully on your machine, private and free. Models download on demand.",
+            // Filenames mirror `core/src/local_stt.rs::AVAILABLE_MODELS`
+            // (whisper) and `core/src/local_llm.rs::AVAILABLE_LLM_MODELS`
+            // (llama). Keep in sync or the green ✓ disagrees with the
+            // Voice/Output pickers.
             models: [
-                S("Whisper Tiny, 42 MB"),
-                S("Whisper Base, 78 MB, default"),
-                S("Whisper Small, 181 MB"),
-                S("Whisper Medium, 514 MB"),
-                S("Whisper Large-v3-Turbo Q5, 574 MB"),
-                S("Whisper Large-v3-Turbo Q8, 874 MB"),
-                S("Whisper Large-v3 Q5, 1.1 GB"),
-                S("Distil-Large-v3.5 Q8 EN, 818 MB"),
-                S("Distil-Large-v3.5 Q5 EN, 538 MB"),
-                S("Parakeet TDT v3, 2.5 GB"),
-                L("Gemma 4 E2B Q4, 3.1 GB"),
-                L("Gemma 4 E2B Q5, 3.7 GB"),
-                L("Gemma 4 E4B Q3, 4.1 GB"),
-                L("Gemma 4 E4B Q4, 5.0 GB"),
-                L("Gemma 4 E4B Q8, 8.2 GB"),
-                L("Phi-4 Mini Q4, 2.5 GB, default"),
+                S("Whisper Tiny, 42 MB",          file: "ggml-tiny-q8_0.bin"),
+                S("Whisper Base, 78 MB, default", file: "ggml-base-q8_0.bin"),
+                S("Whisper Small, 181 MB",        file: "ggml-small-q5_1.bin"),
+                S("Whisper Medium, 514 MB",       file: "ggml-medium-q5_0.bin"),
+                S("Whisper Large-v3-Turbo Q5, 574 MB", file: "ggml-large-v3-turbo-q5_0.bin"),
+                S("Whisper Large-v3-Turbo Q8, 874 MB", file: "ggml-large-v3-turbo-q8_0.bin"),
+                S("Whisper Large-v3 Q5, 1.1 GB",  file: "ggml-large-v3-q5_0.bin"),
+                S("Distil-Large-v3.5 Q8 EN, 818 MB", file: "ggml-distil-large-v3.5-q8_0.bin"),
+                S("Distil-Large-v3.5 Q5 EN, 538 MB", file: "ggml-distil-large-v3.5-q5_0.bin"),
+                P("Parakeet TDT v3, 2.5 GB"),
+                L("Gemma 4 E2B Q4, 3.1 GB",       file: "gemma-4-E2B-it-Q4_K_M.gguf"),
+                L("Gemma 4 E2B Q5, 3.7 GB",       file: "gemma-4-E2B-it-Q5_K_M.gguf"),
+                L("Gemma 4 E4B Q3, 4.1 GB",       file: "gemma-4-E4B-it-Q3_K_M.gguf"),
+                L("Gemma 4 E4B Q4, 5.0 GB",       file: "gemma-4-E4B-it-Q4_K_M.gguf"),
+                L("Gemma 4 E4B Q8, 8.2 GB",       file: "gemma-4-E4B-it-Q8_0.gguf"),
+                L("Phi-4 Mini Q4, 2.5 GB, default", file: "phi-4-mini-instruct-q4_k_m.gguf"),
             ]
         ),
 

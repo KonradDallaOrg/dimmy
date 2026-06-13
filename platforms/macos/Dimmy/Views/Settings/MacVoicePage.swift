@@ -34,7 +34,9 @@ struct MacVoicePage: View {
     private static let parakeetTag = "parakeet:fp32"
 
     /// Picker label for one whisper model dict from `listLocalModels()`:
-    /// "Large-v3-Turbo Q8 · 874 MB" (+ " · downloaded" once on disk).
+    /// "Large-v3-Turbo Q8 · 874 MB". The on-disk state is rendered as a
+    /// green ✓ next to the row (see `whisperPickerItem` below), not in
+    /// the text.
     private static func modelLabel(_ m: [String: Any]) -> String {
         let name = (m["name"] as? String) ?? (m["filename"] as? String) ?? "Model"
         let mb = m["size_mb"] as? Int ?? 0
@@ -46,9 +48,44 @@ struct MacVoicePage: View {
         } else {
             size = ""
         }
-        var label = size.isEmpty ? name : "\(name) · \(size)"
-        if (m["downloaded"] as? Bool) == true { label += " · downloaded" }
-        return label
+        return size.isEmpty ? name : "\(name) · \(size)"
+    }
+
+    /// One row inside the local-model Picker. Downloaded entries get a
+    /// green check (`checkmark.circle.fill`); not-yet-downloaded rows
+    /// stay plain text so the visual delta is unambiguous. The Rust
+    /// core's `dimmy_list_local_models` already ships a `downloaded:
+    /// bool` per entry (see `core/src/ffi.rs::dimmy_list_local_models`)
+    /// so Windows can do the exact same with no FFI change.
+    @ViewBuilder
+    fileprivate static func whisperPickerItem(_ m: [String: Any]) -> some View {
+        let filename = m["filename"] as? String ?? ""
+        let label = modelLabel(m)
+        if (m["downloaded"] as? Bool) == true {
+            Label(label, systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .tag(filename)
+        } else {
+            Text(label).tag(filename)
+        }
+    }
+
+    /// Parakeet picker row. The Mac path checks the in-process bundle
+    /// flag instead of the listLocalModels output because Parakeet is
+    /// not a whisper file — it's the CoreML/Fluid bundle owned by
+    /// `parakeet_fluid.rs` and surfaced via `parakeetBundlePresent`.
+    @ViewBuilder
+    fileprivate static func parakeetPickerItem(
+        label: String,
+        present: Bool
+    ) -> some View {
+        if present {
+            Label(label, systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .tag(parakeetTag)
+        } else {
+            Text(label).tag(parakeetTag)
+        }
     }
 
     /// User-facing label for the call-detect exclusion list. Maps the
@@ -341,11 +378,12 @@ struct MacVoicePage: View {
                     ) {
                         Picker("", selection: localModelPickerBinding) {
                             ForEach(localModels.indices, id: \.self) { i in
-                                Text(Self.modelLabel(localModels[i]))
-                                    .tag(localModels[i]["filename"] as? String ?? "")
+                                Self.whisperPickerItem(localModels[i])
                             }
-                            Text("Parakeet TDT v3 · 466 MB · Apple Neural Engine")
-                                .tag(Self.parakeetTag)
+                            Self.parakeetPickerItem(
+                                label: "Parakeet TDT v3 · 466 MB · Apple Neural Engine",
+                                present: appState.parakeetBundlePresent
+                            )
                         }
                         .labelsHidden()
                         .frame(width: 260)

@@ -836,8 +836,20 @@ struct MacOutputPage: View {
                             // loaded through LocalLlmCatalog — so adding a
                             // local model touches only core/src/local_llm.rs
                             // (matches Windows PopulateLocalLlmModels).
+                            //
+                            // Green ✓ next to entries already on disk
+                            // mirrors the Voice → Local model picker
+                            // (whisper/Parakeet). Presence query via
+                            // `dimmy_llm_model_exists`; cheap, runs only
+                            // when the picker re-renders.
                             ForEach(LocalLlmCatalog.models) { model in
-                                Text(model.label).tag(model.filename)
+                                if DimmyCore.shared.llmModelExists(model.filename) {
+                                    Label(model.label, systemImage: "checkmark.circle.fill")
+                                        .foregroundStyle(.green)
+                                        .tag(model.filename)
+                                } else {
+                                    Text(model.label).tag(model.filename)
+                                }
                             }
                         }
                         .labelsHidden()

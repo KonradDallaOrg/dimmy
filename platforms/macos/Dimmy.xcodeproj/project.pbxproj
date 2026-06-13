@@ -117,6 +117,7 @@
 		AA000902 /* FileLoadToMeetingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000902 /* FileLoadToMeetingService.swift */; };
 		AA000903 /* MacClaudeCodeCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000903 /* MacClaudeCodeCard.swift */; };
 		AA000906 /* MacCodexCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000906 /* MacCodexCard.swift */; };
+		AA000907 /* GroqKeyValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000907 /* GroqKeyValidator.swift */; };
 		AA000904 /* TelemetryBuckets.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000904 /* TelemetryBuckets.swift */; };
 		AA000905 /* SystemAudioCaptureService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000905 /* SystemAudioCaptureService.swift */; };
 		AA001110 /* SystemAudioProcessTap.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB001110 /* SystemAudioProcessTap.swift */; };
@@ -248,6 +249,7 @@
 		AB000305 /* ClaudeDesktopConnectSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeDesktopConnectSheet.swift; sourceTree = "<group>"; };
 		AB000306 /* CodexConnectSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexConnectSheet.swift; sourceTree = "<group>"; };
 		AB000906 /* MacCodexCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCodexCard.swift; sourceTree = "<group>"; };
+		AB000907 /* GroqKeyValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroqKeyValidator.swift; sourceTree = "<group>"; };
 		AB000800 /* DictHotkeyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictHotkeyManager.swift; sourceTree = "<group>"; };
 		AB000801 /* DictToastWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictToastWindow.swift; sourceTree = "<group>"; };
 		AB000099 /* Dimmy.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Dimmy.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -340,6 +342,7 @@
 				AB000902 /* FileLoadToMeetingService.swift */,
 				AB000904 /* TelemetryBuckets.swift */,
 				AB000905 /* SystemAudioCaptureService.swift */,
+				AB000907 /* GroqKeyValidator.swift */,
 				AB001110 /* SystemAudioProcessTap.swift */,
 				AB001101 /* CallDetectionManager.swift */,
 			);
@@ -765,6 +768,7 @@
 				AA000902 /* FileLoadToMeetingService.swift in Sources */,
 				AA000903 /* MacClaudeCodeCard.swift in Sources */,
 				AA000906 /* MacCodexCard.swift in Sources */,
+				AA000907 /* GroqKeyValidator.swift in Sources */,
 				AA000904 /* TelemetryBuckets.swift in Sources */,
 				AA000602 /* MeetingViewModel.swift in Sources */,
 				AA000603 /* MeetingSidebar.swift in Sources */,

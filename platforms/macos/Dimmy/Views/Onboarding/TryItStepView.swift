@@ -210,25 +210,16 @@ struct TryItStepView: View {
                 .multilineTextAlignment(.center)
                 .lineSpacing(4)
 
-            HStack(spacing: 12) {
-                Button(action: {
-                    withAnimation(.spring(response: 0.4)) { showSuccess = false }
-                }) {
-                    Text("Back").frame(maxWidth: 90)
-                }
-                .controlSize(.large)
-
-                Button(action: {
-                    appState.showPillIntro = true
-                    onComplete()
-                }) {
-                    Text("Start Using Dimmy")
-                        .font(.system(size: 14, weight: .semibold))
-                        .frame(maxWidth: 200)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+            Button(action: {
+                appState.showPillIntro = true
+                onComplete()
+            }) {
+                Text("Start Using Dimmy")
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(maxWidth: 200)
             }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
         }
     }
 
