@@ -4843,6 +4843,14 @@ public sealed partial class SettingsWindow : Window
         catch { }
     }
 
+    private void RestartOnboarding_Click(object sender, RoutedEventArgs e)
+    {
+        // Hand off to the App: it owns the OnboardingWindow lifecycle and
+        // the post-close config + hotkey refresh. Re-running is idempotent
+        // (existing models + keys are detected, nothing re-downloads).
+        (Microsoft.UI.Xaml.Application.Current as App)?.RelaunchOnboarding();
+    }
+
     // CheckForUpdateAsync + IsNewerVersion removed 2026-05-11 — the
     // GitHub-Releases poll has been replaced by UpdateService (Velopack
     // wrapper). The new path silently downloads the delta + surfaces

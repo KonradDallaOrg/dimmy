@@ -102,6 +102,21 @@ fn write_to_buf(s: &str, buf: *mut c_char, buf_len: c_int) -> c_int {
     copy_len as c_int
 }
 
+/// Pick the canonical transcript from the live streaming/chunked workers.
+/// A non-empty result from either is authoritative (its segments were
+/// already typed live). An empty result means the live session FAILED
+/// (WS dropped, auth error, mid-recording network blip) and the caller
+/// must fall back to a batch pass on the still-intact buffered audio —
+/// returning `None` here signals exactly that. Streaming wins over chunked
+/// when both are present (they never both run, but the ordering is fixed
+/// for determinism). Extracted so the work-loss guard has a regression
+/// test: an empty live result must never beat the batch retry.
+fn resolve_live_final(streaming: Option<String>, chunked: Option<String>) -> Option<String> {
+    streaming
+        .filter(|c| !c.trim().is_empty())
+        .or_else(|| chunked.filter(|c| !c.trim().is_empty()))
+}
+
 /// Write 16 kHz mono int16 WAV. Used by the history-audio retention
 /// path. Clamps + scales f32 [-1.0, 1.0] to i16 range with int16
 /// saturation so peaking samples don't wrap around. Returns the
@@ -1026,19 +1041,22 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
     let transcribe_start = std::time::Instant::now();
     // The chunked transcriber was already drained above (before the
     // audio buffer was cleared) so we just consume its result here.
-    let transcript = if let Some(cumulative) = streaming_final {
-        // Deepgram streaming already produced the full transcript live.
-        if cumulative.trim().is_empty() {
-            Err(crate::error::TranscribeError::Empty)
-        } else {
-            Ok(cumulative)
-        }
-    } else if let Some(cumulative) = chunked_final {
-        if cumulative.trim().is_empty() {
-            Err(crate::error::TranscribeError::Empty)
-        } else {
-            Ok(cumulative)
-        }
+    // The streaming (Deepgram) and chunked workers were drained above,
+    // before the audio buffer was cleared. A NON-EMPTY result from either
+    // is canonical — the segments were already typed live, so use it as-is.
+    // An EMPTY result means the live session failed (WS dropped, auth
+    // error, network blip mid-recording): fall through to a batch pass on
+    // the still-intact `processed` audio rather than discarding the whole
+    // recording. The host only suppresses the final paste once at least one
+    // segment was injected live, so a zero-segment failure still gets pasted
+    // from this batch transcript. Work-loss guard, 2026-06-13.
+    let had_live = streaming_final.is_some() || chunked_final.is_some();
+    let live_final = resolve_live_final(streaming_final, chunked_final);
+    if had_live && live_final.is_none() {
+        log("[StopRec] live streaming/chunked transcript was empty — falling back to batch STT on buffered audio (work-loss guard)");
+    }
+    let transcript = if let Some(cumulative) = live_final {
+        Ok(cumulative)
     } else if stt_mode == "local" {
         if local_stt_backend == "parakeet" {
             log("[StopRec] Local STT mode — backend: parakeet (batch)");
@@ -1340,7 +1358,7 @@ pub extern "C" fn dimmy_stop_recording(out_buf: *mut c_char, buf_len: c_int) -> 
             // `transcription.failed` telemetry without the body, so
             // the user had no way to find out why dictation broke.
             let truncated = if err_msg.len() > 300 {
-                format!("{}…", &err_msg[..300])
+                format!("{}…", crate::truncate_utf8(&err_msg, 300))
             } else {
                 err_msg.clone()
             };
@@ -2798,7 +2816,7 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
         ) {
             Ok(enhanced) => {
                 let preview = if enhanced.len() > 120 {
-                    format!("{}...", &enhanced[..120])
+                    format!("{}...", crate::truncate_utf8(&enhanced, 120))
                 } else {
                     enhanced.clone()
                 };
@@ -4669,9 +4687,10 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
             }
             Err(e) => {
                 let msg = format!("{}", e);
-                let mut truncated = msg;
-                truncated.truncate(200);
-                log(&format!("[LlmRaw] local failed: {}", truncated));
+                log(&format!(
+                    "[LlmRaw] local failed: {}",
+                    crate::truncate_utf8(&msg, 200)
+                ));
                 -3
             }
         };
@@ -4895,9 +4914,10 @@ pub unsafe extern "C" fn dimmy_llm_call_raw(
             // in dimmy.log for local debugging via the explicit log
             // call below.
             let display_short = format!("{}", e);
-            let mut truncated = display_short;
-            truncated.truncate(200);
-            log(&format!("[LlmRaw] failed: {}", truncated));
+            log(&format!(
+                "[LlmRaw] failed: {}",
+                crate::truncate_utf8(&display_short, 200)
+            ));
 
             // Categorize the error so the UI can render a specific,
             // actionable message instead of a generic "failed". The
@@ -8039,6 +8059,7 @@ pub unsafe extern "C" fn dimmy_call_detector_state(out: *mut c_char, out_len: c_
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::ffi::c_char;
 
     // ── categorize_llm_error_to_rc tests ─────────────────────────
@@ -8204,6 +8225,55 @@ mod tests {
         let (provider, model) = parse_recap_override("xyz:something");
         assert_eq!(provider, "cloud");
         assert_eq!(model, "xyz:something");
+    }
+
+    // ── resolve_live_final (work-loss guard) tests ──────────────────
+
+    #[test]
+    fn live_final_uses_nonempty_streaming() {
+        // The happy path: Deepgram streaming produced text live → it wins.
+        let r = resolve_live_final(Some("hello world".into()), None);
+        assert_eq!(r.as_deref(), Some("hello world"));
+    }
+
+    #[test]
+    fn live_final_empty_streaming_falls_back_to_batch() {
+        // Work-loss guard: an empty streaming result (WS dropped / auth
+        // failure) must NOT win — returning None tells the caller to run a
+        // batch pass on the buffered audio instead of discarding it.
+        assert_eq!(resolve_live_final(Some(String::new()), None), None);
+        assert_eq!(resolve_live_final(Some("   ".into()), None), None);
+        assert_eq!(resolve_live_final(Some("\n\t ".into()), None), None);
+    }
+
+    #[test]
+    fn live_final_uses_nonempty_chunked_when_no_streaming() {
+        let r = resolve_live_final(None, Some("chunked text".into()));
+        assert_eq!(r.as_deref(), Some("chunked text"));
+    }
+
+    #[test]
+    fn live_final_empty_chunked_falls_back_to_batch() {
+        assert_eq!(resolve_live_final(None, Some("  ".into())), None);
+    }
+
+    #[test]
+    fn live_final_none_when_no_live_workers() {
+        // No streaming, no chunked — the pure-batch dictation path.
+        assert_eq!(resolve_live_final(None, None), None);
+    }
+
+    #[test]
+    fn live_final_streaming_wins_over_chunked() {
+        // They never both run, but the ordering is fixed for determinism.
+        let r = resolve_live_final(Some("stream".into()), Some("chunk".into()));
+        assert_eq!(r.as_deref(), Some("stream"));
+    }
+
+    #[test]
+    fn live_final_empty_streaming_yields_to_nonempty_chunked() {
+        let r = resolve_live_final(Some(String::new()), Some("chunk".into()));
+        assert_eq!(r.as_deref(), Some("chunk"));
     }
 
     // ── write_to_buf tests ──────────────────────────────────────────
@@ -8440,6 +8510,7 @@ mod tests {
     // ── dimmy_has_api_key tests ─────────────────────────────────────
 
     #[test]
+    #[serial]
     fn has_api_key_returns_1_when_key_set() {
         ensure_test_state();
         let result = dimmy_has_api_key();
@@ -8449,6 +8520,7 @@ mod tests {
     // ── dimmy_is_recording tests ────────────────────────────────────
 
     #[test]
+    #[serial]
     fn is_recording_returns_0_when_not_recording() {
         ensure_test_state();
         // Ensure not recording
@@ -8459,6 +8531,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn is_recording_returns_1_when_recording() {
         ensure_test_state();
         if let Ok(mut r) = state().recording.lock() {
@@ -8475,6 +8548,7 @@ mod tests {
     // ── dimmy_get_amplitude tests ───────────────────────────────────
 
     #[test]
+    #[serial]
     fn get_amplitude_returns_zero_for_empty_buffer() {
         ensure_test_state();
         if let Ok(mut b) = state().audio_buffer.lock() {
@@ -8485,6 +8559,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn get_amplitude_returns_peak_value() {
         ensure_test_state();
         if let Ok(mut b) = state().audio_buffer.lock() {
@@ -8497,6 +8572,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn get_amplitude_clamps_to_1() {
         ensure_test_state();
         if let Ok(mut b) = state().audio_buffer.lock() {
@@ -8510,6 +8586,7 @@ mod tests {
     // ── dimmy_start_recording tests ─────────────────────────────────
 
     #[test]
+    #[serial]
     fn start_recording_returns_neg2_if_already_recording() {
         ensure_test_state();
         if let Ok(mut r) = state().recording.lock() {
@@ -8524,6 +8601,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn start_recording_returns_neg1_if_no_key_cloud_mode() {
         ensure_test_state();
         // Set cloud mode — API key is required
@@ -8544,6 +8622,7 @@ mod tests {
     // ── dimmy_cancel_recording tests ────────────────────────────────
 
     #[test]
+    #[serial]
     fn cancel_recording_clears_buffer_and_stops() {
         ensure_test_state();
         // Set up as if recording
@@ -8565,6 +8644,7 @@ mod tests {
     // ── dimmy_cycle_llm_style tests ─────────────────────────────────
 
     #[test]
+    #[serial]
     fn cycle_llm_style_forward_wraps_around() {
         ensure_test_state();
         // Set to last style
@@ -8578,6 +8658,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn cycle_llm_style_backward_wraps_around() {
         ensure_test_state();
         let styles = crate::llm::LlmStyle::ALL;
@@ -8596,6 +8677,7 @@ mod tests {
     // ── dimmy_cycle_llm_tone tests ──────────────────────────────────
 
     #[test]
+    #[serial]
     fn cycle_llm_tone_forward_wraps_around() {
         ensure_test_state();
         let tones = crate::llm::LlmTone::ALL;
@@ -8610,6 +8692,7 @@ mod tests {
     // ── dimmy_update_stats tests ────────────────────────────────────
 
     #[test]
+    #[serial]
     fn update_stats_accumulates() {
         ensure_test_state();
         let words_before = *state().stats_total_words.lock().unwrap();
@@ -8627,6 +8710,7 @@ mod tests {
     // ── dimmy_get_config_json tests ─────────────────────────────────
 
     #[test]
+    #[serial]
     fn get_config_json_returns_valid_json() {
         ensure_test_state();
         let mut buf = vec![0u8; 8192];
@@ -8642,6 +8726,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn get_config_json_null_buf_returns_neg1() {
         ensure_test_state();
         let result = dimmy_get_config_json(std::ptr::null_mut(), 100);
@@ -8651,6 +8736,7 @@ mod tests {
     // ── dimmy_set_config_json tests ─────────────────────────────────
 
     #[test]
+    #[serial]
     fn set_config_json_applies_language() {
         ensure_test_state();
         let json = CString::new(r#"{"language":"it"}"#).unwrap();
@@ -8666,6 +8752,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn set_config_json_null_ptr_returns_neg1() {
         ensure_test_state();
         let result = unsafe { dimmy_set_config_json(std::ptr::null()) };
@@ -8673,6 +8760,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn set_config_json_malformed_json_returns_neg1() {
         ensure_test_state();
         let bad = CString::new("not json at all {{{").unwrap();
@@ -8700,6 +8788,7 @@ mod tests {
     const OPENAI_URL: &str = "https://api.openai.com/v1/chat/completions";
 
     #[test]
+    #[serial]
     fn set_config_json_reloads_llm_key_when_provider_url_changes() {
         ensure_test_state();
         // Seed: Anthropic LLM key in keystore, no OpenAI LLM key.
@@ -8730,6 +8819,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn set_config_json_use_same_key_toggle_does_not_delete_stored_llm_key() {
         ensure_test_state();
         // Seed Anthropic key + point state at Anthropic.
@@ -8776,6 +8866,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn set_config_json_switching_providers_preserves_each_key() {
         ensure_test_state();
         state().key_store.replace_cache_for_testing(&[
@@ -8815,6 +8906,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn get_config_json_reports_per_provider_has_llm_keys() {
         ensure_test_state();
         // Seed: only Anthropic LLM has a key.
@@ -8847,6 +8939,7 @@ mod tests {
     // ── dimmy_list_devices_json tests ───────────────────────────────
 
     #[test]
+    #[serial]
     fn list_devices_json_returns_valid_json_array() {
         ensure_test_state();
         let mut buf = vec![0u8; 4096];
@@ -9017,6 +9110,7 @@ mod tests {
     // ── Negative space: invalid input returns error codes ──────────
 
     #[test]
+    #[serial]
     fn update_stats_rejects_negative_words() {
         ensure_test_state();
         let result = dimmy_update_stats(-1, 5.0);
@@ -9024,6 +9118,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn update_stats_rejects_negative_secs() {
         ensure_test_state();
         let result = dimmy_update_stats(0, -1.0);
@@ -9031,6 +9126,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn update_stats_rejects_nan_secs() {
         ensure_test_state();
         let result = dimmy_update_stats(0, f64::NAN);
@@ -9038,6 +9134,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn update_stats_rejects_inf_secs() {
         ensure_test_state();
         let result = dimmy_update_stats(0, f64::INFINITY);
@@ -9045,6 +9142,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn cycle_style_ignores_zero_direction() {
         ensure_test_state();
         let before = *state().llm_style.lock().unwrap();
@@ -9057,6 +9155,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn cycle_tone_ignores_invalid_direction() {
         ensure_test_state();
         let before = *state().llm_tone.lock().unwrap();
@@ -9066,6 +9165,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn get_amplitude_handles_nan_in_buffer() {
         ensure_test_state();
         if let Ok(mut b) = state().audio_buffer.lock() {
@@ -9082,6 +9182,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn get_amplitude_handles_all_nan_buffer() {
         ensure_test_state();
         if let Ok(mut b) = state().audio_buffer.lock() {
@@ -9093,6 +9194,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn stop_recording_rejects_null_buffer() {
         ensure_test_state();
         // Make sure not recording so it doesn't try to actually transcribe
@@ -9104,6 +9206,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn stop_recording_rejects_zero_length() {
         ensure_test_state();
         if let Ok(mut r) = state().recording.lock() {
@@ -9117,6 +9220,7 @@ mod tests {
     // ── dimmy_process_with_llm tests ────────────────────────────────
 
     #[test]
+    #[serial]
     fn process_with_llm_rejects_null_text() {
         ensure_test_state();
         let mut buf = vec![0u8; 1024];
@@ -9131,6 +9235,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn process_with_llm_rejects_null_buffer() {
         ensure_test_state();
         let text = CString::new("hello world").unwrap();
@@ -9139,6 +9244,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn process_with_llm_rejects_zero_buf_len() {
         ensure_test_state();
         let text = CString::new("hello world").unwrap();
@@ -9149,6 +9255,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn process_with_llm_empty_text_returns_empty() {
         ensure_test_state();
         let text = CString::new("").unwrap();
@@ -9164,6 +9271,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn process_with_llm_passthrough_when_disabled() {
         ensure_test_state();
         // Ensure LLM is disabled
@@ -9194,6 +9302,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn process_with_llm_passthrough_when_style_off() {
         ensure_test_state();
         // Enable LLM but set style to Off
@@ -9229,6 +9338,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn process_with_llm_graceful_no_key() {
         ensure_test_state();
         // Enable LLM with a real style but remove the key
@@ -9276,6 +9386,7 @@ mod tests {
     // ── dimmy_check_audio_health tests ────────────────────────────────
 
     #[test]
+    #[serial]
     fn check_audio_health_rejects_null_buffer() {
         ensure_test_state();
         let result = dimmy_check_audio_health(std::ptr::null_mut(), 100);
@@ -9283,6 +9394,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn check_audio_health_returns_valid_json() {
         ensure_test_state();
         let mut buf = vec![0u8; 4096];
@@ -9318,6 +9430,7 @@ mod tests {
     // ── dimmy_shutdown tests ──────────────────────────────────────────
 
     #[test]
+    #[serial]
     fn shutdown_clears_recording_flag() {
         ensure_test_state();
         // Set recording to true, then shutdown should clear it
@@ -9339,6 +9452,7 @@ mod tests {
     //  -1  → internal lock failure (not exercised here)
 
     #[test]
+    #[serial]
     fn meeting_pause_no_op_without_meeting() {
         ensure_test_state();
         // Defensive cleanup in case a prior test left a session.
@@ -9356,6 +9470,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn start_recording_blocked_when_meeting_active() {
         ensure_test_state();
         // Drop any leftover MEETING from prior tests that touched it.

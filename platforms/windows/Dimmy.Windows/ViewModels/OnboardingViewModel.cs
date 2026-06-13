@@ -10,10 +10,36 @@ public partial class OnboardingViewModel : ObservableObject
 
     [ObservableProperty] private int _currentStep;
     [ObservableProperty] private string _shortcut = "Win+Alt";
-    [ObservableProperty] private string _shortcutMode = "toggle";
+    // Must match the Rust config default ("hold", core/src/lib.rs) AND the
+    // wizard copy ("Hold to dictate, release to paste"): the trial step runs
+    // with the Rust default, so persisting a different mode at Finish breaks
+    // the taught gesture on the next launch.
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(TrialPromptVerb))]
+    private string _shortcutMode = "hold";
     [ObservableProperty] private bool _isTrialSuccess;
     [ObservableProperty] private string _trialText = "";
     [ObservableProperty] private bool _isRecordingTrial;
+    // True once a transcript has come back during the Try-it step. Drives the
+    // inline "Transcribed" confirmation + the Continue button, instead of
+    // auto-jumping to the success screen the instant text arrives (which hid
+    // the result before the user could read it).
+    [ObservableProperty] private bool _trialHasResult;
+
+    // Live status shown in the trial box while there's no result yet, so the
+    // user sees the hold working ("Listening...") and the post-release STT
+    // round-trip ("Transcribing...") instead of a box that looks frozen for
+    // the ~2 s it takes to come back.
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(TrialBoxPlaceholder))]
+    private string _trialStatus = "";
+
+    public string TrialBoxPlaceholder =>
+        string.IsNullOrEmpty(TrialStatus) ? "Your transcription will appear here." : TrialStatus;
+
+    // Mode-aware verb for the Try-it prompt: PTT is "Hold", toggle is "Press".
+    // The old copy was hardcoded "Hold", which lied in toggle mode.
+    public string TrialPromptVerb => ShortcutMode == "hold" ? "Hold" : "Press";
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsLocalSelected))]
@@ -38,10 +64,12 @@ public partial class OnboardingViewModel : ObservableObject
     private bool _isLocalReady;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanAdvanceFromChoiceStep))]
     [NotifyPropertyChangedFor(nameof(ChoiceContinueLabel))]
     private bool _isLocalFailed;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanAdvanceFromChoiceStep))]
     [NotifyPropertyChangedFor(nameof(ChoiceContinueLabel))]
     private bool _isLocalOffline;
 
@@ -72,14 +100,20 @@ public partial class OnboardingViewModel : ObservableObject
     public bool IsLocalSelected => Choice == ModelChoice.Local;
     public bool IsCloudSelected => Choice == ModelChoice.Cloud;
 
+    /// Enables the choice-step button. Failed/offline count as clickable
+    /// because the button then acts as Retry (NextStep_Click routes the
+    /// click to a fresh download instead of advancing). Without this the
+    /// label said "Try again" on a permanently disabled button.
     public bool CanAdvanceFromChoiceStep =>
-        (Choice == ModelChoice.Local && IsLocalReady) ||
+        (Choice == ModelChoice.Local && (IsLocalReady || IsLocalFailed || IsLocalOffline)) ||
         (Choice == ModelChoice.Cloud && IsCloudReady);
+
+    public bool IsLocalRetryable => IsLocalFailed || IsLocalOffline;
 
     public string ChoiceContinueLabel => Choice switch
     {
         ModelChoice.Local when IsLocalFailed => "Try again",
-        ModelChoice.Local when IsLocalOffline => "Offline",
+        ModelChoice.Local when IsLocalOffline => "Try again",
         ModelChoice.Local when !IsLocalReady => "Preparing model...",
         ModelChoice.Cloud when IsValidatingKey => "Verifying...",
         _ => "Continue",

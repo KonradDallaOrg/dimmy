@@ -385,7 +385,12 @@ pub fn log(msg: &str) {
         if let Ok(meta) = std::fs::metadata(&path) {
             if meta.len() > MAX_LOG_BYTES {
                 if let Ok(data) = std::fs::read_to_string(&path) {
-                    let half = data.len() / 2;
+                    let mut half = data.len() / 2;
+                    // Back off to a char boundary: log lines carry UTF-8
+                    // (accented chars) and slicing mid-code-point panics.
+                    while !data.is_char_boundary(half) {
+                        half -= 1;
+                    }
                     // Find the next newline after the halfway point to avoid splitting a line
                     let cut = data[half..]
                         .find('\n')
@@ -404,6 +409,21 @@ pub fn log(msg: &str) {
             let _ = writeln!(f, "[{}] {}", ts, msg);
         }
     }
+}
+
+/// Truncate to at most `max` bytes without splitting a UTF-8 code point.
+/// `&s[..200]` / `String::truncate(200)` panic when byte 200 falls inside
+/// a multi-byte char (Italian accents, emoji in API error bodies) — and a
+/// panic that crosses the extern "C" boundary aborts the whole host app.
+pub fn truncate_utf8(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let mut end = max;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
 }
 
 /// Non-sensitive config persisted to disk.
@@ -1775,6 +1795,32 @@ pub fn snapshot_config(state: &AppState) -> Result<AppConfig, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn truncate_utf8_ascii_exact_and_short() {
+        assert_eq!(truncate_utf8("hello", 200), "hello");
+        assert_eq!(truncate_utf8("hello", 5), "hello");
+        assert_eq!(truncate_utf8("hello", 3), "hel");
+        assert_eq!(truncate_utf8("", 200), "");
+    }
+
+    #[test]
+    fn truncate_utf8_backs_off_multibyte_boundary() {
+        // "à" is 2 bytes (0xC3 0xA0): cutting at byte 1 must yield "" not panic
+        assert_eq!(truncate_utf8("à", 1), "");
+        // Italian error body: cut lands mid-"è" with the old `&s[..200]` pattern
+        let body = "Errore di autenticazione: la chiave non è più valida (perché è scaduta)";
+        for max in 0..=body.len() {
+            let t = truncate_utf8(body, max);
+            assert!(t.len() <= max);
+            assert!(body.starts_with(t));
+        }
+        // 4-byte emoji
+        let s = "ok 🚀 fine";
+        for max in 0..=s.len() {
+            let _ = truncate_utf8(s, max); // must never panic
+        }
+    }
 
     #[test]
     fn resolve_meetings_dir_empty_override_uses_default() {

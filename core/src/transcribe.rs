@@ -108,7 +108,7 @@ pub async fn transcribe_audio(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        let body = Provider::scrub_api_key(&body[..body.len().min(200)], api_key);
+        let body = Provider::scrub_api_key(crate::truncate_utf8(&body, 200), api_key);
         return Err(crate::error::TranscribeError::Api {
             status: status.as_u16(),
             body,
@@ -240,7 +240,7 @@ async fn transcribe_audio_deepgram(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        let scrubbed = Provider::scrub_api_key(&body[..body.len().min(200)], api_key);
+        let scrubbed = Provider::scrub_api_key(crate::truncate_utf8(&body, 200), api_key);
         // Deepgram 4xx bodies are request-parameter errors (e.g. an invalid
         // `language`/`model`/`keyterm` combo), NOT transcribed content — safe
         // to log so the failure isn't a silent "HTTP 400".
@@ -318,7 +318,7 @@ async fn transcribe_audio_gemini(
         let body = response.text().await.unwrap_or_default();
         return Err(crate::error::TranscribeError::Api {
             status: status.as_u16(),
-            body: Provider::scrub_api_key(&body[..body.len().min(200)], api_key),
+            body: Provider::scrub_api_key(crate::truncate_utf8(&body, 200), api_key),
         });
     }
 

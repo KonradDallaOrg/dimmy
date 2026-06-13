@@ -27,7 +27,13 @@ struct ModelDownloadStepView: View {
         case downloading
         case completed
         case skipped
+        case failed
     }
+
+    /// Shown under the "Download failed" header. Generic copy: the FFI
+    /// only reports success/failure, and the detailed cause is in the
+    /// core log either way.
+    @State private var failureText = "Check your internet connection and try again."
 
     var body: some View {
         VStack(spacing: 20) {
@@ -96,6 +102,23 @@ struct ModelDownloadStepView: View {
                 Text("You can download the model later in Settings.")
                     .font(.caption)
                     .foregroundColor(.secondary)
+
+            case .failed:
+                VStack(spacing: 8) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                        Text("Download failed")
+                    }
+                    .font(.headline)
+                    Text(failureText)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                    Button("Try again") { startDownload() }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                }
             }
 
             Spacer()
@@ -261,7 +284,7 @@ struct ModelDownloadStepView: View {
                 DispatchQueue.main.async {
                     appState.isDownloadingParakeet = false
                     appState.parakeetBundlePresent = success
-                    downloadState = success ? .completed : .notStarted
+                    downloadState = success ? .completed : .failed
                 }
             }
         } else {
@@ -274,7 +297,7 @@ struct ModelDownloadStepView: View {
                 let success = DimmyCore.shared.downloadModel(target)
                 DispatchQueue.main.async {
                     appState.isDownloadingModel = false
-                    downloadState = success ? .completed : .notStarted
+                    downloadState = success ? .completed : .failed
                 }
             }
         }

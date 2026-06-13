@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
@@ -176,6 +177,7 @@ public sealed partial class OnboardingWindow : Window
         ViewModel.DownloadBytesText = "";
         ViewModel.IsLocalReady = false;
         ViewModel.IsLocalFailed = false;
+        ViewModel.IsLocalOffline = false;
 
         if (tag == ParakeetTag)
         {
@@ -309,8 +311,144 @@ public sealed partial class OnboardingWindow : Window
         ViewModel.DownloadBytesText = $"{downloaded / 1024.0 / 1024.0:0} / {total / 1024.0 / 1024.0:0} MB";
     }
 
+    // ── Shortcut capture (free choice) ──────────────────────────────
+    // WinUI key events never see the Windows key (the OS reserves it) and
+    // treat Alt as a system key, so the user couldn't record Win+Alt — the
+    // app default. We poll the PHYSICAL key state via GetAsyncKeyState while
+    // recording, which sees every key including Win+Alt. The user clicks the
+    // box, holds any combo, releases, and that becomes the shortcut.
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int vKey);
+
+    private Microsoft.UI.Xaml.DispatcherTimer? _captureTimer;
+    private bool _capturing;
+    private bool _captureSawKey;
+    private readonly HashSet<string> _captureMods = new();
+    private string? _captureKey;
+
+    private void ShortcutCapture_Tapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)
+    {
+        if (_capturing) return;
+        _capturing = true;
+        _captureSawKey = false;
+        _captureMods.Clear();
+        _captureKey = null;
+        ShortcutCaptureText.Text = "Press your keys...";
+        _captureTimer = new Microsoft.UI.Xaml.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(30)
+        };
+        _captureTimer.Tick += ShortcutCapture_Tick;
+        _captureTimer.Start();
+    }
+
+    private void ShortcutCapture_Tick(object? sender, object e)
+    {
+        static bool Down(int vk) => (GetAsyncKeyState(vk) & 0x8000) != 0;
+
+        var mods = new List<string>();
+        if (Down(0x5B) || Down(0x5C)) mods.Add("win");   // L/R Windows
+        if (Down(0x11)) mods.Add("ctrl");                 // Control
+        if (Down(0x12)) mods.Add("alt");                  // Menu/Alt
+        if (Down(0x10)) mods.Add("shift");                // Shift
+
+        string? key = null;
+        foreach (var (vk, token) in CaptureKeyTokens())
+        {
+            if (Down(vk)) { key = token; break; }
+        }
+
+        bool anyDown = mods.Count > 0 || key != null;
+        if (anyDown)
+        {
+            _captureSawKey = true;
+            foreach (var m in mods) _captureMods.Add(m);
+            if (key != null) _captureKey = key;
+            ShortcutCaptureText.Text = BuildCombo(pretty: true);
+        }
+        else if (_captureSawKey)
+        {
+            FinishShortcutCapture();
+        }
+    }
+
+    private void FinishShortcutCapture()
+    {
+        _captureTimer?.Stop();
+        _captureTimer = null;
+        _capturing = false;
+
+        int modCount = _captureMods.Count;
+        bool hasKey = _captureKey != null;
+        bool isF = _captureKey is { Length: >= 2 } k && k[0] == 'f' && char.IsDigit(k[1]);
+        // Same acceptance as the Settings recorder: a modifier + a key, OR
+        // two modifiers (Win+Alt, Ctrl+Shift), OR a lone function key.
+        bool valid = (modCount >= 1 && hasKey) || modCount >= 2 || isF;
+
+        if (valid)
+        {
+            ViewModel.Shortcut = BuildCombo(pretty: false);
+            ShortcutCaptureText.Text = BuildCombo(pretty: true);
+        }
+        else
+        {
+            // Reject junk (a lone modifier / unmappable key); restore display.
+            ShortcutCaptureText.Text = ViewModel.Shortcut;
+        }
+    }
+
+    /// Build the combo string from the captured set. Order is fixed
+    /// (win, ctrl, alt, shift, key) so the same physical combo always
+    /// serializes identically. Lowercase for storage (the Rust hook is
+    /// case-insensitive); pretty-cased for the on-screen label.
+    private string BuildCombo(bool pretty)
+    {
+        var order = new[] { "win", "ctrl", "alt", "shift" };
+        var parts = new List<string>();
+        foreach (var m in order)
+            if (_captureMods.Contains(m))
+                parts.Add(pretty ? Capitalize(m) : m);
+        if (_captureKey != null)
+            parts.Add(pretty ? _captureKey.ToUpperInvariant() : _captureKey);
+        return string.Join(pretty ? "+" : "+", parts);
+    }
+
+    private static string Capitalize(string s) =>
+        s switch { "win" => "Win", "ctrl" => "Ctrl", "alt" => "Alt", "shift" => "Shift", _ => s };
+
+    /// Non-modifier virtual keys we accept as the final key, with the token
+    /// the Rust hook understands. Letters, digits, function keys, Space.
+    private static IEnumerable<(int vk, string token)> CaptureKeyTokens()
+    {
+        for (int vk = 0x41; vk <= 0x5A; vk++) yield return (vk, ((char)vk).ToString().ToLowerInvariant()); // A-Z
+        for (int vk = 0x30; vk <= 0x39; vk++) yield return (vk, ((char)vk).ToString());                    // 0-9
+        for (int i = 1; i <= 12; i++) yield return (0x70 + (i - 1), "f" + i);                               // F1-F12
+        yield return (0x20, "space");
+    }
+
     private void DetectPriorState()
     {
+        // Show the shortcut the app is ACTUALLY using, not the wizard's
+        // hardcoded "Win+Alt" default. On a re-run (Settings to "Run setup
+        // again") the live config may be "ctrl+shift" or anything the user
+        // set; without this sync the wizard would display Win+Alt, the
+        // "Try it" step would register the real config shortcut, and the
+        // two wouldn't match (pressing the shown keys did nothing). On a
+        // fresh install AppViewModel already holds the Rust default, so
+        // this is a no-op there.
+        try
+        {
+            var appVm = (Application.Current as App)?.AppViewModel;
+            if (appVm != null)
+            {
+                if (!string.IsNullOrWhiteSpace(appVm.Shortcut))
+                    ViewModel.Shortcut = appVm.Shortcut;
+                if (!string.IsNullOrWhiteSpace(appVm.ShortcutMode))
+                    ViewModel.ShortcutMode = appVm.ShortcutMode;
+            }
+        }
+        catch (Exception ex) { Debug.WriteLine($"[Onboarding] DetectPriorState shortcut: {ex.Message}"); }
+
         try
         {
             var baseFile = ModelPaths.GetModelFilePath(ModelPaths.BaseModelFilename);
@@ -389,7 +527,43 @@ public sealed partial class OnboardingWindow : Window
     private void LocalCard_Tapped(object sender, TappedRoutedEventArgs e)
     {
         ViewModel.Choice = ModelChoice.Local;
-        if (ViewModel.IsLocalFailed) _prefetch.Retry();
+        if (ViewModel.IsLocalRetryable) RetryLocalDownload();
+    }
+
+    /// Restart the download for whichever local model is selected.
+    /// `_prefetch.Retry()` was wrong on both paths: it always re-fetches
+    /// whisper BASE (not the selected file) and is a no-op when the
+    /// service was disposed by a selection change — and it never knew
+    /// about Parakeet at all, so a failed 2.5 GB bundle download left
+    /// the wizard with no working retry. The Rust side resumes partial
+    /// .part files via HTTP Range, so a retry continues where it died.
+    private void RetryLocalDownload()
+    {
+        ViewModel.IsLocalFailed = false;
+        ViewModel.IsLocalOffline = false;
+        ViewModel.IsLocalReady = false;
+        ViewModel.LocalErrorText = "";
+        ViewModel.DownloadPercent = 0;
+        ViewModel.DownloadBytesText = "";
+
+        if (ViewModel.SelectedLocalModelTag == ParakeetTag)
+        {
+            _parakeetDownloadCts?.Cancel();
+            ViewModel.DownloadStatusText = "Starting Parakeet download...";
+            StartParakeetDownload();
+        }
+        else
+        {
+            ViewModel.DownloadStatusText = "Starting download...";
+            try { _prefetch.StateChanged -= Prefetch_StateChanged; } catch { }
+            try { _prefetch.Dispose(); } catch { }
+            _prefetch = new ModelPrefetchService();
+            _prefetch.StateChanged += Prefetch_StateChanged;
+            var tag = string.IsNullOrEmpty(ViewModel.SelectedLocalModelTag)
+                ? ModelPaths.BaseModelFilename
+                : ViewModel.SelectedLocalModelTag;
+            _prefetch.StartFor(tag, WhisperExpectedSize(tag));
+        }
     }
 
     private void CloudCard_Tapped(object sender, TappedRoutedEventArgs e)
@@ -441,6 +615,7 @@ public sealed partial class OnboardingWindow : Window
     // advances away from it OR when the window closes. Stored so the
     // unsubscribe always pairs with the subscribe.
     private Action<string>? _trialTranscriptHandler;
+    private System.ComponentModel.PropertyChangedEventHandler? _trialStateHandler;
 
     private void SubscribeTrialTranscript()
     {
@@ -451,24 +626,74 @@ public sealed partial class OnboardingWindow : Window
         {
             _dq.TryEnqueue(() =>
             {
+                // Show the transcript in the box and mark a result, but DON'T
+                // jump to the success screen — the user reads what came out,
+                // then advances with Continue. Auto-skipping hid the result.
                 ViewModel.TrialText = text;
-                ViewModel.IsTrialSuccess = !string.IsNullOrWhiteSpace(text);
+                ViewModel.TrialHasResult = !string.IsNullOrWhiteSpace(text);
                 ViewModel.IsRecordingTrial = false;
+                ViewModel.TrialStatus = "";
             });
         };
         appVm.TranscriptReady += _trialTranscriptHandler;
+
+        // Live status so the hold visibly works: "Listening..." while the key
+        // is held + recording, "Transcribing..." during the post-release STT
+        // round-trip. Without this the box looks dead for ~2 s and PTT feels
+        // broken even though it captured fine.
+        _trialStateHandler = (s, ev) =>
+        {
+            if (ev.PropertyName != nameof(AppViewModel.CurrentState)) return;
+            _dq.TryEnqueue(() =>
+            {
+                switch (appVm.CurrentState)
+                {
+                    case AppState.Recording:
+                        ViewModel.IsRecordingTrial = true;
+                        ViewModel.TrialStatus = "Listening...";
+                        break;
+                    case AppState.Transcribing:
+                    case AppState.Processing:
+                        ViewModel.IsRecordingTrial = false;
+                        ViewModel.TrialStatus = "Transcribing...";
+                        break;
+                    default:
+                        ViewModel.IsRecordingTrial = false;
+                        if (!ViewModel.TrialHasResult) ViewModel.TrialStatus = "";
+                        break;
+                }
+            });
+        };
+        appVm.PropertyChanged += _trialStateHandler;
     }
 
     private void UnsubscribeTrialTranscript()
     {
-        if (_trialTranscriptHandler == null) return;
         var appVm = App.Instance?.AppViewModel;
-        if (appVm != null) appVm.TranscriptReady -= _trialTranscriptHandler;
-        _trialTranscriptHandler = null;
+        if (_trialTranscriptHandler != null)
+        {
+            if (appVm != null) appVm.TranscriptReady -= _trialTranscriptHandler;
+            _trialTranscriptHandler = null;
+        }
+        if (_trialStateHandler != null)
+        {
+            if (appVm != null) appVm.PropertyChanged -= _trialStateHandler;
+            _trialStateHandler = null;
+        }
     }
 
     private void NextStep_Click(object sender, RoutedEventArgs e)
     {
+        // On the choice step a failed/offline local download turns the
+        // Continue button into "Try again" — retry, don't advance.
+        if (ViewModel.CurrentStep == 1 &&
+            ViewModel.Choice == ModelChoice.Local &&
+            ViewModel.IsLocalRetryable)
+        {
+            RetryLocalDownload();
+            return;
+        }
+
         // Capture the step the user is LEAVING — this is the one that's
         // "completed" (they finished it and are advancing). The post-
         // increment ViewModel.CurrentStep change happens below.
@@ -494,6 +719,11 @@ public sealed partial class OnboardingWindow : Window
         // into whatever app has focus + the user sees nothing here).
         if (ViewModel.CurrentStep == 3)
         {
+            // Make the LIVE hotkey match what the wizard shows. ShowPillAndHotkey
+            // registers AppViewModel.Shortcut, which on a re-run is the old saved
+            // value, not what the user just picked / saw on the shortcut step.
+            // Apply first so "Hold {Shortcut} and say something" actually fires.
+            App.Instance?.ApplyOnboardingShortcut(ViewModel.Shortcut, ViewModel.ShortcutMode);
             App.Instance?.ShowPillAndHotkey();
             SubscribeTrialTranscript();
         }
@@ -520,10 +750,17 @@ public sealed partial class OnboardingWindow : Window
                     });
                     break;
                 case ModelChoice.Cloud:
+                    // Pin the Groq STT endpoint explicitly: the validated key is
+                    // a Groq key, but on a re-run config.json may already point
+                    // api_url/api_model at another provider (Rust merge keeps
+                    // absent keys). Pair must match core/src/lib.rs
+                    // DEFAULT_API_URL / DEFAULT_MODEL.
                     json = JsonSerializer.Serialize(new
                     {
                         stt_mode = "cloud",
                         api_key = ViewModel.GroqApiKey.Trim(),
+                        api_url = "https://api.groq.com/openai/v1/audio/transcriptions",
+                        api_model = "whisper-large-v3-turbo",
                     });
                     break;
                 default:
@@ -540,6 +777,16 @@ public sealed partial class OnboardingWindow : Window
     }
 
     private void PrevStep_Click(object sender, RoutedEventArgs e) => ViewModel.PreviousStep();
+
+    /// Try-it → success screen. The user has read the transcript (or chose to
+    /// Skip) and explicitly advances; we no longer auto-jump on first result.
+    private void TrialContinue_Click(object sender, RoutedEventArgs e)
+        => ViewModel.IsTrialSuccess = true;
+
+    /// Success screen → back to the Try-it form, keeping the transcript shown
+    /// so the user can dictate again before finishing.
+    private void TrialBack_Click(object sender, RoutedEventArgs e)
+        => ViewModel.IsTrialSuccess = false;
 
     private void FinishOnboarding_Click(object sender, RoutedEventArgs e)
     {

@@ -350,6 +350,25 @@ public partial class App : Application
         }
     }
 
+    /// <summary>Apply a shortcut + mode chosen in onboarding to the LIVE
+    /// hotkey immediately. ShowPillAndHotkey early-returns when the pill is
+    /// already up (re-run from Settings), so it would never re-register the
+    /// new combo on its own — this does it explicitly. Safe before the
+    /// HotkeyService exists (first run): it just primes the AppViewModel and
+    /// ShowPillAndHotkey registers it when it creates the service.</summary>
+    public void ApplyOnboardingShortcut(string shortcut, string mode)
+    {
+        if (!string.IsNullOrWhiteSpace(shortcut))
+            _appViewModel.Shortcut = shortcut;
+        if (!string.IsNullOrWhiteSpace(mode))
+            _appViewModel.ShortcutMode = mode;
+        if (_hotkeyService != null)
+        {
+            _hotkeyService.PttMode = _appViewModel.ShortcutMode == "hold";
+            _hotkeyService.Register(_appViewModel.Shortcut);
+        }
+    }
+
     /// <summary>Show pill + register hotkey. Safe to call multiple times.</summary>
     public void ShowPillAndHotkey()
     {
@@ -1135,6 +1154,47 @@ public partial class App : Application
         // (see OnboardingWindow.PersistModelChoice). Closing without choosing
         // leaves the marker absent → onboarding shows again next launch.
         StartNormalMode();
+    }
+
+    /// Re-open the welcome guide on demand from Settings → About. The app
+    /// is already in normal mode (pill + hotkey + tray live), so unlike the
+    /// first-launch path this MUST NOT call StartNormalMode again — that
+    /// would stack a second TrayService / taskbar anchor. The wizard's
+    /// DetectPriorState recognises already-downloaded models and an existing
+    /// saved key, so a re-run never re-downloads or asks for a key the user
+    /// already has. On close we pull the (possibly changed) config back into
+    /// the running UI and re-register the hotkey so a new model / shortcut
+    /// applies without a restart.
+    public void RelaunchOnboarding()
+    {
+        if (_onboardingWindow is not null)
+        {
+            _onboardingWindow.Activate();
+            return;
+        }
+        _onboardingWindow = new OnboardingWindow();
+        _onboardingWindow.Closed += OnboardingRerunClosed;
+        _onboardingWindow.Activate();
+    }
+
+    private void OnboardingRerunClosed(object sender, WindowEventArgs args)
+    {
+        _onboardingWindow = null;
+        // The wizard already persisted any choice via dimmy_set_config_json
+        // (single-writer merge preserves untouched keys). Ensure the marker
+        // exists, then refresh the live view model + hotkey from the core.
+        MarkOnboardingComplete();
+        try
+        {
+            ReloadConfig();
+            _hotkeyService?.Register(_appViewModel.Shortcut);
+            if (_hotkeyService != null)
+                _hotkeyService.PttMode = _appViewModel.ShortcutMode == "hold";
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[Onboarding rerun] refresh failed: {ex.Message}");
+        }
     }
 
     /// Subtitle-style routing of stt_chunk events: the caption window
