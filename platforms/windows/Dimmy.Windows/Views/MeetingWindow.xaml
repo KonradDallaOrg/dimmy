@@ -447,6 +447,17 @@
                 <TextBlock x:Name="DoneMeta" FontSize="12"
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                            Text=""/>
+                <!-- Meeting-type chip: the auto-detected (or chosen) meeting
+                     type, Notion-style. Hidden when the type is unresolved. -->
+                <Border x:Name="DoneTypeChip" Visibility="Collapsed"
+                        HorizontalAlignment="Left"
+                        Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+                        BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                        BorderThickness="1" CornerRadius="10"
+                        Padding="9,2,9,2" Margin="0,2,0,0">
+                  <TextBlock x:Name="DoneTypeChipText" FontSize="11" FontWeight="SemiBold"
+                             Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text=""/>
+                </Border>
               </StackPanel>
 
               <!-- Card containing the mirrored-stereo waveform + the

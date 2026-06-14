@@ -91,6 +91,16 @@ struct MeetingDoneView: View {
             Text(vm.doneMeta)
                 .font(.system(size: 11))
                 .foregroundStyle(Color.macTextSecondary)
+            // Meeting-type chip (Notion-style): the auto-detected (or
+            // chosen) type. Hidden when unresolved (auto/unknown).
+            if let typeLabel = MeetingPostProcessService.friendlyTypeLabel(vm.doneSections["__TYPE__"]) {
+                Text(typeLabel)
+                    .font(.system(size: 10, weight: .semibold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.macTextSecondary.opacity(0.12)))
+                    .foregroundStyle(Color.macTextSecondary)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)

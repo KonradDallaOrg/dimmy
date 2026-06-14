@@ -425,4 +425,134 @@ public class MeetingRecapHelpersTests
         Assert.Equal(MeetingRecapHelpers.CanonicalSectionKeys.Count,
             MeetingRecapHelpers.SectionHeadings.Count);
     }
+
+    // ── Meeting-type (Auto + override + __TYPE__ chip) ─────────────
+
+    [Fact]
+    public void Prompt_default_asks_model_to_classify_meeting_type()
+    {
+        var prompt = MeetingRecapHelpers.BuildStructuredRecapPrompt("body");
+        Assert.Contains("classify", prompt, System.StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("<!-- dimmy-type:", prompt);
+        // The classifier key list is offered to the model.
+        Assert.Contains("brainstorm", prompt);
+        Assert.Contains("customer", prompt);
+    }
+
+    [Fact]
+    public void Prompt_specific_type_injects_label_and_guidance_and_tag()
+    {
+        var prompt = MeetingRecapHelpers.BuildStructuredRecapPrompt("body", "", "brainstorm");
+        Assert.Contains("Brainstorming", prompt);            // the label
+        Assert.Contains("group ideas by theme", prompt);     // the guidance
+        Assert.Contains("<!-- dimmy-type: brainstorm -->", prompt); // the forced tag
+    }
+
+    [Fact]
+    public void Prompt_with_type_still_emits_all_11_sections_in_order()
+    {
+        // INVARIANCE: a meeting type only nudges emphasis — it must NEVER
+        // change the 11-section contract or its order.
+        var prompt = MeetingRecapHelpers.BuildStructuredRecapPrompt("body", "", "customer");
+        int last = -1;
+        foreach (var key in MeetingRecapHelpers.CanonicalSectionKeys)
+        {
+            int idx = prompt.IndexOf($"==={key}===", System.StringComparison.Ordinal); // marker is ===KEY===
+            Assert.True(idx > last, $"section {key} out of order or missing with a forced type");
+            last = idx;
+        }
+    }
+
+    [Fact]
+    public void Parse_captures_type_tag_into_sentinel()
+    {
+        var raw = "# Sync\n<!-- dimmy-type: customer -->\n\n## ===TLDR===\nbody";
+        var s = MeetingRecapHelpers.ParseStructuredRecap(raw);
+        Assert.Equal("Sync", s["__TITLE__"]);
+        Assert.Equal("customer", s["__TYPE__"]);
+        Assert.Equal("body", s["TLDR"]);
+        // The tag must NOT leak into a visible section.
+        Assert.DoesNotContain("dimmy-type", s["TLDR"]);
+    }
+
+    [Fact]
+    public void Parse_unknown_type_tag_normalizes_to_general()
+    {
+        var raw = "# T\n<!-- dimmy-type: nonsense -->\n\n## ===TLDR===\nb";
+        var s = MeetingRecapHelpers.ParseStructuredRecap(raw);
+        Assert.Equal("general", s["__TYPE__"]);
+    }
+
+    [Fact]
+    public void Parse_type_tag_only_still_falls_back_to_TLDR()
+    {
+        // A recap with a title + type tag but NO section markers must still
+        // land the body in TLDR (the __TYPE__ sentinel is not a real section).
+        var raw = "# Title\n<!-- dimmy-type: lecture -->\n\nThe whole body.";
+        var s = MeetingRecapHelpers.ParseStructuredRecap(raw);
+        Assert.Equal("lecture", s["__TYPE__"]);
+        Assert.Contains("The whole body.", s["TLDR"]);
+        Assert.DoesNotContain("dimmy-type", s["TLDR"]);
+    }
+
+    [Fact]
+    public void RoundTrip_type_tag_survives_build_and_reparse()
+    {
+        var sections = new Dictionary<string, string>
+        {
+            ["__TITLE__"] = "Quarter plan",
+            ["__TYPE__"] = "planning",
+            ["TLDR"] = "Ship in Q3.",
+        };
+        var md = MeetingRecapHelpers.BuildMarkdownFromSections(sections);
+        Assert.Contains("<!-- dimmy-type: planning -->", md);
+        var reparsed = MeetingRecapHelpers.ParseStructuredRecap(md);
+        Assert.Equal("planning", reparsed["__TYPE__"]);
+        Assert.Equal("Quarter plan", reparsed["__TITLE__"]);
+        Assert.Equal("Ship in Q3.", reparsed["TLDR"]);
+    }
+
+    [Fact]
+    public void Build_does_not_emit_tag_for_auto_or_unknown_type()
+    {
+        var auto = MeetingRecapHelpers.BuildMarkdownFromSections(new Dictionary<string, string>
+        {
+            ["__TITLE__"] = "T", ["__TYPE__"] = "auto", ["TLDR"] = "x",
+        });
+        Assert.DoesNotContain("dimmy-type", auto);
+    }
+
+    [Theory]
+    [InlineData("auto", null)]
+    [InlineData("", null)]
+    [InlineData("nonsense", null)]
+    [InlineData("brainstorm", "Brainstorming")]
+    [InlineData("one_on_one", "1:1")]
+    public void FriendlyTypeLabel_only_resolves_known_non_auto_keys(string? key, string? expected)
+    {
+        Assert.Equal(expected, MeetingRecapHelpers.FriendlyTypeLabel(key));
+    }
+
+    [Theory]
+    [InlineData("customer", "customer")]
+    [InlineData(" brainstorm ", "brainstorm")]
+    [InlineData("CUSTOMER", "customer")]
+    [InlineData("zzz", "general")]
+    [InlineData("", "general")]
+    public void NormalizeTypeKey_maps_known_and_falls_back_to_general(string key, string expected)
+    {
+        Assert.Equal(expected, MeetingRecapHelpers.NormalizeTypeKey(key));
+    }
+
+    [Fact]
+    public void MeetingTypes_contains_auto_and_general_and_unique_keys()
+    {
+        var keys = MeetingRecapHelpers.MeetingTypes.Select(t => t.Key).ToList();
+        Assert.Contains("auto", keys);
+        Assert.Contains("general", keys);
+        Assert.Equal(keys.Count, keys.Distinct().Count());
+        // Every non-auto type has a non-empty label.
+        foreach (var t in MeetingRecapHelpers.MeetingTypes)
+            Assert.False(string.IsNullOrWhiteSpace(t.Label), $"type {t.Key} has no label");
+    }
 }

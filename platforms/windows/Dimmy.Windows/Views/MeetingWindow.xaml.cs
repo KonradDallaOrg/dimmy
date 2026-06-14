@@ -1462,6 +1462,19 @@ public sealed partial class MeetingWindow : Window
     private void ApplyDoneSections(Dictionary<string, string> sections)
     {
         _lastDoneSections = sections;
+        // Meeting-type chip from the parsed __TYPE__ sentinel. Hidden when
+        // unresolved (auto/unknown → FriendlyTypeLabel returns null).
+        var typeLabel = Helpers.MeetingRecapHelpers.FriendlyTypeLabel(
+            sections.GetValueOrDefault("__TYPE__", ""));
+        if (typeLabel != null)
+        {
+            DoneTypeChipText.Text = typeLabel;
+            DoneTypeChip.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            DoneTypeChip.Visibility = Visibility.Collapsed;
+        }
         // CONTEXT + HIGHLIGHTS + NARRATIVE + FOLLOWUPS were defined
         // in the prompt but silently dropped by the UI before — the
         // four cards below were missing. Without them the LLM's

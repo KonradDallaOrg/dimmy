@@ -90,7 +90,8 @@ enum MeetingPostProcessService {
     static func runRecap(dir: String,
                          transcript: String,
                          modelOverride: String? = nil,
-                         notionAutoSend: Bool = false) -> Swift.Result<Result, Failure> {
+                         notionAutoSend: Bool = false,
+                         meetingType: String = "") -> Swift.Result<Result, Failure> {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .failure(.emptyTranscript) }
 
@@ -99,7 +100,7 @@ enum MeetingPostProcessService {
         // emphasis. Missing file → empty string → no notes section.
         let notesURL = URL(fileURLWithPath: dir).appendingPathComponent("notes.md")
         let notes = (try? String(contentsOf: notesURL, encoding: .utf8)) ?? ""
-        let prompt = buildStructuredRecapPrompt(transcript: trimmed, notes: notes)
+        let prompt = buildStructuredRecapPrompt(transcript: trimmed, notes: notes, meetingType: meetingType)
         let model = (modelOverride?.isEmpty == false) ? modelOverride! : pickRecapModel()
         // 32K tokens — same ceiling Win uses to give Opus 4.7 / Gemini
         // 3.1 Pro headroom for adaptive-thinking budgets. The provider
@@ -184,13 +185,108 @@ enum MeetingPostProcessService {
         "FOLLOWUPS",
     ]
 
-    static func buildStructuredRecapPrompt(transcript: String, notes: String = "") -> String {
+    // MARK: - Meeting type (Auto + override + __TYPE__ chip)
+    //
+    // A meeting type NEVER changes the 11-section contract — it only
+    // shifts emphasis via a hint injected into the prompt (like the
+    // listener's notes). `key` is persisted in the invisible
+    // `<!-- dimmy-type: KEY -->` line of recap.md; `label` is the chip
+    // text; `guidance` is the emphasis hint. "auto" = the model
+    // classifies + emits the detected key; "general" = neutral fallback.
+    // Keep in sync with the Win copy (MeetingRecapHelpers.MeetingTypes).
+
+    struct MeetingTypeInfo { let key: String; let label: String; let guidance: String }
+
+    static let meetingTypes: [MeetingTypeInfo] = [
+        MeetingTypeInfo(key: "auto", label: "Auto-detect", guidance: ""),
+        MeetingTypeInfo(key: "one_on_one", label: "1:1",
+            guidance: "A 1:1 between two people. Emphasize feedback exchanged, career/growth topics, sentiment and rapport, and personal commitments. ACTIONS and FOLLOWUPS matter most; KEY_DECISIONS are often light."),
+        MeetingTypeInfo(key: "standup", label: "Standup / status",
+            guidance: "A short status sync. In NARRATIVE and TOPICS organize by person or workstream: what is done, in progress, and blocked. Surface blockers prominently in RISKS. Keep it brief."),
+        MeetingTypeInfo(key: "planning", label: "Planning",
+            guidance: "A planning, sprint or roadmap session. Emphasize goals, scoped work, owners, estimates and deadlines under ACTIONS and NEXT_STEPS; capture scope decisions in KEY_DECISIONS and dependencies in RISKS."),
+        MeetingTypeInfo(key: "technical", label: "Technical / design review",
+            guidance: "A technical or design review. Emphasize the options and approaches considered with their tradeoffs in TOPICS, the chosen direction in KEY_DECISIONS, unresolved technical questions in OPEN_QUESTIONS, and risks or dependencies in RISKS."),
+        MeetingTypeInfo(key: "brainstorm", label: "Brainstorming",
+            guidance: "A brainstorming or ideation session. In TOPICS group ideas by theme; in HIGHLIGHTS surface the most promising directions. Expect KEY_DECISIONS to be light or empty (this is divergent thinking, not decisions). Capture parked ideas in FOLLOWUPS."),
+        MeetingTypeInfo(key: "interview", label: "Interview (hiring)",
+            guidance: "A hiring or candidate interview. Stay factual and evidence-based. In TOPICS capture the areas probed and what the candidate demonstrated; surface strengths in HIGHLIGHTS and concerns in RISKS. Do NOT invent a hire / no-hire verdict unless it was explicitly stated."),
+        MeetingTypeInfo(key: "customer", label: "Customer call",
+            guidance: "A customer-facing call (sales, discovery, or user research). Emphasize the customer's needs, pain points and goals, objections or concerns, and any commitments. Capture feature requests and insights in TOPICS; relationship or deal next steps in NEXT_STEPS."),
+        MeetingTypeInfo(key: "lecture", label: "Lecture / talk",
+            guidance: "A talk, lecture, webinar or presentation the user is mostly listening to. Emphasize the key concepts and structured takeaways in TOPICS and HIGHLIGHTS, and write a teaching-quality NARRATIVE. ACTIONS and KEY_DECISIONS are usually empty (this is learning, not a working meeting)."),
+        MeetingTypeInfo(key: "general", label: "General", guidance: ""),
+    ]
+
+    static let typeTagPrefix = "<!-- dimmy-type:"
+
+    /// Friendly label for a stored key, or nil for "auto"/unknown (no chip).
+    static func friendlyTypeLabel(_ key: String?) -> String? {
+        guard let key = key, !key.isEmpty, key != "auto" else { return nil }
+        return meetingTypes.first { $0.key.caseInsensitiveCompare(key) == .orderedSame && $0.key != "auto" }?.label
+    }
+
+    /// Normalise a raw type token (LLM tag or UI pick) to a known key;
+    /// unknown / empty → "general".
+    static func normalizeTypeKey(_ key: String?) -> String {
+        if let key = key?.trimmingCharacters(in: .whitespaces), !key.isEmpty,
+           let hit = meetingTypes.first(where: { $0.key.caseInsensitiveCompare(key) == .orderedSame }) {
+            return hit.key
+        }
+        return "general"
+    }
+
+    /// Extract the `<!-- dimmy-type: KEY -->` tag from the preamble (before
+    /// the first section marker / heading). Used by both parse paths.
+    static func extractTypeTag(_ raw: String) -> String? {
+        for line in raw.split(separator: "\n", omittingEmptySubsequences: false) {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if t.lowercased().hasPrefix(typeTagPrefix) {
+                if let end = t.range(of: "-->") {
+                    let prefixEnd = t.index(t.startIndex, offsetBy: typeTagPrefix.count)
+                    let inner = String(t[prefixEnd..<end.lowerBound])
+                    return normalizeTypeKey(inner.trimmingCharacters(in: .whitespaces))
+                }
+            }
+            // The tag lives in the preamble only — stop at the first section.
+            if t.hasPrefix("===") || t.hasPrefix("## ") { break }
+        }
+        return nil
+    }
+
+    private static func classifierKeyList() -> String {
+        meetingTypes.filter { $0.key != "auto" }.map { $0.key }.joined(separator: ", ")
+    }
+
+    /// The meeting-type block injected into the recap prompt for a given
+    /// type key. "auto"/empty → ask the model to classify + emit the tag.
+    static func typeGuidanceBlock(_ meetingType: String) -> String {
+        let typeKey = meetingType.trimmingCharacters(in: .whitespaces).isEmpty
+            ? "auto" : meetingType.trimmingCharacters(in: .whitespaces)
+        if typeKey == "auto" {
+            return "## Meeting type (classify, then tailor)\n"
+                + "First infer the meeting type from the transcript. IMMEDIATELY after the title "
+                + "line, output exactly one line: `\(typeTagPrefix) KEY -->` where KEY is the single "
+                + "best fit from: \(classifierKeyList()). Then write every section with the emphasis "
+                + "appropriate to that type — for some types a section will naturally be light or "
+                + "empty (`—`), and that is correct. Never mention the type tag in the prose.\n"
+        }
+        let info = meetingTypes.first { $0.key == typeKey } ?? meetingTypes.last!
+        return "## Meeting type: \(info.label)\n"
+            + (info.guidance.isEmpty ? "" : info.guidance + " ")
+            + "Keep ALL 11 sections; let the ones that do not apply be `—`. IMMEDIATELY after the "
+            + "title line, output exactly one line: `\(typeTagPrefix) \(info.key) -->`. "
+            + "Never mention the type tag in the prose.\n"
+    }
+
+    static func buildStructuredRecapPrompt(transcript: String, notes: String = "", meetingType: String = "") -> String {
         // Verbatim port of MeetingWindow.xaml.cs::BuildStructuredRecapPrompt.
         // Notion-style recap targeting reasoning-tier models (Opus 4.7
         // adaptive thinking, Gemini 3.1 Pro thinkingLevel=high, GPT-5).
         // Leading spaces matter for the parser ===KEY=== markers — do
         // not reflow.
         let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        let typeBlock = typeGuidanceBlock(meetingType)
         // Listener's notes (notes.md) are the user's own emphasis — fold
         // them in as a HIGH PRIORITY appendix after the transcript so the
         // model weights timestamps + content. Verbatim port of Win
@@ -223,6 +319,7 @@ enum MeetingPostProcessService {
         ## Output language
         Auto-detect from the transcript. For mixed languages, pick the dominant one. Do NOT translate. If the transcript is in Italian, write the recap in Italian.
 
+        \(typeBlock)
         ## Sections (emit ALL of them, in this order)
 
         ## ===CONTEXT===
@@ -316,6 +413,8 @@ enum MeetingPostProcessService {
                 break
             }
         }
+        // Invisible `<!-- dimmy-type: KEY -->` tag → __TYPE__ sentinel.
+        let capturedType = extractTypeTag(raw)
 
         // ===KEY=== markers are ASCII, so character-distance is safe
         // (no multi-byte ambiguity inside the marker itself).
@@ -327,13 +426,19 @@ enum MeetingPostProcessService {
             }
         }
         if hits.isEmpty {
-            var fallback = ["TLDR": raw.trimmingCharacters(in: .whitespacesAndNewlines)]
+            // Drop any type-tag line so it never shows inside the TLDR card.
+            let cleaned = raw.split(separator: "\n", omittingEmptySubsequences: false)
+                .filter { !$0.trimmingCharacters(in: .whitespaces).lowercased().hasPrefix(typeTagPrefix) }
+                .joined(separator: "\n")
+            var fallback = ["TLDR": cleaned.trimmingCharacters(in: .whitespacesAndNewlines)]
             if let capturedTitle { fallback["__TITLE__"] = capturedTitle }
+            if let capturedType { fallback["__TYPE__"] = capturedType }
             return fallback
         }
         hits.sort { $0.0.lowerBound < $1.0.lowerBound }
         var result: [String: String] = [:]
         if let capturedTitle { result["__TITLE__"] = capturedTitle }
+        if let capturedType { result["__TYPE__"] = capturedType }
         for i in 0..<hits.count {
             let contentStart = hits[i].0.upperBound
             let contentEnd = i + 1 < hits.count ? hits[i + 1].0.lowerBound : raw.endIndex
@@ -370,7 +475,15 @@ enum MeetingPostProcessService {
         // Without this the title round-trips to nothing (no ===NAME===
         // marker matches it). See parseStructuredRecap.
         if let title = s["__TITLE__"]?.trimmingCharacters(in: .whitespaces), !title.isEmpty {
-            out += "# \(title)\n\n"
+            out += "# \(title)\n"
+            // Persist the resolved meeting type as an invisible tag right
+            // under the title so the chip survives a reopen. Only for a
+            // resolved type (skip auto/unknown). Renderers discard the
+            // preamble, so it never shows in a card.
+            if let tkey = s["__TYPE__"], friendlyTypeLabel(tkey) != nil {
+                out += "\(typeTagPrefix) \(tkey.trimmingCharacters(in: .whitespaces)) -->\n"
+            }
+            out += "\n"
         }
         for (key, title) in titles {
             guard let body = s[key], !body.isEmpty else { continue }
@@ -404,11 +517,15 @@ enum MeetingPostProcessService {
                 indices.append((intIdx, key))
             }
         }
+        let capturedType = extractTypeTag(markdown)
         if indices.isEmpty {
-            return ["TLDR": markdown.trimmingCharacters(in: .whitespacesAndNewlines)]
+            var fallback = ["TLDR": markdown.trimmingCharacters(in: .whitespacesAndNewlines)]
+            if let capturedType { fallback["__TYPE__"] = capturedType }
+            return fallback
         }
         indices.sort { $0.0 < $1.0 }
         var result: [String: String] = [:]
+        if let capturedType { result["__TYPE__"] = capturedType }
         for (i, (start, key)) in indices.enumerated() {
             let lo = markdown.index(markdown.startIndex, offsetBy: start)
             let endOfHeader = markdown[lo...].firstIndex(of: "\n") ?? markdown.endIndex

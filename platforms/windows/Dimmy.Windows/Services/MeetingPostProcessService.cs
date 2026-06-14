@@ -34,7 +34,11 @@ public static class MeetingPostProcessService
     /// markdown + actions to disk via dimmy_meeting_save_post_process.
     /// Heavy work (LLM call, FFI marshalling) runs on a background
     /// thread; the returned task completes when persisting is done.
-    public static async Task<RecapResult> RunRecapAsync(string dir, string transcript)
+    /// <paramref name="meetingType"/> is a taxonomy key (see
+    /// <see cref="Helpers.MeetingRecapHelpers.MeetingTypes"/>). Empty /
+    /// "auto" → the model classifies the meeting; a specific key tailors
+    /// the recap emphasis. The pill stop path passes nothing (auto).
+    public static async Task<RecapResult> RunRecapAsync(string dir, string transcript, string meetingType = "")
     {
         if (string.IsNullOrEmpty(dir))
             return new RecapResult { Success = false, Error = "missing dir" };
@@ -56,7 +60,7 @@ public static class MeetingPostProcessService
             }
             catch { /* notes are best-effort context, never block the recap */ }
 
-            var prompt = Helpers.MeetingRecapHelpers.BuildStructuredRecapPrompt(transcript, notes);
+            var prompt = Helpers.MeetingRecapHelpers.BuildStructuredRecapPrompt(transcript, notes, meetingType);
             var modelOverride = MeetingWindow.PickRecapModelInternal();
             App.Log($"recap (shared) model='{modelOverride}' prompt {prompt.Length} chars dir='{dir}'",
                 "MeetingRecap");
@@ -83,6 +87,11 @@ public static class MeetingPostProcessService
             var sections = Helpers.MeetingRecapHelpers.ParseStructuredRecap(raw);
             var recapMarkdown = Helpers.MeetingRecapHelpers.BuildMarkdownFromSections(sections);
             var actionsPlain = sections.GetValueOrDefault("ACTIONS", "");
+            // Resolved meeting type (categorical enum, privacy-safe): the
+            // model-detected key in auto mode, else the forced pick.
+            var resolvedType = sections.TryGetValue("__TYPE__", out var dt) && !string.IsNullOrWhiteSpace(dt)
+                ? dt
+                : (string.IsNullOrWhiteSpace(meetingType) ? "auto" : meetingType);
 
             int saveRc = DimmyNative.dimmy_meeting_save_post_process(
                 dir, recapMarkdown, actionsPlain, null);
@@ -97,6 +106,7 @@ public static class MeetingPostProcessService
                 provider = TelemetryBuckets.Provider(ReadLlmApiUrl()),
                 recap_model_bucket = TelemetryBuckets.RecapModel(modelOverride),
                 processing_ms_bucket = TelemetryBuckets.ProcessingMs(stopwatch.ElapsedMilliseconds),
+                meeting_type = resolvedType,
                 success = true,
             });
 

@@ -69,6 +69,86 @@ public static class MeetingRecapHelpers
     };
 
     /// <summary>
+    /// Meeting-type taxonomy. A type NEVER changes the 11-section
+    /// contract — it only shifts emphasis (which sections fill, which
+    /// fall to `—`) via a hint injected into the prompt, exactly like the
+    /// listener's notes. <c>Key</c> is the machine value persisted in the
+    /// invisible <c>&lt;!-- dimmy-type: KEY --&gt;</c> line of recap.md;
+    /// <c>Label</c> is the dropdown + chip text; <c>Guidance</c> is the
+    /// emphasis hint. <c>auto</c> = the model classifies and emits the
+    /// detected key; <c>general</c> = neutral fallback.
+    /// Keep in sync with the Mac copy in
+    /// <c>MeetingPostProcessService.swift</c> (meetingTypes).
+    /// </summary>
+    public sealed record MeetingTypeInfo(string Key, string Label, string Guidance);
+
+    public static readonly IReadOnlyList<MeetingTypeInfo> MeetingTypes = new[]
+    {
+        new MeetingTypeInfo("auto", "Auto-detect", ""),
+        new MeetingTypeInfo("one_on_one", "1:1",
+            "A 1:1 between two people. Emphasize feedback exchanged, career/growth topics, " +
+            "sentiment and rapport, and personal commitments. ACTIONS and FOLLOWUPS matter most; " +
+            "KEY_DECISIONS are often light."),
+        new MeetingTypeInfo("standup", "Standup / status",
+            "A short status sync. In NARRATIVE and TOPICS organize by person or workstream: " +
+            "what is done, in progress, and blocked. Surface blockers prominently in RISKS. Keep it brief."),
+        new MeetingTypeInfo("planning", "Planning",
+            "A planning, sprint or roadmap session. Emphasize goals, scoped work, owners, estimates " +
+            "and deadlines under ACTIONS and NEXT_STEPS; capture scope decisions in KEY_DECISIONS and " +
+            "dependencies in RISKS."),
+        new MeetingTypeInfo("technical", "Technical / design review",
+            "A technical or design review. Emphasize the options and approaches considered with their " +
+            "tradeoffs in TOPICS, the chosen direction in KEY_DECISIONS, unresolved technical questions " +
+            "in OPEN_QUESTIONS, and risks or dependencies in RISKS."),
+        new MeetingTypeInfo("brainstorm", "Brainstorming",
+            "A brainstorming or ideation session. In TOPICS group ideas by theme; in HIGHLIGHTS surface " +
+            "the most promising directions. Expect KEY_DECISIONS to be light or empty (this is divergent " +
+            "thinking, not decisions). Capture parked ideas in FOLLOWUPS."),
+        new MeetingTypeInfo("interview", "Interview (hiring)",
+            "A hiring or candidate interview. Stay factual and evidence-based. In TOPICS capture the areas " +
+            "probed and what the candidate demonstrated; surface strengths in HIGHLIGHTS and concerns in " +
+            "RISKS. Do NOT invent a hire / no-hire verdict unless it was explicitly stated."),
+        new MeetingTypeInfo("customer", "Customer call",
+            "A customer-facing call (sales, discovery, or user research). Emphasize the customer's needs, " +
+            "pain points and goals, objections or concerns, and any commitments. Capture feature requests " +
+            "and insights in TOPICS; relationship or deal next steps in NEXT_STEPS."),
+        new MeetingTypeInfo("lecture", "Lecture / talk",
+            "A talk, lecture, webinar or presentation the user is mostly listening to. Emphasize the key " +
+            "concepts and structured takeaways in TOPICS and HIGHLIGHTS, and write a teaching-quality " +
+            "NARRATIVE. ACTIONS and KEY_DECISIONS are usually empty (this is learning, not a working meeting)."),
+        new MeetingTypeInfo("general", "General", ""),
+    };
+
+    /// <summary>Friendly label for a stored type key, or null when the
+    /// key is unknown / "auto" (no chip shown for an unresolved type).</summary>
+    public static string? FriendlyTypeLabel(string? key)
+    {
+        if (string.IsNullOrWhiteSpace(key) || key == "auto") return null;
+        foreach (var t in MeetingTypes)
+            if (string.Equals(t.Key, key, StringComparison.OrdinalIgnoreCase) && t.Key != "auto")
+                return t.Label;
+        return null;
+    }
+
+    /// <summary>Normalise a raw type token (from the LLM tag or a UI pick)
+    /// to a known key; unknown / empty → "general".</summary>
+    public static string NormalizeTypeKey(string? key)
+    {
+        if (!string.IsNullOrWhiteSpace(key))
+            foreach (var t in MeetingTypes)
+                if (string.Equals(t.Key, key.Trim(), StringComparison.OrdinalIgnoreCase))
+                    return t.Key;
+        return "general";
+    }
+
+    private const string TypeTagPrefix = "<!-- dimmy-type:";
+
+    /// <summary>The list of selectable type keys (excluding "auto"), for the
+    /// auto-classify instruction.</summary>
+    private static string ClassifierKeyList() =>
+        string.Join(", ", MeetingTypes.Where(t => t.Key != "auto").Select(t => t.Key));
+
+    /// <summary>
     /// Build the Notion-quality structured-recap prompt for a meeting
     /// transcript. Designed for reasoning-tier models (Opus 4.7 +
     /// extended thinking, Gemini 3.1 Pro thinkingLevel=high, GPT-5).
@@ -79,9 +159,37 @@ public static class MeetingRecapHelpers
     /// The output language is implicit (auto-detected by the LLM from
     /// the transcript). Section markers `===NAME===` are the contract
     /// with <see cref="ParseStructuredRecap"/>.
+    ///
+    /// <paramref name="meetingType"/> is a taxonomy key (see
+    /// <see cref="MeetingTypes"/>). Empty or "auto" → the model classifies
+    /// the meeting and emits the detected key; a specific key injects that
+    /// type's emphasis hint. EITHER way the 11 sections are unchanged — the
+    /// type only nudges which sections fill vs fall to `—`.
     /// </summary>
-    public static string BuildStructuredRecapPrompt(string transcript, string notes = "")
+    public static string BuildStructuredRecapPrompt(string transcript, string notes = "", string meetingType = "")
     {
+        var typeKey = string.IsNullOrWhiteSpace(meetingType) ? "auto" : meetingType.Trim();
+        string typeBlock;
+        if (typeKey == "auto")
+        {
+            typeBlock =
+                "## Meeting type (classify, then tailor)\n" +
+                "First infer the meeting type from the transcript. IMMEDIATELY after the title " +
+                "line, output exactly one line: `" + TypeTagPrefix + " KEY -->` where KEY is the " +
+                "single best fit from: " + ClassifierKeyList() + ". Then write every section with " +
+                "the emphasis appropriate to that type — for some types a section will naturally be " +
+                "light or empty (`—`), and that is correct. Never mention the type tag in the prose.\n\n";
+        }
+        else
+        {
+            var info = MeetingTypes.FirstOrDefault(t => t.Key == typeKey) ?? MeetingTypes.Last();
+            typeBlock =
+                "## Meeting type: " + info.Label + "\n" +
+                (string.IsNullOrEmpty(info.Guidance) ? "" : info.Guidance + " ") +
+                "Keep ALL 11 sections; let the ones that do not apply be `—`. IMMEDIATELY after the " +
+                "title line, output exactly one line: `" + TypeTagPrefix + " " + info.Key + " -->`. " +
+                "Never mention the type tag in the prose.\n\n";
+        }
         return
             "You are a senior meeting analyst writing a polished, Notion-style " +
             "summary of an audio recording. Output ONLY markdown with the EXACT " +
@@ -105,6 +213,8 @@ public static class MeetingRecapHelpers
             "## Output language\n" +
             "Auto-detect from the transcript. For mixed languages, pick the dominant one. " +
             "Do NOT translate. If the transcript is in Italian, write the recap in Italian.\n\n" +
+
+            typeBlock +
 
             "## Sections (emit ALL of them, in this order)\n\n" +
 
@@ -390,6 +500,23 @@ public static class MeetingRecapHelpers
                 }
             }
 
+            // Optional `<!-- dimmy-type: KEY -->` tag — captured ONCE before
+            // any section opens. Invisible in rendered markdown (it sits in
+            // the preamble the renderer discards); drives the type chip and
+            // round-trips via BuildMarkdownFromSections.
+            if (currentKey == null
+                && !result.ContainsKey("__TYPE__")
+                && trimmed.StartsWith(TypeTagPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                var inner = trimmed.Substring(TypeTagPrefix.Length);
+                int end = inner.IndexOf("-->", StringComparison.Ordinal);
+                if (end >= 0)
+                {
+                    result["__TYPE__"] = NormalizeTypeKey(inner.Substring(0, end).Trim());
+                    continue;
+                }
+            }
+
             if (currentKey != null) sb.AppendLine(line);
         }
         Flush();
@@ -398,7 +525,10 @@ public static class MeetingRecapHelpers
         // TLDR (minus the title if we captured one) so the user always sees
         // something. The OLDER recap format with no markers at all hits this
         // path; covered by `Parse_no_markers_falls_back_to_TLDR_with_whole_text`.
-        int realCount = result.Count(kv => kv.Key != "__TITLE__");
+        // Sentinels (__TITLE__, __TYPE__) are NOT real sections — exclude
+        // both so a recap that only produced a title/type tag still hits
+        // the TLDR fallback instead of showing an empty card.
+        int realCount = result.Count(kv => kv.Key != "__TITLE__" && kv.Key != "__TYPE__");
         if (realCount == 0)
         {
             var body = raw.Trim();
@@ -411,6 +541,11 @@ public static class MeetingRecapHelpers
                     body, pattern, "",
                     System.Text.RegularExpressions.RegexOptions.Multiline).Trim();
             }
+            // Strip the invisible type tag so it never lands in a visible card.
+            body = System.Text.RegularExpressions.Regex.Replace(
+                body, @"^\s*<!--\s*dimmy-type:.*?-->\s*(\r?\n)?", "",
+                System.Text.RegularExpressions.RegexOptions.Multiline
+                | System.Text.RegularExpressions.RegexOptions.IgnoreCase).Trim();
             if (body.Length > 0) result["TLDR"] = body;
         }
         return result;
@@ -434,7 +569,14 @@ public static class MeetingRecapHelpers
         if (s.TryGetValue("__TITLE__", out var title)
             && !string.IsNullOrWhiteSpace(title))
         {
-            sb.AppendLine($"# {title.Trim()}").AppendLine();
+            sb.AppendLine($"# {title.Trim()}");
+            // Persist the resolved meeting type as an invisible tag right
+            // under the title so the chip survives a reopen. Only for a
+            // resolved type (skip "auto"/unknown). Renderers discard the
+            // preamble, so it never shows in a card.
+            if (s.TryGetValue("__TYPE__", out var tkey) && FriendlyTypeLabel(tkey) != null)
+                sb.AppendLine($"{TypeTagPrefix} {tkey.Trim()} -->");
+            sb.AppendLine();
         }
         void AppendSection(string key, string heading)
         {
