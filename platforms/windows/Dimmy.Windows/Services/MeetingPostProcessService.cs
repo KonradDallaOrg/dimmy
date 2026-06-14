@@ -97,6 +97,10 @@ public static class MeetingPostProcessService
                 dir, recapMarkdown, actionsPlain, null);
             App.Log($"recap (shared) saved rc={saveRc}", "MeetingRecap");
 
+            // Best-effort copy into the user's export folder (Obsidian /
+            // Drive / Dropbox sync). No-op when unconfigured; never throws.
+            RecapExportService.TryExport(dir, sections.GetValueOrDefault("__TITLE__", ""));
+
             // Recap-completed telemetry (success path). Bucketed
             // provider + model + processing time so dashboards can
             // see which combos are popular without leaking the user's

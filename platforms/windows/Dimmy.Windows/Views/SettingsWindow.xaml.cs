@@ -289,6 +289,7 @@ public sealed partial class SettingsWindow : Window
         };
 
         RefreshMeetingFolderDisplay();
+        RefreshRecapExportFolderDisplay();
 
         _loaded = true;
         // Now that selections are established + _loaded is true, run one auth
@@ -4721,6 +4722,70 @@ public sealed partial class SettingsWindow : Window
     private void MeetingFolderReset_Click(object sender, RoutedEventArgs e)
     {
         PersistMeetingStoragePath(string.Empty);
+    }
+
+    // ── Recap export folder (Obsidian / Drive / Dropbox sync) ────────
+    //
+    // UI-only Win preference (UiPreferences.RecapExportFolder) — NOT a Rust
+    // config field. After each recap save, RecapExportService copies recap.md
+    // here as `<title> (<meeting-id>).md`. Empty = off.
+
+    private void RefreshRecapExportFolderDisplay()
+    {
+        try
+        {
+            var folder = Services.UiPreferences.Load().RecapExportFolder;
+            bool isOff = string.IsNullOrWhiteSpace(folder);
+            RecapExportFolderPathText.Text = isOff ? "Off — recaps stay in the app only." : folder;
+            ToolTipService.SetToolTip(RecapExportFolderPathText, isOff ? "" : folder);
+            RecapExportClearBtn.IsEnabled = !isOff;
+        }
+        catch (Exception ex)
+        {
+            App.Log($"RefreshRecapExportFolderDisplay: {ex.Message}", "Settings");
+        }
+    }
+
+    private void RecapExportBrowse_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var hwnd = WindowHelper.GetHwnd(this);
+            var prefs = Services.UiPreferences.Load();
+            var picked = Helpers.Win32FileDialog.PickFolder(
+                hwnd, "Choose a folder to export recaps into",
+                string.IsNullOrWhiteSpace(prefs.RecapExportFolder) ? null : prefs.RecapExportFolder);
+            if (string.IsNullOrEmpty(picked)) return; // cancelled
+
+            if (!IsDirectoryWritable(picked!))
+            {
+                _ = ShowMeetingFolderErrorAsync(picked!);
+                return;
+            }
+
+            prefs.RecapExportFolder = picked!;
+            prefs.Save();
+            RefreshRecapExportFolderDisplay();
+        }
+        catch (Exception ex)
+        {
+            App.Log($"RecapExportBrowse: {ex.Message}", "Settings");
+        }
+    }
+
+    private void RecapExportClear_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var prefs = Services.UiPreferences.Load();
+            prefs.RecapExportFolder = "";
+            prefs.Save();
+            RefreshRecapExportFolderDisplay();
+        }
+        catch (Exception ex)
+        {
+            App.Log($"RecapExportClear: {ex.Message}", "Settings");
+        }
     }
 
     /// Single-writer rule: send a targeted {"meeting_storage_path": "..."}

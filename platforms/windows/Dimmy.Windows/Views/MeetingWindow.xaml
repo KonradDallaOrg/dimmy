@@ -478,22 +478,8 @@
                   <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
                   </Grid.RowDefinitions>
-                  <!-- Playback source: Mix (default), Voice (clean mic), or
-                       System (clean loopback). Shown only when per-track files
-                       exist; lets the user hear the clean system audio instead
-                       of the mic-contaminated mix. -->
-                  <ComboBox x:Name="DoneTrackSelector" Grid.Row="0"
-                            HorizontalAlignment="Right" MinWidth="120"
-                            SelectedIndex="0" Visibility="Collapsed"
-                            ToolTipService.ToolTip="Which audio track to play back"
-                            SelectionChanged="DoneTrackSelector_SelectionChanged">
-                    <ComboBoxItem x:Name="DoneTrackMixItem" Content="Mix"/>
-                    <ComboBoxItem x:Name="DoneTrackVoiceItem" Content="Voice"/>
-                    <ComboBoxItem x:Name="DoneTrackSystemItem" Content="System"/>
-                  </ComboBox>
-                  <Border Grid.Row="1" Height="74">
+                  <Border Grid.Row="0" Height="74">
                     <Canvas x:Name="DoneWaveformCanvas"
                             Background="Transparent"
                             SizeChanged="DoneWaveformCanvas_SizeChanged"
@@ -505,7 +491,7 @@
                        card / window so icons stay readable on Dark mode
                        (no hard Light theme — the card itself follows
                        the system now). -->
-                  <MediaPlayerElement x:Name="DoneAudioPlayer" Grid.Row="2"
+                  <MediaPlayerElement x:Name="DoneAudioPlayer" Grid.Row="1"
                                       AreTransportControlsEnabled="True"
                                       AutoPlay="False"
                                       MinHeight="64">
@@ -574,6 +560,16 @@
                     <SolidColorBrush x:Key="ButtonBorderBrushPointerOver" Color="Transparent"/>
                     <SolidColorBrush x:Key="ButtonBorderBrushPressed" Color="Transparent"/>
                   </StackPanel.Resources>
+                  <!-- Meeting-type override: default "Auto-detect"; pick a
+                       specific type to bias the recap's emphasis, then hit
+                       the regenerate-recap button next to it. The detected /
+                       chosen type also shows as the chip under the title.
+                       Items + selection are bound in code-behind to
+                       MeetingRecapHelpers.MeetingTypes. -->
+                  <ComboBox x:Name="RecapTypePicker" MinWidth="148"
+                            VerticalAlignment="Center" Margin="0,0,6,0"
+                            DisplayMemberPath="Label" SelectedValuePath="Key"
+                            ToolTipService.ToolTip="Meeting type — pick one, then regenerate the recap"/>
                   <Button x:Name="RegenTranscriptBtn" Click="RegenerateTranscript_Click"
                           ToolTipService.ToolTip="(Re)generate transcript from audio"
                           Background="Transparent" BorderThickness="0" Padding="8">

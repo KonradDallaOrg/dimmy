@@ -62,6 +62,13 @@ public sealed partial class MeetingWindow : Window
         this.InitializeComponent();
         Title = "Dimmy Meeting";
 
+        // Meeting-type override picker: data-bind to the shared taxonomy and
+        // default to "Auto-detect" (index 0). Picking a specific type before
+        // (re)generating the recap biases its emphasis; the result shows as
+        // the chip under the title.
+        RecapTypePicker.ItemsSource = Helpers.MeetingRecapHelpers.MeetingTypes;
+        RecapTypePicker.SelectedIndex = 0;
+
         // Match settings-window theme (Light/Dark/Auto from UiPreferences)
         try
         {
@@ -957,10 +964,6 @@ public sealed partial class MeetingWindow : Window
     // / System). Without headphones the mix carries the AEC/NS/AGC-processed
     // mic on top of the clean loopback, so the system-only track sounds
     // cleaner for system-audio content — let the user pick which to hear.
-    private string? _doneMixPath;
-    private string? _doneMicPath;
-    private string? _doneSystemPath;
-
     /// Resolve a meeting audio track to its on-disk file: prefer the
     /// compressed `.ogg` (current format), fall back to legacy `.wav`
     /// (older recordings / WAV-fallback when the Vorbis encoder was
@@ -972,27 +975,6 @@ public sealed partial class MeetingWindow : Window
         var wav = Path.Combine(dir, baseName + ".wav");
         if (File.Exists(wav)) return wav;
         return null;
-    }
-
-    /// Swap the meeting playback source when the user picks Mix / Voice /
-    /// System. The mix carries the processed mic; the system-only track is
-    /// the clean loopback. Resets to the chosen track's start.
-    private void DoneTrackSelector_SelectionChanged(object sender, Microsoft.UI.Xaml.Controls.SelectionChangedEventArgs e)
-    {
-        if (DoneAudioPlayer == null || DoneTrackSelector == null) return;
-        string? path = DoneTrackSelector.SelectedIndex switch
-        {
-            1 => _doneMicPath,
-            2 => _doneSystemPath,
-            _ => _doneMixPath,
-        };
-        if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
-        try
-        {
-            DoneAudioPlayer.Source =
-                global::Windows.Media.Core.MediaSource.CreateFromUri(new Uri(path));
-        }
-        catch { }
     }
 
     private async Task LoadDoneAudioAsync(string dir)
@@ -1052,23 +1034,6 @@ public sealed partial class MeetingWindow : Window
             var micPath = ResolveAudioTrack(dir, "audio_mic");
             var systemPath = ResolveAudioTrack(dir, "audio_system");
             var mixForPeaks = mixPath;
-
-            // Wire the playback-source selector: Mix is always present; expose
-            // Voice/System only when the per-track files exist (Mix-mode
-            // recordings). Default stays Mix; the user can switch to the clean
-            // system-only track for system-audio review.
-            _doneMixPath = mixPath;
-            _doneMicPath = micPath;
-            _doneSystemPath = systemPath;
-            if (DoneTrackVoiceItem != null) DoneTrackVoiceItem.IsEnabled = micPath != null;
-            if (DoneTrackSystemItem != null) DoneTrackSystemItem.IsEnabled = systemPath != null;
-            if (DoneTrackSelector != null)
-            {
-                DoneTrackSelector.SelectedIndex = 0; // Mix
-                DoneTrackSelector.Visibility = (micPath != null || systemPath != null)
-                    ? Visibility.Visible
-                    : Visibility.Collapsed;
-            }
 
             var micPeaks = micPath != null
                 ? await Task.Run(() => Helpers.WavPeaks.ReadPeaksAny(micPath, buckets))
@@ -1283,11 +1248,11 @@ public sealed partial class MeetingWindow : Window
 
     // ── Post-process pipeline (LLM recap + actions) ──────────────
 
-    private async Task GeneratePostProcessAsync(string dir, string transcript)
+    private async Task GeneratePostProcessAsync(string dir, string transcript, string meetingType = "")
     {
         try
         {
-            var prompt = Helpers.MeetingRecapHelpers.BuildStructuredRecapPrompt(transcript);
+            var prompt = Helpers.MeetingRecapHelpers.BuildStructuredRecapPrompt(transcript, "", meetingType);
             var modelOverride = PickRecapModel();
             App.Log($"recap with model='{modelOverride}', prompt {prompt.Length} chars", "Meeting");
             var buf = new byte[1 << 18];
@@ -1317,6 +1282,10 @@ public sealed partial class MeetingWindow : Window
             var recapMarkdown = Helpers.MeetingRecapHelpers.BuildMarkdownFromSections(sections);
             var actionsPlain = sections.GetValueOrDefault("ACTIONS", "");
             DimmyNative.dimmy_meeting_save_post_process(dir, recapMarkdown, actionsPlain, null);
+
+            // Best-effort copy into the user's export folder (Obsidian /
+            // Drive / Dropbox sync). No-op when unconfigured; never throws.
+            Services.RecapExportService.TryExport(dir, sections.GetValueOrDefault("__TITLE__", ""));
         }
         catch (Exception ex)
         {
@@ -1474,6 +1443,14 @@ public sealed partial class MeetingWindow : Window
         else
         {
             DoneTypeChip.Visibility = Visibility.Collapsed;
+        }
+        // Reflect the resolved type in the override picker so the user sees
+        // what the recap currently is and can re-pick + regenerate. Absent /
+        // unresolved __TYPE__ → "auto". The parser already normalised the key.
+        if (RecapTypePicker != null)
+        {
+            var rt = sections.GetValueOrDefault("__TYPE__", "");
+            RecapTypePicker.SelectedValue = string.IsNullOrWhiteSpace(rt) ? "auto" : rt;
         }
         // CONTEXT + HIGHLIGHTS + NARRATIVE + FOLLOWUPS were defined
         // in the prompt but silently dropped by the UI before — the
@@ -2418,8 +2395,12 @@ public sealed partial class MeetingWindow : Window
                 return;
             }
             ClearDoneCards();
+            // Honour the meeting-type override picker: "auto" (index 0) →
+            // empty so the model classifies; a specific key biases emphasis.
+            var meetingType = (RecapTypePicker?.SelectedValue as string) ?? "";
+            if (meetingType == "auto") meetingType = "";
             ShowToast("Generating recap…");
-            await GeneratePostProcessAsync(dir, transcript);
+            await GeneratePostProcessAsync(dir, transcript, meetingType);
             ShowToast("Recap regenerated.");
         }
         catch (Exception ex)

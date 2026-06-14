@@ -54,7 +54,19 @@ final class MeetingViewModel: ObservableObject {
     // ── Done state ─────────────────────────────────────────────────
     @Published var doneTitle: String = "Meeting"
     @Published var doneMeta: String = ""
-    @Published var doneSections: [String: String] = [:]
+    @Published var doneSections: [String: String] = [:] {
+        didSet {
+            // Reflect the resolved meeting type into the override picker so the
+            // user sees what the recap currently is and can re-pick + regen.
+            let rt = doneSections["__TYPE__"] ?? ""
+            let normalized = rt.isEmpty ? "auto" : rt
+            if selectedMeetingType != normalized { selectedMeetingType = normalized }
+        }
+    }
+
+    /// Meeting-type override for the recap. "auto" = let the model classify.
+    /// Bound to the Done-view picker; passed into the next regenerateRecap().
+    @Published var selectedMeetingType: String = "auto"
     @Published var doneRawTranscript: String = ""
     @Published var doneAudioURL: URL?
     /// Per-track mic WAV (`audio_mic.wav`). When both mic + system are
@@ -530,11 +542,13 @@ final class MeetingViewModel: ObservableObject {
     private func runPostProcess(dir: String, transcript: String) {
         statusLabel = "Generating recap with LLM..."
         let notionAutoSend = AppState.shared.notionAutoSend
+        let meetingType = selectedMeetingType == "auto" ? "" : selectedMeetingType
         DispatchQueue.global(qos: .userInitiated).async {
             let result = MeetingPostProcessService.runRecap(
                 dir: dir,
                 transcript: transcript,
-                notionAutoSend: notionAutoSend
+                notionAutoSend: notionAutoSend,
+                meetingType: meetingType
             )
             DispatchQueue.main.async {
                 self.isWorking = false

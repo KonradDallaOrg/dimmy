@@ -99,6 +99,13 @@ public sealed class UiPreferences
     /// re-applying after some Windows updates.</summary>
     public bool TrayIconAlwaysVisible { get; set; } = false;
 
+    /// <summary>Optional folder to also copy each finished recap.md into, as
+    /// `&lt;title&gt; (&lt;meeting-id&gt;).md`. Lets the user point at an
+    /// Obsidian vault or a Google Drive / Dropbox / OneDrive sync folder so
+    /// recaps land in their notes / cloud for free (no OAuth). Empty =
+    /// disabled. Win-only convenience, hence here and not in config.json.</summary>
+    public string RecapExportFolder { get; set; } = "";
+
     private static string PrefsPath
     {
         get

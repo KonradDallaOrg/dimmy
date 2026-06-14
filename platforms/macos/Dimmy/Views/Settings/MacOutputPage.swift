@@ -26,6 +26,12 @@ struct MacOutputPage: View {
     @State private var localLlmExists: Bool = false
     @State private var llmDownloadFailed: String? = nil
 
+    /// Recap export folder (Obsidian / Drive / Dropbox sync). UI-only Mac
+    /// preference; key must match
+    /// MeetingPostProcessService.recapExportFolderKey ("recapExportFolder").
+    /// Empty = disabled.
+    @AppStorage("recapExportFolder") private var recapExportFolder: String = ""
+
     /// Use the AppState-published flag (NOT a local @State) so the
     /// download progress survives the Settings page being recreated:
     /// SwiftUI tears the view down when you navigate to another page,
@@ -121,6 +127,7 @@ struct MacOutputPage: View {
             if appState.showAdvanced {
                 pasteboardGroup
                 meetingStorageGroup
+                recapExportGroup
                 advancedLlmGroup
             }
         }
@@ -162,6 +169,55 @@ struct MacOutputPage: View {
                 }
             }
         }
+    }
+
+    // MARK: - Recap export folder (Obsidian / Drive / Dropbox sync)
+    //
+    // UI-only Mac preference (UserDefaults "recapExportFolder") — NOT a Rust
+    // config field. After each recap save, MeetingPostProcessService copies
+    // recap.md here as `<title> (<meeting-id>).md`. Empty = off. Win parity:
+    // UiPreferences.RecapExportFolder + the Settings card in SettingsWindow.
+
+    private var recapExportGroup: some View {
+        Group {
+            MacGroupLabel(text: "Export recaps")
+            MacTile {
+                MacRow(
+                    "Export folder",
+                    description: recapExportFolder.isEmpty
+                        ? "Off, recaps stay in the app only."
+                        : recapExportFolder,
+                    hint: "Save a copy of each recap as a markdown file in a folder you choose. Point it at an Obsidian vault or a Google Drive, Dropbox or OneDrive folder to sync your recaps for free.",
+                    showsDivider: false
+                ) {
+                    HStack(spacing: 8) {
+                        Button("Browse...") { pickRecapExportFolder() }
+                            .controlSize(.small)
+                            .buttonStyle(.borderedProminent)
+                        Button("Turn off") { recapExportFolder = "" }
+                            .controlSize(.small)
+                            .disabled(recapExportFolder.isEmpty)
+                            .help("Stop exporting recaps to a folder")
+                    }
+                }
+            }
+        }
+    }
+
+    private func pickRecapExportFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Choose"
+        panel.message = "Choose a folder to export recaps into"
+        if !recapExportFolder.isEmpty {
+            panel.directoryURL = URL(fileURLWithPath: recapExportFolder)
+        }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard isDirectoryWritable(url.path) else { return }
+        recapExportFolder = url.path
     }
 
     private var meetingStorageDescription: String {

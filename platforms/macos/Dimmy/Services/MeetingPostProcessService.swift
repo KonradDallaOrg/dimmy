@@ -140,6 +140,9 @@ enum MeetingPostProcessService {
                 recap: markdown,
                 actions: actions
             )
+            // Best-effort copy into the user's export folder (Obsidian /
+            // Drive / Dropbox sync). No-op when unconfigured; never throws.
+            tryExportRecap(dir: dir, title: sections["__TITLE__"])
             // Auto-send to Notion if user has token + auto-send on.
             // Best-effort: failure is logged but does not block the
             // recap pipeline. The user can always retry manually from
@@ -219,6 +222,70 @@ enum MeetingPostProcessService {
     ]
 
     static let typeTagPrefix = "<!-- dimmy-type:"
+
+    // MARK: - Recap export folder (Obsidian / Drive / Dropbox sync)
+
+    /// UserDefaults key for the recap export folder. Empty = disabled.
+    /// Win parity: UiPreferences.RecapExportFolder.
+    static let recapExportFolderKey = "recapExportFolder"
+
+    /// Turn a meeting title into a safe markdown filename STEM (no extension).
+    /// Replaces filesystem-illegal chars (`\ / : * ? " < > |`) and control
+    /// chars with a space, collapses whitespace runs, trims trailing
+    /// dots/spaces, caps length at 120. Empty / all-illegal → "meeting".
+    /// Mirror of Win MeetingRecapHelpers.SanitizeRecapFileName.
+    static func sanitizeRecapFileName(_ title: String?) -> String {
+        let trimmed = (title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "meeting" }
+        let illegal: Set<Character> = ["\\", "/", ":", "*", "?", "\"", "<", ">", "|"]
+        var out = ""
+        for ch in trimmed {
+            if illegal.contains(ch) || ch.isNewline
+                || (ch.asciiValue != nil && ch.asciiValue! < 0x20) {
+                out.append(" ")
+            } else {
+                out.append(ch)
+            }
+        }
+        out = out.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        while let last = out.last, last == "." || last == " " { out.removeLast() }
+        if out.isEmpty { return "meeting" }
+        if out.count > 120 {
+            out = String(out.prefix(120))
+            while let last = out.last, last == "." || last == " " { out.removeLast() }
+        }
+        return out.isEmpty ? "meeting" : out
+    }
+
+    /// Copy `<dir>/recap.md` into the configured export folder, named from the
+    /// meeting title as `<stem> (<meeting-id>).md`. The meeting-id suffix lets
+    /// a REGENERATE of the same meeting overwrite its own file while never
+    /// clobbering a different meeting with the same title. No-op + never
+    /// throws when unset / missing / unwritable.
+    static func tryExportRecap(dir: String, title: String?) {
+        guard !dir.isEmpty else { return }
+        let folder = (UserDefaults.standard.string(forKey: recapExportFolderKey) ?? "")
+            .trimmingCharacters(in: .whitespaces)
+        guard !folder.isEmpty else { return }
+        let recapURL = URL(fileURLWithPath: dir).appendingPathComponent("recap.md")
+        guard FileManager.default.fileExists(atPath: recapURL.path) else { return }
+        let folderURL = URL(fileURLWithPath: folder)
+        do {
+            try FileManager.default.createDirectory(
+                at: folderURL, withIntermediateDirectories: true)
+            let stem = sanitizeRecapFileName(title)
+            let meetingId = URL(fileURLWithPath: dir).lastPathComponent
+            let fileName = meetingId.isEmpty ? "\(stem).md" : "\(stem) (\(meetingId)).md"
+            let dest = folderURL.appendingPathComponent(fileName)
+            if FileManager.default.fileExists(atPath: dest.path) {
+                try FileManager.default.removeItem(at: dest)
+            }
+            try FileManager.default.copyItem(at: recapURL, to: dest)
+            NSLog("[Dimmy] recap exported to \(dest.path)")
+        } catch {
+            NSLog("[Dimmy] recap export failed: \(error.localizedDescription)")
+        }
+    }
 
     /// Friendly label for a stored key, or nil for "auto"/unknown (no chip).
     static func friendlyTypeLabel(_ key: String?) -> String? {
