@@ -555,4 +555,41 @@ public class MeetingRecapHelpersTests
         foreach (var t in MeetingRecapHelpers.MeetingTypes)
             Assert.False(string.IsNullOrWhiteSpace(t.Label), $"type {t.Key} has no label");
     }
+
+    // ── SanitizeRecapFileName (recap export) ─────────────────────────
+
+    [Theory]
+    [InlineData("Sprint planning Q3", "Sprint planning Q3")]
+    [InlineData("Roadmap: Q3/Q4 review", "Roadmap Q3 Q4 review")]
+    [InlineData("Bug? \"weird\" <crash> | fix*", "Bug weird crash fix")]
+    [InlineData("  spaced   out  title  ", "spaced out title")]
+    [InlineData("trailing dots...", "trailing dots")]
+    public void SanitizeRecapFileName_strips_illegal_and_collapses(string input, string expected)
+    {
+        Assert.Equal(expected, MeetingRecapHelpers.SanitizeRecapFileName(input));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    [InlineData("///:::")]
+    [InlineData("...")]
+    public void SanitizeRecapFileName_empty_or_all_illegal_falls_back_to_meeting(string? input)
+    {
+        Assert.Equal("meeting", MeetingRecapHelpers.SanitizeRecapFileName(input));
+    }
+
+    [Fact]
+    public void SanitizeRecapFileName_caps_length_and_has_no_illegal_chars()
+    {
+        var huge = new string('a', 500) + "/\\:*?\"<>|";
+        var result = MeetingRecapHelpers.SanitizeRecapFileName(huge);
+        Assert.True(result.Length <= 120, $"length {result.Length} exceeds cap");
+        Assert.DoesNotContain('/', result);
+        Assert.DoesNotContain('\\', result);
+        Assert.DoesNotContain(':', result);
+        Assert.False(result.EndsWith(".") || result.EndsWith(" "),
+            "filename stem must not end with a dot or space");
+    }
 }

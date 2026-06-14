@@ -1040,6 +1040,51 @@
                   </StackPanel>
                 </StackPanel>
               </Border>
+
+              <!-- Export folder: copy each finished recap into a folder of
+                   the user's choosing as a markdown file. Point it at an
+                   Obsidian vault or a Google Drive / Dropbox / OneDrive sync
+                   folder to get notes + cloud sync for free (no sign-in). -->
+              <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+                      BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                      BorderThickness="1" CornerRadius="4" Padding="16,12"
+                      Margin="0,12,0,0">
+                <StackPanel Spacing="12">
+                  <Grid ColumnSpacing="16">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="Auto" />
+                      <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <FontIcon Grid.Column="0" FontFamily="Segoe Fluent Icons"
+                              Glyph="&#xEDE1;" FontSize="16" Width="24" Height="24"
+                              VerticalAlignment="Top"
+                              Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                    <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+                      <TextBlock Text="Export recaps to a folder" FontSize="14"
+                                 Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                      <TextBlock FontSize="12" TextWrapping="Wrap"
+                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                 Text="Save a copy of each recap as a markdown file here. Point it at an Obsidian vault or a Google Drive, Dropbox or OneDrive folder to sync your recaps for free." />
+                    </StackPanel>
+                  </Grid>
+                  <Border Background="{ThemeResource ControlFillColorDefaultBrush}"
+                          BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                          BorderThickness="1" CornerRadius="4" Padding="10,7">
+                    <TextBlock x:Name="RecapExportFolderPathText" FontSize="12"
+                               TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                               IsTextSelectionEnabled="True"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                  </Border>
+                  <StackPanel Orientation="Horizontal" Spacing="8"
+                              HorizontalAlignment="Right">
+                    <Button x:Name="RecapExportClearBtn" Content="Turn off"
+                            Click="RecapExportClear_Click" />
+                    <Button x:Name="RecapExportBrowseBtn" Content="Browse…"
+                            Click="RecapExportBrowse_Click"
+                            Style="{ThemeResource AccentButtonStyle}" />
+                  </StackPanel>
+                </StackPanel>
+              </Border>
               </StackPanel>
 
               <!-- ═══ Recap section ═══

@@ -134,6 +134,17 @@ struct MeetingDoneView: View {
             }
             Spacer()
             HStack(spacing: 6) {
+                // Meeting-type override: default "Auto-detect"; pick a type to
+                // bias the recap's emphasis, then hit the regenerate-recap
+                // button. The detected / chosen type shows as the chip above.
+                Picker("", selection: $vm.selectedMeetingType) {
+                    ForEach(MeetingPostProcessService.meetingTypes, id: \.key) { t in
+                        Text(t.label).tag(t.key)
+                    }
+                }
+                .labelsHidden()
+                .frame(maxWidth: 170)
+                .help("Meeting type — pick one, then regenerate the recap")
                 toolbarButton(systemImage: "waveform.badge.magnifyingglass",
                               help: "(Re)generate transcript from audio") {
                     vm.regenerateTranscript()

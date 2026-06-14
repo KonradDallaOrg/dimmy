@@ -119,6 +119,35 @@ public static class MeetingRecapHelpers
         new MeetingTypeInfo("general", "General", ""),
     };
 
+    /// <summary>Turn a meeting title into a safe, cross-platform markdown
+    /// filename STEM (no extension, no directory). Replaces characters
+    /// illegal on Windows (<c>\ / : * ? " &lt; &gt; |</c>) and control chars
+    /// with a space, collapses whitespace runs, trims trailing dots/spaces
+    /// (illegal as a Windows filename ending), and caps the length. Empty /
+    /// all-illegal input → <c>"meeting"</c>. Pure — unit-tested by
+    /// <c>MeetingRecapHelpersTests</c>; the export IO lives in
+    /// <c>Services.RecapExportService</c>.</summary>
+    public static string SanitizeRecapFileName(string? title)
+    {
+        if (string.IsNullOrWhiteSpace(title)) return "meeting";
+        var sb = new System.Text.StringBuilder(title.Length);
+        foreach (var ch in title.Trim())
+        {
+            if (ch is '\\' or '/' or ':' or '*' or '?' or '"' or '<' or '>' or '|'
+                || char.IsControl(ch))
+                sb.Append(' ');
+            else
+                sb.Append(ch);
+        }
+        var cleaned = System.Text.RegularExpressions.Regex
+            .Replace(sb.ToString(), @"\s+", " ").Trim()
+            .TrimEnd('.', ' ');
+        if (cleaned.Length == 0) return "meeting";
+        if (cleaned.Length > 120)
+            cleaned = cleaned.Substring(0, 120).TrimEnd('.', ' ');
+        return cleaned.Length == 0 ? "meeting" : cleaned;
+    }
+
     /// <summary>Friendly label for a stored type key, or null when the
     /// key is unknown / "auto" (no chip shown for an unresolved type).</summary>
     public static string? FriendlyTypeLabel(string? key)
