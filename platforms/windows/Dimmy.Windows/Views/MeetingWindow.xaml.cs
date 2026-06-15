@@ -1053,6 +1053,7 @@ public sealed partial class MeetingWindow : Window
                 ? null
                 : await Task.Run(() => Helpers.WavPeaks.ReadPeaksAny(mixForPeaks, buckets));
 
+            _doneFrac = 0; // fresh meeting starts un-played
             DrawDoneWaveform();
         }
         catch (Exception ex)
@@ -1062,6 +1063,47 @@ public sealed partial class MeetingWindow : Window
     }
 
     private Microsoft.UI.Xaml.Shapes.Rectangle? _donePlayhead;
+    // Redesigned waveform: a faint "unplayed" layer underneath + a full-colour
+    // "played" layer on top, clipped to [0..playX]. Progress is an O(1) clip
+    // resize (no per-frame redraw). Knob marks the playhead.
+    private Microsoft.UI.Xaml.Controls.Canvas? _wavePlayedLayer;
+    private Microsoft.UI.Xaml.Shapes.Ellipse? _doneKnob;
+    private double _doneFrac;
+
+    // Brand gradient endpoints (logo): green #2ECE8E → violet #6E7DF7.
+    private static readonly global::Windows.UI.Color WaveGreen =
+        global::Windows.UI.Color.FromArgb(0xFF, 0x2E, 0xCE, 0x8E);
+    private static readonly global::Windows.UI.Color WaveViolet =
+        global::Windows.UI.Color.FromArgb(0xFF, 0x6E, 0x7D, 0xF7);
+
+    private static global::Windows.UI.Color WaveLerp(double t)
+    {
+        t = Math.Max(0, Math.Min(1, t));
+        byte L(byte a, byte b) => (byte)Math.Round(a + (b - a) * t);
+        return global::Windows.UI.Color.FromArgb(0xFF,
+            L(WaveGreen.R, WaveViolet.R), L(WaveGreen.G, WaveViolet.G), L(WaveGreen.B, WaveViolet.B));
+    }
+
+    /// Resample a peaks array to exactly <paramref name="n"/> bars by taking the
+    /// max in each slice (so spikes survive). Handles n &gt; src.Length (repeats)
+    /// and n &lt; src.Length (downsamples) — the path that fills the card for any
+    /// recording length.
+    private static float[] ResampleMax(float[] src, int n)
+    {
+        var outp = new float[n];
+        if (src.Length == 0) return outp;
+        double step = (double)src.Length / n;
+        for (int i = 0; i < n; i++)
+        {
+            int a = (int)(i * step), b = (int)((i + 1) * step);
+            if (b <= a) b = a + 1;
+            if (b > src.Length) b = src.Length;
+            float mx = 0;
+            for (int j = a; j < b; j++) if (src[j] > mx) mx = src[j];
+            outp[i] = mx;
+        }
+        return outp;
+    }
 
     private void OnDonePlaybackPositionChanged(
         global::Windows.Media.Playback.MediaPlaybackSession session, object args)
@@ -1082,104 +1124,142 @@ public sealed partial class MeetingWindow : Window
         double w = DoneWaveformCanvas.ActualWidth;
         double h = DoneWaveformCanvas.ActualHeight;
         if (w <= 0 || h <= 0) return;
+        _doneFrac = Math.Max(0, Math.Min(1, frac));
+        double playX = w * _doneFrac;
+
+        // Reveal the full-colour "played" layer up to the playhead by
+        // resizing its clip. Cheap — no bar rebuild.
+        if (_wavePlayedLayer != null)
+            _wavePlayedLayer.Clip = new Microsoft.UI.Xaml.Media.RectangleGeometry
+            {
+                Rect = new global::Windows.Foundation.Rect(0, 0, playX, h),
+            };
+
+        // Thin guide line.
         if (_donePlayhead == null || !DoneWaveformCanvas.Children.Contains(_donePlayhead))
         {
             _donePlayhead = new Microsoft.UI.Xaml.Shapes.Rectangle
             {
-                Width = 2, Height = h,
-                Fill = new SolidColorBrush(Microsoft.UI.Colors.OrangeRed),
+                Width = 1.5, Height = h,
+                Fill = new SolidColorBrush(global::Windows.UI.Color.FromArgb(0x99, 0xC7, 0xCB, 0xD6)),
                 IsHitTestVisible = false,
             };
             Microsoft.UI.Xaml.Controls.Canvas.SetTop(_donePlayhead, 0);
             DoneWaveformCanvas.Children.Add(_donePlayhead);
         }
-        Microsoft.UI.Xaml.Controls.Canvas.SetLeft(_donePlayhead,
-            Math.Max(0, Math.Min(w - 2, w * frac)));
+        Microsoft.UI.Xaml.Controls.Canvas.SetLeft(_donePlayhead, Math.Max(0, Math.Min(w - 1.5, playX)));
+
+        // Circular knob (white fill, violet ring + dot).
+        const double kr = 7;
+        if (_doneKnob == null || !DoneWaveformCanvas.Children.Contains(_doneKnob))
+        {
+            _doneKnob = new Microsoft.UI.Xaml.Shapes.Ellipse
+            {
+                Width = kr * 2, Height = kr * 2,
+                Fill = new SolidColorBrush(Microsoft.UI.Colors.White),
+                Stroke = new SolidColorBrush(WaveViolet),
+                StrokeThickness = 2.4,
+                IsHitTestVisible = false,
+            };
+            DoneWaveformCanvas.Children.Add(_doneKnob);
+        }
+        Microsoft.UI.Xaml.Controls.Canvas.SetLeft(_doneKnob, Math.Max(0, Math.Min(w - kr * 2, playX - kr)));
+        Microsoft.UI.Xaml.Controls.Canvas.SetTop(_doneKnob, h / 2.0 - kr);
     }
+
+    // Bar geometry: slim + dense. 3 px bar, 2 px gap → the count adapts to the
+    // card width, so any recording length fills the card (long = each bar is the
+    // peak over a longer slice ⇒ fuller/smoother; short = finer detail).
+    private const double WaveBarW = 3.0;
+    private const double WaveBarGap = 2.0;
 
     private void DrawDoneWaveform()
     {
         if (DoneWaveformCanvas == null) return;
         DoneWaveformCanvas.Children.Clear();
         _donePlayhead = null;
+        _doneKnob = null;
+        _wavePlayedLayer = null;
         double w = DoneWaveformCanvas.ActualWidth;
         double h = DoneWaveformCanvas.ActualHeight;
         if (w <= 0 || h <= 0) return;
 
-        // Render whichever bands actually decoded, using their canonical
-        // colours so the user can READ the failure mode at a glance:
-        //   mic = accent, system = LimeGreen, mix = accent mirrored.
-        // Burned 2026-05-30: meetings whose audio_mic.ogg has unrecoverable
-        // vorbis errors showed a blue mirrored mix waveform — visually
-        // indistinguishable from a healthy mic-only recording, so the
-        // user couldn't tell what was actually wrong.
-        var micBrush = Helpers.ThemeHelper.ResolvedAccentBrush();
-        var sysBrush = new SolidColorBrush(Microsoft.UI.Colors.LimeGreen);
-        double midline = h / 2.0;
-        bool hasMic = _cachedMicPeaks != null && _cachedMicPeaks.Length > 0;
-        bool hasSys = _cachedSystemPeaks != null && _cachedSystemPeaks.Length > 0;
-        bool hasMix = _cachedDonePeaks != null && _cachedDonePeaks.Length > 0;
-        if (hasMic && hasSys)
+        // Pick the bands. Prefer per-track (mic up / system down); fall back to
+        // a single decoded band mirrored, or the combined mix mirrored.
+        float[]? mic = (_cachedMicPeaks != null && _cachedMicPeaks.Length > 0) ? _cachedMicPeaks : null;
+        float[]? sys = (_cachedSystemPeaks != null && _cachedSystemPeaks.Length > 0) ? _cachedSystemPeaks : null;
+        if (mic == null && sys == null)
         {
-            // Dual-band audiogram: mic grows UP from midline (accent),
-            // system grows DOWN (green). Each gets the FULL half so loud
-            // moments stay legible on short cards.
-            DrawDoneBandAnchored(_cachedMicPeaks!, micBrush, midline, midline - 2, w, anchorTop: true);
-            DrawDoneBandAnchored(_cachedSystemPeaks!, sysBrush, midline, midline - 2, w, anchorTop: false);
+            var mix = (_cachedDonePeaks != null && _cachedDonePeaks.Length > 0) ? _cachedDonePeaks : null;
+            if (mix == null) return;
+            mic = mix; sys = mix;
         }
-        else if (hasMic)
-        {
-            // Mic decoded, system did not — show mic alone in accent so
-            // the user sees their voice was captured.
-            DrawDoneBandAnchored(_cachedMicPeaks!, micBrush, midline, midline - 2, w, anchorTop: true);
-            DrawDoneBandAnchored(_cachedMicPeaks!, micBrush, midline, midline - 2, w, anchorTop: false);
-        }
-        else if (hasSys)
-        {
-            // System decoded, mic did not — show system alone in green
-            // so the colour itself signals "the mic track is missing".
-            DrawDoneBandAnchored(_cachedSystemPeaks!, sysBrush, midline, midline - 2, w, anchorTop: true);
-            DrawDoneBandAnchored(_cachedSystemPeaks!, sysBrush, midline, midline - 2, w, anchorTop: false);
-        }
-        else if (hasMix)
-        {
-            // Neither per-track decoded — render the combined mix mirrored.
-            // Accent brush because there's no per-track signal to colour-code.
-            DrawDoneBandAnchored(_cachedDonePeaks!, micBrush, midline, midline - 2, w, anchorTop: true);
-            DrawDoneBandAnchored(_cachedDonePeaks!, micBrush, midline, midline - 2, w, anchorTop: false);
-        }
+        else { mic ??= sys; sys ??= mic; }
 
-        UpdateDonePlayhead(0);
-    }
+        double slot = WaveBarW + WaveBarGap;
+        int n = Math.Max(1, (int)(w / slot));
+        var mN = ResampleMax(mic!, n);
+        var sN = ResampleMax(sys!, n);
 
-    /// Draw bars anchored on a shared horizontal midline — anchorTop
-    /// means each bar extends upward from `mid` (top of canvas at 0),
-    /// !anchorTop means it extends downward. Replaces the older
-    /// centered-band drawer to give the audiogram aesthetic.
-    private void DrawDoneBandAnchored(float[] peaks, SolidColorBrush brush,
-        double mid, double maxHeight, double w, bool anchorTop)
-    {
-        if (peaks.Length == 0) return;
-        double slot = w / peaks.Length;
-        double barW = Math.Max(1, slot - 1);
-        for (int i = 0; i < peaks.Length; i++)
+        // Normalise so the loudest bar nearly fills the half-height — keeps a
+        // quiet recording from looking flat without clipping a loud one.
+        float max = 0.05f;
+        for (int i = 0; i < n; i++) { if (mN[i] > max) max = mN[i]; if (sN[i] > max) max = sN[i]; }
+        double norm = Math.Min(1.0 / max, 3.2) * 0.92;
+
+        double mid = h / 2.0;
+        double maxH = mid - 4;
+
+        // Faint center hairline.
+        var hair = new Microsoft.UI.Xaml.Shapes.Rectangle
         {
-            double bh = Math.Max(1, peaks[i] * maxHeight);
-            var rect = new Microsoft.UI.Xaml.Shapes.Rectangle
+            Width = w, Height = 1,
+            Fill = new SolidColorBrush(global::Windows.UI.Color.FromArgb(0x33, 0xC7, 0xCB, 0xD6)),
+            IsHitTestVisible = false,
+        };
+        Microsoft.UI.Xaml.Controls.Canvas.SetTop(hair, mid - 0.5);
+        DoneWaveformCanvas.Children.Add(hair);
+
+        // Two layers: faint "unplayed" base + full-colour "played" on top
+        // (clipped to the playhead in UpdateDonePlayhead).
+        var unplayed = new Microsoft.UI.Xaml.Controls.Canvas { IsHitTestVisible = false };
+        var played = new Microsoft.UI.Xaml.Controls.Canvas { IsHitTestVisible = false };
+
+        void Bar(Microsoft.UI.Xaml.Controls.Canvas layer, double x, double top, double bh,
+                 global::Windows.UI.Color color, byte alpha)
+        {
+            if (bh < 1.5) bh = 1.5;
+            var c = global::Windows.UI.Color.FromArgb(alpha, color.R, color.G, color.B);
+            var r = new Microsoft.UI.Xaml.Shapes.Rectangle
             {
-                Width = barW,
-                Height = bh,
-                Fill = brush,
-                RadiusX = 1,
-                RadiusY = 1,
+                Width = WaveBarW, Height = bh, RadiusX = WaveBarW / 2, RadiusY = WaveBarW / 2,
+                Fill = new SolidColorBrush(c),
             };
-            Microsoft.UI.Xaml.Controls.Canvas.SetLeft(rect, i * slot);
-            // anchorTop = true → bar's BOTTOM rests on `mid`, grows up.
-            // anchorTop = false → bar's TOP rests on `mid`, grows down.
-            double top = anchorTop ? mid - bh : mid;
-            Microsoft.UI.Xaml.Controls.Canvas.SetTop(rect, top);
-            DoneWaveformCanvas.Children.Add(rect);
+            Microsoft.UI.Xaml.Controls.Canvas.SetLeft(r, x);
+            Microsoft.UI.Xaml.Controls.Canvas.SetTop(r, top);
+            layer.Children.Add(r);
         }
+
+        for (int i = 0; i < n; i++)
+        {
+            double x = i * slot;
+            double hm = Math.Max(1.5, mN[i] * norm * maxH);
+            double hs = Math.Max(1.5, sN[i] * norm * maxH);
+            // Vertical gradient illusion: colour each bar by its centre's Y.
+            var cm = WaveLerp((mid - hm / 2) / h);
+            var cs = WaveLerp((mid + hs / 2) / h);
+            // mic grows UP from mid, system grows DOWN.
+            Bar(played, x, mid - hm, hm, cm, 0xFF);
+            Bar(played, x, mid, hs, cs, 0xFF);
+            Bar(unplayed, x, mid - hm, hm, cm, 0x47);   // ~28% — colored, faded
+            Bar(unplayed, x, mid, hs, cs, 0x47);
+        }
+
+        DoneWaveformCanvas.Children.Add(unplayed);
+        DoneWaveformCanvas.Children.Add(played);
+        _wavePlayedLayer = played;
+
+        UpdateDonePlayhead(_doneFrac);
     }
 
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _waveResizeTimer;
