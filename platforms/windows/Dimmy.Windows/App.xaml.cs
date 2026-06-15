@@ -586,6 +586,9 @@ public partial class App : Application
                     if (!_appViewModel.IsBusy && !_pttStarted)
                     {
                         CaptureAndPushAppContext();
+                        // Grab the selection NOW (pristine focus, no keys) so
+                        // hold mode never fights the synthetic Ctrl+C.
+                        BeginCommandSelectionCapture();
                         _pendingStop = false;
                         _pttStarted = true;
                         _appViewModel.SuppressRecordingStarted = false;
@@ -642,6 +645,7 @@ public partial class App : Application
                     else if (!_appViewModel.IsBusy && !_stopInProgress)
                     {
                         CaptureAndPushAppContext();
+                        BeginCommandSelectionCapture();
                         _appViewModel.SuppressRecordingStarted = false;
                         _appViewModel.CommandOneShot = true;
                         var result = DimmyNative.dimmy_start_recording();
@@ -1388,6 +1392,31 @@ public partial class App : Application
     /// unexpected). Cleared after PASTE so the next press starts fresh.
     private Helpers.AppContextCapture.CapturedTargetContext? _targetContext;
 
+    /// <summary>Command Mode's selection, grabbed at PRESS time via UIA
+    /// (no keyboard, no clipboard) while focus + selection are pristine —
+    /// the reliable path for Outlook/Word/native edit controls and safe in
+    /// hold mode. Awaited in <see cref="StopAndCommandTransform"/>; null
+    /// result there falls back to the synthetic-Ctrl+C grab for Electron
+    /// apps. Started on a background thread so it never delays recording.</summary>
+    private Task<string?>? _pendingCommandSelection;
+
+    /// <summary>Kick off the pristine-focus UIA selection read for a command
+    /// recording. Fire-and-forget on the thread pool (MTA); the result is
+    /// awaited at stop. Safe to call even if the app has no UIA text — it
+    /// just resolves to null.</summary>
+    private void BeginCommandSelectionCapture()
+    {
+        try
+        {
+            _pendingCommandSelection = Task.Run(() => Services.UiaSelectionReader.TryGetFocusedSelection());
+        }
+        catch (Exception ex)
+        {
+            _pendingCommandSelection = null;
+            PttLog($"BeginCommandSelectionCapture EXC: {ex.Message}");
+        }
+    }
+
     private void CaptureAndPushAppContext()
     {
         try
@@ -1692,10 +1721,22 @@ public partial class App : Application
             // the STT round-trip.
             await RestoreTargetForegroundAsync();
 
-            // Grab the selection while the target is focused (Ctrl+C
-            // round-trip; null when nothing is selected).
-            var selection = await Services.SelectionCaptureService.CaptureAsync();
-            PttLog($"CommandMode: captured selection = {(selection == null ? "(none)" : $"{selection.Length} chars")}");
+            // Prefer the pristine-focus UIA read taken at PRESS time (no
+            // keyboard/clipboard, reliable in Outlook/Word/native controls).
+            // Only fall back to the synthetic-Ctrl+C grab when UIA yielded
+            // nothing — Electron apps (VS Code, Slack) need the Ctrl+C path.
+            string? selection = null;
+            if (_pendingCommandSelection != null)
+            {
+                try { selection = await _pendingCommandSelection; } catch { selection = null; }
+                _pendingCommandSelection = null;
+                PttLog($"CommandMode: UIA pre-capture = {(selection == null ? "(none)" : $"{selection.Length} chars")}");
+            }
+            if (selection == null)
+            {
+                selection = await Services.SelectionCaptureService.CaptureAsync();
+                PttLog($"CommandMode: Ctrl+C fallback = {(selection == null ? "(none)" : $"{selection.Length} chars")}");
+            }
 
             var result = await Services.TranscriptionService.StopAndCommandAsync(selection);
 
