@@ -23,7 +23,10 @@ struct AudioPlaybackBar: View {
     let systemURL: URL?
     @StateObject private var model = AudioPlaybackModel()
 
-    private let waveformBucketCount: Int = 120
+    // Decode a generous bucket count; the strips resample this down to the
+    // width-adaptive slim-bar count at draw time (so any duration fills the
+    // card). Mirrors Win's 400-bucket decode.
+    private let waveformBucketCount: Int = 400
 
     init(url: URL, micURL: URL? = nil, systemURL: URL? = nil) {
         self.url = url
@@ -114,6 +117,76 @@ struct AudioPlaybackBar: View {
 /// tinted with the accent colour, the unplayed with `macTextSecondary`.
 /// Bars centre-mirror around the vertical midpoint, like a typical
 /// audio-editor scrub strip.
+// Brand gradient (logo): green #2ECE8E (top / mic) → violet #6E7DF7 (bottom /
+// system). Slim dense bars (3pt + 2pt gap), width-adaptive count.
+private let waveGreen = Color(red: 46.0 / 255, green: 206.0 / 255, blue: 142.0 / 255)
+private let waveViolet = Color(red: 110.0 / 255, green: 125.0 / 255, blue: 247.0 / 255)
+private let waveBarW: CGFloat = 3
+private let waveBarGap: CGFloat = 2
+
+/// Vertical green→violet gradient mapped to the canvas height, so a bar near
+/// the top reads green and one near the bottom reads violet. `fade` = the
+/// faded "unplayed" version.
+private func waveShading(height: CGFloat, fade: Bool) -> GraphicsContext.Shading {
+    let colors = fade
+        ? [waveGreen.opacity(0.30), waveViolet.opacity(0.30)]
+        : [waveGreen, waveViolet]
+    return .linearGradient(
+        Gradient(colors: colors),
+        startPoint: CGPoint(x: 0, y: 0),
+        endPoint: CGPoint(x: 0, y: height))
+}
+
+/// Resample peaks to exactly `n` bars by max (spikes survive). Fills the card
+/// at any duration: long audio = peak over a longer slice ⇒ fuller/smoother.
+private func waveResampleMax(_ src: [Float], _ n: Int) -> [Float] {
+    guard n > 0 else { return [] }
+    if src.isEmpty { return Array(repeating: 0, count: n) }
+    var out = [Float](repeating: 0, count: n)
+    let step = Double(src.count) / Double(n)
+    for i in 0..<n {
+        let a = Int(Double(i) * step)
+        var b = Int(Double(i + 1) * step)
+        if b <= a { b = a + 1 }
+        if b > src.count { b = src.count }
+        var mx: Float = 0
+        var j = a
+        while j < b { if src[j] > mx { mx = src[j] }; j += 1 }
+        out[i] = mx
+    }
+    return out
+}
+
+/// Normalise so the loudest bar ~fills the half-height (quiet recordings still
+/// look full) without clipping a loud one.
+private func waveNorm(_ bars: [Float]) -> Double {
+    var mx: Float = 0.05
+    for v in bars where v > mx { mx = v }
+    return min(1.0 / Double(mx), 3.2) * 0.92
+}
+
+/// Circular scrubber knob (white fill, violet ring + dot) with a faint guide
+/// line. Replaces the old thin accent cursor.
+private struct WaveKnob: View {
+    let progress: CGFloat
+    let width: CGFloat
+    let height: CGFloat
+    var body: some View {
+        let cx = max(7, min(width - 7, width * max(0, min(1, progress))))
+        ZStack {
+            Rectangle()
+                .fill(Color.macTextSecondary.opacity(0.35))
+                .frame(width: 1.5, height: max(0, height - 12))
+            Circle()
+                .fill(Color.white)
+                .overlay(Circle().stroke(waveViolet, lineWidth: 2.2))
+                .overlay(Circle().fill(waveViolet).frame(width: 5, height: 5))
+                .frame(width: 14, height: 14)
+        }
+        .offset(x: cx - 7)
+    }
+}
+
 private struct WaveformStrip: View {
     let peaks: [Float]
     let progress: CGFloat
@@ -122,22 +195,13 @@ private struct WaveformStrip: View {
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                Canvas { ctx, size in
-                    drawBars(ctx: &ctx, size: size, gradient: unplayedGradient)
-                }
+                Canvas { ctx, size in drawBars(ctx: &ctx, size: size, fade: true) }
                 Canvas { ctx, size in
                     let clipWidth = size.width * max(0, min(1, progress))
                     ctx.clip(to: Path(CGRect(x: 0, y: 0, width: clipWidth, height: size.height)))
-                    drawBars(ctx: &ctx, size: size, gradient: playedGradient)
+                    drawBars(ctx: &ctx, size: size, fade: false)
                 }
-                // 1.5pt accent cursor with a soft glow so the playhead
-                // pops even when the underlying waveform is near-silent.
-                Rectangle()
-                    .fill(Color.accentColor)
-                    .frame(width: 1.5)
-                    .shadow(color: Color.accentColor.opacity(0.6), radius: 3)
-                    .offset(x: geo.size.width * max(0, min(1, progress)) - 0.75)
-                    .opacity(progress > 0 ? 0.95 : 0)
+                WaveKnob(progress: progress, width: geo.size.width, height: geo.size.height)
             }
             .contentShape(Rectangle())
             .gesture(
@@ -150,56 +214,20 @@ private struct WaveformStrip: View {
         }
     }
 
-    private var playedGradient: GraphicsContext.Shading {
-        .linearGradient(
-            Gradient(colors: [
-                Color.accentColor,
-                Color.accentColor.opacity(0.55),
-            ]),
-            startPoint: CGPoint(x: 0, y: 0),
-            endPoint: CGPoint(x: 0, y: 1)
-        )
-    }
-
-    private var unplayedGradient: GraphicsContext.Shading {
-        .linearGradient(
-            Gradient(colors: [
-                Color.macTextSecondary.opacity(0.55),
-                Color.macTextSecondary.opacity(0.25),
-            ]),
-            startPoint: CGPoint(x: 0, y: 0),
-            endPoint: CGPoint(x: 0, y: 1)
-        )
-    }
-
-    private func drawBars(ctx: inout GraphicsContext, size: CGSize, gradient: GraphicsContext.Shading) {
-        guard !peaks.isEmpty else {
-            // Empty / unparsable waveform — render a thin baseline so
-            // the strip doesn't disappear visually.
-            let mid = size.height / 2
-            let path = Path { p in
-                p.move(to: CGPoint(x: 0, y: mid))
-                p.addLine(to: CGPoint(x: size.width, y: mid))
-            }
-            ctx.stroke(path, with: gradient, lineWidth: 1)
-            return
-        }
-        let n = peaks.count
-        let totalWidth = size.width
-        let gap: CGFloat = 2
-        // Wider bars + 2pt gap (chunkier than the original 1pt gap with
-        // 220 buckets) — gives the waveform real visual weight at the
-        // ~120 bucket count used here.
-        let barWidth = max(2, (totalWidth - CGFloat(n - 1) * gap) / CGFloat(n))
+    private func drawBars(ctx: inout GraphicsContext, size: CGSize, fade: Bool) {
+        guard !peaks.isEmpty else { return }
+        let slot = waveBarW + waveBarGap
+        let n = max(1, Int(size.width / slot))
+        let bars = waveResampleMax(peaks, n)
+        let norm = waveNorm(bars)
         let mid = size.height / 2
-        let maxHalf = size.height / 2 - 2  // 2pt vertical padding
-        let cornerRadius: CGFloat = 2
-        for (i, peak) in peaks.enumerated() {
-            let x = CGFloat(i) * (barWidth + gap)
-            let half = max(1.5, CGFloat(peak) * maxHalf)
-            let rect = CGRect(x: x, y: mid - half, width: barWidth, height: half * 2)
-            ctx.fill(Path(roundedRect: rect, cornerRadius: cornerRadius, style: .continuous),
-                      with: gradient)
+        let maxHalf = size.height / 2 - 3
+        let shading = waveShading(height: size.height, fade: fade)
+        for (i, peak) in bars.enumerated() {
+            let x = CGFloat(i) * slot
+            let half = max(1.5, CGFloat(Double(peak) * norm) * maxHalf)
+            let rect = CGRect(x: x, y: mid - half, width: waveBarW, height: half * 2)
+            ctx.fill(Path(roundedRect: rect, cornerRadius: waveBarW / 2, style: .continuous), with: shading)
         }
     }
 }
@@ -221,39 +249,21 @@ private struct DualBandWaveformStrip: View {
     let progress: CGFloat
     let onSeekFraction: (CGFloat) -> Void
 
-    private static let micColor = Color(red: 0.118, green: 0.565, blue: 1.000)        // DodgerBlue
-    private static let systemColor = Color(red: 0.196, green: 0.804, blue: 0.196)     // LimeGreen
-
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                Canvas { ctx, size in
-                    drawBand(ctx: &ctx, size: size, peaks: peaksMic,
-                             color: Self.micColor.opacity(0.45), direction: .up)
-                    drawBand(ctx: &ctx, size: size, peaks: peaksSystem,
-                             color: Self.systemColor.opacity(0.45), direction: .down)
-                }
+                Canvas { ctx, size in drawDual(ctx: &ctx, size: size, fade: true) }
                 Canvas { ctx, size in
                     let clipWidth = size.width * max(0, min(1, progress))
                     ctx.clip(to: Path(CGRect(x: 0, y: 0, width: clipWidth, height: size.height)))
-                    drawBand(ctx: &ctx, size: size, peaks: peaksMic,
-                             color: Self.micColor, direction: .up)
-                    drawBand(ctx: &ctx, size: size, peaks: peaksSystem,
-                             color: Self.systemColor, direction: .down)
+                    drawDual(ctx: &ctx, size: size, fade: false)
                 }
-                // Centre baseline so the empty stretches at start/end
-                // don't look broken — and so the two bands feel like
-                // one continuous strip.
+                // Faint centre hairline so silent stretches at start/end
+                // read as one continuous strip.
                 Rectangle()
-                    .fill(Color.macTextSecondary.opacity(0.25))
+                    .fill(Color.macTextSecondary.opacity(0.22))
                     .frame(height: 0.5)
-                    .offset(y: 0)
-                Rectangle()
-                    .fill(Color.accentColor)
-                    .frame(width: 1.5)
-                    .shadow(color: Color.accentColor.opacity(0.6), radius: 3)
-                    .offset(x: geo.size.width * max(0, min(1, progress)) - 0.75)
-                    .opacity(progress > 0 ? 0.95 : 0)
+                WaveKnob(progress: progress, width: geo.size.width, height: geo.size.height)
             }
             .contentShape(Rectangle())
             .gesture(
@@ -266,33 +276,26 @@ private struct DualBandWaveformStrip: View {
         }
     }
 
-    private enum BandDirection { case up, down }
-
-    private func drawBand(ctx: inout GraphicsContext,
-                          size: CGSize,
-                          peaks: [Float],
-                          color: Color,
-                          direction: BandDirection) {
-        guard !peaks.isEmpty else { return }
-        let n = peaks.count
-        let gap: CGFloat = 2
-        let barWidth = max(2, (size.width - CGFloat(n - 1) * gap) / CGFloat(n))
+    /// mic grows UP from the midline, system grows DOWN. Both filled with the
+    /// shared vertical green→violet gradient (so the band itself carries the
+    /// colour: greener at top, more violet at bottom).
+    private func drawDual(ctx: inout GraphicsContext, size: CGSize, fade: Bool) {
+        let slot = waveBarW + waveBarGap
+        let n = max(1, Int(size.width / slot))
+        let m = waveResampleMax(peaksMic, n)
+        let s = waveResampleMax(peaksSystem, n)
+        let norm = waveNorm(m + s)
         let mid = size.height / 2
-        let maxReach = max(2, size.height / 2 - 2)
-        let cornerRadius: CGFloat = 2
-        let shading = GraphicsContext.Shading.color(color)
-        for (i, peak) in peaks.enumerated() {
-            let x = CGFloat(i) * (barWidth + gap)
-            let h = max(1.0, CGFloat(peak) * maxReach)
-            let rect: CGRect
-            switch direction {
-            case .up:
-                rect = CGRect(x: x, y: mid - h, width: barWidth, height: h)
-            case .down:
-                rect = CGRect(x: x, y: mid, width: barWidth, height: h)
-            }
-            ctx.fill(Path(roundedRect: rect, cornerRadius: cornerRadius, style: .continuous),
-                     with: shading)
+        let maxReach = max(2, size.height / 2 - 3)
+        let shading = waveShading(height: size.height, fade: fade)
+        for i in 0..<n {
+            let x = CGFloat(i) * slot
+            let hm = max(1.5, CGFloat(Double(m[i]) * norm) * maxReach)
+            let hs = max(1.5, CGFloat(Double(s[i]) * norm) * maxReach)
+            ctx.fill(Path(roundedRect: CGRect(x: x, y: mid - hm, width: waveBarW, height: hm),
+                          cornerRadius: waveBarW / 2, style: .continuous), with: shading)
+            ctx.fill(Path(roundedRect: CGRect(x: x, y: mid, width: waveBarW, height: hs),
+                          cornerRadius: waveBarW / 2, style: .continuous), with: shading)
         }
     }
 }
