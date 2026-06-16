@@ -726,25 +726,30 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: staging-latest
-          # Upload the full Velopack output set, not just the
-          # human-friendly installer / portable. UpdateService on the
-          # client side calls `GithubSource(prerelease: true)` which
-          # parses `releases.win.json` to find the latest delta/full
-          # .nupkg — without these files we get "Setup.exe in the
-          # release but no manifest" and auto-update silently no-ops.
-          # Pattern matches what `vpk pack` writes into velopack-output:
-          #   - Setup.exe / Portable.zip — user-facing
-          #   - releases.win.json — manifest Velopack polls
-          #   - Dimmy-{ver}-full.nupkg — fallback full package
-          #   - Dimmy-{ver}-delta.nupkg — delta from previous release
-          # Burned 2026-05-11: staging had Setup but no manifest, so
-          # the "Pre-release" channel found nothing to download.
+          # MANUAL-SIDELOAD ONLY — do NOT upload the Velopack manifest
+          # (releases.win.json) or the .nupkg here. This build is
+          # flavor=staging: it talks to license-staging.dimmy.app +
+          # Stripe Test under a DIFFERENT licensing pubkey. It also
+          # ships under packId `Dimmy` (same as prod), so the moment a
+          # manifest is present, the prod client's
+          # `GithubSource(prerelease: true)` discovers it and — because
+          # vpk strips the suffix to a clean `0.6.59` (> `0.6.59-rc1`) —
+          # serves it to PAYING prod users on the prerelease channel.
+          # Their prod license then fails to verify against the staging
+          # pubkey => silent demotion to free/trial, and "Buy plan"
+          # bills Stripe Test. Burned 2026-06-16.
+          #
+          # Invariant: anything discoverable under packId `Dimmy` MUST
+          # be a prod-flavor build (release.yml). Staging-native is a
+          # team sideload artifact only — Setup.exe / Portable.zip,
+          # downloaded by hand. Proper side-by-side auto-update is the
+          # `Dimmy-Staging` packId path in staging-tester.yml.
+          #
+          # (Reverses the 2026-05-11 "add the manifest so prerelease
+          # sees staging" change, which was the root cause.)
           files: |
             platforms/windows/velopack-output/Dimmy-win-Setup.exe
             platforms/windows/velopack-output/Dimmy-win-Portable.zip
-            platforms/windows/velopack-output/releases.win.json
-            platforms/windows/velopack-output/Dimmy-*-full.nupkg
-            platforms/windows/velopack-output/Dimmy-*-delta.nupkg
 
   # ── Linux Native Build (parallel with macOS + Windows + rust-check) ──
   build-linux:

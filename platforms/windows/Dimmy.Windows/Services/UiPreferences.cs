@@ -58,10 +58,13 @@ public sealed class UiPreferences
     public string Theme { get; set; } = "Default";
 
     /// <summary>Auto-update channel: "stable" (default — Latest GitHub
-    /// release only) or "prerelease" (also offers staging-native builds
-    /// off the staging-latest tag). The user picks in Settings → About;
-    /// UpdateService reads it on every BackgroundCheckAsync to decide
-    /// whether to set GithubSource.prerelease=true.</summary>
+    /// release only) or "prerelease" (stable + rc builds from
+    /// release.yml). Both are PROD-flavor only; staging-native builds
+    /// are NOT offered here (staging-auto-update.yml withholds the
+    /// Velopack manifest by design — burned 2026-06-16). The user picks
+    /// in Settings → About; UpdateService reads it on every
+    /// BackgroundCheckAsync to decide whether to set
+    /// GithubSource.prerelease=true.</summary>
     public string UpdateChannel { get; set; } = "stable";
 
     /// <summary>Provider ids the user has connected (saved a key for) via the
