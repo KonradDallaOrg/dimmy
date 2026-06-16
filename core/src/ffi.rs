@@ -6658,6 +6658,10 @@ fn group_words_into_turns(words: &[(f64, String)], offset_secs: f64) -> Vec<(u12
 /// files exist. Uses `process_buffer_for_file_load` (highpass only — AGC NaNs
 /// long files, CLAUDE.md AUDIO-001). rc: bytes written, -1 bad args, -2 no
 /// audio, -3 write failed, -5 empty result, -6 cloud config incomplete.
+///
+/// # Safety
+/// `dir_ptr` must be a valid NUL-terminated C string. `out_buf` must be a
+/// valid writable buffer of `buf_len` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn dimmy_meeting_retranscribe(
     dir_ptr: *const c_char,
