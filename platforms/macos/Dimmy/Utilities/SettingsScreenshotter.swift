@@ -130,12 +130,97 @@ enum SettingsScreenshotter {
             }
         }
 
+        // Marketing/docs extras: onboarding steps + pill states. Mirror of
+        // the Windows MarketingCapture harness. Best-effort — logs + continues.
+        await captureOnboarding(modes: modes)
+        await capturePillStates()
+
         // Reset appearance to auto so the user's normal launch doesn't
         // stay forced into one mode.
         NSApp.appearance = nil
         NSLog("[Screenshotter] done, terminating in 0.5 s")
         try? await Task.sleep(nanoseconds: 500_000_000)
         NSApp.terminate(nil)
+    }
+
+    /// Render a SwiftUI view offscreen into a PNG via NSHostingView +
+    /// cacheDisplay (no WindowServer round-trip). Used for views that aren't
+    /// already on screen (onboarding steps presented out of their normal flow).
+    @MainActor
+    private static func renderHosted(_ view: AnyView, size: NSSize, appearance: NSAppearance?, to outURL: URL) {
+        let host = NSHostingView(rootView: view.frame(width: size.width, height: size.height))
+        host.frame = NSRect(origin: .zero, size: size)
+        if let appearance { host.appearance = appearance }
+        host.layoutSubtreeIfNeeded()
+        guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else {
+            NSLog("[Screenshotter] renderHosted: no bitmap rep for \(outURL.lastPathComponent)"); return
+        }
+        host.cacheDisplay(in: host.bounds, to: rep)
+        guard let png = rep.representation(using: .png, properties: [:]) else {
+            NSLog("[Screenshotter] renderHosted: png encode failed for \(outURL.lastPathComponent)"); return
+        }
+        do {
+            try FileManager.default.createDirectory(at: outURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try png.write(to: outURL, options: .atomic)
+            NSLog("[Screenshotter] wrote \(outURL.path)")
+        } catch { NSLog("[Screenshotter] write failed \(outURL.path): \(error)") }
+    }
+
+    // Onboarding: present each step out of band and capture it. Maps to the
+    // website manifest mac slots (first-dictation/mac-welcome|model|shortcut|tryit).
+    @MainActor
+    private static func captureOnboarding(modes: [(String, NSAppearance?)]) async {
+        NSLog("[Screenshotter] === onboarding ===")
+        let dir = outDir.appendingPathComponent("help/first-dictation")
+        // step index -> manifest filename stem (see OnboardingContainerView.stepName)
+        let names = [0: "mac-welcome", 1: "mac-permissions", 2: "mac-shortcut", 3: "mac-model", 4: "mac-tryit"]
+        for step in 0..<OnboardingContainerView.totalSteps {
+            for (mode, appearance) in modes {
+                let view = AnyView(OnboardingContainerView(appState: AppState.shared, startStep: step)
+                    .environmentObject(AppState.shared))
+                let stem = names[step] ?? "step-\(step)"
+                renderHosted(view, size: NSSize(width: 760, height: 580), appearance: appearance,
+                             to: dir.appendingPathComponent("\(stem)-\(mode).png"))
+            }
+        }
+    }
+
+    // Pill states: drive AppState.recordingState through each visual state and
+    // capture the live pill panel. Mirror of Windows demo-pill. Best-effort:
+    // the pill panel must be visible (pillVisible=true). Captured over whatever
+    // is behind it (the pill is a transparent panel).
+    @MainActor
+    private static func capturePillStates() async {
+        NSLog("[Screenshotter] === pill states ===")
+        let dir = outDir.appendingPathComponent("help/pill")
+        AppState.shared.pillVisible = true
+        try? await Task.sleep(nanoseconds: 800_000_000)
+        let states: [(String, RecordingState)] = [
+            ("idle", .idle),
+            ("recording", .recording(.pushToTalk)),
+            ("transcribing", .transcribing),
+            ("processing", .processing),
+            ("completing", .completing),
+        ]
+        // Locate the pill panel: a borderless NSPanel that is not the Settings window.
+        for (label, state) in states {
+            AppState.shared.recordingState = state
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            guard let panel = NSApp.windows.first(where: {
+                ($0 is NSPanel) && $0.title != "Dimmy Settings" && $0.isVisible
+            }), let content = panel.contentView, content.bounds.width > 0 else {
+                NSLog("[Screenshotter] pill panel not found for \(label)"); continue
+            }
+            guard let rep = content.bitmapImageRepForCachingDisplay(in: content.bounds) else { continue }
+            content.cacheDisplay(in: content.bounds, to: rep)
+            if let png = rep.representation(using: .png, properties: [:]) {
+                let url = dir.appendingPathComponent("state-\(label).png")
+                try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                try? png.write(to: url, options: .atomic)
+                NSLog("[Screenshotter] wrote \(url.path)")
+            }
+        }
+        AppState.shared.recordingState = .idle
     }
 }
 

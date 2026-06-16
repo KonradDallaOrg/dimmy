@@ -888,6 +888,18 @@ public partial class App : Application
                     return;
                 }
                 if (command == "open-meeting") { OpenMeetingWindow(); return; }
+                if (command.StartsWith("demo-pill:", StringComparison.Ordinal))
+                {
+                    // Screenshot/docs helper: force the pill into a given visual
+                    // state so the marketing capture harness can shoot each one
+                    // (idle/recording/transcribing/processing/completing/error).
+                    // No audio, no transcription — purely a visual state push.
+                    var st = command["demo-pill:".Length..];
+                    ShowPillAndHotkey();
+                    if (Enum.TryParse<AppState>(st, ignoreCase: true, out var demoState))
+                        _appViewModel.SetState(demoState);
+                    return;
+                }
                 if (command == "quit") { Quit(); return; }
                 if (command.StartsWith("set-style:", StringComparison.Ordinal))
                 {

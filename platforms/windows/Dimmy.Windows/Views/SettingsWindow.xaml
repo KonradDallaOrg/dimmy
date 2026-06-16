@@ -109,6 +109,7 @@
           <Border Padding="14,8" BorderThickness="0,1,0,0"
                   BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}">
             <ToggleSwitch Header="Advanced mode"
+                          AutomationProperties.AutomationId="SettingsAdvancedToggle"
                           IsOn="{Binding IsAdvanced, Mode=TwoWay}"
                           OnContent="On" OffContent="Off" />
           </Border>
