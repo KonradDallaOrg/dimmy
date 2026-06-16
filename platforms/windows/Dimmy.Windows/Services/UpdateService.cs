@@ -157,8 +157,18 @@ public sealed class UpdateService
             }
 
             var prefs = UiPreferences.Load();
-            bool prerelease = string.Equals(prefs.UpdateChannel, "prerelease",
-                StringComparison.OrdinalIgnoreCase);
+            // A staging install (packId Dimmy-Staging, Velopack channel
+            // "staging") lives entirely on prerelease GitHub releases — the
+            // prod "Latest" release is a different packId, so prerelease=false
+            // would find nothing and staging would never auto-update. Force
+            // prerelease=true for staging so a downloaded staging build keeps
+            // itself current with no user action ("scarico e basta"). It can
+            // NEVER pick up a prod build: packId AND channel both differ, so
+            // Velopack filters prod releases out. The channel selector in
+            // Settings is a prod-only control.
+            bool prerelease = BuildInfo.IsStaging
+                || string.Equals(prefs.UpdateChannel, "prerelease",
+                    StringComparison.OrdinalIgnoreCase);
 
             // Recreate manager each time so the prerelease flag tracks
             // the user's pref without an app restart. Velopack's

@@ -258,6 +258,12 @@ jobs:
           DIMMY_LICENSE_PUBKEY: avlM65dRGDHomOzqGICiuIXf6_dY21w653AOnza2fzU
           DIMMY_LICENSE_SERVER_URL: https://license-staging.dimmy.app
           DIMMY_BUILD_FLAVOR: staging
+          # Side-by-side staging install: packId Dimmy-Staging (Velopack
+          # pack step) + isolated config dir dimmy-staging here, identical
+          # to staging-tester.yml. Without this the side-by-side install
+          # would write into the prod `dimmy` config dir (default when
+          # DIMMY_CONFIG_NAMESPACE is unset) and mix data with prod.
+          DIMMY_CONFIG_NAMESPACE: dimmy-staging
         run: |
           echo "CMake: $(cmake --version | head -1)"
           echo "Xcode CLT: $(xcode-select -p)"
@@ -553,6 +559,12 @@ jobs:
           DIMMY_LICENSE_PUBKEY: avlM65dRGDHomOzqGICiuIXf6_dY21w653AOnza2fzU
           DIMMY_LICENSE_SERVER_URL: https://license-staging.dimmy.app
           DIMMY_BUILD_FLAVOR: staging
+          # Side-by-side staging install: packId Dimmy-Staging (Velopack
+          # pack step) + isolated config dir dimmy-staging here, identical
+          # to staging-tester.yml. Without this the side-by-side install
+          # would write into the prod `dimmy` config dir (default when
+          # DIMMY_CONFIG_NAMESPACE is unset) and mix data with prod.
+          DIMMY_CONFIG_NAMESPACE: dimmy-staging
         run: |
           REM Activate VS 2026 MSVC for this step only — PATH, INCLUDE,
           REM LIB point at the 14.50+ toolchain. Subsequent steps inherit
@@ -715,41 +727,42 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ needs.create-release.outputs.version }}"
-          # Velopack needs semver (X.Y.Z) — extract base version before any suffix
-          if ($version -match '^(\d+\.\d+\.\d+)') { $semver = $Matches[1] } else { $semver = "0.0.1" }
+          # Monotonic prerelease version: every staging push must be a NEW
+          # version Velopack will offer. A stripped clean `0.6.59` repeats
+          # across pushes (same Cargo version) => Velopack sees no change =>
+          # no auto-update. github.run_number is strictly increasing, and
+          # `0.6.59-staging.<n>` is valid semver that sorts BELOW the eventual
+          # prod `0.6.59` (extra guard: staging can never outrank prod).
+          if ($version -match '^(\d+\.\d+\.\d+)') { $base = $Matches[1] } else { $base = "0.0.1" }
+          $semver = "$base-staging.${{ github.run_number }}"
           $pubDir = (Resolve-Path "platforms/windows/Dimmy.Windows/publish").Path
           Write-Host "Packing Velopack v$semver from $pubDir"
-          vpk pack --packId Dimmy --packVersion $semver --packDir "$pubDir" --mainExe Dimmy.Windows.exe --icon "platforms/windows/Dimmy.Windows/Assets/dimmy.ico" --framework "vcredist143-x64" --outputDir platforms/windows/velopack-output
+          # packId Dimmy-Staging + --channel staging: installs side-by-side
+          # with prod (%LOCALAPPDATA%\Dimmy-Staging) and is NEVER discoverable
+          # by the prod `Dimmy` prerelease channel (different packId AND
+          # channel). This is the STRUCTURAL guarantee that a staging build
+          # can never reach a paying prod user. Matches staging-tester.yml.
+          vpk pack --packId Dimmy-Staging --packVersion $semver --packDir "$pubDir" --mainExe Dimmy.Windows.exe --icon "platforms/windows/Dimmy.Windows/Assets/dimmy.ico" --framework "vcredist143-x64" --channel staging --outputDir platforms/windows/velopack-output
           Get-ChildItem platforms/windows/velopack-output | ForEach-Object { Write-Host "$($_.Name) ($([math]::Round($_.Length/1MB, 1)) MB)" }
 
       - name: Upload to release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: staging-latest
-          # MANUAL-SIDELOAD ONLY — do NOT upload the Velopack manifest
-          # (releases.win.json) or the .nupkg here. This build is
-          # flavor=staging: it talks to license-staging.dimmy.app +
-          # Stripe Test under a DIFFERENT licensing pubkey. It also
-          # ships under packId `Dimmy` (same as prod), so the moment a
-          # manifest is present, the prod client's
-          # `GithubSource(prerelease: true)` discovers it and — because
-          # vpk strips the suffix to a clean `0.6.59` (> `0.6.59-rc1`) —
-          # serves it to PAYING prod users on the prerelease channel.
-          # Their prod license then fails to verify against the staging
-          # pubkey => silent demotion to free/trial, and "Buy plan"
-          # bills Stripe Test. Burned 2026-06-16.
-          #
-          # Invariant: anything discoverable under packId `Dimmy` MUST
-          # be a prod-flavor build (release.yml). Staging-native is a
-          # team sideload artifact only — Setup.exe / Portable.zip,
-          # downloaded by hand. Proper side-by-side auto-update is the
-          # `Dimmy-Staging` packId path in staging-tester.yml.
-          #
-          # (Reverses the 2026-05-11 "add the manifest so prerelease
-          # sees staging" change, which was the root cause.)
+          # The Velopack manifest (releases.staging.json) + nupkg ARE
+          # uploaded here — but under packId `Dimmy-Staging` + Velopack
+          # channel `staging`, so the prod `Dimmy` client can NEVER
+          # discover them (GithubSource filters by packId + channel).
+          # This is what makes a downloaded staging build auto-update
+          # across the staging channel with no user action, while staying
+          # structurally invisible to paying prod users on `prerelease`.
+          # (packId `Dimmy` + a manifest here was the 2026-06-16 leak.)
+          # Filenames are `Dimmy-Staging-*` — mirror of staging-tester.yml.
           files: |
-            platforms/windows/velopack-output/Dimmy-win-Setup.exe
-            platforms/windows/velopack-output/Dimmy-win-Portable.zip
+            platforms/windows/velopack-output/Dimmy-Staging-*Setup.exe
+            platforms/windows/velopack-output/Dimmy-Staging-*Portable.zip
+            platforms/windows/velopack-output/Dimmy-Staging-*-full.nupkg
+            platforms/windows/velopack-output/releases*.json
 
   # ── Linux Native Build (parallel with macOS + Windows + rust-check) ──
   build-linux:
@@ -806,6 +819,12 @@ jobs:
           DIMMY_LICENSE_PUBKEY: avlM65dRGDHomOzqGICiuIXf6_dY21w653AOnza2fzU
           DIMMY_LICENSE_SERVER_URL: https://license-staging.dimmy.app
           DIMMY_BUILD_FLAVOR: staging
+          # Side-by-side staging install: packId Dimmy-Staging (Velopack
+          # pack step) + isolated config dir dimmy-staging here, identical
+          # to staging-tester.yml. Without this the side-by-side install
+          # would write into the prod `dimmy` config dir (default when
+          # DIMMY_CONFIG_NAMESPACE is unset) and mix data with prod.
+          DIMMY_CONFIG_NAMESPACE: dimmy-staging
         run: cargo build --release --features license-client
 
       - name: Package AppImage
