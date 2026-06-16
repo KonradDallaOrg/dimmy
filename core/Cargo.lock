@@ -936,7 +936,7 @@ dependencies = [
 
 [[package]]
 name = "dimmy"
-version = "0.6.58"
+version = "0.6.59"
 dependencies = [
  "aec3",
  "anyhow",
