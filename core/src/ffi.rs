@@ -6604,6 +6604,316 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
     write_to_buf(&text, out_buf, buf_len)
 }
 
+/// Group Deepgram per-word `(start_secs, word)` into speaker-turn lines:
+/// `(start_ms, text)`. A new line starts when the gap to the previous word
+/// exceeds `GAP_SECS` (a natural pause) or the current line gets long.
+/// `offset_secs` shifts each word into absolute meeting time (the chunk's
+/// start, since cloud chunking is at the provider's max-file size).
+fn group_words_into_turns(words: &[(f64, String)], offset_secs: f64) -> Vec<(u128, String)> {
+    const GAP_SECS: f64 = 1.3;
+    const MAX_CHARS: usize = 240;
+    let mut lines: Vec<(u128, String)> = Vec::new();
+    let mut cur = String::new();
+    let mut cur_start = 0.0_f64;
+    let mut prev = f64::NEG_INFINITY;
+    for (start, word) in words {
+        let s = start + offset_secs;
+        if cur.is_empty() {
+            cur_start = s;
+            cur.push_str(word);
+        } else if s - prev > GAP_SECS || cur.len() + word.len() + 1 > MAX_CHARS {
+            lines.push((
+                (cur_start * 1000.0).max(0.0) as u128,
+                std::mem::take(&mut cur),
+            ));
+            cur_start = s;
+            cur.push_str(word);
+        } else {
+            cur.push(' ');
+            cur.push_str(word);
+        }
+        prev = s;
+    }
+    if !cur.is_empty() {
+        lines.push(((cur_start * 1000.0).max(0.0) as u128, cur));
+    }
+    lines
+}
+
+/// Re-transcribe a meeting's PER-TRACK audio (`audio_mic` + `audio_system`),
+/// rebuilding `transcripts.txt` in the SAME `[<ms> ms] [band] text` format the
+/// live worker writes. The old "Regenerate transcript" path transcribed each
+/// track as one blob, which collapsed the meeting into a single `[mic]` +
+/// `[system]` block with no speaker turns and no timestamps. This restores both.
+///
+/// Backend-aware chunking (NEVER one HTTP POST per 15 s — that hammered cloud
+/// providers with hundreds of calls):
+/// - LOCAL (whisper / parakeet): fixed `meeting_chunk_secs` windows (default
+///   15 s); timestamp = window start.
+/// - CLOUD: chunk at the PROVIDER's max file size (a few big calls). Deepgram →
+///   per-word timestamps grouped into turns; other providers → one line per
+///   big chunk (coarse timestamps, but fast and never hangs).
+///
+/// Falls back to the combined `audio` mix (labeled `[mic]`) when no per-track
+/// files exist. Uses `process_buffer_for_file_load` (highpass only — AGC NaNs
+/// long files, CLAUDE.md AUDIO-001). rc: bytes written, -1 bad args, -2 no
+/// audio, -3 write failed, -5 empty result, -6 cloud config incomplete.
+#[no_mangle]
+pub unsafe extern "C" fn dimmy_meeting_retranscribe(
+    dir_ptr: *const c_char,
+    out_buf: *mut c_char,
+    buf_len: c_int,
+) -> c_int {
+    if dir_ptr.is_null() || out_buf.is_null() || buf_len <= 0 {
+        return -1;
+    }
+    let dir = match CStr::from_ptr(dir_ptr).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let dir_path = std::path::Path::new(dir);
+
+    // Resolve per-track files (prefer .ogg, fall back to legacy .wav).
+    fn resolve_track(dir: &std::path::Path, base: &str) -> Option<String> {
+        for ext in ["ogg", "wav"] {
+            let p = dir.join(format!("{}.{}", base, ext));
+            if p.exists() {
+                return Some(p.to_string_lossy().to_string());
+            }
+        }
+        None
+    }
+    let mut bands: Vec<(&str, String)> = Vec::new();
+    if let Some(p) = resolve_track(dir_path, "audio_mic") {
+        bands.push(("mic", p));
+    }
+    if let Some(p) = resolve_track(dir_path, "audio_system") {
+        bands.push(("system", p));
+    }
+    if bands.is_empty() {
+        if let Some(p) = resolve_track(dir_path, "audio") {
+            bands.push(("mic", p));
+        }
+    }
+    if bands.is_empty() {
+        log("[Retranscribe] no audio tracks in dir");
+        return -2;
+    }
+
+    let st = state();
+    let stt_mode = st
+        .stt_mode
+        .lock()
+        .map(|m| m.clone())
+        .unwrap_or_else(|_| "local".to_string());
+    let is_local = stt_mode == "local";
+    let backend = st
+        .local_stt_backend
+        .lock()
+        .map(|b| b.clone())
+        .unwrap_or_else(|_| "whisper".to_string());
+    let mut language = st.language.lock().map(|l| l.clone()).unwrap_or_default();
+    if language.is_empty() {
+        language = "en".to_string();
+    }
+    let model = st
+        .local_model
+        .lock()
+        .map(|m| m.clone())
+        .unwrap_or_else(|_| "ggml-base-q8_0.bin".to_string());
+    let prompt_base = st.prompt.lock().map(|p| p.clone()).unwrap_or_default();
+    let user_dict = st.user_dict.lock().map(|d| d.clone()).unwrap_or_default();
+    let composed_prompt = crate::compose_stt_prompt(&prompt_base, &user_dict);
+
+    // Cloud config (only when stt_mode != local).
+    let api_url = st.api_url.lock().map(|u| u.clone()).unwrap_or_default();
+    let api_model = st.api_model.lock().map(|m| m.clone()).unwrap_or_default();
+    let api_key = st
+        .api_key
+        .lock()
+        .ok()
+        .and_then(|g| g.clone())
+        .unwrap_or_default();
+    let cloud_rt = if !is_local {
+        if api_url.is_empty() || api_key.is_empty() || api_model.is_empty() {
+            log("[Retranscribe] cloud config incomplete (url/key/model)");
+            return -6;
+        }
+        match tokio::runtime::Runtime::new() {
+            Ok(r) => Some(r),
+            Err(e) => {
+                log(&format!("[Retranscribe] tokio runtime: {}", e));
+                return -3;
+            }
+        }
+    } else {
+        None
+    };
+
+    // Chunk window — same default as the live worker so the re-transcribe
+    // looks like the original (speaker turns at the same granularity).
+    let chunk_secs = st
+        .meeting_chunk_secs
+        .lock()
+        .map(|g| *g)
+        .unwrap_or(15.0)
+        .max(5.0);
+
+    let mut lines: Vec<(u128, &'static str, String)> = Vec::new();
+    for (band, path) in &bands {
+        let band: &'static str = if *band == "system" { "system" } else { "mic" };
+        let ext = std::path::Path::new(path)
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_ascii_lowercase())
+            .unwrap_or_default();
+        let (mono, rate) = match if ext == "wav" {
+            decode_wav_via_hound(path)
+        } else {
+            decode_via_symphonia(path)
+        } {
+            Ok(v) => v,
+            Err(e) => {
+                log(&format!("[Retranscribe] decode {} failed: {}", band, e));
+                continue;
+            }
+        };
+        let processed = crate::preprocess::process_buffer_for_file_load(&mono, rate);
+        if processed.is_empty() {
+            continue;
+        }
+        let total = processed.len();
+        if is_local {
+            // LOCAL: fixed `meeting_chunk_secs` windows (whisper context /
+            // parakeet). Timestamp = window start.
+            let chunk_samples = ((chunk_secs * rate as f32) as usize).max(rate as usize);
+            let mut start = 0usize;
+            while start < total {
+                let end = (start + chunk_samples).min(total);
+                let window = crate::audio::ProcessedAudio {
+                    samples: processed[start..end].to_vec(),
+                    sample_rate: rate,
+                };
+                let elapsed_ms = (start as f64 / rate as f64 * 1000.0) as u128;
+                let text = if backend == "parakeet" {
+                    crate::transcribe::transcribe_audio_local_parakeet_with_word_ts(&window)
+                        .map(|(t, _)| t)
+                        .unwrap_or_default()
+                } else {
+                    crate::transcribe::transcribe_audio_local(
+                        &window,
+                        &language,
+                        &model,
+                        &composed_prompt,
+                    )
+                    .unwrap_or_default()
+                };
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    lines.push((elapsed_ms, band, trimmed.to_string()));
+                }
+                emit_event(
+                    "file_transcribe_progress",
+                    &serde_json::json!({ "percent": (end as f64 / total as f64) * 100.0 })
+                        .to_string(),
+                );
+                start = end;
+            }
+        } else {
+            // CLOUD: chunk at the PROVIDER's max file size (a few big calls,
+            // never one-per-15s). Deepgram → per-word timestamps grouped into
+            // turns; other providers → one line per big chunk.
+            let provider = crate::provider::Provider::from_url(&api_url);
+            let is_deepgram = matches!(provider, crate::provider::Provider::Deepgram);
+            // 16 kHz mono WAV = 2 bytes/sample; leave header headroom. Floor at
+            // 30 s so a tiny max_file_bytes can't explode the call count.
+            let max_16k = (provider.max_file_bytes().saturating_sub(4096) / 2).max(16_000 * 30);
+            let win = (((max_16k as f64 / 16_000.0) * rate as f64) as usize).max(rate as usize);
+            let mut start = 0usize;
+            while start < total {
+                let end = (start + win).min(total);
+                let pcm16k = crate::preprocess::downsample_to_16k(&processed[start..end], rate);
+                let wav = crate::audio::encode_wav(&pcm16k, 16000).unwrap_or_default();
+                let chunk_start_secs = start as f64 / rate as f64;
+                if is_deepgram {
+                    let words = cloud_rt
+                        .as_ref()
+                        .and_then(|rt| {
+                            rt.block_on(crate::transcribe::transcribe_audio_deepgram_words(
+                                &api_url,
+                                &api_model,
+                                &api_key,
+                                &wav,
+                                &language,
+                                &composed_prompt,
+                            ))
+                            .ok()
+                        })
+                        .unwrap_or_default();
+                    for (ms, text) in group_words_into_turns(&words, chunk_start_secs) {
+                        lines.push((ms, band, text));
+                    }
+                } else {
+                    let text = cloud_rt
+                        .as_ref()
+                        .and_then(|rt| {
+                            rt.block_on(crate::transcribe::transcribe_audio(
+                                &api_url,
+                                &api_model,
+                                &api_key,
+                                &wav,
+                                &language,
+                                &composed_prompt,
+                            ))
+                            .ok()
+                        })
+                        .unwrap_or_default();
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        lines.push((
+                            (chunk_start_secs * 1000.0) as u128,
+                            band,
+                            trimmed.to_string(),
+                        ));
+                    }
+                }
+                emit_event(
+                    "file_transcribe_progress",
+                    &serde_json::json!({ "percent": (end as f64 / total as f64) * 100.0 })
+                        .to_string(),
+                );
+                start = end;
+            }
+        }
+    }
+
+    // Interleave the two bands by time (stable so mic precedes system on ties).
+    lines.sort_by_key(|(ms, _, _)| *ms);
+    let mut out = String::new();
+    for (ms, band, text) in &lines {
+        out.push_str(&format!("[{:>6} ms] [{}] {}\n", ms, band, text));
+    }
+    if out.trim().is_empty() {
+        log("[Retranscribe] produced empty transcript");
+        return -5;
+    }
+    if let Err(e) = std::fs::write(dir_path.join("transcripts.txt"), out.as_bytes()) {
+        log(&format!(
+            "[Retranscribe] write transcripts.txt failed: {}",
+            e
+        ));
+        return -3;
+    }
+    log(&format!(
+        "[Retranscribe] {} dir='{}' -> {} lines, {} bytes",
+        if is_local { &backend } else { "cloud" },
+        dir,
+        lines.len(),
+        out.len()
+    ));
+    write_to_buf(&out, out_buf, buf_len)
+}
+
 /// Poll for hotkey events. Returns:
 /// - 0 = no event
 /// - 1 = pressed (all keys in combo are down)

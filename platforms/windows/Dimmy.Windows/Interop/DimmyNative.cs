@@ -261,6 +261,15 @@ public static class DimmyNative
         [MarshalAs(UnmanagedType.LPUTF8Str)] string path,
         byte[] outBuf, int bufLen);
 
+    /// Re-transcribe a meeting's per-track audio (audio_mic + audio_system)
+    /// in chunks, rebuilding transcripts.txt with `[ms] [band] text` lines
+    /// (speaker turns + timestamps), and returns the merged transcript.
+    /// See core/src/ffi.rs::dimmy_meeting_retranscribe for the rc table.
+    [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int dimmy_meeting_retranscribe(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string dir,
+        byte[] outBuf, int bufLen);
+
     [DllImport(DLL, CallingConvention = CallingConvention.Cdecl)]
     public static extern int dimmy_history_update_enhanced(
         int id,

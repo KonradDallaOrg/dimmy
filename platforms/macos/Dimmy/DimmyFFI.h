@@ -339,6 +339,15 @@ int32_t dimmy_transcribe_file(const char * _Nonnull path_ptr,
                               char * _Nonnull out_buf,
                               int32_t buf_len);
 
+/// Re-transcribe a meeting's per-track audio (audio_mic + audio_system) in
+/// chunks, rebuilding transcripts.txt with `[<ms> ms] [band] text` lines
+/// (speaker turns + timestamps) and returning the merged transcript. Honors
+/// the active backend (cloud / parakeet / whisper). rc: bytes on success,
+/// -1 bad args, -2 no audio, -3 write failed, -5 empty, -6 cloud config.
+int32_t dimmy_meeting_retranscribe(const char * _Nonnull dir_ptr,
+                                   char * _Nonnull out_buf,
+                                   int32_t buf_len);
+
 // ── Meeting mode ─────────────────────────────────────────────────
 
 /// Start a meeting recording. Returns the session id length on success;

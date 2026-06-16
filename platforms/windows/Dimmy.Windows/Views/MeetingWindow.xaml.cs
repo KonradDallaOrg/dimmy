@@ -2501,53 +2501,20 @@ public sealed partial class MeetingWindow : Window
     /// Returns "" if no audio file is present.
     private static string TranscribeMeetingDir(string dir)
     {
-        var sb = new System.Text.StringBuilder();
+        // Chunked, per-band re-transcription in the Rust core: rebuilds
+        // transcripts.txt with `[<ms> ms] [mic|system] text` lines (speaker
+        // turns + timestamps) like the live worker — instead of the old
+        // blob-per-track path that collapsed each track into one `[mic]` /
+        // `[system]` block with no turns or times. The FFI writes
+        // transcripts.txt itself; the returned string is the merged text.
         var buf = new byte[1 << 22]; // 4 MB transcript ceiling
-
-        string TranscribeOne(string path)
+        int rc = DimmyNative.dimmy_meeting_retranscribe(dir, buf, buf.Length);
+        if (rc <= 0)
         {
-            int rc = DimmyNative.dimmy_transcribe_file(path, buf, buf.Length);
-            if (rc <= 0)
-            {
-                App.Log($"transcribe_file '{Path.GetFileName(path)}' rc={rc}", "Meeting");
-                return "";
-            }
-            return System.Text.Encoding.UTF8.GetString(buf, 0, rc);
+            App.Log($"meeting_retranscribe rc={rc}", "Meeting");
+            return "";
         }
-
-        // Prefer the compressed .ogg tracks (current format), fall back
-        // to legacy .wav. dimmy_transcribe_file decodes either via the
-        // shared hound/Symphonia path, so re-transcription needs no WAV.
-        var micPath = ResolveAudioTrack(dir, "audio_mic");
-        var systemPath = ResolveAudioTrack(dir, "audio_system");
-        var monoPath = ResolveAudioTrack(dir, "audio");
-
-        bool hasMic = micPath != null && new FileInfo(micPath).Length > 44;
-        bool hasSystem = systemPath != null && new FileInfo(systemPath).Length > 44;
-
-        if (hasMic || hasSystem)
-        {
-            if (hasMic)
-            {
-                var mic = TranscribeOne(micPath!);
-                if (!string.IsNullOrWhiteSpace(mic))
-                    sb.AppendLine("[mic]").AppendLine(mic.Trim()).AppendLine();
-            }
-            if (hasSystem)
-            {
-                var sys = TranscribeOne(systemPath!);
-                if (!string.IsNullOrWhiteSpace(sys))
-                    sb.AppendLine("[system]").AppendLine(sys.Trim()).AppendLine();
-            }
-        }
-        else if (monoPath != null && new FileInfo(monoPath).Length > 44)
-        {
-            var mono = TranscribeOne(monoPath);
-            if (!string.IsNullOrWhiteSpace(mono))
-                sb.Append(mono.Trim());
-        }
-
-        return sb.ToString().TrimEnd();
+        return System.Text.Encoding.UTF8.GetString(buf, 0, rc);
     }
 
     // ── Helpers ────────────────────────────────────────────────────

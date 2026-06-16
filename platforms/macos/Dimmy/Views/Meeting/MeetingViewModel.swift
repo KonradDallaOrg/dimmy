@@ -608,29 +608,26 @@ final class MeetingViewModel: ObservableObject {
         }
     }
 
-    /// Re-run the file-load transcribe path on the meeting's mix track
-    /// (audio.ogg / audio.wav fallback), replaces transcripts.txt +
-    /// re-runs the recap. Useful when the live STT truncated or the user
-    /// wants a different language pass. `dimmy_transcribe_file` already
-    /// decodes both formats via Symphonia (the ABI is in the regen-ed
-    /// abi_exports.txt golden).
+    /// Rebuild `transcripts.txt` from the per-band audio
+    /// (`audio_mic.*` / `audio_system.*`, or `audio.*` as mic fallback)
+    /// in the live-worker format `[<ms> ms] [band] text`, interleaved by
+    /// time — same shape the meeting worker produces live. The Rust side
+    /// (`dimmy_meeting_retranscribe`) decodes each band, runs the active
+    /// STT backend (local or cloud, backend-aware chunking), writes
+    /// `transcripts.txt` itself, and returns the merged text. Then we
+    /// re-run the recap. Useful when the live STT truncated or the user
+    /// wants a fresh pass.
     func regenerateTranscript() {
         guard !activeMeetingDir.isEmpty || selectedDir != nil else { return }
         let dir = selectedDir ?? activeMeetingDir
-        guard let audioURL = Self.resolveMeetingAudio(dir: dir, base: "audio") else {
-            showToast("No mix track on disk to re-transcribe.")
-            return
-        }
         phase = .processing
         processingStep = .saving
         statusLabel = "Re-transcribing audio..."
         DispatchQueue.global(qos: .userInitiated).async {
-            let result = DimmyCore.shared.transcribeFile(at: audioURL.path)
+            let result = DimmyCore.shared.meetingRetranscribe(dir: dir)
             DispatchQueue.main.async {
                 switch result {
                 case .success(let text):
-                    let transcriptURL = URL(fileURLWithPath: dir).appendingPathComponent("transcripts.txt")
-                    try? text.write(to: transcriptURL, atomically: true, encoding: .utf8)
                     self.doneRawTranscript = text
                     self.regenerateRecap()
                 case .failure(let err):
