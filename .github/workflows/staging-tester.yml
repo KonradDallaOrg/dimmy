@@ -622,6 +622,13 @@ jobs:
           $ortLib = "core/target/onnxruntime-win-x64-1.22.0/lib"
           Copy-Item "$ortLib/onnxruntime.dll" "$pubDir/"
           Copy-Item "$ortLib/onnxruntime_providers_shared.dll" "$pubDir/"
+          # Bundle the dimmy-mcp MCP server next to the app exe (Win parity
+          # with the macOS .app Resources copy) so the INSTALLED app exposes
+          # meetings to Claude Code / Claude Desktop. Self-contained Rust stdio
+          # binary; no whisper/vulkan, so no MSVC 14.50 gate needed. Relies on
+          # the same System32 VC redist Velopack installs via --framework.
+          cargo build --release --manifest-path mcp-server/Cargo.toml
+          Copy-Item "mcp-server/target/release/dimmy-mcp.exe" "$pubDir/" -Force
           Get-ChildItem "$pubDir" -Filter "*.pdb" -Recurse | Remove-Item -ErrorAction SilentlyContinue
 
       - name: Install Velopack CLI
