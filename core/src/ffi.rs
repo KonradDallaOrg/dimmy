@@ -6604,19 +6604,60 @@ pub unsafe extern "C" fn dimmy_transcribe_file(
     write_to_buf(&text, out_buf, buf_len)
 }
 
-/// Re-transcribe a meeting's PER-TRACK audio (`audio_mic` + `audio_system`)
-/// in fixed-size chunks, rebuilding `transcripts.txt` in the SAME
-/// `[<ms> ms] [band] text` format the live worker writes. The old
-/// "Regenerate transcript" path transcribed each track as one blob, which
-/// collapsed the meeting into a single `[mic]` + `[system]` block with no
-/// speaker turns and no timestamps. This restores both.
+/// Group Deepgram per-word `(start_secs, word)` into speaker-turn lines:
+/// `(start_ms, text)`. A new line starts when the gap to the previous word
+/// exceeds `GAP_SECS` (a natural pause) or the current line gets long.
+/// `offset_secs` shifts each word into absolute meeting time (the chunk's
+/// start, since cloud chunking is at the provider's max-file size).
+fn group_words_into_turns(words: &[(f64, String)], offset_secs: f64) -> Vec<(u128, String)> {
+    const GAP_SECS: f64 = 1.3;
+    const MAX_CHARS: usize = 240;
+    let mut lines: Vec<(u128, String)> = Vec::new();
+    let mut cur = String::new();
+    let mut cur_start = 0.0_f64;
+    let mut prev = f64::NEG_INFINITY;
+    for (start, word) in words {
+        let s = start + offset_secs;
+        if cur.is_empty() {
+            cur_start = s;
+            cur.push_str(word);
+        } else if s - prev > GAP_SECS || cur.len() + word.len() + 1 > MAX_CHARS {
+            lines.push((
+                (cur_start * 1000.0).max(0.0) as u128,
+                std::mem::take(&mut cur),
+            ));
+            cur_start = s;
+            cur.push_str(word);
+        } else {
+            cur.push(' ');
+            cur.push_str(word);
+        }
+        prev = s;
+    }
+    if !cur.is_empty() {
+        lines.push(((cur_start * 1000.0).max(0.0) as u128, cur));
+    }
+    lines
+}
+
+/// Re-transcribe a meeting's PER-TRACK audio (`audio_mic` + `audio_system`),
+/// rebuilding `transcripts.txt` in the SAME `[<ms> ms] [band] text` format the
+/// live worker writes. The old "Regenerate transcript" path transcribed each
+/// track as one blob, which collapsed the meeting into a single `[mic]` +
+/// `[system]` block with no speaker turns and no timestamps. This restores both.
+///
+/// Backend-aware chunking (NEVER one HTTP POST per 15 s — that hammered cloud
+/// providers with hundreds of calls):
+/// - LOCAL (whisper / parakeet): fixed `meeting_chunk_secs` windows (default
+///   15 s); timestamp = window start.
+/// - CLOUD: chunk at the PROVIDER's max file size (a few big calls). Deepgram →
+///   per-word timestamps grouped into turns; other providers → one line per
+///   big chunk (coarse timestamps, but fast and never hangs).
 ///
 /// Falls back to the combined `audio` mix (labeled `[mic]`) when no per-track
-/// files exist (older single-track recordings). Honors the active STT backend
-/// (cloud / parakeet / whisper) + `language` exactly like file-load, and uses
-/// `process_buffer_for_file_load` (highpass only — AGC NaNs long files,
-/// CLAUDE.md AUDIO-001). rc: bytes written, -1 bad args, -2 no audio,
-/// -3 write failed, -5 empty result, -6 cloud config incomplete.
+/// files exist. Uses `process_buffer_for_file_load` (highpass only — AGC NaNs
+/// long files, CLAUDE.md AUDIO-001). rc: bytes written, -1 bad args, -2 no
+/// audio, -3 write failed, -5 empty result, -6 cloud config incomplete.
 #[no_mangle]
 pub unsafe extern "C" fn dimmy_meeting_retranscribe(
     dir_ptr: *const c_char,
@@ -6741,59 +6782,108 @@ pub unsafe extern "C" fn dimmy_meeting_retranscribe(
         if processed.is_empty() {
             continue;
         }
-        let chunk_samples = ((chunk_secs * rate as f32) as usize).max(rate as usize);
         let total = processed.len();
-        let mut start = 0usize;
-        while start < total {
-            let end = (start + chunk_samples).min(total);
-            let window = crate::audio::ProcessedAudio {
-                samples: processed[start..end].to_vec(),
-                sample_rate: rate,
-            };
-            let elapsed_ms = (start as f64 / rate as f64 * 1000.0) as u128;
-            let text: String = if !is_local {
-                // Cloud: one POST per window (matches the live per-chunk path).
-                let pcm16k = crate::preprocess::downsample_to_16k(&window.samples, rate);
-                let wav = crate::audio::encode_wav(&pcm16k, 16000).unwrap_or_default();
-                cloud_rt
-                    .as_ref()
-                    .and_then(|rt| {
-                        rt.block_on(crate::transcribe::transcribe_audio(
-                            &api_url,
-                            &api_model,
-                            &api_key,
-                            &wav,
-                            &language,
-                            &composed_prompt,
-                        ))
-                        .ok()
-                    })
+        if is_local {
+            // LOCAL: fixed `meeting_chunk_secs` windows (whisper context /
+            // parakeet). Timestamp = window start.
+            let chunk_samples = ((chunk_secs * rate as f32) as usize).max(rate as usize);
+            let mut start = 0usize;
+            while start < total {
+                let end = (start + chunk_samples).min(total);
+                let window = crate::audio::ProcessedAudio {
+                    samples: processed[start..end].to_vec(),
+                    sample_rate: rate,
+                };
+                let elapsed_ms = (start as f64 / rate as f64 * 1000.0) as u128;
+                let text = if backend == "parakeet" {
+                    crate::transcribe::transcribe_audio_local_parakeet_with_word_ts(&window)
+                        .map(|(t, _)| t)
+                        .unwrap_or_default()
+                } else {
+                    crate::transcribe::transcribe_audio_local(
+                        &window,
+                        &language,
+                        &model,
+                        &composed_prompt,
+                    )
                     .unwrap_or_default()
-            } else if backend == "parakeet" {
-                crate::transcribe::transcribe_audio_local_parakeet_with_word_ts(&window)
-                    .map(|(t, _)| t)
-                    .unwrap_or_default()
-            } else {
-                crate::transcribe::transcribe_audio_local(
-                    &window,
-                    &language,
-                    &model,
-                    &composed_prompt,
-                )
-                .unwrap_or_default()
-            };
-            let trimmed = text.trim();
-            if !trimmed.is_empty() {
-                lines.push((elapsed_ms, band, trimmed.to_string()));
+                };
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    lines.push((elapsed_ms, band, trimmed.to_string()));
+                }
+                emit_event(
+                    "file_transcribe_progress",
+                    &serde_json::json!({ "percent": (end as f64 / total as f64) * 100.0 })
+                        .to_string(),
+                );
+                start = end;
             }
-            emit_event(
-                "file_transcribe_progress",
-                &serde_json::json!({
-                    "percent": (end as f64 / total as f64) * 100.0,
-                })
-                .to_string(),
-            );
-            start = end;
+        } else {
+            // CLOUD: chunk at the PROVIDER's max file size (a few big calls,
+            // never one-per-15s). Deepgram → per-word timestamps grouped into
+            // turns; other providers → one line per big chunk.
+            let provider = crate::provider::Provider::from_url(&api_url);
+            let is_deepgram = matches!(provider, crate::provider::Provider::Deepgram);
+            // 16 kHz mono WAV = 2 bytes/sample; leave header headroom. Floor at
+            // 30 s so a tiny max_file_bytes can't explode the call count.
+            let max_16k = (provider.max_file_bytes().saturating_sub(4096) / 2).max(16_000 * 30);
+            let win = (((max_16k as f64 / 16_000.0) * rate as f64) as usize).max(rate as usize);
+            let mut start = 0usize;
+            while start < total {
+                let end = (start + win).min(total);
+                let pcm16k = crate::preprocess::downsample_to_16k(&processed[start..end], rate);
+                let wav = crate::audio::encode_wav(&pcm16k, 16000).unwrap_or_default();
+                let chunk_start_secs = start as f64 / rate as f64;
+                if is_deepgram {
+                    let words = cloud_rt
+                        .as_ref()
+                        .and_then(|rt| {
+                            rt.block_on(crate::transcribe::transcribe_audio_deepgram_words(
+                                &api_url,
+                                &api_model,
+                                &api_key,
+                                &wav,
+                                &language,
+                                &composed_prompt,
+                            ))
+                            .ok()
+                        })
+                        .unwrap_or_default();
+                    for (ms, text) in group_words_into_turns(&words, chunk_start_secs) {
+                        lines.push((ms, band, text));
+                    }
+                } else {
+                    let text = cloud_rt
+                        .as_ref()
+                        .and_then(|rt| {
+                            rt.block_on(crate::transcribe::transcribe_audio(
+                                &api_url,
+                                &api_model,
+                                &api_key,
+                                &wav,
+                                &language,
+                                &composed_prompt,
+                            ))
+                            .ok()
+                        })
+                        .unwrap_or_default();
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        lines.push((
+                            (chunk_start_secs * 1000.0) as u128,
+                            band,
+                            trimmed.to_string(),
+                        ));
+                    }
+                }
+                emit_event(
+                    "file_transcribe_progress",
+                    &serde_json::json!({ "percent": (end as f64 / total as f64) * 100.0 })
+                        .to_string(),
+                );
+                start = end;
+            }
         }
     }
 

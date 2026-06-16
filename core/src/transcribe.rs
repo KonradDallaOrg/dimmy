@@ -269,6 +269,68 @@ async fn transcribe_audio_deepgram(
     Ok(text)
 }
 
+/// Deepgram transcription returning per-word `(start_secs, punctuated_word)`.
+/// Same request as [`transcribe_audio_deepgram`] but parses the `words` array
+/// (nova models return it with `smart_format`). Lets meeting re-transcription
+/// rebuild speaker-turn lines with REAL timestamps from one call per band,
+/// instead of one HTTP POST per 15 s window. Falls back to a single pseudo-word
+/// holding the whole transcript at t=0 if no `words` array is present.
+pub async fn transcribe_audio_deepgram_words(
+    api_url: &str,
+    model: &str,
+    api_key: &str,
+    wav_data: &[u8],
+    language: &str,
+    prompt: &str,
+) -> Result<Vec<(f64, String)>, crate::error::TranscribeError> {
+    let url = compose_deepgram_url(api_url, model, language, prompt);
+    let timeout = timeout_for_payload(wav_data);
+    let client = reqwest::Client::builder().timeout(timeout).build()?;
+    let response = client
+        .post(&url)
+        .header("Authorization", format!("Token {}", api_key))
+        .header("Content-Type", "audio/wav")
+        .body(wav_data.to_vec())
+        .send()
+        .await?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        let scrubbed = Provider::scrub_api_key(crate::truncate_utf8(&body, 200), api_key);
+        crate::log(&format!(
+            "[STT] deepgram(words) HTTP {} body={}",
+            status.as_u16(),
+            scrubbed
+        ));
+        return Err(crate::error::TranscribeError::Api {
+            status: status.as_u16(),
+            body: scrubbed,
+        });
+    }
+    let result: serde_json::Value = response.json().await?;
+    let alt = &result["results"]["channels"][0]["alternatives"][0];
+    let mut out: Vec<(f64, String)> = Vec::new();
+    if let Some(words) = alt["words"].as_array() {
+        for w in words {
+            let start = w["start"].as_f64().unwrap_or(0.0);
+            let word = w["punctuated_word"]
+                .as_str()
+                .or_else(|| w["word"].as_str())
+                .unwrap_or("");
+            if !word.is_empty() {
+                out.push((start, word.to_string()));
+            }
+        }
+    }
+    if out.is_empty() {
+        let text = alt["transcript"].as_str().unwrap_or("").trim().to_string();
+        if !text.is_empty() {
+            out.push((0.0, text));
+        }
+    }
+    Ok(out)
+}
+
 /// Gemini-specific transcription: sends audio as base64 inline data to generateContent.
 /// The URL already contains the model name, e.g.:
 ///   https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent
