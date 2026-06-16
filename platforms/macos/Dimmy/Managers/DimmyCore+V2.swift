@@ -71,6 +71,39 @@ extension DimmyCore {
         return .success(String(cString: buffer))
     }
 
+    /// Rebuild a meeting's `transcripts.txt` from the per-band audio
+    /// (`audio_mic.*` / `audio_system.*`, or `audio.*` as mic fallback)
+    /// in the live-worker format `[<ms> ms] [band] text`, interleaved by
+    /// time. The Rust side writes `transcripts.txt` itself and returns
+    /// the merged text. Blocking — call from a background thread.
+    ///
+    /// Return codes (negative = failure):
+    ///   - .success(text) — merged transcript (empty if nothing produced)
+    ///   - .failure(.invalidArgs)      — null pointer / bad UTF-8 (-1)
+    ///   - .failure(.openFailed)       — no decodable band audio (-2)
+    ///   - .failure(.silentInput)      — every band produced empty text (-5)
+    ///   - .failure(.cloudUnsupported) — cloud STT config incomplete (-6)
+    ///   - .failure(.backendFailed)    — write failed / backend error (other)
+    func meetingRetranscribe(dir: String) -> Result<String, FileTranscribeError> {
+        guard isInitialized else { return .failure(.notInitialized) }
+        let bufLen: Int32 = 1 << 22  // 4 MB transcript buffer (long meetings)
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(bufLen))
+        defer { buffer.deallocate() }
+        buffer[0] = 0
+        let rc = dir.withCString { p in dimmy_meeting_retranscribe(p, buffer, bufLen) }
+        if rc < 0 {
+            switch rc {
+            case -1: return .failure(.invalidArgs)
+            case -2: return .failure(.openFailed)
+            case -5: return .failure(.silentInput)
+            case -6: return .failure(.cloudUnsupported)
+            default: return .failure(.backendFailed)
+            }
+        }
+        if rc == 0 { return .success("") }
+        return .success(String(cString: buffer))
+    }
+
     enum FileTranscribeError: Error, CustomStringConvertible {
         case notInitialized
         case invalidArgs
