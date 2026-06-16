@@ -25,8 +25,14 @@ namespace Dimmy.Windows.Services;
 /// 2026-05-11 design conversation: "Mixed" scenario.
 ///
 /// Channel selection lives in <see cref="UiPreferences.UpdateChannel"/>:
-/// "stable" (Latest GitHub release only) vs "prerelease" (also offers
-/// staging-native builds via GithubSource(prerelease: true)).
+/// "stable" (Latest GitHub release only) vs "prerelease" (stable + rc
+/// builds from release.yml via GithubSource(prerelease: true)). Both
+/// channels only ever serve PROD-flavor builds (license.dimmy.app +
+/// Stripe Live). staging-native builds are deliberately NOT
+/// discoverable here — staging-auto-update.yml withholds the Velopack
+/// manifest so a paying prod user can't auto-update into a
+/// flavor=staging binary (Stripe Test, different license pubkey).
+/// Burned 2026-06-16. See CLAUDE.md "Release pipelines".
 ///
 /// Failure modes are silent by design — no network, no GitHub auth,
 /// or a malformed release manifest must NOT block the user from
