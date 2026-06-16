@@ -523,26 +523,36 @@ public class MarketingCapture
         app.GetMainWindow(automation, TimeSpan.FromSeconds(20));
         Thread.Sleep(4000);
         SendCommand("open-settings:integrations");
-        Thread.Sleep(2500);
+        IntPtr swin = IntPtr.Zero;
+        for (int i = 0; i < 20 && swin == IntPtr.Zero; i++) { Thread.Sleep(400); swin = FindWindow("Settings", true); }
+        Thread.Sleep(1500);
 
         // Each integration may be disconnected (Connect button) OR connected
         // (re-open / change-destination button) — try both so the wizard is
         // reachable regardless of the machine's connection state.
+        // candidates are tried as AutomationId first, then Name — so the two
+        // colliding "Set up wizard" buttons (Anthropic vs Codex) are disambiguated
+        // by their x:Name (= AutomationId in WinUI).
         TryWizard(automation, new[] { "Connect Notion", "Change destination" }, outDir, "integrations-notion", "wizard", "/assets/help/integrations-notion/wizard.png");
         TryWizard(automation, new[] { "Connect Claude Desktop", "Re-run wizard" }, outDir, "integrations-claude-desktop", "wizard", "/assets/help/integrations-claude-desktop/wizard.png");
+        // Claude Code subscription: AnthropicIntegrationWizardBtn (disconnected) or "Re-run setup" (connected).
+        TryWizard(automation, new[] { "AnthropicIntegrationWizardBtn", "Re-run setup" }, outDir, "integrations-claude-cli", "wizard", "/assets/help/integrations-claude-cli/wizard.png");
+        // Codex (ChatGPT): CodexIntegrationWizardBtn — only present when disconnected.
+        TryWizard(automation, new[] { "CodexIntegrationWizardBtn" }, outDir, "integrations-codex-cli", "wizard", "/assets/help/integrations-codex-cli/wizard.png");
     }
 
-    private void TryWizard(UIA3Automation automation, string[] buttonNames, string outDir, string slug, string name, string src)
+    private void TryWizard(UIA3Automation automation, string[] candidates, string outDir, string slug, string name, string src)
     {
         var hwnd = FindWindow("Settings", true);
+        if (hwnd == IntPtr.Zero) { Log($"  wizard '{slug}' — settings window not found, skip"); return; }
         var win = automation.FromHandle(hwnd).AsWindow();
         AutomationElement? btn = null;
-        foreach (var bn in buttonNames)
+        foreach (var c in candidates)
         {
-            btn = win.FindFirstDescendant(cf => cf.ByName(bn));
+            btn = win.FindFirstDescendant(cf => cf.ByAutomationId(c)) ?? win.FindFirstDescendant(cf => cf.ByName(c));
             if (btn != null) break;
         }
-        if (btn == null) { Log($"  wizard '{slug}' button {string.Join("/", buttonNames)} not found — skip"); return; }
+        if (btn == null) { Log($"  wizard '{slug}' button {string.Join("/", candidates)} not found — skip"); return; }
         try { btn.AsButton().Invoke(); } catch { try { btn.Click(); } catch { } }
         Thread.Sleep(2200);
         var rel = Path.Combine(slug, $"{name}-light.png");
