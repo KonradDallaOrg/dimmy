@@ -37,6 +37,26 @@ pub fn list() -> Vec<serde_json::Value> {
             }
         }),
         json!({
+            "name": "dimmy_search",
+            "description": "Search across ALL recorded meetings (titles + transcripts + recaps) by keyword, topic, person, or phrase. Forgiving: tolerates typos, word forms (plural/singular), accents, and partial words. Returns compact ranked results — id, title, date, a short highlighted snippet (the match is wrapped in « »), and whether all your words matched — NOT the full transcript. Use this whenever the user references a TOPIC/keyword rather than \"recent\" (e.g. \"the meeting about NFC tags\", \"when did we discuss pricing\"); then call dimmy_get_meeting with the chosen id for the full content. Much cheaper than fetching meetings one by one.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Free-text search terms (one or more words). Word order does not matter."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum results to return (default 8, max 25).",
+                        "minimum": 1,
+                        "maximum": 25
+                    }
+                },
+                "required": ["query"]
+            }
+        }),
+        json!({
             "name": "dimmy_get_meeting",
             "description": "Retrieve the full transcript, metadata, and any existing recap for a specific meeting. Call this after dimmy_get_recent_meetings to fetch the content for the meeting the user wants to discuss. The transcript is plain text with [elapsed_ms] [speaker] line format.",
             "inputSchema": {
@@ -108,6 +128,7 @@ pub async fn dispatch(params: serde_json::Value, cfg: &Config) -> Result<serde_j
     let started = std::time::Instant::now();
     let result = match name.as_str() {
         "dimmy_get_recent_meetings" => get_recent_meetings(args, cfg).await,
+        "dimmy_search" => search_meetings(args, cfg).await,
         "dimmy_get_meeting" => get_meeting(args, cfg).await,
         "dimmy_save_recap" => save_recap(args, cfg).await,
         "dimmy_get_recent_dictations" => get_recent_dictations(args, cfg).await,
@@ -197,6 +218,39 @@ async fn get_recent_meetings(
     }
 
     let body = serde_json::to_string_pretty(&summaries)
+        .map_err(|e| Error::internal(&format!("serialize: {}", e)))?;
+    Ok(text_result(&body))
+}
+
+async fn search_meetings(
+    args: serde_json::Value,
+    cfg: &Config,
+) -> Result<serde_json::Value, Error> {
+    let query = args
+        .get("query")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| Error::invalid_params("missing `query`"))?
+        .to_string();
+    if query.trim().is_empty() {
+        return Err(Error::invalid_params("query cannot be empty"));
+    }
+    let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(8) as usize;
+
+    // The index build + ranking is synchronous filesystem work; run it on
+    // a blocking thread so the (current_thread) async runtime never stalls.
+    let dir = cfg.meetings_dir();
+    let q = query.clone();
+    let hits = tokio::task::spawn_blocking(move || crate::search::run(&dir, &q, limit))
+        .await
+        .map_err(|e| Error::internal(&format!("search task: {}", e)))?;
+
+    if hits.is_empty() {
+        return Ok(text_result(&format!(
+            "No meetings matched \"{}\". Try fewer or different words, or use dimmy_get_recent_meetings to list everything.",
+            query
+        )));
+    }
+    let body = serde_json::to_string_pretty(&hits)
         .map_err(|e| Error::internal(&format!("serialize: {}", e)))?;
     Ok(text_result(&body))
 }
@@ -436,9 +490,9 @@ mod tests {
     }
 
     #[test]
-    fn list_returns_five_tools_with_required_fields() {
+    fn list_returns_six_tools_with_required_fields() {
         let tools = list();
-        assert_eq!(tools.len(), 5);
+        assert_eq!(tools.len(), 6);
         for t in &tools {
             assert!(t.get("name").and_then(|v| v.as_str()).is_some());
             assert!(t.get("description").and_then(|v| v.as_str()).is_some());
@@ -449,6 +503,7 @@ mod tests {
             .filter_map(|t| t.get("name").and_then(|v| v.as_str()))
             .collect();
         assert!(names.contains(&"dimmy_get_recent_meetings"));
+        assert!(names.contains(&"dimmy_search"));
         assert!(names.contains(&"dimmy_get_meeting"));
         assert!(names.contains(&"dimmy_save_recap"));
         assert!(names.contains(&"dimmy_get_recent_dictations"));
