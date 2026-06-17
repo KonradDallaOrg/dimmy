@@ -34,6 +34,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 mod config;
 mod protocol;
+mod search;
 mod tools;
 
 #[tokio::main(flavor = "current_thread")]
