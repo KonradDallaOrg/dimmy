@@ -132,6 +132,9 @@ public static class ProviderCatalog
                 S("Distil-Large-v3.5 Q5 · EN · 538 MB", "ggml-distil-large-v3.5-q5_0.bin"),
                 P("Parakeet TDT v3 · 2.5 GB"),
                 // Local LLM — every downloadable Gemma + Phi (core/src/local_llm.rs).
+                L("Gemma 4 E2B QAT · 2.6 GB",      "gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf"),
+                L("Gemma 4 E4B QAT · 4.2 GB",      "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
+                L("Gemma 4 12B QAT · 6.7 GB",      "gemma-4-12B-it-qat-UD-Q4_K_XL.gguf"),
                 L("Gemma 4 E2B Q4 · 3.1 GB",       "gemma-4-E2B-it-Q4_K_M.gguf"),
                 L("Gemma 4 E2B Q5 · 3.7 GB",       "gemma-4-E2B-it-Q5_K_M.gguf"),
                 L("Gemma 4 E4B Q3 · 4.1 GB",       "gemma-4-E4B-it-Q3_K_M.gguf"),
