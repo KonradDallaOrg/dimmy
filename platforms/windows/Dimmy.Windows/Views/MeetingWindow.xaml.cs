@@ -1393,6 +1393,50 @@ public sealed partial class MeetingWindow : Window
         // button would route them to the wrong fix.
         OpenRecapSettingsButton.Visibility = actionable
             ? Visibility.Visible : Visibility.Collapsed;
+        // Recovery path: regardless of WHY the configured backend
+        // failed, if Claude Desktop + the dimmy MCP bridge are
+        // connected the user has a working alternative that needs no
+        // API key or CLI. Surface it here so a silent recap failure
+        // turns into one click to the path that works.
+        RefreshClaudeFallbackCta();
+    }
+
+    /// Toggle the "Generate recap with Claude Desktop" recovery CTA in
+    /// the Done-view fallback card. Visible only when the dimmy MCP
+    /// extension is installed in Claude Desktop. Loads the real Claude
+    /// brand mark (same source as the toolbar button) asynchronously.
+    private void RefreshClaudeFallbackCta()
+    {
+        if (RecapWithClaudeFallbackButton == null) return;
+        try
+        {
+            var status = Interop.DimmyNative.GetClaudeDesktopStatus();
+            RecapWithClaudeFallbackButton.Visibility = status.ExtensionInstalled
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+            if (status.ExtensionInstalled)
+            {
+                _ = System.Threading.Tasks.Task.Run(async () =>
+                {
+                    var iconPath = await Helpers.ClaudeIconExtractor.TryExtractAsync();
+                    if (!string.IsNullOrEmpty(iconPath))
+                    {
+                        DispatcherQueue.TryEnqueue(() =>
+                        {
+                            if (RecapWithClaudeFallbackIcon != null)
+                            {
+                                RecapWithClaudeFallbackIcon.Source =
+                                    new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(iconPath));
+                            }
+                        });
+                    }
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            App.Log($"RefreshClaudeFallbackCta exc: {ex.Message}", "ClaudeDesktop");
+        }
     }
 
     /// Tab switcher on the Done view. The XAML wires PointerPressed
@@ -1511,6 +1555,12 @@ public sealed partial class MeetingWindow : Window
     private void ApplyDoneSections(Dictionary<string, string> sections)
     {
         _lastDoneSections = sections;
+        // A successful recap clears any leftover failure CTAs from a
+        // prior attempt (e.g. a regenerate that finally worked).
+        if (OpenRecapSettingsButton != null)
+            OpenRecapSettingsButton.Visibility = Visibility.Collapsed;
+        if (RecapWithClaudeFallbackButton != null)
+            RecapWithClaudeFallbackButton.Visibility = Visibility.Collapsed;
         // Meeting-type chip from the parsed __TYPE__ sentinel. Hidden when
         // unresolved (auto/unknown → FriendlyTypeLabel returns null).
         var typeLabel = Helpers.MeetingRecapHelpers.FriendlyTypeLabel(
