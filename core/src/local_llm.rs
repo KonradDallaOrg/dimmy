@@ -30,18 +30,40 @@ pub struct LlmModel {
 }
 
 pub const AVAILABLE_LLM_MODELS: &[LlmModel] = &[
-    // NOTE (2026-06-18): Gemma 4 QAT gguf files (Unsloth UD-Q4_K_XL AND
-    // Google official q4_0) do NOT load in the bundled llama.cpp — both fail
-    // with `missing tensor 'blk.15.attn_k.weight'` (the E-series QAT export
-    // omits per-layer attn_k that this llama.cpp version requires). The
-    // non-QAT Gemma 4 below loads + generates fine. Adding QAT needs a
-    // llama.cpp fork bump, deliberately deferred. Verified end-to-end on CPU.
+    // ── Gemma 4 QAT (Quantization-Aware Trained) — smaller, near-bf16 quality ─
+    // QAT ggufs use cross-layer KV sharing (gemma4.attention.shared_kv_layers):
+    // blocks 15+ carry no attn_k/attn_v, they reuse earlier layers' KV. This
+    // needs a llama.cpp that implements shared_kv_layers — shipped since the
+    // fork was bumped to eugenehp v0.3.1 (llama.cpp 2026-06-03+). Older builds
+    // failed `missing tensor 'blk.15.attn_k.weight'`. Verified end-to-end (load
+    // + generate) against v0.3.1 on 2026-06-18.
+    LlmModel {
+        name: "Gemma 4 E2B QAT",
+        filename: "gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf",
+        size_mb: 2498,
+        description: "Recommended. QAT keeps near-full quality at a smaller size, fits 4GB VRAM (5B params).",
+        url: Some("https://huggingface.co/unsloth/gemma-4-E2B-it-qat-GGUF/resolve/main/gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf"),
+    },
+    LlmModel {
+        name: "Gemma 4 E4B QAT",
+        filename: "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
+        size_mb: 4020,
+        description: "QAT, near-full quality at a smaller size (8B params). Wants 6GB+ VRAM; CPU-offloads on 4GB cards.",
+        url: Some("https://huggingface.co/unsloth/gemma-4-E4B-it-qat-GGUF/resolve/main/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
+    },
+    LlmModel {
+        name: "Gemma 4 12B QAT",
+        filename: "gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
+        size_mb: 6405,
+        description: "12B dense at QAT quality, smaller than the plain Q4. Wants about 9GB VRAM; spills to CPU on 4GB cards.",
+        url: Some("https://huggingface.co/unsloth/gemma-4-12b-it-qat-GGUF/resolve/main/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf"),
+    },
     // ── Gemma 4 family (Google, Apache 2.0, 140+ languages) ─────
     LlmModel {
         name: "Gemma 4 E2B Q4",
         filename: "gemma-4-E2B-it-Q4_K_M.gguf",
         size_mb: 3100,
-        description: "Default. Good quality, fits 4GB VRAM (5B params)",
+        description: "Good quality, fits 4GB VRAM (5B params)",
         url: None,
     },
     LlmModel {
@@ -599,7 +621,7 @@ mod llm_cache {
                 .map(|d| d.as_nanos() as u32)
                 .unwrap_or(0xDEAD_BEEF);
             LlamaSampler::chain_simple([
-                LlamaSampler::penalties_simple(&cached.model, 64),
+                LlamaSampler::penalties_simple(64, 1.1),
                 LlamaSampler::top_k(40),
                 LlamaSampler::top_p(0.9, 1),
                 LlamaSampler::temp(0.6),
@@ -607,7 +629,7 @@ mod llm_cache {
             ])
         } else {
             LlamaSampler::chain_simple([
-                LlamaSampler::penalties_simple(&cached.model, 64),
+                LlamaSampler::penalties_simple(64, 1.1),
                 LlamaSampler::greedy(),
             ])
         };
