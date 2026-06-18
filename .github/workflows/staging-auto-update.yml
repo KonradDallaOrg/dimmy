@@ -875,6 +875,10 @@ jobs:
       contents: write
     with:
       tag: staging-latest
+      # staging-auto-update packs under packId Dimmy-Staging (PR #114),
+      # so the installer asset is Dimmy-Staging-staging-Setup.exe, NOT the
+      # prod Dimmy-win-Setup.exe default.
+      setup_pattern: 'Dimmy-Staging-*Setup.exe'
 
   # ── Publish (waits for all jobs including rust-check + test-install) ─
   publish:

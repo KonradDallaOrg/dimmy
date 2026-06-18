@@ -22,12 +22,22 @@ on:
         description: 'Release tag to download the installer from'
         required: true
         type: string
+      setup_pattern:
+        description: 'gh release asset glob for the installer. Default matches the prod packId (release.yml); staging-auto-update.yml passes the Dimmy-Staging packId name.'
+        required: false
+        default: 'Dimmy-win-Setup.exe'
+        type: string
   workflow_dispatch:
     inputs:
       tag:
         description: 'Release tag to download the installer from (e.g. staging-latest or v0.6.3)'
         required: false
         default: staging-latest
+        type: string
+      setup_pattern:
+        description: 'gh release asset glob for the installer (e.g. Dimmy-win-Setup.exe or Dimmy-Staging-*Setup.exe)'
+        required: false
+        default: 'Dimmy-win-Setup.exe'
         type: string
 
 permissions:
@@ -40,6 +50,7 @@ jobs:
     runs-on: windows-latest
     env:
       RELEASE_TAG: ${{ inputs.tag }}
+      SETUP_PATTERN: ${{ inputs.setup_pattern }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
@@ -65,10 +76,12 @@ jobs:
         run: |
           $tag = $env:RELEASE_TAG
           if (-not $tag) { throw "No RELEASE_TAG set — reusable workflow caller must pass 'tag' input" }
+          $pattern = $env:SETUP_PATTERN
+          if (-not $pattern) { $pattern = "Dimmy-win-Setup.exe" }
           $dest = "$env:RUNNER_TEMP\Dimmy-Setup.exe"
-          Write-Host "Downloading Dimmy-win-Setup.exe from release '$tag' via gh CLI"
+          Write-Host "Downloading installer matching '$pattern' from release '$tag' via gh CLI"
           # gh release download works on drafts and prereleases too (uses GITHUB_TOKEN)
-          gh release download $tag --repo "${{ github.repository }}" --pattern "Dimmy-win-Setup.exe" --output $dest --clobber
+          gh release download $tag --repo "${{ github.repository }}" --pattern "$pattern" --output $dest --clobber
           if ($LASTEXITCODE -ne 0) { throw "gh release download failed" }
           $size = (Get-Item $dest).Length
           Write-Host "Downloaded: $([math]::Round($size/1MB,1)) MB"

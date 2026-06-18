@@ -75,6 +75,32 @@ enum ProviderCatalog {
         ProviderModel(name: name, stt: true, llm: false, recap: false, localFilename: "parakeet:fp32")
     }
 
+    /// On-device rows, loaded from the SAME Rust model arrays the pickers
+    /// use (via FFI), so adding a model in core/src/local_*.rs surfaces here
+    /// automatically — one source of truth, no hardcoded mirror. Order matches
+    /// the pickers: whisper STT, the Parakeet bundle (special-cased, a bundle
+    /// not a single file, presence via dimmy_parakeet_bundle_present), then the
+    /// LLM models. FFI-at-static-init is the same pattern cat() uses.
+    private static func localModels() -> [ProviderModel] {
+        var list: [ProviderModel] = []
+        list.append(contentsOf: parseLocal(DimmyCore.shared.listLocalModels(), stt: true))
+        list.append(P("Parakeet TDT v3, 2.5 GB"))
+        list.append(contentsOf: parseLocal(DimmyCore.shared.listLLMModels(), stt: false))
+        return list
+    }
+
+    private static func parseLocal(_ rows: [[String: Any]]?, stt: Bool) -> [ProviderModel] {
+        guard let rows else { return [] }
+        return rows.compactMap { m in
+            guard let name = m["name"] as? String, !name.isEmpty,
+                  let file = m["filename"] as? String, !file.isEmpty else { return nil }
+            let sizeMb = (m["size_mb"] as? Int) ?? (m["size_mb"] as? Double).map(Int.init) ?? 0
+            let size = sizeMb >= 1024 ? String(format: "%.1f GB", Double(sizeMb) / 1024.0) : "\(sizeMb) MB"
+            let label = sizeMb > 0 ? "\(name), \(size)" : name
+            return stt ? S(label, file: file) : L(label, file: file)
+        }
+    }
+
     /// Cloud providers' model rows are DERIVED from the single-source catalog
     /// (ModelCatalog) so this reference list can never disagree with the
     /// actual pickers. Task flags + label come straight from the catalog.
@@ -134,28 +160,12 @@ enum ProviderCatalog {
             accentHex: "#7C8CFF", consoleUrl: "",
             stt: true, llm: true,
             getKeyHint: "No key needed, runs fully on your machine, private and free. Models download on demand.",
-            // Filenames mirror `core/src/local_stt.rs::AVAILABLE_MODELS`
-            // (whisper) and `core/src/local_llm.rs::AVAILABLE_LLM_MODELS`
-            // (llama). Keep in sync or the green ✓ disagrees with the
-            // Voice/Output pickers.
-            models: [
-                S("Whisper Tiny, 42 MB",          file: "ggml-tiny-q8_0.bin"),
-                S("Whisper Base, 78 MB, default", file: "ggml-base-q8_0.bin"),
-                S("Whisper Small, 181 MB",        file: "ggml-small-q5_1.bin"),
-                S("Whisper Medium, 514 MB",       file: "ggml-medium-q5_0.bin"),
-                S("Whisper Large-v3-Turbo Q5, 574 MB", file: "ggml-large-v3-turbo-q5_0.bin"),
-                S("Whisper Large-v3-Turbo Q8, 874 MB", file: "ggml-large-v3-turbo-q8_0.bin"),
-                S("Whisper Large-v3 Q5, 1.1 GB",  file: "ggml-large-v3-q5_0.bin"),
-                S("Distil-Large-v3.5 Q8 EN, 818 MB", file: "ggml-distil-large-v3.5-q8_0.bin"),
-                S("Distil-Large-v3.5 Q5 EN, 538 MB", file: "ggml-distil-large-v3.5-q5_0.bin"),
-                P("Parakeet TDT v3, 2.5 GB"),
-                L("Gemma 4 E2B Q4, 3.1 GB",       file: "gemma-4-E2B-it-Q4_K_M.gguf"),
-                L("Gemma 4 E2B Q5, 3.7 GB",       file: "gemma-4-E2B-it-Q5_K_M.gguf"),
-                L("Gemma 4 E4B Q3, 4.1 GB",       file: "gemma-4-E4B-it-Q3_K_M.gguf"),
-                L("Gemma 4 E4B Q4, 5.0 GB",       file: "gemma-4-E4B-it-Q4_K_M.gguf"),
-                L("Gemma 4 E4B Q8, 8.2 GB",       file: "gemma-4-E4B-it-Q8_0.gguf"),
-                L("Phi-4 Mini Q4, 2.5 GB, default", file: "phi-4-mini-instruct-q4_k_m.gguf"),
-            ]
+            // SINGLE SOURCE: the On-device list is loaded from the SAME Rust
+            // arrays the Voice/Output pickers use (local_stt::AVAILABLE_MODELS
+            // + local_llm::AVAILABLE_LLM_MODELS) via FFI — see localModels().
+            // No hardcoded mirror to drift out of sync. Mirrors how cloud rows
+            // are derived from ModelCatalog via cat().
+            models: Self.localModels()
         ),
 
         ProviderInfo(

@@ -30,6 +30,12 @@ pub struct LlmModel {
 }
 
 pub const AVAILABLE_LLM_MODELS: &[LlmModel] = &[
+    // NOTE (2026-06-18): Gemma 4 QAT gguf files (Unsloth UD-Q4_K_XL AND
+    // Google official q4_0) do NOT load in the bundled llama.cpp — both fail
+    // with `missing tensor 'blk.15.attn_k.weight'` (the E-series QAT export
+    // omits per-layer attn_k that this llama.cpp version requires). The
+    // non-QAT Gemma 4 below loads + generates fine. Adding QAT needs a
+    // llama.cpp fork bump, deliberately deferred. Verified end-to-end on CPU.
     // ── Gemma 4 family (Google, Apache 2.0, 140+ languages) ─────
     LlmModel {
         name: "Gemma 4 E2B Q4",

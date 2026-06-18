@@ -95,6 +95,42 @@ public static class ProviderCatalog
     // dimmy_parakeet_bundle_present, flagged by the "parakeet:fp32" sentinel.
     private static ProviderModel P(string name) => new(name, true, false, false, "parakeet:fp32");
 
+    // On-device rows, loaded from the SAME Rust model arrays the pickers use,
+    // so adding a model in core/src/local_*.rs surfaces here automatically —
+    // one source of truth, no hardcoded mirror. Order matches the pickers:
+    // whisper STT, then the Parakeet bundle (special-cased — not in the STT
+    // array because it's a bundle, presence via dimmy_parakeet_bundle_present),
+    // then the LLM models. FFI-at-static-init is the same pattern Cat() uses.
+    private static IReadOnlyList<ProviderModel> LocalModels()
+    {
+        var list = new List<ProviderModel>();
+        list.AddRange(ParseLocalModels(Interop.DimmyNative.ListLocalModels(), stt: true));
+        list.Add(P("Parakeet TDT v3 · 2.5 GB"));
+        list.AddRange(ParseLocalModels(Interop.DimmyNative.ListLocalLlmModels(), stt: false));
+        return list;
+    }
+
+    private static IEnumerable<ProviderModel> ParseLocalModels(string? json, bool stt)
+    {
+        if (string.IsNullOrEmpty(json)) yield break;
+        System.Text.Json.JsonDocument doc;
+        try { doc = System.Text.Json.JsonDocument.Parse(json); }
+        catch { yield break; }
+        using (doc)
+        {
+            foreach (var m in doc.RootElement.EnumerateArray())
+            {
+                var name = m.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+                var filename = m.TryGetProperty("filename", out var f) ? f.GetString() ?? "" : "";
+                if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(filename)) continue;
+                var sizeMb = m.TryGetProperty("size_mb", out var s) ? s.GetInt32() : 0;
+                var size = sizeMb >= 1024 ? $"{sizeMb / 1024.0:0.0} GB" : $"{sizeMb} MB";
+                var label = sizeMb > 0 ? $"{name} · {size}" : name;
+                yield return stt ? S(label, filename) : L(label, filename);
+            }
+        }
+    }
+
     // Cloud providers' model rows are DERIVED from the single-source catalog so
     // this reference list can never disagree with the actual pickers. The
     // task flags come straight from the catalog; the label gets the tier as a
@@ -115,32 +151,12 @@ public static class ProviderCatalog
         new ProviderInfo("local", "On-device", "Lo", "#7C8CFF", "",
             true, true,
             "No key needed — runs fully on your machine, private and free. Models download on demand.",
-            new[]
-            {
-                // Local STT — whisper.cpp sizes + Parakeet (core/src/local_stt.rs, parakeet.rs).
-                // Filenames MUST mirror local_stt.rs::AVAILABLE_MODELS /
-                // local_llm.rs::AVAILABLE_LLM_MODELS or the green ✓ here
-                // disagrees with the Voice/Output pickers.
-                S("Whisper Tiny · 42 MB",          "ggml-tiny-q8_0.bin"),
-                S("Whisper Base · 78 MB · default", "ggml-base-q8_0.bin"),
-                S("Whisper Small · 181 MB",        "ggml-small-q5_1.bin"),
-                S("Whisper Medium · 514 MB",       "ggml-medium-q5_0.bin"),
-                S("Whisper Large-v3-Turbo Q5 · 574 MB", "ggml-large-v3-turbo-q5_0.bin"),
-                S("Whisper Large-v3-Turbo Q8 · 874 MB", "ggml-large-v3-turbo-q8_0.bin"),
-                S("Whisper Large-v3 Q5 · 1.1 GB",  "ggml-large-v3-q5_0.bin"),
-                S("Distil-Large-v3.5 Q8 · EN · 818 MB", "ggml-distil-large-v3.5-q8_0.bin"),
-                S("Distil-Large-v3.5 Q5 · EN · 538 MB", "ggml-distil-large-v3.5-q5_0.bin"),
-                P("Parakeet TDT v3 · 2.5 GB"),
-                // Local LLM — every downloadable Gemma + Phi (core/src/local_llm.rs).
-                L("Gemma 4 E2B Q4 · 3.1 GB",       "gemma-4-E2B-it-Q4_K_M.gguf"),
-                L("Gemma 4 E2B Q5 · 3.7 GB",       "gemma-4-E2B-it-Q5_K_M.gguf"),
-                L("Gemma 4 E4B Q3 · 4.1 GB",       "gemma-4-E4B-it-Q3_K_M.gguf"),
-                L("Gemma 4 E4B Q4 · 5.0 GB",       "gemma-4-E4B-it-Q4_K_M.gguf"),
-                L("Gemma 4 E4B Q8 · 8.2 GB",       "gemma-4-E4B-it-Q8_0.gguf"),
-                L("Gemma 4 12B Q4 · 7.1 GB",       "gemma-4-12b-it-Q4_K_M.gguf"),
-                L("Gemma 4 12B Q2 · 4.7 GB",       "gemma-4-12b-it-UD-Q2_K_XL.gguf"),
-                L("Phi-4 Mini Q4 · 2.5 GB · default", "phi-4-mini-instruct-q4_k_m.gguf"),
-            }),
+            // SINGLE SOURCE: the On-device list is loaded from the SAME Rust
+            // arrays the Voice/Output pickers use (local_stt::AVAILABLE_MODELS +
+            // local_llm::AVAILABLE_LLM_MODELS) via FFI — see LocalModels(). No
+            // hardcoded mirror to drift out of sync. Mirrors how cloud rows are
+            // derived from ModelCatalog via Cat().
+            LocalModels()),
 
         new ProviderInfo("groq", "Groq", "Gq", "#F55036", "https://console.groq.com/keys",
             true, true,
