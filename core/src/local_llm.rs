@@ -318,10 +318,15 @@ fn strip_special_tags(text: &str) -> String {
         .expect("think regex must compile");
     let text = re_think.replace_all(text, "");
 
-    // 2. Remove remaining standalone special tags
-    let re = regex::Regex::new(
-        r"</?(?:think|start_of_turn|end_of_turn|pad|s)>|<\|/?(?:think|end|endoftext|assistant|user|system)\|?>"
-    ).expect("strip_special_tags regex must compile");
+    // 2. Remove remaining standalone special tags. The second alternation is a
+    //    GENERAL ChatML matcher `<|...|>` — small models prompted in ChatML emit
+    //    their turn-end token (`<|im_end|>`) as plain text when it isn't in their
+    //    native special vocab (Gemma 4 uses <end_of_turn>, so `<|im_end|>` comes
+    //    out as ordinary tokens and slips past the per-token skip). Matching any
+    //    `<|word|>` catches im_end/im_start/assistant/endoftext/think/… in one go.
+    let re =
+        regex::Regex::new(r"</?(?:think|start_of_turn|end_of_turn|pad|s|eos|bos)>|<\|[\w/]+\|?>")
+            .expect("strip_special_tags regex must compile");
 
     let cleaned = re.replace_all(&text, "");
 
@@ -675,6 +680,27 @@ mod llm_cache {
 
             output.push_str(&piece);
             n_generated += 1;
+
+            // Stop at a turn-end marker that arrived as PLAIN TEXT (multiple
+            // ordinary tokens), which the per-piece check above can't see. Some
+            // QAT conversions (e.g. Unsloth Gemma 4) ship a ChatML chat_template
+            // whose `<|im_end|>` isn't the model's real EOT token, so the model
+            // emits it as text and then rolls into a SECOND, duplicate turn
+            // (often with a stray "**Output:**" header). Truncate at the first
+            // marker and stop — kills the dupe turn, the marker, and the header.
+            if let Some(idx) = [
+                "<|im_end|>",
+                "<|im_start|>",
+                "<end_of_turn>",
+                "<start_of_turn>",
+            ]
+            .iter()
+            .filter_map(|m| output.find(m))
+            .min()
+            {
+                output.truncate(idx);
+                break;
+            }
 
             // Prepare next decode
             batch.clear();
@@ -1134,6 +1160,22 @@ mod tests {
         let input = "<|think|>some thinking<|/think|>The answer.";
         let result = strip_special_tags(input);
         assert_eq!(result, "The answer.");
+    }
+
+    #[test]
+    fn strip_tags_removes_chatml_im_end() {
+        // Unsloth Gemma 4 QAT ships a ChatML chat_template; the model emits
+        // <|im_end|> as plain text. The general <|...|> matcher must strip it.
+        let input = "Ciao, come stai?\n<|im_end|>";
+        let result = strip_special_tags(input);
+        assert_eq!(result, "Ciao, come stai?");
+    }
+
+    #[test]
+    fn strip_tags_removes_im_start_and_assistant() {
+        let input = "<|im_start|>assistant\nRisposta pulita.<|im_end|>";
+        let result = strip_special_tags(input);
+        assert_eq!(result, "assistant\nRisposta pulita.");
     }
 
     // ── Feature-gated tests ─────────────────────────────────────
