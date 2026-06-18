@@ -224,6 +224,15 @@ struct MeetingDoneView: View {
                 if let tldr = vm.doneSections["TLDR"], !tldr.isEmpty {
                     tldrCard(tldr)
                 }
+                // Recovery CTA: when the configured recap backend failed
+                // but Claude Desktop + the dimmy MCP extension are
+                // connected, offer to generate the recap through Claude
+                // Desktop (the user's subscription, no API key or CLI).
+                // Surfaces the existing deeplink exactly when it's the
+                // working path. Mirror of Win RefreshClaudeFallbackCta.
+                if vm.recapFailed && claudeMcpInstalled {
+                    recapWithClaudeFallbackCta
+                }
                 cardIfPresent(key: "CONTEXT", title: "Context", systemImage: "info.circle", tint: .secondary)
                 cardIfPresent(key: "HIGHLIGHTS", title: "Highlights", systemImage: "sparkles", tint: .yellow)
                 cardIfPresent(key: "NARRATIVE", title: "Narrative", systemImage: "text.alignleft", tint: .secondary)
@@ -333,6 +342,26 @@ struct MeetingDoneView: View {
                 .scaledToFit()
                 .frame(width: 16, height: 16)
         }
+    }
+
+    /// Recovery CTA shown in the recap tab when the configured backend
+    /// failed but Claude Desktop + the MCP bridge are connected. Reuses
+    /// the same `recapWithClaude()` deeplink as the toolbar button, just
+    /// surfaced prominently where the user is staring at the failure.
+    private var recapWithClaudeFallbackCta: some View {
+        Button {
+            recapWithClaude()
+        } label: {
+            HStack(spacing: 8) {
+                Image("ClaudeMark")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 16, height: 16)
+                Text("Generate recap with Claude Desktop")
+            }
+        }
+        .buttonStyle(.borderedProminent)
+        .help("Generate this meeting's recap through Claude Desktop (uses MCP)")
     }
 
     private func recapWithClaude() {

@@ -64,6 +64,12 @@ final class MeetingViewModel: ObservableObject {
         }
     }
 
+    /// True when the last recap attempt (post-process or regenerate)
+    /// failed. Drives the "Generate recap with Claude Desktop" recovery
+    /// CTA in the Done view, so a silent recap failure becomes one click
+    /// to the path that works (mirror of Win RefreshClaudeFallbackCta).
+    @Published var recapFailed: Bool = false
+
     /// Meeting-type override for the recap. "auto" = let the model classify.
     /// Bound to the Done-view picker; passed into the next regenerateRecap().
     @Published var selectedMeetingType: String = "auto"
@@ -559,10 +565,12 @@ final class MeetingViewModel: ObservableObject {
                     self.doneSections = recap.sections
                     self.statusLabel = "Done"
                     self.subStatusLabel = "Recap saved to \(URL(fileURLWithPath: dir).lastPathComponent)"
+                    self.recapFailed = false
                 case .failure(let err):
                     self.doneSections = ["TLDR": "(recap failed, \(err))"]
                     self.statusLabel = "Recap failed"
                     self.subStatusLabel = "\(err)"
+                    self.recapFailed = true
                 }
                 self.loadHistory()
             }
@@ -600,9 +608,11 @@ final class MeetingViewModel: ObservableObject {
                     self.doneSections = recap.sections
                     self.doneRawTranscript = transcript
                     self.statusLabel = "Recap regenerated"
+                    self.recapFailed = false
                 case .failure(let err):
                     self.statusLabel = "Recap failed"
                     self.subStatusLabel = "\(err)"
+                    self.recapFailed = true
                 }
             }
         }
