@@ -80,16 +80,17 @@ public static class SelectionCaptureService
                 RestoreClipboard(previousText);
                 return null;
             }
-            var raw = await dp.GetTextAsync();
-            if (raw == Sentinel)
+            var text = (await dp.GetTextAsync() ?? "").Trim();
+            if (text == Sentinel)
             {
                 // seq bumped but content is still our sentinel — a race
-                // where another writer beat the app's copy. Treat as no
-                // selection rather than transforming garbage.
+                // where another writer beat the app's copy, or Ctrl+C copied
+                // nothing. Trim-then-compare so a trailing CRLF the OS adds
+                // to the probe doesn't sneak the sentinel through as a
+                // "selection". Treat as no selection rather than garbage.
                 RestoreClipboard(previousText);
                 return null;
             }
-            var text = (raw ?? "").Trim();
             RestoreClipboard(previousText);
             return string.IsNullOrEmpty(text) ? null : text;
         }
@@ -115,9 +116,17 @@ public static class SelectionCaptureService
 
     private static void RestoreClipboard(string? previousText)
     {
-        if (previousText is null) return;
         try
         {
+            if (previousText is null)
+            {
+                // The clipboard was empty before we probed; we wrote the
+                // sentinel into it. Clear it back to empty so the sentinel
+                // never lingers for the user's next manual paste — the bug
+                // that surfaced `__DIMMY_CMD_PROBE_v1__` in pasted output.
+                WinClipboard.Clear();
+                return;
+            }
             var dp = new WinDataPackage();
             dp.SetText(previousText);
             WinClipboard.SetContent(dp);

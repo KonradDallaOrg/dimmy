@@ -119,7 +119,14 @@ local-dfn = ["dep:deep_filter", "dep:ndarray", "dep:anyhow"]
 local-llm = ["dep:llama-cpp-4"]
 local-llm-metal = ["local-llm", "llama-cpp-4/metal", "llama-cpp-4/dynamic-link"]
 local-llm-cuda = ["local-llm", "llama-cpp-4/cuda"]
-local-llm-vulkan = ["local-llm", "llama-cpp-4/vulkan"]
+# dynamic-link: build llama.cpp + ggml as SHARED libs (ggml.dll/llama.dll) so
+# their ggml symbols live OUTSIDE dimmy_lib.dll. Without this, whisper-rs-sys and
+# llama-cpp-sys-4 each static-link their own ggml into the cdylib → the linker
+# dedups with /FORCE:MULTIPLE (LNK4006) and whichever ggml wins corrupts the
+# other consumer. After bumping llama to a June-2026 ggml, llama's ggml won and
+# broke whisper STT (empty transcription). dynamic-link keeps llama's ggml in its
+# own DLL so whisper keeps its static ggml — both work. (Mirrors local-llm-metal.)
+local-llm-vulkan = ["local-llm", "llama-cpp-4/vulkan", "llama-cpp-4/dynamic-link"]
 # test-ffi: gates test-only FFI entry points that bypass cpal by injecting
 # PCM samples directly into the audio buffer. Never enabled in release builds.
 # Used only by integration tests under core/tests/.
