@@ -30,6 +30,32 @@ pub struct LlmModel {
 }
 
 pub const AVAILABLE_LLM_MODELS: &[LlmModel] = &[
+    // ── Gemma 4 QAT (Google, June 2026) — quantization-aware trained.
+    // The model was fine-tuned WITH 4-bit quantization in the loop, so
+    // these recover near full-precision quality at the size of a normal
+    // 4-bit quant (often smaller). Drop-in for llama.cpp; the Gemma chat
+    // template is read from the gguf. Repos: unsloth/gemma-4-*-it-qat-GGUF.
+    LlmModel {
+        name: "Gemma 4 E2B QAT",
+        filename: "gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf",
+        size_mb: 2620,
+        description: "Recommended. Quantization-aware 4-bit, near full-precision quality, smaller than E2B Q4. Fits 4GB VRAM (5B params).",
+        url: Some("https://huggingface.co/unsloth/gemma-4-E2B-it-qat-GGUF/resolve/main/gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf"),
+    },
+    LlmModel {
+        name: "Gemma 4 E4B QAT",
+        filename: "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
+        size_mb: 4220,
+        description: "Quantization-aware 4-bit. 8B quality close to full precision, about 5GB RAM. Strong all-round local recap.",
+        url: Some("https://huggingface.co/unsloth/gemma-4-E4B-it-qat-GGUF/resolve/main/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
+    },
+    LlmModel {
+        name: "Gemma 4 12B QAT",
+        filename: "gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
+        size_mb: 6720,
+        description: "Quantization-aware 4-bit. Best local Gemma quality, smaller than 12B Q4. Wants about 7GB VRAM.",
+        url: Some("https://huggingface.co/unsloth/gemma-4-12b-it-qat-GGUF/resolve/main/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf"),
+    },
     // ── Gemma 4 family (Google, Apache 2.0, 140+ languages) ─────
     LlmModel {
         name: "Gemma 4 E2B Q4",
