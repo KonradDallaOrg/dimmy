@@ -5539,6 +5539,7 @@ public sealed partial class SettingsWindow : Window
         var dialog = new ClaudeDesktopConnectDialog
         {
             XamlRoot = (this.Content as FrameworkElement)?.XamlRoot,
+            RequestedTheme = Helpers.ThemeHelper.ResolvedElementTheme(),
             // Jump past detect/patch if already done — saves clicks on re-runs.
             InitialStep = DecideMcpInitialStep(),
         };
