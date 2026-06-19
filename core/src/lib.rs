@@ -19,6 +19,7 @@ pub mod deepgram_stream;
 pub mod dfn;
 #[cfg(feature = "local-dfn")]
 pub mod dfn3;
+pub mod download;
 pub mod error;
 pub mod ffi;
 pub mod filler;
