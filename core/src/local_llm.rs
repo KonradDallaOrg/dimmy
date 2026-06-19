@@ -384,7 +384,13 @@ pub fn build_local_system_prompt(
     };
 
     let translate_instr = if !translate_to.is_empty() && translate_to != "none" {
-        format!("Translate the output to {}.", translate_to)
+        // Use the language NAME, not the bare code — small models ignore
+        // "translate to en" but follow "translate to English" (live flow
+        // matrix, 2026-06-19).
+        format!(
+            "Then translate the entire output to {name}. Write the final text in {name} only.",
+            name = crate::llm::lang_name(translate_to)
+        )
     } else {
         String::new()
     };
