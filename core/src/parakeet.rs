@@ -160,6 +160,16 @@ pub fn download_bundle(mut progress: impl FnMut(u64, u64)) -> Result<(), Transcr
             .error_for_status()
             .map_err(|e| TranscribeError::LocalModel(format!("GET {}: {}", url, e)))?;
 
+        // HF LFS serves each file's SHA-256 as the (X-Linked-)ETag → use it to
+        // verify the bytes after download (catches a corrupt resumed partial).
+        let expected_sha = resp
+            .headers()
+            .get("x-linked-etag")
+            .or_else(|| resp.headers().get(reqwest::header::ETAG))
+            .and_then(|v| v.to_str().ok())
+            .map(crate::download::normalize_etag)
+            .filter(|s| crate::download::is_sha256(s));
+
         // Only append when the server honoured the Range request; a
         // 200 means it sent the whole file again, so start clean.
         let resuming = resume_from > 0 && resp.status() == reqwest::StatusCode::PARTIAL_CONTENT;
@@ -200,6 +210,17 @@ pub fn download_bundle(mut progress: impl FnMut(u64, u64)) -> Result<(), Transcr
         progress(grand_done, grand_total);
         last_emit_bytes = grand_done;
         last_emit_time = std::time::Instant::now();
+        // Integrity: hash the finished file against the server's SHA-256. A
+        // corrupt partial (resumed onto bad bytes) or truncated body is caught
+        // here; delete it so the retry re-downloads this file clean. ONNX/JSON
+        // have no shared magic, so rely on the hash (magic list empty).
+        if let Err(e) = crate::download::verify_file(&tmp, &[], expected_sha.as_deref()) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(TranscribeError::LocalModel(format!(
+                "{} failed integrity check ({}) — deleted, retry to re-download",
+                name, e
+            )));
+        }
         std::fs::rename(&tmp, &dest)
             .map_err(|e| TranscribeError::LocalModel(format!("rename {:?}: {}", tmp, e)))?;
     }
