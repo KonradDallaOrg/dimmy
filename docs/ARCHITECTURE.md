@@ -41,14 +41,15 @@ pai-voice/
 │   │   ├── dfn.rs            DeepFilterNet noise suppression (scaffolding, deferred)
 │   │   ├── preprocess.rs     VAD + AGC + highpass + file-load path (see audio-pipeline.md)
 │   │   ├── transcribe.rs     Cloud STT routing + chunking
-│   │   ├── local_stt.rs      whisper-rs integration + model download
+│   │   ├── local_stt.rs      whisper-rs integration + resumable model download
 │   │   ├── parakeet.rs       Parakeet TDT v3 (ONNX) — Win/Linux + CPU Mac
 │   │   ├── parakeet_fluid.rs Parakeet via FluidAudio CoreML — Mac Apple Neural Engine
 │   │   ├── chunked_stt.rs    Realtime chunked Parakeet worker (5 s window + dedup)
 │   │   ├── meeting.rs        Long-form meeting mode + pause/resume + post-process
 │   │   ├── process_loopback.rs Per-process WASAPI loopback (Phase 5a, Win-only)
 │   │   ├── llm.rs            LLM post-processing router + adaptive thinking dispatch
-│   │   ├── local_llm.rs      llama-cpp-4 integration (optional)
+│   │   ├── local_llm.rs      llama-cpp-4 (dynamic-link ggml) integration (optional)
+│   │   ├── download.rs       Resumable + SHA-256-verified model downloads (LLM/whisper/parakeet)
 │   │   ├── provider.rs       Provider enum + URL validation
 │   │   ├── app_rules.rs      Per-app LLM style override resolution
 │   │   ├── keystore.rs       AES-256 key storage

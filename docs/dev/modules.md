@@ -36,27 +36,44 @@ Cloud providers have three wire formats; the module dispatches on the `Provider`
 - Input: f32 16 kHz mono samples. The preprocessing pipeline in `preprocess.rs` produces 48 kHz; `to_wav_payload()` downsamples to 16 kHz for whisper.
 - **Context cache:** the loaded `WhisperContext` stays in VRAM across recordings. Invalidated on model change or `dimmy_shutdown()`.
 - **Sticky known-bad GPU marker:** if a GPU path aborts once (e.g. `ggml-vulkan` init crash), a fingerprint is written so the next run falls back to CPU without reattempting the same combo. See [`../dev/known-bugs.md`](known-bugs.md) for GPU crash recovery context.
+- **Downloads go through the shared `download.rs` module (below)** — resumable + SHA-256/magic verified (whisper `.bin` magic is `ggml`/`GGUF`).
 - FFI: `dimmy_list_local_models`, `dimmy_download_model`, `dimmy_model_exists`.
 
 ## `local_llm.rs` — llama.cpp integration (optional)
 
 - Feature-gated behind `local-llm`. GPU variants: `local-llm-metal`, `local-llm-vulkan`, `local-llm-cuda`.
-- Uses the **forked `llama-cpp-4`** dependency — `KonradDallaOrg/llama-cpp-rs`. The fork patches `llama-context.cpp` for Gemma 4 (FGDN patch). When bumping the llama.cpp submodule upstream, re-apply the FGDN patch.
-- Platform differences:
-  - **Windows:** static link (`--features local-llm-vulkan`), linker needs `/FORCE:MULTIPLE`.
-  - **macOS:** `dynamic-link` feature enabled (pulled in via `local-llm-metal`). dylibs (`libllama.dylib`, `libggml.dylib`, ...) bundled into `Dimmy.app/Contents/Frameworks/` and codesigned.
+- Uses the **forked `llama-cpp-4`** dependency — `KonradDallaOrg/llama-cpp-rs`.
+- **`dynamic-link` is enabled on the GPU builds that ship — Vulkan (Windows) and Metal (macOS)** (`local-llm-vulkan` and `local-llm-metal` both pull `llama-cpp-4/dynamic-link`; `local-llm-cuda` does not). llama's ggml ships as separate DLLs/dylibs next to `dimmy_lib` instead of being statically linked in. This is load-bearing: `whisper-rs-sys` AND `llama-cpp-sys-4` each vendor ggml, and a static link deduplicates them to ONE (`/FORCE:MULTIPLE`, `LNK4006`) — fine while their ggml revisions matched, but after the llama.cpp fork bump the June-2026 ggml diverged from whisper's and silently broke local STT (0 chars + crash). Dynamic-link keeps each module's ggml private (per-module symbol resolution). See `feedback_whisper_llama_shared_ggml_collision` in the session memory.
+  - **Windows:** `ggml*.dll` + `llama*.dll` are copied next to `dimmy_lib.dll` by the C# `CopyLlamaDlls` MSBuild target (and into the installer); they are loaded at runtime, so they MUST sit beside the DLL.
+  - **macOS:** dylibs bundled into `Dimmy.app/Contents/Frameworks/` and codesigned.
   - **Linux:** built but not wired into the default AppImage (CPU-only for portability).
-- **Thinking mode must be OFF** for Gemma 4. See [`local-llm-feasibility.md`](local-llm-feasibility.md) — with thinking on, models generate 300-500 hidden tokens before answering (20+ seconds).
+- **Generation hygiene** (small chat-templated models, e.g. Gemma/Phi): stop at the turn-end marker and `strip_special_tags` removes `<think>…</think>`, `<|im_end|>`, `<start_of_turn>` etc. Thinking mode stays OFF — with it on, models emit 300-500 hidden tokens first (see [`local-llm-feasibility.md`](local-llm-feasibility.md)). `DEFAULT_LLM_MODEL` is Phi-4 Mini (Gemma E2B drifts "playful" on short prompts).
+- **Translation prompt** uses the language NAME via `crate::llm::lang_name` (small models ignore "translate to en" but follow "translate to English").
+- **Downloads go through the shared `download.rs` module (below)** — resumable + SHA-256/magic verified.
 - FFI: `dimmy_list_llm_models`, `dimmy_download_llm_model`, `dimmy_llm_model_exists`.
+
+## `download.rs` — resumable, integrity-checked model downloads
+
+One place for every multi-GB model download (LLM GGUF, whisper ggml/GGUF, parakeet ONNX bundle) so they all survive a mid-flight kill and never install a corrupt file — shared core, so Win/Mac/Linux behave identically.
+
+- **`download_resumable(client, url, dest, accept_magics, on_progress)`** (async) — used by `local_llm` and `local_stt`. Writes to `<dest>.part`, then atomically renames.
+- **`verify_file(path, accept_magics, expected_sha)`** (sync) — magic + streaming SHA-256; reused by `parakeet`'s blocking per-file bundle download.
+- **Resume:** an existing `.part` continues via `Range: bytes=N-`. `206` → append; `200` (server ignored the range, or `If-Range` says the file changed) → truncate + restart; `416` → discard the stale `.part`. The starting ETag is persisted in a `<file>.part.etag` sidecar so a later resume can send `If-Range`.
+- **Integrity:** HuggingFace LFS serves each file's SHA-256 as the (`X-Linked-`)`ETag` → captured and compared after download (streamed in 1 MiB chunks, never buffered whole), plus optional magic-byte prefixes. On ANY integrity/size failure the `.part` is DELETED so the retry restarts clean instead of resuming corruption.
+- `sha2` is a **non-optional** dependency so the check runs in every build (incl. the frozen Windows feature set, which has no `license-client`).
 
 ## `llm.rs` — post-processing router
 
+- Two entry points: `process_text` (dictation enhancement — style + tone + translate, wraps the text in `[TRANSCRIPTION]` and applies `build_system_prompt`) and `process_raw_prompt` (command mode + meeting recap — sends the caller's prompt verbatim). Local mirrors live in `local_llm.rs`.
 - Dispatches on `style` (Off, Correct, Summarize, Elaborate, Comprehensible, Professional, Prompt, Gen-Z, Boomer, Emoji, Acronyms, Imbruttito, Custom).
-- Two wire formats:
-  - **OpenAI-compatible chat completions** — Groq, OpenAI, OpenRouter, Gemini, Custom
-  - **Anthropic Messages API** — Claude
+- Two wire formats: **OpenAI-compatible chat completions** (Groq, OpenAI, OpenRouter, Gemini, Together, Custom) and **Anthropic Messages API** (Claude).
 - `llm_mode` config field routes to cloud or local (when `local-llm` feature is enabled).
 - **PREAMBLE enforces "keep same language as the input"**. Small local models need this reinforcement or they default to English.
+- **Translation directive** uses `lang_name(code)` → the English language NAME + an imperative ("Then translate the ENTIRE result into English…"). The old bare ISO code (`"…to en."`) was silently ignored even by capable models (Claude Haiku kept Italian). Codes accepted via `SUPPORTED_TRANSLATE_LANGS`.
+- **`strip_output_scaffolding`** runs on cloud output: drops prompt scaffolding a weak model echoes (`[TRANSCRIPTION]`, `[SPOKEN]`/`[SELECTION]`, ChatML tokens) AND the whole `<think>…</think>` reasoning trace (qwen3 via Groq leaked it).
+- **OpenAI gpt-5 / o-series** use `openai_reasoning_shape` → `max_completion_tokens` (no `temperature`) **floored at `.max(8192)`** in both `process_text` and `process_raw_prompt`. Without the floor the internal reasoning trace consumes the whole budget and the content comes back EMPTY.
+- **Key resolution** (in `ffi.rs`, not here): the cloud/command dispatch reads `KeyringScope::Llm(vendor)` first, then falls back to the SAME vendor's `KeyringScope::Stt(vendor)` key — vendor is derived from `llm_url`, so it can never pull a different provider's key. One key per provider works for STT + LLM + command.
+- **Live verification:** [`core/tests/llm_flows.rs`](../../core/tests/llm_flows.rs) — the `#[ignore]` flow matrix + catalog sweep. See [`llm-flows-testing.md`](llm-flows-testing.md).
 
 ## `keystore.rs` — API key storage
 
