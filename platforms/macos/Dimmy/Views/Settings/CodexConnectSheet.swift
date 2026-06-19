@@ -1,24 +1,26 @@
 import SwiftUI
 import AppKit
 
-/// 2-step ChatGPT (Codex) subscription setup wizard, modal sheet.
-/// Mac mirror of `Views/CodexConnectDialog.xaml` on Windows, and a
-/// trimmed `ClaudeConnectSheet`. There is NO Node.js step because the
-/// Codex CLI ships as a native standalone binary, installed via a
-/// one-line shell command.
+/// Guided 3-page ChatGPT (Codex) subscription setup wizard, modal sheet.
+/// Mac mirror of `Views/CodexConnectDialog.xaml` on Windows. There is NO
+/// Node.js step because the Codex CLI ships as a native standalone binary.
 ///
 /// Flow:
-///   Step 1 - Install the Codex CLI via `curl ... | sh` + detect the
-///            `codex` binary.
-///   Step 2 - Sign in (browser flow via `codex login`) + auto-fire test
-///            ping.
+///   Page 1 - Install : pick an install command (curl / brew / npm),
+///                      Copy -> auto-advance.
+///   Page 2 - Run     : open Terminal and auto-run the command -> advance.
+///   Page 3 - Finish  : poll for the codex binary, sign in if needed,
+///                      green check -> Done.
 ///
-/// Smart-skip: on appearance we probe the binary + login state once and
-/// jump to the first incomplete step. A machine where the CLI is already
-/// installed lands on Step 2 with test-ready state.
+/// Minimal copy on each page; the extra detail lives behind the (i) info
+/// buttons. One accent (blue) action per page: Copy -> Install now ->
+/// Sign in / Done.
 ///
-/// Completion contract: `onComplete` is called with `true` iff Step 2's
-/// test ping returned positive. The caller (MacIntegrationsPage) then
+/// Smart-skip: on appearance we probe the binary + login state once. If
+/// Codex is already Ready we open directly on page 3.
+///
+/// Completion contract: `onComplete` is called with `true` iff Codex is
+/// Ready when the user presses Done. The caller (MacIntegrationsPage) then
 /// flips the Output subscription routing so the integration is live.
 ///
 /// Reuses the existing dimmy_codex_* FFI. No new native surface.
@@ -27,19 +29,46 @@ struct CodexConnectSheet: View {
     let onClose: () -> Void
     let onComplete: (Bool) -> Void
 
-    private enum WizardStep: Int { case install = 1, signIn = 2 }
+    /// Start at page 1 regardless of detection (the "Re-run setup" entry
+    /// point from the connected card). Mirrors `ForceStartAtStep1`.
+    var forceStartAtStep1: Bool = false
+
+    private enum WizardStep: Int { case install = 1, run = 2, finish = 3 }
+
+    private enum CommandSource: String, CaseIterable, Identifiable {
+        case curl, brew, npm
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .curl: return "curl"
+            case .brew: return "brew"
+            case .npm: return "npm"
+            }
+        }
+        var command: String {
+            switch self {
+            case .curl: return "curl -fsSL https://chatgpt.com/codex/install.sh | sh"
+            case .brew: return "brew install --cask codex"
+            case .npm: return "npm install -g @openai/codex"
+            }
+        }
+    }
 
     @State private var currentStep: WizardStep = .install
+    @State private var commandSource: CommandSource = .curl
+
     @State private var codexStatus: DimmyCore.ClaudeCodeStatus = .notInstalled
     @State private var binaryPath: String? = nil
 
     @State private var signInRunning: Bool = false
-    @State private var pollAttempt: Int = 0
-    @State private var testRunning: Bool = false
-    @State private var testResult: DimmyCore.ClaudeCodePingResult? = nil
-    @State private var copiedFlash: Bool = false
+    @State private var pollTimer: Timer? = nil
 
-    private let installCommand = "curl -fsSL https://chatgpt.com/codex/install.sh | sh"
+    @State private var showInstallInfo: Bool = false
+    @State private var showRunInfo: Bool = false
+    @State private var showFinishInfo: Bool = false
+
+    private var codexOk: Bool { codexStatus != .notInstalled }
+    private var signedIn: Bool { codexStatus == .ready }
 
     var body: some View {
         VStack(spacing: 16) {
@@ -50,8 +79,9 @@ struct CodexConnectSheet: View {
             ScrollView {
                 Group {
                     switch currentStep {
-                    case .install: stepOne
-                    case .signIn: stepTwo
+                    case .install: stepInstall
+                    case .run: stepRun
+                    case .finish: stepFinish
                     }
                 }
                 .padding(.vertical, 4)
@@ -64,6 +94,7 @@ struct CodexConnectSheet: View {
         .padding(20)
         .frame(width: 560)
         .onAppear { probeAndSkip() }
+        .onDisappear { stopPoll() }
     }
 
     // MARK: - Header / progress / footer
@@ -84,15 +115,27 @@ struct CodexConnectSheet: View {
         }
     }
 
+    /// Three step dots. Active dot = accent; inactive = a medium grey that
+    /// reads clearly on both light and dark backgrounds (the Windows lesson:
+    /// near-invisible dots on a light sheet are unacceptable).
     private var progressDots: some View {
         HStack(spacing: 8) {
-            ForEach([WizardStep.install, .signIn], id: \.rawValue) { step in
+            ForEach([WizardStep.install, .run, .finish], id: \.rawValue) { step in
                 Circle()
-                    .fill(step.rawValue <= currentStep.rawValue ? Color.accentColor : Color.gray.opacity(0.3))
-                    .frame(width: 8, height: 8)
+                    .fill(step.rawValue <= currentStep.rawValue
+                          ? Color.accentColor
+                          : inactiveDotColor)
+                    .frame(width: 10, height: 10)
             }
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private var inactiveDotColor: Color {
+        // Medium grey, opaque, visible on both themes. Color(.systemGray)
+        // adapts to appearance and never washes out the way a low-opacity
+        // grey does on a light sheet.
+        Color(nsColor: .systemGray)
     }
 
     private var footer: some View {
@@ -103,237 +146,214 @@ struct CodexConnectSheet: View {
             if currentStep != .install {
                 Button("Back") { goBack() }
             }
-            Button(primaryButtonLabel) { handlePrimary() }
+            Button("Done") { handleDone() }
                 .keyboardShortcut(.defaultAction)
-                .disabled(!primaryButtonEnabled)
+                .disabled(!signedIn)
         }
     }
 
-    private var primaryButtonLabel: String {
-        switch currentStep {
-        case .install: return "Next"
-        case .signIn:
-            if let r = testResult, case .ok = r { return "Close & enable" }
-            if codexStatus == .ready { return "Test connection" }
-            return "Next"
-        }
-    }
-
-    private var primaryButtonEnabled: Bool {
-        switch currentStep {
-        case .install: return codexStatus != .notInstalled
-        case .signIn:
-            if let r = testResult, case .ok = r { return true }
-            return codexStatus == .ready && !testRunning
-        }
-    }
-
-    private func handlePrimary() {
-        switch currentStep {
-        case .install:
-            currentStep = .signIn
-            probeCodex()
-            if codexStatus == .ready && testResult == nil { runTest() }
-        case .signIn:
-            if let r = testResult, case .ok = r {
-                onComplete(true)
-                onClose()
-            } else if codexStatus == .ready {
-                runTest()
-            }
-        }
+    private func handleDone() {
+        guard signedIn else { return }
+        stopPoll()
+        onComplete(true)
+        onClose()
     }
 
     private func goBack() {
-        if currentStep == .signIn { currentStep = .install; probeCodex() }
+        stopPoll()
+        switch currentStep {
+        case .run: currentStep = .install
+        case .finish: currentStep = .run
+        case .install: break
+        }
     }
 
-    // MARK: - Step 1: Install Codex CLI
-
-    private var stepOne: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("1 - Install Codex")
-                .font(.system(size: 18, weight: .semibold))
-            Text("Open Terminal, paste this command, and press Enter. It installs the Codex CLI. No Node.js needed.")
-                .font(.system(size: 13))
+    private func infoButton(isPresented: Binding<Bool>, text: String) -> some View {
+        Button {
+            isPresented.wrappedValue.toggle()
+        } label: {
+            Image(systemName: "info.circle")
+                .font(.system(size: 14))
                 .foregroundColor(.secondary)
-
-            codexStatusBadge
-
-            if codexStatus == .notInstalled {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        Text(installCommand)
-                            .font(.system(.body, design: .monospaced))
-                            .textSelection(.enabled)
-                            .padding(10)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color.gray.opacity(0.12))
-                            .cornerRadius(4)
-                    }
-                    HStack(spacing: 8) {
-                        Button(action: copyInstallCommand) {
-                            Label(copiedFlash ? "Copied!" : "Copy command",
-                                  systemImage: "doc.on.doc")
-                        }
-                        .buttonStyle(.borderedProminent)
-                        Button(action: openTerminal) {
-                            Label("Open Terminal", systemImage: "terminal")
-                        }
-                        Button(action: recheckCodex) {
-                            Label("Recheck", systemImage: "arrow.clockwise")
-                        }
-                    }
-                    Text("After installing, you may need to restart Dimmy so the new PATH is picked up.")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                }
-            }
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: isPresented, arrowEdge: .bottom) {
+            Text(text)
+                .font(.system(size: 13))
+                .frame(width: 300, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(12)
         }
     }
 
-    private var codexStatusBadge: some View {
-        HStack(spacing: 10) {
-            if codexStatus != .notInstalled {
-                Image(systemName: "checkmark.circle.fill").foregroundColor(.green).font(.title2)
-                if let p = binaryPath {
-                    Text("Codex CLI detected at \(p)")
-                } else {
-                    Text("Codex CLI detected")
-                }
-            } else {
-                Image(systemName: "xmark.circle.fill").foregroundColor(.red).font(.title2)
-                Text("Codex CLI not installed. Run the command below in Terminal.")
+    // MARK: - Page 1: Install
+
+    private var stepInstall: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 6) {
+                Text("1 - Install Codex")
+                    .font(.system(size: 18, weight: .semibold))
+                infoButton(
+                    isPresented: $showInstallInfo,
+                    text: "Codex is a small standalone CLI from OpenAI. No Node.js required. Homebrew and the install script both fetch a native binary."
+                )
             }
-            Spacer()
+
+            Picker("", selection: $commandSource) {
+                ForEach(CommandSource.allCases) { src in
+                    Text(src.label).tag(src)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: 280, alignment: .leading)
+
+            Text(commandSource.command)
+                .font(.system(.body, design: .monospaced))
+                .textSelection(.enabled)
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.gray.opacity(0.12))
+                .cornerRadius(4)
+
+            if let url = URL(string: "https://github.com/openai/codex") {
+                Link("See OpenAI's official install page", destination: url)
+                    .font(.system(size: 12))
+            }
+
+            Button(action: copyCommandAndContinue) {
+                Text("Copy command and continue")
+            }
+            .buttonStyle(.borderedProminent)
         }
-        .padding(12)
-        .background(Color.gray.opacity(0.08))
-        .cornerRadius(6)
     }
 
-    private func copyInstallCommand() {
+    private func copyCommandAndContinue() {
         let pb = NSPasteboard.general
         pb.clearContents()
-        pb.setString(installCommand, forType: .string)
-        copiedFlash = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copiedFlash = false }
+        pb.setString(commandSource.command, forType: .string)
+        currentStep = .run
     }
 
-    private func openTerminal() {
-        let script = "tell application \"Terminal\" to do script \"cd ~ && clear\""
-        var error: NSDictionary? = nil
-        NSAppleScript(source: script)?.executeAndReturnError(&error)
-        NSWorkspace.shared.launchApplication("Terminal")
-    }
+    // MARK: - Page 2: Run
 
-    private func recheckCodex() {
-        let s = DimmyCore.shared.recheckCodex()
-        codexStatus = s
-        binaryPath = DimmyCore.shared.codexBinaryPath
-    }
-
-    // MARK: - Step 2: Sign in + test
-
-    private var stepTwo: some View {
+    private var stepRun: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("2 - Sign in with ChatGPT")
-                .font(.system(size: 18, weight: .semibold))
-            Text("Click Sign in to open a Terminal window with the Codex sign-in. Log in with your ChatGPT Plus, Pro, Team, Business, or Enterprise plan. Dimmy detects the login and runs a quick test. A free ChatGPT account won't work for Codex.")
+            HStack(spacing: 6) {
+                Text("2 - Run it")
+                    .font(.system(size: 18, weight: .semibold))
+                infoButton(
+                    isPresented: $showRunInfo,
+                    text: "Terminal opens and runs the install automatically. Wait until it finishes, then come back. (The command is also on your clipboard as a fallback.)"
+                )
+            }
+
+            Text("A terminal opens and runs the install for you. Wait for it to finish, then come back.")
                 .font(.system(size: 13))
                 .foregroundColor(.secondary)
 
+            Button(action: installNow) {
+                Text("Install now")
+            }
+            .buttonStyle(.borderedProminent)
+        }
+    }
+
+    private func installNow() {
+        runInTerminal(commandSource.command)
+        currentStep = .finish
+        startPoll()
+    }
+
+    /// Auto-run the install: open Terminal.app and run the command there, so
+    /// the user neither pastes nor types. Mirrors the Windows auto-run.
+    private func runInTerminal(_ command: String) {
+        let escaped = command
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let script = """
+        tell application "Terminal"
+            activate
+            do script "\(escaped)"
+        end tell
+        """
+        var error: NSDictionary? = nil
+        NSAppleScript(source: script)?.executeAndReturnError(&error)
+    }
+
+    // MARK: - Page 3: Finish
+
+    private var stepFinish: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 6) {
+                Text("3 - Finish")
+                    .font(.system(size: 18, weight: .semibold))
+                infoButton(
+                    isPresented: $showFinishInfo,
+                    text: "Dimmy launches the Codex CLI as a local subprocess and uses its stored login. Requires a paid ChatGPT plan. Dimmy never sees your token. Subject to OpenAI's terms."
+                )
+            }
+
             VStack(alignment: .leading, spacing: 10) {
-                signInBadge
-                if testResult != nil || testRunning {
-                    testBadge
+                installStatusRow
+                if codexOk {
+                    signInStatusRow
                 }
             }
-            .padding(12)
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color.gray.opacity(0.08))
             .cornerRadius(6)
 
             HStack(spacing: 8) {
-                if codexStatus != .ready {
+                if codexOk && !signedIn {
                     Button(action: signIn) {
-                        Label("Sign in", systemImage: "person.badge.key.fill")
+                        Text("Sign in with ChatGPT")
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(signInRunning)
                 }
-                Button(action: recheckSignIn) {
+                Button(action: recheck) {
                     Label("Recheck", systemImage: "arrow.clockwise")
                 }
-                if let r = testResult, case .ok = r {} else if testResult != nil {
-                    Button(action: { testResult = nil; runTest() }) {
-                        Label("Retry test", systemImage: "arrow.clockwise")
-                    }
-                }
             }
-
-            Text("Dimmy launches the Codex CLI as a local subprocess and uses its stored login. Requires an active paid ChatGPT plan. Dimmy never sees your token. Subject to OpenAI's terms of service.")
-                .font(.system(size: 11))
-                .foregroundColor(.secondary)
-                .padding(10)
-                .background(Color.gray.opacity(0.06))
-                .cornerRadius(6)
         }
     }
 
-    private var signInBadge: some View {
+    private var installStatusRow: some View {
         HStack(spacing: 10) {
-            if codexStatus == .ready {
-                Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
-                Text("Signed in with your ChatGPT plan.")
-            } else if codexStatus == .notLoggedIn {
-                if signInRunning {
-                    ProgressView().controlSize(.small).scaleEffect(0.7)
-                    Text("Complete the ChatGPT sign-in. Dimmy will detect when you're signed in…")
-                } else {
-                    Image(systemName: "exclamationmark.circle.fill").foregroundColor(.orange)
-                    Text("Not signed in. Click Sign in to open the ChatGPT login flow.")
-                }
+            if codexOk {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(.green)
+                    .font(.title3)
+                Text("Codex CLI installed.")
             } else {
-                Image(systemName: "xmark.circle.fill").foregroundColor(.red)
-                Text("Codex CLI missing. Go back to Step 1.")
-            }
-            Spacer()
-        }
-        .font(.system(size: 13))
-    }
-
-    @ViewBuilder
-    private var testBadge: some View {
-        HStack(spacing: 10) {
-            if testRunning {
                 ProgressView().controlSize(.small).scaleEffect(0.7)
-                Text("Test connection: pinging ChatGPT…")
-            } else if let r = testResult {
-                switch r {
-                case .ok(let ms):
-                    Image(systemName: "checkmark.seal.fill").foregroundColor(.green)
-                    Text("Test connection OK (\(ms) ms). ChatGPT subscription ready.")
-                default:
-                    Image(systemName: "exclamationmark.octagon.fill").foregroundColor(.red)
-                    Text("Test failed: \(describeTestResult(r))")
-                }
+                Text("Run the command in your terminal. It appears here when done.")
             }
             Spacer()
         }
         .font(.system(size: 13))
     }
 
-    private func describeTestResult(_ r: DimmyCore.ClaudeCodePingResult) -> String {
-        switch r {
-        case .ok: return ""
-        case .notInstalled: return "Codex CLI not installed"
-        case .notLoggedIn: return "Not signed in"
-        case .spawnFailed: return "Couldn't spawn the CLI subprocess"
-        case .timeout: return "Timed out (30 s)"
-        case .nonZeroExit: return "CLI returned an error code"
-        case .invalidUtf8: return "CLI returned invalid output"
-        case .unknownError: return "Unknown error"
+    private var signInStatusRow: some View {
+        HStack(spacing: 10) {
+            if signedIn {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(.green)
+                    .font(.title3)
+                Text("Signed in to ChatGPT.")
+            } else if signInRunning {
+                ProgressView().controlSize(.small).scaleEffect(0.7)
+                Text("Complete the browser sign-in. Dimmy detects it automatically.")
+            } else {
+                Image(systemName: "info.circle.fill")
+                    .foregroundColor(.secondary)
+                Text("Not signed in yet.")
+            }
+            Spacer()
         }
+        .font(.system(size: 13))
     }
 
     private func signIn() {
@@ -345,48 +365,39 @@ struct CodexConnectSheet: View {
                     signInRunning = false
                     return
                 }
-                pollAttempt = 0
-                pollForCredentials()
+                startPoll()
             }
         }
     }
 
-    private func pollForCredentials() {
-        if pollAttempt >= 90 { // 3 minutes
-            signInRunning = false
-            return
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            let s = DimmyCore.shared.recheckCodex()
-            codexStatus = s
-            binaryPath = DimmyCore.shared.codexBinaryPath
-            if s == .ready {
-                signInRunning = false
-                runTest()
-                return
-            }
-            pollAttempt += 1
-            pollForCredentials()
-        }
-    }
-
-    private func recheckSignIn() {
+    private func recheck() {
         let s = DimmyCore.shared.recheckCodex()
         codexStatus = s
         binaryPath = DimmyCore.shared.codexBinaryPath
-        if s == .ready && testResult == nil { runTest() }
+        if signedIn { signInRunning = false }
     }
 
-    private func runTest() {
-        testRunning = true
-        testResult = nil
-        DispatchQueue.global(qos: .userInitiated).async {
-            let r = DimmyCore.shared.pingCodex()
-            DispatchQueue.main.async {
-                testRunning = false
-                testResult = r
+    // MARK: - Polling
+
+    private func startPoll() {
+        stopPoll()
+        let timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
+            let prevSignedIn = signedIn
+            let s = DimmyCore.shared.recheckCodex()
+            codexStatus = s
+            binaryPath = DimmyCore.shared.codexBinaryPath
+            if signedIn {
+                signInRunning = false
+                if !prevSignedIn { stopPoll() } // fully done - stop hammering the CLI
             }
         }
+        pollTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func stopPoll() {
+        pollTimer?.invalidate()
+        pollTimer = nil
     }
 
     // MARK: - Probes / smart-skip
@@ -394,16 +405,11 @@ struct CodexConnectSheet: View {
     private func probeAndSkip() {
         codexStatus = DimmyCore.shared.codexStatus
         binaryPath = DimmyCore.shared.codexBinaryPath
-        if codexStatus == .notInstalled {
-            currentStep = .install
+        if !forceStartAtStep1 && codexOk {
+            currentStep = .finish
+            startPoll()
         } else {
-            currentStep = .signIn
-            if codexStatus == .ready { runTest() }
+            currentStep = .install
         }
-    }
-
-    private func probeCodex() {
-        codexStatus = DimmyCore.shared.codexStatus
-        binaryPath = DimmyCore.shared.codexBinaryPath
     }
 }

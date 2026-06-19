@@ -2,24 +2,20 @@
 <!--
   Claude Code subscription setup wizard.
 
-  Two linear steps, one ContentDialog. Same shape as
-  NotionConnectDialog: state machine in code-behind toggles
-  Step2Panel / Step3Panel visibility, the dialog buttons
-  (Primary/Secondary/Close) get relabeled per step.
+  Guided 3-page flow, one ContentDialog. Code-behind state machine flips
+  PageNPanel visibility + relabels the dialog buttons per page. Mirror of
+  CodexConnectDialog.
 
-  Claude Code ships as a native standalone binary now (no
-  Node.js), installed via a one-line PowerShell command.
+    Page 1 - Install : pick an install command (winget / PowerShell / npm),
+                       Copy -> auto-advance.
+    Page 2 - Run     : Install now -> opens a terminal that auto-runs the
+                       command, then auto-advance.
+    Page 3 - Finish  : poll for the claude binary, sign in if needed,
+                       green check -> Done.
 
-  Smart-skip on entry: when the dialog opens we probe claude +
-  credentials state once and start on the FIRST step whose
-  precondition is missing. Anyone already past a step doesn't
-  see it.
-
-  Flow:
-    Step 1 - Install Claude Code -> copy install command + open
-                                    terminal + recheck
-    Step 2 - Sign in + test      -> spawn `claude /login`, poll
-                                    credentials, auto-fire test ping
+  Minimal copy on each page; the extra detail lives behind the (i) info
+  buttons, like the rest of Settings. Default install command is winget: it
+  runs in plain cmd (or any shell), needs neither PowerShell 7 nor Node.js.
 -->
 <ContentDialog
     x:Class="Dimmy.Windows.Views.ClaudeConnectDialog"
@@ -35,134 +31,159 @@
     CloseButtonClick="OnCloseClick">
 
   <ContentDialog.Resources>
-    <x:Double x:Key="ContentDialogMaxWidth">580</x:Double>
-    <x:Double x:Key="ContentDialogMinWidth">580</x:Double>
+    <x:Double x:Key="ContentDialogMaxWidth">560</x:Double>
+    <x:Double x:Key="ContentDialogMinWidth">560</x:Double>
   </ContentDialog.Resources>
 
-  <Grid RowSpacing="14" MinHeight="420">
+  <Grid RowSpacing="14" MinHeight="300">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto"/>
       <RowDefinition Height="*"/>
     </Grid.RowDefinitions>
 
-    <!-- ── Progress dots ───────────────────────────────────────── -->
+    <!-- Progress dots -->
     <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="8"
                 HorizontalAlignment="Center" Margin="0,0,0,4">
       <Ellipse x:Name="Dot1" Width="10" Height="10"
                Fill="{ThemeResource AccentFillColorDefaultBrush}"/>
       <Ellipse x:Name="Dot2" Width="10" Height="10"
-               Fill="{ThemeResource ControlStrokeColorDefaultBrush}"/>
+               Fill="{ThemeResource TextFillColorSecondaryBrush}"/>
+      <Ellipse x:Name="Dot3" Width="10" Height="10"
+               Fill="{ThemeResource TextFillColorSecondaryBrush}"/>
     </StackPanel>
 
     <Grid Grid.Row="1">
 
-      <!-- ════ Step 1 - Install Claude Code ════ -->
-      <StackPanel x:Name="Step2Panel" Spacing="12" Visibility="Visible">
-        <TextBlock Text="1 - Install Claude Code"
-                   FontSize="18" FontWeight="SemiBold"/>
-        <TextBlock TextWrapping="Wrap" FontSize="13"
-                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                   Text="Open a terminal, paste this command, and press Enter. It installs the Claude Code CLI. No Node.js needed."/>
-
-        <Border x:Name="ClaudeStatusBorder"
-                Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                BorderThickness="1" CornerRadius="6" Padding="14">
-          <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
-            <FontIcon x:Name="ClaudeStatusGlyph" FontSize="20"
-                      FontFamily="Segoe Fluent Icons"
-                      Glyph="&#xE9F5;"
+      <!-- Page 1 - Install -->
+      <StackPanel x:Name="Page1Panel" Spacing="12" Visibility="Visible">
+        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+          <TextBlock Text="1 - Install Claude Code" FontSize="18" FontWeight="SemiBold"/>
+          <Button Background="Transparent" BorderThickness="0" Padding="2"
+                  VerticalAlignment="Center"
+                  ToolTipService.ToolTip="About installing Claude Code">
+            <FontIcon Glyph="&#xE946;" FontSize="14"
                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-            <TextBlock x:Name="ClaudeStatusText" VerticalAlignment="Center"
-                       FontSize="13" TextWrapping="Wrap"
-                       Text="Checking for Claude CLI…"/>
-          </StackPanel>
-        </Border>
-
-        <StackPanel x:Name="ClaudeActionPanel" Visibility="Collapsed" Spacing="10">
-          <Border Background="{ThemeResource ControlAltFillColorTertiaryBrush}"
-                  CornerRadius="4" Padding="12,8,12,8">
-            <TextBlock x:Name="NpmCommandText"
-                       Text="irm https://claude.ai/install.ps1 | iex"
-                       FontFamily="Consolas, Menlo, monospace"
-                       FontSize="13" TextWrapping="NoWrap"
-                       IsTextSelectionEnabled="True"/>
-          </Border>
-          <StackPanel Orientation="Horizontal" Spacing="10">
-            <Button x:Name="CopyCmdBtn" Content="Copy command"
-                    Click="CopyInstallCommand_Click"
-                    Style="{ThemeResource AccentButtonStyle}"/>
-            <Button x:Name="OpenTerminalBtn" Content="Open PowerShell"
-                    Click="OpenTerminal_Click"/>
-            <Button x:Name="RecheckClaudeBtn" Content="Recheck"
-                    Click="RecheckClaude_Click"/>
-          </StackPanel>
+            <Button.Flyout>
+              <Flyout>
+                <TextBlock Width="300" TextWrapping="Wrap" FontSize="13"
+                           Text="Claude Code is a small standalone CLI from Anthropic. No Node.js required. winget is built into Windows and runs in any terminal (including cmd). The PowerShell installer needs PowerShell 7; npm is the legacy path."/>
+              </Flyout>
+            </Button.Flyout>
+          </Button>
         </StackPanel>
 
-        <TextBlock x:Name="ClaudeHelpText" TextWrapping="Wrap" FontSize="12"
-                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                   Text="After it finishes installing, click Recheck. You may need to reopen Dimmy so the new PATH is seen."
-                   Visibility="Collapsed"/>
+        <!-- Command source tabs -->
+        <StackPanel Orientation="Horizontal" Spacing="6">
+          <RadioButton x:Name="TabWinget" Content="winget" GroupName="CmdTab"
+                       Checked="CmdTab_Checked" IsChecked="True"/>
+          <RadioButton x:Name="TabPwsh" Content="PowerShell" GroupName="CmdTab"
+                       Checked="CmdTab_Checked"/>
+          <RadioButton x:Name="TabNpm" Content="npm" GroupName="CmdTab"
+                       Checked="CmdTab_Checked"/>
+        </StackPanel>
+
+        <Border Background="{ThemeResource ControlAltFillColorTertiaryBrush}"
+                CornerRadius="4" Padding="12,10,12,10">
+          <TextBlock x:Name="CommandText"
+                     Text="winget install Anthropic.ClaudeCode"
+                     FontFamily="Consolas, Menlo, monospace"
+                     FontSize="13" TextWrapping="Wrap"
+                     IsTextSelectionEnabled="True"/>
+        </Border>
+
+        <HyperlinkButton Content="See Anthropic's official install page"
+                         NavigateUri="https://github.com/anthropics/claude-code"
+                         FontSize="12" Padding="0"/>
+
+        <Button x:Name="CopyCmdBtn" Content="Copy command and continue"
+                Click="CopyCommand_Click"
+                Style="{ThemeResource AccentButtonStyle}"
+                HorizontalAlignment="Left"/>
       </StackPanel>
 
-      <!-- ════ Step 2 - Sign in + Test ════ -->
-      <StackPanel x:Name="Step3Panel" Spacing="12" Visibility="Collapsed">
-        <TextBlock Text="2 - Sign in to Claude"
-                   FontSize="18" FontWeight="SemiBold"/>
+      <!-- Page 2 - Run -->
+      <StackPanel x:Name="Page2Panel" Spacing="12" Visibility="Collapsed">
+        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+          <TextBlock Text="2 - Run it" FontSize="18" FontWeight="SemiBold"/>
+          <Button Background="Transparent" BorderThickness="0" Padding="2"
+                  VerticalAlignment="Center"
+                  ToolTipService.ToolTip="What happens in the terminal">
+            <FontIcon Glyph="&#xE946;" FontSize="14"
+                      Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+            <Button.Flyout>
+              <Flyout>
+                <TextBlock Width="300" TextWrapping="Wrap" FontSize="13"
+                           Text="A terminal opens and runs the install automatically. Wait until it finishes, then come back to this window. (The command is also on your clipboard as a fallback.)"/>
+              </Flyout>
+            </Button.Flyout>
+          </Button>
+        </StackPanel>
+
         <TextBlock TextWrapping="Wrap" FontSize="13"
                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                   Text="Click Sign in to open a terminal window with the Claude CLI's browser-based OAuth flow. Complete it in your browser, then come back, Dimmy will detect the login and run a quick test."/>
+                   Text="A terminal opens and runs the install for you. Wait for it to finish, then come back."/>
 
-        <Border x:Name="SignInStatusBorder"
-                Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
+        <Button x:Name="OpenTerminalBtn" Content="Install now"
+                Click="OpenTerminal_Click"
+                Style="{ThemeResource AccentButtonStyle}"
+                HorizontalAlignment="Left"/>
+      </StackPanel>
+
+      <!-- Page 3 - Finish -->
+      <StackPanel x:Name="Page3Panel" Spacing="12" Visibility="Collapsed">
+        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+          <TextBlock Text="3 - Finish" FontSize="18" FontWeight="SemiBold"/>
+          <Button Background="Transparent" BorderThickness="0" Padding="2"
+                  VerticalAlignment="Center"
+                  ToolTipService.ToolTip="About this step">
+            <FontIcon Glyph="&#xE946;" FontSize="14"
+                      Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+            <Button.Flyout>
+              <Flyout>
+                <TextBlock Width="300" TextWrapping="Wrap" FontSize="13"
+                           Text="Dimmy launches the Claude Code CLI as a local subprocess and uses its stored login. Requires your active Anthropic subscription. Dimmy never sees your token. Subject to Anthropic's terms."/>
+              </Flyout>
+            </Button.Flyout>
+          </Button>
+        </StackPanel>
+
+        <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
                 BorderThickness="1" CornerRadius="6" Padding="14">
-          <StackPanel Spacing="8">
+          <StackPanel Spacing="10">
             <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+              <FontIcon x:Name="InstallGlyph" FontSize="20"
+                        FontFamily="Segoe Fluent Icons"
+                        Glyph="&#xE9F5;"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+              <TextBlock x:Name="InstallText" VerticalAlignment="Center"
+                         FontSize="13" TextWrapping="Wrap"
+                         Text="Looking for the Claude Code CLI..."/>
+              <ProgressRing x:Name="InstallRing" Width="16" Height="16"
+                            IsActive="True"/>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center"
+                        x:Name="SignInRow" Visibility="Collapsed">
               <FontIcon x:Name="SignInGlyph" FontSize="20"
                         FontFamily="Segoe Fluent Icons"
                         Glyph="&#xE9F5;"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
               <TextBlock x:Name="SignInText" VerticalAlignment="Center"
                          FontSize="13" TextWrapping="Wrap"
-                         Text="Checking sign-in status…"/>
+                         Text="Sign in to Claude"/>
               <ProgressRing x:Name="SignInRing" Width="16" Height="16"
-                            IsActive="False" Visibility="Collapsed"/>
-            </StackPanel>
-            <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center"
-                        x:Name="TestStatusRow" Visibility="Collapsed">
-              <FontIcon x:Name="TestGlyph" FontSize="20"
-                        FontFamily="Segoe Fluent Icons"
-                        Glyph="&#xE9F5;"
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-              <TextBlock x:Name="TestText" VerticalAlignment="Center"
-                         FontSize="13" TextWrapping="Wrap"
-                         Text="Test connection: waiting…"/>
-              <ProgressRing x:Name="TestRing" Width="16" Height="16"
                             IsActive="False" Visibility="Collapsed"/>
             </StackPanel>
           </StackPanel>
         </Border>
 
-        <StackPanel x:Name="SignInActionPanel" Orientation="Horizontal" Spacing="10">
-          <Button x:Name="SignInBtn" Content="Sign in"
+        <StackPanel Orientation="Horizontal" Spacing="10">
+          <Button x:Name="SignInBtn" Content="Sign in to Claude"
                   Click="SignIn_Click"
-                  Style="{ThemeResource AccentButtonStyle}"/>
-          <Button x:Name="RecheckSignInBtn" Content="Recheck"
-                  Click="RecheckSignIn_Click"/>
-          <Button x:Name="RetryTestBtn" Content="Retry test"
-                  Click="RetryTest_Click"
+                  Style="{ThemeResource AccentButtonStyle}"
                   Visibility="Collapsed"/>
+          <Button x:Name="RecheckBtn" Content="Recheck" Click="Recheck_Click"/>
         </StackPanel>
-
-        <Border Background="{ThemeResource ControlAltFillColorTertiaryBrush}"
-                BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                BorderThickness="1" CornerRadius="6" Padding="12,10,12,10"
-                Margin="0,8,0,0">
-          <TextBlock TextWrapping="Wrap" FontSize="11"
-                     Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                     Text="Dimmy launches the Claude Code CLI as a local subprocess and uses its stored login. Requires your active Anthropic subscription. Subject to Anthropic's terms of service."/>
-        </Border>
       </StackPanel>
 
     </Grid>
