@@ -108,7 +108,7 @@ cargo test --lib --features local-stt,local-llm
 # 1. Build the Rust DLL with Vulkan + LLM
 cd core
 set CMAKE_GENERATOR=Ninja
-cargo build --release --lib --features local-stt-vulkan,local-llm-vulkan
+cargo build --release --lib --features local-stt-vulkan,local-stt-parakeet,local-llm-vulkan
 
 # 2. Build the WinUI 3 app
 cd ../platforms/windows/Dimmy.Windows

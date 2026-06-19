@@ -35,7 +35,7 @@ pai-voice/
 ├── core/                     Rust core — all business logic
 │   ├── src/
 │   │   ├── lib.rs            Config, AppState, module exports
-│   │   ├── ffi.rs            ~76 C exports (cdylib surface; ABI snapshot)
+│   │   ├── ffi.rs            132 C exports (cdylib surface; ABI snapshot via abi_snapshot.rs)
 │   │   ├── audio.rs          Mic + WASAPI loopback capture via cpal (multi-stream)
 │   │   ├── aec.rs            WebRTC AEC3 — Mix-mode echo cancellation
 │   │   ├── dfn.rs            DeepFilterNet noise suppression (scaffolding, deferred)
@@ -46,10 +46,19 @@ pai-voice/
 │   │   ├── parakeet_fluid.rs Parakeet via FluidAudio CoreML — Mac Apple Neural Engine
 │   │   ├── chunked_stt.rs    Realtime chunked Parakeet worker (5 s window + dedup)
 │   │   ├── meeting.rs        Long-form meeting mode + pause/resume + post-process
+│   │   ├── call_detector.rs  Auto-detect meetings (mic-in-use + app inference) → record nudge (Win + Mac)
+│   │   ├── consent.rs        Recording-consent notice text + consent.jsonl audit (GDPR / all-party)
+│   │   ├── deepgram_stream.rs Realtime streaming dictation over Deepgram WebSocket (true streaming)
 │   │   ├── process_loopback.rs Per-process WASAPI loopback (Phase 5a, Win-only)
 │   │   ├── llm.rs            LLM post-processing router + adaptive thinking dispatch
 │   │   ├── local_llm.rs      llama-cpp-4 (dynamic-link ggml) integration (optional)
 │   │   ├── download.rs       Resumable + SHA-256-verified model downloads (LLM/whisper/parakeet)
+│   │   ├── claude_code.rs    Anthropic subscription LLM via local `claude` CLI (no API key)
+│   │   ├── codex.rs          OpenAI/ChatGPT subscription LLM via local `codex` CLI
+│   │   ├── claude_desktop.rs Claude Desktop MCP bridge (patches config + spawns dimmy-mcp)
+│   │   ├── notion.rs         Notion REST client — send recaps to a page/database
+│   │   ├── catalog.rs        Embedded model-catalog.json (single source for cloud models)
+│   │   ├── dfn3.rs           DeepFilterNet v3 noise suppression (feature local-dfn)
 │   │   ├── provider.rs       Provider enum + URL validation
 │   │   ├── app_rules.rs      Per-app LLM style override resolution
 │   │   ├── keystore.rs       AES-256 key storage
@@ -91,6 +100,9 @@ pai-voice/
 │   ├── preprocess_properties.rs  proptest invariants (NaN-free, clamped, monotone len)
 │   ├── abi_snapshot.rs       Cross-platform symbol diff vs golden fixture
 │   ├── v2_ffi.rs / v2_followups.rs  v2 config-field round-trip + retention
+│   ├── llm_request_shape.rs  Asserts the exact JSON body each provider gets
+│   ├── llm_flows.rs / live_models.rs  Tier-A live LLM matrix + model smoke (manual, #[ignore])
+│   ├── telemetry_coverage.rs Telemetry hygiene gate (every Event emitted or reserved)
 │   └── stress_tests.rs       Offline stress (no API calls)
 │
 ├── .github/workflows/        ci.yml, staging-auto-update.yml, staging-tester.yml,

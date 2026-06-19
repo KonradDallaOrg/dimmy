@@ -75,6 +75,61 @@ One place for every multi-GB model download (LLM GGUF, whisper ggml/GGUF, parake
 - **Key resolution** (in `ffi.rs`, not here): the cloud/command dispatch reads `KeyringScope::Llm(vendor)` first, then falls back to the SAME vendor's `KeyringScope::Stt(vendor)` key — vendor is derived from `llm_url`, so it can never pull a different provider's key. One key per provider works for STT + LLM + command.
 - **Live verification:** [`core/tests/llm_flows.rs`](../../core/tests/llm_flows.rs) — the `#[ignore]` flow matrix + catalog sweep. See [`llm-flows-testing.md`](llm-flows-testing.md).
 
+## `claude_code.rs` — Anthropic subscription LLM (local `claude` CLI)
+
+- Routes LLM calls through the user's Claude Pro/Team/Max subscription instead of an API key, by shelling out to the locally-installed `claude` binary. A synthetic `claude-code://default` URL selects this path in `llm.rs`.
+- `status()` → `Ready { binary_path }` / `NotLoggedIn { binary_path }` / `NotInstalled`. `spawn_login()` runs `claude login` (browser OAuth → `~/.claude/credentials.json`); `run_blocking(prompt, model, timeout)` invokes `claude --print` with the prompt on **stdin** (no argv leakage, stderr captured separately, 5-min timeout).
+- **Privacy:** Dimmy never reads the credentials file; `ClaudeCodeError::Display` strips spawn/stdout text so transcript fragments can't leak into logs/telemetry.
+- FFI: `dimmy_claude_code_status`, `_spawn_login`, `_ping`, `_recheck`, `_diagnostics`, `_binary_path`, `_node_status`. See [`claude-code-backend.md`](claude-code-backend.md).
+
+## `codex.rs` — OpenAI/ChatGPT subscription LLM (local `codex` CLI)
+
+- Sibling of `claude_code.rs` for ChatGPT Plus/Pro/Team: detects the `codex` CLI, `codex login` for OAuth, invokes `codex exec -` with the prompt on stdin. Synthetic `codex://` URL selects it in `llm.rs`.
+- Same status enum + privacy posture (stdin only, stderr captured, Display redacts spawn text). Credentials in `$CODEX_HOME` (`~/.codex/auth.json`).
+- FFI: `dimmy_codex_status`, `_spawn_login`, `_ping`, `_recheck`, `_diagnostics`, `_binary_path`.
+
+## `claude_desktop.rs` — Claude Desktop MCP bridge
+
+- Wires Dimmy into the Claude Desktop app: detects the install (Win MSIX/Squirrel, Mac `/Applications/Claude.app`), resolves `claude_desktop_config.json`, and adds a `dimmy` MCP server entry that spawns the bundled `dimmy-mcp` binary on Claude startup.
+- The MCP server (`mcp-server/`) exposes tools so Claude can read meetings + write recaps back (incl. `dimmy_search` full-text search over meetings).
+- FFI: `dimmy_claude_desktop_status`, `_install`, `_uninstall`.
+
+## `catalog.rs` — embedded cloud-model catalog
+
+- `include_str!`s `assets/model-catalog.json` (schema v2) into the binary as the single source of truth for cloud STT/LLM/recap providers + models. Win (System.Text.Json) and Mac (Codable) deserialize the SAME bytes → no per-OS model drift.
+- Only cloud models; local Whisper/Parakeet/Gemma/Phi stay in host code. A unit test validates schema version + non-empty arrays + per-task endpoint URLs.
+- FFI: `dimmy_model_catalog_json`. Validate against live `/models` endpoints with `scripts/dev/check-model-ids.py` before a release.
+
+## `notion.rs` — Notion integration
+
+- REST client for the user's OWN internal Notion integration token (no Dimmy server in between). Sends a recap to a chosen page/database via `POST /v1/pages` with server-side markdown parsing.
+- Token stored in the AES keystore under `KeyringScope::NotionToken`. API version pinned (`Notion-Version`); ~3 req/s, human-paced (no auto-retry).
+- `search()` → `NotionSearchResult { id, object, title, parent_label, url }`; `send_recap()` with page/database routing.
+- FFI: `dimmy_notion_has_token`, `_set_token`, `_test_connection`, `_search`, `_send_recap`.
+
+## `call_detector.rs` — meeting auto-detection state machine
+
+- Pure state machine (no threads/IO): the host polls audio-session state and feeds signals; the core decides whether to nudge "start a meeting?" and when to suggest stopping. App-agnostic (a browser call works like Teams/Zoom).
+- Debounce + per-app cooldown + exclusion list + a silence-based stop-suggestion (`has_tracked_origin` gates it to a watched pid to stop flapping). Emits each transition exactly once.
+- FFI: `dimmy_call_signal`, `_signal_sys`, `_signal_session_ended`, `_signal_response`, `_set_tracked_origin`, `_meeting_started_external`, `_detector_state`. Win: `CallDetectionService.cs` + `CallNudgeWindow`. Mac: `CallDetectionManager`.
+
+## `consent.rs` — recording-consent gate
+
+- One cross-platform source for what the recording-consent notice SAYS and THAT it happened. `modal_text(lang)` + `announcement_text(lang, cloud_processing)` localize to it/es/fr/de/pt (+ English fallback); the announcement discloses local-only vs cloud processing (a material GDPR fact).
+- `append_event(kind, lang)` writes an append-only `<config_dir>/consent.jsonl` audit trail (best-effort, never blocks recording). The host decides WHEN to show the notice.
+- FFI: `dimmy_consent_text`, `dimmy_consent_log_event`.
+
+## `deepgram_stream.rs` — streaming dictation (Deepgram WebSocket)
+
+- True realtime STT (vs `chunked_stt.rs`'s chunked approximation): one persistent Deepgram WS, PCM16 LE 16 kHz pushed as cpal captures it, interim+final results streamed back.
+- Reuses the chunked callback contract `(delta, cumulative, is_final)` so the host injects `delta` at the cursor and shows `cumulative` as a live caption. `streaming_dictation` config + STT mode pick this (cloud) vs the local chunked path. TLS via `tokio-tungstenite` + `native-tls` (rustls 0.23+ panics under Velopack).
+- No new public FFI — driven by the `STREAMING` static in `ffi.rs`, emits `stt_chunk` events.
+
+## `dfn3.rs` — DeepFilterNet v3 noise suppression
+
+- Newer sibling of `dfn.rs`: wraps the `deep_filter` crate (DFN3 model + tract ONNX). Gated on the `local-dfn` cargo feature; `process_mono`/`process_frame` operate on 10 ms hops (480 @ 48 kHz) so the AEC/preprocess worker can swap implementations via `cfg`.
+- Still DEFERRED in shipping builds (not in the default feature set) — same status as `dfn.rs`.
+
 ## `keystore.rs` — API key storage
 
 - **Always uses local AES-256-GCM encrypted file** at `~/.config/dimmy/keys.enc` (or `%APPDATA%\dimmy\keys.enc`).
