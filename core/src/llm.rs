@@ -777,6 +777,13 @@ pub async fn process_text(
 /// returned unchanged (minus a trim).
 pub fn strip_output_scaffolding(s: &str) -> String {
     let mut out = s.to_string();
+    // Reasoning models (e.g. qwen3 via Groq) emit their chain-of-thought wrapped
+    // in <think>…</think> BEFORE the answer. Drop the whole block — everything up
+    // to and including the final </think> — so the reasoning trace never reaches
+    // the user's pasted text (live catalog sweep, 2026-06-19).
+    if let Some(end) = out.rfind("</think>") {
+        out = out[end + "</think>".len()..].to_string();
+    }
     for tag in [
         "[TRANSCRIPTION]",
         "[/TRANSCRIPTION]",
@@ -788,6 +795,8 @@ pub fn strip_output_scaffolding(s: &str) -> String {
         "<|im_start|>",
         "<end_of_turn>",
         "<start_of_turn>",
+        "<think>",
+        "</think>",
     ] {
         if out.contains(tag) {
             out = out.replace(tag, "");
@@ -1824,5 +1833,24 @@ mod tests {
         // to_ascii_lowercase()).
         assert!(!anthropic_uses_adaptive_thinking("Claude-Opus-4-7"));
         assert!(!anthropic_wants_thinking("CLAUDE-OPUS-4-7"));
+    }
+
+    #[test]
+    fn strip_scaffolding_drops_think_block() {
+        let out = strip_output_scaffolding(
+            "<think>Okay, the user wants a translation.\nLet me do it.</think>\n\nSee you tomorrow.",
+        );
+        assert_eq!(out, "See you tomorrow.");
+        assert!(!out.contains("<think>") && !out.contains("Okay"));
+    }
+
+    #[test]
+    fn strip_scaffolding_removes_delimiters_and_keeps_clean_text() {
+        assert_eq!(
+            strip_output_scaffolding("[TRANSCRIPTION]\nciao come stai<|im_end|>"),
+            "ciao come stai"
+        );
+        // A clean answer is returned unchanged (minus trim).
+        assert_eq!(strip_output_scaffolding("  Hello there.  "), "Hello there.");
     }
 }
