@@ -5405,6 +5405,7 @@ public sealed partial class SettingsWindow : Window
         var dlg = new NotionConnectDialog
         {
             XamlRoot = (this.Content as FrameworkElement)?.XamlRoot,
+            RequestedTheme = Helpers.ThemeHelper.ResolvedElementTheme(),
             InitialStep = initialStep,
         };
         dlg.SetExistingTarget(ViewModel.NotionTargetId ?? "");
