@@ -141,14 +141,15 @@ public sealed partial class CodexConnectDialog : ContentDialog
 
     private void OpenTerminal_Click(object sender, RoutedEventArgs e)
     {
-        // Match the shell to the command: the PowerShell tab needs
-        // PowerShell; winget/npm run fine in plain cmd (which every
-        // Windows has), so default to cmd.
+        // Auto-run: open a terminal that immediately runs the selected
+        // install command, so the user doesn't have to paste or type.
+        // cmd for winget/npm (works everywhere), PowerShell for the irm tab.
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var cmd = SelectedCommand();
         if (TabPwsh.IsChecked == true)
-            TrySpawn("powershell.exe", "-NoExit", home);
-        else if (!TrySpawn("cmd.exe", "/K", home))
-            TrySpawn("powershell.exe", "-NoExit", home);
+            TrySpawn("powershell.exe", $"-NoExit -Command \"{cmd}\"", home);
+        else if (!TrySpawn("cmd.exe", $"/K {cmd}", home))
+            TrySpawn("powershell.exe", $"-NoExit -Command \"{cmd}\"", home);
         EnterPage(Page.Finish);
     }
 

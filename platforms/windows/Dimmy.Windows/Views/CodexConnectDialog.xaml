@@ -112,7 +112,7 @@
             <Button.Flyout>
               <Flyout>
                 <TextBlock Width="300" TextWrapping="Wrap" FontSize="13"
-                           Text="A terminal window opens. Paste the command (Ctrl+V or right-click) and press Enter. When it finishes, come back to this window."/>
+                           Text="A terminal opens and runs the install automatically. Wait until it finishes, then come back to this window. (The command is also on your clipboard as a fallback.)"/>
               </Flyout>
             </Button.Flyout>
           </Button>
@@ -120,9 +120,9 @@
 
         <TextBlock TextWrapping="Wrap" FontSize="13"
                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                   Text="The command is on your clipboard. Open a terminal, paste, and press Enter."/>
+                   Text="A terminal opens and runs the install for you. Wait for it to finish, then come back."/>
 
-        <Button x:Name="OpenTerminalBtn" Content="Open terminal and continue"
+        <Button x:Name="OpenTerminalBtn" Content="Install now"
                 Click="OpenTerminal_Click"
                 Style="{ThemeResource AccentButtonStyle}"
                 HorizontalAlignment="Left"/>
