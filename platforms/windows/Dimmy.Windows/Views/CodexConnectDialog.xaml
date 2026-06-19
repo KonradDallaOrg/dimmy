@@ -46,9 +46,9 @@
       <Ellipse x:Name="Dot1" Width="10" Height="10"
                Fill="{ThemeResource AccentFillColorDefaultBrush}"/>
       <Ellipse x:Name="Dot2" Width="10" Height="10"
-               Fill="{ThemeResource TextFillColorTertiaryBrush}"/>
+               Fill="{ThemeResource TextFillColorSecondaryBrush}"/>
       <Ellipse x:Name="Dot3" Width="10" Height="10"
-               Fill="{ThemeResource TextFillColorTertiaryBrush}"/>
+               Fill="{ThemeResource TextFillColorSecondaryBrush}"/>
     </StackPanel>
 
     <Grid Grid.Row="1">

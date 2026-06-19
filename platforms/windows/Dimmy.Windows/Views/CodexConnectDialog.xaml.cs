@@ -87,7 +87,7 @@ public sealed partial class CodexConnectDialog : ContentDialog
         Page3Panel.Visibility = page == Page.Finish ? Visibility.Visible : Visibility.Collapsed;
 
         var accent = (Brush)Application.Current.Resources["AccentFillColorDefaultBrush"];
-        var inactive = (Brush)Application.Current.Resources["TextFillColorTertiaryBrush"];
+        var inactive = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
         Dot1.Fill = page >= Page.Install ? accent : inactive;
         Dot2.Fill = page >= Page.Run ? accent : inactive;
         Dot3.Fill = page >= Page.Finish ? accent : inactive;
@@ -96,12 +96,13 @@ public sealed partial class CodexConnectDialog : ContentDialog
         switch (page)
         {
             case Page.Install:
-                PrimaryButtonText = "Next";
-                IsPrimaryButtonEnabled = true;
+                // No footer "Next" — the blue in-content "Copy and continue"
+                // button is the single action, and it auto-advances. Keeps
+                // exactly one accent (blue) button per page.
+                PrimaryButtonText = "";
                 break;
             case Page.Run:
-                PrimaryButtonText = "Next";
-                IsPrimaryButtonEnabled = true;
+                PrimaryButtonText = "";
                 break;
             case Page.Finish:
                 PrimaryButtonText = "Done";
