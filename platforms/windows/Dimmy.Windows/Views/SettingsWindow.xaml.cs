@@ -2377,7 +2377,7 @@ public sealed partial class SettingsWindow : Window
                     (Microsoft.UI.Xaml.Style)Application.Current.Resources["DefaultButtonStyle"];
                 CodexIntegrationSignInBtn.IsEnabled = false;
                 CodexIntegrationMessageText.Text =
-                    "Install the Codex CLI with `npm install -g @openai/codex` (or the native installer), then click Refresh — or just use the wizard.";
+                    "Install the Codex CLI with `irm https://chatgpt.com/codex/install.ps1 | iex`, then click Refresh, or just use the wizard.";
                 CodexIntegrationMessageBar.Visibility = Visibility.Visible;
                 break;
         }
@@ -2389,12 +2389,26 @@ public sealed partial class SettingsWindow : Window
     /// wizard.</summary>
     private async void CodexIntegrationWizard_Click(object sender, RoutedEventArgs e)
     {
+        await ShowCodexWizardAsync(forceStep1: false);
+    }
+
+    /// <summary>"Re-run setup" from the connected state — forces the wizard
+    /// to start at step 1 so the user can re-inspect / reinstall, mirroring
+    /// the Anthropic card's re-run button.</summary>
+    private async void CodexIntegrationRerunWizard_Click(object sender, RoutedEventArgs e)
+    {
+        await ShowCodexWizardAsync(forceStep1: true);
+    }
+
+    private async System.Threading.Tasks.Task ShowCodexWizardAsync(bool forceStep1)
+    {
         try
         {
             var dialog = new CodexConnectDialog
             {
                 XamlRoot = this.Content.XamlRoot,
                 RequestedTheme = Helpers.ThemeHelper.ResolvedElementTheme(),
+                ForceStartAtStep1 = forceStep1,
             };
             await dialog.ShowAsync();
             Interop.DimmyNative.RecheckCodex();
