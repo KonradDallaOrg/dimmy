@@ -1,7 +1,5 @@
 using System;
 using System.Diagnostics;
-using System.Threading;
-using System.Threading.Tasks;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -12,60 +10,36 @@ using Dimmy.Windows.Interop;
 namespace Dimmy.Windows.Views;
 
 /// <summary>
-/// 3-step Claude Code subscription setup wizard. Linear, modal,
-/// re-runnable. Same shape as <see cref="NotionConnectDialog"/>:
-/// internal state machine flips StepNPanel visibility + relabels
-/// the ContentDialog buttons per step.
-///
-/// Steps:
-///   1. Detect / install Node.js (≥ 18 required).
-///   2. Detect / install Claude CLI (npm install -g).
-///   3. Sign in (browser OAuth via `claude /login`) + auto-test
-///      a tiny ping prompt.
-///
-/// Smart-skip: on Open we probe every precondition once and start
-/// at the FIRST incomplete step. A machine where everything's
-/// already set lands on Step 3 with test-ready state + the
-/// "Close &amp; enable" button armed.
-///
-/// Completion contract: <see cref="Completed"/> is true iff the
-/// user reached Step 3 with a green test. The SettingsWindow
-/// caller then sets <c>llm_auth_method=subscription</c> via FFI.
+/// Guided 3-page Claude Code setup wizard (Install -> Run -> Finish).
+/// Mirror of <see cref="CodexConnectDialog"/>. The Claude Code CLI is a
+/// native standalone binary (no Node.js); page 1 offers winget / PowerShell
+/// / npm install commands, defaulting to winget because it runs in plain cmd
+/// with no PowerShell 7 or Node dependency. Copy and Install-now auto-advance;
+/// the Finish page polls for the binary, drives the sign-in, and enables Done
+/// on a green status.
 /// </summary>
 public sealed partial class ClaudeConnectDialog : ContentDialog
 {
-    /// <summary>True iff Step 3's test ping returned a positive result.</summary>
     public bool Completed { get; private set; }
 
-    /// <summary>
-    /// When true, bypass the smart-skip and start at Step 1 regardless
-    /// of current detection state. Caller uses this for "Re-run setup"
-    /// (e.g. user wants to walk through the wizard again to inspect /
-    /// re-validate their install) — without it the smart-skip would
-    /// jump straight to Step 3 on an already-configured machine.
-    /// </summary>
+    /// <summary>Start at page 1 regardless of detection (the "Re-run setup"
+    /// entry point from the connected card).</summary>
     public bool ForceStartAtStep1 { get; set; }
 
-    private enum Step { Node = 1, ClaudeCli = 2, SignIn = 3 }
+    private enum Page { Install = 1, Run = 2, Finish = 3 }
 
-    // Segoe Fluent Icons codepoints. Using compile-time consts so
-    // a source-encoding hiccup can't strip the literals (which would
-    // leave the FontIcon glyph blank, showing as a rendering box —
-    // the bug that shipped to the user on the first build).
-    private const string GlyphSuccess = "";   // Checkmark
-    private const string GlyphCaution = "";   // Warning triangle
-    private const string GlyphCritical = "";  // Important / X-on-circle
-    private const string GlyphPending = "";   // Globe / placeholder
-    private const string GlyphInfo = "";      // Info
+    private const string GlyphSuccess = ""; // CheckMark
+    private const string GlyphPending = ""; // neutral placeholder
+    private const string GlyphInfo = "";    // Info
 
-    private Step _currentStep = Step.Node;
-    private bool _nodeOk;
+    private const string CmdWinget = "winget install Anthropic.ClaudeCode";
+    private const string CmdPwsh = "irm https://claude.ai/install.ps1 | iex";
+    private const string CmdNpm = "npm install -g @anthropic-ai/claude-code";
+
+    private Page _currentPage = Page.Install;
     private bool _claudeOk;
     private bool _signInOk;
-    private bool _testOk;
-
-    private DispatcherQueueTimer? _credentialsPollTimer;
-    private CancellationTokenSource? _autoTestCts;
+    private DispatcherQueueTimer? _pollTimer;
 
     public ClaudeConnectDialog()
     {
@@ -74,55 +48,30 @@ public sealed partial class ClaudeConnectDialog : ContentDialog
         Closed += OnClosed;
     }
 
-    // ── Lifecycle ─────────────────────────────────────────────────────
-
     private void OnOpened(ContentDialog sender, ContentDialogOpenedEventArgs args)
     {
-        // Smart-skip: probe everything once, jump to first incomplete
-        // step. The recheck buttons inside each step do their own per-
-        // step probe so the state stays fresh as the user progresses.
-        ProbeAllStates();
-        var startAt = Step.Node;
-        if (!ForceStartAtStep1)
-        {
-            if (_nodeOk) startAt = Step.ClaudeCli;
-            if (_nodeOk && _claudeOk) startAt = Step.SignIn;
-        }
-        EnterStep(startAt);
+        ProbeStatus();
+        var start = Page.Install;
+        if (!ForceStartAtStep1 && _claudeOk) start = Page.Finish;
+        EnterPage(start);
     }
 
     private void OnClosed(ContentDialog sender, ContentDialogClosedEventArgs args)
     {
-        StopCredentialsPoll();
-        _autoTestCts?.Cancel();
-        _autoTestCts?.Dispose();
-        _autoTestCts = null;
+        StopPoll();
     }
 
-    private void ProbeAllStates()
+    private void ProbeStatus()
     {
-        try
-        {
-            var node = DimmyNative.GetNodeStatus();
-            _nodeOk = node.Found && node.MeetsMinimum;
-            UpdateNodeUi(node);
-        }
-        catch (Exception ex)
-        {
-            App.Log($"ClaudeWizard: node probe exc {ex.Message}", "Wizard");
-            _nodeOk = false;
-        }
         try
         {
             var s = DimmyNative.GetClaudeCodeStatus();
             _claudeOk = s != DimmyNative.ClaudeCodeStatus.NotInstalled;
             _signInOk = s == DimmyNative.ClaudeCodeStatus.Ready;
-            UpdateClaudeUi(s);
-            UpdateSignInUi(s);
         }
         catch (Exception ex)
         {
-            App.Log($"ClaudeWizard: claude probe exc {ex.Message}", "Wizard");
+            App.Log($"ClaudeWizard: probe exc {ex.Message}", "Wizard");
             _claudeOk = false;
             _signInOk = false;
         }
@@ -130,168 +79,98 @@ public sealed partial class ClaudeConnectDialog : ContentDialog
 
     // ── State machine ─────────────────────────────────────────────────
 
-    private void EnterStep(Step step)
+    private void EnterPage(Page page)
     {
-        _currentStep = step;
-        Step1Panel.Visibility = step == Step.Node ? Visibility.Visible : Visibility.Collapsed;
-        Step2Panel.Visibility = step == Step.ClaudeCli ? Visibility.Visible : Visibility.Collapsed;
-        Step3Panel.Visibility = step == Step.SignIn ? Visibility.Visible : Visibility.Collapsed;
+        _currentPage = page;
+        Page1Panel.Visibility = page == Page.Install ? Visibility.Visible : Visibility.Collapsed;
+        Page2Panel.Visibility = page == Page.Run ? Visibility.Visible : Visibility.Collapsed;
+        Page3Panel.Visibility = page == Page.Finish ? Visibility.Visible : Visibility.Collapsed;
 
         var accent = (Brush)Application.Current.Resources["AccentFillColorDefaultBrush"];
-        var inactive = (Brush)Application.Current.Resources["ControlStrokeColorDefaultBrush"];
-        Dot1.Fill = step >= Step.Node ? accent : inactive;
-        Dot2.Fill = step >= Step.ClaudeCli ? accent : inactive;
-        Dot3.Fill = step >= Step.SignIn ? accent : inactive;
+        // Resolve the inactive grey from the dialog's ACTUAL theme, not the
+        // app resources (which return the app-theme brush and can render
+        // near-white on a light dialog). Explicit greys, clearly visible on
+        // each background.
+        bool dark = ActualTheme == ElementTheme.Dark;
+        Brush inactive = new SolidColorBrush(dark
+            ? Microsoft.UI.ColorHelper.FromArgb(0xFF, 0xA6, 0xA6, 0xA6)
+            : Microsoft.UI.ColorHelper.FromArgb(0xFF, 0x70, 0x70, 0x70));
+        Dot1.Fill = page >= Page.Install ? accent : inactive;
+        Dot2.Fill = page >= Page.Run ? accent : inactive;
+        Dot3.Fill = page >= Page.Finish ? accent : inactive;
 
-        // Button visibility / labels per step.
-        SecondaryButtonText = step == Step.Node ? "" : "Back";
-        switch (step)
+        SecondaryButtonText = page == Page.Install ? "" : "Back";
+        switch (page)
         {
-            case Step.Node:
-                PrimaryButtonText = "Next";
-                IsPrimaryButtonEnabled = _nodeOk;
+            case Page.Install:
+                // No footer "Next" - the blue in-content "Copy and continue"
+                // button is the single action, and it auto-advances. Keeps
+                // exactly one accent (blue) button per page.
+                PrimaryButtonText = "";
                 break;
-            case Step.ClaudeCli:
-                PrimaryButtonText = "Next";
-                IsPrimaryButtonEnabled = _claudeOk;
+            case Page.Run:
+                PrimaryButtonText = "";
                 break;
-            case Step.SignIn:
-                PrimaryButtonText = _testOk ? "Close & enable" : "Test connection";
+            case Page.Finish:
+                PrimaryButtonText = "Done";
                 IsPrimaryButtonEnabled = _signInOk;
-                // Auto-fire test when we landed here already signed in
-                // (e.g. user comes back to wizard after manual install).
-                if (_signInOk && !_testOk) _ = AutoRunTestAsync();
+                StartPoll();
+                UpdateFinishUi();
                 break;
         }
     }
 
-    // ── Step 1 — Node.js ──────────────────────────────────────────────
+    // ── Page 1 — Install ──────────────────────────────────────────────
 
-    private void UpdateNodeUi(DimmyNative.NodeStatus node)
+    private string SelectedCommand()
     {
-        var brushSuccess = (Brush)Application.Current.Resources["SystemFillColorSuccessBrush"];
-        var brushCaution = (Brush)Application.Current.Resources["SystemFillColorCautionBrush"];
-        var brushCritical = (Brush)Application.Current.Resources["SystemFillColorCriticalBrush"];
-
-        if (node.Found && node.MeetsMinimum)
-        {
-            NodeStatusGlyph.Glyph = "";
-            NodeStatusGlyph.Foreground = brushSuccess;
-            NodeStatusText.Text = node.Version != null
-                ? $"Node.js v{node.Version} detected"
-                : "Node.js detected";
-            NodeActionPanel.Visibility = Visibility.Collapsed;
-            NodeHelpText.Visibility = Visibility.Collapsed;
-        }
-        else if (node.Found && !node.MeetsMinimum)
-        {
-            NodeStatusGlyph.Glyph = "";
-            NodeStatusGlyph.Foreground = brushCaution;
-            NodeStatusText.Text = node.Version != null
-                ? $"Node.js v{node.Version} found, but Claude needs v18 or newer. Please upgrade."
-                : "Node.js found but version too old (need v18+).";
-            NodeActionPanel.Visibility = Visibility.Visible;
-            NodeHelpText.Visibility = Visibility.Visible;
-        }
-        else
-        {
-            NodeStatusGlyph.Glyph = "";
-            NodeStatusGlyph.Foreground = brushCritical;
-            NodeStatusText.Text = "Node.js not found. Click below to install.";
-            NodeActionPanel.Visibility = Visibility.Visible;
-            NodeHelpText.Visibility = Visibility.Visible;
-        }
-        IsPrimaryButtonEnabled = _currentStep == Step.Node ? _nodeOk : IsPrimaryButtonEnabled;
+        if (TabPwsh.IsChecked == true) return CmdPwsh;
+        if (TabNpm.IsChecked == true) return CmdNpm;
+        return CmdWinget;
     }
 
-    private void OpenNodeJs_Click(object sender, RoutedEventArgs e)
+    private void CmdTab_Checked(object sender, RoutedEventArgs e)
     {
-        // Latest LTS landing page — auto-detects OS + offers the right
-        // installer. Better UX than hard-coding the .msi URL (which
-        // bakes in a version and goes stale).
-        OpenUrl("https://nodejs.org/en/download/");
+        // Fires during InitializeComponent before CommandText exists.
+        if (CommandText == null) return;
+        CommandText.Text = SelectedCommand();
     }
 
-    private void RecheckNode_Click(object sender, RoutedEventArgs e)
-    {
-        DimmyNative.RecheckClaudeCode(); // clears node + claude caches
-        var node = DimmyNative.GetNodeStatus();
-        _nodeOk = node.Found && node.MeetsMinimum;
-        UpdateNodeUi(node);
-        IsPrimaryButtonEnabled = _nodeOk;
-    }
-
-    // ── Step 2 — Claude CLI ───────────────────────────────────────────
-
-    private void UpdateClaudeUi(DimmyNative.ClaudeCodeStatus status)
-    {
-        var brushSuccess = (Brush)Application.Current.Resources["SystemFillColorSuccessBrush"];
-        var brushCritical = (Brush)Application.Current.Resources["SystemFillColorCriticalBrush"];
-
-        if (status != DimmyNative.ClaudeCodeStatus.NotInstalled)
-        {
-            var path = DimmyNative.GetClaudeCodeBinaryPath() ?? "";
-            ClaudeStatusGlyph.Glyph = "";
-            ClaudeStatusGlyph.Foreground = brushSuccess;
-            ClaudeStatusText.Text = string.IsNullOrEmpty(path)
-                ? "Claude CLI detected"
-                : $"Claude CLI detected at {path}";
-            ClaudeActionPanel.Visibility = Visibility.Collapsed;
-            ClaudeHelpText.Visibility = Visibility.Collapsed;
-        }
-        else
-        {
-            ClaudeStatusGlyph.Glyph = "";
-            ClaudeStatusGlyph.Foreground = brushCritical;
-            ClaudeStatusText.Text = "Claude CLI not installed. Run the command below in a terminal.";
-            ClaudeActionPanel.Visibility = Visibility.Visible;
-            ClaudeHelpText.Visibility = Visibility.Visible;
-        }
-        IsPrimaryButtonEnabled = _currentStep == Step.ClaudeCli ? _claudeOk : IsPrimaryButtonEnabled;
-    }
-
-    private void CopyNpmCommand_Click(object sender, RoutedEventArgs e)
+    private void CopyCommand_Click(object sender, RoutedEventArgs e)
     {
         var pkg = new DataPackage();
-        pkg.SetText("npm install -g @anthropic-ai/claude-code");
+        pkg.SetText(SelectedCommand());
         Clipboard.SetContent(pkg);
-        CopyCmdBtn.Content = "Copied!";
-        // Restore label after 1.5 s so the user doesn't see "Copied!"
-        // forever — they may want to copy again.
-        var dq = DispatcherQueue.GetForCurrentThread();
-        var t = dq.CreateTimer();
-        t.Interval = TimeSpan.FromMilliseconds(1500);
-        t.IsRepeating = false;
-        t.Tick += (s, _) =>
-        {
-            CopyCmdBtn.Content = "Copy command";
-            t.Stop();
-        };
-        t.Start();
+        EnterPage(Page.Run);
     }
+
+    // ── Page 2 — Run ──────────────────────────────────────────────────
 
     private void OpenTerminal_Click(object sender, RoutedEventArgs e)
     {
-        // Try Windows Terminal first (Win11 default, modern UX). Fall
-        // back to PowerShell, then cmd if even that fails — every
-        // Windows install has cmd.exe so the chain can't end empty-handed.
-        if (TrySpawn("wt.exe", "")) return;
-        if (TrySpawn("powershell.exe", "-NoExit")) return;
-        TrySpawn("cmd.exe", "/K");
+        // Auto-run: open a terminal that immediately runs the selected
+        // install command, so the user doesn't have to paste or type.
+        // cmd for winget/npm (works everywhere), PowerShell for the irm tab.
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var cmd = SelectedCommand();
+        if (TabPwsh.IsChecked == true)
+            TrySpawn("powershell.exe", $"-NoExit -Command \"{cmd}\"", home);
+        else if (!TrySpawn("cmd.exe", $"/K {cmd}", home))
+            TrySpawn("powershell.exe", $"-NoExit -Command \"{cmd}\"", home);
+        EnterPage(Page.Finish);
     }
 
-    private static bool TrySpawn(string fileName, string args)
+    private static bool TrySpawn(string fileName, string args, string workDir)
     {
         try
         {
-            var psi = new ProcessStartInfo
+            Process.Start(new ProcessStartInfo
             {
                 FileName = fileName,
                 Arguments = args,
                 UseShellExecute = true,
-                WorkingDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            };
-            Process.Start(psi);
+                WorkingDirectory = workDir,
+            });
             return true;
         }
         catch
@@ -300,198 +179,119 @@ public sealed partial class ClaudeConnectDialog : ContentDialog
         }
     }
 
-    private void RecheckClaude_Click(object sender, RoutedEventArgs e)
+    // ── Page 3 — Finish ───────────────────────────────────────────────
+
+    private void StartPoll()
     {
-        var rc = DimmyNative.RecheckClaudeCode();
-        _claudeOk = rc != DimmyNative.ClaudeCodeStatus.NotInstalled;
-        _signInOk = rc == DimmyNative.ClaudeCodeStatus.Ready;
-        UpdateClaudeUi(rc);
-        IsPrimaryButtonEnabled = _claudeOk;
+        StopPoll();
+        var dq = DispatcherQueue.GetForCurrentThread();
+        _pollTimer = dq.CreateTimer();
+        _pollTimer.Interval = TimeSpan.FromSeconds(2);
+        _pollTimer.IsRepeating = true;
+        _pollTimer.Tick += (s, _) =>
+        {
+            var prevSignedIn = _signInOk;
+            DimmyNative.RecheckClaudeCode();
+            ProbeStatus();
+            UpdateFinishUi();
+            if (_signInOk && !prevSignedIn)
+                StopPoll(); // fully done - stop hammering the CLI
+        };
+        _pollTimer.Start();
     }
 
-    // ── Step 3 — Sign in + Test ───────────────────────────────────────
-
-    private void UpdateSignInUi(DimmyNative.ClaudeCodeStatus status)
+    private void StopPoll()
     {
-        var brushSuccess = (Brush)Application.Current.Resources["SystemFillColorSuccessBrush"];
-        var brushCritical = (Brush)Application.Current.Resources["SystemFillColorCriticalBrush"];
+        _pollTimer?.Stop();
+        _pollTimer = null;
+    }
 
-        if (status == DimmyNative.ClaudeCodeStatus.Ready)
+    private void UpdateFinishUi()
+    {
+        var success = (Brush)Application.Current.Resources["SystemFillColorSuccessBrush"];
+        var neutral = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
+
+        if (!_claudeOk)
         {
-            SignInGlyph.Glyph = "";
-            SignInGlyph.Foreground = brushSuccess;
+            InstallGlyph.Glyph = GlyphPending;
+            InstallGlyph.Foreground = neutral;
+            InstallText.Text = "Run the command in your terminal. It appears here when done.";
+            InstallRing.IsActive = true;
+            InstallRing.Visibility = Visibility.Visible;
+            SignInRow.Visibility = Visibility.Collapsed;
+            SignInBtn.Visibility = Visibility.Collapsed;
+            IsPrimaryButtonEnabled = false;
+            return;
+        }
+
+        // Binary present.
+        InstallGlyph.Glyph = GlyphSuccess;
+        InstallGlyph.Foreground = success;
+        InstallText.Text = "Claude Code CLI installed.";
+        InstallRing.IsActive = false;
+        InstallRing.Visibility = Visibility.Collapsed;
+        SignInRow.Visibility = Visibility.Visible;
+
+        if (_signInOk)
+        {
+            SignInGlyph.Glyph = GlyphSuccess;
+            SignInGlyph.Foreground = success;
             SignInText.Text = "Signed in to Claude.";
             SignInBtn.Visibility = Visibility.Collapsed;
-            RecheckSignInBtn.Visibility = Visibility.Collapsed;
-        }
-        else if (status == DimmyNative.ClaudeCodeStatus.NotLoggedIn)
-        {
-            SignInGlyph.Glyph = "";
-            SignInGlyph.Foreground = brushCritical;
-            SignInText.Text = "Not signed in. Click Sign in to open the browser flow.";
-            SignInBtn.Visibility = Visibility.Visible;
-            RecheckSignInBtn.Visibility = Visibility.Visible;
+            SignInRing.IsActive = false;
+            SignInRing.Visibility = Visibility.Collapsed;
+            IsPrimaryButtonEnabled = true;
         }
         else
         {
-            // NotInstalled — shouldn't land here normally; the smart-skip
-            // sends the user back to Step 2 first.
-            SignInGlyph.Glyph = "";
-            SignInGlyph.Foreground = brushCritical;
-            SignInText.Text = "Claude CLI missing — go back to Step 2.";
-            SignInBtn.Visibility = Visibility.Collapsed;
-            RecheckSignInBtn.Visibility = Visibility.Visible;
+            SignInGlyph.Glyph = GlyphInfo;
+            SignInGlyph.Foreground = neutral;
+            SignInText.Text = "Not signed in yet.";
+            SignInBtn.Visibility = Visibility.Visible;
+            IsPrimaryButtonEnabled = false;
         }
-        if (_currentStep == Step.SignIn)
-            IsPrimaryButtonEnabled = _signInOk;
     }
 
     private void SignIn_Click(object sender, RoutedEventArgs e)
     {
-        // Spawn `claude /login` — opens a new terminal window with the
-        // OAuth URL. The user completes it in the browser, then we
-        // detect the credentials file appearing via the poll below.
         var ok = DimmyNative.SpawnClaudeCodeLogin();
         if (!ok)
         {
-            SignInText.Text = "Couldn't spawn the login flow. Try again or run `claude /login` from a terminal manually.";
+            SignInText.Text = "Couldn't start the sign-in. Try again, or run `claude /login` in a terminal.";
             return;
         }
-        SignInText.Text = "Complete the browser flow. Dimmy will detect when you're signed in…";
+        SignInText.Text = "Complete the browser sign-in. Dimmy detects it automatically...";
         SignInRing.IsActive = true;
         SignInRing.Visibility = Visibility.Visible;
         SignInBtn.IsEnabled = false;
-        StartCredentialsPoll();
+        StartPoll();
     }
 
-    private void RecheckSignIn_Click(object sender, RoutedEventArgs e)
+    private void Recheck_Click(object sender, RoutedEventArgs e)
     {
-        var rc = DimmyNative.RecheckClaudeCode();
-        _signInOk = rc == DimmyNative.ClaudeCodeStatus.Ready;
-        UpdateSignInUi(rc);
-        if (_signInOk && !_testOk) _ = AutoRunTestAsync();
-    }
-
-    private void StartCredentialsPoll()
-    {
-        StopCredentialsPoll();
-        var dq = DispatcherQueue.GetForCurrentThread();
-        _credentialsPollTimer = dq.CreateTimer();
-        _credentialsPollTimer.Interval = TimeSpan.FromSeconds(2);
-        _credentialsPollTimer.IsRepeating = true;
-        _credentialsPollTimer.Tick += (s, _) =>
-        {
-            var rc = DimmyNative.RecheckClaudeCode();
-            if (rc == DimmyNative.ClaudeCodeStatus.Ready)
-            {
-                StopCredentialsPoll();
-                _signInOk = true;
-                SignInRing.IsActive = false;
-                SignInRing.Visibility = Visibility.Collapsed;
-                SignInBtn.IsEnabled = true;
-                UpdateSignInUi(rc);
-                _ = AutoRunTestAsync();
-            }
-        };
-        _credentialsPollTimer.Start();
-    }
-
-    private void StopCredentialsPoll()
-    {
-        _credentialsPollTimer?.Stop();
-        _credentialsPollTimer = null;
-    }
-
-    private async Task AutoRunTestAsync()
-    {
-        if (_testOk) return;
-        _autoTestCts?.Cancel();
-        _autoTestCts = new CancellationTokenSource();
-        var ct = _autoTestCts.Token;
-        TestStatusRow.Visibility = Visibility.Visible;
-        TestGlyph.Glyph = "";
-        var brushNeutral = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
-        TestGlyph.Foreground = brushNeutral;
-        TestText.Text = "Test connection: pinging Claude…";
-        TestRing.IsActive = true;
-        TestRing.Visibility = Visibility.Visible;
-        RetryTestBtn.Visibility = Visibility.Collapsed;
-        IsPrimaryButtonEnabled = false;
-
-        var (result, elapsedMs) = await Task.Run(() => DimmyNative.PingClaudeCode(), ct);
-        if (ct.IsCancellationRequested) return;
-        TestRing.IsActive = false;
-        TestRing.Visibility = Visibility.Collapsed;
-
-        var brushSuccess = (Brush)Application.Current.Resources["SystemFillColorSuccessBrush"];
-        var brushCritical = (Brush)Application.Current.Resources["SystemFillColorCriticalBrush"];
-        if (result == DimmyNative.ClaudeCodePingResult.Ok)
-        {
-            _testOk = true;
-            TestGlyph.Glyph = "";
-            TestGlyph.Foreground = brushSuccess;
-            TestText.Text = $"Test connection OK ({elapsedMs} ms). Claude subscription ready.";
-            RetryTestBtn.Visibility = Visibility.Collapsed;
-            PrimaryButtonText = "Close & enable";
-            IsPrimaryButtonEnabled = true;
-        }
-        else
-        {
-            _testOk = false;
-            TestGlyph.Glyph = "";
-            TestGlyph.Foreground = brushCritical;
-            TestText.Text = $"Test failed: {DescribePingResult(result)}";
-            RetryTestBtn.Visibility = Visibility.Visible;
-            PrimaryButtonText = "Test connection";
-            IsPrimaryButtonEnabled = true;
-        }
-    }
-
-    private static string DescribePingResult(DimmyNative.ClaudeCodePingResult r) => r switch
-    {
-        DimmyNative.ClaudeCodePingResult.NotInstalled => "Claude CLI not installed",
-        DimmyNative.ClaudeCodePingResult.NotLoggedIn => "Not signed in",
-        DimmyNative.ClaudeCodePingResult.SpawnFailed => "Couldn't spawn the CLI subprocess",
-        DimmyNative.ClaudeCodePingResult.Timeout => "Timed out (15 s)",
-        DimmyNative.ClaudeCodePingResult.NonZeroExit => "CLI returned an error code",
-        DimmyNative.ClaudeCodePingResult.InvalidUtf8 => "CLI returned invalid output",
-        _ => "Unknown error",
-    };
-
-    private void RetryTest_Click(object sender, RoutedEventArgs e)
-    {
-        _testOk = false;
-        _ = AutoRunTestAsync();
+        DimmyNative.RecheckClaudeCode();
+        ProbeStatus();
+        UpdateFinishUi();
     }
 
     // ── ContentDialog buttons ─────────────────────────────────────────
 
     private void OnPrimaryClick(ContentDialog sender, ContentDialogButtonClickEventArgs args)
     {
-        switch (_currentStep)
+        switch (_currentPage)
         {
-            case Step.Node:
-                if (!_nodeOk) { args.Cancel = true; return; }
+            case Page.Install:
                 args.Cancel = true;
-                EnterStep(Step.ClaudeCli);
+                EnterPage(Page.Run);
                 break;
-            case Step.ClaudeCli:
-                if (!_claudeOk) { args.Cancel = true; return; }
+            case Page.Run:
                 args.Cancel = true;
-                EnterStep(Step.SignIn);
+                EnterPage(Page.Finish);
                 break;
-            case Step.SignIn:
-                if (_testOk)
+            case Page.Finish:
+                if (_signInOk)
                 {
-                    Completed = true;
-                    // args.Cancel stays false → dialog closes.
-                }
-                else if (_signInOk)
-                {
-                    // Primary button is "Test connection" — fire ping
-                    // without closing.
-                    args.Cancel = true;
-                    _ = AutoRunTestAsync();
+                    Completed = true; // dialog closes
                 }
                 else
                 {
@@ -504,36 +304,18 @@ public sealed partial class ClaudeConnectDialog : ContentDialog
     private void OnSecondaryClick(ContentDialog sender, ContentDialogButtonClickEventArgs args)
     {
         args.Cancel = true;
-        var prev = _currentStep switch
+        StopPoll();
+        var prev = _currentPage switch
         {
-            Step.ClaudeCli => Step.Node,
-            Step.SignIn => Step.ClaudeCli,
-            _ => Step.Node,
+            Page.Run => Page.Install,
+            Page.Finish => Page.Run,
+            _ => Page.Install,
         };
-        EnterStep(prev);
+        EnterPage(prev);
     }
 
     private void OnCloseClick(ContentDialog sender, ContentDialogButtonClickEventArgs args)
     {
-        // Default: dialog closes with Completed=false. Caller decides
-        // whether to flip llm_auth_method=subscription based on the flag.
-    }
-
-    // ── Helpers ───────────────────────────────────────────────────────
-
-    private static void OpenUrl(string url)
-    {
-        try
-        {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = url,
-                UseShellExecute = true,
-            });
-        }
-        catch (Exception ex)
-        {
-            App.Log($"ClaudeWizard: OpenUrl failed for {url}: {ex.Message}", "Wizard");
-        }
+        // Closes with Completed=false. Caller decides what to do.
     }
 }

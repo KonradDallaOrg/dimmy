@@ -942,6 +942,7 @@ public sealed partial class SettingsWindow : Window
             : "\nThis runs locally and may take a few minutes.";
         var dlg = new ContentDialog
         {
+            RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
             Title = "Long file",
             Content = $"{System.IO.Path.GetFileName(path)}\n" +
                       $"≈ {mins} min · {sizeMb:F1} MB{costHint}\n\nProceed?",
@@ -2377,7 +2378,7 @@ public sealed partial class SettingsWindow : Window
                     (Microsoft.UI.Xaml.Style)Application.Current.Resources["DefaultButtonStyle"];
                 CodexIntegrationSignInBtn.IsEnabled = false;
                 CodexIntegrationMessageText.Text =
-                    "Install the Codex CLI with `npm install -g @openai/codex` (or the native installer), then click Refresh — or just use the wizard.";
+                    "Install the Codex CLI with `irm https://chatgpt.com/codex/install.ps1 | iex`, then click Refresh, or just use the wizard.";
                 CodexIntegrationMessageBar.Visibility = Visibility.Visible;
                 break;
         }
@@ -2389,12 +2390,26 @@ public sealed partial class SettingsWindow : Window
     /// wizard.</summary>
     private async void CodexIntegrationWizard_Click(object sender, RoutedEventArgs e)
     {
+        await ShowCodexWizardAsync(forceStep1: false);
+    }
+
+    /// <summary>"Re-run setup" from the connected state — forces the wizard
+    /// to start at step 1 so the user can re-inspect / reinstall, mirroring
+    /// the Anthropic card's re-run button.</summary>
+    private async void CodexIntegrationRerunWizard_Click(object sender, RoutedEventArgs e)
+    {
+        await ShowCodexWizardAsync(forceStep1: true);
+    }
+
+    private async System.Threading.Tasks.Task ShowCodexWizardAsync(bool forceStep1)
+    {
         try
         {
             var dialog = new CodexConnectDialog
             {
                 XamlRoot = this.Content.XamlRoot,
                 RequestedTheme = Helpers.ThemeHelper.ResolvedElementTheme(),
+                ForceStartAtStep1 = forceStep1,
             };
             await dialog.ShowAsync();
             Interop.DimmyNative.RecheckCodex();
@@ -3681,6 +3696,7 @@ public sealed partial class SettingsWindow : Window
         // charge that the server-side gate has to refund.
         var dlg = new ContentDialog
         {
+            RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
             Title = "Sign out from this device?",
             Content =
                 "Your subscription on Stripe will stay active and will keep " +
@@ -3891,6 +3907,7 @@ public sealed partial class SettingsWindow : Window
 
         var dlg = new ContentDialog
         {
+            RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
             Title = $"Continue to {ToTitleCase(tier)} checkout",
             Content = stack,
             PrimaryButtonText = "Continue",
@@ -3942,6 +3959,7 @@ public sealed partial class SettingsWindow : Window
                 // new tier and the silent UX feels off.
                 var confirmDialog = new ContentDialog
                 {
+                    RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
                     Title = $"Switch plan to {ToTitleCase(tier)}?",
                     Content =
                         $"You're already subscribed (current: {ToTitleCase(status.Tier ?? "")}). " +
@@ -4021,6 +4039,7 @@ public sealed partial class SettingsWindow : Window
                 {
                     var dlg = new ContentDialog
                     {
+                        RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
                         Title = $"You already have a {c.CurrentTier} license",
                         Content =
                             $"The email {promptedEmail} is already linked to an active {c.CurrentTier} license. " +
@@ -4650,6 +4669,7 @@ public sealed partial class SettingsWindow : Window
         {
             var dlg = new ContentDialog
             {
+                RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
                 Title = "Model not downloaded yet",
                 Content = $"\"{modelName}\" runs the recap locally (offline, private) but isn't on disk yet.\n\nGo to Settings → LLM, switch to Local, and download it. Until then the recap will fall back / fail.",
                 CloseButtonText = "Got it",
@@ -4836,6 +4856,7 @@ public sealed partial class SettingsWindow : Window
         {
             var dlg = new ContentDialog
             {
+                RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
                 Title = "Folder not writable",
                 Content = $"Dimmy can't write to:\n{dir}\n\nPick a different folder.",
                 CloseButtonText = "OK",
@@ -5391,6 +5412,7 @@ public sealed partial class SettingsWindow : Window
         var dlg = new NotionConnectDialog
         {
             XamlRoot = (this.Content as FrameworkElement)?.XamlRoot,
+            RequestedTheme = Helpers.ThemeHelper.ResolvedElementTheme(),
             InitialStep = initialStep,
         };
         dlg.SetExistingTarget(ViewModel.NotionTargetId ?? "");
@@ -5466,6 +5488,7 @@ public sealed partial class SettingsWindow : Window
     {
         var confirm = new ContentDialog
         {
+            RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
             Title = "Disconnect Notion?",
             Content = "Dimmy will forget your token and destination. Your Notion content stays untouched. You can reconnect any time.",
             PrimaryButtonText = "Disconnect",
@@ -5525,6 +5548,7 @@ public sealed partial class SettingsWindow : Window
         var dialog = new ClaudeDesktopConnectDialog
         {
             XamlRoot = (this.Content as FrameworkElement)?.XamlRoot,
+            RequestedTheme = Helpers.ThemeHelper.ResolvedElementTheme(),
             // Jump past detect/patch if already done — saves clicks on re-runs.
             InitialStep = DecideMcpInitialStep(),
         };
@@ -5536,6 +5560,7 @@ public sealed partial class SettingsWindow : Window
     {
         var confirm = new ContentDialog
         {
+            RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
             Title = "Disconnect Claude Desktop?",
             Content = "Dimmy will remove its extension from Claude Desktop. Other extensions stay in place. Restart Claude Desktop afterwards so it forgets the connection.",
             PrimaryButtonText = "Disconnect",

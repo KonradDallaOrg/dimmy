@@ -2844,7 +2844,6 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
     }
 
     // ── Cloud LLM mode ──────────────────────────────────────────
-    let use_same_key = st.llm_use_same_key.lock().map(|k| *k).unwrap_or(true);
     let llm_url = st.llm_api_url.lock().map(|u| u.clone()).unwrap_or_default();
     let llm_model = st
         .llm_api_model
@@ -2866,35 +2865,26 @@ pub unsafe extern "C" fn dimmy_process_with_llm(
         || crate::claude_code::is_claude_code_url(&llm_url)
         || crate::codex::is_codex_url(&llm_url);
 
-    // Resolve the dispatch API key. The LLM vendor is derived from
-    // `llm_url`; with `use_same_key=true` we try the per-vendor
-    // upstream keystore (Llm-scope first, then Stt-scope as a
-    // cross-layer fallback). With `use_same_key=false` we only use
-    // the dedicated Llm-scope entry. This mirrors the recap
-    // dispatcher's per-vendor lookup and decouples "reuse saved key"
-    // from "STT and LLM must be the same provider" — a user with a
-    // Groq STT key and Anthropic LLM can no longer accidentally
-    // pull the Groq key into the Anthropic call.
+    // Resolve the dispatch API key. The LLM vendor is derived from `llm_url`, so
+    // we only ever read THAT vendor's scopes — never a different provider's. Read
+    // the LLM scope first, then fall back to the SAME vendor's STT-scope key: the
+    // unified Providers card stores one key per provider across every scope, and a
+    // key entered anywhere for the vendor must work for the LLM too. (The old
+    // `llm_use_same_key=false` branch read ONLY the LLM scope, so a Gemini key
+    // saved in the STT scope gave a spurious "no API key configured" while the
+    // Providers card showed "Connected".)
     let api_key = if is_subscription {
         String::new()
     } else {
         let llm_vendor = Provider::from_url(&llm_url);
         let use_kr = st.use_keyring.lock().map(|k| *k).unwrap_or(false);
-        let raw = if use_same_key {
-            let llm_scope =
-                crate::load_key_with_store(&st.key_store, KeyringScope::Llm(llm_vendor), use_kr)
-                    .unwrap_or_default();
-            if !llm_scope.is_empty() {
-                llm_scope
-            } else {
-                // Cross-layer skip — pull the STT-scope key for the
-                // SAME vendor (user saved a Gemini STT key, now uses
-                // Gemini for LLM too).
-                crate::load_key_with_store(&st.key_store, KeyringScope::Stt(llm_vendor), use_kr)
-                    .unwrap_or_default()
-            }
-        } else {
+        let llm_scope =
             crate::load_key_with_store(&st.key_store, KeyringScope::Llm(llm_vendor), use_kr)
+                .unwrap_or_default();
+        let raw = if !llm_scope.is_empty() {
+            llm_scope
+        } else {
+            crate::load_key_with_store(&st.key_store, KeyringScope::Stt(llm_vendor), use_kr)
                 .unwrap_or_default()
         };
         if raw.is_empty() {
@@ -3094,19 +3084,16 @@ pub unsafe extern "C" fn dimmy_command_transform(
     } else {
         let llm_vendor = Provider::from_url(&llm_url);
         let use_kr = st.use_keyring.lock().map(|k| *k).unwrap_or(false);
-        let use_same_key = st.llm_use_same_key.lock().map(|k| *k).unwrap_or(true);
-        let raw = if use_same_key {
-            let llm_scope =
-                crate::load_key_with_store(&st.key_store, KeyringScope::Llm(llm_vendor), use_kr)
-                    .unwrap_or_default();
-            if !llm_scope.is_empty() {
-                llm_scope
-            } else {
-                crate::load_key_with_store(&st.key_store, KeyringScope::Stt(llm_vendor), use_kr)
-                    .unwrap_or_default()
-            }
-        } else {
+        // LLM scope first, then the SAME vendor's STT scope (one key per provider
+        // — see dimmy_process_with_llm). Fixes a spurious -3 when the vendor's key
+        // lives only in the STT scope while the Providers card shows "Connected".
+        let llm_scope =
             crate::load_key_with_store(&st.key_store, KeyringScope::Llm(llm_vendor), use_kr)
+                .unwrap_or_default();
+        let raw = if !llm_scope.is_empty() {
+            llm_scope
+        } else {
+            crate::load_key_with_store(&st.key_store, KeyringScope::Stt(llm_vendor), use_kr)
                 .unwrap_or_default()
         };
         if raw.is_empty() {

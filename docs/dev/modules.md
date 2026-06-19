@@ -36,27 +36,99 @@ Cloud providers have three wire formats; the module dispatches on the `Provider`
 - Input: f32 16 kHz mono samples. The preprocessing pipeline in `preprocess.rs` produces 48 kHz; `to_wav_payload()` downsamples to 16 kHz for whisper.
 - **Context cache:** the loaded `WhisperContext` stays in VRAM across recordings. Invalidated on model change or `dimmy_shutdown()`.
 - **Sticky known-bad GPU marker:** if a GPU path aborts once (e.g. `ggml-vulkan` init crash), a fingerprint is written so the next run falls back to CPU without reattempting the same combo. See [`../dev/known-bugs.md`](known-bugs.md) for GPU crash recovery context.
+- **Downloads go through the shared `download.rs` module (below)** — resumable + SHA-256/magic verified (whisper `.bin` magic is `ggml`/`GGUF`).
 - FFI: `dimmy_list_local_models`, `dimmy_download_model`, `dimmy_model_exists`.
 
 ## `local_llm.rs` — llama.cpp integration (optional)
 
 - Feature-gated behind `local-llm`. GPU variants: `local-llm-metal`, `local-llm-vulkan`, `local-llm-cuda`.
-- Uses the **forked `llama-cpp-4`** dependency — `KonradDallaOrg/llama-cpp-rs`. The fork patches `llama-context.cpp` for Gemma 4 (FGDN patch). When bumping the llama.cpp submodule upstream, re-apply the FGDN patch.
-- Platform differences:
-  - **Windows:** static link (`--features local-llm-vulkan`), linker needs `/FORCE:MULTIPLE`.
-  - **macOS:** `dynamic-link` feature enabled (pulled in via `local-llm-metal`). dylibs (`libllama.dylib`, `libggml.dylib`, ...) bundled into `Dimmy.app/Contents/Frameworks/` and codesigned.
+- Uses the **forked `llama-cpp-4`** dependency — `KonradDallaOrg/llama-cpp-rs`.
+- Linking:
+  - **Windows (Vulkan):** llama's ggml is **statically linked**; the linker needs `/FORCE:MULTIPLE` because `whisper-rs-sys` AND `llama-cpp-sys-4` each vendor ggml — the dedup is fine as long as their ggml revisions match.
+  - **macOS (Metal):** `dynamic-link` — dylibs (`libllama`/`libggml*`) bundled into `Dimmy.app/Contents/Frameworks/` and codesigned.
   - **Linux:** built but not wired into the default AppImage (CPU-only for portability).
-- **Thinking mode must be OFF** for Gemma 4. See [`local-llm-feasibility.md`](local-llm-feasibility.md) — with thinking on, models generate 300-500 hidden tokens before answering (20+ seconds).
+- **Generation hygiene** (small chat-templated models, e.g. Gemma/Phi): `strip_special_tags` removes `<think>…</think>`, `<start_of_turn>`, ChatML tokens etc. Thinking mode stays OFF — with it on, models emit 300-500 hidden tokens first (see [`local-llm-feasibility.md`](local-llm-feasibility.md)). `DEFAULT_LLM_MODEL` is Phi-4 Mini (Gemma E2B drifts "playful" on short prompts).
+- **Translation prompt** uses the language NAME via `crate::llm::lang_name` (small models ignore "translate to en" but follow "translate to English").
+- **Downloads go through the shared `download.rs` module (below)** — resumable + SHA-256/magic verified.
 - FFI: `dimmy_list_llm_models`, `dimmy_download_llm_model`, `dimmy_llm_model_exists`.
+
+## `download.rs` — resumable, integrity-checked model downloads
+
+One place for every multi-GB model download (LLM GGUF, whisper ggml/GGUF, parakeet ONNX bundle) so they all survive a mid-flight kill and never install a corrupt file — shared core, so Win/Mac/Linux behave identically.
+
+- **`download_resumable(client, url, dest, accept_magics, on_progress)`** (async) — used by `local_llm` and `local_stt`. Writes to `<dest>.part`, then atomically renames.
+- **`verify_file(path, accept_magics, expected_sha)`** (sync) — magic + streaming SHA-256; reused by `parakeet`'s blocking per-file bundle download.
+- **Resume:** an existing `.part` continues via `Range: bytes=N-`. `206` → append; `200` (server ignored the range, or `If-Range` says the file changed) → truncate + restart; `416` → discard the stale `.part`. The starting ETag is persisted in a `<file>.part.etag` sidecar so a later resume can send `If-Range`.
+- **Integrity:** HuggingFace LFS serves each file's SHA-256 as the (`X-Linked-`)`ETag` → captured and compared after download (streamed in 1 MiB chunks, never buffered whole), plus optional magic-byte prefixes. On ANY integrity/size failure the `.part` is DELETED so the retry restarts clean instead of resuming corruption.
+- `sha2` is a **non-optional** dependency so the check runs in every build (incl. the frozen Windows feature set, which has no `license-client`).
 
 ## `llm.rs` — post-processing router
 
+- Two entry points: `process_text` (dictation enhancement — style + tone + translate, wraps the text in `[TRANSCRIPTION]` and applies `build_system_prompt`) and `process_raw_prompt` (command mode + meeting recap — sends the caller's prompt verbatim). Local mirrors live in `local_llm.rs`.
 - Dispatches on `style` (Off, Correct, Summarize, Elaborate, Comprehensible, Professional, Prompt, Gen-Z, Boomer, Emoji, Acronyms, Imbruttito, Custom).
-- Two wire formats:
-  - **OpenAI-compatible chat completions** — Groq, OpenAI, OpenRouter, Gemini, Custom
-  - **Anthropic Messages API** — Claude
+- Two wire formats: **OpenAI-compatible chat completions** (Groq, OpenAI, OpenRouter, Gemini, Together, Custom) and **Anthropic Messages API** (Claude).
 - `llm_mode` config field routes to cloud or local (when `local-llm` feature is enabled).
 - **PREAMBLE enforces "keep same language as the input"**. Small local models need this reinforcement or they default to English.
+- **Translation directive** uses `lang_name(code)` → the English language NAME + an imperative ("Then translate the ENTIRE result into English…"). The old bare ISO code (`"…to en."`) was silently ignored even by capable models (Claude Haiku kept Italian). Codes accepted via `SUPPORTED_TRANSLATE_LANGS`.
+- **`strip_output_scaffolding`** runs on cloud output: drops prompt scaffolding a weak model echoes (`[TRANSCRIPTION]`, `[SPOKEN]`/`[SELECTION]`, ChatML tokens) AND the whole `<think>…</think>` reasoning trace (qwen3 via Groq leaked it).
+- **OpenAI gpt-5 / o-series** use `openai_reasoning_shape` → `max_completion_tokens` (no `temperature`) **floored at `.max(8192)`** in both `process_text` and `process_raw_prompt`. Without the floor the internal reasoning trace consumes the whole budget and the content comes back EMPTY.
+- **Key resolution** (in `ffi.rs`, not here): the cloud/command dispatch reads `KeyringScope::Llm(vendor)` first, then falls back to the SAME vendor's `KeyringScope::Stt(vendor)` key — vendor is derived from `llm_url`, so it can never pull a different provider's key. One key per provider works for STT + LLM + command.
+- **Live verification:** [`core/tests/llm_flows.rs`](../../core/tests/llm_flows.rs) — the `#[ignore]` flow matrix + catalog sweep. See [`llm-flows-testing.md`](llm-flows-testing.md).
+
+## `claude_code.rs` — Anthropic subscription LLM (local `claude` CLI)
+
+- Routes LLM calls through the user's Claude Pro/Team/Max subscription instead of an API key, by shelling out to the locally-installed `claude` binary. A synthetic `claude-code://default` URL selects this path in `llm.rs`.
+- `status()` → `Ready { binary_path }` / `NotLoggedIn { binary_path }` / `NotInstalled`. `spawn_login()` runs `claude login` (browser OAuth → `~/.claude/credentials.json`); `run_blocking(prompt, model, timeout)` invokes `claude --print` with the prompt on **stdin** (no argv leakage, stderr captured separately, 5-min timeout).
+- **Privacy:** Dimmy never reads the credentials file; `ClaudeCodeError::Display` strips spawn/stdout text so transcript fragments can't leak into logs/telemetry.
+- FFI: `dimmy_claude_code_status`, `_spawn_login`, `_ping`, `_recheck`, `_diagnostics`, `_binary_path`, `_node_status`. See [`claude-code-backend.md`](claude-code-backend.md).
+
+## `codex.rs` — OpenAI/ChatGPT subscription LLM (local `codex` CLI)
+
+- Sibling of `claude_code.rs` for ChatGPT Plus/Pro/Team: detects the `codex` CLI, `codex login` for OAuth, invokes `codex exec -` with the prompt on stdin. Synthetic `codex://` URL selects it in `llm.rs`.
+- Same status enum + privacy posture (stdin only, stderr captured, Display redacts spawn text). Credentials in `$CODEX_HOME` (`~/.codex/auth.json`).
+- FFI: `dimmy_codex_status`, `_spawn_login`, `_ping`, `_recheck`, `_diagnostics`, `_binary_path`.
+
+## `claude_desktop.rs` — Claude Desktop MCP bridge
+
+- Wires Dimmy into the Claude Desktop app: detects the install (Win MSIX/Squirrel, Mac `/Applications/Claude.app`), resolves `claude_desktop_config.json`, and adds a `dimmy` MCP server entry that spawns the bundled `dimmy-mcp` binary on Claude startup.
+- The MCP server (`mcp-server/`) exposes tools so Claude can read meetings + write recaps back (incl. `dimmy_search` full-text search over meetings).
+- FFI: `dimmy_claude_desktop_status`, `_install`, `_uninstall`.
+
+## `catalog.rs` — embedded cloud-model catalog
+
+- `include_str!`s `assets/model-catalog.json` (schema v2) into the binary as the single source of truth for cloud STT/LLM/recap providers + models. Win (System.Text.Json) and Mac (Codable) deserialize the SAME bytes → no per-OS model drift.
+- Only cloud models; local Whisper/Parakeet/Gemma/Phi stay in host code. A unit test validates schema version + non-empty arrays + per-task endpoint URLs.
+- FFI: `dimmy_model_catalog_json`. Validate against live `/models` endpoints with `scripts/dev/check-model-ids.py` before a release.
+
+## `notion.rs` — Notion integration
+
+- REST client for the user's OWN internal Notion integration token (no Dimmy server in between). Sends a recap to a chosen page/database via `POST /v1/pages` with server-side markdown parsing.
+- Token stored in the AES keystore under `KeyringScope::NotionToken`. API version pinned (`Notion-Version`); ~3 req/s, human-paced (no auto-retry).
+- `search()` → `NotionSearchResult { id, object, title, parent_label, url }`; `send_recap()` with page/database routing.
+- FFI: `dimmy_notion_has_token`, `_set_token`, `_test_connection`, `_search`, `_send_recap`.
+
+## `call_detector.rs` — meeting auto-detection state machine
+
+- Pure state machine (no threads/IO): the host polls audio-session state and feeds signals; the core decides whether to nudge "start a meeting?" and when to suggest stopping. App-agnostic (a browser call works like Teams/Zoom).
+- Debounce + per-app cooldown + exclusion list + a silence-based stop-suggestion (`has_tracked_origin` gates it to a watched pid to stop flapping). Emits each transition exactly once.
+- FFI: `dimmy_call_signal`, `_signal_sys`, `_signal_session_ended`, `_signal_response`, `_set_tracked_origin`, `_meeting_started_external`, `_detector_state`. Win: `CallDetectionService.cs` + `CallNudgeWindow`. Mac: `CallDetectionManager`.
+
+## `consent.rs` — recording-consent gate
+
+- One cross-platform source for what the recording-consent notice SAYS and THAT it happened. `modal_text(lang)` + `announcement_text(lang, cloud_processing)` localize to it/es/fr/de/pt (+ English fallback); the announcement discloses local-only vs cloud processing (a material GDPR fact).
+- `append_event(kind, lang)` writes an append-only `<config_dir>/consent.jsonl` audit trail (best-effort, never blocks recording). The host decides WHEN to show the notice.
+- FFI: `dimmy_consent_text`, `dimmy_consent_log_event`.
+
+## `deepgram_stream.rs` — streaming dictation (Deepgram WebSocket)
+
+- True realtime STT (vs `chunked_stt.rs`'s chunked approximation): one persistent Deepgram WS, PCM16 LE 16 kHz pushed as cpal captures it, interim+final results streamed back.
+- Reuses the chunked callback contract `(delta, cumulative, is_final)` so the host injects `delta` at the cursor and shows `cumulative` as a live caption. `streaming_dictation` config + STT mode pick this (cloud) vs the local chunked path. TLS via `tokio-tungstenite` + `native-tls` (rustls 0.23+ panics under Velopack).
+- No new public FFI — driven by the `STREAMING` static in `ffi.rs`, emits `stt_chunk` events.
+
+## `dfn3.rs` — DeepFilterNet v3 noise suppression
+
+- Newer sibling of `dfn.rs`: wraps the `deep_filter` crate (DFN3 model + tract ONNX). Gated on the `local-dfn` cargo feature; `process_mono`/`process_frame` operate on 10 ms hops (480 @ 48 kHz) so the AEC/preprocess worker can swap implementations via `cfg`.
+- Still DEFERRED in shipping builds (not in the default feature set) — same status as `dfn.rs`.
 
 ## `keystore.rs` — API key storage
 

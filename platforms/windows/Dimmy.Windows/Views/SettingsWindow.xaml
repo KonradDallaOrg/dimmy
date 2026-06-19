@@ -2212,6 +2212,8 @@
                     </Button>
                     <Button Content="Re-sign in" Click="CodexIntegrationSignIn_Click"
                             ToolTipService.ToolTip="Re-run the ChatGPT sign-in if your subscription token expired"/>
+                    <Button Content="Re-run setup" Click="CodexIntegrationRerunWizard_Click"
+                            ToolTipService.ToolTip="Re-open the install + sign-in wizard"/>
                     <Button Content="Refresh" Click="CodexIntegrationRefresh_Click"/>
                   </StackPanel>
                 </Grid>

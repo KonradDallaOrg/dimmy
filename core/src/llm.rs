@@ -366,6 +366,69 @@ fn resolve_translate_lang(translate_to: &str) -> Option<String> {
     }
 }
 
+/// Map a supported ISO-639-1 code to its English language NAME. Models follow
+/// "translate to English" far more reliably than "translate to en" — the bare
+/// code was silently ignored by capable models (Haiku kept Italian) in the
+/// live flow matrix (2026-06-19). Falls back to the code itself for anything
+/// not mapped (every entry in SUPPORTED_TRANSLATE_LANGS is covered here).
+pub fn lang_name(code: &str) -> &'static str {
+    match code {
+        "it" => "Italian",
+        "en" => "English",
+        "es" => "Spanish",
+        "fr" => "French",
+        "de" => "German",
+        "pt" => "Portuguese",
+        "ja" => "Japanese",
+        "zh" => "Chinese",
+        "ru" => "Russian",
+        "ko" => "Korean",
+        "ar" => "Arabic",
+        "nl" => "Dutch",
+        "pl" => "Polish",
+        "tr" => "Turkish",
+        "sv" => "Swedish",
+        "no" => "Norwegian",
+        "da" => "Danish",
+        "fi" => "Finnish",
+        "el" => "Greek",
+        "he" => "Hebrew",
+        "hi" => "Hindi",
+        "th" => "Thai",
+        "vi" => "Vietnamese",
+        "id" => "Indonesian",
+        "uk" => "Ukrainian",
+        "cs" => "Czech",
+        "ro" => "Romanian",
+        "hu" => "Hungarian",
+        "bg" => "Bulgarian",
+        "hr" => "Croatian",
+        "sk" => "Slovak",
+        "sl" => "Slovenian",
+        "et" => "Estonian",
+        "lv" => "Latvian",
+        "lt" => "Lithuanian",
+        "is" => "Icelandic",
+        "ms" => "Malay",
+        "tl" => "Tagalog",
+        "fa" => "Persian",
+        "ur" => "Urdu",
+        "bn" => "Bengali",
+        "ta" => "Tamil",
+        "te" => "Telugu",
+        "ml" => "Malayalam",
+        "kn" => "Kannada",
+        "mr" => "Marathi",
+        "gu" => "Gujarati",
+        "pa" => "Punjabi",
+        "sw" => "Swahili",
+        // Every SUPPORTED_TRANSLATE_LANGS entry is mapped above; this arm only
+        // fires for an unmapped code. The borrowed input can't be returned as
+        // 'static, so use a neutral phrase.
+        _ => "the requested language",
+    }
+}
+
 /// Build the system prompt from a style + tone + translate_to combination.
 /// If style is Off and translate_to is empty/none, returns empty string (caller should skip LLM).
 /// If style is Custom, uses `custom_prompt` instead of the style instruction.
@@ -406,14 +469,17 @@ pub fn build_system_prompt(
     // line so the LLM doesn't have to reconcile two contradictory rules.
     let translate_instruction = match resolved_lang.as_deref() {
         Some(lang) if style == LlmStyle::Imbruttito && lang != "it" => format!(
-            "Translate the output to {}. This translation OVERRIDES the \
-             'always output in Italian' rule from the style instruction \
-             — output the final text in {} only, while keeping the \
-             Imbruttito tone, English business jargon and Milanese \
-             attitude.",
-            lang, lang
+            "Then translate the ENTIRE result into {name}. This OVERRIDES the \
+             'always output in Italian' rule from the style — the final text \
+             MUST be written in {name} only, while keeping the Imbruttito tone, \
+             English business jargon and Milanese attitude.",
+            name = lang_name(lang)
         ),
-        Some(lang) => format!("Translate the output to {}.", lang),
+        Some(lang) => format!(
+            "Then translate the ENTIRE result into {name}. The final output MUST \
+             be written in {name} only — never leave it in the source language.",
+            name = lang_name(lang)
+        ),
         None => String::new(),
     };
 
@@ -643,10 +709,15 @@ pub async fn process_text(
             { "role": "user", "content": user_message },
         ]);
         let body = if openai_reasoning_shape(api_url, &model.to_ascii_lowercase()) {
-            // gpt-5 / o-series: max_completion_tokens, no temperature.
+            // gpt-5 / o-series: max_completion_tokens, no temperature. Reasoning
+            // models spend tokens on an internal trace BEFORE the visible answer,
+            // so the (input*3).max(512) budget gets entirely consumed by reasoning
+            // and the content comes back EMPTY — every gpt-5-mini enhancement
+            // returned "" in the live flow matrix (2026-06-19) while the command
+            // path (which already gives reasoning headroom) worked. Give them room.
             serde_json::json!({
                 "model": model,
-                "max_completion_tokens": max_tokens,
+                "max_completion_tokens": max_tokens.max(8192),
                 "messages": msgs,
             })
         } else {
@@ -695,7 +766,43 @@ pub async fn process_text(
             .unwrap_or_else(|| text.to_string())
     };
 
-    Ok(content)
+    Ok(strip_output_scaffolding(&content))
+}
+
+/// Strip prompt scaffolding a weak model sometimes echoes into its answer
+/// (`[TRANSCRIPTION]` delimiters, `[SPOKEN]`/`[SELECTION]` command tags, ChatML
+/// turn tokens). Capable models never do this, but small ones (e.g.
+/// llama-3.1-8b) leaked `[TRANSCRIPTION]` in the live flow matrix (2026-06-19) —
+/// never let it reach the user's pasted text. Idempotent; a clean answer is
+/// returned unchanged (minus a trim).
+pub fn strip_output_scaffolding(s: &str) -> String {
+    let mut out = s.to_string();
+    // Reasoning models (e.g. qwen3 via Groq) emit their chain-of-thought wrapped
+    // in <think>…</think> BEFORE the answer. Drop the whole block — everything up
+    // to and including the final </think> — so the reasoning trace never reaches
+    // the user's pasted text (live catalog sweep, 2026-06-19).
+    if let Some(end) = out.rfind("</think>") {
+        out = out[end + "</think>".len()..].to_string();
+    }
+    for tag in [
+        "[TRANSCRIPTION]",
+        "[/TRANSCRIPTION]",
+        "[SPOKEN]",
+        "[/SPOKEN]",
+        "[SELECTION]",
+        "[/SELECTION]",
+        "<|im_end|>",
+        "<|im_start|>",
+        "<end_of_turn>",
+        "<start_of_turn>",
+        "<think>",
+        "</think>",
+    ] {
+        if out.contains(tag) {
+            out = out.replace(tag, "");
+        }
+    }
+    out.trim().to_string()
 }
 
 /// Raw LLM call: send `user_prompt` directly without the dictation
@@ -1017,10 +1124,15 @@ pub async fn process_raw_prompt(
     } else {
         // OpenAI-compatible (Groq, OpenAI, Together, Gemini-OAI proxy, ...).
         let body = if openai_reasoning_shape(api_url, &model_lc) {
-            // gpt-5 / o-series: max_completion_tokens, no temperature.
+            // gpt-5 / o-series: max_completion_tokens, no temperature. Floor the
+            // budget so the internal reasoning trace can't eat it all and return
+            // EMPTY — a short creative command ("write a haiku") on gpt-5-mini
+            // came back "" in the live flow matrix (2026-06-19) with a small
+            // budget. The floor only raises tiny values; recap's large budget
+            // is untouched.
             serde_json::json!({
                 "model": model,
-                "max_completion_tokens": max_tokens,
+                "max_completion_tokens": max_tokens.max(8192),
                 "messages": [
                     { "role": "user", "content": user_prompt },
                 ],
@@ -1463,7 +1575,7 @@ mod tests {
     fn translate_only_activates_llm() {
         let prompt = build_system_prompt(LlmStyle::Off, LlmTone::None, "", "en");
         assert!(!prompt.is_empty());
-        assert!(prompt.contains("Translate the output to en."));
+        assert!(prompt.contains("into English"));
     }
 
     #[test]
@@ -1482,7 +1594,7 @@ mod tests {
     fn translate_with_style() {
         let prompt = build_system_prompt(LlmStyle::Correct, LlmTone::None, "", "it");
         assert!(prompt.contains("fix grammar"));
-        assert!(prompt.contains("Translate the output to it."));
+        assert!(prompt.contains("into Italian"));
         assert!(!prompt.contains("Do NOT translate"));
     }
 
@@ -1491,7 +1603,7 @@ mod tests {
         let prompt = build_system_prompt(LlmStyle::Correct, LlmTone::Formal, "", "de");
         assert!(prompt.contains("fix grammar"));
         assert!(prompt.contains("formal"));
-        assert!(prompt.contains("Translate the output to de."));
+        assert!(prompt.contains("into German"));
     }
 
     #[test]
@@ -1558,7 +1670,7 @@ mod tests {
         // UI may serialize "IT" (display chip) — the prompt must use
         // the canonical lowercase form so a model never sees both.
         let prompt = build_system_prompt(LlmStyle::Correct, LlmTone::None, "", "IT");
-        assert!(prompt.contains("Translate the output to it."));
+        assert!(prompt.contains("into Italian"));
         assert!(!prompt.contains("Translate the output to IT."));
     }
 
@@ -1570,7 +1682,7 @@ mod tests {
         // a no-op for the language but we still emit the directive
         // (LLMs handle redundancy fine).
         let prompt = build_system_prompt(LlmStyle::Imbruttito, LlmTone::None, "", "it");
-        assert!(prompt.contains("Translate the output to it."));
+        assert!(prompt.contains("into Italian"));
         assert!(
             !prompt.contains("OVERRIDES"),
             "no override line needed when target lang matches the style's hardcoded lang"
@@ -1583,7 +1695,7 @@ mod tests {
         // Italian". When translate_to=en is set, we MUST tell the LLM
         // which directive wins.
         let prompt = build_system_prompt(LlmStyle::Imbruttito, LlmTone::None, "", "en");
-        assert!(prompt.contains("Translate the output to en."));
+        assert!(prompt.contains("into English"));
         assert!(
             prompt.contains("OVERRIDES"),
             "override line must appear so the model resolves the conflict deterministically"
@@ -1721,5 +1833,24 @@ mod tests {
         // to_ascii_lowercase()).
         assert!(!anthropic_uses_adaptive_thinking("Claude-Opus-4-7"));
         assert!(!anthropic_wants_thinking("CLAUDE-OPUS-4-7"));
+    }
+
+    #[test]
+    fn strip_scaffolding_drops_think_block() {
+        let out = strip_output_scaffolding(
+            "<think>Okay, the user wants a translation.\nLet me do it.</think>\n\nSee you tomorrow.",
+        );
+        assert_eq!(out, "See you tomorrow.");
+        assert!(!out.contains("<think>") && !out.contains("Okay"));
+    }
+
+    #[test]
+    fn strip_scaffolding_removes_delimiters_and_keeps_clean_text() {
+        assert_eq!(
+            strip_output_scaffolding("[TRANSCRIPTION]\nciao come stai<|im_end|>"),
+            "ciao come stai"
+        );
+        // A clean answer is returned unchanged (minus trim).
+        assert_eq!(strip_output_scaffolding("  Hello there.  "), "Hello there.");
     }
 }

@@ -62,7 +62,12 @@ public sealed partial class ClaudeDesktopConnectDialog : ContentDialog
         Step3Panel.Visibility = _currentStep == 3 ? Visibility.Visible : Visibility.Collapsed;
 
         var accent = (Brush)Application.Current.Resources["AccentFillColorDefaultBrush"];
-        var idle = (Brush)Application.Current.Resources["ControlStrokeColorDefaultBrush"];
+        // Resolve the inactive grey from the dialog's ACTUAL theme, not the
+        // app resources (which can render near-white on a light dialog).
+        bool dark = ActualTheme == ElementTheme.Dark;
+        Brush idle = new SolidColorBrush(dark
+            ? Microsoft.UI.ColorHelper.FromArgb(0xFF, 0xA6, 0xA6, 0xA6)
+            : Microsoft.UI.ColorHelper.FromArgb(0xFF, 0x70, 0x70, 0x70));
         Dot1.Fill = _currentStep >= 1 ? accent : idle;
         Dot2.Fill = _currentStep >= 2 ? accent : idle;
         Dot3.Fill = _currentStep >= 3 ? accent : idle;

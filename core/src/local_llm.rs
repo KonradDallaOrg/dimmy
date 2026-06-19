@@ -221,65 +221,13 @@ where
         .build()
         .map_err(|e| LlmError::LocalModel(format!("HTTP client error: {}", e)))?;
 
-    let resp = client
-        .get(&url)
-        .send()
+    // Resume + integrity (Range/If-Range + SHA-256 + GGUF magic) live in the
+    // shared `download` module so whisper, parakeet and the LLM all behave the same.
+    crate::download::download_resumable(&client, &url, &dest, &[b"GGUF"], on_progress)
         .await
-        .map_err(|e| LlmError::LocalModel(format!("download request failed: {}", e)))?;
+        .map_err(LlmError::LocalModel)?;
 
-    if !resp.status().is_success() {
-        let status = resp.status().as_u16();
-        let body = resp.text().await.unwrap_or_default();
-        let body_trunc = crate::truncate_utf8(&body, 200);
-        return Err(LlmError::LocalModel(format!(
-            "download failed: HTTP {} — {}",
-            status, body_trunc
-        )));
-    }
-
-    let total_bytes = resp.content_length().unwrap_or(0);
-    let part_path = dir.join(format!("{}.part", filename));
-
-    let mut file = std::fs::File::create(&part_path).map_err(|e| {
-        LlmError::LocalModel(format!(
-            "cannot create temp file {}: {}",
-            part_path.display(),
-            e
-        ))
-    })?;
-
-    let mut downloaded: u64 = 0;
-
-    use std::io::Write;
-    let mut resp = resp;
-    while let Some(chunk) = resp
-        .chunk()
-        .await
-        .map_err(|e| LlmError::LocalModel(format!("download stream error: {}", e)))?
-    {
-        file.write_all(&chunk)
-            .map_err(|e| LlmError::LocalModel(format!("write error: {}", e)))?;
-        downloaded += chunk.len() as u64;
-        on_progress(downloaded, total_bytes);
-    }
-
-    drop(file); // flush & close before rename
-
-    // Atomic rename: .part → final
-    std::fs::rename(&part_path, &dest).map_err(|e| {
-        LlmError::LocalModel(format!(
-            "rename {} → {} failed: {}",
-            part_path.display(),
-            dest.display(),
-            e
-        ))
-    })?;
-
-    crate::log(&format!(
-        "[LocalLLM] Download complete: {} ({} bytes)",
-        dest.display(),
-        downloaded
-    ));
+    crate::log(&format!("[LocalLLM] Download complete: {}", dest.display()));
     assert!(dest.is_file(), "LLM model file must exist after download");
 
     Ok(dest)
@@ -357,7 +305,13 @@ pub fn build_local_system_prompt(
     };
 
     let translate_instr = if !translate_to.is_empty() && translate_to != "none" {
-        format!("Translate the output to {}.", translate_to)
+        // Use the language NAME, not the bare code — small models ignore
+        // "translate to en" but follow "translate to English" (live flow
+        // matrix, 2026-06-19).
+        format!(
+            "Then translate the entire output to {name}. Write the final text in {name} only.",
+            name = crate::llm::lang_name(translate_to)
+        )
     } else {
         String::new()
     };

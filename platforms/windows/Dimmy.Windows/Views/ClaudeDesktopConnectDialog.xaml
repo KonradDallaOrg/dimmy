@@ -2,15 +2,14 @@
 <!--
   Claude Desktop MCP connection wizard.
 
-  Three steps, one ContentDialog. Mirrors the NotionConnectDialog
-  shape (progress dots, Back / Next / Done buttons, per-step panel
-  visibility) so a contributor flipping between integrations sees an
-  identical surface.
+  Three steps, one ContentDialog. Shares the look of the CLI setup wizards
+  (CodexConnectDialog): theme-aware progress dots, minimal copy per page with
+  the detail behind (i) info flyouts, one accent action per page. The FLOW is
+  its own (this connects the MCP bridge, it does not install a CLI):
 
-  Flow:
-    Step 1 — detect / install Claude Desktop
-    Step 2 — confirm + patch claude_desktop_config.json
-    Step 3 — wait for first heartbeat (Claude Desktop must be restarted)
+    Step 1 - detect / install Claude Desktop
+    Step 2 - register Dimmy in claude_desktop_config.json
+    Step 3 - restart Claude Desktop, wait for the first heartbeat
 -->
 <ContentDialog
     x:Class="Dimmy.Windows.Views.ClaudeDesktopConnectDialog"
@@ -30,32 +29,41 @@
     <x:Double x:Key="ContentDialogMinWidth">560</x:Double>
   </ContentDialog.Resources>
 
-  <Grid RowSpacing="14" MinHeight="380">
+  <Grid RowSpacing="14" MinHeight="340">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto"/>
       <RowDefinition Height="*"/>
     </Grid.RowDefinitions>
 
-    <!-- ── Progress dots ───────────────────────────────────────── -->
+    <!-- Progress dots -->
     <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="8"
                 HorizontalAlignment="Center" Margin="0,0,0,4">
       <Ellipse x:Name="Dot1" Width="10" Height="10"
                Fill="{ThemeResource AccentFillColorDefaultBrush}"/>
       <Ellipse x:Name="Dot2" Width="10" Height="10"
-               Fill="{ThemeResource ControlStrokeColorDefaultBrush}"/>
+               Fill="{ThemeResource TextFillColorSecondaryBrush}"/>
       <Ellipse x:Name="Dot3" Width="10" Height="10"
-               Fill="{ThemeResource ControlStrokeColorDefaultBrush}"/>
+               Fill="{ThemeResource TextFillColorSecondaryBrush}"/>
     </StackPanel>
 
     <Grid Grid.Row="1">
 
-      <!-- ════ Step 1 — detect Claude Desktop ════ -->
+      <!-- ════ Step 1 - detect Claude Desktop ════ -->
       <StackPanel x:Name="Step1Panel" Spacing="12" Visibility="Visible">
-        <TextBlock Text="1 — Install Claude Desktop"
-                   FontSize="18" FontWeight="SemiBold"/>
-        <TextBlock TextWrapping="Wrap" FontSize="13"
-                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                   Text="Dimmy talks to Claude Desktop over MCP. You'll be able to ask Claude about your meetings, generate recaps from a different angle, and have Claude write notes back into Dimmy."/>
+        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+          <TextBlock Text="1 - Install Claude Desktop" FontSize="18" FontWeight="SemiBold"/>
+          <Button Background="Transparent" BorderThickness="0" Padding="2"
+                  VerticalAlignment="Center" ToolTipService.ToolTip="Why Claude Desktop">
+            <FontIcon Glyph="&#xE946;" FontSize="14"
+                      Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+            <Button.Flyout>
+              <Flyout>
+                <TextBlock Width="300" TextWrapping="Wrap" FontSize="13"
+                           Text="Dimmy talks to Claude Desktop over MCP. You'll be able to ask Claude about your meetings, generate recaps from a different angle, and have Claude write notes back into Dimmy."/>
+              </Flyout>
+            </Button.Flyout>
+          </Button>
+        </StackPanel>
 
         <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
@@ -65,7 +73,7 @@
               <FontIcon x:Name="DetectGlyph" Glyph="&#xE9CE;" FontSize="20"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
               <TextBlock x:Name="DetectStatus" FontSize="13" VerticalAlignment="Center"
-                         Text="Looking for Claude Desktop…"/>
+                         Text="Looking for Claude Desktop..."/>
             </StackPanel>
             <TextBlock x:Name="DetectPath" FontSize="12"
                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
@@ -75,19 +83,29 @@
 
         <StackPanel Orientation="Horizontal" Spacing="10">
           <Button x:Name="InstallBtn" Content="Download Claude Desktop"
-                  Click="InstallClaude_Click" Visibility="Collapsed"/>
+                  Click="InstallClaude_Click" Visibility="Collapsed"
+                  Style="{ThemeResource AccentButtonStyle}"/>
           <Button x:Name="RecheckBtn" Content="I installed it, recheck"
                   Click="Recheck_Click" Visibility="Collapsed"/>
         </StackPanel>
       </StackPanel>
 
-      <!-- ════ Step 2 — patch config ════ -->
+      <!-- ════ Step 2 - patch config ════ -->
       <StackPanel x:Name="Step2Panel" Spacing="12" Visibility="Collapsed">
-        <TextBlock Text="2 — Register Dimmy with Claude Desktop"
-                   FontSize="18" FontWeight="SemiBold"/>
-        <TextBlock TextWrapping="Wrap" FontSize="13"
-                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                   Text="Dimmy will add itself to Claude Desktop's MCP servers list. Your existing servers (Notion, Slack, custom ones) stay untouched — we back up the file before changing it."/>
+        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+          <TextBlock Text="2 - Register Dimmy" FontSize="18" FontWeight="SemiBold"/>
+          <Button Background="Transparent" BorderThickness="0" Padding="2"
+                  VerticalAlignment="Center" ToolTipService.ToolTip="What this changes">
+            <FontIcon Glyph="&#xE946;" FontSize="14"
+                      Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+            <Button.Flyout>
+              <Flyout>
+                <TextBlock Width="300" TextWrapping="Wrap" FontSize="13"
+                           Text="Dimmy adds itself to Claude Desktop's MCP servers list. Your existing servers (Notion, Slack, custom ones) stay untouched. We back up the file before changing it."/>
+              </Flyout>
+            </Button.Flyout>
+          </Button>
+        </StackPanel>
 
         <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
@@ -97,7 +115,7 @@
                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
             <TextBlock x:Name="ConfigPathText" FontSize="12" FontFamily="Consolas"
                        TextWrapping="Wrap"/>
-            <TextBlock Text="MCP binary (will be copied into the extension folder)" FontSize="11" Margin="0,8,0,0"
+            <TextBlock Text="MCP binary (copied into the extension folder)" FontSize="11" Margin="0,8,0,0"
                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
             <TextBlock x:Name="BinaryPathText" FontSize="12" FontFamily="Consolas"
                        TextWrapping="Wrap"/>
@@ -105,7 +123,8 @@
         </Border>
 
         <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
-          <Button x:Name="PatchBtn" Content="Connect" Click="Patch_Click"/>
+          <Button x:Name="PatchBtn" Content="Connect" Click="Patch_Click"
+                  Style="{ThemeResource AccentButtonStyle}"/>
           <ProgressRing x:Name="PatchRing" Width="20" Height="20"
                         IsActive="False" Visibility="Collapsed"/>
           <FontIcon x:Name="PatchOkGlyph" Glyph="&#xE73E;" FontSize="18"
@@ -116,13 +135,26 @@
         </StackPanel>
       </StackPanel>
 
-      <!-- ════ Step 3 — verify heartbeat ════ -->
+      <!-- ════ Step 3 - verify heartbeat ════ -->
       <StackPanel x:Name="Step3Panel" Spacing="12" Visibility="Collapsed">
-        <TextBlock Text="3 — Restart Claude Desktop"
-                   FontSize="18" FontWeight="SemiBold"/>
+        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+          <TextBlock Text="3 - Restart Claude Desktop" FontSize="18" FontWeight="SemiBold"/>
+          <Button Background="Transparent" BorderThickness="0" Padding="2"
+                  VerticalAlignment="Center" ToolTipService.ToolTip="Why a restart">
+            <FontIcon Glyph="&#xE946;" FontSize="14"
+                      Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+            <Button.Flyout>
+              <Flyout>
+                <TextBlock Width="300" TextWrapping="Wrap" FontSize="13"
+                           Text="Claude Desktop only spawns MCP servers at startup, so it has to be restarted once for Dimmy to appear. Dimmy detects the first heartbeat automatically."/>
+              </Flyout>
+            </Button.Flyout>
+          </Button>
+        </StackPanel>
+
         <TextBlock TextWrapping="Wrap" FontSize="13"
                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                   Text="Claude Desktop only spawns MCP servers at startup. Quit it (system-tray icon → Quit) and reopen it. Dimmy will detect the first heartbeat automatically."/>
+                   Text="Quit Claude Desktop (system-tray icon, Quit) and reopen it."/>
 
         <Border Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
@@ -132,7 +164,7 @@
               <FontIcon x:Name="HeartbeatGlyph" Glyph="&#xE9CE;" FontSize="20"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
               <TextBlock x:Name="HeartbeatStatus" FontSize="13" VerticalAlignment="Center"
-                         Text="Waiting for first heartbeat…"/>
+                         Text="Waiting for first heartbeat..."/>
               <ProgressRing x:Name="HeartbeatRing" Width="16" Height="16"
                             IsActive="True"/>
             </StackPanel>
@@ -140,7 +172,8 @@
         </Border>
 
         <Button x:Name="OpenClaudeBtn" Content="Open Claude Desktop"
-                Click="OpenClaude_Click" HorizontalAlignment="Left"/>
+                Click="OpenClaude_Click" HorizontalAlignment="Left"
+                Style="{ThemeResource AccentButtonStyle}"/>
       </StackPanel>
 
     </Grid>

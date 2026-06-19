@@ -119,6 +119,26 @@ Ships as a separate `ffi-smoke` job in `e2e-tests.yml`, matrix Win/Mac/Linux, `n
 
 The release-critical `test-install.yml` is intentionally not modified by this gate. A follow-up can extend `dimmy_smoke` to load the *installed* DLL after Setup.exe runs.
 
+## Tier A — live model / LLM tests (manual, `#[ignore]`, NOT CI)
+
+Real network + API keys (repo `.env`). The ONLY reliable way to check model behaviour — never gate CI on them.
+
+- **`core/tests/live_models.rs`** — drives `llm::process_raw_prompt` against every cloud model in `assets/model-catalog.json`; catches dead/renamed model ids.
+- **`core/tests/llm_flows.rs`** — the LLM flow matrix + catalog sweep (style · translate · command · security across providers, plus a per-model sweep). Dedicated guide: [`llm-flows-testing.md`](llm-flows-testing.md).
+
+```bash
+cargo test --test llm_flows --features local-llm -- --ignored --nocapture --skip flows_local_gguf
+```
+
+## Other Rust suites (run on plain `cargo test`)
+
+- **`llm_request_shape.rs`** — asserts the exact JSON body (system prompt, temperature, thinking mode, headers) each provider receives.
+- **`telemetry_coverage.rs`** — hygiene gate: every `Event` variant is emitted somewhere or explicitly reserved.
+- **`v2_ffi.rs` / `v2_followups.rs`** — v2 FFI round-trip (app context, file transcribe, meeting-active, history hooks, raw LLM call) + retention / orphan recovery.
+- **`meeting_pause_resume.rs`** — pause/resume idempotency + stop-while-paused.
+- **`stress_tests.rs`** — offline stress (30 min / 1 h recordings, NaN/Inf audio, memory pressure), no API calls.
+- **`parakeet_long_file.rs`** — diagnostic regression guard for `dimmy_transcribe_file` on >10 min WAVs (AUDIO-001 file-load case).
+
 ## Tier 2 — Windows UI smoke (FlaUI)
 
 **What it tests.** Launches the built `Dimmy.Windows.exe`, drives the onboarding wizard via UIA3, and asserts on the automation tree. 5 tests, ~41 s locally.

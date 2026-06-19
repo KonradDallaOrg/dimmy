@@ -1,7 +1,5 @@
-﻿using System;
+using System;
 using System.Diagnostics;
-using System.Threading;
-using System.Threading.Tasks;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -12,55 +10,36 @@ using Dimmy.Windows.Interop;
 namespace Dimmy.Windows.Views;
 
 /// <summary>
-/// 2-step ChatGPT (Codex) subscription setup wizard. Linear, modal,
-/// re-runnable. Same shape as <see cref="ClaudeConnectDialog"/> minus
-/// the Node.js step — the Codex CLI is a native binary, so there is no
-/// runtime prerequisite to detect.
-///
-/// Steps:
-///   1. Detect / install the Codex CLI (npm or native installer).
-///   2. Sign in (browser flow via `codex login`) + auto-test a tiny
-///      ping prompt.
-///
-/// Smart-skip: on Open we probe the binary + login state once and start
-/// at the FIRST incomplete step. A machine where the CLI is already
-/// installed lands on Step 2 with test-ready state.
-///
-/// Completion contract: <see cref="Completed"/> is true iff Step 2's
-/// test ping returned a positive result. The SettingsWindow caller then
-/// lights up the Output subscription toggles.
-///
-/// Reuses the existing dimmy_codex_* FFI (status / recheck / spawn-login
-/// / ping) — no new native surface.
-///
-/// Glyphs use \uXXXX escapes (ASCII in source) so a source-encoding
-/// hiccup can't strip the literal and leave the FontIcon blank — the
-/// bug that shipped on the first Claude wizard build.
+/// Guided 3-page Codex setup wizard (Install -> Run -> Finish). Linear,
+/// modal, re-runnable. The Codex CLI is a native standalone binary (no
+/// Node.js); page 1 offers winget / PowerShell / npm install commands,
+/// defaulting to winget because it runs in plain cmd with no PowerShell 7
+/// or Node dependency. Copy and Open-terminal auto-advance; the Finish
+/// page polls for the binary, drives the sign-in, and enables Done on a
+/// green status.
 /// </summary>
 public sealed partial class CodexConnectDialog : ContentDialog
 {
-    private const string GlyphSuccess = "\uE73E"; // CheckMark
-    private const string GlyphError = "\uEA39"; // Info / status dot
-    private const string GlyphPending = "\uE895"; // Sync / placeholder
-
-    /// <summary>True iff Step 2's test ping returned a positive result.</summary>
     public bool Completed { get; private set; }
 
-    /// <summary>
-    /// When true, bypass the smart-skip and start at Step 1 regardless
-    /// of current detection state. Caller uses this for "Re-run setup".
-    /// </summary>
+    /// <summary>Start at page 1 regardless of detection (the "Re-run setup"
+    /// entry point from the connected card).</summary>
     public bool ForceStartAtStep1 { get; set; }
 
-    private enum Step { Install = 1, SignIn = 2 }
+    private enum Page { Install = 1, Run = 2, Finish = 3 }
 
-    private Step _currentStep = Step.Install;
-    private bool _codexOk;   // binary present (any status != NotInstalled)
-    private bool _signInOk;  // logged in (status == Ready)
-    private bool _testOk;
+    private const string GlyphSuccess = ""; // CheckMark
+    private const string GlyphPending = ""; // neutral placeholder
+    private const string GlyphInfo = "";    // Info
 
-    private DispatcherQueueTimer? _credentialsPollTimer;
-    private CancellationTokenSource? _autoTestCts;
+    private const string CmdWinget = "winget install OpenAI.Codex";
+    private const string CmdPwsh = "irm https://chatgpt.com/codex/install.ps1 | iex";
+    private const string CmdNpm = "npm install -g @openai/codex";
+
+    private Page _currentPage = Page.Install;
+    private bool _codexOk;
+    private bool _signInOk;
+    private DispatcherQueueTimer? _pollTimer;
 
     public CodexConnectDialog()
     {
@@ -69,37 +48,30 @@ public sealed partial class CodexConnectDialog : ContentDialog
         Closed += OnClosed;
     }
 
-    // ── Lifecycle ─────────────────────────────────────────────────────
-
     private void OnOpened(ContentDialog sender, ContentDialogOpenedEventArgs args)
     {
-        ProbeAllStates();
-        var startAt = Step.Install;
-        if (!ForceStartAtStep1 && _codexOk) startAt = Step.SignIn;
-        EnterStep(startAt);
+        ProbeStatus();
+        var start = Page.Install;
+        if (!ForceStartAtStep1 && _codexOk) start = Page.Finish;
+        EnterPage(start);
     }
 
     private void OnClosed(ContentDialog sender, ContentDialogClosedEventArgs args)
     {
-        StopCredentialsPoll();
-        _autoTestCts?.Cancel();
-        _autoTestCts?.Dispose();
-        _autoTestCts = null;
+        StopPoll();
     }
 
-    private void ProbeAllStates()
+    private void ProbeStatus()
     {
         try
         {
             var s = DimmyNative.GetCodexStatus();
             _codexOk = s != DimmyNative.ClaudeCodeStatus.NotInstalled;
             _signInOk = s == DimmyNative.ClaudeCodeStatus.Ready;
-            UpdateCodexUi(s);
-            UpdateSignInUi(s);
         }
         catch (Exception ex)
         {
-            App.Log($"CodexWizard: probe exc {ex.Message}", "Wizard");
+            App.Log($"CodexWizard: probe exc {ex.Message}", "Codex");
             _codexOk = false;
             _signInOk = false;
         }
@@ -107,98 +79,98 @@ public sealed partial class CodexConnectDialog : ContentDialog
 
     // ── State machine ─────────────────────────────────────────────────
 
-    private void EnterStep(Step step)
+    private void EnterPage(Page page)
     {
-        _currentStep = step;
-        Step1Panel.Visibility = step == Step.Install ? Visibility.Visible : Visibility.Collapsed;
-        Step2Panel.Visibility = step == Step.SignIn ? Visibility.Visible : Visibility.Collapsed;
+        _currentPage = page;
+        Page1Panel.Visibility = page == Page.Install ? Visibility.Visible : Visibility.Collapsed;
+        Page2Panel.Visibility = page == Page.Run ? Visibility.Visible : Visibility.Collapsed;
+        Page3Panel.Visibility = page == Page.Finish ? Visibility.Visible : Visibility.Collapsed;
 
         var accent = (Brush)Application.Current.Resources["AccentFillColorDefaultBrush"];
-        var inactive = (Brush)Application.Current.Resources["ControlStrokeColorDefaultBrush"];
-        Dot1.Fill = step >= Step.Install ? accent : inactive;
-        Dot2.Fill = step >= Step.SignIn ? accent : inactive;
+        // Resolve the inactive grey from the dialog's ACTUAL theme, not the
+        // app resources (which return the app-theme brush and can render
+        // near-white on a light dialog). Explicit greys, clearly visible on
+        // each background.
+        bool dark = ActualTheme == ElementTheme.Dark;
+        Brush inactive = new SolidColorBrush(dark
+            ? Microsoft.UI.ColorHelper.FromArgb(0xFF, 0xA6, 0xA6, 0xA6)
+            : Microsoft.UI.ColorHelper.FromArgb(0xFF, 0x70, 0x70, 0x70));
+        Dot1.Fill = page >= Page.Install ? accent : inactive;
+        Dot2.Fill = page >= Page.Run ? accent : inactive;
+        Dot3.Fill = page >= Page.Finish ? accent : inactive;
 
-        SecondaryButtonText = step == Step.Install ? "" : "Back";
-        switch (step)
+        SecondaryButtonText = page == Page.Install ? "" : "Back";
+        switch (page)
         {
-            case Step.Install:
-                PrimaryButtonText = "Next";
-                IsPrimaryButtonEnabled = _codexOk;
+            case Page.Install:
+                // No footer "Next" — the blue in-content "Copy and continue"
+                // button is the single action, and it auto-advances. Keeps
+                // exactly one accent (blue) button per page.
+                PrimaryButtonText = "";
                 break;
-            case Step.SignIn:
-                PrimaryButtonText = _testOk ? "Close & enable" : "Test connection";
+            case Page.Run:
+                PrimaryButtonText = "";
+                break;
+            case Page.Finish:
+                PrimaryButtonText = "Done";
                 IsPrimaryButtonEnabled = _signInOk;
-                if (_signInOk && !_testOk) _ = AutoRunTestAsync();
+                StartPoll();
+                UpdateFinishUi();
                 break;
         }
     }
 
-    // ── Step 1 — Install ──────────────────────────────────────────────
+    // ── Page 1 — Install ──────────────────────────────────────────────
 
-    private void UpdateCodexUi(DimmyNative.ClaudeCodeStatus status)
+    private string SelectedCommand()
     {
-        var brushSuccess = (Brush)Application.Current.Resources["SystemFillColorSuccessBrush"];
-        var brushCritical = (Brush)Application.Current.Resources["SystemFillColorCriticalBrush"];
-
-        if (status != DimmyNative.ClaudeCodeStatus.NotInstalled)
-        {
-            var path = DimmyNative.GetCodexBinaryPath() ?? "";
-            CodexStatusGlyph.Glyph = GlyphSuccess;
-            CodexStatusGlyph.Foreground = brushSuccess;
-            CodexStatusText.Text = string.IsNullOrEmpty(path)
-                ? "Codex CLI detected"
-                : $"Codex CLI detected at {path}";
-            CodexActionPanel.Visibility = Visibility.Collapsed;
-            CodexHelpText.Visibility = Visibility.Collapsed;
-        }
-        else
-        {
-            CodexStatusGlyph.Glyph = GlyphError;
-            CodexStatusGlyph.Foreground = brushCritical;
-            CodexStatusText.Text = "Codex CLI not installed. Run the command below in a terminal.";
-            CodexActionPanel.Visibility = Visibility.Visible;
-            CodexHelpText.Visibility = Visibility.Visible;
-        }
-        IsPrimaryButtonEnabled = _currentStep == Step.Install ? _codexOk : IsPrimaryButtonEnabled;
+        if (TabPwsh.IsChecked == true) return CmdPwsh;
+        if (TabNpm.IsChecked == true) return CmdNpm;
+        return CmdWinget;
     }
 
-    private void CopyInstallCommand_Click(object sender, RoutedEventArgs e)
+    private void CmdTab_Checked(object sender, RoutedEventArgs e)
+    {
+        // Fires during InitializeComponent before CommandText exists.
+        if (CommandText == null) return;
+        CommandText.Text = SelectedCommand();
+    }
+
+    private void CopyCommand_Click(object sender, RoutedEventArgs e)
     {
         var pkg = new DataPackage();
-        pkg.SetText("npm install -g @openai/codex");
+        pkg.SetText(SelectedCommand());
         Clipboard.SetContent(pkg);
-        CopyCmdBtn.Content = "Copied!";
-        var dq = DispatcherQueue.GetForCurrentThread();
-        var t = dq.CreateTimer();
-        t.Interval = TimeSpan.FromMilliseconds(1500);
-        t.IsRepeating = false;
-        t.Tick += (s, _) =>
-        {
-            CopyCmdBtn.Content = "Copy command";
-            t.Stop();
-        };
-        t.Start();
+        EnterPage(Page.Run);
     }
+
+    // ── Page 2 — Run ──────────────────────────────────────────────────
 
     private void OpenTerminal_Click(object sender, RoutedEventArgs e)
     {
-        if (TrySpawn("wt.exe", "")) return;
-        if (TrySpawn("powershell.exe", "-NoExit")) return;
-        TrySpawn("cmd.exe", "/K");
+        // Auto-run: open a terminal that immediately runs the selected
+        // install command, so the user doesn't have to paste or type.
+        // cmd for winget/npm (works everywhere), PowerShell for the irm tab.
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var cmd = SelectedCommand();
+        if (TabPwsh.IsChecked == true)
+            TrySpawn("powershell.exe", $"-NoExit -Command \"{cmd}\"", home);
+        else if (!TrySpawn("cmd.exe", $"/K {cmd}", home))
+            TrySpawn("powershell.exe", $"-NoExit -Command \"{cmd}\"", home);
+        EnterPage(Page.Finish);
     }
 
-    private static bool TrySpawn(string fileName, string args)
+    private static bool TrySpawn(string fileName, string args, string workDir)
     {
         try
         {
-            var psi = new ProcessStartInfo
+            Process.Start(new ProcessStartInfo
             {
                 FileName = fileName,
                 Arguments = args,
                 UseShellExecute = true,
-                WorkingDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            };
-            Process.Start(psi);
+                WorkingDirectory = workDir,
+            });
             return true;
         }
         catch
@@ -207,48 +179,77 @@ public sealed partial class CodexConnectDialog : ContentDialog
         }
     }
 
-    private void RecheckCodex_Click(object sender, RoutedEventArgs e)
+    // ── Page 3 — Finish ───────────────────────────────────────────────
+
+    private void StartPoll()
     {
-        var rc = DimmyNative.RecheckCodex();
-        _codexOk = rc != DimmyNative.ClaudeCodeStatus.NotInstalled;
-        _signInOk = rc == DimmyNative.ClaudeCodeStatus.Ready;
-        UpdateCodexUi(rc);
-        IsPrimaryButtonEnabled = _codexOk;
+        StopPoll();
+        var dq = DispatcherQueue.GetForCurrentThread();
+        _pollTimer = dq.CreateTimer();
+        _pollTimer.Interval = TimeSpan.FromSeconds(2);
+        _pollTimer.IsRepeating = true;
+        _pollTimer.Tick += (s, _) =>
+        {
+            var prevSignedIn = _signInOk;
+            DimmyNative.RecheckCodex();
+            ProbeStatus();
+            UpdateFinishUi();
+            if (_signInOk && !prevSignedIn)
+                StopPoll(); // fully done — stop hammering the CLI
+        };
+        _pollTimer.Start();
     }
 
-    // ── Step 2 — Sign in + Test ───────────────────────────────────────
-
-    private void UpdateSignInUi(DimmyNative.ClaudeCodeStatus status)
+    private void StopPoll()
     {
-        var brushSuccess = (Brush)Application.Current.Resources["SystemFillColorSuccessBrush"];
-        var brushCritical = (Brush)Application.Current.Resources["SystemFillColorCriticalBrush"];
+        _pollTimer?.Stop();
+        _pollTimer = null;
+    }
 
-        if (status == DimmyNative.ClaudeCodeStatus.Ready)
+    private void UpdateFinishUi()
+    {
+        var success = (Brush)Application.Current.Resources["SystemFillColorSuccessBrush"];
+        var neutral = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
+
+        if (!_codexOk)
+        {
+            InstallGlyph.Glyph = GlyphPending;
+            InstallGlyph.Foreground = neutral;
+            InstallText.Text = "Run the command in your terminal. It appears here when done.";
+            InstallRing.IsActive = true;
+            InstallRing.Visibility = Visibility.Visible;
+            SignInRow.Visibility = Visibility.Collapsed;
+            SignInBtn.Visibility = Visibility.Collapsed;
+            IsPrimaryButtonEnabled = false;
+            return;
+        }
+
+        // Binary present.
+        InstallGlyph.Glyph = GlyphSuccess;
+        InstallGlyph.Foreground = success;
+        InstallText.Text = "Codex CLI installed.";
+        InstallRing.IsActive = false;
+        InstallRing.Visibility = Visibility.Collapsed;
+        SignInRow.Visibility = Visibility.Visible;
+
+        if (_signInOk)
         {
             SignInGlyph.Glyph = GlyphSuccess;
-            SignInGlyph.Foreground = brushSuccess;
-            SignInText.Text = "Signed in with your ChatGPT plan.";
+            SignInGlyph.Foreground = success;
+            SignInText.Text = "Signed in to ChatGPT.";
             SignInBtn.Visibility = Visibility.Collapsed;
-            RecheckSignInBtn.Visibility = Visibility.Collapsed;
-        }
-        else if (status == DimmyNative.ClaudeCodeStatus.NotLoggedIn)
-        {
-            SignInGlyph.Glyph = GlyphError;
-            SignInGlyph.Foreground = brushCritical;
-            SignInText.Text = "Not signed in. Click Sign in to open the ChatGPT login flow.";
-            SignInBtn.Visibility = Visibility.Visible;
-            RecheckSignInBtn.Visibility = Visibility.Visible;
+            SignInRing.IsActive = false;
+            SignInRing.Visibility = Visibility.Collapsed;
+            IsPrimaryButtonEnabled = true;
         }
         else
         {
-            SignInGlyph.Glyph = GlyphError;
-            SignInGlyph.Foreground = brushCritical;
-            SignInText.Text = "Codex CLI missing — go back to Step 1.";
-            SignInBtn.Visibility = Visibility.Collapsed;
-            RecheckSignInBtn.Visibility = Visibility.Visible;
+            SignInGlyph.Glyph = GlyphInfo;
+            SignInGlyph.Foreground = neutral;
+            SignInText.Text = "Not signed in yet.";
+            SignInBtn.Visibility = Visibility.Visible;
+            IsPrimaryButtonEnabled = false;
         }
-        if (_currentStep == Step.SignIn)
-            IsPrimaryButtonEnabled = _signInOk;
     }
 
     private void SignIn_Click(object sender, RoutedEventArgs e)
@@ -256,138 +257,41 @@ public sealed partial class CodexConnectDialog : ContentDialog
         var ok = DimmyNative.SpawnCodexLogin();
         if (!ok)
         {
-            SignInText.Text = "Couldn't spawn the login flow. Run `codex login` from a terminal manually.";
+            SignInText.Text = "Couldn't start the sign-in. Try again, or run `codex login` in a terminal.";
             return;
         }
-        SignInText.Text = "Complete the ChatGPT sign-in. Dimmy will detect when you're signed in…";
+        SignInText.Text = "Complete the browser sign-in. Dimmy detects it automatically...";
         SignInRing.IsActive = true;
         SignInRing.Visibility = Visibility.Visible;
         SignInBtn.IsEnabled = false;
-        StartCredentialsPoll();
+        StartPoll();
     }
 
-    private void RecheckSignIn_Click(object sender, RoutedEventArgs e)
+    private void Recheck_Click(object sender, RoutedEventArgs e)
     {
-        var rc = DimmyNative.RecheckCodex();
-        _codexOk = rc != DimmyNative.ClaudeCodeStatus.NotInstalled;
-        _signInOk = rc == DimmyNative.ClaudeCodeStatus.Ready;
-        UpdateSignInUi(rc);
-        if (_signInOk && !_testOk) _ = AutoRunTestAsync();
-    }
-
-    private void StartCredentialsPoll()
-    {
-        StopCredentialsPoll();
-        var dq = DispatcherQueue.GetForCurrentThread();
-        _credentialsPollTimer = dq.CreateTimer();
-        _credentialsPollTimer.Interval = TimeSpan.FromSeconds(2);
-        _credentialsPollTimer.IsRepeating = true;
-        _credentialsPollTimer.Tick += (s, _) =>
-        {
-            var rc = DimmyNative.RecheckCodex();
-            if (rc == DimmyNative.ClaudeCodeStatus.Ready)
-            {
-                StopCredentialsPoll();
-                _signInOk = true;
-                SignInRing.IsActive = false;
-                SignInRing.Visibility = Visibility.Collapsed;
-                SignInBtn.IsEnabled = true;
-                UpdateSignInUi(rc);
-                _ = AutoRunTestAsync();
-            }
-        };
-        _credentialsPollTimer.Start();
-    }
-
-    private void StopCredentialsPoll()
-    {
-        _credentialsPollTimer?.Stop();
-        _credentialsPollTimer = null;
-    }
-
-    private async Task AutoRunTestAsync()
-    {
-        if (_testOk) return;
-        _autoTestCts?.Cancel();
-        _autoTestCts = new CancellationTokenSource();
-        var ct = _autoTestCts.Token;
-        TestStatusRow.Visibility = Visibility.Visible;
-        TestGlyph.Glyph = GlyphPending;
-        var brushNeutral = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
-        TestGlyph.Foreground = brushNeutral;
-        TestText.Text = "Test connection: pinging ChatGPT…";
-        TestRing.IsActive = true;
-        TestRing.Visibility = Visibility.Visible;
-        RetryTestBtn.Visibility = Visibility.Collapsed;
-        IsPrimaryButtonEnabled = false;
-
-        var (result, elapsedMs) = await Task.Run(() => DimmyNative.PingCodex(), ct);
-        if (ct.IsCancellationRequested) return;
-        TestRing.IsActive = false;
-        TestRing.Visibility = Visibility.Collapsed;
-
-        var brushSuccess = (Brush)Application.Current.Resources["SystemFillColorSuccessBrush"];
-        var brushCritical = (Brush)Application.Current.Resources["SystemFillColorCriticalBrush"];
-        if (result == DimmyNative.ClaudeCodePingResult.Ok)
-        {
-            _testOk = true;
-            TestGlyph.Glyph = GlyphSuccess;
-            TestGlyph.Foreground = brushSuccess;
-            TestText.Text = $"Test connection OK ({elapsedMs} ms). ChatGPT subscription ready.";
-            RetryTestBtn.Visibility = Visibility.Collapsed;
-            PrimaryButtonText = "Close & enable";
-            IsPrimaryButtonEnabled = true;
-        }
-        else
-        {
-            _testOk = false;
-            TestGlyph.Glyph = GlyphError;
-            TestGlyph.Foreground = brushCritical;
-            TestText.Text = $"Test failed: {DescribePingResult(result)}";
-            RetryTestBtn.Visibility = Visibility.Visible;
-            PrimaryButtonText = "Test connection";
-            IsPrimaryButtonEnabled = true;
-        }
-    }
-
-    private static string DescribePingResult(DimmyNative.ClaudeCodePingResult r) => r switch
-    {
-        DimmyNative.ClaudeCodePingResult.NotInstalled => "Codex CLI not installed",
-        DimmyNative.ClaudeCodePingResult.NotLoggedIn => "Not signed in",
-        DimmyNative.ClaudeCodePingResult.SpawnFailed => "Couldn't spawn the CLI subprocess",
-        DimmyNative.ClaudeCodePingResult.Timeout => "Timed out (30 s)",
-        DimmyNative.ClaudeCodePingResult.NonZeroExit => "CLI returned an error code",
-        DimmyNative.ClaudeCodePingResult.InvalidUtf8 => "CLI returned invalid output",
-        _ => "Unknown error",
-    };
-
-    private void RetryTest_Click(object sender, RoutedEventArgs e)
-    {
-        _testOk = false;
-        _ = AutoRunTestAsync();
+        DimmyNative.RecheckCodex();
+        ProbeStatus();
+        UpdateFinishUi();
     }
 
     // ── ContentDialog buttons ─────────────────────────────────────────
 
     private void OnPrimaryClick(ContentDialog sender, ContentDialogButtonClickEventArgs args)
     {
-        switch (_currentStep)
+        switch (_currentPage)
         {
-            case Step.Install:
-                if (!_codexOk) { args.Cancel = true; return; }
+            case Page.Install:
                 args.Cancel = true;
-                EnterStep(Step.SignIn);
+                EnterPage(Page.Run);
                 break;
-            case Step.SignIn:
-                if (_testOk)
+            case Page.Run:
+                args.Cancel = true;
+                EnterPage(Page.Finish);
+                break;
+            case Page.Finish:
+                if (_signInOk)
                 {
-                    Completed = true;
-                    // args.Cancel stays false → dialog closes.
-                }
-                else if (_signInOk)
-                {
-                    args.Cancel = true;
-                    _ = AutoRunTestAsync();
+                    Completed = true; // dialog closes
                 }
                 else
                 {
@@ -400,11 +304,18 @@ public sealed partial class CodexConnectDialog : ContentDialog
     private void OnSecondaryClick(ContentDialog sender, ContentDialogButtonClickEventArgs args)
     {
         args.Cancel = true;
-        EnterStep(Step.Install);
+        StopPoll();
+        var prev = _currentPage switch
+        {
+            Page.Run => Page.Install,
+            Page.Finish => Page.Run,
+            _ => Page.Install,
+        };
+        EnterPage(prev);
     }
 
     private void OnCloseClick(ContentDialog sender, ContentDialogButtonClickEventArgs args)
     {
-        // Default: dialog closes with Completed=false.
+        // Closes with Completed=false. Caller decides what to do.
     }
 }

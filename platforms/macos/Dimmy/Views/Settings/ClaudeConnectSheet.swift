@@ -1,43 +1,69 @@
 import SwiftUI
 import AppKit
 
-/// 3-step Claude Code subscription setup wizard, modal sheet.
-/// Mac mirror of `Views/ClaudeConnectDialog.xaml` on Windows.
+/// Guided 3-page Claude Code subscription setup wizard, modal sheet.
+/// Mac mirror of `Views/ClaudeConnectDialog.xaml` on Windows and the
+/// sibling `CodexConnectSheet`. Linear, modal, re-runnable.
+///
+/// Claude Code ships as a native standalone binary now (no Node.js),
+/// installed via a one-line shell command.
 ///
 /// Flow:
-///   Step 1 — Detect / install Node.js (≥ 18 required).
-///   Step 2 — Detect / install Claude CLI via `npm install -g`.
-///   Step 3 — Sign in (browser OAuth via `claude /login`) +
-///            auto-fire test ping.
+///   Page 1 - Install : pick an install command (curl / npm), Copy ->
+///                      auto-advance.
+///   Page 2 - Run     : open Terminal and run the command for the user ->
+///                      auto-advance.
+///   Page 3 - Finish  : poll for the `claude` binary, sign in if needed,
+///                      green check -> Done.
 ///
-/// Smart-skip: on appearance we probe each precondition once and
-/// jump to the first incomplete step. A machine where everything is
-/// already set lands on Step 3 with test-ready state.
+/// Minimal copy on each page; the extra detail lives behind the (i) info
+/// popovers, like the rest of Settings. Default install command is curl:
+/// it fetches a native binary with no Node.js required.
 ///
-/// Completion contract: `onComplete` is called with the wizard
-/// outcome — `true` iff Step 3's test ping returned positive. The
-/// caller (MacIntegrationsPage) then flips
-/// `llm_auth_method=subscription` so the integration is live without
-/// a second click.
+/// Smart-skip: on appearance we probe the status once and, unless the
+/// caller forces step 1, jump straight to Finish when already Ready.
+///
+/// Completion contract: `onComplete` is called with `true` iff the wizard
+/// reached the signed-in (Ready) state. The caller (MacIntegrationsPage)
+/// then flips `llm_auth_method=subscription` so the integration is live
+/// without a second click.
 struct ClaudeConnectSheet: View {
     @ObservedObject var appState: AppState
     let onClose: () -> Void
     let onComplete: (Bool) -> Void
 
-    private enum WizardStep: Int { case node = 1, claudeCli = 2, signIn = 3 }
+    /// Start at page 1 regardless of detection (the "Re-run setup" entry
+    /// point from the connected card). Mirrors the Windows
+    /// `ForceStartAtStep1`.
+    var forceStartAtStep1: Bool = false
 
-    @State private var currentStep: WizardStep = .node
-    @State private var nodeStatus: DimmyCore.NodeStatus = .missing
+    private enum WizardPage: Int { case install = 1, run = 2, finish = 3 }
+
+    private enum CommandSource: Int, CaseIterable, Identifiable {
+        case curl, npm
+        var id: Int { rawValue }
+        var label: String { self == .curl ? "curl" : "npm" }
+        var command: String {
+            switch self {
+            case .curl: return "curl -fsSL https://claude.ai/install.sh | bash"
+            case .npm: return "npm install -g @anthropic-ai/claude-code"
+            }
+        }
+    }
+
+    @State private var currentPage: WizardPage = .install
+    @State private var commandSource: CommandSource = .curl
+
     @State private var claudeStatus: DimmyCore.ClaudeCodeStatus = .notInstalled
     @State private var binaryPath: String? = nil
 
     @State private var signInRunning: Bool = false
-    @State private var pollAttempt: Int = 0
-    @State private var testRunning: Bool = false
-    @State private var testResult: DimmyCore.ClaudeCodePingResult? = nil
     @State private var copiedFlash: Bool = false
+    @State private var pollTimer: Timer? = nil
 
-    private let npmCommand = "npm install -g @anthropic-ai/claude-code"
+    private var selectedCommand: String { commandSource.command }
+    private var claudeOk: Bool { claudeStatus != .notInstalled }
+    private var ready: Bool { claudeStatus == .ready }
 
     var body: some View {
         VStack(spacing: 16) {
@@ -47,10 +73,10 @@ struct ClaudeConnectSheet: View {
 
             ScrollView {
                 Group {
-                    switch currentStep {
-                    case .node: stepOne
-                    case .claudeCli: stepTwo
-                    case .signIn: stepThree
+                    switch currentPage {
+                    case .install: pageInstall
+                    case .run: pageRun
+                    case .finish: pageFinish
                     }
                 }
                 .padding(.vertical, 4)
@@ -62,7 +88,8 @@ struct ClaudeConnectSheet: View {
         }
         .padding(20)
         .frame(width: 560)
-        .onAppear { probeAllAndSkip() }
+        .onAppear { probeAndSkip() }
+        .onDisappear { stopPoll() }
     }
 
     // MARK: - Header / progress / footer
@@ -78,11 +105,18 @@ struct ClaudeConnectSheet: View {
         }
     }
 
+    /// Three step dots, always visible. Active = accent; inactive = a
+    /// fixed medium grey that reads on BOTH light and dark backgrounds
+    /// (the key Windows lesson: a translucent/near-white inactive dot
+    /// vanishes on a light sheet). We use an explicit opaque grey, not a
+    /// low-opacity tint of the label colour.
     private var progressDots: some View {
         HStack(spacing: 8) {
-            ForEach([WizardStep.node, .claudeCli, .signIn], id: \.rawValue) { step in
+            ForEach([WizardPage.install, .run, .finish], id: \.rawValue) { page in
                 Circle()
-                    .fill(step.rawValue <= currentStep.rawValue ? Color.accentColor : Color.gray.opacity(0.3))
+                    .fill(page.rawValue <= currentPage.rawValue
+                          ? Color.accentColor
+                          : Color(red: 0.56, green: 0.56, blue: 0.56))
                     .frame(width: 8, height: 8)
             }
         }
@@ -91,315 +125,179 @@ struct ClaudeConnectSheet: View {
 
     private var footer: some View {
         HStack {
-            Button("Cancel") { onClose() }
+            Button("Cancel") { stopPoll(); onClose() }
                 .keyboardShortcut(.cancelAction)
             Spacer()
-            if currentStep != .node {
+            if currentPage != .install {
                 Button("Back") { goBack() }
             }
-            Button(primaryButtonLabel) { handlePrimary() }
+            if currentPage == .finish {
+                Button("Done") {
+                    stopPoll()
+                    onComplete(true)
+                    onClose()
+                }
                 .keyboardShortcut(.defaultAction)
-                .disabled(!primaryButtonEnabled)
-        }
-    }
-
-    private var primaryButtonLabel: String {
-        switch currentStep {
-        case .node, .claudeCli: return "Next"
-        case .signIn:
-            if let r = testResult, case .ok = r { return "Close & enable" }
-            if claudeStatus == .ready { return "Test connection" }
-            return "Next"
-        }
-    }
-
-    private var primaryButtonEnabled: Bool {
-        switch currentStep {
-        case .node: return nodeStatus.found && nodeStatus.meetsMinimum
-        case .claudeCli: return claudeStatus != .notInstalled
-        case .signIn:
-            if let r = testResult, case .ok = r { return true }
-            return claudeStatus == .ready && !testRunning
-        }
-    }
-
-    private func handlePrimary() {
-        switch currentStep {
-        case .node:
-            currentStep = .claudeCli
-            probeClaude()
-        case .claudeCli:
-            currentStep = .signIn
-            probeClaude()
-            if claudeStatus == .ready && testResult == nil { runTest() }
-        case .signIn:
-            if let r = testResult, case .ok = r {
-                onComplete(true)
-                onClose()
-            } else if claudeStatus == .ready {
-                runTest()
+                .buttonStyle(.borderedProminent)
+                .disabled(!ready)
             }
         }
     }
 
-    private func goBack() {
-        switch currentStep {
-        case .claudeCli: currentStep = .node; probeNode()
-        case .signIn: currentStep = .claudeCli; probeClaude()
-        default: break
-        }
-    }
+    // MARK: - Page 1: Install
 
-    // MARK: - Step 1: Node.js
-
-    private var stepOne: some View {
+    private var pageInstall: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("1 — Install Node.js")
-                .font(.system(size: 18, weight: .semibold))
-            Text("Claude Code is a Node.js CLI. We need Node 18 or newer before installing it. The official installer adds Node to your PATH automatically.")
-                .font(.system(size: 13))
-                .foregroundColor(.secondary)
-
-            nodeStatusBadge
-
-            if !(nodeStatus.found && nodeStatus.meetsMinimum) {
-                HStack(spacing: 8) {
-                    Button(action: openNodejs) {
-                        Label("Open nodejs.org", systemImage: "arrow.up.right.square.fill")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    Button(action: recheckNode) {
-                        Label("Recheck", systemImage: "arrow.clockwise")
-                    }
-                }
-                Text("After installing, you may need to restart Dimmy so the new PATH is picked up.")
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
+            HStack(spacing: 6) {
+                Text("1 - Install Claude Code")
+                    .font(.system(size: 18, weight: .semibold))
+                infoPopover(
+                    "Claude Code is a small standalone CLI from Anthropic. No Node.js required. The install script fetches a native binary.")
             }
-        }
-    }
 
-    private var nodeStatusBadge: some View {
-        HStack(spacing: 10) {
-            if nodeStatus.found && nodeStatus.meetsMinimum {
-                Image(systemName: "checkmark.circle.fill").foregroundColor(.green).font(.title2)
-                Text(nodeStatus.version.map { "Node.js v\($0) detected" } ?? "Node.js detected")
-            } else if nodeStatus.found {
-                Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.orange).font(.title2)
-                Text(nodeStatus.version.map { "Node.js v\($0) found, but Claude needs v18 or newer." }
-                     ?? "Node.js found but version too old (need v18+).")
-            } else {
-                Image(systemName: "xmark.circle.fill").foregroundColor(.red).font(.title2)
-                Text("Node.js not found. Click below to install.")
-            }
-            Spacer()
-        }
-        .padding(12)
-        .background(Color.gray.opacity(0.08))
-        .cornerRadius(6)
-    }
-
-    private func openNodejs() {
-        if let url = URL(string: "https://nodejs.org/en/download/") {
-            NSWorkspace.shared.open(url)
-        }
-    }
-
-    private func recheckNode() {
-        DimmyCore.shared.recheckClaudeCode()
-        nodeStatus = DimmyCore.shared.nodeStatus()
-    }
-
-    // MARK: - Step 2: Claude CLI
-
-    private var stepTwo: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("2 — Install Claude CLI")
-                .font(.system(size: 18, weight: .semibold))
-            Text("The CLI ships via npm. Open a terminal, paste the command below, press return — npm downloads and installs claude-code globally.")
-                .font(.system(size: 13))
-                .foregroundColor(.secondary)
-
-            claudeStatusBadge
-
-            if claudeStatus == .notInstalled {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        Text(npmCommand)
-                            .font(.system(.body, design: .monospaced))
-                            .textSelection(.enabled)
-                            .padding(10)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color.gray.opacity(0.12))
-                            .cornerRadius(4)
-                    }
-                    HStack(spacing: 8) {
-                        Button(action: copyNpmCommand) {
-                            Label(copiedFlash ? "Copied!" : "Copy command",
-                                  systemImage: "doc.on.doc")
-                        }
-                        .buttonStyle(.borderedProminent)
-                        Button(action: openTerminal) {
-                            Label("Open Terminal", systemImage: "terminal")
-                        }
-                        Button(action: recheckClaude) {
-                            Label("Recheck", systemImage: "arrow.clockwise")
-                        }
-                    }
-                    Text("If npm reports a permission error, run with a per-user prefix: `npm config set prefix ~/.npm-global` then add `~/.npm-global/bin` to your PATH.")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
+            Picker("", selection: $commandSource) {
+                ForEach(CommandSource.allCases) { src in
+                    Text(src.label).tag(src)
                 }
             }
-        }
-    }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: 220, alignment: .leading)
 
-    private var claudeStatusBadge: some View {
-        HStack(spacing: 10) {
-            if claudeStatus != .notInstalled {
-                Image(systemName: "checkmark.circle.fill").foregroundColor(.green).font(.title2)
-                if let p = binaryPath {
-                    Text("Claude CLI detected at \(p)")
-                } else {
-                    Text("Claude CLI detected")
-                }
-            } else {
-                Image(systemName: "xmark.circle.fill").foregroundColor(.red).font(.title2)
-                Text("Claude CLI not installed. Run the command below in a terminal.")
+            Text(selectedCommand)
+                .font(.system(.body, design: .monospaced))
+                .textSelection(.enabled)
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.gray.opacity(0.12))
+                .cornerRadius(4)
+
+            Link("See Anthropic's official install page",
+                 destination: URL(string: "https://github.com/anthropics/claude-code")!)
+                .font(.system(size: 12))
+
+            Button(action: copyAndContinue) {
+                Text(copiedFlash ? "Copied!" : "Copy command and continue")
             }
-            Spacer()
+            .buttonStyle(.borderedProminent)
         }
-        .padding(12)
-        .background(Color.gray.opacity(0.08))
-        .cornerRadius(6)
     }
 
-    private func copyNpmCommand() {
+    private func copyAndContinue() {
         let pb = NSPasteboard.general
         pb.clearContents()
-        pb.setString(npmCommand, forType: .string)
+        pb.setString(selectedCommand, forType: .string)
         copiedFlash = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copiedFlash = false }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { copiedFlash = false }
+        enterPage(.run)
     }
 
-    private func openTerminal() {
-        // Open a new Terminal window at the user's home dir. The
-        // shell prompt is ready for paste. (We deliberately don't
-        // auto-execute the npm command — the user controls when it
-        // runs.)
-        let script = "tell application \"Terminal\" to do script \"cd ~ && clear\""
-        var error: NSDictionary? = nil
-        NSAppleScript(source: script)?.executeAndReturnError(&error)
-        NSWorkspace.shared.launchApplication("Terminal")
-    }
+    // MARK: - Page 2: Run
 
-    private func recheckClaude() {
-        let s = DimmyCore.shared.recheckClaudeCode()
-        claudeStatus = s
-        binaryPath = DimmyCore.shared.claudeCodeBinaryPath
-    }
-
-    // MARK: - Step 3: Sign in + test
-
-    private var stepThree: some View {
+    private var pageRun: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("3 — Sign in to Claude")
-                .font(.system(size: 18, weight: .semibold))
-            Text("Click Sign in to open a Terminal window with the Claude CLI's browser-based OAuth flow. Complete it in your browser — Dimmy detects the login and runs a quick test.")
+            HStack(spacing: 6) {
+                Text("2 - Run it")
+                    .font(.system(size: 18, weight: .semibold))
+                infoPopover(
+                    "Terminal opens and runs the install automatically. Wait until it finishes, then come back. (The command is also on your clipboard as a fallback.)")
+            }
+
+            Text("A terminal opens and runs the install for you. Wait for it to finish, then come back.")
                 .font(.system(size: 13))
                 .foregroundColor(.secondary)
 
-            VStack(alignment: .leading, spacing: 10) {
-                signInBadge
-                if testResult != nil || testRunning {
-                    testBadge
-                }
+            Button(action: installNow) {
+                Text("Install now")
             }
-            .padding(12)
-            .background(Color.gray.opacity(0.08))
-            .cornerRadius(6)
+            .buttonStyle(.borderedProminent)
+        }
+    }
+
+    /// Auto-run: open Terminal.app and execute the selected install
+    /// command for the user, so they do not have to paste or type. The
+    /// command is also on the clipboard as a fallback (page 1 copied it).
+    private func installNow() {
+        let cmd = selectedCommand
+        let escaped = cmd
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let script = """
+        tell application "Terminal"
+            do script "\(escaped)"
+            activate
+        end tell
+        """
+        var error: NSDictionary? = nil
+        NSAppleScript(source: script)?.executeAndReturnError(&error)
+        enterPage(.finish)
+    }
+
+    // MARK: - Page 3: Finish
+
+    private var pageFinish: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 6) {
+                Text("3 - Finish")
+                    .font(.system(size: 18, weight: .semibold))
+                infoPopover(
+                    "Dimmy launches the Claude Code CLI as a local subprocess and uses its stored login. Requires your active Anthropic subscription. Dimmy never sees your token. Subject to Anthropic's terms.")
+            }
+
+            statusBox
 
             HStack(spacing: 8) {
-                if claudeStatus != .ready {
+                if claudeOk && !ready {
                     Button(action: signIn) {
-                        Label("Sign in", systemImage: "person.badge.key.fill")
+                        Label("Sign in to Claude", systemImage: "person.badge.key.fill")
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(signInRunning)
                 }
-                Button(action: recheckSignIn) {
+                Button(action: recheck) {
                     Label("Recheck", systemImage: "arrow.clockwise")
                 }
-                if let r = testResult, case .ok = r {} else if testResult != nil {
-                    Button(action: { testResult = nil; runTest() }) {
-                        Label("Retry test", systemImage: "arrow.clockwise")
-                    }
-                }
             }
-
-            Text("Dimmy launches the Claude Code CLI as a local subprocess and uses its stored login. Requires your active Anthropic subscription. Subject to Anthropic's terms of service.")
-                .font(.system(size: 11))
-                .foregroundColor(.secondary)
-                .padding(10)
-                .background(Color.gray.opacity(0.06))
-                .cornerRadius(6)
         }
     }
 
-    private var signInBadge: some View {
-        HStack(spacing: 10) {
-            if claudeStatus == .ready {
-                Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
-                Text("Signed in to Claude.")
-            } else if claudeStatus == .notLoggedIn {
-                if signInRunning {
+    private var statusBox: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // Install row.
+            HStack(spacing: 10) {
+                if !claudeOk {
                     ProgressView().controlSize(.small).scaleEffect(0.7)
-                    Text("Complete the browser flow. Dimmy will detect when you're signed in…")
+                    Text("Run the command in your terminal. It appears here when done.")
                 } else {
-                    Image(systemName: "exclamationmark.circle.fill").foregroundColor(.orange)
-                    Text("Not signed in. Click Sign in to open the browser flow.")
+                    Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
+                    Text("Claude Code installed.")
                 }
-            } else {
-                Image(systemName: "xmark.circle.fill").foregroundColor(.red)
-                Text("Claude CLI missing — go back to Step 2.")
+                Spacer()
             }
-            Spacer()
-        }
-        .font(.system(size: 13))
-    }
+            .font(.system(size: 13))
 
-    @ViewBuilder
-    private var testBadge: some View {
-        HStack(spacing: 10) {
-            if testRunning {
-                ProgressView().controlSize(.small).scaleEffect(0.7)
-                Text("Test connection: pinging Claude…")
-            } else if let r = testResult {
-                switch r {
-                case .ok(let ms):
-                    Image(systemName: "checkmark.seal.fill").foregroundColor(.green)
-                    Text("Test connection OK (\(ms) ms). Claude subscription ready.")
-                default:
-                    Image(systemName: "exclamationmark.octagon.fill").foregroundColor(.red)
-                    Text("Test failed: \(describeTestResult(r))")
+            // Sign-in row (only once the binary is present).
+            if claudeOk {
+                HStack(spacing: 10) {
+                    if ready {
+                        Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
+                        Text("Signed in to Claude.")
+                    } else if signInRunning {
+                        ProgressView().controlSize(.small).scaleEffect(0.7)
+                        Text("Complete the browser flow. Dimmy will detect when you're signed in.")
+                    } else {
+                        Image(systemName: "exclamationmark.circle.fill").foregroundColor(.orange)
+                        Text("Not signed in yet.")
+                    }
+                    Spacer()
                 }
+                .font(.system(size: 13))
             }
-            Spacer()
         }
-        .font(.system(size: 13))
-    }
-
-    private func describeTestResult(_ r: DimmyCore.ClaudeCodePingResult) -> String {
-        switch r {
-        case .ok: return ""
-        case .notInstalled: return "Claude CLI not installed"
-        case .notLoggedIn: return "Not signed in"
-        case .spawnFailed: return "Couldn't spawn the CLI subprocess"
-        case .timeout: return "Timed out (15 s)"
-        case .nonZeroExit: return "CLI returned an error code"
-        case .invalidUtf8: return "CLI returned invalid output"
-        case .unknownError: return "Unknown error"
-        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.gray.opacity(0.08))
+        .cornerRadius(6)
     }
 
     private func signIn() {
@@ -411,75 +309,103 @@ struct ClaudeConnectSheet: View {
                     signInRunning = false
                     return
                 }
-                pollAttempt = 0
-                pollForCredentials()
+                // Keep polling; the timer flips ready + stops itself.
+                startPoll()
             }
         }
     }
 
-    private func pollForCredentials() {
-        if pollAttempt >= 90 { // 3 minutes
-            signInRunning = false
-            return
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+    private func recheck() {
+        let s = DimmyCore.shared.recheckClaudeCode()
+        claudeStatus = s
+        binaryPath = DimmyCore.shared.claudeCodeBinaryPath
+        if ready { signInRunning = false; stopPoll() }
+    }
+
+    // MARK: - Polling (page 3 only)
+
+    private func startPoll() {
+        stopPoll()
+        let t = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
             let s = DimmyCore.shared.recheckClaudeCode()
             claudeStatus = s
             binaryPath = DimmyCore.shared.claudeCodeBinaryPath
             if s == .ready {
                 signInRunning = false
-                runTest()
-                return
+                stopPoll()
             }
-            pollAttempt += 1
-            pollForCredentials()
+        }
+        RunLoop.main.add(t, forMode: .common)
+        pollTimer = t
+    }
+
+    private func stopPoll() {
+        pollTimer?.invalidate()
+        pollTimer = nil
+    }
+
+    // MARK: - Navigation
+
+    private func enterPage(_ page: WizardPage) {
+        currentPage = page
+        if page == .finish {
+            probeClaude()
+            if !ready { startPoll() } else { stopPoll() }
+        } else {
+            stopPoll()
         }
     }
 
-    private func recheckSignIn() {
-        let s = DimmyCore.shared.recheckClaudeCode()
-        claudeStatus = s
-        binaryPath = DimmyCore.shared.claudeCodeBinaryPath
-        if s == .ready && testResult == nil { runTest() }
-    }
-
-    private func runTest() {
-        testRunning = true
-        testResult = nil
-        DispatchQueue.global(qos: .userInitiated).async {
-            let r = DimmyCore.shared.pingClaudeCode()
-            DispatchQueue.main.async {
-                testRunning = false
-                testResult = r
-            }
+    private func goBack() {
+        switch currentPage {
+        case .run: enterPage(.install)
+        case .finish: enterPage(.run)
+        case .install: break
         }
     }
 
     // MARK: - Probes / smart-skip
 
-    private func probeAllAndSkip() {
-        nodeStatus = DimmyCore.shared.nodeStatus()
+    private func probeAndSkip() {
         claudeStatus = DimmyCore.shared.claudeCodeStatus
         binaryPath = DimmyCore.shared.claudeCodeBinaryPath
-
-        let nodeOk = nodeStatus.found && nodeStatus.meetsMinimum
-        let claudeOk = claudeStatus != .notInstalled
-        if !nodeOk {
-            currentStep = .node
-        } else if !claudeOk {
-            currentStep = .claudeCli
+        if !forceStartAtStep1 && ready {
+            enterPage(.finish)
         } else {
-            currentStep = .signIn
-            if claudeStatus == .ready { runTest() }
+            currentPage = .install
         }
-    }
-
-    private func probeNode() {
-        nodeStatus = DimmyCore.shared.nodeStatus()
     }
 
     private func probeClaude() {
         claudeStatus = DimmyCore.shared.claudeCodeStatus
         binaryPath = DimmyCore.shared.claudeCodeBinaryPath
+    }
+
+    // MARK: - Helpers
+
+    private func infoPopover(_ text: String) -> some View {
+        InfoPopoverButton(text: text)
+    }
+}
+
+/// Small (i) button that shows an explanatory popover on click. Mirrors
+/// the Windows info Flyout buttons next to each page heading.
+private struct InfoPopoverButton: View {
+    let text: String
+    @State private var shown = false
+
+    var body: some View {
+        Button(action: { shown.toggle() }) {
+            Image(systemName: "info.circle")
+                .font(.system(size: 14))
+                .foregroundColor(.secondary)
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $shown, arrowEdge: .bottom) {
+            Text(text)
+                .font(.system(size: 13))
+                .frame(width: 300, alignment: .leading)
+                .padding(12)
+        }
     }
 }
