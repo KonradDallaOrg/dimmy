@@ -51,7 +51,7 @@ pai-voice/
 │   │   ├── deepgram_stream.rs Realtime streaming dictation over Deepgram WebSocket (true streaming)
 │   │   ├── process_loopback.rs Per-process WASAPI loopback (Phase 5a, Win-only)
 │   │   ├── llm.rs            LLM post-processing router + adaptive thinking dispatch
-│   │   ├── local_llm.rs      llama-cpp-4 (dynamic-link ggml) integration (optional)
+│   │   ├── local_llm.rs      llama-cpp-4 integration (optional)
 │   │   ├── download.rs       Resumable + SHA-256-verified model downloads (LLM/whisper/parakeet)
 │   │   ├── claude_code.rs    Anthropic subscription LLM via local `claude` CLI (no API key)
 │   │   ├── codex.rs          OpenAI/ChatGPT subscription LLM via local `codex` CLI

@@ -43,11 +43,11 @@ Cloud providers have three wire formats; the module dispatches on the `Provider`
 
 - Feature-gated behind `local-llm`. GPU variants: `local-llm-metal`, `local-llm-vulkan`, `local-llm-cuda`.
 - Uses the **forked `llama-cpp-4`** dependency — `KonradDallaOrg/llama-cpp-rs`.
-- **`dynamic-link` is enabled on the GPU builds that ship — Vulkan (Windows) and Metal (macOS)** (`local-llm-vulkan` and `local-llm-metal` both pull `llama-cpp-4/dynamic-link`; `local-llm-cuda` does not). llama's ggml ships as separate DLLs/dylibs next to `dimmy_lib` instead of being statically linked in. This is load-bearing: `whisper-rs-sys` AND `llama-cpp-sys-4` each vendor ggml, and a static link deduplicates them to ONE (`/FORCE:MULTIPLE`, `LNK4006`) — fine while their ggml revisions matched, but after the llama.cpp fork bump the June-2026 ggml diverged from whisper's and silently broke local STT (0 chars + crash). Dynamic-link keeps each module's ggml private (per-module symbol resolution). See `feedback_whisper_llama_shared_ggml_collision` in the session memory.
-  - **Windows:** `ggml*.dll` + `llama*.dll` are copied next to `dimmy_lib.dll` by the C# `CopyLlamaDlls` MSBuild target (and into the installer); they are loaded at runtime, so they MUST sit beside the DLL.
-  - **macOS:** dylibs bundled into `Dimmy.app/Contents/Frameworks/` and codesigned.
+- Linking:
+  - **Windows (Vulkan):** llama's ggml is **statically linked**; the linker needs `/FORCE:MULTIPLE` because `whisper-rs-sys` AND `llama-cpp-sys-4` each vendor ggml — the dedup is fine as long as their ggml revisions match.
+  - **macOS (Metal):** `dynamic-link` — dylibs (`libllama`/`libggml*`) bundled into `Dimmy.app/Contents/Frameworks/` and codesigned.
   - **Linux:** built but not wired into the default AppImage (CPU-only for portability).
-- **Generation hygiene** (small chat-templated models, e.g. Gemma/Phi): stop at the turn-end marker and `strip_special_tags` removes `<think>…</think>`, `<|im_end|>`, `<start_of_turn>` etc. Thinking mode stays OFF — with it on, models emit 300-500 hidden tokens first (see [`local-llm-feasibility.md`](local-llm-feasibility.md)). `DEFAULT_LLM_MODEL` is Phi-4 Mini (Gemma E2B drifts "playful" on short prompts).
+- **Generation hygiene** (small chat-templated models, e.g. Gemma/Phi): `strip_special_tags` removes `<think>…</think>`, `<start_of_turn>`, ChatML tokens etc. Thinking mode stays OFF — with it on, models emit 300-500 hidden tokens first (see [`local-llm-feasibility.md`](local-llm-feasibility.md)). `DEFAULT_LLM_MODEL` is Phi-4 Mini (Gemma E2B drifts "playful" on short prompts).
 - **Translation prompt** uses the language NAME via `crate::llm::lang_name` (small models ignore "translate to en" but follow "translate to English").
 - **Downloads go through the shared `download.rs` module (below)** — resumable + SHA-256/magic verified.
 - FFI: `dimmy_list_llm_models`, `dimmy_download_llm_model`, `dimmy_llm_model_exists`.
