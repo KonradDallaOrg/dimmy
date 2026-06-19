@@ -6,7 +6,7 @@
 
 ## What Dimmy is (one paragraph)
 
-Cross-platform voice-transcription overlay. Records audio via global hotkey, transcribes locally (whisper.cpp, default) or via cloud STT (Groq, OpenAI, Deepgram, Gemini). Optionally post-processes with an LLM, removes filler words, saves to history, pastes into the focused app. Shared Rust core (`core/`) + one native UI per OS: WinUI 3 on Windows, SwiftUI on macOS, GTK4 on Linux. Current version: see `core/Cargo.toml`.
+Cross-platform voice-transcription overlay. Records audio via global hotkey, transcribes locally (whisper.cpp or Parakeet) or via cloud STT (Groq, OpenAI, Deepgram, Gemini, …), with optional realtime streaming dictation (Deepgram WebSocket). Optionally post-processes with an LLM — cloud via API key OR a **subscription** (Claude Code / Codex CLI), or local via llama.cpp — removes filler words, saves to history, and pastes into the focused app. Also does **command mode** (transform the selected text in place), **meeting mode** (long-form record → recap, with auto-detect + recording-consent), and integrates with **Claude Desktop (MCP)** and **Notion**. Shared Rust core (`core/`) + one native UI per OS: WinUI 3 on Windows, SwiftUI on macOS, GTK4 on Linux. Current version: see `core/Cargo.toml`.
 
 ## Navigation — read these when relevant
 
@@ -149,8 +149,9 @@ Also: `--no-incremental` is cheap insurance when chasing "did my change really g
 
 ## v2 surfaces — what shipped on `feat/v2-unified` + `feat/system-audio-capture` (2026-05)
 
-Current `staging` is **v0.6.31** carrying the cumulative v2 feature set.
-Two big merges define the surface area:
+v2 landed at v0.6.31 (2026-05); the tree is now **v0.6.63** (check `core/Cargo.toml`
+for the live number) and a lot more shipped on top — see "Surfaces shipped since v2"
+below. The two merges that defined the v2 base:
 
 - `feat/v2-unified` (Apr–May 2026) — app rules, history v2, file load,
   meeting mode, Parakeet local STT, taskbar / jumplist / pill chrome.
@@ -190,6 +191,25 @@ before touching anything:
 | **Pill ↔ Meeting recap pipeline** | (no Rust) | (no FFI — uses existing meeting FFI) | Win: `Services/MeetingPostProcessService.cs`. Mac: `Services/MeetingPostProcessService.swift` (mirror) |
 
 Hardening status: see [`docs/dev/system-audio-capture-tests.md`](docs/dev/system-audio-capture-tests.md) for the 40 net-new tests landed with PR #45 (23 Rust unit + 4 integration + 13 C# xUnit) and the manual-sweep checklist for what isn't automated. Earlier `feat/v2-unified` hardening plan: [`docs/dev/v2-test-hardening-plan.md`](docs/dev/v2-test-hardening-plan.md).
+
+### Surfaces shipped since v2 (v0.6.32 → 0.6.63, May–Jun 2026)
+
+A fresh session must know these exist too — all in the shared core, so each is automatically cross-platform (Win C# + Mac Swift mirror the same FFI).
+
+| Surface | Rust module | FFI entries | Notes |
+|---|---|---|---|
+| **Command mode** — transform the SELECTED text in place (not paste-only); CASE-A instruction vs CASE-B replacement | `llm.rs::{build_command_transform_prompt,build_command_generate_prompt}` | `dimmy_command_transform` | Win: `Services/SelectionCaptureService.cs` + `UiaSelectionReader.cs` (UIA-first). Mac: AX selection read. Auth = same dispatch as recap (api_key / subscription) |
+| **Claude Code subscription** LLM (Anthropic Pro/Team/Max via local `claude` CLI) | `claude_code.rs` | `dimmy_claude_code_status`/`_spawn_login`/`_ping`/`_recheck`/`_diagnostics`/`_binary_path`/`_node_status` | Synthetic `claude-code://` URL routes `process_text`+`process_raw_prompt` via `claude --print`. Dimmy never reads `~/.claude/credentials.json`. See [`docs/dev/claude-code-backend.md`](docs/dev/claude-code-backend.md) |
+| **Codex subscription** LLM (OpenAI/ChatGPT via local `codex` CLI) | `codex.rs` | `dimmy_codex_status`/`_spawn_login`/`_ping`/`_recheck`/`_diagnostics`/`_binary_path` | Sibling of `claude_code.rs`; `codex exec -` with prompt on stdin |
+| **Claude Desktop MCP bridge** | `claude_desktop.rs` + `mcp-server/` (`dimmy-mcp` binary) | `dimmy_claude_desktop_status`/`_install`/`_uninstall` | Patches `claude_desktop_config.json`; the MCP server exposes 6 tools (incl. `dimmy_search` over meetings) |
+| **Call / meeting auto-detect** + stop-suggestion | `call_detector.rs` (pure state machine) | `dimmy_call_signal`/`_signal_sys`/`_signal_session_ended`/`_signal_response`/`_set_tracked_origin`/`_meeting_started_external`/`_detector_state` | Host polls audio-session state → signals; core decides nudge/suppress. Win: `CallDetectionService.cs` + `CallNudgeWindow`. Mac: `CallDetectionManager` |
+| **Recording consent** gate (GDPR / all-party) | `consent.rs` | `dimmy_consent_text`, `dimmy_consent_log_event` | Localized modal + announcement (6 langs) + append-only `consent.jsonl` audit. Host decides WHEN to show it |
+| **Streaming dictation** — realtime typing as you speak | `deepgram_stream.rs` (cloud WS) + `chunked_stt.rs` (local) | (internal — `STREAMING` static in `ffi.rs`, `stt_chunk` events) | `streaming_dictation` config follows STT mode: cloud→Deepgram WS, local→chunked typing. Host injects delta at cursor |
+| **Custom dictionary** — bias STT toward user terms | `user_dict` storage (in `lib.rs`/`ffi.rs`) | `dimmy_user_dict_add`/`_remove`/`_list_json` | Win + Mac Settings page + add-via-hotkey |
+| **Model catalog** — single source of truth for cloud models | `catalog.rs` (`include_str!` `assets/model-catalog.json`) | `dimmy_model_catalog_json` | Win (System.Text.Json) + Mac (Codable) read the same compiled bytes → no per-OS model drift |
+| **Resumable + integrity-checked model downloads** | `download.rs` | (backs `dimmy_download_model` / `dimmy_download_llm_model`) | Range/If-Range resume + SHA-256/magic verify; see modules.md |
+| **Notion integration** — send recaps to a page/database | `notion.rs` | `dimmy_notion_has_token`/`_set_token`/`_test_connection`/`_search`/`_send_recap` | User's own internal integration token (AES keystore, `KeyringScope::NotionToken`) |
+| **Obsidian / folder export** — write `recap.md` to a sync folder | (host-only, no Rust) | (none) | Win: `RecapExportService`. Mac: `tryExportRecap` |
 
 ## Decision tree — where does this change go?
 
