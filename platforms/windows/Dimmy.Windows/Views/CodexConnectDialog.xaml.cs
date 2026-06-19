@@ -87,7 +87,14 @@ public sealed partial class CodexConnectDialog : ContentDialog
         Page3Panel.Visibility = page == Page.Finish ? Visibility.Visible : Visibility.Collapsed;
 
         var accent = (Brush)Application.Current.Resources["AccentFillColorDefaultBrush"];
-        var inactive = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
+        // Resolve the inactive grey from the dialog's ACTUAL theme, not the
+        // app resources (which return the app-theme brush and can render
+        // near-white on a light dialog). Explicit greys, clearly visible on
+        // each background.
+        bool dark = ActualTheme == ElementTheme.Dark;
+        Brush inactive = new SolidColorBrush(dark
+            ? Microsoft.UI.ColorHelper.FromArgb(0xFF, 0xA6, 0xA6, 0xA6)
+            : Microsoft.UI.ColorHelper.FromArgb(0xFF, 0x70, 0x70, 0x70));
         Dot1.Fill = page >= Page.Install ? accent : inactive;
         Dot2.Fill = page >= Page.Run ? accent : inactive;
         Dot3.Fill = page >= Page.Finish ? accent : inactive;
