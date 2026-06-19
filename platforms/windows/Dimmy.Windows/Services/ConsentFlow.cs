@@ -54,6 +54,7 @@ public static class ConsentFlow
 
         var dialog = new ContentDialog
         {
+            RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
             XamlRoot = xamlRoot,
             Title = "Recording notice",
             Content = body,

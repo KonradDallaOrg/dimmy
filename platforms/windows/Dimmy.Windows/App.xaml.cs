@@ -2343,6 +2343,7 @@ public partial class App : Application
             var version = UpdateService.Instance?.PendingVersion ?? "";
             var dlg = new Microsoft.UI.Xaml.Controls.ContentDialog
             {
+                RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
                 Title = "Update ready",
                 Content = string.IsNullOrEmpty(version)
                     ? "A Dimmy update is downloaded.\nApply now? Dimmy will close and reopen on the new version."

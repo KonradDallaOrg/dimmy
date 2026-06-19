@@ -942,6 +942,7 @@ public sealed partial class SettingsWindow : Window
             : "\nThis runs locally and may take a few minutes.";
         var dlg = new ContentDialog
         {
+            RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
             Title = "Long file",
             Content = $"{System.IO.Path.GetFileName(path)}\n" +
                       $"≈ {mins} min · {sizeMb:F1} MB{costHint}\n\nProceed?",
@@ -3695,6 +3696,7 @@ public sealed partial class SettingsWindow : Window
         // charge that the server-side gate has to refund.
         var dlg = new ContentDialog
         {
+            RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
             Title = "Sign out from this device?",
             Content =
                 "Your subscription on Stripe will stay active and will keep " +
@@ -3905,6 +3907,7 @@ public sealed partial class SettingsWindow : Window
 
         var dlg = new ContentDialog
         {
+            RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
             Title = $"Continue to {ToTitleCase(tier)} checkout",
             Content = stack,
             PrimaryButtonText = "Continue",
@@ -3956,6 +3959,7 @@ public sealed partial class SettingsWindow : Window
                 // new tier and the silent UX feels off.
                 var confirmDialog = new ContentDialog
                 {
+                    RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
                     Title = $"Switch plan to {ToTitleCase(tier)}?",
                     Content =
                         $"You're already subscribed (current: {ToTitleCase(status.Tier ?? "")}). " +
@@ -4035,6 +4039,7 @@ public sealed partial class SettingsWindow : Window
                 {
                     var dlg = new ContentDialog
                     {
+                        RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
                         Title = $"You already have a {c.CurrentTier} license",
                         Content =
                             $"The email {promptedEmail} is already linked to an active {c.CurrentTier} license. " +
@@ -4664,6 +4669,7 @@ public sealed partial class SettingsWindow : Window
         {
             var dlg = new ContentDialog
             {
+                RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
                 Title = "Model not downloaded yet",
                 Content = $"\"{modelName}\" runs the recap locally (offline, private) but isn't on disk yet.\n\nGo to Settings → LLM, switch to Local, and download it. Until then the recap will fall back / fail.",
                 CloseButtonText = "Got it",
@@ -4850,6 +4856,7 @@ public sealed partial class SettingsWindow : Window
         {
             var dlg = new ContentDialog
             {
+                RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
                 Title = "Folder not writable",
                 Content = $"Dimmy can't write to:\n{dir}\n\nPick a different folder.",
                 CloseButtonText = "OK",
@@ -5481,6 +5488,7 @@ public sealed partial class SettingsWindow : Window
     {
         var confirm = new ContentDialog
         {
+            RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
             Title = "Disconnect Notion?",
             Content = "Dimmy will forget your token and destination. Your Notion content stays untouched. You can reconnect any time.",
             PrimaryButtonText = "Disconnect",
@@ -5552,6 +5560,7 @@ public sealed partial class SettingsWindow : Window
     {
         var confirm = new ContentDialog
         {
+            RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
             Title = "Disconnect Claude Desktop?",
             Content = "Dimmy will remove its extension from Claude Desktop. Other extensions stay in place. Restart Claude Desktop afterwards so it forgets the connection.",
             PrimaryButtonText = "Disconnect",

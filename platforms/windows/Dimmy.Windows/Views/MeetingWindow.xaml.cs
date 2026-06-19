@@ -1756,6 +1756,7 @@ public sealed partial class MeetingWindow : Window
 
         var dlg = new Microsoft.UI.Xaml.Controls.ContentDialog
         {
+            RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
             Title = "Delete this meeting?",
             Content = $"This will permanently remove:\n\n{Path.GetFileName(row.Dir)}\n\n" +
                       "Includes audio (audio.wav, per-track WAVs), transcripts.txt, and recap.md.",
@@ -2399,6 +2400,7 @@ public sealed partial class MeetingWindow : Window
     {
         var dlg = new Microsoft.UI.Xaml.Controls.ContentDialog
         {
+            RequestedTheme = Dimmy.Windows.Helpers.ThemeHelper.ResolvedElementTheme(),
             Title = title,
             Content = content,
             CloseButtonText = "Close",
